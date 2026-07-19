@@ -86,6 +86,7 @@ export { cmdBrainSession } from "./session.ts";
 export { cmdBrainPanel } from "./panel.ts";
 export { cmdBrainTrigger } from "./trigger.ts";
 export { cmdBrainDeepSynthesis } from "./deep-synthesis.ts";
+export { cmdBrainDiarize } from "./diarize.ts";
 export { cmdBrainIdeas } from "./ideas.ts";
 export { cmdBrainEntity } from "./entity.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";
@@ -111,6 +112,9 @@ export { cmdBrainAgenda } from "./agenda.ts";
 export { cmdBrainToday } from "./today.ts";
 export { cmdBrainApplyMarkers } from "./apply-markers.ts";
 export { cmdBrainPending } from "./pending.ts";
+export { cmdBrainTelegramCapture } from "./telegram-capture.ts";
+export { cmdBrainInboxDrain } from "./inbox-drain.ts";
+export { cmdBrainRepairLane } from "./repair-lane.ts";
 export { cmdBrainSignal } from "./signal.ts";
 export {
   cmdBrainSessionDescribe,

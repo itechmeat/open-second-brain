@@ -65,6 +65,15 @@ export const BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
 /** Persisted contradiction (tension) notes: `Brain/tensions/tension-<slug>.md` (S2). */
 export const BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
+/**
+ * Inbound-capture staging + archive (Knowledge intake suite, seam 1,
+ * t_f8f5ef6a). Mirrors the inbox-versus-processed distinction: a capture
+ * lands in `Brain/captures/` (staging) and moves to
+ * `Brain/captures/processed/` (archive) once drained. Kept in its own
+ * subtree so the signal inbox and the dream pass stay untouched.
+ */
+export const BRAIN_CAPTURES_REL = posix.join(BRAIN_ROOT_REL, "captures");
+export const BRAIN_CAPTURES_PROCESSED_REL = posix.join(BRAIN_CAPTURES_REL, "processed");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
 export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
@@ -98,6 +107,14 @@ export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
 /** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
 export function claimGraphPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
+}
+
+/** Persisted rollup-ladder counter ledger (knowledge-intake-and-consolidation, S3). */
+export const BRAIN_ROLLUP_LEDGER_FILE = "rollup-ladder.json";
+
+/** Path of the rollup-ladder ledger: `Brain/rollup-ladder.json`. */
+export function rollupLedgerPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ROLLUP_LEDGER_FILE), vault);
 }
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
@@ -357,6 +374,44 @@ export function proceduralRecurrencePath(vault: string): string {
  */
 export function queryDemandLogPath(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_LOG_REL, "query-demand.jsonl"), vault);
+}
+
+/** Inbound-capture staging dir: `Brain/captures/` (seam 1, t_f8f5ef6a). */
+export function capturesDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_CAPTURES_REL), vault);
+}
+
+/** Inbound-capture archive dir: `Brain/captures/processed/` (seam 1). */
+export function capturesProcessedDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_CAPTURES_PROCESSED_REL), vault);
+}
+
+/** A staged capture page: `Brain/captures/<id>.md` (seam 1). */
+export function captureStagingPath(vault: string, id: string): string {
+  return ensureInsideVault(join(capturesDir(vault), `${validateSlug(id)}.md`), vault);
+}
+
+/** An archived capture page: `Brain/captures/processed/<id>.md` (seam 1). */
+export function captureArchivePath(vault: string, id: string): string {
+  return ensureInsideVault(join(capturesProcessedDir(vault), `${validateSlug(id)}.md`), vault);
+}
+
+/**
+ * Catchup watermark sidecar: `Brain/captures/.catchup-watermark.json` (seam
+ * 1). Dot-file so the vault walker never indexes it; records the id of the
+ * last capture acknowledged by a `/catchup` reply.
+ */
+export function captureWatermarkPath(vault: string): string {
+  return ensureInsideVault(join(capturesDir(vault), ".catchup-watermark.json"), vault);
+}
+
+/**
+ * Capture-decision ledger: `Brain/log/capture-decisions.jsonl` (seam 1).
+ * One JSON line per inbound update the bot handled - accepted, rejected, or
+ * malformed - so no update is ever silently dropped.
+ */
+export function captureDecisionLogPath(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_LOG_REL, "capture-decisions.jsonl"), vault);
 }
 
 /** Log file for the given UTC date: `Brain/log/<YYYY-MM-DD>.md`. */

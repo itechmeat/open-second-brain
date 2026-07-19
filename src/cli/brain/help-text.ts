@@ -107,6 +107,9 @@ Brain verbs (observing memory):
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queue: list | apply <id> | reject <id>
   signal              Fact signal lifecycle: retire <id> --reason <text>
+  telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
+  inbox-drain         Classify and route staged captures (dry-run; --apply to route)
+  repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -129,6 +132,7 @@ Brain verbs (observing memory):
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
+  diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault
@@ -787,6 +791,33 @@ export const VERB_HELP: Record<string, string> = {
     "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
     "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
     "silent no-op).\n",
+  "telegram-capture":
+    "usage: o2b brain telegram-capture <run|catchup> [--vault <path>]\n" +
+    "Inbound Telegram capture bot. run long-polls getUpdates via fetch (needs\n" +
+    "TELEGRAM_BOT_TOKEN or telegram_bot_token, and telegram_chat_allowlist);\n" +
+    "each allowlisted text message becomes one staged capture, /catchup replies\n" +
+    "with captures since the last acknowledged one, and every rejected or\n" +
+    "malformed update is one logged decision. A missing token exits with a typed\n" +
+    "error. catchup renders the same summary to stdout from disk, no token or\n" +
+    "network needed. Nothing runs implicitly from hooks.\n",
+  "inbox-drain":
+    "usage: o2b brain inbox-drain [--apply] [--vault <path>] [--json]\n" +
+    "Classify and route staged captures via the capture-note contract.\n" +
+    "Classification is structural only: a url-shaped body is a source\n" +
+    "reference (ingested), a leading @obligation marker opens an obligation,\n" +
+    "and everything else is an atomic idea (create-or-merge note). Dry-run is\n" +
+    "the default and writes nothing; --apply routes each capture and archives\n" +
+    "it, so a rerun is a no-op. Unroutable items are reported and left in\n" +
+    "place. Each item names its action and reason.\n",
+  "repair-lane":
+    'usage: o2b brain repair-lane [--apply --confirm "apply repair"] [--include-inferred] [--vault <path>] [--json]\n' +
+    "Deterministic memory-graph repair lane. Collects candidate edges from\n" +
+    "structural signals only (explicit references, session continuity, same-\n" +
+    "topic evidence), ordered by identity strength. Dry-run is the default and\n" +
+    "writes nothing; --apply writes edges and requires the exact confirmation\n" +
+    "phrase via --confirm. A confidence threshold and a hard per-run write cap\n" +
+    "bound the writes; existing edges are skipped, so a rerun converges to zero\n" +
+    "writes. Inferred candidates are opt-in behind --include-inferred.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

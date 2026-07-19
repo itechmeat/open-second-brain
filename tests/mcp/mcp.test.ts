@@ -276,6 +276,8 @@ describe("tool listing", () => {
         // Workspace Insight Suite: trigger queue + proactive insight.
         "brain_trigger",
         "brain_deep_synthesis",
+        // Subject diarization (knowledge-intake-and-consolidation, t_28ba3fc4).
+        "brain_diarize",
         "brain_idea_discovery",
         // Entity Truth & Self-Improving Dream Suite.
         "brain_truth",
@@ -658,7 +660,9 @@ describe("stdio loop", () => {
     //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
     // + brain_write_batch (general all-or-nothing multi-op write surface,
     //   recall-trust-and-write-surface W2) = 106.
-    expect(list.result.tools.length).toBe(106);
+    // + brain_diarize (subject diarization,
+    //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
+    expect(list.result.tools.length).toBe(107);
   });
 
   test("returns parse error for invalid JSON", async () => {

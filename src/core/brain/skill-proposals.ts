@@ -1,10 +1,18 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  unlinkSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
+import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
 import { reconcileProceduralMemory } from "./procedural-memory.ts";
@@ -35,6 +43,10 @@ export interface SkillProposalLearnResult {
   readonly scanned: number;
   readonly created: ReadonlyArray<string>;
   readonly suppressed: ReadonlyArray<string>;
+  /** Candidates whose support merged into an existing same-name proposal. */
+  readonly merged: ReadonlyArray<string>;
+  /** Candidates the verifier gate rejected before the pending queue. */
+  readonly verifierRejected: ReadonlyArray<string>;
 }
 
 export interface SkillProposalReviewResult {
@@ -49,7 +61,14 @@ interface ProposalCandidate {
   readonly patternKind: SkillProposalPatternKind;
   readonly key: string;
   readonly confidence: number;
+  /** Bounded evidence sample kept for the proposal note, slug, and hash. */
   readonly records: ReadonlyArray<ContinuityRecord>;
+  /**
+   * Full supporting record set the candidate cleared detection with. Carried
+   * apart from the capped `records` so the verifier gate sees the true support
+   * count (a minSupport above the sample cap must not reject a passing draft).
+   */
+  readonly supportingRecords: ReadonlyArray<ContinuityRecord>;
   readonly suggestedTitle: string;
 }
 
@@ -60,6 +79,12 @@ interface WatermarkState {
 
 const DEFAULT_MIN_SUPPORT = 3;
 const DEFAULT_PROCEDURAL_ROOTS = ["Brain/procedures", "skills"] as const;
+
+/** Version stamped on a freshly-drafted skill; increments on evolution. */
+const SKILL_PROPOSAL_INITIAL_VERSION = 1;
+
+/** JSONL ledger of verifier rejections, relative to the vault. */
+const VERIFIER_REJECTION_LEDGER_REL = join(BRAIN_SKILL_PROPOSALS_REL, "verifier-rejections.jsonl");
 
 export function learnSkillProposals(
   vault: string,
@@ -89,22 +114,73 @@ export function learnSkillProposals(
       scanned: 0,
       created: Object.freeze([]),
       suppressed: Object.freeze([]),
+      merged: Object.freeze([]),
+      verifierRejected: Object.freeze([]),
     };
   }
 
   const candidates = detectCandidates(records, minSupport);
   const created: string[] = [];
   const suppressed: string[] = [];
+  const merged: string[] = [];
+  const verifierRejected: string[] = [];
+  const watermarkTo = records[records.length - 1]!.createdAt;
 
   for (const candidate of candidates) {
     const payloadHash = candidateHash(candidate);
     const slug = proposalSlug(candidate, payloadHash);
     const proposalId = `prop-${slug}`;
+    const nameKey = candidateNameKey(candidate);
+    const newRefs = candidateSourceRefs(candidate);
+
+    // Verifier gate: a draft reaches pending only after passing structural and
+    // evidence-count checks against its OWN supporting records.
+    const verdict = verifySkillProposalCandidate(
+      {
+        patternKind: candidate.patternKind,
+        key: candidate.key,
+        confidence: candidate.confidence,
+        evidence: candidate.supportingRecords.map((record) => ({
+          id: record.id,
+          supportsPattern: recordSupportsCandidate(candidate, record),
+        })),
+      },
+      { minEvidence: minSupport },
+    );
+    if (!verdict.accepted) {
+      appendVerifierRejection(vault, {
+        id: proposalId,
+        name_key: nameKey,
+        reason: verdict.reason,
+        at: now.toISOString(),
+      });
+      verifierRejected.push(proposalId);
+      continue;
+    }
+
+    // Same-name merge: an accepted collision evolves the skill (version bump);
+    // a pending collision accumulates support. Neither forks a new draft.
+    const acceptedMatch = findProposalByNameKey(vault, "accepted", nameKey);
+    if (acceptedMatch !== null) {
+      evolveAcceptedProposal(vault, acceptedMatch, candidate, newRefs, now, watermarkTo);
+      merged.push(acceptedMatch.id);
+      continue;
+    }
+    const pendingMatch = findProposalByNameKey(vault, "pending", nameKey);
+    if (pendingMatch !== null) {
+      mergePendingProposal(vault, pendingMatch, candidate, newRefs, now, watermarkTo);
+      merged.push(pendingMatch.id);
+      continue;
+    }
+    if (findProposalByNameKey(vault, "rejected", nameKey) !== null) {
+      // A human rejected this name; do not resurface it as a fresh draft.
+      suppressed.push(proposalId);
+      continue;
+    }
 
     const pendingPath = skillProposalPendingPath(vault, slug);
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
     const rejectedPath = skillProposalRejectedPath(vault, slug);
-
     if (existsSync(pendingPath) || existsSync(acceptedPath) || existsSync(rejectedPath)) {
       suppressed.push(proposalId);
       continue;
@@ -119,17 +195,16 @@ export function learnSkillProposals(
         slug,
         status: "pending",
         pattern_kind: candidate.patternKind,
+        name_key: nameKey,
+        version: SKILL_PROPOSAL_INITIAL_VERSION,
         confidence: candidate.confidence.toFixed(3),
         payload_hash: payloadHash,
         created_at: now.toISOString(),
         updated_at: now.toISOString(),
         watermark_from: watermark.lastCreatedAt ?? "",
-        watermark_to: records[records.length - 1]!.createdAt,
+        watermark_to: watermarkTo,
         evidence_count: String(candidate.records.length),
-        source_refs: candidate.records.flatMap((record) => [
-          record.id,
-          ...record.sourceRefs.map((src) => src.id),
-        ]),
+        source_refs: newRefs,
       },
       renderProposalBody(candidate),
       {
@@ -142,7 +217,6 @@ export function learnSkillProposals(
   }
 
   const watermarkRecord = records[records.length - 1]!;
-  const watermarkTo = watermarkRecord.createdAt;
   writeWatermark(vault, {
     lastCreatedAt: watermarkTo,
     lastId: watermarkRecord.id,
@@ -156,6 +230,8 @@ export function learnSkillProposals(
     scanned: records.length,
     created: Object.freeze(created),
     suppressed: Object.freeze(suppressed),
+    merged: Object.freeze(merged),
+    verifierRejected: Object.freeze(verifierRejected),
   };
 }
 
@@ -206,6 +282,7 @@ export function acceptSkillProposal(
     throw new Error(`invalid skill proposal file: ${pendingPath}`);
   }
   const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
+  const version = parseVersion(fm["version"]);
   const acceptedPath = skillProposalAcceptedPath(vault, slug);
   const procPath = procedurePath(vault, slug);
 
@@ -214,6 +291,7 @@ export function acceptSkillProposal(
     {
       ...fm,
       status: "accepted",
+      version,
       reviewed_at: now,
       updated_at: now,
       ...(opts.note ? { review_note: opts.note } : {}),
@@ -235,6 +313,7 @@ export function acceptSkillProposal(
         id: `proc-${slug}`,
         slug,
         source_proposal: id,
+        version,
         created_at: now,
         updated_at: now,
         status: "active",
@@ -340,6 +419,174 @@ function watermarkPath(vault: string): string {
   return proposalWatermarkPath(vault);
 }
 
+/** Stable name identity of a candidate, independent of the specific records. */
+function candidateNameKey(candidate: ProposalCandidate): string {
+  return `${candidate.patternKind}:${candidate.key}`;
+}
+
+/** Source references a candidate contributes (record ids plus their source ids). */
+function candidateSourceRefs(candidate: ProposalCandidate): string[] {
+  return candidate.records.flatMap((record) => [
+    record.id,
+    ...record.sourceRefs.map((src) => src.id),
+  ]);
+}
+
+/** True when `record` structurally supports the candidate's pattern. */
+function recordSupportsCandidate(candidate: ProposalCandidate, record: ContinuityRecord): boolean {
+  switch (candidate.patternKind) {
+    case "repeated_action":
+      return actionToken(record) === candidate.key;
+    case "structural_similarity":
+      return shapeSignature(record) === candidate.key;
+    case "co_occurrence": {
+      const [left, right] = candidate.key.split(" -> ");
+      const token = actionToken(record);
+      return token !== null && (token === left || token === right);
+    }
+    case "temporal_routine": {
+      const [action, hour] = candidate.key.split("@");
+      return actionToken(record) === action && isoHour(record.createdAt) === hour;
+    }
+    default:
+      return false;
+  }
+}
+
+/** Parse a stored version scalar, defaulting to the initial version. */
+function parseVersion(value: unknown): number {
+  const parsed = typeof value === "number" ? value : Number.parseInt(String(value ?? ""), 10);
+  return Number.isFinite(parsed) && parsed >= 1
+    ? Math.floor(parsed)
+    : SKILL_PROPOSAL_INITIAL_VERSION;
+}
+
+/** Merge two source-ref lists, preserving order and dropping duplicates. */
+function mergeSourceRefs(previous: unknown, next: ReadonlyArray<string>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const push = (value: unknown): void => {
+    if (typeof value !== "string" || value.length === 0 || seen.has(value)) return;
+    seen.add(value);
+    out.push(value);
+  };
+  if (Array.isArray(previous)) for (const ref of previous) push(ref);
+  for (const ref of next) push(ref);
+  return out;
+}
+
+interface FoundProposal {
+  readonly path: string;
+  readonly slug: string;
+  readonly id: string;
+  readonly fm: Record<string, unknown>;
+  readonly body: string;
+}
+
+/** Find the first proposal in `phase` whose stored name key matches. */
+function findProposalByNameKey(
+  vault: string,
+  phase: "pending" | "accepted" | "rejected",
+  nameKey: string,
+): FoundProposal | null {
+  const dir = ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, phase), vault);
+  if (!existsSync(dir)) return null;
+  for (const name of readdirSync(dir).toSorted()) {
+    if (!name.endsWith(".md")) continue;
+    const path = ensureInsideVault(join(dir, name), vault);
+    const [fm, body] = parseFrontmatter(path);
+    if (fm["kind"] !== "brain-skill-proposal") continue;
+    if (fm["name_key"] !== nameKey) continue;
+    const slug =
+      typeof fm["slug"] === "string" ? fm["slug"] : name.replace(/^prop-/, "").replace(/\.md$/, "");
+    const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
+    return { path, slug, id, fm: fm as Record<string, unknown>, body };
+  }
+  return null;
+}
+
+/** Count of distinct records that structurally support the candidate. */
+function supportingCount(candidate: ProposalCandidate): number {
+  return new Set(
+    candidate.records
+      .filter((record) => recordSupportsCandidate(candidate, record))
+      .map((r) => r.id),
+  ).size;
+}
+
+/** Merge a candidate's support into an existing pending draft (no fork). */
+function mergePendingProposal(
+  vault: string,
+  match: FoundProposal,
+  candidate: ProposalCandidate,
+  newRefs: ReadonlyArray<string>,
+  now: Date,
+  watermarkTo: string,
+): void {
+  const priorEvidence = Number.parseInt(String(match.fm["evidence_count"] ?? "0"), 10) || 0;
+  const priorConfidence = Number.parseFloat(String(match.fm["confidence"] ?? "0")) || 0;
+  writeFrontmatterAtomic(
+    match.path,
+    {
+      ...match.fm,
+      confidence: Math.max(priorConfidence, candidate.confidence).toFixed(3),
+      evidence_count: String(priorEvidence + supportingCount(candidate)),
+      source_refs: mergeSourceRefs(match.fm["source_refs"], newRefs),
+      updated_at: now.toISOString(),
+      watermark_to: watermarkTo,
+    },
+    match.body,
+    { overwrite: true, vaultForRelativePath: vault },
+  );
+}
+
+/** Evolve an accepted skill: merge support and increment its version. */
+function evolveAcceptedProposal(
+  vault: string,
+  match: FoundProposal,
+  candidate: ProposalCandidate,
+  newRefs: ReadonlyArray<string>,
+  now: Date,
+  watermarkTo: string,
+): void {
+  const priorEvidence = Number.parseInt(String(match.fm["evidence_count"] ?? "0"), 10) || 0;
+  const nextVersion = parseVersion(match.fm["version"]) + 1;
+  writeFrontmatterAtomic(
+    match.path,
+    {
+      ...match.fm,
+      version: nextVersion,
+      evidence_count: String(priorEvidence + supportingCount(candidate)),
+      source_refs: mergeSourceRefs(match.fm["source_refs"], newRefs),
+      updated_at: now.toISOString(),
+      watermark_to: watermarkTo,
+    },
+    match.body,
+    { overwrite: true, vaultForRelativePath: vault },
+  );
+
+  const procPath = procedurePath(vault, match.slug);
+  if (existsSync(procPath)) {
+    const [procFm, procBody] = parseFrontmatter(procPath);
+    writeFrontmatterAtomic(
+      procPath,
+      { ...procFm, version: nextVersion, updated_at: now.toISOString() },
+      procBody,
+      { overwrite: true, vaultForRelativePath: vault },
+    );
+  }
+}
+
+/** Append one verifier-rejection record to the JSONL ledger. */
+function appendVerifierRejection(
+  vault: string,
+  entry: { id: string; name_key: string; reason: string; at: string },
+): void {
+  const path = ensureInsideVault(join(vault, VERIFIER_REJECTION_LEDGER_REL), vault);
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, `${JSON.stringify(entry)}\n`, { encoding: "utf8" });
+}
+
 function detectCandidates(
   records: ReadonlyArray<ContinuityRecord>,
   minSupport: number,
@@ -361,6 +608,7 @@ function detectCandidates(
       key: action,
       confidence: confidence(bucket.length, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Repeated action: ${action}`,
     });
   }
@@ -380,6 +628,7 @@ function detectCandidates(
       key: shape,
       confidence: confidence(bucket.length, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Structural routine: ${shape}`,
     });
   }
@@ -402,6 +651,7 @@ function detectCandidates(
       key: pair,
       confidence: confidence(support, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Co-occurrence flow: ${pair}`,
     });
   }
@@ -425,6 +675,7 @@ function detectCandidates(
       key,
       confidence: confidence(daySet.size, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Temporal routine: ${key}`,
     });
   }

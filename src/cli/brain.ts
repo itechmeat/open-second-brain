@@ -103,6 +103,7 @@ import {
   cmdBrainPanel,
   cmdBrainTrigger,
   cmdBrainDeepSynthesis,
+  cmdBrainDiarize,
   cmdBrainIdeas,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
@@ -126,6 +127,9 @@ import {
   cmdBrainToday,
   cmdBrainApplyMarkers,
   cmdBrainPending,
+  cmdBrainTelegramCapture,
+  cmdBrainInboxDrain,
+  cmdBrainRepairLane,
   cmdBrainSignal,
   cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
@@ -338,6 +342,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainTrigger(rest);
       case "deep-synthesis":
         return await cmdBrainDeepSynthesis(rest);
+      case "diarize":
+        return await cmdBrainDiarize(rest);
       case "ideas":
         return await cmdBrainIdeas(rest);
       case "entity":
@@ -402,6 +408,12 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPending(rest);
       case "signal":
         return await cmdBrainSignal(rest);
+      case "telegram-capture":
+        return await cmdBrainTelegramCapture(rest);
+      case "inbox-drain":
+        return await cmdBrainInboxDrain(rest);
+      case "repair-lane":
+        return await cmdBrainRepairLane(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":

@@ -1,13 +1,18 @@
 /**
  * `o2b brain deep-synthesis <topic>` (Workspace Insight Suite,
- * t_04e94382): deterministic topic dossier - matched notes,
- * agreements, contradictions, stale claims, knowledge gaps. With
- * `--triggers` the contradiction/gap findings enqueue into the
- * trigger queue.
+ * t_40fa4e8d): deterministic topic dossier - matched notes,
+ * agreements, contradictions, stale claims, knowledge gaps, plus
+ * per-finding causal context, decomposed confidence, and the visible
+ * evidence-loss ledger. With `--triggers` the contradiction/gap
+ * findings enqueue into the trigger queue.
  */
 
 import { defaultConfigPath, resolveTriggerCooldownDays } from "../../../core/config.ts";
-import { deepSynthesis, synthesisCandidates } from "../../../core/brain/deep-synthesis.ts";
+import {
+  deepSynthesis,
+  synthesisCandidates,
+  synthesisFindingsJson,
+} from "../../../core/brain/deep-synthesis.ts";
 import { createTriggers } from "../../../core/brain/triggers/store.ts";
 import { resolveSearchConfig, SearchError } from "../../../core/search/index.ts";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
@@ -70,6 +75,7 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
               source_artifacts: report.strongestObjection.sourceArtifacts,
             }
           : null,
+        ...synthesisFindingsJson(report),
         ...(flags["triggers"] === true ? { triggers_created: enqueued } : {}),
       });
       return 0;

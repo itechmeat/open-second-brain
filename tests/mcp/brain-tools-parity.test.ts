@@ -72,6 +72,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_deep_synthesis",
   "brain_delete_by_source",
   "brain_derive_fact",
+  "brain_diarize",
   "brain_distill_source",
   "brain_doctor",
   "brain_dream",
