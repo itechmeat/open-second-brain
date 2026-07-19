@@ -194,6 +194,10 @@ describe("tool listing", () => {
         "brain_note",
         // Brain Portability & Interop suite: write an actual vault note file.
         "brain_create_note",
+        // Recall-trust-and-write-surface W1: update and append existing notes
+        // as single-operation batches over the atomic write-batch core.
+        "brain_update_note",
+        "brain_append_note",
         "brain_pinned_context",
         "brain_context",
         "brain_query",
@@ -647,7 +651,9 @@ describe("stdio loop", () => {
     //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
     // + brain_status (unified operator status snapshot,
     //   source-pipeline-integrity O3 t_9f9c5466) = 103.
-    expect(list.result.tools.length).toBe(103);
+    // + brain_update_note / brain_append_note (single-operation batches over
+    //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
+    expect(list.result.tools.length).toBe(105);
   });
 
   test("returns parse error for invalid JSON", async () => {

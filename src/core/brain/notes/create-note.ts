@@ -47,18 +47,31 @@ export interface CreateNoteResult {
   readonly created: true;
 }
 
+/** A note path resolved through the shared write safety envelope. */
+export interface ResolvedNoteTarget {
+  /** Normalised vault-relative path (native separators). */
+  readonly relPath: string;
+  /** Absolute filesystem path, guaranteed inside the vault. */
+  readonly abs: string;
+}
+
 /**
- * Create one Markdown note in the vault. Returns the created note's
- * vault-relative path; throws {@link CreateNoteError} on any refusal.
+ * Resolve and safety-check a vault-relative note path - the exact
+ * envelope enforced by {@link createNote}: `.md` suffix, vault-relative
+ * (no absolute path), no `..` traversal, not the Brain machinery root,
+ * not a vault-scope-excluded location, and inside the vault. Every
+ * refusal is a typed {@link CreateNoteError}. Extracted so the atomic
+ * write-batch core (kernel 2) reuses the same envelope for update and
+ * append operations rather than re-deriving it.
  */
-export function createNote(vault: string, input: CreateNoteInput): CreateNoteResult {
-  if (!input.path.toLowerCase().endsWith(".md")) {
-    throw new CreateNoteError("invalid_path", `note path must end in .md: ${input.path}`);
+export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarget {
+  if (!path.toLowerCase().endsWith(".md")) {
+    throw new CreateNoteError("invalid_path", `note path must end in .md: ${path}`);
   }
   // The tool addresses notes by a vault-relative path; an absolute path is
   // ambiguous (which root?) and is refused rather than silently re-rooted.
-  if (input.path.startsWith("/") || input.path.startsWith("\\")) {
-    throw new CreateNoteError("invalid_path", `note path must be vault-relative: ${input.path}`);
+  if (path.startsWith("/") || path.startsWith("\\")) {
+    throw new CreateNoteError("invalid_path", `note path must be vault-relative: ${path}`);
   }
 
   // inspectPath normalises the relative path and throws on `..` traversal;
@@ -67,13 +80,13 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   const scope = resolveVaultScope(vault);
   let inspected;
   try {
-    inspected = inspectPath(input.path, scope, vault);
+    inspected = inspectPath(path, scope, vault);
   } catch (err) {
     throw new CreateNoteError("invalid_path", err instanceof Error ? err.message : String(err));
   }
   const relPath = inspected.relPath;
   if (relPath === "") {
-    throw new CreateNoteError("invalid_path", `empty note path: ${input.path}`);
+    throw new CreateNoteError("invalid_path", `empty note path: ${path}`);
   }
 
   // The Brain machinery root is owned by the brain's own writers; a
@@ -100,6 +113,15 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   } catch (err) {
     throw new CreateNoteError("outside_vault", err instanceof Error ? err.message : String(err));
   }
+  return { relPath, abs };
+}
+
+/**
+ * Create one Markdown note in the vault. Returns the created note's
+ * vault-relative path; throws {@link CreateNoteError} on any refusal.
+ */
+export function createNote(vault: string, input: CreateNoteInput): CreateNoteResult {
+  const { relPath, abs } = resolveNoteTarget(vault, input.path);
 
   mkdirSync(dirname(abs), { recursive: true });
   try {

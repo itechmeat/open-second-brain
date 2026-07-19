@@ -171,5 +171,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
   // + brain_status (unified operator status snapshot,
   //   source-pipeline-integrity O3 t_9f9c5466) = 103.
-  expect(list.result.tools.length).toBe(103);
+  // + brain_update_note / brain_append_note (single-operation batches over
+  //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
+  expect(list.result.tools.length).toBe(105);
 });
