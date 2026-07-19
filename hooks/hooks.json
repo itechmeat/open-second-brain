@@ -74,6 +74,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" pretool-orient; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook pretool-orient; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: strict read-block orientation gate (opt-in)"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "matcher": "*",

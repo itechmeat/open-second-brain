@@ -801,6 +801,22 @@ export function resolveNavTierCadenceMinutes(configPath?: string): number | unde
 }
 
 /**
+ * Strict PreToolUse read-block gate (retrieval-quality-and-context-delivery,
+ * D2 / t_36b0fd8d). Default OFF: the opt-in PreToolUse hook stays permissive
+ * (emits nothing, byte-identical to today) unless `hook_strict_enabled:
+ * "true"` (or the matching env override). Flag on denies the FIRST raw
+ * vault-file read of a session with a redirect to the brain search surface,
+ * then downgrades to a soft nudge; every failure path fails open.
+ */
+export function resolveHookStrictEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED",
+    "hook_strict_enabled",
+    configPath,
+  );
+}
+
+/**
  * Knowledge-gap loop gate (recall-trust-and-write-surface, A3 /
  * t_67d38036). Default OFF: the opt-in session-start gap agenda and
  * session-end gap promotion/auto-close stay dormant unless
