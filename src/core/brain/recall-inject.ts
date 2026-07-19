@@ -21,6 +21,10 @@
 import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts";
 import { searchAcrossVaults } from "../search/cross-vault.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
+import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
+
+/** `origin` label stamped on the recall brief's untrusted-content fence. */
+const RECALL_FENCE_ORIGIN = "recall-inject";
 
 /** Hard cap on notes carried in a single brief. */
 export const RECALL_INJECT_MAX_NOTES = 4;
@@ -137,35 +141,65 @@ export async function decideRecallInject(
  * orientation line, then one bullet per note added only while the whole
  * brief stays within `maxChars`. Returns the count of notes actually
  * rendered so the audit reflects the delivered brief.
+ *
+ * Note titles are untrusted vault content, so every title is neutralized
+ * (see {@link neutralizeTitle}) BEFORE it reaches either the recall-hint line
+ * or a note bullet, and the finished brief is fenced as untrusted content
+ * ({@link fenceUntrustedContent}). The fence delimiter overhead is charged
+ * against `maxChars` - the whole fenced brief, not just its inner body, stays
+ * within the cap - so the hard char bound the audit relies on still holds.
  */
 function renderRecallBrief(
   chosen: ReadonlyArray<RecallCandidate>,
   total: number,
   maxChars: number,
 ): { readonly brief: string; readonly noteCount: number } {
-  const hintInputs: ReadonlyArray<RecallHintInput> = chosen.map((c) => ({
+  const safe = chosen.map((c) => ({ ...c, title: neutralizeTitle(c.title) }));
+  const hintInputs: ReadonlyArray<RecallHintInput> = safe.map((c) => ({
     searchType: c.searchType,
     score: c.score,
     title: c.title,
   }));
   const hint = deriveRecallHint(hintInputs, total);
   const lines: string[] = ["Recalled vault context (relevance-matched to this prompt):"];
-  if (hint !== null) lines.push(hint);
+  // Charge the fence delimiter overhead against the cap so the FENCED brief
+  // (not merely its inner body) is what stays within `maxChars`.
+  const innerBudget = Math.max(0, maxChars - fenceOverhead());
+  // The hint is orientation, not a pointer: keep it only while it fits, so a
+  // tight budget spends its characters on the actual note pointers instead.
+  if (hint !== null && [...lines, hint].join("\n").length <= innerBudget) lines.push(hint);
   let noteCount = 0;
-  for (const note of chosen) {
+  for (const note of safe) {
     const line = renderNoteLine(note);
-    if ([...lines, line].join("\n").length > maxChars) break;
+    if ([...lines, line].join("\n").length > innerBudget) break;
     lines.push(line);
     noteCount += 1;
   }
-  return { brief: lines.join("\n"), noteCount };
+  return { brief: fenceUntrustedContent(lines.join("\n"), RECALL_FENCE_ORIGIN), noteCount };
 }
 
-function renderNoteLine(note: RecallCandidate): string {
-  const title = note.title !== null && note.title.length > 0 ? note.title : "(untitled)";
+/** Character cost of the untrusted-content fence around an empty body. */
+function fenceOverhead(): number {
+  return fenceUntrustedContent("", RECALL_FENCE_ORIGIN).length;
+}
+
+/**
+ * Neutralize one untrusted vault title for single-line use in the brief.
+ * Reuses the structural neutralizer (control/bidi/zero-width strip plus
+ * delimiter escape), then collapses any surviving newline/tab run to one
+ * space so the title can never break the brief's line structure or smuggle a
+ * forged delimiter past review.
+ */
+function neutralizeTitle(title: string | null): string {
+  if (title === null || title.length === 0) return "(untitled)";
+  const clean = neutralizeUntrustedText(title).replace(/[\n\t]+/g, " ");
+  return clean.length > 0 ? clean : "(untitled)";
+}
+
+function renderNoteLine(note: { readonly title: string } & Omit<RecallCandidate, "title">): string {
   const pointer = `${note.path}:L${note.startLine}-L${note.endLine}`;
   const origin = note.origin !== undefined ? ` [${note.origin}]` : "";
-  return `- "${title}" (${pointer}, ${note.searchType} ${note.score.toFixed(2)})${origin}`;
+  return `- "${note.title}" (${pointer}, ${note.searchType} ${note.score.toFixed(2)})${origin}`;
 }
 
 function errorReason(exc: unknown): string {
