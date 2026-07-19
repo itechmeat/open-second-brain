@@ -300,6 +300,15 @@ export function showObligation(vault: string, slug: string): ObligationPage | nu
   return parsePage(vault, slugify(slug));
 }
 
+/**
+ * True when an active obligation page already exists for `slug`. Lets callers
+ * (e.g. the inbox-drain pass) detect a same-title collision structurally
+ * before attempting a create that {@link addObligation} would reject.
+ */
+export function obligationExists(vault: string, slug: string): boolean {
+  return existsSync(obligationPath(vault, slugify(slug)));
+}
+
 export interface ObligationListItem extends ObligationPage {
   /** True when next-due is strictly before today (UTC). */
   readonly overdue: boolean;

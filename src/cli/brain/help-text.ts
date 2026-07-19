@@ -108,6 +108,7 @@ Brain verbs (observing memory):
   pending             Review the write-approval queue: list | apply <id> | reject <id>
   signal              Fact signal lifecycle: retire <id> --reason <text>
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
+  inbox-drain         Classify and route staged captures (dry-run; --apply to route)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -797,6 +798,15 @@ export const VERB_HELP: Record<string, string> = {
     "malformed update is one logged decision. A missing token exits with a typed\n" +
     "error. catchup renders the same summary to stdout from disk, no token or\n" +
     "network needed. Nothing runs implicitly from hooks.\n",
+  "inbox-drain":
+    "usage: o2b brain inbox-drain [--apply] [--vault <path>] [--json]\n" +
+    "Classify and route staged captures via the capture-note contract.\n" +
+    "Classification is structural only: a url-shaped body is a source\n" +
+    "reference (ingested), a leading @obligation marker opens an obligation,\n" +
+    "and everything else is an atomic idea (create-or-merge note). Dry-run is\n" +
+    "the default and writes nothing; --apply routes each capture and archives\n" +
+    "it, so a rerun is a no-op. Unroutable items are reported and left in\n" +
+    "place. Each item names its action and reason.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

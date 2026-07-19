@@ -112,6 +112,7 @@ export { cmdBrainToday } from "./today.ts";
 export { cmdBrainApplyMarkers } from "./apply-markers.ts";
 export { cmdBrainPending } from "./pending.ts";
 export { cmdBrainTelegramCapture } from "./telegram-capture.ts";
+export { cmdBrainInboxDrain } from "./inbox-drain.ts";
 export { cmdBrainSignal } from "./signal.ts";
 export {
   cmdBrainSessionDescribe,
