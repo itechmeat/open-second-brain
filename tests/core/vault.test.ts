@@ -39,6 +39,74 @@ describe("parseFrontmatter", () => {
     expect(body).toBe("Just a note.");
   });
 
+  test("parses block-style YAML list into an array", () => {
+    // Regression: the frontmatter reader only understood inline arrays
+    // (`tags: [a, b]`) and silently dropped block sequences
+    // (`tags:\n  - a\n  - b`). Block lists are what Obsidian's Properties
+    // editor and several writers emit, so the dropped `tags` surfaced as
+    // spurious `signal missing field: tags` errors in `o2b brain doctor`.
+    const path = join(tmp, "note.md");
+    writeFileSync(
+      path,
+      "---\nkind: brain-signal\ntags:\n  - brain\n  - brain/signal\n  - brain/topic/foo\ntopic: foo\nsignal: positive\n---\n\nBody.\n",
+    );
+    const [meta, body] = parseFrontmatter(path);
+    expect(meta["kind"]).toBe("brain-signal");
+    expect(meta["tags"]).toEqual(["brain", "brain/signal", "brain/topic/foo"]);
+    expect(meta["topic"]).toBe("foo");
+    expect(meta["signal"]).toBe("positive");
+    expect(body).toBe("Body.");
+  });
+
+  test("block list with a bare empty dash item is not silently dropped", () => {
+    // Regression for the CodeRabbit edge case: an isolated `-` (or `- `)
+    // must NOT reset blockKey and drop the rest of the list. The empty
+    // item surfaces as an empty-string element, and subsequent items are
+    // still captured.
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\ntags:\n  - brain\n  -\n  - brain/signal\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["tags"]).toEqual(["brain", "", "brain/signal"]);
+  });
+
+  test("dash-prefixed string without whitespace is not a list item", () => {
+    // `-foo` has no space after the dash, so it must NOT be parsed as a
+    // block-list item (only `- foo` / bare `-` count). As a lone line it
+    // is simply ignored as a non-key/value line.
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\nkey: value\n-foo\nother: end\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["key"]).toBe("value");
+    expect(meta["other"]).toBe("end");
+    expect(meta["-foo"]).toBeUndefined();
+  });
+
+  test("block-style list with quoted items parses as strings", () => {
+    const path = join(tmp, "note.md");
+    writeFileSync(path, '---\ntags:\n  - plain\n  - "needs, comma"\ntitle: Mixed\n---\n\nBody.\n');
+    const [meta] = parseFrontmatter(path);
+    expect(meta["tags"]).toEqual(["plain", "needs, comma"]);
+  });
+
+  test("empty scalar key (no following dash list) round-trips as empty string", () => {
+    // A genuine null scalar (`key:` with no block list after it) must
+    // stay an empty string, not be misread as a block-sequence header.
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\ntitle: Hello\nsummary:\nbody: A note\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["summary"]).toBe("");
+    expect(meta["body"]).toBe("A note");
+  });
+
+  test("block list and inline array interleave correctly", () => {
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\ninline: [x, y]\nblock:\n  - a\n  - b\ntail: end\n---\n\nBody.\n");
+    const [meta] = parseFrontmatter(path);
+    expect(meta["inline"]).toEqual(["x", "y"]);
+    expect(meta["block"]).toEqual(["a", "b"]);
+    expect(meta["tail"]).toBe("end");
+  });
+
   test("handles missing file gracefully", () => {
     const [meta, body] = parseFrontmatter("/nonexistent/file.md");
     expect(meta).toEqual({});

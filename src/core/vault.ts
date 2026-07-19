@@ -18,6 +18,10 @@ import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 const KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
+// Block-sequence dash item: `- item` or a bare `-` (empty item). The
+// leading whitespace is required so `-foo` (a dash-prefixed string, not a
+// list item) is NOT matched. Captures the item text after the whitespace.
+const DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 const PLAIN_SCALAR_RE = /^[A-Za-z0-9_./-](?:[A-Za-z0-9_./ -]*[A-Za-z0-9_./-])?$/;
 const CODE_BLOCK_RE = /```[\s\S]*?```|`[^`]+`/g;
 const SLUG_INVALID_RE = /[^a-z0-9]+/g;
@@ -81,13 +85,58 @@ export function parseFrontmatterText(text: string): readonly [FrontmatterMap, st
   const body = text.slice(match[0].length).trim();
   const metadata: FrontmatterMap = {};
 
-  for (const rawLine of fmBlock.split("\n")) {
-    const line = rawLine.trim();
+  // Block-sequence state: when a key is opened with an empty value
+  // (`key:`) and the following lines are dash items (`- a`), we assemble
+  // them into an array. This mirrors standard YAML block lists, which is
+  // what Obsidian's Properties editor and several writers emit — the
+  // original inline-array-only parser silently dropped such lists and
+  // surfaced spurious "missing field" errors in `o2b brain doctor`.
+  const lines = fmBlock.split("\n");
+  let blockKey: string | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!.trim();
     if (!line || line.startsWith("#")) continue;
+
+    const dash = DASH_ITEM_RE.exec(line);
+    if (dash && blockKey !== null) {
+      const arr = (metadata[blockKey] as string[] | undefined) ?? [];
+      arr.push(stripQuotes(dash[1] ?? ""));
+      metadata[blockKey] = arr;
+      continue;
+    }
+
+    // Any non-dash line terminates an open block sequence.
+    blockKey = null;
+
     const kv = KEY_VALUE_RE.exec(line);
     if (!kv) continue;
     const key = kv[1]!;
     let value = kv[2]!.trim();
+
+    if (value === "") {
+      // Empty value. Peek at the next meaningful line: if it is a dash
+      // item this is a block-sequence header, otherwise keep the original
+      // empty-string behaviour so a genuine null scalar round-trips.
+      let j = i + 1;
+      let nextMeaningful: string | null = null;
+      while (j < lines.length) {
+        const cand = lines[j]!.trim();
+        if (!cand || cand.startsWith("#")) {
+          j++;
+          continue;
+        }
+        nextMeaningful = cand;
+        break;
+      }
+      if (nextMeaningful !== null && DASH_ITEM_RE.test(nextMeaningful)) {
+        metadata[key] = [];
+        blockKey = key;
+      } else {
+        metadata[key] = "";
+      }
+      continue;
+    }
 
     if (value.startsWith("[") && value.endsWith("]")) {
       const inner = value.slice(1, -1).trim();
