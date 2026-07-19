@@ -700,6 +700,16 @@ export function resolveSearchConfig(opts: {
     false,
     "search_trust_gate_enabled",
   );
+  const supersedeFadeEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE",
+      "search_supersede_fade_enabled",
+    ),
+    false,
+    "search_supersede_fade_enabled",
+  );
   const learnedWeightsEnabled = parseBool(
     envOrConfig(
       env,
@@ -822,6 +832,7 @@ export function resolveSearchConfig(opts: {
     cacheTtlSeconds,
     relationPolarityEnabled,
     retrievalTrustGateEnabled,
+    supersedeFadeEnabled,
     learnedWeightsEnabled,
     activationEnabled,
     twoPassEnabled,

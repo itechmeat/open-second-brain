@@ -70,6 +70,8 @@ export function makeConfig(opts: {
   relationPolarityEnabled?: boolean;
   /** Retrieval trust gate (kernel 1); defaults to false (opt-in). */
   retrievalTrustGateEnabled?: boolean;
+  /** Relation-only supersede fade (kernel 1); defaults to false (opt-in). */
+  supersedeFadeEnabled?: boolean;
   /** Learned recall weights from feedback; defaults to false (opt-in). */
   learnedWeightsEnabled?: boolean;
   /** Access-reinforced activation; defaults to true (neutral without events). */
@@ -137,6 +139,7 @@ export function makeConfig(opts: {
       cacheTtlSeconds: 300,
       relationPolarityEnabled: opts.relationPolarityEnabled ?? true,
       retrievalTrustGateEnabled: opts.retrievalTrustGateEnabled ?? false,
+      supersedeFadeEnabled: opts.supersedeFadeEnabled ?? false,
       learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,
       activationEnabled: opts.activationEnabled ?? true,
       twoPassEnabled: opts.twoPassEnabled ?? true,

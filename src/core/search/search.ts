@@ -90,6 +90,7 @@ import {
   attachTrustMetadata,
   buildTerminalPaths,
   readCachedFrontmatter,
+  supersedeFadeAdjuster,
 } from "./result-filters.ts";
 import { applyRelationPolarityPhase, applyTraversal } from "./graph-phases.ts";
 import { buildEvidenceVerification, coverageOverChunks } from "./evidence-verification.ts";
@@ -119,6 +120,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     synMax: r.synonymMaxTerms,
     relPol: r.relationPolarityEnabled,
     trustGate: r.retrievalTrustGateEnabled,
+    supFade: r.supersedeFadeEnabled,
     lw: r.learnedWeightsEnabled,
     // Cross-encoder rerank re-orders the cached outcome, so a toggle or
     // knob change must invalidate cached rows (the endpoint identity is
@@ -976,6 +978,14 @@ export async function search(
       rankAdjusters.push(
         trustGateAdjuster((path) => readCachedFrontmatter(frontmatterCache, config.vault, path)),
       );
+    }
+    if (config.recall.supersedeFadeEnabled) {
+      // Relation-only supersede fade (t_c4a9cef8): fetch the pool's typed
+      // relations once and fade any candidate a `superseded_by` edge marks
+      // superseded, the same source of truth `attachTrustMetadata` uses.
+      const poolDocIds = Array.from(new Set(reranked.map((r) => r.documentId)));
+      const relByPoolDoc = store.typedRelationsForDocuments(poolDocIds);
+      rankAdjusters.push(supersedeFadeAdjuster((documentId) => relByPoolDoc.get(documentId) ?? []));
     }
     const adjusted = applyRankAdjusters(reranked, rankAdjusters);
     // Per-pack retrieval trust receipts (t_5f61130a): compact references

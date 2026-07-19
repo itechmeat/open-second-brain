@@ -914,6 +914,16 @@ export interface ResolvedRecallConfig {
    */
   readonly retrievalTrustGateEnabled: boolean;
   /**
+   * Relation-only supersede fade (t_c4a9cef8), kernel 1's second
+   * consumer. Off by default: when true, a candidate a surfaced
+   * `superseded_by` relation marks superseded (the same source of truth
+   * `attachTrustMetadata` uses) is faded by SUPERSEDE_FADE_MULTIPLIER on
+   * both the semantic and pure-lexical paths. A pool with no such
+   * relation ranks byte-identically, and the existing superseded-non-tip
+   * tombstone drop is untouched.
+   */
+  readonly supersedeFadeEnabled: boolean;
+  /**
    * Retrieval feedback loop (recall-trust-suite). Off by default: when
    * true, learned per-layer multipliers derived from explicit recall
    * feedback (`Brain/search/learned-weights.json`) compose with the
