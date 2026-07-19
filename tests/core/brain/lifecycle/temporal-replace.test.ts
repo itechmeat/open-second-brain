@@ -120,9 +120,13 @@ test("date-only facts keep whole-day semantics", () => {
 test("temporalReplace logs a temporal-replace event", () => {
   const pred = writeFact("old");
   const succ = writeFact("new");
-  temporalReplace({ vault, predecessor: pred, successor: succ, at: AT });
+  const res = temporalReplace({ vault, predecessor: pred, successor: succ, at: AT });
 
-  const { entries } = readLogDay(vault, "2026-07-18");
+  // The event lands under the UTC day of the wall-clock write instant
+  // (result.loggedAt), NOT the belief instant `at`. Deriving the log day
+  // from the result keeps this test green on any wall-clock date.
+  const logDay = res.loggedAt.slice(0, 10);
+  const { entries } = readLogDay(vault, logDay);
   const events = entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.temporalReplace);
   expect(events.length).toBe(1);
   expect(events[0]!.body["at"]).toBe(AT);
