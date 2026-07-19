@@ -28,6 +28,7 @@ import { appendMetric } from "../../core/brain/metrics.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { createTriggers } from "../../core/brain/triggers/store.ts";
 import { deepSynthesis, synthesisCandidates } from "../../core/brain/deep-synthesis.ts";
+import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
@@ -374,6 +375,45 @@ async function toolBrainDeepSynthesis(
       : null,
     ...(triggersCreated !== undefined ? { triggers_created: triggersCreated } : {}),
   };
+}
+
+// ----- brain_diarize (subject diarization, t_28ba3fc4) ----------------------
+
+async function toolBrainDiarize(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const query = coerceStr(args, "entity", true)!;
+  const category = coerceStr(args, "category", false);
+  try {
+    const report = diarize(
+      ctx.vault,
+      { query, ...(category ? { category } : {}) },
+      { now: new Date() },
+    );
+    return {
+      entity_id: report.entityId,
+      entity_name: report.entityName,
+      category: report.category,
+      generated_at: report.generatedAt,
+      document_set: report.documentSet,
+      stated_vs_evidenced: report.statedVsEvidenced.map((l) => ({
+        kind: l.kind,
+        statement: l.statement,
+        evidence: l.evidence,
+        evidence_frequency: l.evidenceFrequency,
+        last_evidenced_at: l.lastEvidencedAt,
+      })),
+      excluded_line_count: report.excludedLineCount,
+      skeleton: report.skeleton,
+      llm_step: report.llmStep,
+    };
+  } catch (err) {
+    if (err instanceof DiarizationError) {
+      throw new MCPError(INVALID_PARAMS, `brain_diarize: ${err.message}`);
+    }
+    throw err;
+  }
 }
 
 // ----- brain_idea_discovery (Workspace Insight Suite) ------------------------
@@ -792,6 +832,30 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     },
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainDeepSynthesis,
+  },
+  {
+    name: "brain_diarize",
+    description:
+      "Subject profile for a registry entity: assembles its document set from the registry and sources, computes a deterministic stated-vs-evidenced gap (claims vs evidence frequency and recency), and emits a profile skeleton plus one needs-llm-step envelope. Read-only. Unknown entity errors.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        entity: {
+          type: "string",
+          minLength: 1,
+          maxLength: 200,
+          description: "Entity name or alias to profile.",
+        },
+        category: {
+          type: "string",
+          description: "Optional category to disambiguate the entity lookup.",
+        },
+      },
+      required: ["entity"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainDiarize,
   },
   {
     name: "brain_idea_discovery",

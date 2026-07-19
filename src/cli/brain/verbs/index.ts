@@ -86,6 +86,7 @@ export { cmdBrainSession } from "./session.ts";
 export { cmdBrainPanel } from "./panel.ts";
 export { cmdBrainTrigger } from "./trigger.ts";
 export { cmdBrainDeepSynthesis } from "./deep-synthesis.ts";
+export { cmdBrainDiarize } from "./diarize.ts";
 export { cmdBrainIdeas } from "./ideas.ts";
 export { cmdBrainEntity } from "./entity.ts";
 export { cmdBrainSessionHook } from "./session-hook.ts";

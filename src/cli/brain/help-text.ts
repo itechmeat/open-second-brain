@@ -131,6 +131,7 @@ Brain verbs (observing memory):
   sgrep               Grep-shaped semantic search: o2b brain sgrep <query> [path]
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
+  diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault

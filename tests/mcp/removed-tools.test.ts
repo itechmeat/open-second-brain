@@ -175,5 +175,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
   // + brain_write_batch (general all-or-nothing multi-op write surface,
   //   recall-trust-and-write-surface W2) = 106.
-  expect(list.result.tools.length).toBe(106);
+  // + brain_diarize (subject diarization,
+  //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
+  expect(list.result.tools.length).toBe(107);
 });
