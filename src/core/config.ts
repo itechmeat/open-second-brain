@@ -756,6 +756,24 @@ export function resolveContextPackOutcomeEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Prompt-time bounded recall-inject gate (recall-trust-and-write-surface,
+ * A2 / t_2ce46130). Default OFF: the opt-in UserPromptSubmit recall-inject
+ * hook stays a no-op unless `recall_inject_enabled: "true"` (or the matching
+ * env override), when each user prompt relevance-recalls a small bounded,
+ * clip-safe brief of vault notes and injects it as additionalContext. The
+ * hook is fail-closed (any error or timeout injects nothing) and audited
+ * (every inject/abstain/error decision writes one line). Flag off keeps the
+ * prompt preamble byte-identical.
+ */
+export function resolveRecallInjectEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED",
+    "recall_inject_enabled",
+    configPath,
+  );
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.
