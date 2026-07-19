@@ -7,9 +7,14 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { utimesSync } from "node:fs";
+import { rmSync, utimesSync } from "node:fs";
+import { join } from "node:path";
 
-import { deepSynthesis, synthesisCandidates } from "../../../src/core/brain/deep-synthesis.ts";
+import {
+  deepSynthesis,
+  hasEvidenceIdentity,
+  synthesisCandidates,
+} from "../../../src/core/brain/deep-synthesis.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
@@ -129,4 +134,80 @@ test("contradiction and gap findings convert to trigger candidates", async () =>
     expect(c.sourceArtifacts.length).toBeGreaterThan(0);
     expect(c.reason.length).toBeGreaterThan(0);
   }
+});
+
+// ----- t_40fa4e8d: causal context, decomposed confidence, evidence gate -----
+
+test("every matched readable note becomes a finding with identity, causal context, and confidence", async () => {
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "manticores", { now: NOW });
+  expect(report.findings.length).toBeGreaterThanOrEqual(3);
+
+  const claim = report.findings.find((f) => f.evidence.path === "Brain/notes/claim.md");
+  expect(claim).toBeDefined();
+  // Evidence identity is a concrete, retrievable artifact.
+  expect(hasEvidenceIdentity(claim!.evidence)).toBe(true);
+  expect(claim!.evidence.kind).toBe("note");
+  expect(claim!.evidence.contentHash).toMatch(/^[0-9a-f]{64}$/);
+
+  // Decomposed confidence, each deterministic from data already in the pass.
+  expect(claim!.confidence.support).toBeGreaterThanOrEqual(1); // support.md relates -> claim
+  expect(claim!.confidence.opposition).toBeGreaterThanOrEqual(1); // claim contradicts counter
+  expect(claim!.confidence.freshness).toBeGreaterThan(0); // recently touched
+  expect(claim!.confidence.coverage).toBeGreaterThanOrEqual(1); // resolves [[counter]]
+
+  // Causal context records the dangling load-bearing citation ([[missing-study]]).
+  expect(claim!.causalContext.danglingCitations).toBeGreaterThanOrEqual(1);
+  expect(claim!.causalContext.relations.some((r) => r.relation === "contradicts")).toBe(true);
+});
+
+test("freshness decays to zero for an aged finding", async () => {
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "taxonomy", { now: NOW });
+  const ancient = report.findings.find((f) => f.evidence.path === "Brain/notes/ancient.md");
+  expect(ancient).toBeDefined();
+  expect(ancient!.confidence.freshness).toBe(0);
+});
+
+test("a matched note with no retrievable content is excluded with a reason, never silently dropped", async () => {
+  writeMd(vault, "Brain/notes/ghost.md", "# Ghost\n\nManticores were sighted at this ridge.");
+  await indexVault(makeConfig({ vault, dbPath }));
+  // Delete after indexing: the index still surfaces it, but its bytes are gone.
+  rmSync(join(vault, "Brain/notes/ghost.md"));
+
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "manticores", { now: NOW });
+  // Still a matched note (existing field, unchanged).
+  expect(report.notes.some((n) => n.path === "Brain/notes/ghost.md")).toBe(true);
+  // But never a finding - it has no evidence identity.
+  expect(report.findings.some((f) => f.evidence.path === "Brain/notes/ghost.md")).toBe(false);
+
+  const excluded = report.excludedFindings.find((e) => e.path === "Brain/notes/ghost.md");
+  expect(excluded).toBeDefined();
+  expect(excluded!.reason).toBe("unreadable");
+  expect(report.excludedFindingCount).toBe(report.excludedFindings.length);
+  expect(report.excludedFindingCount).toBeGreaterThanOrEqual(1);
+});
+
+test("hasEvidenceIdentity rejects incomplete identities", () => {
+  expect(hasEvidenceIdentity(null)).toBe(false);
+  expect(hasEvidenceIdentity(undefined)).toBe(false);
+  expect(hasEvidenceIdentity({ path: "", kind: "note", contentHash: "h" })).toBe(false);
+  expect(hasEvidenceIdentity({ path: "a", kind: "", contentHash: "h" })).toBe(false);
+  expect(hasEvidenceIdentity({ path: "a", kind: "note", contentHash: "" })).toBe(false);
+  expect(hasEvidenceIdentity({ path: "a", kind: "note", contentHash: "h" })).toBe(true);
+});
+
+test("the additive fields do not disturb the prior report shape", async () => {
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "manticores", { now: NOW });
+  // Prior dimensions unchanged (regression on prior output shape).
+  expect(report.checked).toEqual([
+    "matched_notes",
+    "agreements",
+    "contradictions",
+    "stale_claims",
+    "knowledge_gaps",
+    "strongest_objection",
+  ]);
+  // New fields are present and additive.
+  expect(Array.isArray(report.findings)).toBe(true);
+  expect(Array.isArray(report.excludedFindings)).toBe(true);
+  expect(typeof report.excludedFindingCount).toBe("number");
 });

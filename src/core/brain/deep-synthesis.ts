@@ -14,6 +14,7 @@
  * (Kernel B) via {@link synthesisCandidates}.
  */
 
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
@@ -65,6 +66,101 @@ export interface SynthesisContamination {
 }
 
 /**
+ * Stable identity for a single piece of evidence grounding a finding
+ * (t_40fa4e8d). The identity is deliberately tied to retrievable
+ * content: `path` names the artifact, `kind` labels what class of
+ * artifact it is (`note`, `source_page`, `claim`, ...), and
+ * `contentHash` is a digest of the evidence bytes. A finding whose
+ * evidence cannot be resolved to concrete content has no identity and
+ * is gated out of emission.
+ *
+ * Exported for reuse by subject diarization (t_28ba3fc4), which builds
+ * the same identity for stated claims and behavioral-signal lines.
+ */
+export interface EvidenceIdentity {
+  /** Vault-relative path (or stable reference) of the grounding artifact. */
+  readonly path: string;
+  /** Artifact class label, e.g. `note`, `source_page`, `claim`. */
+  readonly kind: string;
+  /** Lowercase hex sha256 of the evidence bytes; ties identity to content. */
+  readonly contentHash: string;
+}
+
+/**
+ * True when the identity names a concrete, retrievable artifact: a
+ * non-empty path, a non-empty kind, and a non-empty content hash. The
+ * emission gate drops any finding whose evidence fails this predicate.
+ */
+export function hasEvidenceIdentity(
+  id: EvidenceIdentity | null | undefined,
+): id is EvidenceIdentity {
+  return (
+    id !== null &&
+    id !== undefined &&
+    id.path.trim() !== "" &&
+    id.kind.trim() !== "" &&
+    id.contentHash.trim() !== ""
+  );
+}
+
+/** A typed relation that draws a note into the matched body. */
+export interface SynthesisRelation {
+  readonly relation: string;
+  readonly target: string;
+}
+
+/**
+ * Additive causal context for a finding (t_40fa4e8d): the deterministic
+ * chain that explains why the note sits in the dossier. No generated
+ * prose - just the structural facts already gathered by the pass.
+ */
+export interface SynthesisCausalContext {
+  /** Typed relations connecting this note to the matched body. */
+  readonly relations: ReadonlyArray<SynthesisRelation>;
+  /** The `superseded_by` pointer bearing on the finding, or null. */
+  readonly supersededBy: string | null;
+  /** Dangling wikilink targets originating here (unverified links). */
+  readonly danglingCitations: number;
+}
+
+/**
+ * Decomposed, deterministic confidence components for one finding
+ * (t_40fa4e8d). Each is computed from data already flowing through the
+ * synthesis; none involves a model call or language analysis.
+ */
+export interface SynthesisConfidence {
+  /** Positive typed relations incident to this note within the matched body. */
+  readonly support: number;
+  /** Contradiction relations incident to this note. */
+  readonly opposition: number;
+  /** Recency in [0,1]: 1 = touched today, 0 = at/over the stale age. */
+  readonly freshness: number;
+  /** Resolvable citations originating in this note. */
+  readonly coverage: number;
+}
+
+/**
+ * A synthesis finding (t_40fa4e8d): one matched note carried with its
+ * evidence identity, causal context, and decomposed confidence. Only
+ * findings that clear the evidence-identity gate are emitted.
+ */
+export interface SynthesisFinding {
+  readonly evidence: EvidenceIdentity;
+  readonly title: string | null;
+  readonly causalContext: SynthesisCausalContext;
+  readonly confidence: SynthesisConfidence;
+}
+
+/** Why a candidate finding was gated out of emission (visible loss). */
+export type SynthesisExclusionReason = "unreadable" | "no_evidence_identity";
+
+/** One gated-out finding: its identifier plus the structural reason. */
+export interface SynthesisExcludedFinding {
+  readonly path: string;
+  readonly reason: SynthesisExclusionReason;
+}
+
+/**
  * The single best-formed objection to the dossier's implicit
  * conclusion (that the matched notes form a coherent, current body of
  * knowledge on the topic). This is NOT generated prose — core stays
@@ -104,6 +200,20 @@ export interface DeepSynthesisReport {
    * dimensions.
    */
   readonly strongestObjection: SynthesisObjection | null;
+  /**
+   * Per-note findings (t_40fa4e8d): each matched note that cleared the
+   * evidence-identity gate, carried with its causal context and
+   * decomposed confidence. Additive - existing consumers ignore it.
+   */
+  readonly findings: ReadonlyArray<SynthesisFinding>;
+  /**
+   * Matched notes gated out of {@link findings} because they lacked an
+   * evidence identity, each with the structural reason. The loss is
+   * visible, never silent.
+   */
+  readonly excludedFindings: ReadonlyArray<SynthesisExcludedFinding>;
+  /** Count of {@link excludedFindings} (mirrors the array length). */
+  readonly excludedFindingCount: number;
 }
 
 export interface DeepSynthesisOptions {
@@ -126,8 +236,52 @@ const CHECKED = Object.freeze([
 /** A body of this many matched notes or fewer is itself an objection. */
 const THIN_EVIDENCE_MAX = 1;
 
+/** Evidence-identity kind label for a matched vault note. */
+const EVIDENCE_KIND_NOTE = "note";
+
+/**
+ * Per-note working state gathered in the main scan, consumed by the
+ * finding pass. `content` is null when the note's bytes could not be
+ * read - the signal the gate turns into a visible exclusion.
+ */
+interface NoteAccumulator {
+  readonly note: BrainSearchResult;
+  /** The note's page + short-name forms, for incidence matching. */
+  readonly names: ReadonlySet<string>;
+  readonly ageDays: number;
+  readonly supersededBy: string | null;
+  readonly relations: SynthesisRelation[];
+  coverage: number;
+  danglingCitations: number;
+  content: string | null;
+}
+
 function stripMd(path: string): string {
   return path.endsWith(".md") ? path.slice(0, -".md".length) : path;
+}
+
+/** The page and short-name forms a note answers to as a wikilink target. */
+function noteNames(path: string): ReadonlySet<string> {
+  const page = stripMd(path);
+  const slash = page.lastIndexOf("/");
+  return new Set(slash >= 0 ? [page, page.slice(slash + 1)] : [page]);
+}
+
+/** Lowercase hex sha256 of a string; ties evidence identity to content. */
+function sha256Hex(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+/**
+ * Recency in [0,1]: 1 the day a note is touched, decaying linearly to 0
+ * at the stale-age horizon and staying 0 beyond it. Rounded to four
+ * decimals so the value is byte-stable across runs.
+ */
+function computeFreshness(ageDays: number, horizonDays: number): number {
+  if (horizonDays <= 0) return 0;
+  const raw = 1 - ageDays / horizonDays;
+  const clamped = raw < 0 ? 0 : raw > 1 ? 1 : raw;
+  return Math.round(clamped * 10000) / 10000;
 }
 
 /**
@@ -263,18 +417,27 @@ export async function deepSynthesis(
   const gapSources = new Map<string, Set<string>>();
   const contaminated: SynthesisContamination[] = [];
   const citedContentCache = new Map<string, string>();
+  // Per-note accumulation for the finding pass (t_40fa4e8d). Support and
+  // opposition are cross-note incidence counts, so findings are built in
+  // a second pass once every relation edge is known.
+  const perNote: NoteAccumulator[] = [];
 
   for (const note of matched) {
+    const names = noteNames(note.path);
+    const relations: SynthesisRelation[] = [];
     let supersededBy: string | null = null;
     for (const rel of note.relations ?? []) {
       if (rel.relation === "contradicts") {
         contradictions.push(Object.freeze({ path: note.path, target: rel.target }));
+        relations.push(Object.freeze({ relation: rel.relation, target: rel.target }));
       } else if (rel.relation === "superseded_by") {
         supersededBy = rel.target;
+        relations.push(Object.freeze({ relation: rel.relation, target: rel.target }));
       } else if (POSITIVE_RELATIONS.has(rel.relation) && matchedTargets.has(rel.target)) {
         agreements.push(
           Object.freeze({ path: note.path, relation: rel.relation, target: rel.target }),
         );
+        relations.push(Object.freeze({ relation: rel.relation, target: rel.target }));
       }
     }
 
@@ -290,14 +453,29 @@ export async function deepSynthesis(
       staleClaims.push(Object.freeze({ path: note.path, ageDays, supersededBy }));
     }
 
+    const acc: NoteAccumulator = {
+      note,
+      names,
+      ageDays,
+      supersededBy,
+      relations,
+      coverage: 0,
+      danglingCitations: 0,
+      content: null,
+    };
+    perNote.push(acc);
+
     // Gaps: wikilink targets referenced by this note that resolve to
-    // no vault page.
+    // no vault page. A note whose bytes cannot be read is recorded (its
+    // `content` stays null) so the finding pass reports the loss rather
+    // than dropping it silently.
     let content: string;
     try {
       content = readFileSync(join(config.vault, note.path), "utf8");
     } catch {
       continue;
     }
+    acc.content = content;
     const citedRel = new Set<string>();
     for (const body of extractWikilinkRichBodies(content)) {
       const target = parseWikilinkRich(body).target;
@@ -310,7 +488,9 @@ export async function deepSynthesis(
       const sources = gapSources.get(target) ?? new Set<string>();
       sources.add(note.path);
       gapSources.set(target, sources);
+      acc.danglingCitations += 1;
     }
+    acc.coverage = citedRel.size;
 
     // Contamination: a note asserting a registered entity its cited
     // sources never mention. Only notes that actually cite something
@@ -349,6 +529,49 @@ export async function deepSynthesis(
     }
   }
 
+  // Finding pass (t_40fa4e8d): build one finding per matched note that
+  // clears the evidence-identity gate; report the rest as a visible loss.
+  const findings: SynthesisFinding[] = [];
+  const excludedFindings: SynthesisExcludedFinding[] = [];
+  for (const acc of perNote) {
+    if (acc.content === null) {
+      excludedFindings.push(Object.freeze({ path: acc.note.path, reason: "unreadable" }));
+      continue;
+    }
+    const evidence: EvidenceIdentity = {
+      path: acc.note.path,
+      kind: EVIDENCE_KIND_NOTE,
+      contentHash: sha256Hex(acc.content),
+    };
+    if (!hasEvidenceIdentity(evidence)) {
+      excludedFindings.push(Object.freeze({ path: acc.note.path, reason: "no_evidence_identity" }));
+      continue;
+    }
+    const support = agreements.filter(
+      (a) => a.path === acc.note.path || acc.names.has(a.target),
+    ).length;
+    const opposition = contradictions.filter(
+      (c) => c.path === acc.note.path || acc.names.has(c.target),
+    ).length;
+    findings.push(
+      Object.freeze({
+        evidence: Object.freeze(evidence),
+        title: acc.note.title,
+        causalContext: Object.freeze({
+          relations: Object.freeze([...acc.relations]),
+          supersededBy: acc.supersededBy,
+          danglingCitations: acc.danglingCitations,
+        }),
+        confidence: Object.freeze({
+          support,
+          opposition,
+          freshness: computeFreshness(acc.ageDays, staleAgeDays),
+          coverage: acc.coverage,
+        }),
+      }),
+    );
+  }
+
   contaminated.sort((a, b) => {
     if (a.path !== b.path) return a.path < b.path ? -1 : 1;
     return a.entity < b.entity ? -1 : a.entity > b.entity ? 1 : 0;
@@ -385,6 +608,9 @@ export async function deepSynthesis(
     gaps,
     contaminated: Object.freeze(contaminated),
     strongestObjection,
+    findings: Object.freeze(findings),
+    excludedFindings: Object.freeze(excludedFindings),
+    excludedFindingCount: excludedFindings.length,
   });
 }
 
