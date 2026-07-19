@@ -77,6 +77,14 @@ export interface RankerInputs {
    * verdicts ranks bit-identically.
    */
   readonly reuseRateByChunk?: ReadonlyMap<number, number>;
+  /**
+   * Optional relational RRF arm (t_09b7ccea): chunk ids from typed-edge
+   * fan-out, best-first. Only consulted in `rrf` fusion. A relational-only
+   * chunk (not already a keyword/semantic candidate) is admitted as a
+   * candidate so a genuinely related node can surface. Absent or empty
+   * leaves ranking byte-identical.
+   */
+  readonly relationalRankedChunkIds?: ReadonlyArray<number>;
 }
 
 /** Freshness-trend multipliers on the relevance portion. */
@@ -167,7 +175,7 @@ interface Candidate {
   documentId: number;
   keywordScore: number;
   semanticScore: number;
-  searchType: "keyword" | "semantic" | "hybrid";
+  searchType: "keyword" | "semantic" | "hybrid" | "link";
   mtime: number;
 }
 
@@ -298,6 +306,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     rrfByChunk = rrfFuse({
       keywordRankedChunkIds: keywordRanked,
       semanticRankedChunkIds: semanticRanked,
+      relationalRankedChunkIds: inputs.relationalRankedChunkIds ?? [],
       k: opts.rrfK ?? DEFAULT_RRF_K,
     });
   }
@@ -329,6 +338,28 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           mtime: inputs.hydrated.get(h.chunkId)?.mtime ?? 0,
         });
       }
+    }
+  }
+
+  // Relational arm candidates (t_09b7ccea): admit relational-only chunks
+  // (surfaced via the typed-edge fan-out lane but not matched by keyword or
+  // semantic) so a genuinely related node can enter the fused ranking. Only
+  // in rrf mode, where the lane above already contributes their score.
+  // searchType "link" - a typed-graph traversal hit. Empty lane = no
+  // additions, so ranking stays byte-identical.
+  if (rrfByChunk !== null && inputs.relationalRankedChunkIds) {
+    for (const chunkId of inputs.relationalRankedChunkIds) {
+      if (candidates.has(chunkId)) continue;
+      const hyd = inputs.hydrated.get(chunkId);
+      if (hyd === undefined) continue;
+      candidates.set(chunkId, {
+        chunkId,
+        documentId: hyd.documentId,
+        keywordScore: 0,
+        semanticScore: 0,
+        searchType: "link",
+        mtime: hyd.mtime,
+      });
     }
   }
 

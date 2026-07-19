@@ -598,6 +598,13 @@ export interface SearchOptions {
    * See src/core/scope-key.ts.
    */
   readonly scope?: { readonly session?: string; readonly project?: string };
+  /**
+   * Per-query override for the typed-edge relational arm (t_09b7ccea).
+   * Absent uses the resolved config default (`relationalArmEnabled`). The
+   * arm only engages in `rrf` fusion for a relationship-shaped query; off
+   * (default) leaves RRF output byte-identical.
+   */
+  readonly relationalArm?: boolean;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /**
@@ -910,6 +917,15 @@ export interface ResolvedRecallConfig {
    * either way; this switch exists as the explicit kill switch.
    */
   readonly relationPolarityEnabled: boolean;
+  /**
+   * Typed-edge relational retrieval arm (t_09b7ccea). Off by default. When
+   * true AND fusion is in `rrf` mode AND the query is relationship-shaped
+   * (a wikilink seed plus an edge-type token from the schema vocabulary),
+   * a bounded depth-2 typed-edge fan-out joins RRF as a fourth arm. Off, or
+   * in linear fusion, or for a non-relational query, ranking is
+   * byte-identical.
+   */
+  readonly relationalArmEnabled: boolean;
   /**
    * Retrieval trust gate (t_5f61130a, kernel 1). Off by default: when
    * true, a deterministic rank-adjustment sink runs between ranking and

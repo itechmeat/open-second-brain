@@ -101,6 +101,10 @@ export function buildCacheKey(
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     agentScope: opts.agentScope ?? null,
     scope: canonicalScope(opts),
+    // Relational arm (t_09b7ccea) changes the result set, so a per-query
+    // override partitions the cache. Dropped when absent, so a query that
+    // does not touch the flag keys byte-identically to a pre-arm row.
+    relationalArm: opts.relationalArm ?? undefined,
     // Disclosure depth (D3) partitions the cache: a `cards` outcome and a
     // `full` outcome must not collide. Folded in only for `cards`, so the
     // default `full` key (and every pre-D3 cached row) stays byte-identical.
