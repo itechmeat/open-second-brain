@@ -46,6 +46,15 @@ import { BRAIN_APPLY_RESULT } from "./types.ts";
 const APPEND_SEPARATOR = "\n\n";
 
 /**
+ * Upper bound on operations in a single batch. Each committed operation
+ * performs synchronous file I/O (read + atomic temp-file + rename), which
+ * blocks the event loop for the duration of the whole batch; an unbounded
+ * batch would let one caller stall the server. 100 is comfortably above any
+ * legitimate batch while capping the worst-case blocking window.
+ */
+export const MAX_BATCH_OPERATIONS = 100;
+
+/**
  * Create a new vault note. Refuses to clobber an existing file. Maps to
  * the {@link createNote} core writer.
  */
@@ -112,6 +121,7 @@ export type WriteBatchErrorCode =
   | "exists"
   | "target_missing"
   | "duplicate_target"
+  | "too_many_operations"
   | "preference_not_found";
 
 /**
@@ -174,6 +184,14 @@ export function applyWriteBatch(
 ): WriteBatchResult {
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new WriteBatchError("invalid_operation", -1, "operations must be a non-empty array");
+  }
+  if (operations.length > MAX_BATCH_OPERATIONS) {
+    throw new WriteBatchError(
+      "too_many_operations",
+      -1,
+      `a batch may contain at most ${MAX_BATCH_OPERATIONS} operations, got ${operations.length}`,
+      { max: MAX_BATCH_OPERATIONS, count: operations.length },
+    );
   }
 
   // A note target may appear at most once per batch: projecting each note

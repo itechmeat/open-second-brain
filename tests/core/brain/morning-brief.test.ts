@@ -119,6 +119,25 @@ describe("buildMorningBrief", () => {
     expect(brief.text).toContain("- [note] Finished timeline review · 2h ago");
   });
 
+  test("renders a budget-trimmed open question trimmed in the timeline", () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-05-28T09:00:00Z",
+      eventType: "reconcile",
+      body: { topic: "commit-style-workflow", domain: "claims-domain", reason: "needs-operator" },
+    });
+    // The entry text is `commit-style-workflow (claims-domain)`; a 12-char
+    // per-entry cap hard-cuts it to `commit-style`.
+    const brief = buildMorningBrief(vault, {
+      now,
+      topK: 0,
+      lookbackDays: 7,
+      maxCharsPerMemory: 12,
+    });
+    expect(brief.text).toContain("- [open] commit-style ·");
+    // The untrimmed reconstruction must NOT leak into the timeline.
+    expect(brief.text).not.toContain("commit-style-workflow (claims-domain)");
+  });
+
   test("honours the total character budget", () => {
     confirmedPref("a", 0.9);
     confirmedPref("b", 0.8);

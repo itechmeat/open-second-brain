@@ -14,9 +14,22 @@ import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
-import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
-import { MCPError } from "../../src/mcp/protocol.ts";
+import { NOTES_TOOLS, writeBatchErrorToMcp } from "../../src/mcp/brain/notes-tools.ts";
+import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
+import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+
+/** Await `result`, assert it rejected with an MCPError, and return it. */
+async function rejectedMcpError(result: unknown): Promise<MCPError> {
+  let thrown: unknown;
+  try {
+    await result;
+  } catch (err) {
+    thrown = err;
+  }
+  expect(thrown).toBeInstanceOf(MCPError);
+  return thrown as MCPError;
+}
 
 let vault: string;
 let configHome: string;
@@ -68,21 +81,26 @@ describe("brain_update_note", () => {
   });
 
   test("a missing target is rejected with INVALID_PARAMS and writes nothing", async () => {
-    await expect(updateTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" })).rejects.toThrow(
-      MCPError,
+    const err = await rejectedMcpError(
+      updateTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" }),
     );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.data).toMatchObject({ code: "target_missing", index: 0, path: "Notes/Ghost.md" });
     expect(existsSync(join(vault, "Notes/Ghost.md"))).toBe(false);
   });
 
   test("requires at least frontmatter or content", async () => {
     seedNote("Notes/Doc.md", "body", "title: Doc");
-    await expect(updateTool.handler(ctx, { path: "Notes/Doc.md" })).rejects.toThrow(MCPError);
+    const err = await rejectedMcpError(updateTool.handler(ctx, { path: "Notes/Doc.md" }));
+    expect(err.code).toBe(INVALID_PARAMS);
   });
 
   test("path traversal is refused with INVALID_PARAMS", async () => {
-    await expect(updateTool.handler(ctx, { path: "../escape.md", content: "x" })).rejects.toThrow(
-      MCPError,
+    const err = await rejectedMcpError(
+      updateTool.handler(ctx, { path: "../escape.md", content: "x" }),
     );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.data).toMatchObject({ code: "invalid_path", index: 0 });
     expect(existsSync(join(vault, "..", "escape.md"))).toBe(false);
   });
 });
@@ -105,14 +123,37 @@ describe("brain_append_note", () => {
   });
 
   test("a missing target is rejected with INVALID_PARAMS", async () => {
-    await expect(appendTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" })).rejects.toThrow(
-      MCPError,
+    const err = await rejectedMcpError(
+      appendTool.handler(ctx, { path: "Notes/Ghost.md", content: "x" }),
     );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.data).toMatchObject({ code: "target_missing", index: 0, path: "Notes/Ghost.md" });
   });
 
   test("refuses to author into the Brain machinery root", async () => {
-    await expect(appendTool.handler(ctx, { path: "Brain/x.md", content: "y" })).rejects.toThrow(
-      MCPError,
+    const err = await rejectedMcpError(
+      appendTool.handler(ctx, { path: "Brain/x.md", content: "y" }),
     );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.data).toMatchObject({ code: "excluded", index: 0 });
+  });
+});
+
+describe("writeBatchErrorToMcp", () => {
+  test("wraps a non-WriteBatchError into a structured INTERNAL_ERROR MCPError", () => {
+    const mapped = writeBatchErrorToMcp(new Error("disk exploded"), "brain_update_note");
+    expect(mapped).toBeInstanceOf(MCPError);
+    expect(mapped.code).toBe(INTERNAL_ERROR);
+    expect(mapped.message).toContain("disk exploded");
+  });
+
+  test("maps a WriteBatchError onto a structured INVALID_PARAMS", () => {
+    const mapped = writeBatchErrorToMcp(
+      new WriteBatchError("target_missing", 2, "note does not exist", { path: "Notes/x.md" }),
+      "brain_write_batch",
+    );
+    expect(mapped).toBeInstanceOf(MCPError);
+    expect(mapped.code).toBe(INVALID_PARAMS);
+    expect(mapped.data).toMatchObject({ code: "target_missing", index: 2, path: "Notes/x.md" });
   });
 });

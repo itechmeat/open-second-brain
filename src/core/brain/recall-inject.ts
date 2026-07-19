@@ -161,10 +161,13 @@ function renderRecallBrief(
     title: c.title,
   }));
   const hint = deriveRecallHint(hintInputs, total);
-  const lines: string[] = ["Recalled vault context (relevance-matched to this prompt):"];
   // Charge the fence delimiter overhead against the cap so the FENCED brief
   // (not merely its inner body) is what stays within `maxChars`.
   const innerBudget = Math.max(0, maxChars - fenceOverhead());
+  // Seed the header only when it fits the inner budget; a caller-supplied
+  // tiny `maxChars` must never be exceeded just to carry the header.
+  const header = "Recalled vault context (relevance-matched to this prompt):";
+  const lines: string[] = header.length <= innerBudget ? [header] : [];
   // The hint is orientation, not a pointer: keep it only while it fits, so a
   // tight budget spends its characters on the actual note pointers instead.
   if (hint !== null && [...lines, hint].join("\n").length <= innerBudget) lines.push(hint);
@@ -192,12 +195,24 @@ function fenceOverhead(): number {
  */
 function neutralizeTitle(title: string | null): string {
   if (title === null || title.length === 0) return "(untitled)";
-  const clean = neutralizeUntrustedText(title).replace(/[\n\t]+/g, " ");
+  const clean = neutralizeSingleLine(title);
   return clean.length > 0 ? clean : "(untitled)";
 }
 
+/**
+ * Structural single-line neutralizer for untrusted vault strings: strip
+ * control/bidi/zero-width and escape delimiters ({@link
+ * neutralizeUntrustedText}), then collapse any surviving newline/tab run to
+ * one space so the value can never break the brief's one-per-line structure.
+ */
+function neutralizeSingleLine(text: string): string {
+  return neutralizeUntrustedText(text).replace(/[\n\t]+/g, " ");
+}
+
 function renderNoteLine(note: { readonly title: string } & Omit<RecallCandidate, "title">): string {
-  const pointer = `${note.path}:L${note.startLine}-L${note.endLine}`;
+  // The path is untrusted vault content too: neutralize it the same way as a
+  // title so a newline/control char in a path cannot break the line format.
+  const pointer = `${neutralizeSingleLine(note.path)}:L${note.startLine}-L${note.endLine}`;
   const origin = note.origin !== undefined ? ` [${note.origin}]` : "";
   return `- "${note.title}" (${pointer}, ${note.searchType} ${note.score.toFixed(2)})${origin}`;
 }

@@ -19,6 +19,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
+import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -137,6 +138,36 @@ describe("brain_write_batch", () => {
 
   test("an empty operations array is rejected", async () => {
     await expect(tool.handler(ctx, { operations: [] })).rejects.toThrow(MCPError);
+  });
+
+  test("a batch over the operation cap is rejected before any write", async () => {
+    const tooMany = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, i) => ({
+      op: "create_note",
+      path: `Notes/Over-${i}.md`,
+      content: "x",
+    }));
+    let thrown: unknown;
+    try {
+      await tool.handler(ctx, { operations: tooMany });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    expect((thrown as MCPError).data).toMatchObject({
+      code: "too_many_operations",
+      index: -1,
+      max: MAX_BATCH_OPERATIONS,
+      count: MAX_BATCH_OPERATIONS + 1,
+    });
+    // Nothing landed: the cap is enforced during validation, before commit.
+    expect(existsSync(join(vault, "Notes/Over-0.md"))).toBe(false);
+  });
+
+  test("the inputSchema advertises the operation cap via maxItems", () => {
+    const schema = tool.inputSchema as {
+      properties: { operations: { maxItems?: number } };
+    };
+    expect(schema.properties.operations.maxItems).toBe(MAX_BATCH_OPERATIONS);
   });
 
   test("single-op create parity with brain_create_note", async () => {

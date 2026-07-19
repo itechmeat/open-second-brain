@@ -59,10 +59,12 @@ export function parseFrontmatterArg(value: unknown, tool: string): FrontmatterMa
 /**
  * Map a core {@link WriteBatchError} onto a structured INVALID_PARAMS so
  * the agent gets a machine-readable rejection (`code`, offending `index`)
- * instead of opaque prose. `tool` prefixes the message. Non-batch errors
- * pass through unchanged.
+ * instead of opaque prose. `tool` prefixes the message. Any other error is
+ * a genuine I/O fault; wrap it in an INTERNAL_ERROR MCPError (mirroring the
+ * fallback in {@link toolBrainCreateNote}) so every write surface returns a
+ * consistent structured MCPError rather than an opaque throw.
  */
-export function writeBatchErrorToMcp(err: unknown, tool: string): unknown {
+export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
   if (err instanceof WriteBatchError) {
     return new MCPError(INVALID_PARAMS, `${tool}: ${err.message}`, {
       code: err.code,
@@ -70,7 +72,7 @@ export function writeBatchErrorToMcp(err: unknown, tool: string): unknown {
       ...err.details,
     });
   }
-  return err;
+  return new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
 }
 
 async function toolBrainCreateNote(

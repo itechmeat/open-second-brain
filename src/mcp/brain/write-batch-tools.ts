@@ -21,6 +21,7 @@ import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import type { BrainApplyOutcome, BrainApplyResult } from "../../core/brain/types.ts";
 import {
   applyWriteBatch,
+  MAX_BATCH_OPERATIONS,
   type WriteBatchResult,
   type WriteOperation,
 } from "../../core/brain/write-batch.ts";
@@ -189,6 +190,7 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         operations: {
           type: "array",
+          maxItems: MAX_BATCH_OPERATIONS,
           description:
             "Ordered operations; each has an `op` discriminator plus that op's params. Committed all-or-nothing.",
           items: {

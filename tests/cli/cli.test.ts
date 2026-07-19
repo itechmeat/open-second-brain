@@ -251,6 +251,39 @@ describe("doctor", () => {
       true,
     );
   });
+
+  test("--readiness exits 1 with a fail reason when a probe fails", async () => {
+    // A key-requiring embedding provider (openai-compat) with no key makes the
+    // llm_key probe fail deterministically - the phase-4 QA scenario.
+    const cfg = join(tmp, "readiness-fail-config.yaml");
+    writeFileSync(
+      cfg,
+      [
+        `vault: ${tmp}`,
+        'search_semantic_enabled: "true"',
+        'embedding_provider: "openai-compat"',
+        'embedding_base_url: "https://example.invalid/v1"',
+        'embedding_model: "test-model"',
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], {
+      env: {
+        OPEN_SECOND_BRAIN_CONFIG: cfg,
+        XDG_CONFIG_HOME: "",
+        VAULT_DIR: "",
+        // Fall through to the config file (empty = unset), and make sure no
+        // developer-shell embedding key leaks in to rescue the probe.
+        OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "",
+        OPEN_SECOND_BRAIN_EMBEDDING_KEY: "",
+        OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER: "",
+      },
+    });
+    expect(r.returncode).toBe(1);
+    expect(r.stdout).toContain("[FAIL] llm_key:");
+    // The failure carries a reason, never a silent fail.
+    expect(r.stdout).toMatch(/\[FAIL\] llm_key:.+/);
+  });
 });
 
 describe("onboarding", () => {

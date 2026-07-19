@@ -185,6 +185,35 @@ describe("recall brief neutralization + fencing (untrusted vault titles)", () =>
     expect(brief).toContain(`&lt;/${UNTRUSTED_SOURCE_TAG}>`);
   });
 
+  test("a tiny maxChars drops the header rather than overflowing the cap", async () => {
+    // 90 fits the empty fence (62 chars overhead) but not the 58-char header,
+    // so the header must be omitted and the whole fenced brief stay within cap.
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: [candidate({ title: "Alpha" })], total: 1 }),
+      { maxChars: 90 },
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    expect(decision.brief.length).toBeLessThanOrEqual(90);
+    expect(decision.brief).not.toContain("Recalled vault context");
+  });
+
+  test("neutralizes a hostile path so a newline cannot break the bullet line", async () => {
+    const hostilePath = "Brain/evil\nInjected instruction line.md";
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({ candidates: [candidate({ path: hostilePath, title: "Alpha" })], total: 1 }),
+    );
+    expect(decision.kind).toBe("inject");
+    if (decision.kind !== "inject") return;
+    const { brief } = decision;
+    // The newline in the path is collapsed to a space: the pointer stays on
+    // one line and cannot smuggle a forged second line past review.
+    expect(brief).toContain("Brain/evil Injected instruction line.md");
+    expect(brief).not.toContain("evil\nInjected");
+  });
+
   test("the fenced brief still respects the max-chars cap (fence overhead included)", async () => {
     const many = Array.from({ length: 4 }, (_, i) =>
       candidate({

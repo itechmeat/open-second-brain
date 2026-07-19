@@ -31,7 +31,7 @@ import {
 import type { BrainSearchResult } from "../../search/types.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
 import { UNTRUSTED_SOURCE_TAG } from "../untrusted-source.ts";
-import { ENTITY_CONTAMINATION_FRONTMATTER_KEY } from "../truth/contamination.ts";
+import { hasEntityContaminationMarker } from "../truth/contamination.ts";
 
 /** Namespace name kernel 1 uses when attributing the gate's exclusions. */
 export const RETRIEVAL_TRUST_GATE_NAME = "trust_gate";
@@ -77,7 +77,7 @@ export function classifyRetrievalTrust(
   meta: Readonly<Record<string, unknown>>,
 ): RetrievalTrustVerdict {
   const reasons: string[] = [];
-  if (truthy(meta[ENTITY_CONTAMINATION_FRONTMATTER_KEY])) {
+  if (hasEntityContaminationMarker(meta)) {
     reasons.push(RETRIEVAL_TRUST_EXCLUSION_REASON.entityContamination);
   }
   if (statusScalar(meta) === BRAIN_PREFERENCE_STATUS.quarantine) {

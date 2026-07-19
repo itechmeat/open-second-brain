@@ -210,7 +210,7 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
       keptQuestions.push({ topic, domain: found?.domain ?? "", ageLabel });
       timeline.push({
         kind: "openQuestion",
-        text: `${topic} (${found?.domain ?? ""})`,
+        text: kept.text,
         timestamp: found?.ts ?? "",
       });
     } else if (kept.item.startsWith(NOTE_PREFIX)) {
