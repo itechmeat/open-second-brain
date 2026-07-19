@@ -6,6 +6,10 @@
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
+import type {
+  MemoryTrustAssessment,
+  RetrievalDecisionTrace,
+} from "../brain/trust/retrieval-receipts.ts";
 
 export type { VaultIgnoreRule };
 
@@ -740,6 +744,18 @@ export interface SearchOutcome {
     readonly stoppedAfter: string;
     readonly skipped: ReadonlyArray<string>;
   };
+  /**
+   * Per-pack retrieval trust receipts (t_5f61130a). Present only when the
+   * retrieval trust gate ran (`recall.retrievalTrustGateEnabled`); absent
+   * on the default path so the outcome shape stays byte-identical. Both
+   * are compact-reference receipts (counts, reasons, id/path refs) - they
+   * never duplicate result bodies. `retrievalDecisionTrace` records what
+   * the gate excluded and why; `memoryTrustAssessment` summarizes the
+   * pack's trust posture. Their concrete shapes live in
+   * src/core/brain/trust/retrieval-receipts.ts.
+   */
+  readonly retrievalDecisionTrace?: RetrievalDecisionTrace;
+  readonly memoryTrustAssessment?: MemoryTrustAssessment;
 }
 
 export interface ResolvedEmbeddingConfig {
@@ -885,6 +901,18 @@ export interface ResolvedRecallConfig {
    * either way; this switch exists as the explicit kill switch.
    */
   readonly relationPolarityEnabled: boolean;
+  /**
+   * Retrieval trust gate (t_5f61130a, kernel 1). Off by default: when
+   * true, a deterministic rank-adjustment sink runs between ranking and
+   * result emission and the trust gate zero-ranks (excludes) quarantined
+   * material classified structurally from the self-approval guardrail
+   * state, untrusted-source provenance, and entity-contamination markers.
+   * Excluded items are counted with reasons into the
+   * retrieval_decision_trace receipt; every pack also carries a
+   * memory_trust_assessment receipt. Flag off keeps ranking and the
+   * outcome shape byte-identical.
+   */
+  readonly retrievalTrustGateEnabled: boolean;
   /**
    * Retrieval feedback loop (recall-trust-suite). Off by default: when
    * true, learned per-layer multipliers derived from explicit recall

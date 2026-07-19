@@ -48,6 +48,12 @@ import { buildQueryPlan } from "./query-plan.ts";
 import { buildCacheKey, getCachedOutcome, putCachedOutcome } from "./query-cache.ts";
 import { deriveExpansionTerms, tokenizeForExpansion, DEFAULT_EXPANSION } from "./synonyms.ts";
 import { rankResults } from "./ranker.ts";
+import { applyRankAdjusters, type RankAdjuster } from "./rank-adjust.ts";
+import { trustGateAdjuster } from "../brain/trust/retrieval-gate.ts";
+import {
+  buildMemoryTrustAssessment,
+  buildRetrievalDecisionTrace,
+} from "../brain/trust/retrieval-receipts.ts";
 import { detectHybridDegrade, rerankByRelevance } from "./enrich.ts";
 import { applyReinforceBoost, loadReinforceStrengths, reinforceFingerprint } from "./reinforce.ts";
 import { readActiveSessionFocus } from "./session-focus.ts";
@@ -112,6 +118,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     syn: r.synonymEnabled,
     synMax: r.synonymMaxTerms,
     relPol: r.relationPolarityEnabled,
+    trustGate: r.retrievalTrustGateEnabled,
     lw: r.learnedWeightsEnabled,
     // Cross-encoder rerank re-orders the cached outcome, so a toggle or
     // knob change must invalidate cached rows (the endpoint identity is
@@ -957,7 +964,36 @@ export async function search(
           warnings.push(`rerank_degraded: ${event.reason ?? "endpoint error"}`);
         }),
     });
-    const sliced = reranked.slice(0, limit);
+    // Kernel 1 (t_5f61130a): the deterministic rank-adjustment sink between
+    // ranking and result emission, mounted on BOTH the semantic and the
+    // pure-lexical paths (both flow through this single pre-slice pool).
+    // Registered adjusters return a per-candidate verdict; with none
+    // registered the pool is returned unchanged, so the default path is
+    // byte-identical. Runs BEFORE the slice so a gate exclusion lets a
+    // deeper survivor backfill the window rather than shrinking it.
+    const rankAdjusters: RankAdjuster[] = [];
+    if (config.recall.retrievalTrustGateEnabled) {
+      rankAdjusters.push(
+        trustGateAdjuster((path) => readCachedFrontmatter(frontmatterCache, config.vault, path)),
+      );
+    }
+    const adjusted = applyRankAdjusters(reranked, rankAdjusters);
+    // Per-pack retrieval trust receipts (t_5f61130a): compact references
+    // consistent with the context-receipt model. Built only when the gate
+    // ran, so the outcome shape stays byte-identical on the default path.
+    const trustReceipts = config.recall.retrievalTrustGateEnabled
+      ? {
+          retrievalDecisionTrace: buildRetrievalDecisionTrace({
+            surfaced: adjusted.results.length,
+            excluded: adjusted.excluded,
+          }),
+          memoryTrustAssessment: buildMemoryTrustAssessment({
+            surfaced: adjusted.results.length,
+            excluded: adjusted.excluded,
+          }),
+        }
+      : null;
+    const sliced = adjusted.results.slice(0, limit);
     // Explainability: when learned weights affected this ranking, every
     // surfaced result says so (acceptance: "search explanations show
     // when learned weights affected a result").
@@ -1083,6 +1119,7 @@ export async function search(
           total: cards.length,
           ...(evidencePack !== undefined ? { evidencePack } : {}),
           ...(secondPass !== undefined ? { secondPass } : {}),
+          ...trustReceipts,
         }),
       );
     }
@@ -1094,6 +1131,7 @@ export async function search(
         total: resultsOut.length,
         ...(evidencePack !== undefined ? { evidencePack } : {}),
         ...(secondPass !== undefined ? { secondPass } : {}),
+        ...trustReceipts,
       }),
     );
   } finally {

@@ -695,6 +695,11 @@ export function resolveSearchConfig(opts: {
     true,
     "search_relation_polarity_enabled",
   );
+  const retrievalTrustGateEnabled = parseBool(
+    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE", "search_trust_gate_enabled"),
+    false,
+    "search_trust_gate_enabled",
+  );
   const learnedWeightsEnabled = parseBool(
     envOrConfig(
       env,
@@ -816,6 +821,7 @@ export function resolveSearchConfig(opts: {
     cacheEnabled,
     cacheTtlSeconds,
     relationPolarityEnabled,
+    retrievalTrustGateEnabled,
     learnedWeightsEnabled,
     activationEnabled,
     twoPassEnabled,

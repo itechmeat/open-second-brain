@@ -10,6 +10,26 @@
 
 import { normalizeEntityName } from "../entities/canonical.ts";
 
+/**
+ * Frontmatter marker key stamped on a page whose synthesized conclusion
+ * failed the entity-contamination check (asserted provenance for an
+ * entity absent from every cited source). This module owns the name so
+ * contamination stays a single boundary: the detector here and any
+ * read-time trust consumer (the retrieval trust gate) agree on the one
+ * structural key rather than each hardcoding it. Structural, not lexical.
+ */
+export const ENTITY_CONTAMINATION_FRONTMATTER_KEY = "entity_contamination";
+
+/**
+ * True when a raw frontmatter map carries a truthy entity-contamination
+ * marker (boolean `true` or the string `"true"`). A missing or falsey
+ * value is clean. Reads only the one structural key - never note prose.
+ */
+export function hasEntityContaminationMarker(meta: Readonly<Record<string, unknown>>): boolean {
+  const value = meta[ENTITY_CONTAMINATION_FRONTMATTER_KEY];
+  return value === true || value === "true";
+}
+
 /** The slice of a registry entity the check needs. */
 export interface ContaminationEntityLike {
   readonly id: string;

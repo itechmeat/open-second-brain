@@ -58,6 +58,7 @@ function semanticConfig(
       cacheEnabled: false,
       cacheTtlSeconds: 300,
       relationPolarityEnabled: true,
+      retrievalTrustGateEnabled: false,
       learnedWeightsEnabled: false,
       activationEnabled: true,
       twoPassEnabled: true,
