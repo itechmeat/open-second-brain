@@ -72,6 +72,7 @@ import {
   type EmbeddingModelPreset,
 } from "../core/search/embeddings/presets.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
+import { rerankFitCheck } from "../core/search/rerank-fit-check.ts";
 import { IndexWatchPlanner } from "../core/search/index-watch.ts";
 import { IndexWatchRunner } from "../core/search/watch-runner.ts";
 import { SafeguardAbortError } from "../core/brain/safeguard.ts";
@@ -92,6 +93,7 @@ const KNOWN_VERBS = new Set([
   "weights",
   "provider",
   "rerank-provider",
+  "rerank-fit",
   "plan",
   "watch",
 ]);
@@ -132,6 +134,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchProvider(rest);
       case "rerank-provider":
         return await cmdSearchRerankProvider(rest);
+      case "rerank-fit":
+        return await cmdSearchRerankFit(rest);
       case "plan":
         return await cmdSearchPlan(rest);
       default:
@@ -557,6 +561,58 @@ async function cmdSearchRerankProvider(argv: ReadonlyArray<string>): Promise<num
       addRerankProviderProfile(vault, { ...profile, envKey: formatEnvKey(profile.envKey) }),
     remove: removeRerankProviderProfile,
   });
+}
+
+// ─── rerank-fit (per-store reranker fit check diagnostic) ────────────────────
+
+async function cmdSearchRerankFit(argv: ReadonlyArray<string>): Promise<number> {
+  const { flags } = parseFlags(argv, {
+    vault: { type: "string" },
+    config: { type: "string" },
+    db: { type: "string" },
+    "max-queries": { type: "string" },
+    "top-k": { type: "string" },
+    json: { type: "boolean" },
+  });
+  const cfg = resolveConfig(flags);
+  const maxQueries =
+    typeof flags["max-queries"] === "string" ? Number(flags["max-queries"]) : undefined;
+  const topK = typeof flags["top-k"] === "string" ? Number(flags["top-k"]) : undefined;
+  if (maxQueries !== undefined && (!Number.isInteger(maxQueries) || maxQueries < 1)) {
+    throw new CliError(`--max-queries must be a positive integer, got '${flags["max-queries"]}'`);
+  }
+  if (topK !== undefined && (!Number.isInteger(topK) || topK < 2)) {
+    throw new CliError(`--top-k must be an integer >= 2, got '${flags["top-k"]}'`);
+  }
+  const report = await rerankFitCheck(cfg, {
+    ...(maxQueries !== undefined ? { maxQueries } : {}),
+    ...(topK !== undefined ? { topK } : {}),
+  });
+  if (flags["json"] === true) {
+    process.stdout.write(
+      JSON.stringify({
+        ok: true,
+        applicable: report.applicable,
+        verdict: report.verdict,
+        correlation: report.correlation,
+        sampled_queries: report.sampledQueries,
+        recommendation: report.recommendation,
+        reason: report.reason,
+      }) + "\n",
+    );
+    return 0;
+  }
+  process.stdout.write(`rerank fit: ${report.verdict}\n`);
+  process.stdout.write(`  ${report.reason}\n`);
+  if (report.correlation !== null) {
+    process.stdout.write(
+      `  correlation: ${report.correlation.toFixed(3)} over ${report.sampledQueries} query(ies)\n`,
+    );
+  }
+  if (report.verdict !== "fits" && report.verdict !== "inapplicable") {
+    process.stdout.write(`  recommendation: ${report.recommendation}\n`);
+  }
+  return 0;
 }
 
 // ─── plan (graph-index query pre-pass) ───────────────────────────────────────

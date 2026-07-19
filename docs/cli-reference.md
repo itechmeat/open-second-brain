@@ -421,6 +421,11 @@ o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (
 o2b search provider list      List registered provider profiles (--json for the array)
 o2b search provider show NAME Show one registered profile (--json)
 o2b search provider remove    Remove a registered profile by NAME
+o2b search rerank-fit         Per-store reranker fit check (read-only diagnostic): samples real
+                              recorded queries and correlates the reranker's scores with the base
+                              retrieval signal. Reports fits (quiet), out_of_domain (low fit), or
+                              inverted (negative) with a disable/swap recommendation; a rerankerless
+                              vault reports inapplicable. --max-queries N --top-k K --json
 ```
 
 Embedding providers (since v0.36.0): `embedding_provider` accepts the
