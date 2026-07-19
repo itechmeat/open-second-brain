@@ -138,7 +138,7 @@ describe("session recall DAG", () => {
   });
 });
 
-describe("session recall — include_raw plus extracted discriminator (C2 / t_ac1d36ea)", () => {
+describe("session recall - include_raw plus extracted discriminator (C2 / t_ac1d36ea)", () => {
   function seed(): void {
     importSessionRecall(vault, {
       sessionId: "session-raw",
