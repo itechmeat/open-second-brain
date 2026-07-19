@@ -515,3 +515,21 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   fixes for doctor-detected classes), and `brain_search` accepts `degree`
   (backlink/outlink cardinality predicates). Omitting every new param keeps
   each tool's output byte-identical.
+- Since v1.35.0 three note-write tools join the surface (106 total):
+  `brain_update_note` (update an existing note's body and/or merge
+  frontmatter keys), `brain_append_note` (append to an existing note's
+  body), and `brain_write_batch` (an ordered mixed batch of create note,
+  update body or frontmatter, append note, apply evidence, and append log
+  line operations, validated and projected in memory first and committed
+  all-or-nothing; the first invalid operation aborts with a typed error
+  naming its index and nothing touches disk). All three enforce the exact
+  create-note safety envelope: path traversal, the Brain machinery root,
+  and vault-scope-excluded paths are refused, and a missing target is a
+  typed error.
+- Since v1.35.0 `brain_session_grep` accepts `include_raw` (carry the
+  original raw capture inline beside each derived record, every item
+  stamped with an `extracted` boolean discriminator) and
+  `raw_budget_chars` (clip raw payloads while identity fields survive).
+  Search outcomes carry the `memory_trust_assessment` and
+  `retrieval_decision_trace` receipts when the retrieval trust gate is
+  enabled. Omitting the new params keeps each tool byte-identical.

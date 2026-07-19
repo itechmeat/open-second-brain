@@ -283,6 +283,37 @@ reported with a reason (an empty allowlist changes nothing). Both `o2b` and
 `vault-log` treat an early-closed stdout pipe (`o2b ... | head`) as a clean
 exit 0, while any other stdout error now fails loudly.
 
+### Trusted recall and memory write surface (since v1.35.0)
+
+```text
+o2b doctor                    gains --readiness: three functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter wiring) with per-check timeouts and outcomes pass, fail with a reason, or skipped-not-configured; any failure exits non-zero; without the flag output stays byte-identical
+o2b brain morning-brief       renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and a relative age label; the underlying JSON data arrays are unchanged
+```
+
+Prompt-time recall is a hook, not a verb: with `recall_inject_enabled:
+"true"` (env `OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED`) the
+UserPromptSubmit hook injects a bounded brief of relevant vault notes (4
+notes, 900 chars, fixed time budget, confidence floor), fenced as
+untrusted content with neutralized titles; any internal error or timeout
+injects nothing, and every decision writes one audit line recording
+counts and scores only. The knowledge-gap loop is likewise hook-driven:
+with `gap_loop_enabled: "true"` (env `OPEN_SECOND_BRAIN_GAP_LOOP_ENABLED`,
+threshold via `gap_loop_threshold`), recurring recall gaps promote at
+session end into durable task notes under `Brain/gap-tasks/` (stable-key
+dedup, never the kanban board), render as a session-start agenda, and
+auto-close once the topic is later recalled confidently.
+
+Search-side trust switches: `search_trust_gate_enabled` (env
+`OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE`) zero-ranks quarantined material
+(self-approval quarantine, untrusted-source provenance, entity
+contamination) out of both semantic and lexical results and attaches the
+`memory_trust_assessment` and `retrieval_decision_trace` receipts naming
+every exclusion; `search_supersede_fade_enabled` (env
+`OPEN_SECOND_BRAIN_SEARCH_SUPERSEDE_FADE`) makes an inbound `supersedes` /
+`superseded_by` relation on a successor fade the unchanged superseded
+note by a named multiplier. Both default off and leave ranking
+byte-identical when unset.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
