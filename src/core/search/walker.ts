@@ -15,6 +15,7 @@ import { readdirSync, statSync, realpathSync, type Dirent, type Stats } from "no
 import { join, relative, sep } from "node:path";
 
 import { canonicalNotePath } from "../path-safety.ts";
+import { admitToIndex } from "../vault-scope/index-admission.ts";
 import { matchIgnore } from "../vault-scope/index.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
@@ -89,6 +90,9 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
 
       if (stat.isDirectory()) {
         if (matchIgnore(relPath, rules).excluded) continue;
+        // Index-admission predicate (seam 2): skip descending into an
+        // excluded lane directory (e.g. the exact-state lane) entirely.
+        if (!admitToIndex(relPath).admit) continue;
         let dirReal: string;
         try {
           dirReal = realpathSync(absPath);
@@ -108,6 +112,10 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       // File-level rule too: a `path/to/file.md` entry in
       // `vault.ignore_paths` excludes that exact file.
       if (matchIgnore(relPath, rules).excluded) continue;
+      // Index-admission predicate (seam 2): the exact-state lane and any
+      // other lane-owned artifact never enters the index. Defaults to
+      // admit, so all existing non-lane content is yielded unchanged.
+      if (!admitToIndex(relPath).admit) continue;
 
       yield { absPath, relPath, stat };
     }

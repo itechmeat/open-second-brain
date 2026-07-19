@@ -84,6 +84,7 @@ import { toSearchCard } from "./cards.ts";
 import {
   applyAgentScope,
   applyDegreeFilter,
+  applyExactStateBarrier,
   applyPropertyFilter,
   applyStatusFilter,
   applyVisibilityScope,
@@ -838,6 +839,11 @@ export async function search(
         },
       );
       const capHit = ranked.length >= rankCap;
+      // Retrieval-time staleness barrier (t_b0c9d0a3): drop any exact-state
+      // lane artifact a stale/older index may still hold, before any later
+      // phase can surface it. No-op (same reference) when the pool has none,
+      // so a vault that never used the lane is byte-identical.
+      ranked = applyExactStateBarrier(ranked).slice();
       // Link-graph traversal (v0.13.0): walk outbound links from the top
       // hits and surface related documents not already matched, scored by
       // decay. No-op when maxHops == 0. Runs before MMR so expansions are

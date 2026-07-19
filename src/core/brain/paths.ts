@@ -75,6 +75,14 @@ export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
 export const BRAIN_CAPTURES_REL = posix.join(BRAIN_ROOT_REL, "captures");
 export const BRAIN_CAPTURES_PROCESSED_REL = posix.join(BRAIN_CAPTURES_REL, "processed");
 export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
+/**
+ * Overwrite-only exact-state lane: `Brain/state/<aspect>.md` (t_b0c9d0a3).
+ * A structured operational-state store keyed by aspect; each write replaces
+ * the aspect's canonical value with no history. The lane is excluded from
+ * the search index by the index-admission predicate so a stale "current"
+ * value can never resurface through semantic recall.
+ */
+export const BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
 export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
@@ -199,6 +207,17 @@ export function brainLessonsPath(vault: string): string {
 /** Path of the transient current-task scratchpad read by `brain_context`. */
 export function brainPinnedPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_PINNED_FILE), vault);
+}
+
+/** Overwrite-only exact-state lane directory: `Brain/state/` (t_b0c9d0a3). */
+export function brainStateDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_STATE_REL), vault);
+}
+
+/** A single exact-state aspect page: `Brain/state/<aspect>.md` (t_b0c9d0a3). */
+export function exactStatePath(vault: string, aspect: string): string {
+  const s = validateSlug(aspect);
+  return ensureInsideVault(join(brainStateDir(vault), `${s}.md`), vault);
 }
 
 /** Active-signal path: `Brain/inbox/sig-<date>-<slug>.md`. */

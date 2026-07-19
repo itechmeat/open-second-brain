@@ -29,6 +29,7 @@ Brain verbs (observing memory):
   reject           Move a preference to retired (user-rejected); --yes if pinned
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
+  state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
   set-primary      Declare or clear primary_agent in _brain.yaml (--clear)
   protect          Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
@@ -268,6 +269,9 @@ export const VERB_HELP: Record<string, string> = {
   unpin:
     "usage: o2b brain unpin --id <pref-id> [--vault <path>] [--json]\n" +
     "Clear pinned: true. Idempotent.\n",
+  state:
+    "usage: o2b brain state <set|get|list|clear> [--aspect <slug>] [--value <text>] [--vault <path>] [--json]\n" +
+    "Overwrite-only exact-state lane keyed by aspect (Brain/state/). Each set replaces the aspect's canonical value with no history. The lane is excluded from the search index so a stale value never resurfaces through recall.\n",
   rollback:
     "usage: o2b brain rollback <run_id> [--vault <path>] [--yes]\n" +
     "                          [--force-rollback] [--json]\n" +

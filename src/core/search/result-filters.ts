@@ -9,6 +9,7 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { BRAIN_STATE_REL } from "../brain/paths.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { isVisible, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
@@ -44,6 +45,26 @@ export function readCachedFrontmatter(
   const [meta] = parseFrontmatter(join(vault, path));
   cache.set(path, meta);
   return meta;
+}
+
+const EXACT_STATE_LANE_PREFIX = `${BRAIN_STATE_REL}/`;
+
+/**
+ * Retrieval-time staleness barrier (t_b0c9d0a3). The overwrite-only
+ * exact-state lane is excluded from indexing going forward, but a lane
+ * artifact indexed by an OLDER build (before the exclusion shipped) could
+ * still surface a superseded value through recall. This barrier drops every
+ * exact-state lane result from the ranked pool, from any retrieval source,
+ * so a stale "current" value can never resurface.
+ *
+ * Path-based and I/O-free: a vault that never used the lane has no lane
+ * results, so the same array is returned unchanged (byte-identical no-op).
+ */
+export function applyExactStateBarrier(
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<BrainSearchResult> {
+  if (!results.some((r) => r.path.startsWith(EXACT_STATE_LANE_PREFIX))) return results;
+  return results.filter((r) => !r.path.startsWith(EXACT_STATE_LANE_PREFIX));
 }
 
 /**
