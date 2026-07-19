@@ -589,6 +589,15 @@ export interface SearchOptions {
    * byte-identical to today. See src/core/graph/agent-scope.ts.
    */
   readonly agentScope?: string;
+  /**
+   * Optional composite scope filter (t_37c05a34): session and project axes
+   * layered on top of the owner axis (`agentScope`). When an axis is set, a
+   * page that declares that axis is returned only if it matches; a page that
+   * declares no value for the axis is shared and always returned. Absent /
+   * empty ({}) applies no filtering, so results are byte-identical to today.
+   * See src/core/scope-key.ts.
+   */
+  readonly scope?: { readonly session?: string; readonly project?: string };
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /**

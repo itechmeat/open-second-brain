@@ -15,6 +15,7 @@ import { join } from "node:path";
 import type { FrontmatterMap } from "../types.ts";
 import { normalizeVisibilityScope } from "../graph/visibility.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
+import { normalizeScopeFilter } from "../scope-key.ts";
 import { isLowSelectivity, planTrigramPrefilter } from "./trigram-prefilter.ts";
 import {
   composeWeightProfiles,
@@ -86,6 +87,7 @@ import {
   applyDegreeFilter,
   applyExactStateBarrier,
   applyPropertyFilter,
+  applyScopeFilter,
   applyStatusFilter,
   applyVisibilityScope,
   attachTrustMetadata,
@@ -765,8 +767,18 @@ export async function search(
     // no ownership filtering, so untagged vaults stay byte-identical.
     const agentScope = normalizeAgentScope(opts.agentScope);
     const hasAgentScopeRequest = agentScope !== null;
+    // Composite scope filter (t_37c05a34): session/project axes on top of
+    // owner. Null when no axis is requested, so an omitted filter never
+    // narrows the pool (byte-identical default).
+    const scopeFilter = opts.scope !== undefined ? normalizeScopeFilter(opts.scope) : null;
+    const hasScopeRequest =
+      scopeFilter !== null && (scopeFilter.session !== null || scopeFilter.project !== null);
     const hasFrontmatterFilter =
-      hasPropertyFilter || hasVisibilityRequest || hasAgentScopeRequest || hasDegreeFilter;
+      hasPropertyFilter ||
+      hasVisibilityRequest ||
+      hasAgentScopeRequest ||
+      hasScopeRequest ||
+      hasDegreeFilter;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -922,7 +934,13 @@ export async function search(
         agentScope !== null
           ? applyAgentScope(visible, agentScope, config.vault, frontmatterCache)
           : visible;
-      return { preVisibility: degreeFiltered.length, visible: scoped, capHit };
+      // Composite session/project scope filter (t_37c05a34): applied only
+      // when an axis is requested; a null filter skips it entirely so the
+      // default path is byte-identical.
+      const compositeScoped = hasScopeRequest
+        ? applyScopeFilter(scoped, scopeFilter!, config.vault, frontmatterCache)
+        : scoped;
+      return { preVisibility: degreeFiltered.length, visible: compositeScoped, capHit };
     };
 
     let assembled = assemble(rankLimit);

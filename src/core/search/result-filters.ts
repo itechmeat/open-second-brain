@@ -13,6 +13,7 @@ import { BRAIN_STATE_REL } from "../brain/paths.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { isVisible, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
+import { scopeAxisReachable, scopeFromFrontmatter, type CompositeScope } from "../scope-key.ts";
 import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
 import { degreeForPath, getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
 import type { Store } from "./store.ts";
@@ -219,6 +220,34 @@ export function applyVisibilityScope(
     }
   };
   return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
+}
+
+/**
+ * Composite scope filter (t_37c05a34): drop results outside the requested
+ * session/project scope. Per axis, a null request does not filter and an
+ * unscoped page is shared, so a request scoping nothing is byte-identical.
+ * An unparseable page fails OPEN here (kept): session/project are recall
+ * conveniences, not an isolation boundary like owner scope. The caller only
+ * invokes this when at least one axis is requested.
+ */
+export function applyScopeFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  requested: CompositeScope,
+  vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
+): ReadonlyArray<BrainSearchResult> {
+  return ranked.filter((r) => {
+    let pageScope: CompositeScope;
+    try {
+      pageScope = scopeFromFrontmatter(readCachedFrontmatter(frontmatterCache, vault, r.path));
+    } catch {
+      return true; // fail open: keep on unreadable frontmatter
+    }
+    return (
+      scopeAxisReachable(pageScope.session, requested.session) &&
+      scopeAxisReachable(pageScope.project, requested.project)
+    );
+  });
 }
 
 export function applyAgentScope(

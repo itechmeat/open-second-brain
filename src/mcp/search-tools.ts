@@ -169,6 +169,16 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "Optional agent-ownership scope; shared (ownerless) pages always match, owner-tagged pages only their owner. Absent = no ownership filtering.",
     },
+    session_scope: {
+      type: "string",
+      description:
+        "Optional session-scope filter; pages with no session always match, session-tagged pages only this session. Absent = no session filtering.",
+    },
+    project_scope: {
+      type: "string",
+      description:
+        "Optional project-scope filter; pages with no project always match, project-tagged pages only this project. Absent = no project filtering.",
+    },
   },
   required: ["query"],
   additionalProperties: false,
@@ -529,6 +539,15 @@ async function toolBrainSearch(
   const degreeFilters = parseDegreeArgument(args["degree"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
   const agentScope = coerceStringOptional(args, "agent_scope", 128);
+  const sessionScope = coerceStringOptional(args, "session_scope", 128);
+  const projectScope = coerceStringOptional(args, "project_scope", 128);
+  const scope =
+    sessionScope !== undefined || projectScope !== undefined
+      ? {
+          ...(sessionScope !== undefined ? { session: sessionScope } : {}),
+          ...(projectScope !== undefined ? { project: projectScope } : {}),
+        }
+      : undefined;
   const reinforce = parseReinforceArgument(args["reinforce"]);
 
   const config = resolveSearchConfig({
@@ -563,6 +582,7 @@ async function toolBrainSearch(
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     ...(agentScope !== undefined ? { agentScope } : {}),
+    ...(scope !== undefined ? { scope } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(sessionFocus !== undefined ? { sessionFocus } : {}),
     ...(focusSession !== undefined ? { focusSession } : {}),
