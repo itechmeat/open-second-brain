@@ -28,6 +28,7 @@ import type {
   BrainConfig,
   BrainFeedbackConfig,
   BrainGuardrailConfig,
+  BrainRollupConfig,
   BrainHealthConfig,
   BrainHygieneConfig,
   BrainLessonsConfig,
@@ -1179,6 +1180,26 @@ export function validateBrainConfigDetailed(
     }
   }
 
+  // Optional `rollup` block (knowledge-intake-and-consolidation, S3).
+  // Overrides the fact rollup-ladder thresholds; hard-error on shape
+  // problems so a mistyped threshold surfaces instead of silently
+  // reverting to the named-constant default.
+  let rollup: BrainRollupConfig | undefined;
+  if (hasBlock(obj, "rollup", knownBlockKeys)) {
+    const rawMap = requireMapBlock(obj["rollup"], "rollup", source);
+    const partial: { fact_threshold?: number; identity_threshold?: number } = {};
+    if ("fact_threshold" in rawMap) {
+      requirePositiveInteger("rollup.fact_threshold", rawMap["fact_threshold"], source);
+      partial.fact_threshold = rawMap["fact_threshold"] as number;
+    }
+    if ("identity_threshold" in rawMap) {
+      requirePositiveInteger("rollup.identity_threshold", rawMap["identity_threshold"], source);
+      partial.identity_threshold = rawMap["identity_threshold"] as number;
+    }
+    warnUnknownKeys(rawMap, ["fact_threshold", "identity_threshold"], "rollup", source, warnings);
+    rollup = partial;
+  }
+
   // Optional `link_graph` block (v0.10.17). Shape:
   //   link_graph:
   //     moc_min_outbound_links: 5     # positive integer
@@ -1722,6 +1743,7 @@ export function validateBrainConfigDetailed(
     ...(active !== undefined ? { active } : {}),
     ...(lessons !== undefined ? { lessons } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
+    ...(rollup !== undefined ? { rollup } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),

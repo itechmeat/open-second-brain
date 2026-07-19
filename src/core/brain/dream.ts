@@ -42,6 +42,13 @@ import { regenerateActiveQuiet } from "./active.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { DREAM_PHASE, type DreamPhase, type DreamPhaseSummary } from "./dream-phases.ts";
+import {
+  planRollupLadder,
+  readRollupLedger,
+  resolveRollupThresholds,
+  writeRollupLedger,
+  type RollupLadderEntry,
+} from "./rollup-ladder.ts";
 import { extractTemporalConstraints } from "./temporal-extract.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { collectEvidenceForSlug } from "./evidence.ts";
@@ -224,6 +231,13 @@ export interface DreamRunSummary {
    */
   readonly phases: ReadonlyArray<DreamPhaseSummary>;
   /**
+   * Count-triggered fact rollup ladder (knowledge-intake-and-
+   * consolidation, S3). Fired rungs this run, each carrying its counter
+   * reset and one needs-llm-step rollup envelope. Empty when no rung
+   * crossed its threshold, keeping a below-threshold run byte-identical.
+   */
+  readonly rollups: ReadonlyArray<RollupLadderEntry>;
+  /**
    * Reconcile-phase domain classification (Brain lifecycle suite,
    * Feature 3). Contradictions that stayed unresolved, each tagged with
    * a domain. Source-freshness contradictions that auto-resolved are
@@ -329,6 +343,19 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // the `reconcile` log events below are emitted only on a changed run.
   const reconcile = buildReconcileOutcomes(scan, plan, cfg, now);
 
+  // Count-triggered fact rollup ladder (S3): pure counters over the
+  // current fact artifacts (preferences) against the persisted per-tier
+  // baselines. Computed before the `changed` gate so a run whose ONLY
+  // effect is a rollup still counts as changed; below threshold it fires
+  // nothing and the ledger is never written, so the run stays
+  // byte-identical.
+  const rollupPlan = planRollupLadder({
+    factCount: scan.preferences.length,
+    ledger: readRollupLedger(vault),
+    thresholds: resolveRollupThresholds(cfg),
+    runId,
+  });
+
   // Decide if anything is going to change. We treat any of the
   // following as a state change:
   //   - a new unconfirmed pref
@@ -337,6 +364,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //   - a same-sign signal noted on an active pref (move + log)
   //   - a corrupted frontmatter (we want the skip event recorded)
   //   - any pinned-rebut-attempt warning
+  //   - a fired rollup-ladder rung (S3)
   const changed =
     plan.newUnconfirmed.length > 0 ||
     refresh.confirmed.size > 0 ||
@@ -350,6 +378,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     // so a run that produces only quarantine entries is still a
     // meaningful run from the operator's perspective.
     plan.quarantined.length > 0 ||
+    rollupPlan.fired ||
     scan.corrupted.length > 0;
 
   if (!changed) {
@@ -373,6 +402,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       gated_retires: Object.freeze([] as ReadonlyArray<DreamGatedRetireEntry>),
       outcome_regressions: Object.freeze([...refresh.outcomeRegressions]),
       phases: Object.freeze([] as ReadonlyArray<DreamPhaseSummary>),
+      rollups: Object.freeze([] as ReadonlyArray<RollupLadderEntry>),
       open_questions: Object.freeze([...reconcile.openQuestions]),
       ...(dryRun ? { dry_run: true } : {}),
     } satisfies DreamRunSummary);
@@ -802,12 +832,25 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       // the log without parsing the structured warnings array.
       summaryBody["non_primary_agent"] = callerAgent;
     }
+    // S3: record each fired rollup rung's counter reset in the dream
+    // report. Absent below threshold, so a non-firing run's summary event
+    // is byte-identical to the pre-rollup behaviour.
+    if (rollupPlan.fired) {
+      summaryBody["rollups"] = rollupPlan.entries.map(
+        (e) => `${e.tier} -> ${e.produces} (${e.fromCount} -> ${e.toCount})`,
+      );
+    }
 
     writeEvent(vault, {
       timestamp: nextStamp(),
       eventType: BRAIN_LOG_EVENT_KIND.dream,
       body: summaryBody,
     });
+
+    // S3: persist the advanced rollup-ladder counters only when a rung
+    // fired. A below-threshold run never touches the ledger, so its
+    // absence is the byte-identical opt-out.
+    if (rollupPlan.fired) writeRollupLedger(vault, rollupPlan.ledger);
   }
 
   // Prune snapshots after the run so the new archive itself counts
@@ -866,6 +909,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     run_id: runId,
     changed: true,
     phases,
+    rollups: Object.freeze([...rollupPlan.entries]),
     open_questions: Object.freeze([...reconcile.openQuestions]),
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),

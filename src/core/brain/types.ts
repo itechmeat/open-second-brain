@@ -1124,6 +1124,19 @@ export interface BrainSnapshotsConfig {
 }
 
 /**
+ * Optional `rollup:` block (knowledge-intake-and-consolidation, S3).
+ * Overrides the count-triggered fact rollup-ladder thresholds in the
+ * dream synthesize phase. Absent: callers fall back to the
+ * `DEFAULT_*_THRESHOLD` named constants in `rollup-ladder.ts`.
+ */
+export interface BrainRollupConfig {
+  /** New facts since the last rollup that trigger a fact -> rollup step. */
+  readonly fact_threshold?: number;
+  /** New rollups since the last rollup that trigger a rollup -> identity step. */
+  readonly identity_threshold?: number;
+}
+
+/**
  * Vault-wide exclusion policy (`Brain/_brain.yaml` → `vault:`).
  *
  * Single source of truth for every vault walker — search indexer,
@@ -1330,6 +1343,12 @@ export interface BrainConfig {
   readonly retire: BrainRetireConfig;
   readonly confidence: BrainConfidenceConfig;
   readonly snapshots: BrainSnapshotsConfig;
+  /**
+   * Optional `rollup:` block (knowledge-intake-and-consolidation, S3).
+   * Overrides the fact rollup-ladder thresholds. Absent: callers fall
+   * back to the `DEFAULT_*_THRESHOLD` constants in `rollup-ladder.ts`.
+   */
+  readonly rollup?: BrainRollupConfig;
   /**
    * Vault-wide exclusion policy (v0.10.9). Absent when the user
    * has not declared `vault.ignore_paths` in `_brain.yaml`; the

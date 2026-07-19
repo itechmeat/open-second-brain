@@ -109,6 +109,14 @@ export function claimGraphPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
 }
 
+/** Persisted rollup-ladder counter ledger (knowledge-intake-and-consolidation, S3). */
+export const BRAIN_ROLLUP_LEDGER_FILE = "rollup-ladder.json";
+
+/** Path of the rollup-ladder ledger: `Brain/rollup-ladder.json`. */
+export function rollupLedgerPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_ROLLUP_LEDGER_FILE), vault);
+}
+
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
 // Run IDs follow `dream-<YYYY-MM-DD>-<HHMMSS>`; we accept the same generic
