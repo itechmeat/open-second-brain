@@ -20,6 +20,7 @@ import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { readLogDay } from "./log-jsonl.ts";
+import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
 import { isoDate, relativeAge } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "./types.ts";
 
@@ -141,22 +142,12 @@ const PREF_PREFIX = "pref:";
 const OQ_PREFIX = "oq:";
 const NOTE_PREFIX = "note:";
 
-// Per-kind type tags stamped onto every rendered bullet so the
-// session-start bundle reads as a scannable typed timeline rather than
-// undifferentiated prose (v1.13.1 recent-activity presentation).
-const TYPE_TAG_PREF = "pref";
-const TYPE_TAG_OPEN = "open";
-const TYPE_TAG_NOTE = "note";
-
-/**
- * Render one timeline bullet: a Markdown list item carrying a type tag
- * and, when available, a short relative-age label. The age is omitted
- * (not shown as "· ") when `ageLabel` is empty — e.g. when the source
- * timestamp was missing or unparseable.
- */
-function timelineBullet(type: string, text: string, ageLabel: string): string {
-  return `- [${type}] ${text}${ageLabel ? ` · ${ageLabel}` : ""}`;
-}
+// Section header for the single chronological, typed, age-labeled
+// session-start timeline (t_4adb0b8b). All kept items - preferences, open
+// questions, notes - render into one time-ordered feed rather than three
+// per-kind sections, so an operator reads recent activity in the order it
+// happened.
+const TIMELINE_HEADER = "## Recent activity";
 
 /**
  * Build the morning brief for a vault. Read-only; deterministic given
@@ -201,53 +192,39 @@ export function buildMorningBrief(vault: string, opts: MorningBriefOptions): Mor
   const preferences: MorningBriefPreference[] = [];
   const keptQuestions: MorningBriefOpenQuestion[] = [];
   const keptNotes: string[] = [];
-  // Per-note rendered bullets carry the age label; the public
-  // `recentNotes` field stays `string[]` for back-compat with MCP
-  // clients, so the age is attached only on the rendered `text` path.
-  const noteBullets: string[] = [];
+  // Every kept item also becomes one timeline entry, tagged by kind and
+  // carrying its source timestamp, so the shared helper can render them as
+  // a single chronological, typed, age-labeled feed.
+  const timeline: ActivityItem[] = [];
   for (const kept of budgeted.kept) {
     if (kept.item.startsWith(PREF_PREFIX)) {
       const id = kept.item.slice(PREF_PREFIX.length);
-      const ageLabel = relativeAge(prefCreatedAtById.get(id) ?? "", opts.now) || undefined;
+      const createdAt = prefCreatedAtById.get(id) ?? "";
+      const ageLabel = relativeAge(createdAt, opts.now) || undefined;
       preferences.push({ id, principle: kept.text, trimmed: kept.trimmed, ageLabel });
+      timeline.push({ kind: "preference", text: kept.text, timestamp: createdAt });
     } else if (kept.item.startsWith(OQ_PREFIX)) {
       const topic = kept.item.slice(OQ_PREFIX.length);
       const found = oqByTopic.get(topic);
       const ageLabel = relativeAge(found?.ts ?? "", opts.now) || undefined;
       keptQuestions.push({ topic, domain: found?.domain ?? "", ageLabel });
+      timeline.push({
+        kind: "openQuestion",
+        text: `${topic} (${found?.domain ?? ""})`,
+        timestamp: found?.ts ?? "",
+      });
     } else if (kept.item.startsWith(NOTE_PREFIX)) {
       const idx = Number(kept.item.slice(NOTE_PREFIX.length));
-      const ageLabel = relativeAge(notes[idx]?.ts ?? "", opts.now);
       keptNotes.push(kept.text);
-      noteBullets.push(timelineBullet(TYPE_TAG_NOTE, kept.text, ageLabel));
+      timeline.push({ kind: "note", text: kept.text, timestamp: notes[idx]?.ts ?? "" });
     }
   }
 
-  const sections: string[] = [];
-  if (preferences.length > 0) {
-    sections.push(
-      [
-        "## Top preferences",
-        ...preferences.map((p) => timelineBullet(TYPE_TAG_PREF, p.principle, p.ageLabel ?? "")),
-      ].join("\n"),
-    );
-  }
-  if (keptQuestions.length > 0) {
-    sections.push(
-      [
-        "## Open questions",
-        ...keptQuestions.map((q) =>
-          timelineBullet(TYPE_TAG_OPEN, `${q.topic} (${q.domain})`, q.ageLabel ?? ""),
-        ),
-      ].join("\n"),
-    );
-  }
-  if (noteBullets.length > 0) {
-    sections.push(["## Recent notes", ...noteBullets].join("\n"));
-  }
+  const timelineText = renderActivityTimeline(timeline, opts.now);
+  const text = timelineText === "" ? "" : `${TIMELINE_HEADER}\n${timelineText}`;
 
   return Object.freeze({
-    text: sections.join("\n\n"),
+    text,
     preferences: Object.freeze(preferences),
     openQuestions: Object.freeze(keptQuestions),
     recentNotes: Object.freeze(keptNotes),
