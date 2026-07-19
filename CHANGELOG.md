@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.36.0] - 2026-07-19
+
+A knowledge intake and consolidation wave: eight units that carry content from the operator's pocket into the vault and turn what accumulates into trustworthy insight. Phone captures arrive through an inbound Telegram bot and drain through a report-then-apply routing pass, keyed web-research providers feed the citation-constrained pipeline, facts roll up into higher tiers on pure counters, entities gain diarized profiles with a stated-vs-evidenced gap, synthesis findings carry causal context and decomposed confidence behind an evidence-identity gate, the link graph gets a capped idempotent repair lane with efficacy holdouts, and skill proposals pass a deterministic verifier before reaching the pending queue. Two shared seams carry the wave: a capture-note contract and a keyed external-fetch helper. The kernel still calls no LLM, and every new surface is byte-identical when unused.
+
+### Added
+
+- Inbound Telegram capture bot (`o2b brain telegram-capture run | catchup`): an explicit long-polling runner (fetch-based getUpdates, no new dependencies) gated by `telegram_bot_token` (env `TELEGRAM_BOT_TOKEN`) and a chat-id allowlist `telegram_chat_allowlist` (env `TELEGRAM_CHAT_ALLOWLIST`, empty accepts nothing); each accepted message becomes one staged capture note through a new capture-note contract (kind, provenance, capture timestamp) under `Brain/captures/`; rejected or malformed updates log one decision each to a capture-decisions sidecar; `catchup` replays captures since the last acknowledged one; a missing token is a typed startup error.
+- Inbox-drain pass (`o2b brain inbox-drain [--apply]`): walks staged captures through the contract, classifies each structurally (URL-shaped body as source reference, explicit obligation marker as task, otherwise atomic idea), routes on apply (source ingest, note create in `captured/`, obligation open), archives processed captures, and reports every item with action and reason; dry-run is the default and writes nothing; rerun after apply is a no-op.
+- Keyed web-research providers plus full-page extract: Brave and Tavily join the research pool only when `BRAVE_API_KEY` or `TAVILY_API_KEY` is set, through a shared external-fetch helper (env-gated, Bearer or named-header auth, typed network/auth/http/payload errors, response cache keyed by normalized request, keys never in cache keys or error text); a keyless pool reports itself empty and stays byte-identical; the extract step feeds verbatim page text into the existing citation-constrained pipeline.
+- Count-triggered fact rollup ladder in the dream synthesize phase: when new facts at a tier reach the threshold (optional `rollup:` config block with `fact_threshold` and `identity_threshold`), one needs-llm-step rollup envelope is emitted and the counter reset is recorded in the dream report over a persisted ledger (`Brain/rollup-ladder.json`); rungs compose from facts to rollups to the identity tier; below threshold the dream output is byte-identical.
+- Subject diarization (`o2b brain diarize`, MCP `brain_diarize`): assembles an entity's document set from the registry and ingested source pages, computes a stated-vs-evidenced section deterministically (stated claims versus evidence frequency and recency, each line carrying an evidence identity and classified stated_corroborated, stated_unevidenced, or evidenced_unstated), and emits a profile skeleton plus one needs-llm-step envelope; unknown entities are a typed error.
+- Synthesis findings hardening: every deep-synthesis finding carries an additive causal-context field and decomposed confidence components (support, opposition, freshness, coverage, all deterministic); findings without an evidence identity are excluded and counted with reasons; the exported evidence-identity type and predicate are shared with diarization; the steelman seed selection is unchanged; both the CLI `--json` payload and the MCP structured content expose the new fields additively.
+- Memory-graph repair lane (`o2b brain repair-lane [--apply --confirm]`): candidate edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred candidates opt-in), gated by a confidence threshold and a hard per-run write cap, dry-run by default, apply requires the exact confirmation phrase, and idempotent forward-scan batching makes reruns converge to zero writes; the paired holdout harness measures graph lift separately from direct recall and fails the gate on any dangling or unhydrated target.
+- Skill-proposal verification and evolution: a deterministic pre-promotion verifier validates each draft against its own supporting records before it reaches pending (rejections recorded with reasons in a ledger), accepted skills carry a version that increments on evolution, and a same-name collision merges support instead of forking; the human accept and reject flow is unchanged and legacy proposals default to version 1.
+
+### Changed
+
+- The MCP tool surface grows from 106 to 107 tools (`brain_diarize`).
+- Deep-synthesis reports gain additive fields (causal context, decomposed confidence, excluded-finding counters) on the core report, the CLI JSON payload, and the MCP structured content; prior fields and consumers are unchanged.
+
 ## [1.35.0] - 2026-07-19
 
 A trusted recall and memory write surface wave: ten units that carry vault knowledge to the agent at the moment it matters and make every step accountable. An opt-in bounded recall brief lands on each prompt, retrieval zero-ranks quarantined material and hands back receipts naming every exclusion, a supersede relation on a successor fades the superseded note without editing it, and MCP agents gain the full atomic note lifecycle: update, append, and all-or-nothing mixed batches. Two shared kernels carry the wave: a deterministic retrieval rank-adjustment stage and an atomic multi-operation write core. The kernel still calls no LLM, and every new surface is byte-identical when its flag or param is omitted.
@@ -6582,6 +6602,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.36.0]: https://github.com/itechmeat/open-second-brain/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/itechmeat/open-second-brain/compare/v1.34.0...v1.35.0
 [1.34.0]: https://github.com/itechmeat/open-second-brain/compare/v1.33.0...v1.34.0
 [1.33.0]: https://github.com/itechmeat/open-second-brain/compare/v1.32.0...v1.33.0

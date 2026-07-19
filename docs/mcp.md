@@ -533,3 +533,13 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   Search outcomes carry the `memory_trust_assessment` and
   `retrieval_decision_trace` receipts when the retrieval trust gate is
   enabled. Omitting the new params keeps each tool byte-identical.
+- Since v1.36.0 `brain_diarize` joins the surface (107 total): a
+  read-only entity profile with a deterministically computed
+  stated-vs-evidenced section (each line carrying an evidence identity)
+  and one needs-llm-step envelope for the prose; unknown entities are a
+  typed error.
+- Since v1.36.0 `brain_deep_synthesis` structured content additively
+  exposes per-finding `causal_context`, decomposed `confidence`
+  components (support, opposition, freshness, coverage), and the
+  `excluded_findings` ledger with `excluded_finding_count`; prior fields
+  are unchanged.

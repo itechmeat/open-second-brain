@@ -314,6 +314,32 @@ every exclusion; `search_supersede_fade_enabled` (env
 note by a named multiplier. Both default off and leave ranking
 byte-identical when unset.
 
+### Knowledge intake and consolidation (since v1.36.0)
+
+```text
+o2b brain telegram-capture   run | catchup - explicit inbound capture runner (fetch-based long-poll getUpdates); gated by telegram_bot_token (env TELEGRAM_BOT_TOKEN) and the telegram_chat_allowlist chat-id allowlist (env TELEGRAM_CHAT_ALLOWLIST, empty accepts nothing); each accepted message becomes one staged capture note under Brain/captures/ with provenance; rejected updates log one decision each; catchup replays captures since the last acknowledged one; a missing token is a typed startup error
+o2b brain inbox-drain        [--apply] - walk staged captures, classify each structurally (URL-shaped body -> source reference, explicit obligation marker -> task, otherwise atomic idea), route on apply (source ingest, note in captured/, obligation open), archive processed captures, and report every item with action and reason; dry-run default writes nothing; rerun after apply is a no-op
+o2b brain diarize            <entity> [--json] - entity profile skeleton plus one needs-llm-step envelope; the stated-vs-evidenced section is computed deterministically (stated claims versus evidence frequency and recency), every line carrying an evidence identity; unknown entity is a typed error
+o2b brain repair-lane        [--apply --confirm "apply repair"] - propose link-graph edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred opt-in) under a confidence threshold and a hard per-run write cap; dry-run default; reruns after apply converge to zero writes; the holdout harness reports graph lift separately from direct recall and fails on dangling or unhydrated targets
+o2b brain deep-synthesis     --json now also carries findings with causal_context, decomposed confidence (support, opposition, freshness, coverage), and the excluded_findings ledger with excluded_finding_count
+```
+
+Web research gains keyed providers: Brave and Tavily join the research
+pool only when `BRAVE_API_KEY` or `TAVILY_API_KEY` is set, through a
+shared external-fetch helper (typed network, auth, http, and payload
+errors; response cache keyed by the normalized request; keys never appear
+in cache keys or error text). A keyless pool reports itself empty and
+report writing stays byte-identical. The full-page extract step feeds
+verbatim page text into the existing citation-constrained pipeline. The
+dream pass gains a count-triggered fact rollup ladder: an optional
+`rollup:` config block (`fact_threshold`, `identity_threshold`) makes a
+tier that accumulates enough new facts emit one needs-llm-step rollup
+envelope over a persisted ledger (`Brain/rollup-ladder.json`); below the
+threshold dream output is byte-identical. Skill proposals pass a
+deterministic pre-promotion verifier (rejections recorded with reasons),
+carry a version that increments on evolution, and merge same-name
+collisions instead of forking.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
