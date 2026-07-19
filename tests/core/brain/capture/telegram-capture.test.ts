@@ -161,6 +161,95 @@ test("runTelegramCapture survives a transport throw, logs one decision, and keep
   expect(staged[0]!.body).toBe("after the failure");
 });
 
+test("repeated getUpdates transport failures back off exponentially and a success resets the counter", async () => {
+  const slept: number[] = [];
+  let call = 0;
+  const transport: TelegramTransport = {
+    getUpdates: () => {
+      call += 1;
+      // Fail on calls 1-3, succeed (empty) on call 4, fail again on call 5.
+      if (call === 4) return Promise.resolve([]);
+      return Promise.reject(new Error("transport down"));
+    },
+    sendMessage: () => Promise.resolve(),
+  };
+
+  await runTelegramCapture(vault, {
+    transport,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    maxCycles: 5,
+    sleep: (ms) => {
+      slept.push(ms);
+      return Promise.resolve();
+    },
+  });
+
+  // Failures 1-3 double the wait (1000, 2000, 4000); the success on call 4
+  // records no sleep and resets the counter, so the failure on call 5 starts
+  // the ladder over at the base wait.
+  expect(slept).toEqual([1000, 2000, 4000, 1000]);
+});
+
+test("the backoff wait is capped and never grows without bound", async () => {
+  const slept: number[] = [];
+  const transport: TelegramTransport = {
+    getUpdates: () => Promise.reject(new Error("transport down")),
+    sendMessage: () => Promise.resolve(),
+  };
+
+  await runTelegramCapture(vault, {
+    transport,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    maxCycles: 8,
+    sleep: (ms) => {
+      slept.push(ms);
+      return Promise.resolve();
+    },
+  });
+
+  // 1000, 2000, 4000, 8000, 16000, then capped at 30000 thereafter.
+  expect(slept).toEqual([1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+});
+
+test("a stop request during a transport backoff ends the loop promptly", async () => {
+  const slept: number[] = [];
+  let stop = false;
+  let calls = 0;
+  const transport: TelegramTransport = {
+    getUpdates: () => {
+      calls += 1;
+      return Promise.reject(new Error("transport down"));
+    },
+    sendMessage: () => Promise.resolve(),
+  };
+
+  const result = await runTelegramCapture(vault, {
+    transport,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    // No maxCycles: only shouldStop can end the loop, proving the backoff path
+    // honors a stop rather than hot-looping the API forever.
+    shouldStop: () => stop,
+    sleep: (ms) => {
+      slept.push(ms);
+      stop = true;
+      return Promise.resolve();
+    },
+  });
+
+  // One failed poll, one backoff, then the stop observed after the sleep ends
+  // the loop: no second getUpdates is issued.
+  expect(calls).toBe(1);
+  expect(result.cycles).toBe(1);
+  expect(slept).toEqual([1000]);
+  expect(result.decisions.filter((d) => d.result === "transport-error")).toHaveLength(1);
+});
+
 test("requireTelegramToken throws a typed error when the token is absent", () => {
   expect(() => requireTelegramToken(null)).toThrow(MissingTelegramTokenError);
   expect(requireTelegramToken("abc")).toBe("abc");

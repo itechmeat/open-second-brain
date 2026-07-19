@@ -55,6 +55,33 @@ const FETCH_TIMEOUT_MARGIN_SECONDS = 10;
 /** Client-side abort timeout (seconds) for the short sendMessage request. */
 const SEND_MESSAGE_TIMEOUT_SECONDS = 15;
 
+/**
+ * Base wait (ms) before retrying getUpdates after the first consecutive
+ * transport failure. Each further consecutive failure doubles the wait.
+ */
+const TRANSPORT_BACKOFF_BASE_MS = 1000;
+
+/**
+ * Ceiling (ms) for the exponential getUpdates retry backoff. Without a cap a
+ * long outage would push the wait unbounded; with it the loop settles into a
+ * steady, gentle retry cadence instead of hammering the API or pinning CPU.
+ */
+const TRANSPORT_BACKOFF_MAX_MS = 30_000;
+
+/** Real timer sleep, used when no {@link RunTelegramCaptureOptions.sleep} is injected. */
+function defaultSleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Exponential backoff for `consecutiveFailures` (1-based): base doubled per
+ * failure, capped at {@link TRANSPORT_BACKOFF_MAX_MS}.
+ */
+function transportBackoffMs(consecutiveFailures: number): number {
+  const raw = TRANSPORT_BACKOFF_BASE_MS * 2 ** (consecutiveFailures - 1);
+  return Math.min(raw, TRANSPORT_BACKOFF_MAX_MS);
+}
+
 /** Minimal shape of the Telegram update objects this bot reads. */
 export interface TelegramUpdate {
   readonly update_id: number;
@@ -277,6 +304,12 @@ export interface RunTelegramCaptureOptions {
   readonly maxCycles?: number;
   /** Cooperative shutdown signal, checked at the top of each cycle. */
   readonly shouldStop?: () => boolean;
+  /**
+   * Injected sleep, awaited to back off between repeated getUpdates transport
+   * failures. Defaults to a real timer ({@link defaultSleep}); tests pass a
+   * recorder so the growing waits are asserted without spending wall-clock time.
+   */
+  readonly sleep?: (ms: number) => Promise<void>;
 }
 
 export interface RunTelegramCaptureResult {
@@ -297,6 +330,8 @@ export async function runTelegramCapture(
   const decisions: CaptureDecision[] = [];
   let offset = 0;
   let cycles = 0;
+  let consecutiveFailures = 0;
+  const sleep = opts.sleep ?? defaultSleep;
   const handleOpts: HandleUpdateOptions = {
     allowlist: opts.allowlist,
     agent: opts.agent,
@@ -314,13 +349,26 @@ export async function runTelegramCapture(
     try {
       // oxlint-disable-next-line no-await-in-loop
       updates = await opts.transport.getUpdates(offset);
+      // A clean poll clears the failure streak so the next outage restarts the
+      // backoff ladder from the base wait rather than an inflated one.
+      consecutiveFailures = 0;
     } catch (err) {
       // A transient transport failure is one logged decision, not a crash: the
       // loop retries on the next cycle. Typed startup errors (missing token)
-      // are raised before the loop and stay fatal.
+      // are raised before the loop and stay fatal. Before retrying we wait out
+      // an exponential backoff so a persistent outage (bad token, DNS failure,
+      // API downtime) settles into a gentle retry cadence instead of a hot loop
+      // that hammers the API and pins the CPU, which matters because production
+      // runs with no maxCycles.
+      consecutiveFailures += 1;
       decisions.push(
         logTransportError(vault, -1, null, `getUpdates failed: ${messageOf(err)}`, opts.now),
       );
+      // oxlint-disable-next-line no-await-in-loop
+      await sleep(transportBackoffMs(consecutiveFailures));
+      // A stop requested during the backoff ends the loop promptly rather than
+      // issuing another getUpdates, so shutdown never waits on a full retry.
+      if (opts.shouldStop?.() === true) break;
       continue;
     }
     for (const update of updates) {
