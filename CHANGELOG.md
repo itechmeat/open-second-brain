@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.34.0] - 2026-07-18
+
+A source pipeline integrity and operator tooling wave: eleven units that make vault intake trustworthy end to end (scoped and gated discovery, reconciled dispatch, deterministic pre-extraction, citation provenance), extend the query surface (configurable FTS tokenizer, graph-degree predicates), and give the operator a repairing doctor plus one consolidated status snapshot. Two shared kernels carry the wave: a gitignore-semantics path-scope engine and a diagnostics-signal registry whose next-command hints travel with the issue definitions. Everything stays deterministic (the kernel calls no LLM) and every new surface is byte-identical when unused.
+
+### Added
+
+- Nested `.gitignore` support in the hygiene file scan through a new path-scope engine (`src/core/fs/ignore.ts`): root and nested ignore files compose with git semantics (a deeper file scopes its own subtree, a nearer `!` re-include wins, `.git/info/exclude` participates); repositories without ignore files scan exactly as before and malformed patterns warn explicitly.
+- Source ingest scoping: `--src-subpath` and `--exclude` on `o2b brain batch-plan` (and `src_subpath` / `exclude` on `brain_ingest_batch_plan`) restrict a monorepo ingest to one subtree with gitignore-style excludes through the same shared engine; a subpath escaping the source root rejects with a typed error.
+- The schema `extractable` flag is enforced during page discovery: with a non-empty allowlist, pages whose `schema_type` is not listed are skipped before extraction, reported with a reason on the plan (`skipped_non_extractable`) and logged; an empty allowlist keeps today's behavior byte for byte and untyped pages are never gated.
+- Deterministic no-LLM code-structure pre-extraction (`o2b brain pre-extract`, `pre_extract` on `brain_ingest_source`): classes, functions, imports, and inheritance edges from TypeScript, JavaScript, and Python sources as JSON entity/edge seeds handed to the agent ingest step; unknown languages report `extracted: false` with a reason, never a fake empty success.
+- Dispatched-vs-ingested reconciliation (`o2b brain batch-plan --reconcile`, `reconcile` on `brain_ingest_batch_plan`): diffs a plan's dispatched set against checkpoint completions and names every silently-lost source; a complete plan reports an explicit empty gap; read-only and idempotent, a report rather than a retry.
+- Inline citation promotion (`o2b brain scan-citations`): structural `[Source: <name>, YYYY-MM-DD]` markers in note prose become dated `source-citation` events on the temporal timeline, stamped at the citation date and deduplicated on normalized name plus date; malformed markers are reported and skipped (`--strict` exits nonzero).
+- Configurable FTS tokenizer: `search_fts_diacritics` (`0 | 1 | 2`) and `search_fts_stemmer` (`none | porter`) assemble the FTS5 tokenizer clause from validated allowlists; invalid values reject with a typed error naming the allowed set, changing the config requires an explicit `o2b search reindex`, and the CJK trigram path is untouched.
+- Graph-degree cardinality predicates in the search filter DSL: `--degree` on `o2b search` (and `degree` on `brain_search`) filters by backlink and outlink counts with `=`, `!=`, `>`, `>=`, `<`, `<=` (orphans `backlinks=0`, hubs `outlinks>=N`), backed by directed degree data on the existing link-graph index.
+- Doctor repair mode (`o2b brain doctor --repair`, `repair` / `apply` on `brain_doctor`): previews targeted fixes for doctor-detected issue classes (dangling workrun checkpoints, dead evidence links) without writing; `--repair --apply` performs them idempotently and logs one typed `doctor-repair` event per fix; structural lifecycle links and append-only audit history are reported needs-review or unfixable rather than half-fixed; plain doctor and `--strict` stay read-only.
+- Unified operator status snapshot (`o2b brain status`, MCP `brain_status`): doctor, semantic health, hygiene, stale scan, review queue depth, active profile, and state-file health in one readable view; every problem line carries the exact next command supplied by the shared diagnostics-signal registry; a healthy vault prints a compact all-clear.
+- Clean exit on early-closed stdout pipes: `o2b ... | head` (and `vault-log`) exits 0 on EPIPE, while any other stdout error now fails loudly instead of being silently swallowed.
+
+### Changed
+
+- The MCP tool surface grows from 102 to 103 tools (`brain_status`); `brain_ingest_batch_plan`, `brain_ingest_source`, `brain_doctor`, and `brain_search` gain the optional params listed above and stay byte-identical when the params are omitted.
+- The hygiene scan replaces its static skip-dir list with gitignore-aware composition via the shared path-scope engine.
+- Doctor diagnostics flow through a shared diagnostics-signal registry (issue class, detector, optional fixer, next-command hint) consumed by both `doctor --repair` and `o2b brain status`.
+
 ## [1.33.0] - 2026-07-18
 
 A belief lifecycle and decision memory wave: eleven units that give memories a full lifecycle (tombstone, supersede, temporal replacement, tension triage) and make decisions first-class, auditable citizens of the brain (records, ratings, commitment tiers, change receipts, governed recall). Everything is deterministic (the kernel still calls no LLM), every mutation is logged or receipted, and vaults that do not opt in behave byte-identically.
@@ -6532,6 +6556,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.34.0]: https://github.com/itechmeat/open-second-brain/compare/v1.33.0...v1.34.0
 [1.33.0]: https://github.com/itechmeat/open-second-brain/compare/v1.32.0...v1.33.0
 [1.32.0]: https://github.com/itechmeat/open-second-brain/compare/v1.31.0...v1.32.0
 [1.31.0]: https://github.com/itechmeat/open-second-brain/compare/v1.30.1...v1.31.0

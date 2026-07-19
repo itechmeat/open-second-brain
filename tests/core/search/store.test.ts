@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../../../src/core/search/store.ts";
-import { LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
+import { DEFAULT_FTS_TOKENIZE, LATEST_SCHEMA_VERSION } from "../../../src/core/search/schema.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type {
   ResolvedSearchConfig,
@@ -77,6 +77,7 @@ function makeConfig(overrides?: Partial<ResolvedSearchConfig>): ResolvedSearchCo
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,
+    ftsTokenize: DEFAULT_FTS_TOKENIZE,
     ...overrides,
   });
 }

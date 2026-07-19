@@ -25,6 +25,7 @@ import {
 } from "../core/search/index.ts";
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
+import { parseDegreePredicate, type DegreePredicate } from "../core/search/property-filter.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
@@ -150,6 +151,12 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
         type: "array",
         items: { type: "string" },
       },
+    },
+    degree: {
+      type: "array",
+      description:
+        "Graph-degree predicates over backlink/outlink counts, e.g. 'backlinks=0' (orphans) or 'outlinks>=5' (hubs); ANDed. Absent = no filter.",
+      items: { type: "string" },
     },
     visibility: {
       type: "array",
@@ -379,6 +386,31 @@ function parseVisibilityArgument(raw: unknown): string[] | undefined {
   return out;
 }
 
+/**
+ * Validate the `degree` argument (array of `<field><op><count>` strings)
+ * into a predicate list. A malformed shape or predicate throws
+ * INVALID_PARAMS rather than silently dropping the filter.
+ */
+function parseDegreeArgument(raw: unknown): DegreePredicate[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new MCPError(INVALID_PARAMS, "argument 'degree' must be an array of strings");
+  }
+  const out: DegreePredicate[] = [];
+  for (const item of raw) {
+    if (typeof item !== "string") {
+      throw new MCPError(INVALID_PARAMS, "argument 'degree' must contain only strings");
+    }
+    try {
+      out.push(parseDegreePredicate(item));
+    } catch (e) {
+      if (e instanceof SearchError) throw searchErrorToMcp(e);
+      throw e;
+    }
+  }
+  return out;
+}
+
 function parseReinforceArgument(raw: unknown): string[] | undefined {
   if (raw === undefined || raw === null) return undefined;
   if (!Array.isArray(raw)) {
@@ -494,6 +526,7 @@ async function toolBrainSearch(
       : undefined;
   const focusSession = coerceStringOptional(args, "focus_session", 128);
   const properties = parsePropertiesArgument(args["properties"]);
+  const degreeFilters = parseDegreeArgument(args["degree"]);
   const visibility = parseVisibilityArgument(args["visibility"]);
   const agentScope = coerceStringOptional(args, "agent_scope", 128);
   const reinforce = parseReinforceArgument(args["reinforce"]);
@@ -527,6 +560,7 @@ async function toolBrainSearch(
     ...(profile !== undefined ? { profile } : {}),
     ...(disclosure === "cards" ? { disclosure: "cards" as const } : {}),
     ...(properties !== undefined ? { properties } : {}),
+    ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),

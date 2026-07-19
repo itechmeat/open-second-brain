@@ -5,6 +5,7 @@
  */
 
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { DegreePredicate } from "./property-filter.ts";
 
 export type { VaultIgnoreRule };
 
@@ -551,6 +552,14 @@ export interface SearchOptions {
    */
   readonly properties?: ReadonlyMap<string, ReadonlyArray<string>>;
   /**
+   * Graph-degree cardinality predicates (t_9bee8f0b). Each predicate
+   * selects notes by backlink/outlink count (orphans `backlinks = 0`,
+   * hubs `outlinks >= N`, etc.); predicates are ANDed and applied as a
+   * post-rank phase backed by the link-graph degree index. Absent /
+   * empty = no filter, byte-identical to prior behaviour.
+   */
+  readonly degreeFilters?: ReadonlyArray<DegreePredicate>;
+  /**
    * Per-query MMR override (v0.13.0). Absent uses the resolved config
    * default; `1` disables diversification for this query.
    */
@@ -1006,4 +1015,14 @@ export interface ResolvedSearchConfig {
    * gated on a signature marker, so a drifted staging DB is rebuilt.
    */
   readonly resumeReindex: boolean;
+  /**
+   * FTS5 tokenizer clause for the searchable `chunk_fts` table (Q1 of the
+   * search config, t_618f7211), assembled from validated
+   * `search_fts_diacritics` / `search_fts_stemmer` config keys. Absent
+   * config yields the historical `unicode61 remove_diacritics 2`
+   * byte-identically. Applied only when the index is (re)built, so a
+   * change requires an explicit `o2b search reindex`; the CJK trigram
+   * shadow index is untouched by this clause.
+   */
+  readonly ftsTokenize: string;
 }

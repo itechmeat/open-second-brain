@@ -201,6 +201,8 @@ describe("tool listing", () => {
         "brain_agent_diff",
         "brain_doctor",
         "brain_health",
+        // Unified operator status snapshot (source-pipeline-integrity O3).
+        "brain_status",
         "brain_hygiene",
         "brain_mcp_landscape",
         // Canonical entity registry read surface (Memory Integrity Suite).
@@ -643,7 +645,9 @@ describe("stdio loop", () => {
     //   belief-lifecycle-decision-memory t_ac03214d) = 101.
     // + brain_tension (persisted-contradiction lifecycle,
     //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
-    expect(list.result.tools.length).toBe(102);
+    // + brain_status (unified operator status snapshot,
+    //   source-pipeline-integrity O3 t_9f9c5466) = 103.
+    expect(list.result.tools.length).toBe(103);
   });
 
   test("returns parse error for invalid JSON", async () => {

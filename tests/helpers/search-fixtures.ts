@@ -16,6 +16,7 @@ import type {
   ResolvedEmbeddingConfig,
   ResolvedRerankConfig,
 } from "../../src/core/search/types.ts";
+import { DEFAULT_FTS_TOKENIZE } from "../../src/core/search/schema.ts";
 
 export function createTempVault(prefix: string): {
   vault: string;
@@ -157,5 +158,6 @@ export function makeConfig(opts: {
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,
+    ftsTokenize: DEFAULT_FTS_TOKENIZE,
   });
 }

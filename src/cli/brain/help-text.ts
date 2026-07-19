@@ -41,7 +41,8 @@ Brain verbs (observing memory):
   snapshot diff    Read-only diff between two snapshots, or snapshot vs live
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
-  doctor              Validate Brain invariants (--strict; --remediate [--dry-run])
+  doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply])
+  status              Unified operator status snapshot with next-command hints
   hygiene             Hygiene pipeline: scan findings; apply by ids (--dry-run)
   refresh             Targeted recompile of stale derived pages (--stale [--dry-run])
   anticipate          Inspect or refresh the anticipatory context cache (--session)
@@ -79,6 +80,7 @@ Brain verbs (observing memory):
   authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
   mcp-landscape       List MCP servers configured across the vault (packages, env names)
   scan-inline         Capture @osb markers from folders listed under notes.read_paths in _brain.yaml
+  scan-citations      Promote inline [Source: <name>, YYYY-MM-DD] markers to dated provenance events
   import-session      Replay signals from a registered agent session .jsonl (or directory)
   entity              Canonical entity registry: set, get, list, relate, archive, prune
   session-hook        Capture one runtime hook payload from stdin (internal hook bridge)
@@ -304,10 +306,13 @@ export const VERB_HELP: Record<string, string> = {
     "(warm | stale | miss), or force a refresh first (TTL debounce applies).\n",
   doctor:
     "usage: o2b brain doctor [--vault <path>] [--json] [--strict]\n" +
-    "                        [--remediate [--dry-run]]\n" +
+    "                        [--remediate [--dry-run]] [--repair [--apply]]\n" +
     "Validate invariants. Warnings exit 0 (or 2 with --strict). Errors always exit 1.\n" +
     "--remediate builds a dependency-ordered repair plan and applies the\n" +
-    "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n",
+    "auto-safe steps (content-hash re-stamp); --dry-run previews without writing.\n" +
+    "--repair previews safe fixes for detected classes (WAL gaps, orphaned\n" +
+    "references); --repair --apply performs them and logs one event per fix.\n" +
+    "Plain doctor and --strict stay read-only.\n",
   watchdog:
     "usage: o2b brain watchdog [--vault <path>] [--json] [--remediate [--dry-run]]\n" +
     "                           [--restore <run_id> [--force-restore]] [--attempt <n>]\n" +
@@ -318,6 +323,12 @@ export const VERB_HELP: Record<string, string> = {
     "Semantic-health report: contradictory confirmed preferences, recurring\n" +
     "concepts with no dedicated preference, and confirmed preferences on stale\n" +
     "evidence, plus a clean/watch/investigate verdict. Read-only.\n",
+  status:
+    "usage: o2b brain status [--vault <path>] [--json]\n" +
+    "Unified operator status snapshot. Composes doctor, semantic health,\n" +
+    "hygiene, stale scan, review candidates, active profile, and state-file\n" +
+    "health into one readable view. Every problem line carries the exact next\n" +
+    "command to run; a healthy vault prints a compact all-clear. Read-only.\n",
   history:
     "usage: o2b brain history <slug> [--vault <path>] [--json]\n" +
     "Render a preference's edit-history timeline (one entry per content\n" +
@@ -536,6 +547,16 @@ export const VERB_HELP: Record<string, string> = {
     "create signals in Brain/inbox/, and annotate the source files with\n" +
     "@osb✓ [[sig-...]]. Brain/, .git, node_modules, and similar directories\n" +
     "are always skipped. Idempotent on re-run.\n",
+  "scan-citations":
+    "usage: o2b brain scan-citations [--vault <path>] [--path <subdir>...] [--exclude <subdir>...]\n" +
+    "                                 [--dry-run] [--strict] [--json] [--agent <name>]\n" +
+    "Walk the vault for inline [Source: <name>, YYYY-MM-DD] provenance markers\n" +
+    "and promote each well-formed citation into the temporal timeline as a\n" +
+    "dated source-citation event stamped at the citation date. Dedup is on\n" +
+    "(normalized name, date), so a re-run over an unchanged vault promotes\n" +
+    "nothing. Malformed markers are reported and skipped; --strict exits 2\n" +
+    "when any malformed marker is found. Brain/ and the usual build dirs are\n" +
+    "always skipped.\n",
   "import-claude-memory":
     "usage: o2b brain import-claude-memory [--vault <path>] [--memory <path>]\n" +
     "                                       [--dry-run | --apply] [--yes] [--json]\n" +

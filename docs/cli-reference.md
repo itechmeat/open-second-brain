@@ -262,6 +262,27 @@ o2b brain session-grep        gains --since <time> and --before <time> bounds on
 
 Supersession is now consumer-aware: context packs inject only the tip of a supersedes chain under budget (an explicit historical flag keeps the whole chain), recall annotates superseded hits with their replacement, and the dream pass accelerates decay of low-recall superseded ancestors (`chain-decay` events). Decisions carry an optional commitment tier (`exploring | leaning | decided | locked`, also valid on preferences and theses) that renders in injected text in place of the raw confidence float when set. Every decision mutation and lifecycle transition appends an accountable `decision_change.v1` receipt (before, after, evidence, confidence delta, actor, reason code) with durable idempotency keys. Search results expose `authored_at` when the source turn carried an instant, and exact hybrid-score ties order newer-first.
 
+### Source pipeline integrity and operator tooling (since v1.34.0)
+
+```text
+o2b brain batch-plan          gains --src-subpath <rel> (scope a monorepo ingest to one subtree; escaping the source root is a typed error), --exclude <pattern> (gitignore-style patterns through the shared ignore engine), and --reconcile (diff the plan's dispatched set against checkpoint completions and name every silently-lost source; a complete plan reports an explicit empty gap)
+o2b brain pre-extract         <file> [--json] - deterministic no-LLM code-structure extraction (classes, functions, imports, inheritance edges as JSON entity/edge seeds) for TypeScript, JavaScript, and Python; unknown extensions report extracted:false with a reason, never an empty success
+o2b brain scan-citations      [--strict] - promote structural [Source: <name>, YYYY-MM-DD] markers in note prose into dated source-citation events on the temporal timeline; dedup on normalized name + date, malformed markers are reported and skipped (--strict exits nonzero on them)
+o2b brain doctor              gains --repair (preview targeted fixes for doctor-detected classes: dangling workrun checkpoints, dead evidence links; dry-run default) and --repair --apply (perform the fixes idempotently, one typed doctor-repair event each); unfixable classes are reported needs-review; plain doctor and --strict stay read-only
+o2b brain status              one consolidated operator snapshot: doctor, semantic health, hygiene, stale scan, review queue depth, active profile, and state-file health; every problem line carries the exact next command from the shared diagnostics-signal registry; healthy vaults print a compact all-clear
+```
+
+The hygiene file scan now honors nested `.gitignore` files with git
+semantics (a deeper ignore file scopes its own subtree, a nearer `!`
+re-include wins, `.git/info/exclude` participates) through the shared
+path-scope engine also used by ingest scoping; repositories without ignore
+files scan exactly as before, and malformed patterns warn explicitly. Page
+discovery enforces the schema `extractable` allowlist: with a non-empty
+allowlist, pages whose `schema_type` is not listed are skipped up front and
+reported with a reason (an empty allowlist changes nothing). Both `o2b` and
+`vault-log` treat an early-closed stdout pipe (`o2b ... | head`) as a clean
+exit 0, while any other stdout error now fails loudly.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
@@ -311,6 +332,8 @@ o2b partner codegraph report  Resolve the in-scope code project and report the c
 o2b search "<query>"          Hybrid full-text + semantic search across the vault
                               --property type=decision --property status=open
                               filters on frontmatter scalars (post-FTS phase)
+                              --degree backlinks=0 / --degree outlinks>=5 filter by graph
+                              cardinality (orphans, hubs; ops = != > >= < <=, ANDed)
                               --query-doc '<lanes>' separates intent/lex/vec/hyde recall lanes
                               --evidence-pack adds matched/missing term diagnostics, abstention text,
                               IDF-weighted coverage, per-token union records, and a completeness verdict
@@ -352,6 +375,15 @@ estimated spend exceeds it unless `--force-cost`. `search_fusion_mode`
 (default `linear`) may be set to `rrf` to fuse the keyword and semantic
 lanes by reciprocal rank (`search_rrf_k`, default 60); `linear` keeps
 ranking bit-identical.
+
+FTS tokenizer (since v1.34.0): `search_fts_diacritics` (default `2`; also
+`0`/`1`) sets the `unicode61 remove_diacritics` rule, and
+`search_fts_stemmer` (default `none`; also `porter`) layers Porter
+stemming over it. Unset keys keep the historical
+`unicode61 remove_diacritics 2` clause byte-identically. An out-of-range
+value is rejected loudly; the CJK trigram prefilter is unaffected.
+Changing either key only takes effect after `o2b search reindex` — there
+is no implicit reindex.
 
 Typed relations participate in ranking (relation polarity): a page whose
 frontmatter declares `superseded_by:` is demoted when it matches and its

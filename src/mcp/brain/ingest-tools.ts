@@ -12,6 +12,7 @@
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
 import { clearCheckpoint } from "../../core/brain/ingest/checkpoint.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
+import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import {
   deleteBySource,
@@ -20,7 +21,7 @@ import {
   type SourceCleanupPlan,
 } from "../../core/brain/source-cleanup.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { coerceBoolOptional, coerceInt, coerceStr } from "../coerce.ts";
+import { coerceBoolOptional, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
@@ -42,6 +43,7 @@ async function toolBrainIngestSource(
   const sourcePath = coerceStr(args, "source_path", true)!;
   const summary = coerceStr(args, "summary", true)!;
   const planId = coerceStr(args, "plan_id", false) ?? undefined;
+  const preExtract = coerceBoolOptional(args, "pre_extract") ?? false;
   const parsed = parseExtractionIntakeArgs(args, TOOL);
   const agent =
     parsed.agent && parsed.agent.trim().length > 0
@@ -52,7 +54,12 @@ async function toolBrainIngestSource(
     const res = ingestSource(
       ctx.vault,
       { sourcePath, summary, extraction: parsed.intake },
-      { agent, now: new Date(), ...(planId !== undefined ? { planId } : {}) },
+      {
+        agent,
+        now: new Date(),
+        ...(planId !== undefined ? { planId } : {}),
+        ...(preExtract ? { preExtract: true } : {}),
+      },
     );
     return {
       summary_path: res.summaryPath,
@@ -60,6 +67,9 @@ async function toolBrainIngestSource(
       entities_created: [...res.entitiesCreated],
       entities_updated: [...res.entitiesUpdated],
       connections: [...res.connections],
+      // Only emitted when the pre-extract pass ran, so a call without it is
+      // byte-identical to before (P4).
+      ...(res.preExtract !== undefined ? { pre_extract: res.preExtract } : {}),
     };
   });
 }
@@ -161,6 +171,16 @@ function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
     total_files: plan.totalFiles,
     total_bytes: plan.totalBytes,
     skipped: [...plan.skipped],
+    // Only emitted when the extractable gate skipped something, so a plan with
+    // no extractable declaration serializes byte-identically to before.
+    ...(plan.skippedNonExtractable.length > 0
+      ? {
+          skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
+            path: s.path,
+            reason: s.reason,
+          })),
+        }
+      : {}),
     plan_id: plan.planId,
     resumed_completed: plan.resumedCompleted,
     batches: plan.batches.map((b) => ({
@@ -191,13 +211,37 @@ async function toolBrainIngestBatchPlan(
     Number.MAX_SAFE_INTEGER,
   );
   const resume = coerceBoolOptional(args, "resume") ?? false;
-  const plan = planBatches(ctx.vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
+  const reconcile = coerceBoolOptional(args, "reconcile") ?? false;
+  const srcSubpath = coerceStr(args, "src_subpath", false) ?? undefined;
+  const exclude = coerceStrList(args, "exclude");
+  const plan = planBatches(ctx.vault, sourceDir, {
+    maxBatchBytes,
+    maxBatchFiles,
+    resume,
+    ...(srcSubpath !== undefined ? { srcSubpath } : {}),
+    ...(exclude.length > 0 ? { exclude } : {}),
+  });
+  // Reconcile BEFORE any checkpoint clear below, so the gap report reads a live
+  // checkpoint. Read-only: it only diffs dispatched vs completed.
+  const report = reconcile ? reconcilePlan(ctx.vault, plan) : undefined;
   // A resumed plan that comes back empty is fully drained: drop its checkpoint
   // (the content manifest is the authoritative final state from here on).
   if (resume && plan.batches.length === 0) {
     clearCheckpoint(ctx.vault, plan.planId);
   }
-  return serializeBatchPlan(plan);
+  const serialized = serializeBatchPlan(plan);
+  return report === undefined
+    ? serialized
+    : {
+        ...serialized,
+        reconcile: {
+          plan_id: report.planId,
+          dispatched: [...report.dispatched],
+          ingested: [...report.ingested],
+          missing: [...report.missing],
+          complete: report.complete,
+        },
+      };
 }
 
 export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
@@ -255,6 +299,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional batch-plan id (from brain_ingest_batch_plan). When set, a successful ingest records this source into that plan's resume checkpoint.",
+        },
+        pre_extract: {
+          type: "boolean",
+          description:
+            "Run the deterministic no-LLM code-structure pass over the source file; returns class/function/import/inheritance seeds under `pre_extract`. Off by default.",
         },
       },
       required: ["source_path", "summary", "entities"],
@@ -345,6 +394,22 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "Resume an interrupted plan: exclude items already recorded completed in this plan's checkpoint. Default false.",
+        },
+        reconcile: {
+          type: "boolean",
+          description:
+            "Also return a `reconcile` gap report diffing the plan's dispatched sources against the checkpoint's ingested set. Read-only; no retry. Default false.",
+        },
+        src_subpath: {
+          type: "string",
+          description:
+            "Scope discovery to a subtree of source_dir (e.g. pkg/a). A value escaping source_dir is a typed error. Absent walks the whole dir.",
+        },
+        exclude: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "Gitignore-style patterns (relative to source_dir) whose matches are dropped from discovery. Same engine as the hygiene scan.",
         },
       },
       required: ["source_dir"],

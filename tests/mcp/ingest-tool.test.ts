@@ -78,6 +78,35 @@ describe("brain_ingest_source", () => {
       handler(ctx, { summary: "x", entities: [{ category: "concept", name: "A" }] }),
     ).rejects.toThrow(MCPError);
   });
+
+  test("pre_extract surfaces deterministic code-structure seeds (P4)", async () => {
+    mkdirSync(join(vault, "Code"), { recursive: true });
+    writeFileSync(
+      join(vault, "Code", "widget.ts"),
+      'import { h } from "./dom";\nexport class Widget extends Base {}\n',
+      "utf8",
+    );
+    const res = (await handler(ctx, {
+      source_path: "Code/widget.ts",
+      summary: "A widget.",
+      entities: [{ category: "concept", name: "Widget" }],
+      pre_extract: true,
+    })) as Record<string, unknown>;
+    expect(res["pre_extract"]).toMatchObject({
+      extracted: true,
+      language: "typescript",
+      entities: [{ kind: "class", name: "Widget" }],
+    });
+  });
+
+  test("without pre_extract the response omits the seeds field (byte-identical)", async () => {
+    const res = (await handler(ctx, {
+      source_path: "Articles/eth.md",
+      summary: "x",
+      entities: [{ category: "concept", name: "A" }],
+    })) as Record<string, unknown>;
+    expect(res["pre_extract"]).toBeUndefined();
+  });
 });
 
 describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {
@@ -112,5 +141,42 @@ describe("brain_ingest_batch_plan resume (t_ba1fa5f6)", () => {
       b.files.map((f) => f.path),
     );
     expect(files).toEqual(["Docs/b.md"]);
+  });
+});
+
+describe("brain_ingest_batch_plan reconcile (P5, t_d067a153)", () => {
+  const batchPlan = INGEST_TOOLS.find((t) => t.name === "brain_ingest_batch_plan")!.handler;
+
+  test("reconcile reports sources dispatched but never ingested", async () => {
+    mkdirSync(join(vault, "Docs"), { recursive: true });
+    writeFileSync(join(vault, "Docs", "a.md"), "alpha", "utf8");
+    writeFileSync(join(vault, "Docs", "b.md"), "bravo", "utf8");
+
+    const first = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
+    // Ingest only a; b is the lost source.
+    await handler(ctx, {
+      source_path: "Docs/a.md",
+      summary: "Alpha.",
+      entities: [{ category: "concept", name: "Alpha" }],
+      plan_id: first["plan_id"],
+    });
+
+    const res = (await batchPlan(ctx, { source_dir: "Docs", reconcile: true })) as Record<
+      string,
+      unknown
+    >;
+    expect(res["reconcile"]).toMatchObject({
+      plan_id: first["plan_id"],
+      ingested: ["Docs/a.md"],
+      missing: ["Docs/b.md"],
+      complete: false,
+    });
+  });
+
+  test("without the reconcile flag the response omits the report (byte-identical)", async () => {
+    mkdirSync(join(vault, "Docs"), { recursive: true });
+    writeFileSync(join(vault, "Docs", "a.md"), "alpha", "utf8");
+    const res = (await batchPlan(ctx, { source_dir: "Docs" })) as Record<string, unknown>;
+    expect(res["reconcile"]).toBeUndefined();
   });
 });

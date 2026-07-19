@@ -9,6 +9,8 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
+import { applyRepair } from "../../core/brain/diagnostics.ts";
+import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
@@ -19,6 +21,26 @@ async function toolBrainDoctor(
 ): Promise<Record<string, unknown>> {
   const strict = coerceBool(args, "strict");
   const format = coerceFormat(args);
+
+  // Guarded repair mode (O2). Opt-in and dry-run by default; `apply`
+  // performs the fixes. `strict` stays read-only and cannot apply.
+  const repair = coerceBool(args, "repair");
+  const apply = coerceBool(args, "apply");
+  // `apply` is a modifier of `repair`; on its own it would silently return
+  // read-only diagnostics, so reject it up front.
+  if (apply && !repair) {
+    throw new Error("brain_doctor: apply requires repair");
+  }
+  if (repair) {
+    if (strict && apply) {
+      throw new Error("brain_doctor: cannot combine strict (read-only) with repair + apply");
+    }
+    const outcome = applyRepair(ctx.vault, {
+      dryRun: !apply,
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    });
+    return { format, repair: outcome };
+  }
 
   const result = runDoctor(ctx.vault, {
     strict,
@@ -112,19 +134,43 @@ async function toolBrainHealth(
   };
 }
 
+// ----- brain_status --------------------------------------------------------
+
+async function toolBrainStatus(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const format = coerceFormat(args);
+  const snapshot = await buildOperatorSnapshot(
+    ctx.vault,
+    ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+  );
+  return { format, ...snapshot };
+}
+
 // ----- Serializers ---------------------------------------------------------
 
 export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_doctor",
     description:
-      "Validate `Brain/` invariants: status-vs-folder consistency, frontmatter validity, duplicate ids, ISO parsing, log header parsing. Read-only.",
+      "Validate `Brain/` invariants (status-vs-folder, frontmatter, duplicate ids, ISO, log headers). Read-only by default; `repair` previews safe fixes for detected classes (WAL gaps, orphaned references), `repair`+`apply` performs them and logs one event per fix.",
     inputSchema: {
       type: "object",
       properties: {
         strict: {
           type: "boolean",
           description: "When true, warnings demote `ok` to false (CLI exit-code parity).",
+        },
+        repair: {
+          type: "boolean",
+          description:
+            "Preview safe fixes for issue classes the doctor detects (dry-run). Read-only unless `apply` is also set.",
+        },
+        apply: {
+          type: "boolean",
+          description:
+            "With `repair`, perform the fixes and log one typed event per fix; otherwise `repair` is a dry-run preview.",
         },
         format: {
           type: "string",
@@ -154,5 +200,23 @@ export const HEALTH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainHealth,
+  },
+  {
+    name: "brain_status",
+    description:
+      "Unified operator status snapshot: composes doctor, semantic health, hygiene, stale scan, review candidates, active profile, and state-file health. Every problem carries the exact next command to run; a healthy vault reports all-clear. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        format: {
+          type: "string",
+          enum: ["markdown", "json"],
+          description:
+            "Output format hint. Structured result is identical; caller decides rendering.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainStatus,
   },
 ]);

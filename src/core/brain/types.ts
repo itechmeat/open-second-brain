@@ -380,6 +380,30 @@ export const BRAIN_LOG_EVENT_KIND = {
    * first detection and each deliberate transition.
    */
   tension: "tension",
+  /**
+   * `source-citation` (Source pipeline integrity suite, Q1, t_a3d1adb0) -
+   * an inline `[Source: <name>, YYYY-MM-DD]` prose citation was promoted
+   * into the temporal timeline as a dated provenance event. The event is
+   * stamped at the citation date (`<date>T00:00:00Z`), so it lands on the
+   * timeline where the source was dated rather than when it was scanned.
+   * Payload carries the raw `name`, the ISO `date`, the vault-relative
+   * `source` note wikilink, and the `agent`. Dedup is on (normalized name,
+   * date) against already-logged source-citation events, so a re-scan of
+   * an unchanged vault promotes nothing and stays byte-identical.
+   */
+  sourceCitation: "source-citation",
+  /**
+   * `doctor-repair` (Source pipeline integrity suite, O2, t_bd6cc4cb) - the
+   * guarded `o2b brain doctor --repair --apply` mode performed one targeted
+   * fix for an issue class the doctor already detects. One event per applied
+   * fix. Payload carries the diagnostics-signal `code` (e.g. `wal-gap`,
+   * `orphaned-reference`), the `target` (vault-relative path or field ref the
+   * fix touched), a one-line `detail`, and the `agent`. A dry-run preview
+   * writes nothing and emits no event; re-running after a successful apply is
+   * a no-op because the underlying issue is gone, so the timeline never
+   * double-counts a fix.
+   */
+  doctorRepair: "doctor-repair",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

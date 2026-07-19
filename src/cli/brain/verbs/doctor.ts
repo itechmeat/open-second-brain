@@ -1,5 +1,6 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
+import { applyRepair, type RepairOutcome } from "../../../core/brain/diagnostics.ts";
 import {
   applyRemediation,
   collectDriftedSlugs,
@@ -7,7 +8,7 @@ import {
   planRemediation,
 } from "../../../core/brain/health/remediation.ts";
 import { loadBrainConfigDetailed, resolveHealth } from "../../../core/brain/policy.ts";
-import { brainVerbContext, fail, ok, parse } from "../helpers.ts";
+import { brainVerbContext, fail, ok, parse, resolveBrainAgent, usageError } from "../helpers.ts";
 
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -15,9 +16,39 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     strict: { type: "boolean" },
     json: { type: "boolean" },
     remediate: { type: "boolean" },
+    repair: { type: "boolean" },
+    apply: { type: "boolean" },
+    agent: { type: "string" },
     "dry-run": { type: "boolean" },
   });
   const { config, vault } = brainVerbContext(flags);
+
+  // `--apply` is a modifier of `--repair`; on its own it would silently
+  // fall through to a read-only doctor run, so reject it up front.
+  if (flags["apply"] && !flags["repair"]) {
+    return usageError("--apply requires --repair");
+  }
+
+  // Guarded repair mode (O2). Opt-in and dry-run by default; `--apply`
+  // performs the fixes. `--strict` stays read-only, so it can never be
+  // combined with an applying repair. Plain / `--strict` doctor below is
+  // untouched and byte-identical when `--repair` is absent.
+  if (flags["repair"]) {
+    if (flags["strict"] && flags["apply"]) {
+      return usageError("cannot combine --strict (read-only) with --repair --apply");
+    }
+    const dryRun = !flags["apply"];
+    try {
+      const outcome = applyRepair(vault, {
+        dryRun,
+        agent: resolveBrainAgent(flags, config),
+        configPath: config,
+      });
+      return renderRepair(outcome, Boolean(flags["json"]));
+    } catch (exc) {
+      return fail(`repair failed: ${(exc as Error).message ?? exc}`);
+    }
+  }
 
   let result;
   try {
@@ -109,6 +140,46 @@ function runRemediate(
   ok(
     `remediation ${dryRun ? "dry-run" : "complete"}: ` +
       `${outcome.applied.length} ${verb}, ${outcome.skipped.length} skipped`,
+  );
+  return 0;
+}
+
+/**
+ * Render the guarded repair outcome. Dry-run lists what `--apply` would
+ * do; apply lists what was done. Needs-review instances and unfixable
+ * classes always print with their next-command hint (supplied by the
+ * diagnostics-signal definition, never hardcoded here).
+ */
+function renderRepair(outcome: RepairOutcome, json: boolean): number {
+  if (json) {
+    process.stdout.write(JSON.stringify(outcome, null, 2) + "\n");
+    return 0;
+  }
+
+  const verb = outcome.dryRun ? "would fix" : "fixed";
+  for (const f of outcome.applied) {
+    process.stdout.write(`[${verb}] ${f.code}: ${f.detail}\n`);
+  }
+  for (const r of outcome.needsReview) {
+    process.stdout.write(
+      `[needs-review] ${r.code}: ${r.detail}${r.reason ? ` (${r.reason})` : ""}\n`,
+    );
+  }
+  for (const u of outcome.unfixable) {
+    process.stdout.write(`[not auto-repairable] ${u.code} x${u.count}: run \`${u.nextCommand}\`\n`);
+  }
+  if (
+    outcome.applied.length === 0 &&
+    outcome.needsReview.length === 0 &&
+    outcome.unfixable.length === 0
+  ) {
+    ok("brain doctor --repair: nothing to fix");
+    return 0;
+  }
+  ok(
+    `repair ${outcome.dryRun ? "dry-run" : "complete"}: ` +
+      `${outcome.applied.length} ${verb}, ${outcome.needsReview.length} needs-review, ` +
+      `${outcome.unfixable.length} not auto-repairable`,
   );
   return 0;
 }

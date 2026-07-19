@@ -38,6 +38,7 @@ import {
   cmdBrainAnticipate,
   cmdBrainWatchdog,
   cmdBrainHealth,
+  cmdBrainStatus,
   cmdBrainHistory,
   cmdBrainActivation,
   cmdBrainTruth,
@@ -77,10 +78,12 @@ import {
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
+  cmdBrainScanCitations,
   cmdBrainEntity,
   cmdBrainImportSession,
   cmdBrainForgetSource,
   cmdBrainBatchPlan,
+  cmdBrainPreExtract,
   cmdBrainDistill,
   cmdBrainHandoff,
   cmdBrainIntention,
@@ -221,6 +224,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainWatchdog(rest);
       case "health":
         return await cmdBrainHealth(rest);
+      case "status":
+        return await cmdBrainStatus(rest);
       case "history":
         return await cmdBrainHistory(rest);
       case "activation":
@@ -285,6 +290,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainMcpLandscape(rest);
       case "scan-inline":
         return await cmdBrainScanInline(rest);
+      case "scan-citations":
+        return cmdBrainScanCitations(rest);
       case "import-session":
         return await cmdBrainImportSession(rest);
       case "handoff":
@@ -299,6 +306,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainForgetSource(rest);
       case "batch-plan":
         return await cmdBrainBatchPlan(rest);
+      case "pre-extract":
+        return await cmdBrainPreExtract(rest);
       case "distill":
         return await cmdBrainDistill(rest);
       case "links":

@@ -32,7 +32,68 @@ export function documentBasename(path: string): string {
   return name.endsWith(".md") ? name.slice(0, -".md".length) : name;
 }
 
-const DDL_V1 = `
+/**
+ * The historical, byte-stable FTS5 tokenizer clause. When no tokenizer
+ * config is set, {@link buildFtsTokenize} returns exactly this string so
+ * the generated `chunk_fts` schema is identical to every prior release.
+ */
+export const DEFAULT_FTS_TOKENIZE = "unicode61 remove_diacritics 2";
+
+/** Allowed `remove_diacritics` values for the unicode61 base tokenizer. */
+export const FTS_DIACRITICS_ALLOWED: ReadonlyArray<string> = Object.freeze(["0", "1", "2"]);
+
+/** Allowed stemmer selectors layered over the unicode61 base tokenizer. */
+export const FTS_STEMMER_ALLOWED: ReadonlyArray<string> = Object.freeze(["none", "porter"]);
+
+/** Validated inputs for {@link buildFtsTokenize}. A null/absent value uses the default. */
+export interface FtsTokenizerOptions {
+  /** `remove_diacritics` rule: "0" | "1" | "2". Absent/null = "2". */
+  readonly diacritics?: string | null;
+  /** Language stemmer: "none" | "porter". Absent/null = "none". */
+  readonly stemmer?: string | null;
+}
+
+/**
+ * Assemble the FTS5 tokenizer clause from validated config options. The
+ * clause is composed structurally from a fixed allow-list of FTS5
+ * tokenizer options (never a natural-language word list), so an operator
+ * can only ever produce a valid SQLite tokenizer directive; an
+ * out-of-range value rejects with a typed `SearchError` listing the
+ * allowed values rather than reaching the DDL.
+ *
+ * With no options set the return value is byte-identical to
+ * {@link DEFAULT_FTS_TOKENIZE}. Changing it takes effect only on the next
+ * `o2b search reindex`; there is no implicit reindex.
+ */
+export function buildFtsTokenize(opts: FtsTokenizerOptions): string {
+  const diacritics = opts.diacritics ?? "2";
+  if (!FTS_DIACRITICS_ALLOWED.includes(diacritics)) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_fts_diacritics must be one of ${FTS_DIACRITICS_ALLOWED.join(", ")}; got '${diacritics}'`,
+    );
+  }
+  const stemmer = opts.stemmer ?? "none";
+  if (!FTS_STEMMER_ALLOWED.includes(stemmer)) {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `search_fts_stemmer must be one of ${FTS_STEMMER_ALLOWED.join(", ")}; got '${stemmer}'`,
+    );
+  }
+  const base = `unicode61 remove_diacritics ${diacritics}`;
+  // The porter stemmer WRAPS a base tokenizer in FTS5 syntax, so it
+  // prefixes the unicode61 directive rather than replacing it.
+  return stemmer === "porter" ? `porter ${base}` : base;
+}
+
+/** Context threaded into every migration's `up`. */
+export interface MigrationContext {
+  /** FTS5 tokenizer clause for the searchable `chunk_fts` table. */
+  readonly ftsTokenize: string;
+}
+
+function ddlV1(ftsTokenize: string): string {
+  return `
 CREATE TABLE IF NOT EXISTS documents (
   id            INTEGER PRIMARY KEY,
   path          TEXT NOT NULL UNIQUE,
@@ -66,7 +127,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS chunk_fts USING fts5(
   content,
   content='chunks',
   content_rowid='id',
-  tokenize='unicode61 remove_diacritics 2'
+  tokenize='${ftsTokenize}'
 );
 
 CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON chunks BEGIN
@@ -115,10 +176,11 @@ CREATE TABLE IF NOT EXISTS index_state (
   updated_at  TEXT NOT NULL
 );
 `;
+}
 
 interface Migration {
   readonly version: number;
-  readonly up: (db: Database) => void;
+  readonly up: (db: Database, ctx: MigrationContext) => void;
 }
 
 /**
@@ -148,7 +210,8 @@ CREATE INDEX IF NOT EXISTS idx_chunk_entities_entity ON chunk_entities(entity);
 
 // FTS rebuild is split from the column add because `ALTER TABLE ADD
 // COLUMN` is not idempotent; the column add is guarded in `up()`.
-const DDL_V2_FTS = `
+function ddlV2Fts(ftsTokenize: string): string {
+  return `
 DROP TRIGGER IF EXISTS chunks_ai;
 DROP TRIGGER IF EXISTS chunks_ad;
 DROP TRIGGER IF EXISTS chunks_au;
@@ -159,7 +222,7 @@ CREATE VIRTUAL TABLE chunk_fts USING fts5(
   heading_path,
   content='chunks',
   content_rowid='id',
-  tokenize='unicode61 remove_diacritics 2'
+  tokenize='${ftsTokenize}'
 );
 
 CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
@@ -179,23 +242,24 @@ END;
 
 INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild');
 `;
+}
 
 export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
   {
     version: 1,
-    up(db) {
-      db.exec(DDL_V1);
+    up(db, ctx) {
+      db.exec(ddlV1(ctx.ftsTokenize));
     },
   },
   {
     version: 2,
-    up(db) {
+    up(db, ctx) {
       db.exec(DDL_V2_ENTITIES);
       const cols = db.query<{ name: string }, []>("PRAGMA table_info(chunks)").all();
       if (!cols.some((c) => c.name === "heading_path")) {
         db.exec("ALTER TABLE chunks ADD COLUMN heading_path TEXT NOT NULL DEFAULT ''");
       }
-      db.exec(DDL_V2_FTS);
+      db.exec(ddlV2Fts(ctx.ftsTokenize));
     },
   },
   {
@@ -240,7 +304,7 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // an expanded FTS shadow column. Existing rows default to their
     // current content until a reindex computes CJK token expansions.
     version: 5,
-    up(db) {
+    up(db, ctx) {
       const cols = db.query<{ name: string }, []>("PRAGMA table_info(chunks)").all();
       if (!cols.some((c) => c.name === "fts_content")) {
         db.exec("ALTER TABLE chunks ADD COLUMN fts_content TEXT NOT NULL DEFAULT ''");
@@ -257,7 +321,7 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
           heading_path,
           content='chunks',
           content_rowid='id',
-          tokenize='unicode61 remove_diacritics 2'
+          tokenize='${ctx.ftsTokenize}'
         );
 
         CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
@@ -455,6 +519,17 @@ function setSchemaVersion(db: Database, version: number): void {
   );
 }
 
+/** Options for {@link applyMigrations}. */
+export interface ApplyMigrationsOptions {
+  /**
+   * FTS5 tokenizer clause for the searchable `chunk_fts` table. Absent =
+   * {@link DEFAULT_FTS_TOKENIZE}, which keeps the generated schema
+   * byte-identical to prior releases. Only takes effect on a fresh build
+   * (reindex); an already-migrated index is not rewritten.
+   */
+  readonly ftsTokenize?: string;
+}
+
 /**
  * Apply every pending migration in a single transaction. On a fresh
  * database (no `index_state`), v1 creates the entire schema. On an
@@ -462,7 +537,8 @@ function setSchemaVersion(db: Database, version: number): void {
  *
  * Returns the version after migration.
  */
-export function applyMigrations(db: Database): number {
+export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {}): number {
+  const ctx: MigrationContext = { ftsTokenize: opts.ftsTokenize ?? DEFAULT_FTS_TOKENIZE };
   const hasIndexState = db
     .query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type='table' AND name='index_state'",
@@ -485,7 +561,7 @@ export function applyMigrations(db: Database): number {
   try {
     for (const migration of MIGRATIONS) {
       if (migration.version <= current) continue;
-      migration.up(db);
+      migration.up(db, ctx);
       setSchemaVersion(db, migration.version);
     }
     db.exec("COMMIT");

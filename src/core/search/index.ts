@@ -12,6 +12,7 @@ import {
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath } from "./paths.ts";
+import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
 import {
   loadProviderRegistry,
@@ -787,6 +788,20 @@ export function resolveSearchConfig(opts: {
     DEFAULTS.resumeReindex,
     "search_resume_reindex",
   );
+  // Configurable FTS tokenizer (t_618f7211). Both keys default to null,
+  // which yields the byte-identical `unicode61 remove_diacritics 2`
+  // clause; an out-of-range value throws SearchError("INVALID_INPUT")
+  // here rather than reaching the DDL. Changing either key takes effect
+  // only after `o2b search reindex`; there is no implicit reindex.
+  const ftsTokenize = buildFtsTokenize({
+    diacritics: rawSetting(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_FTS_DIACRITICS",
+      "search_fts_diacritics",
+    ),
+    stemmer: rawSetting(env, config, "OPEN_SECOND_BRAIN_SEARCH_FTS_STEMMER", "search_fts_stemmer"),
+  });
   const recall: ResolvedRecallConfig = Object.freeze({
     mmrLambda,
     maxHops,
@@ -829,6 +844,7 @@ export function resolveSearchConfig(opts: {
     rerank,
     shutdownGraceMs: shutdownGraceSeconds * 1000,
     resumeReindex,
+    ftsTokenize,
   });
 
   if (!opts.overrides) {

@@ -11,6 +11,7 @@
  */
 
 import { planBatches } from "../../../core/brain/ingest/batch-plan.ts";
+import { reconcilePlan } from "../../../core/brain/ingest/reconcile.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse, usageError } from "../helpers.ts";
 
 /** Default caps, mirroring the MCP surface (1 MiB / 25 files per batch). */
@@ -31,13 +32,17 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     vault: { type: "string" },
     "max-bytes": { type: "string" },
     "max-files": { type: "string" },
+    "src-subpath": { type: "string" },
+    exclude: { type: "string-array" },
     resume: { type: "boolean" },
+    reconcile: { type: "boolean" },
     json: { type: "boolean" },
   });
   const sourceDir = positional[0];
   if (!sourceDir) {
     return usageError(
-      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] [--resume] [--json]",
+      "usage: o2b brain batch-plan <source-dir> [--max-bytes N] [--max-files N] " +
+        "[--src-subpath PATH] [--exclude PATTERN]... [--resume] [--reconcile] [--json]",
     );
   }
 
@@ -46,7 +51,19 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     const maxBatchBytes = parseCap(flags["max-bytes"], "--max-bytes", DEFAULT_MAX_BATCH_BYTES);
     const maxBatchFiles = parseCap(flags["max-files"], "--max-files", DEFAULT_MAX_BATCH_FILES);
     const resume = flags["resume"] === true;
-    const plan = planBatches(vault, sourceDir, { maxBatchBytes, maxBatchFiles, resume });
+    const srcSubpath = flags["src-subpath"] as string | undefined;
+    const exclude = (flags["exclude"] as string[] | undefined) ?? [];
+    const reconcile = flags["reconcile"] === true;
+    const plan = planBatches(vault, sourceDir, {
+      maxBatchBytes,
+      maxBatchFiles,
+      resume,
+      ...(srcSubpath !== undefined ? { srcSubpath } : {}),
+      ...(exclude.length > 0 ? { exclude } : {}),
+    });
+    // The reconcile is read-only: it diffs the plan's dispatched set against the
+    // checkpoint and reports the gap; it never re-dispatches.
+    const report = reconcile ? reconcilePlan(vault, plan) : undefined;
 
     if (flags["json"]) {
       okJson({
@@ -56,6 +73,16 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
         total_files: plan.totalFiles,
         total_bytes: plan.totalBytes,
         skipped: [...plan.skipped],
+        // Only present when the extractable gate skipped something, so the
+        // no-declaration output is byte-identical to before.
+        ...(plan.skippedNonExtractable.length > 0
+          ? {
+              skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
+                path: s.path,
+                reason: s.reason,
+              })),
+            }
+          : {}),
         plan_id: plan.planId,
         resumed_completed: plan.resumedCompleted,
         batches: plan.batches.map((b) => ({
@@ -63,6 +90,17 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
           total_bytes: b.totalBytes,
           files: b.files.map((f) => ({ path: f.path, bytes: f.bytes, status: f.status })),
         })),
+        // Only present with --reconcile, so the default output is unchanged.
+        ...(report !== undefined
+          ? {
+              reconcile: {
+                dispatched: [...report.dispatched],
+                ingested: [...report.ingested],
+                missing: [...report.missing],
+                complete: report.complete,
+              },
+            }
+          : {}),
       });
       return 0;
     }
@@ -80,6 +118,18 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     if (plan.skipped.length > 0) {
       info(`  ${plan.skipped.length} unchanged file(s) skipped:`);
       for (const p of plan.skipped) info(`    - ${p}`);
+    }
+    if (plan.skippedNonExtractable.length > 0) {
+      info(`  ${plan.skippedNonExtractable.length} non-extractable page(s) skipped:`);
+      for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
+    }
+    if (report !== undefined) {
+      if (report.complete) {
+        ok(`  reconcile: all ${report.dispatched.length} dispatched source(s) ingested`);
+      } else {
+        info(`  reconcile: ${report.missing.length} dispatched source(s) never ingested:`);
+        for (const p of report.missing) info(`    - ${p}`);
+      }
     }
     return 0;
   } catch (err) {

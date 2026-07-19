@@ -77,6 +77,7 @@ import { resolveSemanticPolicy, runSemanticPhase, semanticPoolSize } from "./sem
 import { toSearchCard } from "./cards.ts";
 import {
   applyAgentScope,
+  applyDegreeFilter,
   applyPropertyFilter,
   applyStatusFilter,
   applyVisibilityScope,
@@ -737,6 +738,11 @@ export async function search(
     // candidates to the filter and surface zero results even when
     // matches exist deeper in the rank.
     const hasPropertyFilter = opts.properties !== undefined && opts.properties.size > 0;
+    // Graph-degree cardinality predicates (t_9bee8f0b): a post-rank filter
+    // that can drop ranked rows, so it shares the frontmatter-filter
+    // overfetch. Absent / empty leaves the pool and results byte-identical.
+    const degreeFilters = opts.degreeFilters ?? [];
+    const hasDegreeFilter = degreeFilters.length > 0;
     // An explicit visibility scope can also drop ranked rows, so it
     // shares the property filter's overfetch. The default (no scope)
     // path does NOT overfetch up front - all-untagged vaults stay
@@ -749,7 +755,8 @@ export async function search(
     // no ownership filtering, so untagged vaults stay byte-identical.
     const agentScope = normalizeAgentScope(opts.agentScope);
     const hasAgentScopeRequest = agentScope !== null;
-    const hasFrontmatterFilter = hasPropertyFilter || hasVisibilityRequest || hasAgentScopeRequest;
+    const hasFrontmatterFilter =
+      hasPropertyFilter || hasVisibilityRequest || hasAgentScopeRequest || hasDegreeFilter;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -882,8 +889,14 @@ export async function search(
       const propFiltered = hasPropertyFilter
         ? applyPropertyFilter(statusFiltered, opts.properties!, config.vault, frontmatterCache)
         : statusFiltered;
+      // Graph-degree cardinality predicates (t_9bee8f0b): drop rows whose
+      // backlink/outlink counts fail the predicates, backed by the
+      // link-graph degree index. No-op when no predicate was requested.
+      const degreeFiltered = hasDegreeFilter
+        ? applyDegreeFilter(propFiltered, degreeFilters, store)
+        : propFiltered;
       const visible = applyVisibilityScope(
-        propFiltered,
+        degreeFiltered,
         visibilityScope,
         config.vault,
         frontmatterCache,
@@ -894,7 +907,7 @@ export async function search(
         agentScope !== null
           ? applyAgentScope(visible, agentScope, config.vault, frontmatterCache)
           : visible;
-      return { preVisibility: propFiltered.length, visible: scoped, capHit };
+      return { preVisibility: degreeFiltered.length, visible: scoped, capHit };
     };
 
     let assembled = assemble(rankLimit);

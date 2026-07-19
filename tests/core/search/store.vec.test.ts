@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { Store } from "../../../src/core/search/store.ts";
+import { DEFAULT_FTS_TOKENIZE } from "../../../src/core/search/schema.ts";
 import type {
   ResolvedSearchConfig,
   ResolvedEmbeddingConfig,
@@ -80,6 +81,7 @@ function semanticConfig(
     }),
     shutdownGraceMs: 5_000,
     resumeReindex: false,
+    ftsTokenize: DEFAULT_FTS_TOKENIZE,
     ...overrides,
   });
 }

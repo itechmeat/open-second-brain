@@ -26,9 +26,15 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 
+import { IgnoreScope, parseIgnorePatterns } from "../../fs/ignore.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { computePlanId, readCheckpoint } from "./checkpoint.ts";
 import { classifyPaths, readManifest } from "./content-manifest.ts";
+import {
+  extractableAllowlist,
+  partitionExtractable,
+  type SkippedPage,
+} from "./extractable-gate.ts";
 
 /**
  * Default set of ingestible (text-bearing) extensions, lowercase with the dot.
@@ -62,6 +68,18 @@ export interface BatchPlanOptions {
    * set so it is stable across resumes. Absent → a fresh, checkpoint-blind plan.
    */
   readonly resume?: boolean;
+  /**
+   * Scope discovery to a subtree of `sourceDir` (t_e82101a5), e.g. `pkg/a` in a
+   * monorepo. Resolved relative to the source dir; a value escaping it throws.
+   * Absent → the whole source dir is walked (byte-identical to before).
+   */
+  readonly srcSubpath?: string;
+  /**
+   * Gitignore-style patterns (t_e82101a5), matched by the shared
+   * {@link parseIgnorePatterns} engine relative to `sourceDir`. Discovered
+   * paths matching any pattern are dropped. Absent/empty → no exclusion.
+   */
+  readonly exclude?: readonly string[];
 }
 
 /** One file selected for (re-)ingest, with the reason it was selected. */
@@ -93,6 +111,12 @@ export interface BatchPlan {
   readonly batches: readonly IngestBatch[];
   /** Canonical paths classified `unchanged` and therefore skipped, sorted. */
   readonly skipped: readonly string[];
+  /**
+   * Pages skipped before extraction because their `schema_type` is not in the
+   * schema `extractable` allowlist (t_ed856388). Empty when the allowlist is
+   * unset (the gate is off), keeping the plan byte-identical to before.
+   */
+  readonly skippedNonExtractable: readonly SkippedPage[];
   /** Total number of files across all batches (`new` + `modified`). */
   readonly totalFiles: number;
   /** Total bytes across all batches. */
@@ -138,12 +162,36 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     throw new Error(`planBatches: source dir is not an existing directory: ${sourceDir}`);
   }
 
+  // Optional subtree scoping (t_e82101a5): resolve `srcSubpath` under the
+  // source dir. ensureInsideVault throws a typed error if it escapes.
+  let walkRoot = dirAbs;
+  if (opts.srcSubpath !== undefined && opts.srcSubpath.length > 0) {
+    walkRoot = ensureInsideVault(join(dirAbs, opts.srcSubpath), dirAbs);
+    if (!existsSync(walkRoot) || !statSync(walkRoot).isDirectory()) {
+      throw new Error(`planBatches: src subpath is not an existing directory: ${opts.srcSubpath}`);
+    }
+  }
+
   const extensions = normalizeExtensions(opts.extensions ?? DEFAULT_INGESTIBLE_EXTENSIONS);
+  // Optional exclusion (t_e82101a5): reuse the shared ignore engine so there is
+  // no second matcher. Patterns are relative to the source dir. A malformed
+  // pattern is a user error, surfaced loudly rather than silently ignored.
+  const excludeScope = buildExcludeScope(opts.exclude ?? [], dirRel);
 
   // Discover ingestible files as canonical vault-relative paths, sorted.
   const discovered: string[] = [];
-  collectIngestible(dirAbs, extensions, discovered);
-  const relPaths = discovered.map((abs) => canonicalNotePath(toPosixRel(vault, abs))).toSorted();
+  collectIngestible(walkRoot, vault, extensions, excludeScope, discovered);
+  const discoveredRel = discovered
+    .map((abs) => canonicalNotePath(toPosixRel(vault, abs)))
+    .toSorted();
+
+  // Honor the schema `extractable` allowlist (t_ed856388): pages whose
+  // schema_type is not extractable are skipped BEFORE extraction, reported with
+  // a reason, and logged. An empty allowlist gates nothing, so the discovered
+  // set (hence planId and the whole plan) stays byte-identical to before.
+  const partition = partitionExtractable(vault, discoveredRel, extractableAllowlist(vault));
+  const relPaths = partition.extractable;
+  const skippedNonExtractable = partition.skipped;
 
   // The plan id keys on the FULL discovered set, so it is identical before and
   // after an interruption regardless of how many items have completed.
@@ -183,6 +231,7 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     maxBatchFiles: opts.maxBatchFiles,
     batches,
     skipped,
+    skippedNonExtractable,
     totalFiles: planned.length,
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
     planId,
@@ -225,14 +274,43 @@ function packBatches(
   return batches;
 }
 
-/** Recursively collect ingestible regular-file absolute paths, skipping hidden entries. */
-function collectIngestible(dir: string, extensions: ReadonlySet<string>, out: string[]): void {
+/**
+ * Build the exclusion scope from `--exclude` patterns, relative to the source
+ * dir. A malformed pattern is a user error and throws (never a silent skip). An
+ * empty pattern list yields an empty scope that ignores nothing, keeping the
+ * no-flag path byte-identical.
+ */
+function buildExcludeScope(patterns: readonly string[], baseDir: string): IgnoreScope {
+  if (patterns.length === 0) return IgnoreScope.empty();
+  const { layer, warnings } = parseIgnorePatterns(patterns, baseDir, "--exclude");
+  if (warnings.length > 0) {
+    const w = warnings[0]!;
+    throw new Error(`planBatches: malformed --exclude pattern "${w.pattern}": ${w.reason}`);
+  }
+  return IgnoreScope.empty().extend(layer);
+}
+
+/**
+ * Recursively collect ingestible regular-file absolute paths, skipping hidden
+ * entries and anything the exclusion scope matches (t_e82101a5). An excluded
+ * directory is pruned so its subtree is never walked.
+ */
+function collectIngestible(
+  dir: string,
+  vault: string,
+  extensions: ReadonlySet<string>,
+  exclude: IgnoreScope,
+  out: string[],
+): void {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue; // hidden file or dot-directory
     const abs = join(dir, entry.name);
+    const rel = toPosixRel(vault, abs);
     if (entry.isDirectory()) {
-      collectIngestible(abs, extensions, out);
-    } else if (entry.isFile() && extensions.has(extname(entry.name))) {
+      if (exclude.isIgnored(rel, true)) continue;
+      collectIngestible(abs, vault, extensions, exclude, out);
+    } else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) {
+      if (exclude.isIgnored(rel, false)) continue;
       out.push(abs);
     }
   }

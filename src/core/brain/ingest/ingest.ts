@@ -40,6 +40,7 @@ import {
 } from "../provenance/provenance.ts";
 import { recordCompleted } from "./checkpoint.ts";
 import { updateManifest } from "./content-manifest.ts";
+import { preExtractCodeStructure, type PreExtractResult } from "./pre-extract.ts";
 
 /** Frontmatter `kind:` marker of an ingested source summary page. */
 export const BRAIN_SOURCE_KIND = "brain-source";
@@ -63,6 +64,15 @@ export interface IngestSourceOptions {
    * state; the checkpoint only tracks plan progress. Absent → no checkpoint.
    */
   readonly planId?: string;
+  /**
+   * Run the deterministic code-structure pre-extraction pass (P4, t_ef786747)
+   * over the source file and surface its JSON seeds on the result, so the agent
+   * step can use them as pre-extracted facts. Off by default: with the pass
+   * unset the ingest is byte-identical to before (no file read, no result
+   * field). The seeds are NEVER written into the summary page - they travel on
+   * the result only, keeping the persisted page unchanged.
+   */
+  readonly preExtract?: boolean;
 }
 
 export interface IngestSourceResult {
@@ -76,6 +86,13 @@ export interface IngestSourceResult {
   readonly entitiesUpdated: readonly string[];
   /** Pre-existing entity ids this source connected to (its connections). */
   readonly connections: readonly string[];
+  /**
+   * Code-structure pre-extraction seeds (P4), present only when the pass was
+   * requested via {@link IngestSourceOptions.preExtract}. `extracted: false`
+   * when the source is not a supported code file or has no readable bytes -
+   * never a fake empty success. Absent entirely when the pass was off.
+   */
+  readonly preExtract?: PreExtractResult;
 }
 
 function renderLinkSection(heading: string, ids: readonly string[]): string {
@@ -94,6 +111,7 @@ export function ingestSource(
   opts: IngestSourceOptions,
 ): IngestSourceResult {
   const canonicalSource = canonicalNotePath(input.sourcePath);
+  const preExtract = opts.preExtract === true ? runPreExtract(vault, canonicalSource) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
   const provenance: Provenance = { level: "stated", sources: [sourceLink], premises: [] };
 
@@ -172,7 +190,28 @@ export function ingestSource(
     entitiesCreated: intake.entitiesCreated,
     entitiesUpdated: intake.entitiesUpdated,
     connections,
+    ...(preExtract !== undefined ? { preExtract } : {}),
   };
+}
+
+/**
+ * Run the code-structure pre-extraction pass over a vault-file source. A source
+ * with no readable file bytes (a URL or identity-only source) cannot be parsed,
+ * so it is reported as unextracted rather than a fake empty success.
+ */
+function runPreExtract(vault: string, canonicalSource: string): PreExtractResult {
+  const abs = join(vault, canonicalSource);
+  try {
+    return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"));
+  } catch {
+    // A source with no readable file bytes - a URL/identity-only source, a
+    // directory, a permission failure, or a deletion race - cannot be parsed,
+    // so it is reported as unextracted rather than aborting the whole ingest.
+    return {
+      extracted: false,
+      reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
+    };
+  }
 }
 
 /** Read a stable `created_at` from an existing summary page, else fall back. */
