@@ -51,11 +51,14 @@ export interface HoldoutResolution {
 }
 
 export interface HoldoutGateResult {
-  /** True only when no edge is dangling. */
+  /** True only when every target both resolves and hydrates into bounded evidence. */
   readonly passed: boolean;
   readonly total: number;
   readonly resolvedCount: number;
+  /** Targets that resolve to nothing (absent memory). */
   readonly danglingCount: number;
+  /** Targets that resolve to durable memory but hydrate into empty evidence. */
+  readonly unhydratedCount: number;
   /** Holdouts whose target is a direct neighbor of the anchor. */
   readonly directRecall: number;
   /** Holdouts whose target is reachable only through the graph. */
@@ -116,7 +119,8 @@ function hydrateEvidence(vault: string, target: string): { resolved: boolean; te
 
 /**
  * Evaluate graph-neighbor holdouts, reporting graph lift separately from
- * direct recall and failing the gate on any dangling edge.
+ * direct recall and failing the gate on any target that does not both resolve
+ * to durable memory and hydrate into bounded evidence.
  */
 export function evaluateGraphHoldouts(
   vault: string,
@@ -126,6 +130,7 @@ export function evaluateGraphHoldouts(
   const resolutions: HoldoutResolution[] = [];
   let resolvedCount = 0;
   let danglingCount = 0;
+  let unhydratedCount = 0;
   let directRecall = 0;
   let graphLift = 0;
 
@@ -146,6 +151,7 @@ export function evaluateGraphHoldouts(
 
     if (resolved) resolvedCount += 1;
     if (dangling) danglingCount += 1;
+    if (resolved && !hydrated) unhydratedCount += 1;
     if (directNeighbor) directRecall += 1;
     if (graphReachable) graphLift += 1;
 
@@ -161,10 +167,11 @@ export function evaluateGraphHoldouts(
   }
 
   return {
-    passed: danglingCount === 0,
+    passed: danglingCount === 0 && unhydratedCount === 0,
     total: holdouts.length,
     resolvedCount,
     danglingCount,
+    unhydratedCount,
     directRecall,
     graphLift,
     resolutions: Object.freeze(resolutions),

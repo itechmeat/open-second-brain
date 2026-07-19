@@ -84,3 +84,24 @@ describe("evaluateGraphHoldouts dangling gate", () => {
     expect(result.resolutions[0]!.hydrated).toBe(false);
   });
 });
+
+describe("evaluateGraphHoldouts hydration gate", () => {
+  test("a resolved-but-empty target fails the gate as unhydrated", () => {
+    // empty.md resolves (the note exists) but its body is empty, so it does
+    // not hydrate into bounded evidence: not dangling, but still a gate failure.
+    writeNote("Notes/anchor.md", "See [[Notes/empty.md]].");
+    writeNote("Notes/empty.md", "");
+
+    const result = evaluateGraphHoldouts(vault, [
+      { anchor: "Notes/anchor.md", target: "Notes/empty.md" },
+    ]);
+    expect(result.passed).toBe(false);
+    expect(result.danglingCount).toBe(0);
+    expect(result.unhydratedCount).toBe(1);
+    expect(result.resolvedCount).toBe(1);
+    expect(result.resolutions[0]!.resolved).toBe(true);
+    expect(result.resolutions[0]!.dangling).toBe(false);
+    expect(result.resolutions[0]!.hydrated).toBe(false);
+    expect(result.resolutions[0]!.evidenceChars).toBe(0);
+  });
+});
