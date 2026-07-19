@@ -201,6 +201,56 @@ describe("doctor", () => {
     expect(r.stdout).toContain("[FAIL] claude_manifest");
     expect(r.stdout).toContain("[FAIL] codex_manifest");
   });
+
+  // Semantic search forced off so the readiness probes are deterministic
+  // (llm_key + embedding_provider skip; adapter wiring passes) regardless
+  // of any embedding env in the developer's shell.
+  const READINESS_ENV = {
+    OPEN_SECOND_BRAIN_CONFIG: "",
+    XDG_CONFIG_HOME: "",
+    VAULT_DIR: "",
+    OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "false",
+  };
+
+  test("without --readiness the output has no readiness section (byte-identical opt-out)", async () => {
+    const plain = await runCli(["doctor", "--vault", tmp], { env: READINESS_ENV });
+    expect(plain.returncode).toBe(0);
+    expect(plain.stdout).not.toContain("readiness:");
+
+    const withFlag = await runCli(["doctor", "--vault", tmp, "--readiness"], {
+      env: READINESS_ENV,
+    });
+    // The readiness run appends its section; the base output is unchanged,
+    // so the plain output is an exact prefix of the readiness output.
+    expect(withFlag.stdout.startsWith(plain.stdout)).toBe(true);
+  });
+
+  test("--readiness runs the three probes with explicit outcomes", async () => {
+    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], { env: READINESS_ENV });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("readiness:");
+    expect(r.stdout).toContain("llm_key:");
+    expect(r.stdout).toContain("embedding_provider:");
+    expect(r.stdout).toContain("runtime_adapter_wiring:");
+    // No silent pass: skipped surfaces explicitly, and wiring passes.
+    expect(r.stdout).toContain("[SKIP] llm_key:");
+    expect(r.stdout).toContain("[PASS] runtime_adapter_wiring:");
+  });
+
+  test("--readiness --json omits the readiness key without the flag and adds it with it", async () => {
+    const plain = await runCli(["doctor", "--vault", tmp, "--json"], { env: READINESS_ENV });
+    expect(JSON.parse(plain.stdout).readiness).toBeUndefined();
+
+    const withFlag = await runCli(["doctor", "--vault", tmp, "--json", "--readiness"], {
+      env: READINESS_ENV,
+    });
+    const parsed = JSON.parse(withFlag.stdout);
+    expect(Array.isArray(parsed.readiness)).toBe(true);
+    expect(parsed.readiness.length).toBe(3);
+    expect(parsed.readiness.every((p: { status: string }) => typeof p.status === "string")).toBe(
+      true,
+    );
+  });
 });
 
 describe("onboarding", () => {

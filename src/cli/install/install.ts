@@ -23,18 +23,9 @@ import { homedir } from "node:os";
 import { parseFlags } from "../argparse.ts";
 import { defaultConfigPath, discoverConfig } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
-// Importing each adapter module triggers `defaultRegistry.register(...)`
-// at module-load time. Keep the side-effect imports ordered alphabetically
-// so the registry's iteration order is predictable.
-import "../../core/install/adapters/aider.ts";
-import "../../core/install/adapters/copilot-cli.ts";
-import "../../core/install/adapters/cursor.ts";
-import "../../core/install/adapters/gemini-cli.ts";
-import "../../core/install/adapters/generic.ts";
-import "../../core/install/adapters/grok.ts";
-import "../../core/install/adapters/kiro.ts";
-import "../../core/install/adapters/opencode.ts";
-import "../../core/install/adapters/pi.ts";
+// The canonical adapter set registers itself into `defaultRegistry` at
+// module-load time via this barrel (single source of the adapter list).
+import "../../core/install/adapters/all.ts";
 
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
 import { InstallError } from "../../core/install/types.ts";

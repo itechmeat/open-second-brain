@@ -23,6 +23,7 @@ import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { doctor } from "../core/doctor.ts";
+import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
@@ -250,6 +251,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     config: { type: "string" },
     repo: { type: "string" },
     json: { type: "boolean" },
+    readiness: { type: "boolean" },
   });
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, config);
@@ -267,19 +269,43 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   }
   const failed = results.filter((r) => !r.ok).length;
 
+  // Opt-in fail-fast readiness probes (t_cc234ff5). Without `--readiness`
+  // this stays null and neither the output nor the exit code changes, so
+  // plain `doctor` is byte-identical to before.
+  let readiness: ReadinessReport | null = null;
+  if (flags["readiness"]) {
+    try {
+      readiness = await runReadinessProbes({ vault, config, cwd: process.cwd() });
+    } catch (exc) {
+      process.stderr.write(`error: doctor readiness failed: ${(exc as Error).message ?? exc}\n`);
+      return 1;
+    }
+  }
+  const readinessFailed = readiness?.failed ?? 0;
+
   if (flags["json"]) {
     const payload = {
-      ok: failed === 0,
+      ok: failed === 0 && readinessFailed === 0,
       checks: results.map((r) => ({
         name: r.name,
         ok: r.ok,
         message: r.message,
         ...(r.fix !== undefined ? { fix: r.fix } : {}),
       })),
+      ...(readiness
+        ? {
+            readiness: readiness.probes.map((p) => ({
+              name: p.name,
+              status: p.status,
+              detail: p.detail,
+              duration_ms: p.durationMs,
+            })),
+          }
+        : {}),
       summary: { total: results.length, failed },
     };
     process.stdout.write(JSON.stringify(payload, sortedReplacer, 2) + "\n");
-    return failed === 0 ? 0 : 1;
+    return failed === 0 && readinessFailed === 0 ? 0 : 1;
   }
 
   for (const r of results) {
@@ -291,7 +317,17 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   // Scriptable aggregate: a summary line plus the 0/1 exit make `o2b doctor`
   // usable as a setup/CI gate.
   process.stdout.write(`\ndoctor: ${results.length} checks, ${failed} failed\n`);
-  return failed === 0 ? 0 : 1;
+
+  if (readiness) {
+    process.stdout.write(
+      `\nreadiness: ${readiness.probes.length} probes, ${readinessFailed} failed\n`,
+    );
+    for (const p of readiness.probes) {
+      const tag = p.status === "pass" ? "PASS" : p.status === "fail" ? "FAIL" : "SKIP";
+      process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
+    }
+  }
+  return failed === 0 && readinessFailed === 0 ? 0 : 1;
 }
 
 async function cmdExportConfig(argv: string[]): Promise<number> {
