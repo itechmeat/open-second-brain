@@ -64,6 +64,12 @@
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" recall-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook recall-inject; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: recalling bounded prompt context (opt-in)"
+          },
+          {
+            "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" nav-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook nav-inject; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: injecting structural navmap tier (opt-in)"
           }
         ]
       }
