@@ -66,6 +66,16 @@ describe("openclaw bundle", () => {
     expect(pkg.openclaw.extensions).toEqual(["./openclaw/index.js"]);
   });
 
+  test("codegraph partnering covers every workspace project (W1)", () => {
+    // The bundled checkCodegraph must iterate all discovered projects, probe
+    // per-query project_path support, and degrade with an explicit note when
+    // unsupported - not collapse the workspace to projects[0].
+    expect(bundleText).toContain("evaluateProjectStatus");
+    expect(bundleText).toContain("defaultDetectProjectPathSupport");
+    expect(bundleText).toContain("code projects:");
+    expect(bundleText).toContain("no per-query project_path support");
+  });
+
   test("bundles before_prompt_build hook (per-turn identity reminder)", () => {
     expect(bundleText).toContain("before_prompt_build");
     expect(bundleText).toContain("prependContext");

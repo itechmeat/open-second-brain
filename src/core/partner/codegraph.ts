@@ -141,6 +141,13 @@ export type CodegraphStatusResult =
 export interface CodegraphCheckDeps {
   readonly whichCodegraph?: () => string | null;
   readonly runStatusJson?: (projectPath: string) => CodegraphStatusResult;
+  /**
+   * Feature probe: does the partnered codegraph accept a per-query project
+   * path, so status can be threaded per project across a multi-project
+   * workspace? When it does not, checkCodegraph degrades to the first project
+   * only (see {@link defaultDetectProjectPathSupport}).
+   */
+  readonly detectProjectPathSupport?: () => boolean;
 }
 
 export interface CodegraphCheckOptions {
@@ -157,6 +164,31 @@ export function defaultWhichCodegraph(): string | null {
     return found ?? null;
   }
   return null;
+}
+
+/**
+ * Structural probe for per-query project-path support: does `codegraph status
+ * --help` document a positional path argument (`[path]`)? The token is the
+ * partner CLI's own usage marker for "you may pass a project path here"; when
+ * present, status/queries can be threaded per project across a multi-project
+ * workspace. This matches a documented usage token, not natural-language text,
+ * and fails closed (returns false) on any spawn/read error so a probe failure
+ * degrades to today's single-project behavior rather than throwing.
+ */
+const CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
+
+export function defaultDetectProjectPathSupport(): boolean {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["codegraph", "status", "--help"],
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
+    return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
+  } catch {
+    return false;
+  }
 }
 
 export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
@@ -206,7 +238,6 @@ export function checkCodegraph(
   const projects = findCodeProjects(opts);
   if (projects.length === 0) return null;
 
-  const project = projects[0]!;
   const whichFn = deps?.whichCodegraph ?? defaultWhichCodegraph;
   const cliPath = whichFn();
 
@@ -217,6 +248,44 @@ export function checkCodegraph(
     return null;
   }
 
+  // Single-project workspace: byte-identical to before. No project_path probe
+  // runs (there is nothing to thread across), so behavior and output are
+  // exactly today's.
+  if (projects.length === 1) {
+    return evaluateProjectStatus(projects[0]!, deps);
+  }
+
+  // Multi-project workspace. Threading status per project is only sound when
+  // the partner accepts a per-query project path; otherwise every query would
+  // report whatever project the CLI infers from its own cwd, so we degrade to
+  // the first project and say so explicitly.
+  const detectFn = deps?.detectProjectPathSupport ?? defaultDetectProjectPathSupport;
+  if (!detectFn()) {
+    const first = evaluateProjectStatus(projects[0]!, deps);
+    return {
+      name: "code_graph",
+      ok: first.ok,
+      message: `${first.message}; note: codegraph CLI has no per-query project_path support - reported 1 of ${projects.length} discovered projects only`,
+    };
+  }
+
+  const results = projects.map((project) => evaluateProjectStatus(project, deps));
+  const header = `${projects.length} code projects:`;
+  return {
+    name: "code_graph",
+    ok: results.every((r) => r.ok),
+    message: [header, ...results.map((r) => `- ${r.message}`)].join("\n"),
+  };
+}
+
+/**
+ * Evaluate one project's codegraph status into a `code_graph` CheckResult,
+ * threading the project path into the status query. This is the exact
+ * per-project logic (not-indexed / status-failed / indexed + graph-health) that
+ * the single-project path returns verbatim, so a single-project workspace stays
+ * byte-identical and a multi-project aggregate reuses one implementation.
+ */
+function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): CheckResult {
   const indexDir = join(project, ".codegraph");
   if (!isDir(indexDir)) {
     return {
