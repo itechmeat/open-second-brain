@@ -79,8 +79,11 @@ interface HookGroupSpec {
  * matcher and lists grok's `search_replace` alongside the Claude tool names.
  */
 const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupSpec> }> = [
-  { event: "SessionStart", groups: [{ hooks: ["active-inject", "session-capture"] }] },
-  { event: "UserPromptSubmit", groups: [{ hooks: ["session-capture"] }] },
+  {
+    event: "SessionStart",
+    groups: [{ hooks: ["active-inject", "gap-agenda", "session-capture"] }],
+  },
+  { event: "UserPromptSubmit", groups: [{ hooks: ["session-capture", "recall-inject"] }] },
   {
     event: "PostToolUse",
     groups: [
@@ -92,7 +95,7 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
     ],
   },
   { event: "Stop", groups: [{ hooks: ["session-capture", "stop-log-guardrail"] }] },
-  { event: "SessionEnd", groups: [{ hooks: ["session-capture"] }] },
+  { event: "SessionEnd", groups: [{ hooks: ["session-capture", "gap-promote"] }] },
   { event: "PostCompact", groups: [{ hooks: ["active-inject", "session-capture"] }] },
 ];
 

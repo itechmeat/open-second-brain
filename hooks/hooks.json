@@ -36,6 +36,12 @@
           },
           {
             "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" gap-agenda; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook gap-agenda; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: injecting open recall-gap agenda (opt-in)"
+          },
+          {
+            "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session start"
@@ -90,6 +96,12 @@
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session end"
+          },
+          {
+            "type": "command",
+            "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" gap-promote; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook gap-promote; exit 0",
+            "timeout": 10,
+            "statusMessage": "OSB: promoting recurring recall gaps (opt-in)"
           }
         ]
       }

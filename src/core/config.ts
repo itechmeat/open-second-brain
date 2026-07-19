@@ -774,6 +774,32 @@ export function resolveRecallInjectEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Knowledge-gap loop gate (recall-trust-and-write-surface, A3 /
+ * t_67d38036). Default OFF: the opt-in session-start gap agenda and
+ * session-end gap promotion/auto-close stay dormant unless
+ * `gap_loop_enabled: "true"` (or the matching env override). Flag off keeps
+ * the session preamble byte-identical and writes no gap-task notes.
+ */
+export function resolveGapLoopEnabled(configPath?: string): boolean {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_GAP_LOOP_ENABLED", "gap_loop_enabled", configPath);
+}
+
+/**
+ * Optional gap-loop recurrence threshold override (A3). A valid positive
+ * integer (env first, then config) wins; anything else returns undefined so
+ * the caller falls back to the named-constant default. Env-overridable so an
+ * operator can tune how often a gap must recur before it promotes to a task.
+ */
+export function resolveGapLoopThreshold(configPath?: string): number | undefined {
+  const env = process.env["OPEN_SECOND_BRAIN_GAP_LOOP_THRESHOLD"]?.trim();
+  const raw = env || discoverConfig(configPath).data["gap_loop_threshold"]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) return undefined;
+  return value;
+}
+
+/**
  * Optional external judge command for the memory benchmark (Memory
  * Observability Suite, t_882c396a). Unset (the default) means the
  * judge phase is skipped - the harness itself never calls an LLM.

@@ -57,6 +57,11 @@ export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
 /** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */
 export const BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
 export const BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
+/**
+ * Knowledge-gap task notes: `Brain/gap-tasks/gap-<hash>.md` (A3 /
+ * t_67d38036). Plain durable note files - never on the Hermes kanban board.
+ */
+export const BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
 /** Persisted contradiction (tension) notes: `Brain/tensions/tension-<slug>.md` (S2). */
 export const BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
 export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
@@ -458,6 +463,11 @@ export function snapshotPath(vault: string, runId: string): string {
 /** Artifacts root: `Brain/.artifacts/`. */
 export function brainArtifactsDir(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_ARTIFACTS_REL), vault);
+}
+
+/** Knowledge-gap task notes root: `Brain/gap-tasks/` (A3 / t_67d38036). */
+export function brainGapTasksDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_GAP_TASKS_REL), vault);
 }
 
 /** Per-run artifact directory: `Brain/.artifacts/<run_id>/`. */
