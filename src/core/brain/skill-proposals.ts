@@ -61,7 +61,14 @@ interface ProposalCandidate {
   readonly patternKind: SkillProposalPatternKind;
   readonly key: string;
   readonly confidence: number;
+  /** Bounded evidence sample kept for the proposal note, slug, and hash. */
   readonly records: ReadonlyArray<ContinuityRecord>;
+  /**
+   * Full supporting record set the candidate cleared detection with. Carried
+   * apart from the capped `records` so the verifier gate sees the true support
+   * count (a minSupport above the sample cap must not reject a passing draft).
+   */
+  readonly supportingRecords: ReadonlyArray<ContinuityRecord>;
   readonly suggestedTitle: string;
 }
 
@@ -133,7 +140,7 @@ export function learnSkillProposals(
         patternKind: candidate.patternKind,
         key: candidate.key,
         confidence: candidate.confidence,
-        evidence: candidate.records.map((record) => ({
+        evidence: candidate.supportingRecords.map((record) => ({
           id: record.id,
           supportsPattern: recordSupportsCandidate(candidate, record),
         })),
@@ -601,6 +608,7 @@ function detectCandidates(
       key: action,
       confidence: confidence(bucket.length, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Repeated action: ${action}`,
     });
   }
@@ -620,6 +628,7 @@ function detectCandidates(
       key: shape,
       confidence: confidence(bucket.length, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Structural routine: ${shape}`,
     });
   }
@@ -642,6 +651,7 @@ function detectCandidates(
       key: pair,
       confidence: confidence(support, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Co-occurrence flow: ${pair}`,
     });
   }
@@ -665,6 +675,7 @@ function detectCandidates(
       key,
       confidence: confidence(daySet.size, minSupport),
       records: Object.freeze(bucket.slice(0, 6)),
+      supportingRecords: Object.freeze([...bucket]),
       suggestedTitle: `Temporal routine: ${key}`,
     });
   }

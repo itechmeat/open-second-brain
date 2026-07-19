@@ -57,6 +57,18 @@ test("allowlist parses a comma-separated list, defaulting to empty", () => {
   expect(resolveTelegramCaptureAllowlist(cfg('telegram_chat_allowlist: "100"\n'))).toEqual(["900"]);
 });
 
+test("a numeric YAML token value degrades safely and never throws", () => {
+  // parseSimpleYaml reads every scalar as a string, so a numeric (or boolean)
+  // token becomes its string form; the resolvers only ever call .trim() on a
+  // string (or undefined, guarded by ?.), so neither resolver throws.
+  expect(() => resolveTelegramBotToken(cfg("telegram_bot_token: 12345\n"))).not.toThrow();
+  expect(resolveTelegramBotToken(cfg("telegram_bot_token: 12345\n"))).toBe("12345");
+  expect(() =>
+    resolveTelegramCaptureAllowlist(cfg("telegram_chat_allowlist: 100\n")),
+  ).not.toThrow();
+  expect(resolveTelegramCaptureAllowlist(cfg("telegram_chat_allowlist: 100\n"))).toEqual(["100"]);
+});
+
 test("redactMapping hides the bot token but keeps the allowlist", () => {
   const out = redactMapping({ telegram_bot_token: "secret", telegram_chat_allowlist: "100" });
   expect(out["telegram_bot_token"]).toBe("[REDACTED]");

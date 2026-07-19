@@ -35,7 +35,10 @@ export async function cmdBrainTelegramCapture(argv: string[]): Promise<number> {
   const { config, vault } = brainVerbContext(flags);
 
   if (action === "catchup") {
-    ok(renderCatchup(vault));
+    // stdout IS the delivery here, so commit the watermark immediately.
+    const catchup = renderCatchup(vault);
+    ok(catchup.text);
+    catchup.commit();
     return 0;
   }
 

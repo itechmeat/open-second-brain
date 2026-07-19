@@ -59,7 +59,12 @@ export async function cmdBrainRepairLane(argv: string[]): Promise<number> {
     });
   } catch (error) {
     if (error instanceof RepairConfirmationError) {
-      return fail(`${error.message} (pass --confirm ${JSON.stringify(REPAIR_CONFIRM_PHRASE)})`);
+      const message = `${error.message} (pass --confirm ${JSON.stringify(REPAIR_CONFIRM_PHRASE)})`;
+      if (flags["json"] === true) {
+        okJson({ ok: false, message });
+        return 1;
+      }
+      return fail(message);
     }
     throw error;
   }

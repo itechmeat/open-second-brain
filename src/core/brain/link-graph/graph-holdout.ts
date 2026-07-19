@@ -102,7 +102,15 @@ function twoHopKeys(adjacency: ReadonlyMap<string, ReadonlySet<string>>, key: st
 
 /** Read a target note's body as bounded evidence. Empty when unresolved. */
 function hydrateEvidence(vault: string, target: string): { resolved: boolean; text: string } {
-  const abs = ensureInsideVault(join(vault, target), vault);
+  let abs: string;
+  try {
+    abs = ensureInsideVault(join(vault, target), vault);
+  } catch {
+    // A target that escapes the vault resolves to no durable memory: treat it
+    // as unresolved (dangling) so the gate fails gracefully per item instead
+    // of throwing and aborting the whole evaluation.
+    return { resolved: false, text: "" };
+  }
   if (!existsSync(abs)) return { resolved: false, text: "" };
   try {
     const [, body] = parseFrontmatter(abs);

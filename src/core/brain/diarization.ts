@@ -188,6 +188,10 @@ export function diarize(
   const lines: DiarizationGapLine[] = [];
   let excludedLineCount = 0;
   const push = (line: DiarizationGapLine): void => {
+    // Defensive gate: every line constructed below carries a non-empty path,
+    // kind, and content hash, so this check is currently unreachable. It is
+    // kept deliberately so that if the evidence construction ever changes, an
+    // identity-less line is reported as a visible loss rather than emitted.
     if (hasEvidenceIdentity(line.evidence)) lines.push(line);
     else excludedLineCount += 1;
   };

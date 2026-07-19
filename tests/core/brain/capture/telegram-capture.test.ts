@@ -78,7 +78,7 @@ test("a malformed update (no text) is a decision, not a throw", () => {
   expect(listStagedCaptures(vault)).toHaveLength(0);
 });
 
-test("/catchup replies with captures since the last acknowledged one and advances the watermark", () => {
+test("/catchup replies with captures since the last acknowledged one; watermark advances only on commit", () => {
   handleCaptureUpdate(vault, textUpdate(1, "100", "first thought"), baseOpts());
   handleCaptureUpdate(vault, textUpdate(2, "100", "second thought"), baseOpts());
   const res = handleCaptureUpdate(vault, textUpdate(3, "100", CATCHUP_COMMAND), baseOpts());
@@ -87,12 +87,78 @@ test("/catchup replies with captures since the last acknowledged one and advance
   expect(res.reply!.chatId).toBe("100");
   expect(res.reply!.text).toContain("first thought");
   expect(res.reply!.text).toContain("second thought");
-  // MarkdownV2 escaping is applied (a period is a reserved character).
+  // Rendering the reply must NOT advance the watermark: only a successful
+  // delivery (commit) does, so a failed send cannot lose the catchup forever.
+  expect(readCatchupWatermark(vault)).toBeNull();
+  res.reply!.commit!();
   expect(readCatchupWatermark(vault)).not.toBeNull();
 
-  // A second catchup with nothing new reports the empty state.
+  // A second catchup after commit reports the empty state.
   const again = handleCaptureUpdate(vault, textUpdate(4, "100", CATCHUP_COMMAND), baseOpts());
   expect(again.reply!.text).not.toContain("first thought");
+});
+
+test("runTelegramCapture advances the catchup watermark only after the send succeeds", async () => {
+  handleCaptureUpdate(vault, textUpdate(1, "100", "alpha"), baseOpts());
+  handleCaptureUpdate(vault, textUpdate(2, "100", "beta"), baseOpts());
+  expect(readCatchupWatermark(vault)).toBeNull();
+
+  // A failed send must leave the watermark unchanged.
+  const failing: TelegramTransport = {
+    getUpdates: (offset) =>
+      Promise.resolve(offset === 0 ? [textUpdate(3, "100", CATCHUP_COMMAND)] : []),
+    sendMessage: () => Promise.reject(new Error("network down")),
+  };
+  const failedRun = await runTelegramCapture(vault, {
+    transport: failing,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    maxCycles: 1,
+  });
+  expect(readCatchupWatermark(vault)).toBeNull();
+  expect(failedRun.decisions.some((d) => d.result === "transport-error")).toBe(true);
+
+  // A successful send advances it.
+  const okTransport: TelegramTransport = {
+    getUpdates: (offset) =>
+      Promise.resolve(offset === 0 ? [textUpdate(4, "100", CATCHUP_COMMAND)] : []),
+    sendMessage: () => Promise.resolve(),
+  };
+  await runTelegramCapture(vault, {
+    transport: okTransport,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    maxCycles: 1,
+  });
+  expect(readCatchupWatermark(vault)).not.toBeNull();
+});
+
+test("runTelegramCapture survives a transport throw, logs one decision, and keeps polling", async () => {
+  let call = 0;
+  const transport: TelegramTransport = {
+    getUpdates: () => {
+      call += 1;
+      if (call === 1) return Promise.reject(new Error("transient network failure"));
+      return Promise.resolve(call === 2 ? [textUpdate(20, "100", "after the failure")] : []);
+    },
+    sendMessage: () => Promise.resolve(),
+  };
+  const result = await runTelegramCapture(vault, {
+    transport,
+    allowlist: ALLOW,
+    agent: "tester",
+    now: () => NOW,
+    maxCycles: 3,
+  });
+  // The loop did not crash: it ran every cycle, logged the transport error as a
+  // decision, and still captured the update delivered after the failure.
+  expect(result.cycles).toBe(3);
+  expect(result.decisions.filter((d) => d.result === "transport-error")).toHaveLength(1);
+  const staged = listStagedCaptures(vault);
+  expect(staged).toHaveLength(1);
+  expect(staged[0]!.body).toBe("after the failure");
 });
 
 test("requireTelegramToken throws a typed error when the token is absent", () => {

@@ -127,15 +127,18 @@ function sortedQuery(query: Readonly<Record<string, string>> | undefined): strin
 }
 
 /**
- * Deterministic cache key for a request. Built ONLY from the method, url,
- * sorted query, and body - never from the API key or auth headers - so no
- * credential can leak into a cache key or the paths derived from one.
+ * Deterministic cache key for a request. Built ONLY from the accept type,
+ * method, url, sorted query, and body - never from the API key or auth headers
+ * - so no credential can leak into a cache key or the paths derived from one.
+ * The accept type is part of the key so a shared cache can never serve a JSON
+ * value where text was expected (or vice versa).
  */
 export function normalizeRequestKey(req: ExternalFetchRequest): string {
+  const accept = req.accept ?? "json";
   const method = req.method ?? "GET";
   const query = sortedQuery(req.query);
   const body = req.body === undefined ? "" : stableStringify(req.body);
-  return `${method} ${req.url}?${query}#${body}`;
+  return `${accept} ${method} ${req.url}?${query}#${body}`;
 }
 
 function buildUrl(req: ExternalFetchRequest): string {

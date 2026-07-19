@@ -46,6 +46,30 @@ describe("skill proposal learning", () => {
     expect(kinds).toContain("temporal_routine");
   });
 
+  test("a candidate clearing detection above the evidence-sample cap still passes the verifier", () => {
+    // Seven records share one action, so the repeated_action candidate has
+    // support 7 - above the 6-record evidence sample the candidate carries.
+    // With minSupport 7 the verifier must see the full support count (not the
+    // truncated sample) and accept, not reject.
+    for (let i = 0; i < 7; i++) {
+      appendContinuityRecord(vault, {
+        kind: "session_turn",
+        createdAt: `2026-05-2${i}T08:00:00Z`,
+        sourceRefs: [{ id: `src-${i}` }],
+        payload: { action: "deploy_service", summary: `run ${i}` },
+      });
+    }
+
+    const result = learnSkillProposals(vault, {
+      now: new Date("2026-06-01T09:00:00Z"),
+      minSupport: 7,
+    });
+
+    expect(result.verifierRejected).toHaveLength(0);
+    const pending = listPendingSkillProposals(vault);
+    expect(pending.some((item) => item.patternKind === "repeated_action")).toBe(true);
+  });
+
   test("advances watermark and suppresses unchanged reruns", () => {
     seedCorePatterns(vault);
 

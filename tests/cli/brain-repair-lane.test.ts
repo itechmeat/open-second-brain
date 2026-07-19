@@ -58,6 +58,16 @@ test("apply without the exact confirmation phrase is refused", async () => {
   expect(readFileSync(join(vault, "Notes/alpha.md"), "utf8")).not.toContain("[[");
 });
 
+test("a refused apply under --json emits a JSON error envelope, not plain text", async () => {
+  const res = await runCli(["brain", "repair-lane", "--apply", "--confirm", "nope", "--json"], {
+    env: env(),
+  });
+  expect(res.returncode).toBe(1);
+  const parsed = JSON.parse(res.stdout) as { ok: boolean; message: string };
+  expect(parsed.ok).toBe(false);
+  expect(parsed.message).toContain("confirmation phrase");
+});
+
 test("apply with the exact phrase writes the edge, and a rerun is a no-op", async () => {
   const applied = await runCli(
     ["brain", "repair-lane", "--apply", "--confirm", "apply repair", "--json"],

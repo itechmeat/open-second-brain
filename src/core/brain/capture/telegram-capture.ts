@@ -45,6 +45,16 @@ const TELEGRAM_API_BASE = "https://api.telegram.org";
 /** Long-poll timeout (seconds) passed to getUpdates. */
 const LONG_POLL_TIMEOUT_SECONDS = 30;
 
+/**
+ * Margin (seconds) added to the long-poll window before the client-side fetch
+ * aborts, so a wedged connection surfaces as a caught, retried transport error
+ * rather than a hang that stalls the runner forever.
+ */
+const FETCH_TIMEOUT_MARGIN_SECONDS = 10;
+
+/** Client-side abort timeout (seconds) for the short sendMessage request. */
+const SEND_MESSAGE_TIMEOUT_SECONDS = 15;
+
 /** Minimal shape of the Telegram update objects this bot reads. */
 export interface TelegramUpdate {
   readonly update_id: number;
@@ -61,7 +71,12 @@ export interface TelegramTransport {
   sendMessage(chatId: string | number, text: string): Promise<void>;
 }
 
-export type CaptureDecisionResult = "captured" | "catchup" | "rejected-chat" | "malformed";
+export type CaptureDecisionResult =
+  | "captured"
+  | "catchup"
+  | "rejected-chat"
+  | "malformed"
+  | "transport-error";
 
 export interface CaptureDecision {
   readonly updateId: number;
@@ -76,7 +91,29 @@ export interface CaptureDecision {
 export interface HandleUpdateResult {
   readonly decision: CaptureDecision;
   /** A reply to send back, or null when the update warrants no reply. */
-  readonly reply: { readonly chatId: string; readonly text: string } | null;
+  readonly reply: {
+    readonly chatId: string;
+    readonly text: string;
+    /**
+     * Deferred side effect to run only once delivery has succeeded (the bot
+     * path advances the catchup watermark here). Absent when the reply carries
+     * no post-delivery commit.
+     */
+    readonly commit?: () => void;
+  } | null;
+}
+
+/** A rendered catchup reply plus the deferred watermark advance. */
+export interface CatchupReply {
+  /** The MarkdownV2-escaped reply text. */
+  readonly text: string;
+  /**
+   * Advance the watermark to the newest capture included in `text`. Split from
+   * rendering so a caller whose delivery can fail (the bot's sendMessage) only
+   * commits after a successful send; a caller whose rendering IS delivery (the
+   * CLI writing to stdout) commits immediately.
+   */
+  readonly commit: () => void;
 }
 
 export interface HandleUpdateOptions {
@@ -113,22 +150,52 @@ function appendDecision(vault: string, decision: CaptureDecision): void {
   appendFileSync(path, `${JSON.stringify(decision)}\n`, { encoding: "utf8" });
 }
 
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Record one `transport-error` decision (getUpdates / sendMessage failure) so a
+ * transient network fault is a logged, greppable decision rather than a crash
+ * that terminates the runner. Returns the decision for the in-memory list too.
+ */
+function logTransportError(
+  vault: string,
+  updateId: number,
+  chatId: string | null,
+  reason: string,
+  now: () => Date,
+): CaptureDecision {
+  const decision: CaptureDecision = {
+    updateId,
+    result: "transport-error",
+    reason,
+    chatId,
+    capturePath: null,
+    at: isoSecond(now()),
+  };
+  appendDecision(vault, decision);
+  return decision;
+}
+
 /**
  * Render the catchup reply for the captures since the last acknowledged one.
- * Advances the watermark to the newest capture so the next `/catchup` starts
- * where this one ended.
+ * Rendering NEVER advances the watermark; the returned {@link CatchupReply.commit}
+ * does that, so a failed delivery cannot silently drop the catchup forever.
  */
-export function renderCatchup(vault: string): string {
+export function renderCatchup(vault: string): CatchupReply {
   const watermark = readCatchupWatermark(vault);
   const pending = capturesSince(vault, watermark);
   if (pending.length === 0) {
-    return escapeMarkdownV2("No new captures since the last catchup.");
+    return { text: escapeMarkdownV2("No new captures since the last catchup."), commit: () => {} };
   }
   const header = escapeMarkdownV2(`${pending.length} capture(s) since the last catchup:`);
   const lines = pending.map((c) => `- ${escapeMarkdownV2(catchupLine(c))}`);
   const newest = pending[pending.length - 1]!;
-  writeCatchupWatermark(vault, newest.id);
-  return [header, ...lines].join("\n");
+  return {
+    text: [header, ...lines].join("\n"),
+    commit: () => writeCatchupWatermark(vault, newest.id),
+  };
 }
 
 function catchupLine(capture: CaptureNote): string {
@@ -158,7 +225,7 @@ export function handleCaptureUpdate(
     reason: string,
     chatId: string | null,
     capturePath: string | null,
-    reply: { chatId: string; text: string } | null,
+    reply: { chatId: string; text: string; commit?: () => void } | null,
   ): HandleUpdateResult => {
     const decision: CaptureDecision = { updateId, result, reason, chatId, capturePath, at };
     appendDecision(vault, decision);
@@ -180,8 +247,14 @@ export function handleCaptureUpdate(
 
   const trimmed = text.trim();
   if (trimmed === CATCHUP_COMMAND) {
-    const replyText = renderCatchup(vault);
-    return finish("catchup", "catchup requested", chatId, null, { chatId, text: replyText });
+    const catchup = renderCatchup(vault);
+    // The watermark advances via catchup.commit, invoked by the run loop only
+    // after sendMessage succeeds - a failed send must not lose the catchup.
+    return finish("catchup", "catchup requested", chatId, null, {
+      chatId,
+      text: catchup.text,
+      commit: catchup.commit,
+    });
   }
 
   const note = writeCaptureNote(vault, {
@@ -233,18 +306,44 @@ export async function runTelegramCapture(
 
   while (opts.maxCycles === undefined || cycles < opts.maxCycles) {
     if (opts.shouldStop?.() === true) break;
+    cycles += 1;
     // A long-poll loop is inherently sequential: each getUpdates uses the
     // offset produced by the previous cycle, so the awaits cannot be
     // parallelized.
-    // oxlint-disable-next-line no-await-in-loop
-    const updates = await opts.transport.getUpdates(offset);
-    cycles += 1;
+    let updates: TelegramUpdate[];
+    try {
+      // oxlint-disable-next-line no-await-in-loop
+      updates = await opts.transport.getUpdates(offset);
+    } catch (err) {
+      // A transient transport failure is one logged decision, not a crash: the
+      // loop retries on the next cycle. Typed startup errors (missing token)
+      // are raised before the loop and stay fatal.
+      decisions.push(
+        logTransportError(vault, -1, null, `getUpdates failed: ${messageOf(err)}`, opts.now),
+      );
+      continue;
+    }
     for (const update of updates) {
       const { decision, reply } = handleCaptureUpdate(vault, update, handleOpts);
       decisions.push(decision);
       if (reply !== null) {
-        // oxlint-disable-next-line no-await-in-loop
-        await opts.transport.sendMessage(reply.chatId, reply.text);
+        try {
+          // oxlint-disable-next-line no-await-in-loop
+          await opts.transport.sendMessage(reply.chatId, reply.text);
+          // Commit deferred side effects (the catchup watermark) ONLY after a
+          // successful send, so a failed delivery never loses the catchup.
+          reply.commit?.();
+        } catch (err) {
+          decisions.push(
+            logTransportError(
+              vault,
+              decision.updateId,
+              reply.chatId,
+              `sendMessage failed: ${messageOf(err)}`,
+              opts.now,
+            ),
+          );
+        }
       }
       if (typeof update.update_id === "number") {
         offset = Math.max(offset, update.update_id + 1);
@@ -265,7 +364,11 @@ export function createFetchTelegramTransport(token: string): TelegramTransport {
   return {
     async getUpdates(offset: number): Promise<TelegramUpdate[]> {
       const url = `${base}/getUpdates?offset=${offset}&timeout=${LONG_POLL_TIMEOUT_SECONDS}`;
-      const res = await fetch(url);
+      const res = await fetch(url, {
+        signal: AbortSignal.timeout(
+          (LONG_POLL_TIMEOUT_SECONDS + FETCH_TIMEOUT_MARGIN_SECONDS) * 1000,
+        ),
+      });
       if (!res.ok) {
         throw new Error(`Telegram getUpdates failed with HTTP ${res.status}`);
       }
@@ -280,6 +383,7 @@ export function createFetchTelegramTransport(token: string): TelegramTransport {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ chat_id: chatId, text, parse_mode: "MarkdownV2" }),
+        signal: AbortSignal.timeout(SEND_MESSAGE_TIMEOUT_SECONDS * 1000),
       });
       if (!res.ok) {
         throw new Error(`Telegram sendMessage failed with HTTP ${res.status}`);

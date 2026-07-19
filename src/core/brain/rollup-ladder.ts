@@ -152,11 +152,13 @@ export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
   ]);
 
   const entries: RollupLadderEntry[] = [];
-  for (const rung of rungs) {
-    // Base rung counts facts; every higher rung counts the rollups its
-    // lower neighbour has produced (recomputed AFTER lower rungs update
-    // `produced`, so composition happens within this pass).
-    const source = rung.tier === ROLLUP_TIER.fact ? factCount : (produced[ROLLUP_TIER.fact] ?? 0);
+  for (let i = 0; i < rungs.length; i++) {
+    const rung = rungs[i]!;
+    // The base rung counts facts; every higher rung counts the rollups its
+    // immediately-lower neighbour has produced (derived by index, recomputed
+    // AFTER lower rungs update `produced`, so composition stays correct within
+    // this pass even if a third rung is added later).
+    const source = i === 0 ? factCount : (produced[rungs[i - 1]!.tier] ?? 0);
     const baseline = baselines[rung.tier] ?? 0;
     const newSinceLast = source - baseline;
     if (newSinceLast < rung.threshold) continue;

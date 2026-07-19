@@ -52,6 +52,20 @@ describe("collectRepairCandidates explicit references", () => {
     expect(explicit!.source).toContain("alpha");
   });
 
+  test("a generic short title does not mass-generate explicit-reference candidates", () => {
+    // "AI" is a two-letter title that recurs in prose across the vault. Below
+    // MIN_EXPLICIT_REFERENCE_TITLE_LENGTH it must not seed 0.9-confidence edges.
+    writeNote("Notes/essay.md", "Essay", "This whole essay is about AI and its many uses.");
+    writeNote("Notes/ai.md", "AI", "standalone");
+
+    const candidates = collectRepairCandidates(vault);
+    expect(
+      candidates.some(
+        (c) => c.strength === IDENTITY_STRENGTH.explicitReference && c.target.includes("ai"),
+      ),
+    ).toBe(false);
+  });
+
   test("an already-linked reference is not re-proposed", () => {
     writeNote("Notes/alpha.md", "Alpha", "See [[Notes/beta.md]] and Beta again.");
     writeNote("Notes/beta.md", "Beta", "standalone");

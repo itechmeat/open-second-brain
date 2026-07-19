@@ -85,7 +85,9 @@ export type RepairAction =
   | "skip-inferred"
   | "skip-cap"
   | "skip-missing-source"
-  | "skip-missing-target";
+  | "skip-missing-target"
+  | "skip-unsafe-path"
+  | "skip-null-endpoint-key";
 
 export interface RepairDecision extends RepairCandidate {
   readonly action: RepairAction;
@@ -131,8 +133,13 @@ function orderCandidates(candidates: readonly RepairCandidate[]): RepairCandidat
   });
 }
 
-function noteAbsPath(vault: string, rel: string): string {
-  return ensureInsideVault(join(vault, rel), vault);
+/** Absolute path of a note, or null when the candidate escapes the vault. */
+function noteAbsPath(vault: string, rel: string): string | null {
+  try {
+    return ensureInsideVault(join(vault, rel), vault);
+  } catch {
+    return null;
+  }
 }
 
 /** Canonical identity key for an edge endpoint (basename, no ext, lowercased). */
@@ -208,13 +215,30 @@ export function runRepairLane(
     }
 
     const sourceAbs = noteAbsPath(vault, candidate.source);
+    if (sourceAbs === null) {
+      decide("skip-unsafe-path");
+      continue;
+    }
     if (!existsSync(sourceAbs)) {
       decide("skip-missing-source");
       continue;
     }
     const targetAbs = noteAbsPath(vault, candidate.target);
+    if (targetAbs === null) {
+      decide("skip-unsafe-path");
+      continue;
+    }
     if (!existsSync(targetAbs)) {
       decide("skip-missing-target");
+      continue;
+    }
+
+    // A candidate with no canonical endpoint key cannot be deduped against
+    // existing edges or tracked for idempotence, so a re-run would re-append
+    // the same wikilink. Refuse it rather than write an untrackable edge.
+    const targetKey = endpointKey(candidate.target);
+    if (targetKey === null) {
+      decide("skip-null-endpoint-key");
       continue;
     }
 
@@ -223,8 +247,7 @@ export function runRepairLane(
       linked = existingEdgeKeys(sourceAbs);
       linkedBySource.set(candidate.source, linked);
     }
-    const targetKey = endpointKey(candidate.target);
-    if (targetKey !== null && linked.has(targetKey)) {
+    if (linked.has(targetKey)) {
       decide("skip-existing");
       continue;
     }
@@ -235,7 +258,7 @@ export function runRepairLane(
     }
 
     if (apply) appendEdge(sourceAbs, candidate.target);
-    if (targetKey !== null) linked.add(targetKey);
+    linked.add(targetKey);
     written += 1;
     decide("write");
   }
@@ -258,6 +281,13 @@ export function runRepairLane(
 
 /** Confidence assigned to an explicit textual reference (strongest signal). */
 export const EXPLICIT_REFERENCE_CONFIDENCE = 0.9;
+/**
+ * Minimum note-title length for an explicit-reference match. Generic short
+ * titles (two-letter tokens such as "AI" or "ML") occur in prose all over the
+ * vault, so matching them would mass-generate spurious 0.9-confidence edges.
+ * Requiring at least this many characters keeps the strongest tier specific.
+ */
+export const MIN_EXPLICIT_REFERENCE_TITLE_LENGTH = 4;
 /** Base confidence for a session-continuity co-reference. */
 export const SESSION_CONTINUITY_BASE_CONFIDENCE = 0.6;
 /** Ceiling for scaled confidences below the explicit tier. */
@@ -288,7 +318,7 @@ function isWordEdge(ch: string | undefined): boolean {
 
 /** True when `term` occurs in `masked` at a word boundary (case-insensitive). */
 function mentionsTerm(masked: string, term: string): boolean {
-  if (term.length < 2) return false;
+  if (term.length < MIN_EXPLICIT_REFERENCE_TITLE_LENGTH) return false;
   const lower = masked.toLowerCase();
   const needle = term.toLowerCase();
   let from = 0;

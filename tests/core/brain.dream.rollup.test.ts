@@ -93,6 +93,31 @@ test("a no-op run stays a no-op with the ladder wired in", () => {
   expect(existsSync(rollupLedgerPath(vault))).toBe(false);
 });
 
+test("a colliding-second rerun rebuilds the rollup so target_path matches the corrected run id", () => {
+  setRollupThreshold(2);
+  seedPref("alpha");
+  seedPref("beta");
+  const now = new Date("2026-05-14T20:00:00Z");
+  const first = dream(vault, { now });
+  expect(first.rollups).toHaveLength(1);
+  expect(first.rollups[0]!.envelope.target_path).toContain(first.run_id);
+
+  // Two more facts push the fact rung over threshold again, and the SECOND run
+  // uses the identical `now`, so its run id collides and is corrected.
+  seedPref("gamma");
+  seedPref("delta");
+  const second = dream(vault, { now });
+
+  expect(second.run_id).toBe(`${first.run_id}-2`);
+  expect(second.rollups).toHaveLength(1);
+  // The envelope target_path must embed the corrected run id, not the
+  // pre-collision one it was first built with.
+  expect(second.rollups[0]!.envelope.target_path).toContain(second.run_id);
+  expect(second.rollups[0]!.envelope.target_path).toBe(
+    `Brain/rollups/rollup-rollup-${second.run_id}.md`,
+  );
+});
+
 test("reaching the threshold fires one rollup envelope and records the reset", () => {
   setRollupThreshold(2);
   seedPref("alpha");

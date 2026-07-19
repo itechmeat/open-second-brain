@@ -33,6 +33,7 @@ function reportJson(report: DrainReport): Record<string, unknown> {
     mode: report.mode,
     routed: report.routed,
     unroutable: report.unroutable,
+    archive_failed: report.archiveFailed,
     items: report.items.map(itemJson),
   };
 }
@@ -58,7 +59,9 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
     const targetLabel = item.target !== null ? ` -> ${item.target}` : "";
     ok(`  [${item.classification}] ${item.action}${targetLabel}: ${item.reason}`);
   }
-  ok(`  routed ${report.routed}, unroutable ${report.unroutable}`);
+  ok(
+    `  routed ${report.routed}, unroutable ${report.unroutable}, archive-failed ${report.archiveFailed}`,
+  );
   if (!flags["apply"] && report.items.length > 0) {
     ok("  re-run with --apply to route and archive");
   }

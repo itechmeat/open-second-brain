@@ -349,7 +349,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // effect is a rollup still counts as changed; below threshold it fires
   // nothing and the ledger is never written, so the run stays
   // byte-identical.
-  const rollupPlan = planRollupLadder({
+  let rollupPlan = planRollupLadder({
     factCount: scan.preferences.length,
     ledger: readRollupLedger(vault),
     thresholds: resolveRollupThresholds(cfg),
@@ -416,7 +416,19 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // Honor an already-expired deadline BEFORE spending snapshot I/O.
   opts.safeguard?.checkpoint();
   if (!dryRun) {
+    const baseRunId = runId;
     runId = nextAvailableDreamRunId(vault, runId);
+    // The rollup plan (and each envelope's target_path) was built with the
+    // pre-collision runId; if the collision check corrected it, rebuild the
+    // plan so every target_path embeds the final run_id.
+    if (rollupPlan.fired && runId !== baseRunId) {
+      rollupPlan = planRollupLadder({
+        factCount: scan.preferences.length,
+        ledger: readRollupLedger(vault),
+        thresholds: resolveRollupThresholds(cfg),
+        runId,
+      });
+    }
     const snap = createSnapshot(vault, runId);
     snapshotPathStr = snap.path;
   }

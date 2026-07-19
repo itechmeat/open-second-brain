@@ -112,6 +112,45 @@ describe("runRepairLane ordering and gating", () => {
   });
 });
 
+describe("runRepairLane path and endpoint safety", () => {
+  test("a candidate that escapes the vault yields a skip decision instead of throwing", () => {
+    writeNote("Notes/a.md", "A", "body");
+    writeNote("Notes/b.md", "B", "body");
+
+    const targetEscape = runRepairLane(vault, [candidate({ target: "../evil.md" })], {
+      apply: true,
+      confirm: REPAIR_CONFIRM_PHRASE,
+    });
+    expect(targetEscape.decisions[0]!.action).toBe("skip-unsafe-path");
+    expect(targetEscape.written).toBe(0);
+
+    const sourceEscape = runRepairLane(vault, [candidate({ source: "../evil.md" })], {
+      apply: true,
+      confirm: REPAIR_CONFIRM_PHRASE,
+    });
+    expect(sourceEscape.decisions[0]!.action).toBe("skip-unsafe-path");
+    expect(sourceEscape.written).toBe(0);
+  });
+
+  test("a candidate whose endpoint has no canonical key is refused, never written twice", () => {
+    writeNote("Notes/a.md", "A", "body");
+    // A file named ".md" has no canonical endpoint key, so an edge to it cannot
+    // be deduped or tracked for idempotence. Refuse it rather than re-append it
+    // on every run.
+    writeNote("Notes/.md", "Blank", "body");
+    const cand = candidate({ target: "Notes/.md" });
+
+    const first = runRepairLane(vault, [cand], { apply: true, confirm: REPAIR_CONFIRM_PHRASE });
+    expect(first.decisions[0]!.action).toBe("skip-null-endpoint-key");
+    expect(first.written).toBe(0);
+    expect(noteBody("Notes/a.md")).not.toContain("[[");
+
+    const second = runRepairLane(vault, [cand], { apply: true, confirm: REPAIR_CONFIRM_PHRASE });
+    expect(second.decisions[0]!.action).toBe("skip-null-endpoint-key");
+    expect(second.written).toBe(0);
+  });
+});
+
 describe("runRepairLane dry-run vs apply", () => {
   test("dry-run is the default and writes nothing to disk", () => {
     writeNote("Notes/a.md", "A", "body");

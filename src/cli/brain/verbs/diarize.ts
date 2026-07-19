@@ -7,7 +7,15 @@
  */
 
 import { diarize, DiarizationError } from "../../../core/brain/diarization.ts";
-import { brainVerbContext, fail, ok, okJson, normalizeFlagString, parse } from "../helpers.ts";
+import {
+  brainVerbContext,
+  fail,
+  ok,
+  okJson,
+  normalizeFlagString,
+  parse,
+  usageError,
+} from "../helpers.ts";
 
 export async function cmdBrainDiarize(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -17,7 +25,7 @@ export async function cmdBrainDiarize(argv: string[]): Promise<number> {
   });
   const query = positional[0];
   if (!query || query.trim() === "") {
-    return fail("usage: o2b brain diarize <entity> [--category C] [--vault <path>] [--json]");
+    return usageError("usage: o2b brain diarize <entity> [--category C] [--vault <path>] [--json]");
   }
   const { vault } = brainVerbContext(flags);
   const category = normalizeFlagString(flags["category"]);
@@ -60,7 +68,12 @@ export async function cmdBrainDiarize(argv: string[]): Promise<number> {
     ok(`needs-llm-step: ${report.llmStep.step} -> ${report.llmStep.target_path}`);
     return 0;
   } catch (err) {
-    if (err instanceof DiarizationError) return fail(err.message);
-    return fail((err as Error).message ?? String(err));
+    const message =
+      err instanceof DiarizationError ? err.message : ((err as Error).message ?? String(err));
+    if (flags["json"] === true) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
   }
 }

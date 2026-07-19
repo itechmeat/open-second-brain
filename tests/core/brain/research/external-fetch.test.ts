@@ -166,6 +166,32 @@ describe("keyedFetch cache", () => {
     const b = normalizeRequestKey({ url: "https://x/y", query: { a: "1", b: "2" } });
     expect(a).toBe(b);
   });
+
+  test("the accept type is part of the cache key so json and text never collide", () => {
+    const base = { url: "https://x/y", query: { q: "z" } } as const;
+    const asJson = normalizeRequestKey({ ...base, accept: "json" });
+    const asText = normalizeRequestKey({ ...base, accept: "text" });
+    const asDefault = normalizeRequestKey(base);
+    expect(asJson).not.toBe(asText);
+    // The default accept is json, so an unspecified accept matches accept: json.
+    expect(asDefault).toBe(asJson);
+  });
+
+  test("a shared cache never serves a json value where text was expected", async () => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, { shape: "json" }));
+    const cache = createMemoryResponseCache();
+    const base = { url: "https://api.example.com/x", query: { q: "z" } } as const;
+    const asJson = await keyedFetch({ apiKey: API_KEY, transport, cache }, { ...base });
+    // A text request for the same url/query must NOT reuse the cached json value;
+    // it makes its own transport call because the accept type differs.
+    const asText = await keyedFetch(
+      { apiKey: API_KEY, transport, cache },
+      { ...base, accept: "text" },
+    );
+    expect(asJson).toEqual({ shape: "json" });
+    expect(asText).toBe(JSON.stringify({ shape: "json" }));
+    expect(calls.length).toBe(2);
+  });
 });
 
 describe("keyedFetch key hygiene (redactor)", () => {

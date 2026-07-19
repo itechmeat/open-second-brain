@@ -543,6 +543,10 @@ export async function deepSynthesis(
       kind: EVIDENCE_KIND_NOTE,
       contentHash: sha256Hex(acc.content),
     };
+    // Defensive gate: the three fields above are always non-empty here, so this
+    // branch is currently unreachable. It is kept deliberately so that if the
+    // evidence construction above ever changes (an empty path, a missing hash),
+    // the finding is dropped as a visible loss rather than emitted identity-less.
     if (!hasEvidenceIdentity(evidence)) {
       excludedFindings.push(Object.freeze({ path: acc.note.path, reason: "no_evidence_identity" }));
       continue;

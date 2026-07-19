@@ -53,7 +53,7 @@ export interface DrainItem {
   readonly id: string;
   /** Vault-relative path of the staged capture. */
   readonly capturePath: string;
-  readonly classification: CaptureClass | "unroutable";
+  readonly classification: CaptureClass | "unroutable" | "archive-failed";
   readonly action: DrainAction;
   readonly reason: string;
   /** Resolved route target (summary page, obligation slug, note path). */
@@ -67,6 +67,13 @@ export interface DrainReport {
   readonly items: readonly DrainItem[];
   readonly routed: number;
   readonly unroutable: number;
+  /**
+   * Count of captures whose route executed but whose archive then failed
+   * (route done, still staged). Reported apart from `unroutable` because the
+   * route already ran, so a blind retry would re-execute it; the idea-note
+   * write is idempotent so a re-run converges instead of duplicating.
+   */
+  readonly archiveFailed: number;
 }
 
 export interface DrainOptions {
@@ -189,9 +196,24 @@ function writeIdeaNote(abs: string, body: string, opts: DrainOptions, merge: boo
     return;
   }
   const [meta, existing] = parseFrontmatter(abs);
+  const existingTrimmed = existing.trim();
+  const incoming = body.trim();
+  // Idempotent merge: if this exact block is already present, do not append
+  // it again. This makes a re-run safe when a prior route succeeded but its
+  // archive failed and left the capture staged (finding: split route/archive
+  // handling), so the idea note is never duplicated.
+  if (bodyContainsBlock(existingTrimmed, incoming)) return;
   const nextMeta: FrontmatterMap = { ...meta, updated_at: stamp };
-  const mergedBody = `${existing.trim()}\n\n${body.trim()}`;
+  const mergedBody = `${existingTrimmed}\n\n${incoming}`;
   atomicWriteText(abs, formatFrontmatter(nextMeta, mergedBody));
+}
+
+/** True when `block` is already present as a paragraph block of `body`. */
+function bodyContainsBlock(body: string, block: string): boolean {
+  return body
+    .split(/\n{2,}/u)
+    .map((b) => b.trim())
+    .includes(block);
 }
 
 function dirOf(abs: string): string {
@@ -204,6 +226,7 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
   const items: DrainItem[] = [];
   let routed = 0;
   let unroutable = 0;
+  let archiveFailed = 0;
 
   for (const note of listStagedCaptures(vault)) {
     const plan = classify(vault, note, opts);
@@ -234,19 +257,13 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
       continue;
     }
 
+    // The route and the archive are handled apart: a route that succeeds but
+    // whose archive then fails is NOT unroutable - the route already ran and
+    // the capture is still staged. Folding it into `unroutable` would both
+    // misreport it and invite a blind retry of an already-executed route.
+    let target: string;
     try {
-      const target = plan.execute();
-      archiveCapture(vault, note.id);
-      routed += 1;
-      items.push({
-        id: note.id,
-        capturePath: note.path,
-        classification: plan.classification,
-        action: plan.action,
-        reason: plan.reason,
-        target,
-        routed: true,
-      });
+      target = plan.execute();
     } catch (err) {
       unroutable += 1;
       const reason =
@@ -262,7 +279,37 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
         target: null,
         routed: false,
       });
+      continue;
     }
+
+    try {
+      archiveCapture(vault, note.id);
+    } catch (err) {
+      archiveFailed += 1;
+      items.push({
+        id: note.id,
+        capturePath: note.path,
+        classification: "archive-failed",
+        action: plan.action,
+        reason: `route succeeded but archive failed: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        target,
+        routed: false,
+      });
+      continue;
+    }
+
+    routed += 1;
+    items.push({
+      id: note.id,
+      capturePath: note.path,
+      classification: plan.classification,
+      action: plan.action,
+      reason: plan.reason,
+      target,
+      routed: true,
+    });
   }
 
   return {
@@ -270,5 +317,6 @@ export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
     items,
     routed,
     unroutable,
+    archiveFailed,
   };
 }

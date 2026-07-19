@@ -85,6 +85,23 @@ describe("evaluateGraphHoldouts dangling gate", () => {
   });
 });
 
+describe("evaluateGraphHoldouts vault-escape safety", () => {
+  test("a target that escapes the vault counts as dangling instead of throwing", () => {
+    writeNote("Notes/anchor.md", "An anchor with a wayward edge.");
+    // A ../ target resolves outside the vault; the gate must fail gracefully
+    // per item rather than throwing and aborting the whole evaluation.
+    const result = evaluateGraphHoldouts(vault, [
+      { anchor: "Notes/anchor.md", target: "../escaping-target.md" },
+    ]);
+    expect(result.passed).toBe(false);
+    expect(result.danglingCount).toBe(1);
+    expect(result.resolvedCount).toBe(0);
+    expect(result.resolutions[0]!.dangling).toBe(true);
+    expect(result.resolutions[0]!.resolved).toBe(false);
+    expect(result.resolutions[0]!.hydrated).toBe(false);
+  });
+});
+
 describe("evaluateGraphHoldouts hydration gate", () => {
   test("a resolved-but-empty target fails the gate as unhydrated", () => {
     // empty.md resolves (the note exists) but its body is empty, so it does

@@ -9,7 +9,15 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -24,6 +32,7 @@ import {
   writeCaptureNote,
   type CaptureProvenance,
 } from "../../../../src/core/brain/capture/capture-note.ts";
+import { capturesProcessedDir } from "../../../../src/core/brain/paths.ts";
 import { listObligations } from "../../../../src/core/brain/obligations.ts";
 
 const NOW = new Date("2026-07-19T12:00:00Z");
@@ -119,6 +128,40 @@ test("an obligation marker without a title is unroutable and left in place", () 
   // Left in place, not archived.
   expect(listStagedCaptures(vault)).toHaveLength(1);
   expect(listArchivedCaptures(vault)).toHaveLength(0);
+});
+
+test("a route that succeeds but whose archive fails is a distinct state; a re-run does not duplicate the idea note", () => {
+  const body = "an idea that survives a broken archive";
+  writeCaptureNote(vault, { body, provenance: prov(1) });
+
+  // Plant a FILE where the processed dir must be created, so archiveCapture's
+  // mkdir throws AFTER plan.execute() has already written the idea note.
+  const processed = capturesProcessedDir(vault);
+  writeFileSync(processed, "blocker");
+
+  const first = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(first.items[0]!.classification).toBe("archive-failed");
+  expect(first.archiveFailed).toBe(1);
+  expect(first.routed).toBe(0);
+  expect(first.unroutable).toBe(0);
+  // The route ran: the idea note exists and the capture is still staged.
+  expect(existsSync(join(vault, CAPTURED_NOTES_DIR_REL))).toBe(true);
+  expect(listStagedCaptures(vault)).toHaveLength(1);
+
+  // Clear the blocker; the re-run archives without re-appending the idea body.
+  rmSync(processed, { force: true });
+  const rerun = drainInbox(vault, { apply: true, agent: "tester", now: NOW });
+  expect(rerun.routed).toBe(1);
+  expect(rerun.archiveFailed).toBe(0);
+  expect(listStagedCaptures(vault)).toHaveLength(0);
+  expect(listArchivedCaptures(vault)).toHaveLength(1);
+
+  // The idea note contains the captured body exactly once - no duplicate merge.
+  const dir = join(vault, CAPTURED_NOTES_DIR_REL);
+  const files = readdirSync(dir);
+  expect(files).toHaveLength(1);
+  const noteBody = readFileSync(join(dir, files[0]!), "utf8");
+  expect(noteBody.split(body).length - 1).toBe(1);
 });
 
 test("an obligation marker defaults the cadence when none is given", () => {
