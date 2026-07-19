@@ -107,7 +107,16 @@ reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
 classification, per-token `union_records` for uncovered terms, and a
 `completeness` verdict whose `uncovered_but_present_in_corpus` list is the
 false-absence guard. It can also emit opt-in recall telemetry with
-`telemetry: true`. `brain_recall_feedback` records one feedback event as a
+`telemetry: true`.
+A deterministic summary-search router (t_7b96f242) inspects each query for
+structural summary signals - a source-targeted `source:<path>` token, or a
+`kind:<t>`/`type:<t>` token whose value is a declared artifact kind in the
+vault schema pack (`schema.page_types`). When a query is summary-shaped it
+carries `surface: "summary"` in the response, naming the summary-search
+surface as the intended route (target a source or artifact kind rather than
+running a generic hybrid search over raw chunks); ranking is never altered
+and non-summary queries omit the field entirely, so the generic-surface
+response stays byte-identical. `brain_recall_feedback` records one feedback event as a
 JSON file under `Brain/search/feedback/` and returns the refreshed learned
 weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and

@@ -198,6 +198,18 @@ export interface BrainSearchResult {
  */
 export type QueryIntent = "neutral" | "exact" | "entity" | "broad";
 
+/**
+ * Retrieval-surface routing decision (t_7b96f242). A deterministic,
+ * structural determination layered onto the query plan that names which
+ * retrieval surface a query is shaped for. `default` is the generic
+ * hybrid-search surface (byte-identical to today); `summary` is the
+ * summary-search surface - reached for source-targeted queries and queries
+ * naming an artifact kind from the schema vocabulary. The field is advisory
+ * (it re-weights nothing) and is `default` for every query unless a caller
+ * supplies the surface vocabulary, so the pure default is provably inert.
+ */
+export type QuerySurface = "default" | "summary";
+
 /** One parsed `lex:` lane of a structured recall query document. */
 export interface StructuredLexLane {
   readonly include: ReadonlyArray<string>;
@@ -239,6 +251,14 @@ export interface QueryPlan {
   readonly weightProfile: WeightProfile;
   readonly expandedTerms: ReadonlyArray<string>;
   readonly planHash: string;
+  /**
+   * Retrieval-surface routing decision (t_7b96f242). Advisory only: it
+   * never enters `planHash` and never re-weights ranking, so a query's
+   * results are byte-identical regardless of its value. `default` unless
+   * the caller supplied a surface vocabulary AND the query is structurally
+   * summary-shaped. See {@link QuerySurface}.
+   */
+  readonly surface: QuerySurface;
 }
 
 export interface IndexStats {
@@ -772,6 +792,14 @@ export interface SearchOutcome {
    */
   readonly retrievalDecisionTrace?: RetrievalDecisionTrace;
   readonly memoryTrustAssessment?: MemoryTrustAssessment;
+  /**
+   * Summary-search router verdict (t_7b96f242). Present only when the query
+   * was structurally routed to the summary surface (`"summary"`); absent on
+   * the generic-surface path, keeping the default outcome shape
+   * byte-identical. Advisory: it names the surface the query is shaped for
+   * (see {@link QuerySurface}) and never alters ranking.
+   */
+  readonly surface?: QuerySurface;
 }
 
 export interface ResolvedEmbeddingConfig {

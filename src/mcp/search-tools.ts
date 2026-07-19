@@ -704,6 +704,11 @@ async function toolBrainSearch(
     total: outcome.total,
     ...(outcome.evidencePack ? { evidence_pack: serializeEvidencePack(outcome.evidencePack) } : {}),
     ...(recallHint !== null ? { recall_hint: recallHint } : {}),
+    // Summary-search router (t_7b96f242): advisory routing hint, present
+    // only when the query was structurally routed to the summary surface.
+    // Absent on the generic path, so the default response stays
+    // byte-identical.
+    ...(outcome.surface !== undefined ? { surface: outcome.surface } : {}),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
   };
 }

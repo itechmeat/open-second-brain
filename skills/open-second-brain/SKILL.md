@@ -31,6 +31,13 @@ Open Second Brain owns one top-level directory in the vault: `Brain/`. Everythin
 5. After producing a durable artifact, check applicable preferences and record evidence via `brain_apply_evidence` (see the `brain-memory` skill).
 6. For read access to vault pages by title, use `second_brain_query`.
 
+## Search surfaces
+
+Name the surface a question is shaped for, and route to it explicitly:
+
+- **Generic recall** - `brain_search` runs hybrid keyword + semantic search over raw chunks. Use it for open-ended, topical, or exploratory questions.
+- **Summary surface** - for a question that targets a specific source or an artifact kind (a summary, digest, or other declared `schema.page_types` type), reach for the summary surface: search by source or filter by artifact kind rather than running a generic search over raw chunks. `brain_search` detects this structurally and returns `surface: "summary"` on the response as an advisory route hint; a source-targeted query uses a `source:<path>` token and an artifact-kind query uses a `kind:<type>`/`type:<type>` token whose value is a declared page type. The hint never changes ranking - it names the intended surface so the agent asks the right way.
+
 ## Safety
 
 If a write operation might affect anything outside the `Brain/` directory, ask for explicit confirmation. When in doubt, prefer `Brain/`.
