@@ -109,6 +109,7 @@ Brain verbs (observing memory):
   signal              Fact signal lifecycle: retire <id> --reason <text>
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
   inbox-drain         Classify and route staged captures (dry-run; --apply to route)
+  repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -808,6 +809,15 @@ export const VERB_HELP: Record<string, string> = {
     "the default and writes nothing; --apply routes each capture and archives\n" +
     "it, so a rerun is a no-op. Unroutable items are reported and left in\n" +
     "place. Each item names its action and reason.\n",
+  "repair-lane":
+    'usage: o2b brain repair-lane [--apply --confirm "apply repair"] [--include-inferred] [--vault <path>] [--json]\n' +
+    "Deterministic memory-graph repair lane. Collects candidate edges from\n" +
+    "structural signals only (explicit references, session continuity, same-\n" +
+    "topic evidence), ordered by identity strength. Dry-run is the default and\n" +
+    "writes nothing; --apply writes edges and requires the exact confirmation\n" +
+    "phrase via --confirm. A confidence threshold and a hard per-run write cap\n" +
+    "bound the writes; existing edges are skipped, so a rerun converges to zero\n" +
+    "writes. Inferred candidates are opt-in behind --include-inferred.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +

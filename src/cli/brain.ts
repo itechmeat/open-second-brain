@@ -129,6 +129,7 @@ import {
   cmdBrainPending,
   cmdBrainTelegramCapture,
   cmdBrainInboxDrain,
+  cmdBrainRepairLane,
   cmdBrainSignal,
   cmdBrainAttentionFlows,
   cmdBrainSessionDescribe,
@@ -411,6 +412,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainTelegramCapture(rest);
       case "inbox-drain":
         return await cmdBrainInboxDrain(rest);
+      case "repair-lane":
+        return await cmdBrainRepairLane(rest);
       case "session-grep":
         return await cmdBrainSessionGrep(rest);
       case "session-describe":
