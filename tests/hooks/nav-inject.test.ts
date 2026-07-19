@@ -1,8 +1,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { indexVault } from "../../src/core/search/indexer.ts";
+import { makeConfig } from "../helpers/search-fixtures.ts";
 
 const HOOK = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "nav-inject.ts");
 
@@ -26,6 +37,10 @@ interface RunResult {
   readonly exit: number;
 }
 
+/**
+ * `payload === undefined` means literally empty stdin (nothing written,
+ * pipe closed immediately) rather than the string "undefined".
+ */
 async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
@@ -37,7 +52,7 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
     stderr: "pipe",
     env: { ...inherited, ...env },
   });
-  proc.stdin.write(JSON.stringify(payload));
+  if (payload !== undefined) proc.stdin.write(JSON.stringify(payload));
   await proc.stdin.end();
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -93,5 +108,33 @@ describe("nav-inject hook", () => {
     );
     expect(r.exit).toBe(0);
     expect(r.stdout).toBe("");
+  });
+
+  test("empty stdin: flag on with a populated link graph still injects once (fail-safe default event); flag off stays byte-empty", async () => {
+    writeFileSync(join(vault, "a.md"), "# A\n\nSee [[b]].\n");
+    writeFileSync(join(vault, "b.md"), "# B\n\nSee [[a]].\n");
+    const dbPath = join(vault, ".open-second-brain", "brain.sqlite");
+    await indexVault(makeConfig({ vault, dbPath }));
+
+    // Flag off: literally empty stdin (no write, just close) stays a
+    // byte-empty no-op, same as today.
+    const off = await runHook(undefined, { VAULT_DIR: vault });
+    expect(off.exit).toBe(0);
+    expect(off.stdout).toBe("");
+
+    // Flag on: literally empty stdin -> readHookInput() returns null ->
+    // asHookPayload() returns {} -> the hook falls back to the default
+    // "UserPromptSubmit" event name and, with a real link graph indexed,
+    // still injects the navmap once. This locks in the CURRENT fail-safe
+    // behavior; it is not a desired new contract.
+    const on = await runHook(undefined, {
+      VAULT_DIR: vault,
+      OPEN_SECOND_BRAIN_NAV_TIER_ENABLED: "true",
+    });
+    expect(on.exit).toBe(0);
+    expect(on.stdout).not.toBe("");
+    const out = JSON.parse(on.stdout);
+    expect(out.hookSpecificOutput.hookEventName).toBe("UserPromptSubmit");
+    expect(out.hookSpecificOutput.additionalContext).toContain("Vault navmap");
   });
 });

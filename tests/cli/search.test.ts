@@ -313,3 +313,24 @@ test("search query --verbose prints an authored line only when present", async (
   expect(out.returncode).toBe(0);
   expect(out.stdout).toContain("authored 2026-05-20T10:00:00.000Z");
 });
+
+test("search query --json surfaces the summary-surface verdict for a source-targeted query, omits it otherwise", async () => {
+  writeVaultFile("notes/foo.md", "# Foo\n\nfox content");
+  await runCli(["search", "index"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+
+  const summary = await runCli(["search", "source:notes/foo.md", "--json", "--limit", "5"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(summary.returncode).toBe(0);
+  const summaryObj = JSON.parse(summary.stdout);
+  expect(summaryObj.surface).toBe("summary");
+
+  const plain = await runCli(["search", "fox", "--json", "--limit", "5"], {
+    env: { OPEN_SECOND_BRAIN_CONFIG: config },
+  });
+  expect(plain.returncode).toBe(0);
+  const plainObj = JSON.parse(plain.stdout);
+  expect("surface" in plainObj).toBe(false);
+});

@@ -856,6 +856,7 @@ function jsonForOutcome(o: SearchOutcome): unknown {
     total: o.total,
     ...(o.cards ? { cards: o.cards.map(serializeSearchCard) } : {}),
     ...(o.evidencePack ? { evidence_pack: serializeEvidencePack(o.evidencePack) } : {}),
+    ...(o.surface !== undefined ? { surface: o.surface } : {}),
   };
 }
 
