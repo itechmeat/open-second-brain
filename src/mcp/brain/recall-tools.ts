@@ -766,6 +766,15 @@ async function toolBrainSessionGrep(
   const since = optionalStringArg("brain_session_grep", args, "since");
   const before = optionalStringArg("brain_session_grep", args, "before");
   const bounds = resolveSessionGrepBounds(since, before);
+  // Inline-raw disclosure (C2): opt-in flag inlines the raw captures beside
+  // each derived record and stamps an extracted discriminator. Omitted, the
+  // response stays byte-identical.
+  const includeRaw = args["include_raw"] === true;
+  const rawBudgetChars = coercePositiveInteger(
+    "brain_session_grep",
+    "raw_budget_chars",
+    args["raw_budget_chars"],
+  );
   return {
     ...searchSessionRecall(ctx.vault, {
       query: requiredStringArg("brain_session_grep", args, "query"),
@@ -778,6 +787,8 @@ async function toolBrainSessionGrep(
       ...(snippetChars !== undefined ? { snippetChars } : {}),
       ...(bounds.sinceMs !== null ? { sinceMs: bounds.sinceMs } : {}),
       ...(bounds.untilMs !== null ? { untilMs: bounds.untilMs } : {}),
+      ...(includeRaw ? { includeRaw: true } : {}),
+      ...(rawBudgetChars !== undefined ? { rawBudgetChars } : {}),
     }),
   };
 }
@@ -1194,6 +1205,17 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional inclusive upper time bound on turn authoring time (same grammar as since).",
+        },
+        include_raw: {
+          type: "boolean",
+          description:
+            "Inline the original raw captures beside each derived record and stamp an extracted discriminator. Omitted: byte-identical response.",
+        },
+        raw_budget_chars: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "With include_raw, clip each inlined raw payload to this many chars; protected identity keys always survive.",
         },
       },
       required: ["query"],
