@@ -553,3 +553,14 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   components (support, opposition, freshness, coverage), and the
   `excluded_findings` ledger with `excluded_finding_count`; prior fields
   are unchanged.
+- Since v1.37.0 `brain_retrieval_plan` joins the surface (108 total): a
+  shadow-only per-question retrieval advisor composing query
+  intent/weights, the summary-surface route, impact-per-token
+  allocation, the calibrated token-impact ledger, and observed route p95
+  latency into a read-only plan with a marginal-value stop; it exposes
+  no mutating parameters and changes no ranking.
+- Since v1.37.0 `brain_search` accepts optional `session_scope` and
+  `project_scope` filters (composite scope keys; omitting them keeps
+  results byte-identical) and its outcome carries an advisory `surface`
+  field when the deterministic router selects the summary surface;
+  non-summary queries are unchanged.
