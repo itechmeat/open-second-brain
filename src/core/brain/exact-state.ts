@@ -64,6 +64,20 @@ function normaliseValue(value: unknown): string {
   return sanitiseTextField(value, { maxLen: Number.POSITIVE_INFINITY }).trim();
 }
 
+/**
+ * Validate an aspect slug, converting the generic slug-guard `Error` into a
+ * typed {@link ExactStateError} so an invalid aspect surfaces as a handleable
+ * operational failure instead of crashing a caller that only catches
+ * `ExactStateError`.
+ */
+function validateAspect(aspect: string): string {
+  try {
+    return validateSlug(aspect);
+  } catch (exc) {
+    throw new ExactStateError("invalid_aspect", (exc as Error).message, { aspect });
+  }
+}
+
 function renderPage(aspect: string, value: string, updatedAt: string): string {
   // Fixed, machine-safe frontmatter fields (slug aspect, ISO instant,
   // constant kind) - no user text reaches the YAML, so no quoting hazard.
@@ -73,7 +87,8 @@ function renderPage(aspect: string, value: string, updatedAt: string): string {
 /**
  * Write (overwrite) an aspect's canonical value. Returns the stored entry.
  * Over-budget input is rejected with {@link ExactStateError} BEFORE any
- * write - never silently truncated. An invalid aspect slug throws.
+ * write - never silently truncated. An invalid aspect slug is rejected with
+ * {@link ExactStateError} (`invalid_aspect`).
  */
 export function writeExactState(
   vault: string,
@@ -81,7 +96,7 @@ export function writeExactState(
   value: unknown,
   now: number = Date.now(),
 ): ExactStateEntry {
-  const slug = validateSlug(aspect);
+  const slug = validateAspect(aspect);
   const normalised = normaliseValue(value);
   if (normalised.length > MAX_EXACT_STATE_VALUE_LEN) {
     throw new ExactStateError(
@@ -98,10 +113,17 @@ export function writeExactState(
 
 /** Read an aspect's canonical value, or null when it was never written. */
 export function readExactState(vault: string, aspect: string): ExactStateEntry | null {
-  const slug = validateSlug(aspect);
+  const slug = validateAspect(aspect);
   const path = exactStatePath(vault, slug);
-  if (!existsSync(path)) return null;
-  return parseEntry(slug, path, readFileSync(path, "utf8"));
+  // Read directly rather than existsSync-then-read: a concurrent delete
+  // between the check and the read would otherwise surface as an unhandled
+  // ENOENT. Treat "not found" as null; propagate any other read error.
+  try {
+    return parseEntry(slug, path, readFileSync(path, "utf8"));
+  } catch (exc) {
+    if ((exc as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw exc;
+  }
 }
 
 /** Every aspect in the lane, sorted by aspect slug ascending. */
@@ -130,7 +152,7 @@ export function listExactState(vault: string): ExactStateEntry[] {
 
 /** Remove an aspect. Returns whether it existed before the call. */
 export function clearExactState(vault: string, aspect: string): boolean {
-  const path = exactStatePath(vault, aspect);
+  const path = exactStatePath(vault, validateAspect(aspect));
   if (!existsSync(path)) return false;
   rmSync(path, { force: true });
   return true;

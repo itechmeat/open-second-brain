@@ -71,3 +71,23 @@ test("an over-budget value is rejected with a typed error, not truncated", () =>
 test("an empty aspect slug is rejected", () => {
   expect(() => writeExactState(vault, "   ", "value")).toThrow();
 });
+
+test("an invalid aspect slug is a typed ExactStateError, not a generic Error", () => {
+  // A path separator is rejected by the slug guard; it must surface as a
+  // typed invalid_aspect failure so the CLI catch handles it instead of
+  // crashing.
+  for (const call of [
+    () => writeExactState(vault, "bad/aspect", "value"),
+    () => readExactState(vault, "bad/aspect"),
+    () => clearExactState(vault, "bad/aspect"),
+  ]) {
+    let caught: unknown;
+    try {
+      call();
+    } catch (exc) {
+      caught = exc;
+    }
+    expect(caught).toBeInstanceOf(ExactStateError);
+    expect((caught as ExactStateError).code).toBe("invalid_aspect");
+  }
+});

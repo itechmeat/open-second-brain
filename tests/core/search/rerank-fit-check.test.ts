@@ -128,6 +128,53 @@ test("a reranker that tracks the base signal fits and stays quiet", async () => 
   }
 });
 
+test("one rejecting query does not sink the whole diagnostic (per-query isolation)", async () => {
+  const { vault, dbPath, cleanup } = createTempVault("fit-isolate");
+  try {
+    const flaky: RerankProvider = {
+      name: "test-flaky",
+      model: "test",
+      rerank: (query, documents) => {
+        if (query === "bad query") return Promise.reject(new Error("probe blew up"));
+        // Good query tracks the base order (Spearman +1).
+        return Promise.resolve(documents.map((_, i) => 4 - i));
+      },
+    };
+    const report = await rerankFitCheck(makeConfig({ vault, dbPath, ...RERANK_ON }), {
+      queries: ["bad query", "good query"],
+      fetchCandidates: (q) => Promise.resolve(candidates(q, 4)),
+      provider: flaky,
+    });
+    // The surviving query still produces a verdict; the rejection degraded to
+    // no-signal rather than rejecting the entire check.
+    expect(report.applicable).toBe(true);
+    expect(report.verdict).toBe("fits");
+    expect(report.sampledQueries).toBe(1);
+  } finally {
+    cleanup();
+  }
+});
+
+test("a sample set where every query rejects reports inapplicable, never a silent fit", async () => {
+  const { vault, dbPath, cleanup } = createTempVault("fit-allbad");
+  try {
+    const allReject: RerankProvider = {
+      name: "test-allbad",
+      model: "test",
+      rerank: () => Promise.reject(new Error("provider down")),
+    };
+    const report = await rerankFitCheck(makeConfig({ vault, dbPath, ...RERANK_ON }), {
+      queries: ["a", "b"],
+      fetchCandidates: (q) => Promise.resolve(candidates(q, 4)),
+      provider: allReject,
+    });
+    expect(report.applicable).toBe(false);
+    expect(report.verdict).toBe("inapplicable");
+  } finally {
+    cleanup();
+  }
+});
+
 test("integration: local reranker over a real index is read-only (no config/store writes)", async () => {
   const { vault, dbPath, cleanup } = createTempVault("fit-integration");
   try {

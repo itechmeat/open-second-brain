@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { hookStateFilePath, readHookStamp, writeHookStamp } from "../../hooks/lib/session-state.ts";
+import { _resetHeldLocksForTests } from "../../src/core/brain/sync-lockfile.ts";
 
 let vault: string;
 
@@ -83,5 +84,34 @@ describe("hook session state", () => {
     writeHookStamp(vault, "sess-1", "osb.oriented.recent", { expiresAt: now + 2000 });
     expect(readHookStamp(vault, "sess-1", "osb.nav_tier.last_injected", now)).not.toBeNull();
     expect(readHookStamp(vault, "sess-1", "osb.oriented.recent", now)).not.toBeNull();
+  });
+
+  test("a contended scope lock fails the write open without clobbering existing stamps", () => {
+    const now = 6_000_000;
+    const KEY_A = "osb.nav_tier.last_injected";
+    const KEY_B = "osb.oriented.recent";
+    // First stamp lands normally.
+    expect(writeHookStamp(vault, "sess-1", KEY_A, { expiresAt: now + 1000 })).toBe(true);
+
+    // Simulate a concurrent hook process holding the per-scope advisory lock:
+    // pre-create the `.lock` sidecar so acquireLockSync sees EEXIST/ELOCKED.
+    const lockPath = hookStateFilePath(vault, "sess-1") + ".lock";
+    writeFileSync(lockPath, "held by another process\n");
+    try {
+      // The read-merge-write cannot acquire the lock within its retry budget,
+      // so it degrades to a fail-open false rather than throwing or racing.
+      expect(writeHookStamp(vault, "sess-1", KEY_B, { expiresAt: now + 2000 })).toBe(false);
+      // The earlier stamp was neither dropped nor corrupted by the blocked write.
+      expect(readHookStamp(vault, "sess-1", KEY_A, now)).not.toBeNull();
+      expect(readHookStamp(vault, "sess-1", KEY_B, now)).toBeNull();
+    } finally {
+      unlinkSync(lockPath);
+      _resetHeldLocksForTests();
+    }
+
+    // Once the lock clears, the write succeeds and both keys coexist.
+    expect(writeHookStamp(vault, "sess-1", KEY_B, { expiresAt: now + 2000 })).toBe(true);
+    expect(readHookStamp(vault, "sess-1", KEY_A, now)).not.toBeNull();
+    expect(readHookStamp(vault, "sess-1", KEY_B, now)).not.toBeNull();
   });
 });

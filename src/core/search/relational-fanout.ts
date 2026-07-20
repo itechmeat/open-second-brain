@@ -30,7 +30,15 @@ export interface RelationalNode {
   readonly edgeRichness: number;
   /** Distinct link types this node was reached via, sorted. */
   readonly viaLinkTypes: ReadonlyArray<string>;
-  /** Deterministic rank score in (0, 1]; nearer + richer ranks higher. */
+  /**
+   * Deterministic rank score `1/hops + min(MAX_RICHNESS_BONUS, RICHNESS_BONUS
+   * * edgeRichness)`. Ranges in `(0, 1 + MAX_RICHNESS_BONUS]` (currently
+   * `(0, 1.49]`), NOT a normalized `(0, 1]`. The richness bonus is capped
+   * below the gap between adjacent hop tiers, so the hop-dominance invariant
+   * holds: a nearer node always outranks a farther one regardless of richness.
+   * Treat it as an intra-fanout ordering key, not a probability - do not
+   * compose it with other bounded scores without renormalizing.
+   */
   readonly score: number;
 }
 
@@ -98,6 +106,8 @@ export function relationalFanout(
 
   const nodes: RelationalNode[] = [];
   for (const [documentId, node] of reached) {
+    // Intra-fanout ordering key in (0, 1 + MAX_RICHNESS_BONUS], NOT normalized
+    // to (0, 1]. The bonus is capped below one hop tier so nearer always wins.
     const score = 1 / node.hops + Math.min(MAX_RICHNESS_BONUS, RICHNESS_BONUS * node.edgeRichness);
     nodes.push(
       Object.freeze({

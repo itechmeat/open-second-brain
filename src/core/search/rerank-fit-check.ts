@@ -310,9 +310,16 @@ export async function rerankFitCheck(
   // One sampled query yields at most one correlation; the queries are
   // independent (each probe search opens and closes its own read-only store),
   // so they run concurrently and the per-query order does not matter - the
-  // verdict is the mean over all queries that carried a rank signal.
+  // verdict is the mean over all queries that carried a rank signal. A single
+  // flaky provider/probe rejection must NOT sink the whole diagnostic, so each
+  // query is isolated: a rejection degrades to null (no signal), exactly like a
+  // query that carried too few candidates. If every query fails or yields no
+  // signal, the empty-correlations guard below reports inapplicable/
+  // insufficient-signal - never a silent "fits".
   const perQuery = await Promise.all(
-    queries.slice(0, maxQueries).map((query) => correlateQuery(query, fetchCandidates, provider)),
+    queries
+      .slice(0, maxQueries)
+      .map((query) => correlateQuery(query, fetchCandidates, provider).catch(() => null)),
   );
   const correlations = perQuery.filter((c): c is number => c !== null);
 

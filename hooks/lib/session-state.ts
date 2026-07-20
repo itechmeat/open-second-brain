@@ -20,6 +20,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { acquireLockSync, type LockHandle } from "../../src/core/brain/sync-lockfile.ts";
 import { resolveSessionScope } from "../../src/core/brain/session-scope.ts";
 
 /** Directory (under the vault's `.open-second-brain/`) holding per-scope state. */
@@ -99,11 +100,43 @@ export function readHookStamp(
   return Object.freeze({ expiresAt });
 }
 
+/** Bounded busy-retry acquiring the per-scope advisory lock. */
+const LOCK_RETRIES = 20;
+/** Sleep between lock attempts (ms). 20 * 5ms ~= 100ms worst-case wait. */
+const LOCK_RETRY_DELAY_MS = 5;
+
+/** Sleep synchronously without spinning the CPU (hooks are sync end-to-end). */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Acquire the scope's advisory lock, retrying on contention. The read-merge-
+ * write in {@link writeHookStamp} is not atomic on its own, so two concurrent
+ * hook processes could otherwise each read the file, merge their own key, and
+ * clobber the other's stamp. The lock serialises that critical section; if it
+ * stays contended past the retry budget we surface `null` and the caller
+ * degrades to a `false` write (its fail-open contract) rather than throwing.
+ */
+function acquireScopeLock(path: string): LockHandle | null {
+  for (let attempt = 0; attempt < LOCK_RETRIES; attempt++) {
+    try {
+      return acquireLockSync(path);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
+      sleepSync(LOCK_RETRY_DELAY_MS);
+    }
+  }
+  return null;
+}
+
 /**
  * Write one namespaced stamp, preserving every other key already in the
- * scope's state file. Returns `true` on success and `false` on any failure
- * (unwritable filesystem, etc.) so a producer can record the outcome without
- * ever throwing - the hooks that call this must stay fail-open.
+ * scope's state file. The whole read-merge-write runs under a per-scope
+ * advisory lock so concurrent hook processes cannot drop each other's stamps.
+ * Returns `true` on success and `false` on any failure (unwritable filesystem,
+ * unresolvable lock contention, etc.) so a producer can record the outcome
+ * without ever throwing - the hooks that call this must stay fail-open.
  */
 export function writeHookStamp(
   vault: string,
@@ -111,9 +144,12 @@ export function writeHookStamp(
   key: string,
   stamp: HookStamp,
 ): boolean {
+  let lock: LockHandle | null = null;
   try {
     const path = hookStateFilePath(vault, sessionId);
     mkdirSync(dirname(path), { recursive: true });
+    lock = acquireScopeLock(path);
+    if (lock === null) return false;
     const state = readState(vault, sessionId);
     state[key] =
       stamp.data !== undefined
@@ -125,5 +161,7 @@ export function writeHookStamp(
     return true;
   } catch {
     return false;
+  } finally {
+    lock?.release();
   }
 }

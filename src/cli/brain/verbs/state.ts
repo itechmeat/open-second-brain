@@ -64,33 +64,57 @@ export async function cmdBrainState(argv: string[]): Promise<number> {
       else ok(`set ${entry.aspect}`);
       return 0;
     } catch (exc) {
-      if (exc instanceof ExactStateError) return fail(`state set failed: ${exc.message}`);
-      throw exc;
+      return handleStateError("set", exc, json);
     }
   }
 
   if (sub === "get") {
     if (aspect === null) return usageError("brain state get missing required flag: --aspect");
     const { vault } = brainVerbContext(flags);
-    const entry = readExactState(vault, aspect);
-    if (entry === null) {
-      if (json) okJson({ aspect, present: false });
-      else ok(`no value for ${aspect}`);
+    try {
+      const entry = readExactState(vault, aspect);
+      if (entry === null) {
+        if (json) okJson({ aspect, present: false });
+        else ok(`no value for ${aspect}`);
+        return 0;
+      }
+      if (json) okJson({ aspect: entry.aspect, value: entry.value, updated_at: entry.updatedAt });
+      else ok(entry.value);
       return 0;
+    } catch (exc) {
+      return handleStateError("get", exc, json);
     }
-    if (json) okJson({ aspect: entry.aspect, value: entry.value, updated_at: entry.updatedAt });
-    else ok(entry.value);
-    return 0;
   }
 
   if (sub === "clear") {
     if (aspect === null) return usageError("brain state clear missing required flag: --aspect");
     const { vault } = brainVerbContext(flags);
-    const existed = clearExactState(vault, aspect);
-    if (json) okJson({ aspect, cleared: existed });
-    else ok(existed ? `cleared ${aspect}` : `no value for ${aspect}`);
-    return 0;
+    try {
+      const existed = clearExactState(vault, aspect);
+      if (json) okJson({ aspect, cleared: existed });
+      else ok(existed ? `cleared ${aspect}` : `no value for ${aspect}`);
+      return 0;
+    } catch (exc) {
+      return handleStateError("clear", exc, json);
+    }
   }
 
   return usageError(`brain state: unknown subcommand '${sub}' (expected set|get|list|clear)`);
+}
+
+/**
+ * Surface an {@link ExactStateError} as an operational failure - under `--json`
+ * the repo-standard `{ ok: false, message }` envelope, otherwise a plain
+ * `fail()` line. Any other error is a genuine bug and rethrown.
+ */
+function handleStateError(op: string, exc: unknown, json: boolean): number {
+  if (exc instanceof ExactStateError) {
+    const message = `state ${op} failed: ${exc.message}`;
+    if (json) {
+      okJson({ ok: false, message });
+      return 1;
+    }
+    return fail(message);
+  }
+  throw exc;
 }
