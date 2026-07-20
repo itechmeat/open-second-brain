@@ -9,9 +9,11 @@ import { statSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { BRAIN_STATE_REL } from "../brain/paths.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { isVisible, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
+import { scopeAxisReachable, scopeFromFrontmatter, type CompositeScope } from "../scope-key.ts";
 import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
 import { degreeForPath, getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
 import type { Store } from "./store.ts";
@@ -44,6 +46,26 @@ export function readCachedFrontmatter(
   const [meta] = parseFrontmatter(join(vault, path));
   cache.set(path, meta);
   return meta;
+}
+
+const EXACT_STATE_LANE_PREFIX = `${BRAIN_STATE_REL}/`;
+
+/**
+ * Retrieval-time staleness barrier (t_b0c9d0a3). The overwrite-only
+ * exact-state lane is excluded from indexing going forward, but a lane
+ * artifact indexed by an OLDER build (before the exclusion shipped) could
+ * still surface a superseded value through recall. This barrier drops every
+ * exact-state lane result from the ranked pool, from any retrieval source,
+ * so a stale "current" value can never resurface.
+ *
+ * Path-based and I/O-free: a vault that never used the lane has no lane
+ * results, so the same array is returned unchanged (byte-identical no-op).
+ */
+export function applyExactStateBarrier(
+  results: ReadonlyArray<BrainSearchResult>,
+): ReadonlyArray<BrainSearchResult> {
+  if (!results.some((r) => r.path.startsWith(EXACT_STATE_LANE_PREFIX))) return results;
+  return results.filter((r) => !r.path.startsWith(EXACT_STATE_LANE_PREFIX));
 }
 
 /**
@@ -198,6 +220,34 @@ export function applyVisibilityScope(
     }
   };
   return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
+}
+
+/**
+ * Composite scope filter (t_37c05a34): drop results outside the requested
+ * session/project scope. Per axis, a null request does not filter and an
+ * unscoped page is shared, so a request scoping nothing is byte-identical.
+ * An unparseable page fails OPEN here (kept): session/project are recall
+ * conveniences, not an isolation boundary like owner scope. The caller only
+ * invokes this when at least one axis is requested.
+ */
+export function applyScopeFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  requested: CompositeScope,
+  vault: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
+): ReadonlyArray<BrainSearchResult> {
+  return ranked.filter((r) => {
+    let pageScope: CompositeScope;
+    try {
+      pageScope = scopeFromFrontmatter(readCachedFrontmatter(frontmatterCache, vault, r.path));
+    } catch {
+      return true; // fail open: keep on unreadable frontmatter
+    }
+    return (
+      scopeAxisReachable(pageScope.session, requested.session) &&
+      scopeAxisReachable(pageScope.project, requested.project)
+    );
+  });
 }
 
 export function applyAgentScope(

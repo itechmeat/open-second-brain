@@ -198,6 +198,18 @@ export interface BrainSearchResult {
  */
 export type QueryIntent = "neutral" | "exact" | "entity" | "broad";
 
+/**
+ * Retrieval-surface routing decision (t_7b96f242). A deterministic,
+ * structural determination layered onto the query plan that names which
+ * retrieval surface a query is shaped for. `default` is the generic
+ * hybrid-search surface (byte-identical to today); `summary` is the
+ * summary-search surface - reached for source-targeted queries and queries
+ * naming an artifact kind from the schema vocabulary. The field is advisory
+ * (it re-weights nothing) and is `default` for every query unless a caller
+ * supplies the surface vocabulary, so the pure default is provably inert.
+ */
+export type QuerySurface = "default" | "summary";
+
 /** One parsed `lex:` lane of a structured recall query document. */
 export interface StructuredLexLane {
   readonly include: ReadonlyArray<string>;
@@ -239,6 +251,14 @@ export interface QueryPlan {
   readonly weightProfile: WeightProfile;
   readonly expandedTerms: ReadonlyArray<string>;
   readonly planHash: string;
+  /**
+   * Retrieval-surface routing decision (t_7b96f242). Advisory only: it
+   * never enters `planHash` and never re-weights ranking, so a query's
+   * results are byte-identical regardless of its value. `default` unless
+   * the caller supplied a surface vocabulary AND the query is structurally
+   * summary-shaped. See {@link QuerySurface}.
+   */
+  readonly surface: QuerySurface;
 }
 
 export interface IndexStats {
@@ -589,6 +609,22 @@ export interface SearchOptions {
    * byte-identical to today. See src/core/graph/agent-scope.ts.
    */
   readonly agentScope?: string;
+  /**
+   * Optional composite scope filter (t_37c05a34): session and project axes
+   * layered on top of the owner axis (`agentScope`). When an axis is set, a
+   * page that declares that axis is returned only if it matches; a page that
+   * declares no value for the axis is shared and always returned. Absent /
+   * empty ({}) applies no filtering, so results are byte-identical to today.
+   * See src/core/scope-key.ts.
+   */
+  readonly scope?: { readonly session?: string; readonly project?: string };
+  /**
+   * Per-query override for the typed-edge relational arm (t_09b7ccea).
+   * Absent uses the resolved config default (`relationalArmEnabled`). The
+   * arm only engages in `rrf` fusion for a relationship-shaped query; off
+   * (default) leaves RRF output byte-identical.
+   */
+  readonly relationalArm?: boolean;
   /** Optional parsed structured recall query document. Plain-string search ignores this. */
   readonly structuredQuery?: StructuredRecallQueryDocument;
   /**
@@ -756,6 +792,14 @@ export interface SearchOutcome {
    */
   readonly retrievalDecisionTrace?: RetrievalDecisionTrace;
   readonly memoryTrustAssessment?: MemoryTrustAssessment;
+  /**
+   * Summary-search router verdict (t_7b96f242). Present only when the query
+   * was structurally routed to the summary surface (`"summary"`); absent on
+   * the generic-surface path, keeping the default outcome shape
+   * byte-identical. Advisory: it names the surface the query is shaped for
+   * (see {@link QuerySurface}) and never alters ranking.
+   */
+  readonly surface?: QuerySurface;
 }
 
 export interface ResolvedEmbeddingConfig {
@@ -901,6 +945,15 @@ export interface ResolvedRecallConfig {
    * either way; this switch exists as the explicit kill switch.
    */
   readonly relationPolarityEnabled: boolean;
+  /**
+   * Typed-edge relational retrieval arm (t_09b7ccea). Off by default. When
+   * true AND fusion is in `rrf` mode AND the query is relationship-shaped
+   * (a wikilink seed plus an edge-type token from the schema vocabulary),
+   * a bounded depth-2 typed-edge fan-out joins RRF as a fourth arm. Off, or
+   * in linear fusion, or for a non-relational query, ranking is
+   * byte-identical.
+   */
+  readonly relationalArmEnabled: boolean;
   /**
    * Retrieval trust gate (t_5f61130a, kernel 1). Off by default: when
    * true, a deterministic rank-adjustment sink runs between ranking and

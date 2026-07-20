@@ -68,6 +68,8 @@ export function makeConfig(opts: {
   cacheEnabled?: boolean;
   /** Relation-aware recall polarity; defaults to true. */
   relationPolarityEnabled?: boolean;
+  /** Typed-edge relational RRF arm; defaults to false (opt-in). */
+  relationalArmEnabled?: boolean;
   /** Retrieval trust gate (kernel 1); defaults to false (opt-in). */
   retrievalTrustGateEnabled?: boolean;
   /** Relation-only supersede fade (kernel 1); defaults to false (opt-in). */
@@ -138,6 +140,7 @@ export function makeConfig(opts: {
       cacheEnabled: opts.cacheEnabled ?? false,
       cacheTtlSeconds: 300,
       relationPolarityEnabled: opts.relationPolarityEnabled ?? true,
+      relationalArmEnabled: opts.relationalArmEnabled ?? false,
       retrievalTrustGateEnabled: opts.retrievalTrustGateEnabled ?? false,
       supersedeFadeEnabled: opts.supersedeFadeEnabled ?? false,
       learnedWeightsEnabled: opts.learnedWeightsEnabled ?? false,

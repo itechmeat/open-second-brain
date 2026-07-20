@@ -10,7 +10,10 @@
  * wildcards, wikilink shapes, the share of entity-like tokens (via the
  * already-structural `extractEntities`), and token count. No
  * natural-language word, synonym, or stopword list appears anywhere. The
- * classifier behaves identically across scripts and locales.
+ * classifier behaves identically across scripts and locales. The
+ * summary-search router (t_7b96f242) obeys the same invariant: it routes on
+ * structured field tokens (`source:`, `kind:`/`type:`) and a caller-supplied
+ * artifact-kind vocabulary (the schema pack's page types), never a word list.
  *
  * The module is pure and deterministic: same query string in, same plan
  * out, with no I/O and no clock/random source.
@@ -18,7 +21,7 @@
 
 import { WIKILINK_DETECT_RE } from "../brain/wikilink.ts";
 import { extractEntities } from "./entities.ts";
-import type { QueryIntent, QueryPlan, WeightProfile } from "./types.ts";
+import type { QueryIntent, QueryPlan, QuerySurface, WeightProfile } from "./types.ts";
 
 /** No-effect profile: every layer keeps its configured weight. */
 export const NEUTRAL_PROFILE: WeightProfile = Object.freeze({
@@ -60,6 +63,35 @@ const PROFILES: Record<QueryIntent, WeightProfile> = Object.freeze({
 
 const QUOTED_PHRASE_RE = /"[^"\n]{2,}"/u;
 const WILDCARD_RE = /\*/u;
+
+/**
+ * Structured field-token grammar for surface routing: a `<field>:<value>`
+ * token anchored at a word boundary, value running to the next whitespace.
+ * Field names are a fixed structural vocabulary (never natural-language
+ * words); the value is compared against the caller-supplied artifact-kind
+ * vocabulary. `source:` targets a source and is vocabulary-independent.
+ */
+const KIND_TOKEN_RE = /(?:^|\s)(?:kind|type):(\S+)/u;
+const SOURCE_TOKEN_RE = /(?:^|\s)source:\S/u;
+
+/**
+ * Route a query to a retrieval surface from structural signals only
+ * (t_7b96f242). Returns `summary` when the query is source-targeted
+ * (`source:<x>`) or names an artifact kind from `vocabulary`
+ * (`kind:<v>` / `type:<v>` with `<v>` in the vocabulary); otherwise
+ * `default`. Pure and deterministic; the vocabulary is a config-derived
+ * token set (the schema pack's page types), never a word list. An empty
+ * vocabulary still honours the vocabulary-independent source signal.
+ */
+export function routeSummarySurface(query: string, vocabulary: ReadonlySet<string>): QuerySurface {
+  const normalized = query.toLowerCase();
+  if (SOURCE_TOKEN_RE.test(normalized)) return "summary";
+  if (vocabulary.size > 0) {
+    const kindMatch = KIND_TOKEN_RE.exec(normalized);
+    if (kindMatch && vocabulary.has(kindMatch[1]!)) return "summary";
+  }
+  return "default";
+}
 
 /** Lowercase + trim + collapse internal whitespace. No word lists. */
 function normalize(query: string): string {
@@ -114,15 +146,23 @@ export function buildQueryPlan(
   query: string,
   expandedTerms: ReadonlyArray<string> = [],
   intentOverride?: QueryIntent | null,
+  surfaceVocabulary?: ReadonlySet<string>,
 ): QueryPlan {
   const normalized = normalize(query);
   const intent = intentOverride ?? classify(query, normalized);
   const terms = Object.freeze([...expandedTerms]);
+  // Surface routing is advisory and does NOT enter the hash: it re-weights
+  // nothing, so a query's cache identity and ranking stay byte-identical
+  // regardless of surface. Omitting the vocabulary keeps the pure default
+  // provably inert (always `default`), so existing call sites are unchanged.
   const planHash = fnv1a(`${normalized}|${intent}|${terms.join(",")}`);
+  const surface =
+    surfaceVocabulary === undefined ? "default" : routeSummarySurface(query, surfaceVocabulary);
   return Object.freeze({
     intent,
     weightProfile: PROFILES[intent],
     expandedTerms: terms,
     planHash,
+    surface,
   });
 }

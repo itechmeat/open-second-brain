@@ -28,6 +28,7 @@ import {
   cmdBrainReject,
   cmdBrainPin,
   cmdBrainUnpin,
+  cmdBrainState,
   cmdBrainSetPrimary,
   cmdBrainProtect,
   cmdBrainUnprotect,
@@ -206,6 +207,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPin(rest);
       case "unpin":
         return await cmdBrainUnpin(rest);
+      case "state":
+        return await cmdBrainState(rest);
       case "set-primary":
         return await cmdBrainSetPrimary(rest);
       case "protect":

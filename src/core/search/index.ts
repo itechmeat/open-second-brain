@@ -695,6 +695,16 @@ export function resolveSearchConfig(opts: {
     true,
     "search_relation_polarity_enabled",
   );
+  const relationalArmEnabled = parseBool(
+    envOrConfig(
+      env,
+      config,
+      "OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_ARM",
+      "search_relational_arm_enabled",
+    ),
+    false,
+    "search_relational_arm_enabled",
+  );
   const retrievalTrustGateEnabled = parseBool(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_TRUST_GATE", "search_trust_gate_enabled"),
     false,
@@ -831,6 +841,7 @@ export function resolveSearchConfig(opts: {
     cacheEnabled,
     cacheTtlSeconds,
     relationPolarityEnabled,
+    relationalArmEnabled,
     retrievalTrustGateEnabled,
     supersedeFadeEnabled,
     learnedWeightsEnabled,

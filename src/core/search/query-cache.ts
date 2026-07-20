@@ -15,6 +15,7 @@
  * already covers them.
  */
 
+import { normalizeScopeFilter } from "../scope-key.ts";
 import type { Store } from "./store.ts";
 import type { SearchOptions, SearchOutcome } from "./types.ts";
 
@@ -48,6 +49,19 @@ function canonicalStructuredQuery(opts: SearchOptions): unknown {
     vec: [...structured.vec],
     hyde: [...structured.hyde],
   };
+}
+
+/**
+ * Canonical composite scope filter for the cache key. Undefined (dropped
+ * from the JSON) when no axis is requested, so a scopeless query keys
+ * byte-identically to a pre-scope cached row. Normalized so equivalent
+ * spellings share one entry.
+ */
+function canonicalScope(opts: SearchOptions): unknown {
+  if (opts.scope === undefined) return undefined;
+  const scope = normalizeScopeFilter(opts.scope);
+  if (scope.session === null && scope.project === null) return undefined;
+  return { session: scope.session, project: scope.project };
 }
 
 function canonicalSessionFocus(opts: SearchOptions): unknown {
@@ -86,6 +100,11 @@ export function buildCacheKey(
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     agentScope: opts.agentScope ?? null,
+    scope: canonicalScope(opts),
+    // Relational arm (t_09b7ccea) changes the result set, so a per-query
+    // override partitions the cache. Dropped when absent, so a query that
+    // does not touch the flag keys byte-identically to a pre-arm row.
+    relationalArm: opts.relationalArm ?? undefined,
     // Disclosure depth (D3) partitions the cache: a `cards` outcome and a
     // `full` outcome must not collide. Folded in only for `cards`, so the
     // default `full` key (and every pre-D3 cached row) stays byte-identical.

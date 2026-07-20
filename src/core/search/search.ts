@@ -15,6 +15,11 @@ import { join } from "node:path";
 import type { FrontmatterMap } from "../types.ts";
 import { normalizeVisibilityScope } from "../graph/visibility.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
+import { canonicalSourceSetKey, normalizeScopeFilter, rrfKey } from "../scope-key.ts";
+import { DEFAULT_RELATION_TYPES, normalizeRelation } from "../graph/relation-vocab.ts";
+import { loadSchemaPack } from "../brain/schema-pack.ts";
+import { parseRelationalQuery } from "./relational-query.ts";
+import { relationalFanout } from "./relational-fanout.ts";
 import { isLowSelectivity, planTrigramPrefilter } from "./trigram-prefilter.ts";
 import {
   composeWeightProfiles,
@@ -84,7 +89,9 @@ import { toSearchCard } from "./cards.ts";
 import {
   applyAgentScope,
   applyDegreeFilter,
+  applyExactStateBarrier,
   applyPropertyFilter,
+  applyScopeFilter,
   applyStatusFilter,
   applyVisibilityScope,
   attachTrustMetadata,
@@ -119,6 +126,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     syn: r.synonymEnabled,
     synMax: r.synonymMaxTerms,
     relPol: r.relationPolarityEnabled,
+    relArm: r.relationalArmEnabled,
     trustGate: r.retrievalTrustGateEnabled,
     supFade: r.supersedeFadeEnabled,
     lw: r.learnedWeightsEnabled,
@@ -253,7 +261,13 @@ export async function search(
     // Query plan (v0.20.0): one structural pass yields the intent weight
     // profile and the cache key. Expanded terms (if any) are folded in
     // once they have been derived from the store below.
-    const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent);
+    const surfaceVocabulary = summarySurfaceVocabulary(config.vault);
+    const basePlan = buildQueryPlan(keywordQuery, [], structured?.intent, surfaceVocabulary);
+    // Summary-search router (t_7b96f242): a per-query structural decision,
+    // independent of results, so it is resolved once here and echoed on
+    // every outcome below. `default` is omitted from the outcome, keeping
+    // the generic-surface response byte-identical to today.
+    const routedSurface = basePlan.surface;
 
     // Persistent query cache (v0.20.0): opt-in. Keyed by the request +
     // base plan hash + a config fingerprint, gated by the corpus
@@ -300,10 +314,15 @@ export async function search(
         // key just for those calls so an unrelated ledger write never
         // invalidates ordinary searches.
         const reinfFp = opts.reinforce !== undefined ? reinforceFingerprint(config.vault) : "off";
+        // Federation hardening (t_09b7ccea): the query cache scopes by the
+        // canonical source-set key, so a cache row is never served for a
+        // different set of origins. Single-vault search draws from one
+        // origin (this vault).
+        const srcSet = canonicalSourceSetKey([config.vault]);
         cacheKey = buildCacheKey(
           keyOpts,
           basePlan.planHash,
-          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}`,
+          `${configFingerprint(config)}|lw:${lwFp}|act:${actFp}|tune:${tuneFp}|reinf:${reinfFp}|src:${srcSet}`,
         );
         const hit = getCachedOutcome(store, cacheKey, generation, ttlMs, Date.now());
         if (hit) return hit;
@@ -346,7 +365,7 @@ export async function search(
         maxTerms: config.recall.synonymMaxTerms,
       });
       if (expandedTerms.length > 0) {
-        plan = buildQueryPlan(keywordQuery, expandedTerms, structured?.intent);
+        plan = buildQueryPlan(keywordQuery, expandedTerms, structured?.intent, surfaceVocabulary);
         kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
           limit: limit * config.recall.poolMultiplier,
           pathPrefix,
@@ -430,10 +449,46 @@ export async function search(
       if (degrade !== null) warnings.push(degrade);
     }
 
+    // Typed-edge relational arm (t_09b7ccea): a fourth RRF arm. Engages
+    // ONLY in rrf fusion, when enabled, for a relationship-shaped query (a
+    // wikilink seed plus a schema-vocabulary edge-type token). A bounded
+    // depth-2 typed-edge fan-out from the resolved seeds contributes ranked
+    // related nodes. Off / linear fusion / a non-relational query leaves the
+    // pool and ranking byte-identical. Source identity from the shared key
+    // module dedups the lane (federation hardening).
+    const relationalRankedChunkIds: number[] = [];
+    const relationalMeta = new Map<number, { via: ReadonlyArray<string>; hops: number }>();
+    const relationalArmActive =
+      config.fusionMode === "rrf" && (opts.relationalArm ?? config.recall.relationalArmEnabled);
+    if (relationalArmActive) {
+      const relQuery = parseRelationalQuery(query, relationalEdgeVocabulary(config.vault));
+      if (relQuery !== null) {
+        const seedDocIds = resolveSeedDocumentIds(store, relQuery.seeds);
+        if (seedDocIds.length > 0) {
+          const nodes = relationalFanout(store, seedDocIds, {
+            maxDepth: RELATIONAL_MAX_DEPTH,
+            edgeTypes: relQuery.edgeTypes,
+          });
+          const reps = store.representativeChunks(nodes.map((n) => n.documentId));
+          const seenKeys = new Set<string>();
+          for (const node of nodes) {
+            const rep = reps.get(node.documentId);
+            if (rep === undefined) continue;
+            const key = rrfKey({ origin: null, path: rep.path, chunkId: rep.chunkId });
+            if (seenKeys.has(key)) continue;
+            seenKeys.add(key);
+            relationalRankedChunkIds.push(rep.chunkId);
+            relationalMeta.set(rep.chunkId, { via: node.viaLinkTypes, hops: node.hops });
+          }
+        }
+      }
+    }
+
     // Hydrate.
     const allChunkIds = new Set<number>();
     for (const h of kwHits) allChunkIds.add(h.chunkId);
     for (const h of semHits) allChunkIds.add(h.chunkId);
+    for (const id of relationalRankedChunkIds) allChunkIds.add(id);
     let idsList = Array.from(allChunkIds);
 
     // Validity-window resolver (hoisted): used both by the time-range
@@ -561,6 +616,7 @@ export async function search(
           warnings: Object.freeze(warnings),
           total: 0,
           ...(evidencePack !== undefined ? { evidencePack } : {}),
+          ...(routedSurface === "summary" ? { surface: routedSurface } : {}),
         }),
       );
     }
@@ -764,8 +820,18 @@ export async function search(
     // no ownership filtering, so untagged vaults stay byte-identical.
     const agentScope = normalizeAgentScope(opts.agentScope);
     const hasAgentScopeRequest = agentScope !== null;
+    // Composite scope filter (t_37c05a34): session/project axes on top of
+    // owner. Null when no axis is requested, so an omitted filter never
+    // narrows the pool (byte-identical default).
+    const scopeFilter = opts.scope !== undefined ? normalizeScopeFilter(opts.scope) : null;
+    const hasScopeRequest =
+      scopeFilter !== null && (scopeFilter.session !== null || scopeFilter.project !== null);
     const hasFrontmatterFilter =
-      hasPropertyFilter || hasVisibilityRequest || hasAgentScopeRequest || hasDegreeFilter;
+      hasPropertyFilter ||
+      hasVisibilityRequest ||
+      hasAgentScopeRequest ||
+      hasScopeRequest ||
+      hasDegreeFilter;
 
     // MMR and traversal both need a candidate pool wider than `limit`:
     // MMR diversifies from it, and traversal seeds expansion from it (a
@@ -820,6 +886,7 @@ export async function search(
           ...(coAccessByChunk !== undefined ? { coAccessByChunk } : {}),
           ...(trendByDoc !== undefined ? { trendByDoc } : {}),
           ...(reuseRateByChunk !== undefined ? { reuseRateByChunk } : {}),
+          ...(relationalRankedChunkIds.length > 0 ? { relationalRankedChunkIds } : {}),
         },
         {
           keywordWeight: opts.keywordWeight ?? config.keywordWeight,
@@ -838,6 +905,11 @@ export async function search(
         },
       );
       const capHit = ranked.length >= rankCap;
+      // Retrieval-time staleness barrier (t_b0c9d0a3): drop any exact-state
+      // lane artifact a stale/older index may still hold, before any later
+      // phase can surface it. No-op (same reference) when the pool has none,
+      // so a vault that never used the lane is byte-identical.
+      ranked = applyExactStateBarrier(ranked).slice();
       // Link-graph traversal (v0.13.0): walk outbound links from the top
       // hits and surface related documents not already matched, scored by
       // decay. No-op when maxHops == 0. Runs before MMR so expansions are
@@ -916,7 +988,13 @@ export async function search(
         agentScope !== null
           ? applyAgentScope(visible, agentScope, config.vault, frontmatterCache)
           : visible;
-      return { preVisibility: degreeFiltered.length, visible: scoped, capHit };
+      // Composite session/project scope filter (t_37c05a34): applied only
+      // when an axis is requested; a null filter skips it entirely so the
+      // default path is byte-identical.
+      const compositeScoped = hasScopeRequest
+        ? applyScopeFilter(scoped, scopeFilter!, config.vault, frontmatterCache)
+        : scoped;
+      return { preVisibility: degreeFiltered.length, visible: compositeScoped, capHit };
     };
 
     let assembled = assemble(rankLimit);
@@ -1060,6 +1138,18 @@ export async function search(
                 : "second_pass: or-broadened retry";
             return Object.freeze({ ...r, reasons: Object.freeze([...r.reasons, reason]) });
           });
+    // Relational-arm attribution (t_09b7ccea): a node surfaced by the
+    // typed-edge fan-out carries a reason naming the link types and hop
+    // distance it was reached by. Empty relationalMeta (arm off) is a no-op.
+    const withRelationalReasons =
+      relationalMeta.size === 0
+        ? withSecondPassReasons
+        : withSecondPassReasons.map((r) => {
+            const meta = relationalMeta.get(r.chunkId);
+            if (meta === undefined) return r;
+            const reason = `relational: via ${meta.via.join(", ")} (${meta.hops} hop${meta.hops === 1 ? "" : "s"})`;
+            return Object.freeze({ ...r, reasons: Object.freeze([...r.reasons, reason]) });
+          });
     // Terminal-state downrank (recall-trust-suite) is now structural and
     // language-agnostic: a result is terminal when its frontmatter
     // `status:` field declares a terminal value (controlled vocabulary),
@@ -1068,12 +1158,12 @@ export async function search(
     // in evidence-pack mode.
     const terminalPaths =
       opts.evidencePack === true
-        ? buildTerminalPaths(config.vault, withSecondPassReasons, frontmatterCache)
+        ? buildTerminalPaths(config.vault, withRelationalReasons, frontmatterCache)
         : new Set<string>();
     const finalResults =
       opts.evidencePack === true
-        ? downrankTerminalEvidenceResults(withSecondPassReasons, terminalPaths)
-        : withSecondPassReasons;
+        ? downrankTerminalEvidenceResults(withRelationalReasons, terminalPaths)
+        : withRelationalReasons;
     const evidencePack =
       opts.evidencePack === true
         ? buildEvidencePack(
@@ -1129,6 +1219,7 @@ export async function search(
           total: cards.length,
           ...(evidencePack !== undefined ? { evidencePack } : {}),
           ...(secondPass !== undefined ? { secondPass } : {}),
+          ...(routedSurface === "summary" ? { surface: routedSurface } : {}),
           ...trustReceipts,
         }),
       );
@@ -1141,6 +1232,7 @@ export async function search(
         total: resultsOut.length,
         ...(evidencePack !== undefined ? { evidencePack } : {}),
         ...(secondPass !== undefined ? { secondPass } : {}),
+        ...(routedSurface === "summary" ? { surface: routedSurface } : {}),
         ...trustReceipts,
       }),
     );
@@ -1172,6 +1264,71 @@ const MIN_COMMON_DOCUMENT_FREQUENCY = 2;
  * only fails to flag a token as common (it stays in the lex lane), so the
  * fallback is always the safe, non-lossy direction.
  */
+/** Bounded typed-edge fan-out depth for the relational arm (t_09b7ccea). */
+const RELATIONAL_MAX_DEPTH = 2;
+
+/**
+ * The recognised edge-type vocabulary for the relational parser: the schema
+ * pack's declared link types unioned with the default relation vocabulary,
+ * all normalized. An unreadable pack falls back to the defaults. This is the
+ * only place edge-type vocabulary enters the search path - never a
+ * natural-language word list.
+ */
+function relationalEdgeVocabulary(vault: string): string[] {
+  const vocab = new Set<string>(DEFAULT_RELATION_TYPES.map((t) => normalizeRelation(t)));
+  try {
+    for (const t of loadSchemaPack(vault).link_types) vocab.add(normalizeRelation(t));
+  } catch {
+    // An unreadable schema pack falls back to the default relation vocabulary.
+  }
+  return [...vocab];
+}
+
+/**
+ * The artifact-kind vocabulary for the summary-search router (t_7b96f242):
+ * the schema pack's declared page types, already normalized. This is the
+ * ONLY place artifact-kind vocabulary enters the surface router - a
+ * config-derived token set, never a natural-language word list. An
+ * unreadable pack yields an empty set, so the router falls back to the
+ * vocabulary-independent source signal only.
+ */
+function summarySurfaceVocabulary(vault: string): ReadonlySet<string> {
+  try {
+    return new Set(loadSchemaPack(vault).vocabulary.page_types.map((t) => t.toLowerCase()));
+  } catch {
+    return new Set<string>();
+  }
+}
+
+/**
+ * Resolve relational-query wikilink seeds to document ids. Tries the exact
+ * `<seed>.md` path, then the bare seed, then an UNAMBIGUOUS basename match
+ * anywhere in the tree (an ambiguous basename stays unresolved -
+ * deterministic inertness beats guessing the wrong page). Deduped.
+ */
+function resolveSeedDocumentIds(store: Store, seeds: ReadonlyArray<string>): number[] {
+  const out: number[] = [];
+  const seen = new Set<number>();
+  let titles: Map<number, { readonly path: string; readonly title: string | null }> | null = null;
+  for (const seed of seeds) {
+    let docId = store.getDocumentIdByPath(`${seed}.md`) ?? store.getDocumentIdByPath(seed);
+    if (docId === null) {
+      titles ??= store.documentTitles();
+      const matches: number[] = [];
+      for (const [id, meta] of titles) {
+        const base = meta.path.split("/").pop() ?? meta.path;
+        if (base === `${seed}.md`) matches.push(id);
+      }
+      if (matches.length === 1) docId = matches[0]!;
+    }
+    if (docId !== null && !seen.has(docId)) {
+      seen.add(docId);
+      out.push(docId);
+    }
+  }
+  return out;
+}
+
 function highFrequencyTokens(store: Store, query: string): ReadonlySet<string> {
   const tokens = [...new Set(tokenizeForExpansion(query))];
   if (tokens.length === 0) return new Set();

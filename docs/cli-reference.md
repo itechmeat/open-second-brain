@@ -340,6 +340,44 @@ deterministic pre-promotion verifier (rejections recorded with reasons),
 carry a version that increments on evolution, and merge same-name
 collisions instead of forking.
 
+### Retrieval quality and context delivery (since v1.37.0)
+
+```text
+o2b brain state              set <aspect> <value> | get <aspect> | list | clear <aspect> - overwrite-only per-aspect operational-state lane under Brain/state/; writing an aspect replaces its canonical value; the lane never enters FTS/vector/graph and a retrieval-time barrier drops superseded exact-state rows from recall; Brain/pinned.md deliberately stays a searchable scratchpad
+o2b search rerank-fit        sample recorded demand-log queries and correlate reranker scores against the base retrieval signal; verdicts fits | out_of_domain | inverted | inapplicable with a disable-or-swap recommendation; strictly read-only (probes disable cache and self-heal)
+```
+
+Relational retrieval: `search_relational_arm_enabled` (env
+`OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_ARM`, default off) adds a fourth RRF
+arm that parses relationship-shaped queries against the schema-pack
+`link_types` vocabulary (subset validation, no word lists) and runs a
+bounded depth-2 typed-edge fan-out; RRF and dedup keys carry source
+identity and the query cache scopes by canonical source-set key. Off
+means byte-identical ranking. Query plans also carry a `surface` verdict
+that routes structurally summary-shaped questions (source-targeted,
+artifact-kind, summary-typed pages) to the summary surface; non-summary
+routing is unchanged. Search accepts optional session/project scope
+filters (MCP `brain_search` `session_scope` / `project_scope`), and page
+dedup keys fold composite scopes additively so identical text in two
+scopes stays distinct.
+
+Context delivery: `nav_tier_enabled` (env
+`OPEN_SECOND_BRAIN_NAV_TIER_ENABLED`, default off) injects an additive,
+untrusted-fenced navigation tier (top hubs by link degree plus vault
+size) on `UserPromptSubmit` when the `nav_tier_cadence_minutes` cadence
+(env `OPEN_SECOND_BRAIN_NAV_TIER_CADENCE_MINUTES`, default 30) is due;
+every inclusion decision is audited with reason and added characters.
+`hook_strict_enabled` (env `OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED`,
+default off) makes the first raw vault-file read of a session receive a
+one-time deny that names the brain search surface, then downgrades to a
+soft nudge; any brain query/search refreshes an orientation stamp that
+suppresses the block, and every failure path fails open. Hook stamps
+live under `.open-second-brain/hook-state/` with epoch-ms expiry.
+`o2b partner codegraph report` and `o2b doctor` aggregate codegraph
+status across every discovered code project, threading `project_path`
+per query when supported (feature-detected) and degrading with an
+explicit note when not.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
@@ -421,6 +459,11 @@ o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (
 o2b search provider list      List registered provider profiles (--json for the array)
 o2b search provider show NAME Show one registered profile (--json)
 o2b search provider remove    Remove a registered profile by NAME
+o2b search rerank-fit         Per-store reranker fit check (read-only diagnostic): samples real
+                              recorded queries and correlates the reranker's scores with the base
+                              retrieval signal. Reports fits (quiet), out_of_domain (low fit), or
+                              inverted (negative) with a disable/swap recommendation; a rerankerless
+                              vault reports inapplicable. --max-queries N --top-k K --json
 ```
 
 Embedding providers (since v0.36.0): `embedding_provider` accepts the

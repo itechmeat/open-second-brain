@@ -38,7 +38,12 @@
  * release added `brain_update_note` and `brain_append_note` (single-operation
  * batches over the atomic write-batch core, kernel 2) and `brain_write_batch`
  * (the general all-or-nothing multi-operation write surface, kernel 2's second
- * consumer).
+ * consumer); the knowledge-intake-and-consolidation release added
+ * `brain_diarize` (subject diarization); the
+ * retrieval-quality-and-context-delivery release added `brain_retrieval_plan`
+ * (the shadow-only retrieval advisor: composes query plan, context-pack
+ * density, token-impact ledger, and route latency into a read-only
+ * per-question plan, exposing no mutating parameters).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -111,6 +116,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_recurrence",
   "brain_research_report",
   "brain_retention",
+  "brain_retrieval_plan",
   "brain_review_candidates",
   "brain_route_metrics",
   "brain_search_by_source",

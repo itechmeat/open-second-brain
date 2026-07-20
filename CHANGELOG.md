@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.37.0] - 2026-07-19
+
+A retrieval quality and context delivery wave: nine units that make search answer relationship-shaped and summary-shaped questions deterministically, explain and plan retrieval without touching live policy, and put the right context in front of the agent while stale operational state stays out. Relationship queries traverse typed edges as a fourth RRF arm, dedup and search respect composite scopes, operational state moves to an overwrite-only lane with a retrieval-time staleness barrier, prompts gain a cadence-controlled navigation tier, an opt-in strict hook redirects the first raw vault read to the search index, and codegraph partnering covers every project in the workspace. Two shared seams carry the wave: a composite scope-key module and an index-admission predicate. The kernel still calls no LLM, and every new surface is byte-identical when its flag or param is omitted.
+
+### Added
+
+- Typed-edge relational retrieval arm: a vocabulary-driven relational-query parser (schema-pack `link_types` with subset validation, no natural-language word lists) and bounded depth-2 typed-edge fan-out join hybrid search as a fourth RRF arm behind `search_relational_arm_enabled` (env `OPEN_SECOND_BRAIN_SEARCH_RELATIONAL_ARM`, default off, byte-identical when disabled); RRF and dedup keys carry source identity through the shared `rrfKey`, and the query cache scopes by canonical source-set key.
+- Composite scope keys with per-scope dedup and search scoping: one shared module owns the source-identity and owner/session/project scope vocabulary; page dedup folds the scope in additively (scopeless writes keep their existing keys, reruns over old rows collapse nothing new), and `brain_search` gains optional `session_scope` and `project_scope` filters that leave unfiltered results byte-identical.
+- Exact-state lane with a retrieval-time staleness barrier: `o2b brain state set|get|list|clear` maintains an overwrite-only, per-aspect operational-state lane under `Brain/state/`, excluded from FTS, vector, and graph layers by a new index-admission predicate (which defaults to admit, so no existing content leaves the index), while a retrieval barrier drops superseded exact-state rows from recall; `Brain/pinned.md` deliberately remains a searchable scratchpad, and the lane is the supported home for current-state values.
+- Deterministic summary-search router: query plans carry a `surface` verdict that routes structurally summary-shaped questions (source-targeted, artifact-kind, summary-typed pages) to the summary surface; non-summary routing stays byte-identical, the verdict never enters the plan hash or ranking, and the retrieval skill names the intended surface explicitly.
+- Per-store reranker fit check: `o2b search rerank-fit` samples recorded demand-log queries, computes the correlation between reranker scores and the base retrieval signal, and reports fits, out-of-domain, or inverted verdicts with a disable-or-swap recommendation; strictly read-only (probes disable cache and self-heal) and explicitly inapplicable on rerankerless vaults.
+- Shadow-only retrieval plan advisor: the `brain_retrieval_plan` MCP tool composes query intent and weights, impact-per-token density allocation, the calibrated token-impact ledger, and observed route latency into a read-only per-question plan with source strategy, token-budget allocation, graph-expansion advice, reliability with p95 latency, and a marginal-value stop that tightens with latency; the tool exposes no mutating parameters.
+- Tiered context injection with a cadence-controlled navigation tier: an additive navmap (top hubs by link degree plus vault size, neutralized and fenced as untrusted) injects on `UserPromptSubmit` only when the cadence is due, behind `nav_tier_enabled` (env `OPEN_SECOND_BRAIN_NAV_TIER_ENABLED`, default off) with `nav_tier_cadence_minutes` (env `OPEN_SECOND_BRAIN_NAV_TIER_CADENCE_MINUTES`, default 30); every inclusion decision is audited with its reason and added character count, and the every-turn kernel stays byte-identical.
+- Opt-in strict PreToolUse orientation hook: with `hook_strict_enabled` (env `OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED`), the first raw vault-file read of a session is denied once with a redirect naming the brain search surface, then downgrades to a soft nudge; any brain query or search refreshes a short-lived orientation stamp that suppresses the block; detection is structural (the tool call's path resolving inside the vault root), and every failure path fails open.
+- Workspace-wide codegraph partnering: `checkCodegraph` aggregates status across every discovered code project and threads `project_path` per query when the partnered codegraph supports it (feature-detected from the status usage text), degrading to the previous single-project behavior with an explicit note when it does not; single-project workspaces are byte-identical.
+
+### Changed
+
+- Hook stamps (`osb.nav_tier.*`, `osb.oriented.*`) live in a minimal per-session file-backed store under `.open-second-brain/hook-state/` with epoch-ms expiry; missing, malformed, or expired stamps read as absent and never throw.
+- The MCP tool surface grows from 107 to 108 tools (`brain_retrieval_plan`).
+
 ## [1.36.0] - 2026-07-19
 
 A knowledge intake and consolidation wave: eight units that carry content from the operator's pocket into the vault and turn what accumulates into trustworthy insight. Phone captures arrive through an inbound Telegram bot and drain through a report-then-apply routing pass, keyed web-research providers feed the citation-constrained pipeline, facts roll up into higher tiers on pure counters, entities gain diarized profiles with a stated-vs-evidenced gap, synthesis findings carry causal context and decomposed confidence behind an evidence-identity gate, the link graph gets a capped idempotent repair lane with efficacy holdouts, and skill proposals pass a deterministic verifier before reaching the pending queue. Two shared seams carry the wave: a capture-note contract and a keyed external-fetch helper. The kernel still calls no LLM, and every new surface is byte-identical when unused.
@@ -6602,6 +6623,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.37.0]: https://github.com/itechmeat/open-second-brain/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/itechmeat/open-second-brain/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/itechmeat/open-second-brain/compare/v1.34.0...v1.35.0
 [1.34.0]: https://github.com/itechmeat/open-second-brain/compare/v1.33.0...v1.34.0

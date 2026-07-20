@@ -36,6 +36,12 @@ export function isFusionMode(value: string): value is FusionMode {
 export function rrfFuse(opts: {
   keywordRankedChunkIds: ReadonlyArray<number>;
   semanticRankedChunkIds: ReadonlyArray<number>;
+  /**
+   * Optional relational arm (t_09b7ccea): chunk ids from typed-edge
+   * fan-out, best-first. Absent or empty contributes nothing, so the
+   * two-lane fusion is byte-identical when the relational arm is off.
+   */
+  relationalRankedChunkIds?: ReadonlyArray<number>;
   k: number;
 }): Map<number, number> {
   const k = Math.max(1, opts.k);
@@ -48,6 +54,7 @@ export function rrfFuse(opts: {
   };
   accumulate(opts.keywordRankedChunkIds);
   accumulate(opts.semanticRankedChunkIds);
+  if (opts.relationalRankedChunkIds) accumulate(opts.relationalRankedChunkIds);
 
   if (raw.size === 0) return raw;
 

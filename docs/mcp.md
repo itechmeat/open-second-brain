@@ -51,6 +51,7 @@ flags for a narrower per-process full server.
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
 | `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names). Read-only. | `operation`                                    |
+| `brain_retrieval_plan`      | Shadow-only retrieval advisor for one `question`: composes query intent/weights, the summary-surface route, the context-pack density allocation, the token-impact ledger, and observed route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Optional `token_budget`. Read-only; exposes no mutating parameters and changes no ranking. | `question`                                     |
 | `brain_token_impact`        | Durable value-of-memory ledger: `record` posts a context pack's tokenizer-exact prompt-token delta (`baseline` − `packed`, `method` exact/fallback) plus an optional modeled inference-avoidance estimate; `outcome` posts first-pass/repair/retry to calibrate the model; `summary` keeps EXACT prompt-token savings strictly separate from the MODELED (outcome-calibrated) figure; `list` reads raw samples. Writes gated on `token_impact_ledger_enabled` (default off); payload-safe (counts + opaque pack id only). Reads ignore the gate. | `operation`                                    |
 | `brain_context_pack_outcome`| Agent-operable outcome loop over the context-pack quality ledger: `post` records one compact outcome row for a carried context-pack quality-sample id — first-pass/repair/retry counters plus three STRICTLY SEPARATE token signals (`exact_prompt_token_savings`, `modeled_inference_avoidance`, `observed_provider_tokens`) — and composes the token-impact ledger by posting a matching first-pass/repair/retry calibration outcome; `list`/`summary` read the rows keeping the signals separate. Writes gated on `context_pack_outcome_enabled` (default off); payload-safe (counters + opaque sample id only), a field the caller omits is never invented. Reads ignore the gate. | `operation`                                    |
 | `brain_knowledge_gaps`      | Aggregate the persisted cross-query demand log into recurring queries the vault answers poorly, ranked by frequency × (1 − IDF-weighted coverage). Read-only; the log is written only by opt-in recall telemetry.                              | —                                              |
@@ -107,7 +108,16 @@ reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
 classification, per-token `union_records` for uncovered terms, and a
 `completeness` verdict whose `uncovered_but_present_in_corpus` list is the
 false-absence guard. It can also emit opt-in recall telemetry with
-`telemetry: true`. `brain_recall_feedback` records one feedback event as a
+`telemetry: true`.
+A deterministic summary-search router (t_7b96f242) inspects each query for
+structural summary signals - a source-targeted `source:<path>` token, or a
+`kind:<t>`/`type:<t>` token whose value is a declared artifact kind in the
+vault schema pack (`schema.page_types`). When a query is summary-shaped it
+carries `surface: "summary"` in the response, naming the summary-search
+surface as the intended route (target a source or artifact kind rather than
+running a generic hybrid search over raw chunks); ranking is never altered
+and non-summary queries omit the field entirely, so the generic-surface
+response stays byte-identical. `brain_recall_feedback` records one feedback event as a
 JSON file under `Brain/search/feedback/` and returns the refreshed learned
 weights (applied to ranking only when `search_learned_weights_enabled` is on).
 `brain_context_pack` accepts opt-in `receipt`, `telemetry`, `cache_stable`, and
@@ -543,3 +553,14 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   components (support, opposition, freshness, coverage), and the
   `excluded_findings` ledger with `excluded_finding_count`; prior fields
   are unchanged.
+- Since v1.37.0 `brain_retrieval_plan` joins the surface (108 total): a
+  shadow-only per-question retrieval advisor composing query
+  intent/weights, the summary-surface route, impact-per-token
+  allocation, the calibrated token-impact ledger, and observed route p95
+  latency into a read-only plan with a marginal-value stop; it exposes
+  no mutating parameters and changes no ranking.
+- Since v1.37.0 `brain_search` accepts optional `session_scope` and
+  `project_scope` filters (composite scope keys; omitting them keeps
+  results byte-identical) and its outcome carries an advisory `surface`
+  field when the deterministic router selects the summary surface;
+  non-summary queries are unchanged.

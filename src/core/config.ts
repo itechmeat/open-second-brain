@@ -774,6 +774,49 @@ export function resolveRecallInjectEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Tiered context-injection nav tier gate (retrieval-quality-and-context-delivery,
+ * D1 / t_2d4f34d7). Default OFF: the additive navigation/map tier stays a
+ * no-op unless `nav_tier_enabled: "true"` (or the matching env override). The
+ * always-on kernel (active-inject / recall-inject) is untouched either way, so
+ * flag off keeps the session preamble byte-identical; flag on injects a
+ * structural navmap only on cadence or first-turn trigger.
+ */
+export function resolveNavTierEnabled(configPath?: string): boolean {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_NAV_TIER_ENABLED", "nav_tier_enabled", configPath);
+}
+
+/**
+ * Optional nav-tier cadence window override in minutes (D1). A valid positive
+ * integer (env first, then config) wins; anything else returns undefined so
+ * the caller falls back to the named-constant default. The cadence window is
+ * the interval during which a fresh nav-tier stamp suppresses re-injection.
+ */
+export function resolveNavTierCadenceMinutes(configPath?: string): number | undefined {
+  const env = process.env["OPEN_SECOND_BRAIN_NAV_TIER_CADENCE_MINUTES"]?.trim();
+  const raw = env || discoverConfig(configPath).data["nav_tier_cadence_minutes"]?.trim();
+  if (!raw) return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1) return undefined;
+  return value;
+}
+
+/**
+ * Strict PreToolUse read-block gate (retrieval-quality-and-context-delivery,
+ * D2 / t_36b0fd8d). Default OFF: the opt-in PreToolUse hook stays permissive
+ * (emits nothing, byte-identical to today) unless `hook_strict_enabled:
+ * "true"` (or the matching env override). Flag on denies the FIRST raw
+ * vault-file read of a session with a redirect to the brain search surface,
+ * then downgrades to a soft nudge; every failure path fails open.
+ */
+export function resolveHookStrictEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED",
+    "hook_strict_enabled",
+    configPath,
+  );
+}
+
+/**
  * Knowledge-gap loop gate (recall-trust-and-write-surface, A3 /
  * t_67d38036). Default OFF: the opt-in session-start gap agenda and
  * session-end gap promotion/auto-close stay dormant unless

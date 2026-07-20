@@ -177,5 +177,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   recall-trust-and-write-surface W2) = 106.
   // + brain_diarize (subject diarization,
   //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
-  expect(list.result.tools.length).toBe(107);
+  // + brain_retrieval_plan (shadow-only retrieval advisor,
+  //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
+  expect(list.result.tools.length).toBe(108);
 });

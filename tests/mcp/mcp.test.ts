@@ -326,6 +326,8 @@ describe("tool listing", () => {
         "brain_memory_bridge",
         // Route-level MCP latency (context-pack-economics-observability).
         "brain_route_metrics",
+        // Shadow-only retrieval advisor (retrieval-quality-and-context-delivery).
+        "brain_retrieval_plan",
         // Durable token-impact ledger (context-pack-economics-observability).
         "brain_token_impact",
       ].toSorted(),
@@ -662,7 +664,9 @@ describe("stdio loop", () => {
     //   recall-trust-and-write-surface W2) = 106.
     // + brain_diarize (subject diarization,
     //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
-    expect(list.result.tools.length).toBe(107);
+    // + brain_retrieval_plan (shadow-only retrieval advisor,
+    //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
+    expect(list.result.tools.length).toBe(108);
   });
 
   test("returns parse error for invalid JSON", async () => {

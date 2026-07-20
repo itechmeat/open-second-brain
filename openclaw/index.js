@@ -1778,18 +1778,21 @@ function defaultRunStatusJson(projectPath) {
     return { ok: false, error: exc.message ?? String(exc) };
   }
 }
-function checkCodegraph(opts, deps) {
-  if (opts.disabled)
-    return null;
-  const projects = findCodeProjects(opts);
-  if (projects.length === 0)
-    return null;
-  const project = projects[0];
-  const whichFn = deps?.whichCodegraph ?? defaultWhichCodegraph;
-  const cliPath = whichFn();
-  if (!cliPath) {
-    return null;
+var CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
+function defaultDetectProjectPathSupport() {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["codegraph", "status", "--help"],
+      stdout: "pipe",
+      stderr: "pipe"
+    });
+    const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
+    return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
+  } catch {
+    return false;
   }
+}
+function evaluateProjectStatus(project, deps) {
   const indexDir = join2(project, ".codegraph");
   if (!isDir(indexDir)) {
     return {
@@ -1820,6 +1823,38 @@ function checkCodegraph(opts, deps) {
     name: "code_graph",
     ok: true,
     message: `code project at ${project}: indexed (${nodes} nodes, ${files} files)`
+  };
+}
+function checkCodegraph(opts, deps) {
+  if (opts.disabled)
+    return null;
+  const projects = findCodeProjects(opts);
+  if (projects.length === 0)
+    return null;
+  const whichFn = deps?.whichCodegraph ?? defaultWhichCodegraph;
+  const cliPath = whichFn();
+  if (!cliPath) {
+    return null;
+  }
+  if (projects.length === 1) {
+    return evaluateProjectStatus(projects[0], deps);
+  }
+  const detectFn = deps?.detectProjectPathSupport ?? defaultDetectProjectPathSupport;
+  if (!detectFn()) {
+    const first = evaluateProjectStatus(projects[0], deps);
+    return {
+      name: "code_graph",
+      ok: first.ok,
+      message: `${first.message}; note: codegraph CLI has no per-query project_path support - reported 1 of ${projects.length} discovered projects only`
+    };
+  }
+  const results = projects.map((project) => evaluateProjectStatus(project, deps));
+  const header = `${projects.length} code projects:`;
+  return {
+    name: "code_graph",
+    ok: results.every((r) => r.ok),
+    message: [header, ...results.map((r) => `- ${r.message}`)].join(`
+`)
   };
 }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import {
   checkCodegraph,
+  defaultDetectProjectPathSupport,
   findCodeProjects,
   isCodeProject,
 } from "../../../src/core/partner/codegraph.ts";
@@ -278,5 +279,96 @@ describe("checkCodegraph", () => {
     // a well-formed value either way.
     const r = checkCodegraph({ cwd: repo, vault: join(tmp, "vault") });
     expect(r === null || r.name === "code_graph").toBe(true);
+  });
+});
+
+const okStatus = (nodes: number, files: number) => ({
+  ok: true as const,
+  data: { initialized: true, nodeCount: nodes, fileCount: files, edgeCount: nodes * 2 },
+});
+
+describe("checkCodegraph across all workspace projects (W1)", () => {
+  test("single-project workspace stays byte-identical and never probes project_path support", () => {
+    const repo = makeRepo(join(tmp, "repo"));
+    makeIndexed(repo);
+    const args = {
+      whichCodegraph: () => "/usr/bin/codegraph",
+      // If project_path support were probed for a single project this would throw.
+      detectProjectPathSupport: (): boolean => {
+        throw new Error("must not probe for a single-project workspace");
+      },
+      runStatusJson: () => okStatus(100, 10),
+    };
+    const r = checkCodegraph({ cwd: repo, vault: join(tmp, "vault") }, args);
+    expect(r!.ok).toBe(true);
+    expect(r!.message).toBe("code project at " + repo + ": indexed (100 nodes, 10 files)");
+    expect(r!.message).not.toContain("note:");
+  });
+
+  test("multiple projects + project_path support -> aggregate names every project", () => {
+    const repoA = makeRepo(join(tmp, "a-repo"));
+    const repoB = makeRepo(join(tmp, "b-repo"));
+    makeIndexed(repoA);
+    makeIndexed(repoB);
+    const r = checkCodegraph(
+      { cwd: repoA, vault: join(tmp, "vault"), scanExtraPaths: [repoB] },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        detectProjectPathSupport: () => true,
+        runStatusJson: (p: string) => (p === repoA ? okStatus(100, 10) : okStatus(50, 5)),
+      },
+    );
+    expect(r!.ok).toBe(true);
+    expect(r!.message).toContain(repoA);
+    expect(r!.message).toContain(repoB);
+    expect(r!.message).toContain("100 nodes");
+    expect(r!.message).toContain("50 nodes");
+    expect(r!.message).toContain("2 code projects");
+  });
+
+  test("multiple projects + support + one not indexed -> ok false, both named", () => {
+    const repoA = makeRepo(join(tmp, "a-repo"));
+    const repoB = makeRepo(join(tmp, "b-repo"));
+    makeIndexed(repoA);
+    // repoB has no .codegraph/ -> not indexed
+    const r = checkCodegraph(
+      { cwd: repoA, vault: join(tmp, "vault"), scanExtraPaths: [repoB] },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        detectProjectPathSupport: () => true,
+        runStatusJson: () => okStatus(100, 10),
+      },
+    );
+    expect(r!.ok).toBe(false);
+    expect(r!.message).toContain(repoA);
+    expect(r!.message).toContain(repoB);
+    expect(r!.message.toLowerCase()).toContain("not indexed");
+  });
+
+  test("multiple projects + NO project_path support -> degrade to first project with an explicit note", () => {
+    const repoA = makeRepo(join(tmp, "a-repo"));
+    const repoB = makeRepo(join(tmp, "b-repo"));
+    makeIndexed(repoA);
+    makeIndexed(repoB);
+    const r = checkCodegraph(
+      { cwd: repoA, vault: join(tmp, "vault"), scanExtraPaths: [repoB] },
+      {
+        whichCodegraph: () => "/usr/bin/codegraph",
+        detectProjectPathSupport: () => false,
+        runStatusJson: () => okStatus(100, 10),
+      },
+    );
+    expect(r!.ok).toBe(true);
+    // Degrades to today's single-project (first project) behavior...
+    expect(r!.message).toContain(repoA);
+    expect(r!.message).toContain("100 nodes");
+    // ...plus an explicit note naming the degradation and the project count.
+    expect(r!.message).toContain("note:");
+    expect(r!.message).toContain("project_path");
+    expect(r!.message).toContain("2");
+  });
+
+  test("defaultDetectProjectPathSupport returns a boolean without throwing", () => {
+    expect(typeof defaultDetectProjectPathSupport()).toBe("boolean");
   });
 });

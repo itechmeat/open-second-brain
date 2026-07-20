@@ -59,6 +59,7 @@ import {
 import { resolveTimeRange } from "../../core/search/time-range.ts";
 import { SearchError } from "../../core/search/types.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
+import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -332,6 +333,26 @@ async function toolBrainRouteMetrics(
     return { vault_path: ctx.vault, ...summary };
   }
   throw new MCPError(INVALID_PARAMS, "brain_route_metrics: operation must be list or summary");
+}
+
+// ----- brain_retrieval_plan (shadow-only retrieval advisor, t_3ffb021c) -----
+
+async function toolBrainRetrievalPlan(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const question = requiredStringArg("brain_retrieval_plan", args, "question");
+  const tokenBudget = coercePositiveInteger(
+    "brain_retrieval_plan",
+    "token_budget",
+    args["token_budget"],
+  );
+  const plan = buildRetrievalPlan(
+    ctx.vault,
+    question,
+    tokenBudget !== undefined ? { tokenBudget } : {},
+  );
+  return { vault_path: ctx.vault, ...serializeRetrievalPlan(plan) };
 }
 
 function routeMetricsFilter(args: Record<string, unknown>): McpRouteLatencyFilter {
@@ -993,6 +1014,30 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainRouteMetrics,
+  },
+  {
+    name: "brain_retrieval_plan",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "Shadow-only retrieval planner for a question: composes query intent/weights, summary-surface route, context-pack density allocation, token-impact ledger, and route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        question: {
+          type: "string",
+          description:
+            "The question to plan retrieval for; drives intent, surface, and expansion advice.",
+        },
+        token_budget: {
+          type: "integer",
+          minimum: 1,
+          description: "Optional context-pack token budget to model (default 2000).",
+        },
+      },
+      required: ["question"],
+      additionalProperties: false,
+    },
+    handler: toolBrainRetrievalPlan,
   },
   {
     name: "brain_token_impact",

@@ -28,15 +28,27 @@ Run these checks in order. Stop at the first state that matches.
 3. If neither cwd nor the user's named project is a code project, look
    at the vault's parent directory and inspect the top-level entries
    (one level only). Many users keep their repos as siblings of the
-   vault.
+   vault. All discovered code projects are candidates, not just the first.
 4. Index state: a `.codegraph/` directory inside the code project root.
 5. Confirmed index: `codegraph status -j <project_path>` returns
    `{"initialized": true, ...}`. The same command on an uninitialized
    project returns `{"initialized": false, ...}` rather than failing.
 
 The structured way to ask is `o2b doctor`. When OSB is installed in the
-workspace, the doctor report carries a `code_graph` line that
-summarises detection result with node count and file count.
+workspace, the doctor report carries a `code_graph` line that summarises
+the detection result with node count and file count.
+
+Multi-project workspaces: when more than one code project is discovered,
+the `code_graph` line covers EVERY project. Status is threaded per project
+by passing each project's path to `codegraph status`, and the line
+aggregates one entry per project (`N code projects:` followed by a bullet
+per project naming its path and index state/health). This per-query
+project-path threading is feature-detected: if the installed codegraph CLI
+does not document a positional `[path]` argument for `status`, OSB cannot
+trust per-project queries, so it degrades to reporting the first project
+only and appends an explicit `note: codegraph CLI has no per-query
+project_path support - reported 1 of N discovered projects only`. A
+single-project workspace is unaffected and its line is unchanged.
 
 ## Step 2 - branch on result
 
@@ -47,6 +59,12 @@ summarises detection result with node count and file count.
 | missing + code project | Argued recommendation (Step 5). |
 | missing + no code project in scope | Stay quiet. |
 | error (CLI present, `status -j` errors with a lock or schema issue) | Suggest `codegraph unlock <path>` or a rebuild, but do not run it. |
+
+In a multi-project workspace the aggregate `code_graph` line can mix these
+states across projects (one indexed, one not); read each bullet and act per
+project. When the line ends with the `note: ... project_path support` marker,
+only the first project was checked - query the others explicitly with
+`codegraph status <their_path>` before trusting a single-project verdict.
 
 ## Step 3 - hard rule after `codegraph init`
 
