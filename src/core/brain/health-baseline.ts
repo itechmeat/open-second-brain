@@ -138,7 +138,11 @@ export function applyHealthSilenceBeforeToYaml(configText: string, value: string
 function detectHealthSiblingIndent(lines: ReadonlyArray<string>, headerIdx: number): string | null {
   for (let i = headerIdx + 1; i < lines.length; i++) {
     const line = lines[i]!;
-    if (line.trim() === "") continue;
+    const trimmed = line.trim();
+    // Comment lines are invisible to parseBrainYaml's own indent checks
+    // (splitLines drops them before that stage), so they must be equally
+    // invisible here: skip rather than let one set - or end - the scan.
+    if (trimmed === "" || trimmed.startsWith("#")) continue;
     if (!/^[ \t]/.test(line)) break;
     return /^[ \t]+/.exec(line)![0];
   }

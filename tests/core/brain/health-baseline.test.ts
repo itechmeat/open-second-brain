@@ -121,6 +121,34 @@ describe("applyHealthSilenceBeforeToYaml", () => {
     const secondParsed = parseBrainYaml(second) as Record<string, Record<string, unknown>>;
     expect(secondParsed["health"]?.["silence_before"]).toBe("2026-05-05");
   });
+
+  test("an indented comment before the real sibling does not set the inserted indent", () => {
+    // parseBrainYaml discards comment lines wholesale before checking indent
+    // consistency, so this 2-space comment followed by a 4-space real key is
+    // valid input. The inserted `silence_before` must match the 4-space real
+    // sibling, not the 2-space comment.
+    const withComment = `${BASE}\nhealth:\n  # a comment\n    concept_gap_min_frequency: 5\n`;
+    const out = applyHealthSilenceBeforeToYaml(withComment, "2026-06-06");
+    expect(out).toContain('\n    silence_before: "2026-06-06"\n');
+    expect(out).not.toContain("\n  silence_before:");
+    const parsed = parseBrainYaml(out) as Record<string, Record<string, unknown>>;
+    expect(parsed["health"]?.["silence_before"]).toBe("2026-06-06");
+    expect(parsed["health"]?.["concept_gap_min_frequency"]).toBe(5);
+  });
+
+  test("an unindented comment inside the block does not end the sibling scan early", () => {
+    // An unindented `#` line is still a comment, invisible to parseBrainYaml's
+    // indent checks, so the real 4-space sibling below it still governs the
+    // block's indent - the scan must not stop at the comment and fall back
+    // to two spaces.
+    const withUnindentedComment = `${BASE}\nhealth:\n# a comment\n    concept_gap_min_frequency: 5\n`;
+    const out = applyHealthSilenceBeforeToYaml(withUnindentedComment, "2026-07-07");
+    expect(out).toContain('\n    silence_before: "2026-07-07"\n');
+    expect(out).not.toContain("\n  silence_before:");
+    const parsed = parseBrainYaml(out) as Record<string, Record<string, unknown>>;
+    expect(parsed["health"]?.["silence_before"]).toBe("2026-07-07");
+    expect(parsed["health"]?.["concept_gap_min_frequency"]).toBe(5);
+  });
 });
 
 /**
