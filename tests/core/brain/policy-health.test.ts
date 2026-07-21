@@ -21,11 +21,37 @@ function validate(yaml: string) {
 const HEAD = `schema_version: 1\n`;
 
 describe("BRAIN_HEALTH_DEFAULTS", () => {
-  test("documents the four knob defaults", () => {
+  test("documents the knob defaults", () => {
     expect(BRAIN_HEALTH_DEFAULTS.contradiction_jaccard).toBe(0.5);
     expect(BRAIN_HEALTH_DEFAULTS.concept_gap_min_frequency).toBe(3);
     expect(BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days).toBe(180);
     expect(BRAIN_HEALTH_DEFAULTS.remediation_step_cap).toBe(20);
+    expect(BRAIN_HEALTH_DEFAULTS.silence_before).toBeNull();
+  });
+});
+
+describe("health.silence_before", () => {
+  test("a date-only value resolves as the watermark string", () => {
+    const { config } = validate(HEAD + `health:\n  silence_before: "2026-01-01"\n`);
+    expect(resolveHealth(config).silence_before).toBe("2026-01-01");
+  });
+
+  test("a full ISO timestamp resolves as the watermark string", () => {
+    const { config } = validate(HEAD + `health:\n  silence_before: "2026-01-01T12:00:00Z"\n`);
+    expect(resolveHealth(config).silence_before).toBe("2026-01-01T12:00:00Z");
+  });
+
+  test("an unparseable date is rejected loudly, never silently ignored", () => {
+    expect(() => validate(HEAD + `health:\n  silence_before: "2026-13-99"\n`)).toThrow(
+      BrainConfigError,
+    );
+    expect(() => validate(HEAD + `health:\n  silence_before: "not-a-date"\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("a non-string value is rejected", () => {
+    expect(() => validate(HEAD + `health:\n  silence_before: 2026\n`)).toThrow(BrainConfigError);
   });
 });
 
@@ -50,6 +76,7 @@ describe("health config block", () => {
       concept_gap_min_frequency: 5,
       stale_claim_max_age_days: 90,
       remediation_step_cap: 4,
+      silence_before: null,
     });
   });
 

@@ -15,6 +15,7 @@
 
 import { extractEntities } from "../../search/entities.ts";
 import { tokenise } from "../similarity.ts";
+import { parseIsoUtc } from "./iso-time.ts";
 
 export interface ConceptGapFinding {
   readonly term: string;
@@ -63,5 +64,33 @@ export function detectConceptGaps(
     out.push({ term, frequency });
   }
   out.sort((a, b) => b.frequency - a.frequency || a.term.localeCompare(b.term));
+  return out;
+}
+
+/**
+ * For each entity, the newest authored date (in epoch ms) among the
+ * corpus entries that mention it. Uses the same entity extraction as
+ * {@link detectConceptGaps}, so the keys line up with finding terms.
+ *
+ * An entry whose date is `null`, missing (a shorter `dates` array), or
+ * unparseable contributes `Infinity` - deliberately treating an undated
+ * mention as newer than any watermark, so a gap can only ever be
+ * suppressed when EVERY entry mentioning it is provably older. Used by
+ * the reconcile baseline filter, never by detection itself.
+ */
+export function latestEntryMsByTerm(
+  principles: ReadonlyArray<string>,
+  dates: ReadonlyArray<string | null> | undefined,
+): Map<string, number> {
+  const out = new Map<string, number>();
+  for (let index = 0; index < principles.length; index++) {
+    const rawDate = dates?.[index] ?? null;
+    const parsed = rawDate === null ? Number.NaN : parseIsoUtc(rawDate);
+    const entryMs = Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY;
+    for (const entity of extractEntities(principles[index]!)) {
+      const prior = out.get(entity);
+      if (prior === undefined || entryMs > prior) out.set(entity, entryMs);
+    }
+  }
   return out;
 }

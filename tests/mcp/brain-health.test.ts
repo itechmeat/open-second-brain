@@ -130,4 +130,73 @@ describe("brain_health MCP tool", () => {
     expect(out["verdict"]).toBe("investigate");
     expect((out["contradictions"] as unknown[]).length).toBe(1);
   });
+
+  test("silence_before watermark surfaces the suppressed mirror (snake_case)", async () => {
+    // A burst of confirmed preferences dated well before the watermark
+    // trips batch-inflation detection; setting `health.silence_before`
+    // after that date hides the burst and the tool must mirror the hidden
+    // count back as `suppressed.batch_inflation`.
+    for (let i = 0; i < 6; i++) {
+      writePreference(
+        vault,
+        {
+          slug: `batch-${i}`,
+          topic: `topic-${i}`,
+          principle: `rule number ${i} for the batch`,
+          created_at: "2026-01-01T00:00:00Z",
+          unconfirmed_until: "2026-01-08T00:00:00Z",
+          confirmed_at: "2026-01-01T00:00:00Z",
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [],
+          content_hash: "0".repeat(64),
+        },
+        { overwrite: true },
+      );
+    }
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      'schema_version: 1\n\nhealth:\n  silence_before: "2026-06-01"\n',
+    );
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_health", {});
+
+    expect(out["suppressed"]).toEqual({
+      concept_gaps: 0,
+      batch_inflation: 1,
+      baseline: "2026-06-01",
+    });
+    expect(out["batch_inflation"] as unknown[]).toEqual([]);
+  });
+
+  test("no watermark set means no suppressed key at all", async () => {
+    // Same burst as above, but _brain.yaml (written in beforeEach) carries
+    // no `health.silence_before` - the finding surfaces normally and the
+    // tool must not emit a `suppressed` key, not even an empty one.
+    for (let i = 0; i < 6; i++) {
+      writePreference(
+        vault,
+        {
+          slug: `batch-${i}`,
+          topic: `topic-${i}`,
+          principle: `rule number ${i} for the batch`,
+          created_at: "2026-01-01T00:00:00Z",
+          unconfirmed_until: "2026-01-08T00:00:00Z",
+          confirmed_at: "2026-01-01T00:00:00Z",
+          status: BRAIN_PREFERENCE_STATUS.confirmed,
+          evidenced_by: [],
+          content_hash: "0".repeat(64),
+        },
+        { overwrite: true },
+      );
+    }
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_health", {});
+
+    expect("suppressed" in out).toBe(false);
+    expect((out["batch_inflation"] as unknown[]).length).toBe(1);
+  });
 });

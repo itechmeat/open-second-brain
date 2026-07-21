@@ -564,3 +564,10 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   results byte-identical) and its outcome carries an advisory `surface`
   field when the deterministic router selects the summary surface;
   non-summary queries are unchanged.
+- Since v1.38.0 `brain_health` additively carries a
+  `suppressed: { concept_gaps, batch_inflation, baseline }` object when
+  the optional `health.silence_before` watermark hides at least one
+  advisory finding whose underlying entries are entirely older than the
+  baseline date; the verdict is computed from the surfaced findings, the
+  key is absent whenever nothing is hidden, and with no watermark set
+  the output is byte-identical to v1.37.0.

@@ -131,6 +131,15 @@ async function toolBrainHealth(
       count: b.count,
       topics: b.topics,
     })),
+    ...(sh?.suppressed
+      ? {
+          suppressed: {
+            concept_gaps: sh.suppressed.conceptGaps,
+            batch_inflation: sh.suppressed.batchInflation,
+            baseline: sh.suppressed.baseline,
+          },
+        }
+      : {}),
   };
 }
 

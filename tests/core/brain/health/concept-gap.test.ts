@@ -11,7 +11,10 @@
 
 import { describe, expect, test } from "bun:test";
 
-import { detectConceptGaps } from "../../../../src/core/brain/health/concept-gap.ts";
+import {
+  detectConceptGaps,
+  latestEntryMsByTerm,
+} from "../../../../src/core/brain/health/concept-gap.ts";
 
 describe("detectConceptGaps", () => {
   test("flags an entity recurring across enough distinct principles", () => {
@@ -84,5 +87,31 @@ describe("detectConceptGaps", () => {
       minFrequency: 3,
     });
     expect(gaps).toEqual([{ term: "бэклог", frequency: 3 }]);
+  });
+});
+
+describe("latestEntryMsByTerm", () => {
+  test("returns the newest mentioning-entry date per entity", () => {
+    const map = latestEntryMsByTerm(
+      ["Kanban slow", "Kanban stuck"],
+      ["2026-01-01T00:00:00Z", "2026-03-01T00:00:00Z"],
+    );
+    expect(map.get("kanban")).toBe(Date.parse("2026-03-01T00:00:00Z"));
+  });
+
+  test("an undated, missing, or unparseable entry counts as newer than any watermark", () => {
+    for (const dates of [
+      ["2026-01-01T00:00:00Z", null],
+      ["2026-01-01T00:00:00Z"], // shorter array: index 1 is missing
+      ["2026-01-01T00:00:00Z", "not-a-date"],
+    ]) {
+      const map = latestEntryMsByTerm(["Kanban slow", "Kanban stuck"], dates);
+      expect(map.get("kanban")).toBe(Number.POSITIVE_INFINITY);
+    }
+  });
+
+  test("absent dates array leaves every term undated (Infinity)", () => {
+    const map = latestEntryMsByTerm(["Kanban slow", "Kanban stuck"], undefined);
+    expect(map.get("kanban")).toBe(Number.POSITIVE_INFINITY);
   });
 });

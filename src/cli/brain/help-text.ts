@@ -49,6 +49,7 @@ Brain verbs (observing memory):
   anticipate          Inspect or refresh the anticipatory context cache (--session)
   watchdog            Probe Brain health and plan safe recovery (--remediate, --restore, --force-restore)
   health              Semantic-health report: contradictions, concept gaps, stale claims
+  health-baseline     Acknowledge-before watermark for advisories (set <date>|now / get / clear)
   history             Render a preference's edit-history timeline
   activation          Activation event store: status and sweep
   truth               Claim ledger: ingest, slots, conflicts, aggregate, collisions, sweep
@@ -331,6 +332,13 @@ export const VERB_HELP: Record<string, string> = {
     "Semantic-health report: contradictory confirmed preferences, recurring\n" +
     "concepts with no dedicated preference, and confirmed preferences on stale\n" +
     "evidence, plus a clean/watch/investigate verdict. Read-only.\n",
+  "health-baseline":
+    "usage: o2b brain health-baseline <set <date>|set now|get|clear> [--vault <path>] [--json]\n" +
+    "Acknowledge-before watermark (health.silence_before in _brain.yaml). set\n" +
+    "records that state up to a date is seen and accepted, so concept-gap and\n" +
+    "batch-inflation advisories entirely older than it stop pinning the verdict\n" +
+    "at watch; get prints the current value; clear removes it. Detection and\n" +
+    "stored memory are untouched - only what the report surfaces changes.\n",
   status:
     "usage: o2b brain status [--vault <path>] [--json]\n" +
     "Unified operator status snapshot. Composes doctor, semantic health,\n" +

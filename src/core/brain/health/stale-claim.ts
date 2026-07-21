@@ -11,22 +11,9 @@
  */
 
 import { BRAIN_PREFERENCE_STATUS, type BrainPreferenceStatus } from "../types.ts";
+import { parseIsoUtc } from "./iso-time.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Date-only ISO form (`YYYY-MM-DD`), which the doctor's checkIso allows. */
-const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
-
-/**
- * Parse an ISO timestamp deterministically. A date-only value is
- * expanded to UTC midnight before parsing so the millisecond result -
- * and therefore `ageDays` - is identical on every engine and peer,
- * never drifting to a local-midnight interpretation.
- */
-function parseIsoUtc(value: string): number {
-  const iso = ISO_DATE_ONLY_RE.test(value) ? `${value}T00:00:00Z` : value;
-  return Date.parse(iso);
-}
 
 /** Narrow projection the detector needs; {@link BrainPreference} satisfies it. */
 export interface PreferenceForStaleClaim {

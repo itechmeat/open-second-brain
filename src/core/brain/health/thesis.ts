@@ -55,9 +55,9 @@ import {
   type NoteForContradiction,
 } from "./contradiction.ts";
 import { jaccard, tokenise } from "../similarity.ts";
+import { parseIsoUtc } from "./iso-time.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A thesis is either an active standing position or formally closed. */
 export const THESIS_STATUS = {
@@ -556,11 +556,6 @@ export interface GraveyardThesisFinding {
   readonly ageDays: number;
   /** The recommended action; the operator confirms - never auto-applied. */
   readonly suggestion: "close";
-}
-
-function parseIsoUtc(value: string): number {
-  const iso = ISO_DATE_ONLY_RE.test(value) ? `${value}T00:00:00Z` : value;
-  return Date.parse(iso);
 }
 
 /**

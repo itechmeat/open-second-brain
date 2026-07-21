@@ -1626,6 +1626,13 @@ export interface BrainHealthConfig {
   readonly stale_claim_max_age_days?: number;
   /** Maximum auto-safe steps a single remediation run applies. Positive integer. */
   readonly remediation_step_cap?: number;
+  /**
+   * Acknowledge-before watermark. When set, advisory concept-gap and
+   * batch-inflation findings entirely older than this instant are hidden
+   * from the semantic-health report and verdict. Date-only `YYYY-MM-DD`
+   * or a full ISO-8601 timestamp. Absent: the feature is off.
+   */
+  readonly silence_before?: string;
 }
 
 /**
@@ -1637,6 +1644,8 @@ export interface ResolvedBrainHealthConfig {
   readonly concept_gap_min_frequency: number;
   readonly stale_claim_max_age_days: number;
   readonly remediation_step_cap: number;
+  /** Acknowledge-before watermark, or `null` when the feature is off. */
+  readonly silence_before: string | null;
 }
 
 // ----- Doctor / trust-layer shapes -------------------------------------------
