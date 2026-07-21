@@ -44,6 +44,12 @@ export async function cmdBrainHealth(argv: string[]): Promise<number> {
   }
 
   process.stdout.write(`verdict: ${sh.verdict}\n`);
+  if (sh.suppressed) {
+    const hidden = sh.suppressed.conceptGaps + sh.suppressed.batchInflation;
+    process.stdout.write(
+      `suppressed: ${hidden} finding(s) older than baseline ${sh.suppressed.baseline}\n`,
+    );
+  }
   for (const c of sh.contradictions) {
     process.stdout.write(
       `[contradiction] ${c.aId} (${c.aSign}) vs ${c.bId} (${c.bSign})` +

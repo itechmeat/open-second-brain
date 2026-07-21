@@ -159,3 +159,152 @@ describe("reconcileSemanticHealth", () => {
     expect(report.verdict).toBe("clean");
   });
 });
+
+describe("reconcileSemanticHealth acknowledge-before watermark", () => {
+  test("an unset watermark leaves the report free of a suppressed field", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-05-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-05-01T00:10:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2 },
+    );
+    expect(report.batchInflation).toHaveLength(1);
+    expect(report.conceptGaps.length).toBeGreaterThan(0);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("a burst whose windowEnd predates the watermark is suppressed and clears the verdict", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-01-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-01-01T00:10:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2, silenceBefore: "2026-03-01" },
+    );
+    expect(report.batchInflation).toEqual([]);
+    expect(report.verdict).toBe("clean");
+    expect(report.suppressed).toEqual({
+      conceptGaps: 0,
+      batchInflation: 1,
+      baseline: "2026-03-01",
+    });
+  });
+
+  test("a burst reaching at or after the watermark still surfaces", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-05-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-05-01T00:10:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2, silenceBefore: "2026-03-01" },
+    );
+    expect(report.batchInflation).toHaveLength(1);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("a concept gap is suppressed when every mentioning entry predates the watermark", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [],
+        signSignById: signs,
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
+        corpusPrincipleDates: [
+          "2026-01-01T00:00:00Z",
+          "2026-01-02T00:00:00Z",
+          "2026-01-03T00:00:00Z",
+        ],
+        coveredTopics: [],
+      },
+      { ...config, silenceBefore: "2026-03-01" },
+    );
+    expect(report.conceptGaps).toEqual([]);
+    expect(report.verdict).toBe("clean");
+    expect(report.suppressed).toEqual({
+      conceptGaps: 1,
+      batchInflation: 0,
+      baseline: "2026-03-01",
+    });
+  });
+
+  test("a concept gap with one fresh mention surfaces at full frequency", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [],
+        signSignById: signs,
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
+        corpusPrincipleDates: [
+          "2026-01-01T00:00:00Z",
+          "2026-01-02T00:00:00Z",
+          "2026-06-01T00:00:00Z",
+        ],
+        coveredTopics: [],
+      },
+      { ...config, silenceBefore: "2026-03-01" },
+    );
+    const kanban = report.conceptGaps.find((g) => g.term === "kanban");
+    expect(kanban?.frequency).toBe(3);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("an undated mention keeps the gap visible (undated counts as newer)", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [],
+        signSignById: signs,
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
+        corpusPrincipleDates: ["2026-01-01T00:00:00Z", "2026-01-02T00:00:00Z", null],
+        coveredTopics: [],
+      },
+      { ...config, silenceBefore: "2026-03-01" },
+    );
+    expect(report.conceptGaps.some((g) => g.term === "kanban")).toBe(true);
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("a set watermark that hides nothing keeps the report byte-identical (no suppressed field)", () => {
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [pref({ id: "pref-a", principle: "write tests first" })],
+        signSignById: signs,
+        corpusPrinciples: ["write tests first"],
+        coveredTopics: ["tests-first"],
+      },
+      { ...config, silenceBefore: "2026-03-01" },
+    );
+    expect(report.verdict).toBe("clean");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("an unparseable watermark throws rather than silently disabling the filter", () => {
+    expect(() =>
+      reconcileSemanticHealth(
+        {
+          preferences: [],
+          signSignById: signs,
+          corpusPrinciples: [],
+          coveredTopics: [],
+        },
+        { ...config, silenceBefore: "not-a-date" },
+      ),
+    ).toThrow();
+  });
+});

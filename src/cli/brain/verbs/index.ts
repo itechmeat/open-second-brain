@@ -23,6 +23,7 @@ export { cmdBrainRollback } from "./rollback.ts";
 export { cmdBrainDoctor } from "./doctor.ts";
 export { cmdBrainWatchdog } from "./watchdog.ts";
 export { cmdBrainHealth } from "./health.ts";
+export { cmdBrainHealthBaseline } from "./health-baseline.ts";
 export { cmdBrainStatus } from "./status.ts";
 export { cmdBrainHistory } from "./history.ts";
 export { cmdBrainActivation } from "./activation.ts";

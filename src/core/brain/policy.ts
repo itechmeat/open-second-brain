@@ -21,6 +21,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { parseBrainYaml, type ParsedBlock } from "./yaml-parse.ts";
+import { isValidIsoInstant } from "./health/iso-time.ts";
 
 import type {
   BrainActiveConfig,
@@ -275,6 +276,7 @@ export const BRAIN_HEALTH_DEFAULTS: ResolvedBrainHealthConfig = Object.freeze({
   concept_gap_min_frequency: 3,
   stale_claim_max_age_days: 180,
   remediation_step_cap: 20,
+  silence_before: null,
 }) as ResolvedBrainHealthConfig;
 
 /**
@@ -291,6 +293,7 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
     stale_claim_max_age_days:
       h.stale_claim_max_age_days ?? BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days,
     remediation_step_cap: h.remediation_step_cap ?? BRAIN_HEALTH_DEFAULTS.remediation_step_cap,
+    silence_before: h.silence_before ?? BRAIN_HEALTH_DEFAULTS.silence_before,
   };
 }
 
@@ -1341,6 +1344,7 @@ export function validateBrainConfigDetailed(
   //     concept_gap_min_frequency: 3 # positive integer
   //     stale_claim_max_age_days: 180
   //     remediation_step_cap: 20
+  //     silence_before: "2026-01-01" # ISO date/timestamp (watermark)
   // Absent block → `cfg.health` undefined; resolveHealth returns the
   // bit-identical defaults.
   let health: BrainHealthConfig | undefined;
@@ -1371,6 +1375,17 @@ export function validateBrainConfigDetailed(
         partialH[key] = v;
       }
     }
+    if ("silence_before" in hObj) {
+      const v = hObj["silence_before"];
+      if (typeof v !== "string" || !isValidIsoInstant(v)) {
+        throw new BrainConfigError(
+          "must be an ISO-8601 date (YYYY-MM-DD) or timestamp",
+          "health.silence_before",
+          source,
+        );
+      }
+      partialH["silence_before"] = v;
+    }
     warnUnknownKeys(
       hObj,
       [
@@ -1378,6 +1393,7 @@ export function validateBrainConfigDetailed(
         "concept_gap_min_frequency",
         "stale_claim_max_age_days",
         "remediation_step_cap",
+        "silence_before",
       ],
       "health",
       source,

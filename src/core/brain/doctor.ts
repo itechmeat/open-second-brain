@@ -515,6 +515,7 @@ interface SignalSignRecord {
   readonly id: string;
   readonly sign: import("./types.ts").BrainSignalSign;
   readonly principle: string;
+  readonly created_at: string;
 }
 
 /**
@@ -531,7 +532,12 @@ function readAllSignalRecords(vault: string): ReadonlyArray<SignalSignRecord> {
       if (!name.endsWith(".md") || !name.startsWith("sig-")) continue;
       try {
         const sig = parseSignal(join(dir, name));
-        out.push({ id: sig.id, sign: sig.signal, principle: sig.principle });
+        out.push({
+          id: sig.id,
+          sign: sig.signal,
+          principle: sig.principle,
+          created_at: sig.created_at,
+        });
       } catch {
         // schema error - reported by checkSignals
       }
@@ -560,14 +566,22 @@ function checkSemanticHealth(
     ...signals.map((s) => s.principle),
     ...prefRecords.map((r) => r.pref.principle),
   ];
+  // Aligned index-for-index with corpusPrinciples: the authored date of
+  // each entry, so the baseline watermark can tell a concept gap that is
+  // entirely old from one still mentioned in fresh memory.
+  const corpusPrincipleDates: (string | null)[] = [
+    ...signals.map((s) => s.created_at),
+    ...prefRecords.map((r) => r.pref.created_at),
+  ];
   const coveredTopics = prefRecords.map((r) => r.pref.topic);
 
   const report = reconcileSemanticHealth(
-    { preferences, signSignById, corpusPrinciples, coveredTopics },
+    { preferences, signSignById, corpusPrinciples, corpusPrincipleDates, coveredTopics },
     {
       contradictionJaccard: health.contradiction_jaccard,
       conceptGapMinFrequency: health.concept_gap_min_frequency,
       staleClaimMaxAgeDays: health.stale_claim_max_age_days,
+      ...(health.silence_before !== null ? { silenceBefore: health.silence_before } : {}),
       now,
     },
   );
