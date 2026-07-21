@@ -60,7 +60,7 @@ export async function cmdBrainHealthBaseline(argv: string[]): Promise<number> {
     }
     const { vault } = brainVerbContext(flags);
     try {
-      writeHealthBaseline(vault, value);
+      await writeHealthBaseline(vault, value);
       if (json) okJson({ baseline: value });
       else ok(`health baseline set to ${value}`);
       return 0;
@@ -73,7 +73,7 @@ export async function cmdBrainHealthBaseline(argv: string[]): Promise<number> {
     const { vault } = brainVerbContext(flags);
     try {
       const existed = readHealthBaseline(vault) !== null;
-      writeHealthBaseline(vault, null);
+      await writeHealthBaseline(vault, null);
       if (json) okJson({ cleared: existed });
       else ok(existed ? "health baseline cleared" : "no health baseline set");
       return 0;

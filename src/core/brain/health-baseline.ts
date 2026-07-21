@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { atomicWriteText } from "../fs-atomic.ts";
+import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath } from "./paths.ts";
 import { loadBrainConfig, resolveHealth } from "./policy.ts";
 import { isValidIsoInstant } from "./health/iso-time.ts";
@@ -37,21 +38,29 @@ export function readHealthBaseline(vault: string): string | null {
  * Overwrite (non-null) or remove (`null`) the `health.silence_before`
  * line in `_brain.yaml`. Rejects an unparseable value loudly rather than
  * writing a watermark the loader would later refuse.
+ *
+ * Locked with the same `withFileLock` + `atomicWriteText` convention
+ * schema-mutate.ts uses for `_brain.yaml`: read-modify-write under an
+ * exclusive lock so a concurrent writer (another `health-baseline set`,
+ * or a schema mutation) can't race this read-modify-write and lose an
+ * update to a last-writer-wins overwrite.
  */
-export function writeHealthBaseline(vault: string, value: string | null): void {
+export async function writeHealthBaseline(vault: string, value: string | null): Promise<void> {
   if (value !== null && !isValidIsoInstant(value)) {
     throw new HealthBaselineError(
       `not an ISO-8601 date (YYYY-MM-DD) or timestamp: ${JSON.stringify(value)}`,
     );
   }
   const path = brainConfigPath(vault);
-  if (!existsSync(path)) {
-    throw new HealthBaselineError("_brain.yaml is missing; run `o2b brain init` to bootstrap it");
-  }
-  const before = readFileSync(path, "utf8");
-  // Temp-file + rename, matching how schema-mutate.ts writes _brain.yaml:
-  // a crash mid-write must never truncate the vault config.
-  atomicWriteText(path, applyHealthSilenceBeforeToYaml(before, value));
+  await withFileLock(path, { staleMs: 30_000, retries: 3 }, () => {
+    if (!existsSync(path)) {
+      throw new HealthBaselineError("_brain.yaml is missing; run `o2b brain init` to bootstrap it");
+    }
+    const before = readFileSync(path, "utf8");
+    // Temp-file + rename, matching how schema-mutate.ts writes _brain.yaml:
+    // a crash mid-write must never truncate the vault config.
+    atomicWriteText(path, applyHealthSilenceBeforeToYaml(before, value));
+  });
 }
 
 /** ISO instants contain no YAML-hazardous bytes, so a plain quote round-trips. */
