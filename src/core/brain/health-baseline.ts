@@ -13,8 +13,9 @@
  * `health/iso-time.ts`, the single source shared with the detectors.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
+import { atomicWriteText } from "../fs-atomic.ts";
 import { brainConfigPath } from "./paths.ts";
 import { loadBrainConfig, resolveHealth } from "./policy.ts";
 import { isValidIsoInstant } from "./health/iso-time.ts";
@@ -48,7 +49,9 @@ export function writeHealthBaseline(vault: string, value: string | null): void {
     throw new HealthBaselineError("_brain.yaml is missing; run `o2b brain init` to bootstrap it");
   }
   const before = readFileSync(path, "utf8");
-  writeFileSync(path, applyHealthSilenceBeforeToYaml(before, value));
+  // Temp-file + rename, matching how schema-mutate.ts writes _brain.yaml:
+  // a crash mid-write must never truncate the vault config.
+  atomicWriteText(path, applyHealthSilenceBeforeToYaml(before, value));
 }
 
 /** ISO instants contain no YAML-hazardous bytes, so a plain quote round-trips. */

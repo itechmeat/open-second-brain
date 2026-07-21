@@ -220,6 +220,68 @@ describe("reconcileSemanticHealth acknowledge-before watermark", () => {
     expect("suppressed" in report).toBe(false);
   });
 
+  test("a burst whose windowEnd equals the watermark instant surfaces (strictly-older boundary)", () => {
+    // windowEnd == watermark: `endMs < watermarkMs` is false, so the burst
+    // is kept. Only a window entirely BEFORE the watermark is hidden.
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-03-01T00:00:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-03-01T00:00:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2, silenceBefore: "2026-03-01" },
+    );
+    expect(report.batchInflation).toHaveLength(1);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("a burst straddling the watermark surfaces (only fully-old bursts hide)", () => {
+    // windowStart before, windowEnd after the watermark (1h apart, inside
+    // the 24h default window). The burst is not entirely old, so it stays.
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [
+          pref({ id: "pref-a", confirmed_at: "2026-02-28T23:30:00Z" }),
+          pref({ id: "pref-b", confirmed_at: "2026-03-01T00:30:00Z" }),
+        ],
+        signSignById: signs,
+        corpusPrinciples: [],
+        coveredTopics: [],
+      },
+      { ...config, batchInflationMinBurstSize: 2, silenceBefore: "2026-03-01" },
+    );
+    expect(report.batchInflation).toHaveLength(1);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
+  test("a concept gap whose newest mention equals the watermark surfaces (kept on the boundary)", () => {
+    // latest == watermark: `latest >= watermarkMs` is true, so the gap is
+    // kept. Suppression needs EVERY mention strictly older.
+    const report = reconcileSemanticHealth(
+      {
+        preferences: [],
+        signSignById: signs,
+        corpusPrinciples: ["Kanban slow", "Kanban stuck", "Kanban grooming"],
+        corpusPrincipleDates: [
+          "2026-01-01T00:00:00Z",
+          "2026-01-02T00:00:00Z",
+          "2026-03-01T00:00:00Z",
+        ],
+        coveredTopics: [],
+      },
+      { ...config, silenceBefore: "2026-03-01" },
+    );
+    expect(report.conceptGaps.some((g) => g.term === "kanban")).toBe(true);
+    expect(report.verdict).toBe("watch");
+    expect("suppressed" in report).toBe(false);
+  });
+
   test("a concept gap is suppressed when every mentioning entry predates the watermark", () => {
     const report = reconcileSemanticHealth(
       {
