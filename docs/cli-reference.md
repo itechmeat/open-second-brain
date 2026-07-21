@@ -378,6 +378,26 @@ status across every discovered code project, threading `project_path`
 per query when supported (feature-detected) and degrading with an
 explicit note when not.
 
+### Semantic-health baselining (since v1.38.0)
+
+```text
+o2b brain health-baseline    set <date>|now | get | clear - record, show, or remove the health.silence_before watermark in _brain.yaml without hand-editing it; set accepts a date-only or full ISO-8601 value (or the literal now) and rejects anything else with exit 2; the upsert preserves unrelated config content byte-for-byte under a file lock with an atomic rename
+```
+
+The watermark acknowledges vault history up to a date: `o2b brain health`
+suppresses advisory findings whose underlying entries are entirely older
+than `health.silence_before` - a `batch-concept-inflation` burst whose
+window ended before it, a `concept-gap` term whose corpus mentions all
+predate it - and computes the verdict from the surfaced findings only.
+An entry without a parseable timestamp counts as newer than any
+watermark, so it is never suppressed, and a concept-gap term with even
+one post-baseline mention surfaces with its full frequency. Whenever the
+watermark hides at least one finding, the report prints
+`suppressed: N finding(s) older than baseline <date>` and carries an
+additive `suppressed` object with per-detector counts; nothing is ever
+hidden silently. An invalid config value is an explicit error at load,
+and with no watermark set every output is byte-identical to v1.37.0.
+
 ## Stability and trust (since v1.0.0)
 
 ```text

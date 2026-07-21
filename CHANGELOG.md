@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.38.0] - 2026-07-21
+
+A semantic-health baselining release ([#147](https://github.com/itechmeat/open-second-brain/issues/147)): an optional acknowledge-before watermark lets an operator declare "I have seen and accepted the state up to this date", so a one-time bulk seed of preferences no longer pins the health verdict at `watch` forever through the `concept-gap` and `batch-concept-inflation` advisories. Detection and storage are unchanged; the watermark only filters which findings are surfaced, the verdict is computed from the surfaced set, and suppression is always reported explicitly. With no watermark set, every output is byte-identical to 1.37.0.
+
+### Added
+
+- Semantic-health baseline watermark: an optional `health.silence_before` date (date-only or full ISO-8601 timestamp) in `_brain.yaml` suppresses advisory findings whose underlying entries are entirely older than the watermark - a `batch-concept-inflation` burst whose window ended before it, a `concept-gap` term whose corpus mentions all predate it. Conservative by construction: an entry with no parseable timestamp counts as newer than any watermark, and a concept-gap term with even one post-baseline mention surfaces with its full frequency. An invalid value is an explicit config error, never silently ignored.
+- `o2b brain health-baseline set <date>|now`, `get`, and `clear` record, show, and remove the watermark without hand-editing `_brain.yaml`; the upsert preserves unrelated config content byte-for-byte under the repository's file-lock plus atomic-rename convention. Usage errors exit 2 and `--json` operational failures emit `{ok:false}` envelopes.
+- Explicit suppression reporting: whenever the watermark hides at least one finding, `o2b brain health` prints `suppressed: N finding(s) older than baseline <date>` and the report carries an additive `suppressed` object with per-detector counts and the baseline date, mirrored on MCP `brain_health` as `suppressed: { concept_gaps, batch_inflation, baseline }`; the field is absent whenever nothing is hidden.
+
+### Changed
+
+- The four detector-local ISO timestamp parsers (stale-claim, batch-inflation, thesis, and the new baseline code) consolidated into one shared `iso-time` helper.
+
 ## [1.37.0] - 2026-07-19
 
 A retrieval quality and context delivery wave: nine units that make search answer relationship-shaped and summary-shaped questions deterministically, explain and plan retrieval without touching live policy, and put the right context in front of the agent while stale operational state stays out. Relationship queries traverse typed edges as a fourth RRF arm, dedup and search respect composite scopes, operational state moves to an overwrite-only lane with a retrieval-time staleness barrier, prompts gain a cadence-controlled navigation tier, an opt-in strict hook redirects the first raw vault read to the search index, and codegraph partnering covers every project in the workspace. Two shared seams carry the wave: a composite scope-key module and an index-admission predicate. The kernel still calls no LLM, and every new surface is byte-identical when its flag or param is omitted.
@@ -6623,6 +6637,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.38.0]: https://github.com/itechmeat/open-second-brain/compare/v1.37.0...v1.38.0
 [1.37.0]: https://github.com/itechmeat/open-second-brain/compare/v1.36.0...v1.37.0
 [1.36.0]: https://github.com/itechmeat/open-second-brain/compare/v1.35.0...v1.36.0
 [1.35.0]: https://github.com/itechmeat/open-second-brain/compare/v1.34.0...v1.35.0
