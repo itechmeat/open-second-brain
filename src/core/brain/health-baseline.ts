@@ -76,21 +76,41 @@ function formatSilenceBeforeYamlValue(value: string): string {
  * preserved byte-for-byte.
  */
 export function applyHealthSilenceBeforeToYaml(configText: string, value: string | null): string {
+  // CRLF `_brain.yaml` files split into lines that keep a trailing `\r` (the
+  // split is on `\n` only), so untouched lines round-trip byte-for-byte
+  // through `lines.join("\n")` automatically. Only text this function
+  // generates - a fresh header, a replaced/inserted `silence_before` line -
+  // needs to carry that trailing `\r` explicitly to match.
+  const eol = configText.includes("\r\n") ? "\r\n" : "\n";
   const hadContent = configText.length > 0;
-  const normalized = !hadContent || configText.endsWith("\n") ? configText : `${configText}\n`;
+  const normalized = !hadContent || configText.endsWith("\n") ? configText : `${configText}${eol}`;
   const lines = normalized.split("\n");
-  const headerIdx = lines.findIndex((line) => /^health:[ \t]*$/.test(line));
+  const headerIdx = lines.findIndex((line) => /^health:[ \t]*\r?$/.test(line));
 
   if (value !== null) {
-    const rendered = `  silence_before: ${formatSilenceBeforeYamlValue(value)}`;
+    const quoted = formatSilenceBeforeYamlValue(value);
     if (headerIdx < 0) {
-      const base = normalized.replace(/\n*$/, "\n");
-      const separator = hadContent ? "\n" : "";
-      return `${base}${separator}health:\n${rendered}\n`;
+      const base = normalized.replace(/[\r\n]+$/, "") + eol;
+      const separator = hadContent ? eol : "";
+      return `${base}${separator}health:${eol}  silence_before: ${quoted}${eol}`;
     }
     const childIdx = findHealthChild(lines, headerIdx, /^[ \t]+silence_before[ \t]*:/);
-    if (childIdx >= 0) lines[childIdx] = rendered;
-    else lines.splice(headerIdx + 1, 0, rendered);
+    if (childIdx >= 0) {
+      // Replace in place: keep the line's own indent and line ending rather
+      // than forcing two spaces, so an existing wider (or narrower) block
+      // indent - which parseBrainYaml requires siblings to share - survives.
+      const existing = lines[childIdx]!;
+      const trailingCr = existing.endsWith("\r") ? "\r" : "";
+      const indent = /^[ \t]+/.exec(existing)?.[0] ?? "  ";
+      lines[childIdx] = `${indent}silence_before: ${quoted}${trailingCr}`;
+    } else {
+      // New key in an existing block: match a sibling's indent so the
+      // inserted line doesn't clash with the block's established width.
+      // Fall back to two spaces only when the block has no siblings yet.
+      const indent = detectHealthSiblingIndent(lines, headerIdx) ?? "  ";
+      const trailingCr = eol === "\r\n" ? "\r" : "";
+      lines.splice(headerIdx + 1, 0, `${indent}silence_before: ${quoted}${trailingCr}`);
+    }
     return lines.join("\n");
   }
 
@@ -106,6 +126,23 @@ export function applyHealthSilenceBeforeToYaml(configText: string, value: string
     lines.splice(headerIdx, removeTo - headerIdx);
   }
   return lines.join("\n");
+}
+
+/**
+ * Leading whitespace of the first child line inside the `health:` block
+ * (headerIdx), or `null` when the block has no children yet (empty or
+ * about to be populated for the first time). `parseBrainYaml` requires all
+ * siblings in a block to share one indent, so any inserted key must match
+ * whatever indent the block already established.
+ */
+function detectHealthSiblingIndent(lines: ReadonlyArray<string>, headerIdx: number): string | null {
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "") continue;
+    if (!/^[ \t]/.test(line)) break;
+    return /^[ \t]+/.exec(line)![0];
+  }
+  return null;
 }
 
 /**

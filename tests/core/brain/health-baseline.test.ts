@@ -66,6 +66,61 @@ describe("applyHealthSilenceBeforeToYaml", () => {
   test("clearing an absent watermark is a no-op", () => {
     expect(applyHealthSilenceBeforeToYaml(BASE, null)).toBe(BASE);
   });
+
+  test("CRLF file: upserts into an existing health block in place, preserving line endings", () => {
+    const withBlock = `${BASE}\nhealth:\n  concept_gap_min_frequency: 5\n`;
+    const crlf = withBlock.replace(/\n/g, "\r\n");
+    const out = applyHealthSilenceBeforeToYaml(crlf, "2026-02-02");
+    expect(out).not.toContain("\r\r\n");
+    expect(out.includes("\r\n")).toBe(true);
+    expect(out.includes("\n")).toBe(true);
+    // Every line-ending in the file is \r\n (no bare \n survives).
+    expect(out.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(silenceOf(out)).toBe("2026-02-02");
+    const parsed = parseBrainYaml(out) as Record<string, Record<string, unknown>>;
+    expect(parsed["health"]?.["concept_gap_min_frequency"]).toBe(5);
+    expect(out.match(/silence_before/g)?.length).toBe(1);
+
+    const second = applyHealthSilenceBeforeToYaml(out, "2026-03-03");
+    expect(second.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(silenceOf(second)).toBe("2026-03-03");
+    expect(second.match(/silence_before/g)?.length).toBe(1);
+
+    const cleared = applyHealthSilenceBeforeToYaml(second, null);
+    expect(cleared.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(silenceOf(cleared)).toBeUndefined();
+    const clearedParsed = parseBrainYaml(cleared) as Record<string, Record<string, unknown>>;
+    expect(clearedParsed["health"]?.["concept_gap_min_frequency"]).toBe(5);
+  });
+
+  test("CRLF file without a health block: creates one and keeps line endings intact", () => {
+    const crlfBase = BASE.replace(/\n/g, "\r\n");
+    const out = applyHealthSilenceBeforeToYaml(crlfBase, "2026-01-01");
+    expect(out.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(silenceOf(out)).toBe("2026-01-01");
+    expect(out).toContain("vault:\r\n  ignore_paths:\r\n    - .git");
+
+    const cleared = applyHealthSilenceBeforeToYaml(out, null);
+    expect(cleared.replace(/\r\n/g, "")).not.toContain("\n");
+    expect(silenceOf(cleared)).toBeUndefined();
+    expect(cleared).not.toContain("health:");
+  });
+
+  test("a 4-space-indented health block keeps sibling indent and stays parseable", () => {
+    const fourSpace = `${BASE}\nhealth:\n    concept_gap_min_frequency: 5\n`;
+    const out = applyHealthSilenceBeforeToYaml(fourSpace, "2026-04-04");
+    // Inserted line matches the block's existing 4-space sibling indent.
+    expect(out).toContain('\n    silence_before: "2026-04-04"\n');
+    expect(out).not.toContain("\n  silence_before:");
+    // Must actually parse: parseBrainYaml rejects mismatched sibling indents.
+    const parsed = parseBrainYaml(out) as Record<string, Record<string, unknown>>;
+    expect(parsed["health"]?.["silence_before"]).toBe("2026-04-04");
+    expect(parsed["health"]?.["concept_gap_min_frequency"]).toBe(5);
+
+    const second = applyHealthSilenceBeforeToYaml(out, "2026-05-05");
+    const secondParsed = parseBrainYaml(second) as Record<string, Record<string, unknown>>;
+    expect(secondParsed["health"]?.["silence_before"]).toBe("2026-05-05");
+  });
 });
 
 /**
