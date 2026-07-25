@@ -32,6 +32,7 @@ import type {
   BrainRollupConfig,
   BrainHealthConfig,
   BrainHygieneConfig,
+  BrainIntegrityConfig,
   BrainLessonsConfig,
   BrainRecallConfig,
   BrainLinkGraphConfig,
@@ -44,6 +45,7 @@ import type {
   DisciplineReportConfig,
   ResolvedBrainGuardrailConfig,
   ResolvedBrainHealthConfig,
+  ResolvedBrainIntegrityConfig,
   ResolvedBrainLinkGraphConfig,
   ResolvedBrainNotesConfig,
   ResolvedBrainSessionsConfig,
@@ -55,6 +57,7 @@ import {
   validateSchemaDeclarations,
 } from "./schema-vocab.ts";
 import { SCOPE_MAX_LEN } from "./signal.ts";
+import { GATE_MODE, GATE_MODES, isGateMode } from "../integrity/stamp.ts";
 // Imported from `defaults.ts` (not from `vault-scope/index.ts`) to
 // break the module-init cycle: the resolver lives in `index.ts` and
 // itself imports `loadBrainConfig` from this file. See the
@@ -298,6 +301,73 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
 }
 
 /**
+ * Sub-keys of the `integrity:` block whose value is a gate mode. Named
+ * once and reused by the validator, the unknown-key list, and the
+ * resolver so the three can never disagree about what the block holds.
+ */
+const INTEGRITY_GATE_KEYS = ["owner_scope_delivery", "embedding_abi"] as const;
+
+/**
+ * How long a context pack stays servable after it was built, when
+ * `_brain.yaml` omits `integrity.pack_validity_seconds`.
+ *
+ * 900 seconds (15 minutes) is the same bound `CRUTCH_LINK_WINDOW_MS`
+ * already uses for "still the same working session", so the pack's outer
+ * staleness bound and the session-continuity bound agree on what a
+ * session is rather than inventing a second, conflicting answer.
+ *
+ * It is deliberately much longer than the anticipatory cache's 120 s TTL:
+ * the provenance stamp is the PRIMARY invalidator (it observes the vault
+ * edits that matter), and this window is the backstop for the changes a
+ * stamp cannot observe. A short window here would duplicate the TTL and
+ * mask which mechanism actually did the invalidating.
+ *
+ * The value is unbounded above on purpose - unlike the instruction-file
+ * ceiling, a large window does not silently disable anything, because
+ * the stamp still refuses a drifted pack.
+ */
+export const PACK_VALIDITY_SECONDS_DEFAULT = 900;
+
+/**
+ * Default `integrity:` block (context-integrity-gates). Absent block (or
+ * absent individual keys) falls back here via `resolveIntegrity`.
+ *
+ * Both gate defaults are the modes that leave every existing vault
+ * byte-identical:
+ *   - `owner_scope_delivery: off` - the delivery path documents a "null
+ *     scope is byte-identical" contract throughout, so defaulting a
+ *     scope would silently narrow vaults that never opted in. There is
+ *     no writer surface for `owner` yet, so nothing would be gained.
+ *   - `embedding_abi: warn` - `vec_version()` is not stable across
+ *     environments, so two peers on different sqlite-vec builds would
+ *     each see a mismatch. Refusing by default risks a rebuild loop on a
+ *     synced vault; reporting cannot.
+ */
+export const BRAIN_INTEGRITY_DEFAULTS: ResolvedBrainIntegrityConfig = Object.freeze({
+  owner_scope_delivery: GATE_MODE.off,
+  embedding_abi: GATE_MODE.warn,
+  pack_validity_seconds: PACK_VALIDITY_SECONDS_DEFAULT,
+}) as ResolvedBrainIntegrityConfig;
+
+/**
+ * Merge a parsed `integrity` block (or `undefined`) with
+ * `BRAIN_INTEGRITY_DEFAULTS`. Resolution happens on the READ side, not
+ * at parse time, so `cfg.integrity` keeps recording exactly what the
+ * operator wrote and "absent" stays distinguishable from "explicitly set
+ * to the default".
+ */
+export function resolveIntegrity(cfg: BrainConfig): ResolvedBrainIntegrityConfig {
+  const it = cfg.integrity;
+  if (it === undefined) return BRAIN_INTEGRITY_DEFAULTS;
+  return {
+    owner_scope_delivery: it.owner_scope_delivery ?? BRAIN_INTEGRITY_DEFAULTS.owner_scope_delivery,
+    embedding_abi: it.embedding_abi ?? BRAIN_INTEGRITY_DEFAULTS.embedding_abi,
+    pack_validity_seconds:
+      it.pack_validity_seconds ?? BRAIN_INTEGRITY_DEFAULTS.pack_validity_seconds,
+  };
+}
+
+/**
  * Default `notes:` block (v0.11.0). Empty `read_paths` list means
  * the agent does not scan any user-authored notes. The operator
  * opts in by listing folders in `_brain.yaml`.
@@ -394,6 +464,17 @@ export const loadTemporalConfigSafe = makeSafeLoader(resolveTemporal, BRAIN_TEMP
  * the opt-in toggles therefore default off rather than throwing.
  */
 export const loadGuardrailsConfigSafe = makeSafeLoader(resolveGuardrails, BRAIN_GUARDRAIL_DEFAULTS);
+
+/**
+ * Load + resolve the `integrity:` block, falling back to
+ * `BRAIN_INTEGRITY_DEFAULTS` when the config file is missing, malformed,
+ * or otherwise unreadable. The search layer reads its gate on a store
+ * open, which must keep working on a vault that has never run
+ * `o2b brain init`; falling back means the gate lands on its documented
+ * default rather than the read failing on a config problem it has no
+ * part in.
+ */
+export const loadIntegrityConfigSafe = makeSafeLoader(resolveIntegrity, BRAIN_INTEGRITY_DEFAULTS);
 
 /**
  * Load the configured `feedback.default_scope`, or `undefined` when the
@@ -1402,6 +1483,52 @@ export function validateBrainConfigDetailed(
     health = Object.keys(partialH).length > 0 ? (partialH as BrainHealthConfig) : {};
   }
 
+  // Optional `integrity:` block (context-integrity-gates). Shape:
+  //   integrity:
+  //     owner_scope_delivery: off | warn | fail   # default off
+  //     embedding_abi: off | warn | fail          # default warn
+  //     pack_validity_seconds: 900                # positive integer
+  // Every value is a hard error when out of range. A gate that clamped
+  // an unrecognised mode to `off`, or a validity window that silently
+  // reverted to the default, would be indistinguishable from the
+  // operator's intent - which is the exact class of silent degradation
+  // this block exists to gate. Absent block → `cfg.integrity` undefined;
+  // `resolveIntegrity` returns the bit-identical defaults.
+  let integrity: BrainIntegrityConfig | undefined;
+  if (hasBlock(obj, "integrity", knownBlockKeys)) {
+    const itObj = requireMapBlock(obj["integrity"], "integrity", source);
+    const partialIt: Record<string, unknown> = {};
+    for (const key of INTEGRITY_GATE_KEYS) {
+      if (key in itObj) {
+        const v = itObj[key];
+        if (!isGateMode(v)) {
+          throw new BrainConfigError(
+            `must be one of ${GATE_MODES.join(", ")}; got ${describe(v)}`,
+            `integrity.${key}`,
+            source,
+          );
+        }
+        partialIt[key] = v;
+      }
+    }
+    if ("pack_validity_seconds" in itObj) {
+      requirePositiveInteger(
+        "integrity.pack_validity_seconds",
+        itObj["pack_validity_seconds"],
+        source,
+      );
+      partialIt["pack_validity_seconds"] = itObj["pack_validity_seconds"] as number;
+    }
+    warnUnknownKeys(
+      itObj,
+      [...INTEGRITY_GATE_KEYS, "pack_validity_seconds"],
+      "integrity",
+      source,
+      warnings,
+    );
+    integrity = Object.keys(partialIt).length > 0 ? (partialIt as BrainIntegrityConfig) : {};
+  }
+
   // Optional `notes:` block (v0.11.0). Shape:
   //   notes:
   //     read_paths:
@@ -1766,6 +1893,7 @@ export function validateBrainConfigDetailed(
     ...(notes !== undefined ? { notes } : {}),
     ...(sessions !== undefined ? { sessions } : {}),
     ...(health !== undefined ? { health } : {}),
+    ...(integrity !== undefined ? { integrity } : {}),
     ...(schema !== undefined ? { schema } : {}),
     ...(hygiene !== undefined ? { hygiene } : {}),
     ...(anticipatory !== undefined ? { anticipatory } : {}),

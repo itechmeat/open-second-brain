@@ -36,6 +36,8 @@ export type {
   BrainRetireConfig,
   BrainConfidenceConfig,
   BrainSnapshotsConfig,
+  BrainIntegrityConfig,
+  ResolvedBrainIntegrityConfig,
 } from "./types.ts";
 
 export {
@@ -114,6 +116,10 @@ export {
   loadBrainConfigDetailed,
   validateBrainConfig,
   validateBrainConfigDetailed,
+  BRAIN_INTEGRITY_DEFAULTS,
+  PACK_VALIDITY_SECONDS_DEFAULT,
+  resolveIntegrity,
+  loadIntegrityConfigSafe,
 } from "./policy.ts";
 export { parseBrainYaml } from "./yaml-parse.ts";
 

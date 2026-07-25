@@ -11,6 +11,14 @@
  * sections 5 (file formats) and 10 (configuration).
  */
 
+// The one import this module carries, and it is TYPE-ONLY: `GateMode`
+// is owned by the integrity seam that acts on it, so the `_brain.yaml`
+// shape cannot drift from the vocabulary the gate actually understands.
+// `verbatimModuleSyntax` erases this entirely, and `stamp.ts` imports
+// nothing itself, so the "plain-data leaf with no runtime dependency"
+// property this module relies on is unchanged.
+import type { GateMode } from "../integrity/stamp.ts";
+
 // ----- Status & retire-reason enums -----------------------------------------
 //
 // We use `as const` objects with derived union types instead of TypeScript
@@ -1415,6 +1423,14 @@ export interface BrainConfig {
    */
   readonly health?: BrainHealthConfig;
   /**
+   * Optional `integrity:` block (context-integrity-gates). Chooses where
+   * refusal begins for the owner-scoped delivery filter and the
+   * embedding-store ABI check, and bounds how long a context pack stays
+   * valid. Absent: callers fall back to `BRAIN_INTEGRITY_DEFAULTS` via
+   * `resolveIntegrity`, which leaves every existing vault unchanged.
+   */
+  readonly integrity?: BrainIntegrityConfig;
+  /**
    * Optional runtime schema vocabulary declarations. Absent by default;
    * consumers resolve built-ins through `resolveSchemaVocabulary`.
    */
@@ -1646,6 +1662,53 @@ export interface ResolvedBrainHealthConfig {
   readonly remediation_step_cap: number;
   /** Acknowledge-before watermark, or `null` when the feature is off. */
   readonly silence_before: string | null;
+}
+
+/**
+ * Optional `integrity:` block (context-integrity-gates). Chooses where
+ * refusal begins for the two gates whose correct strictness the
+ * ENVIRONMENT decides rather than the release, and bounds how long a
+ * context pack stays valid. Absent: callers fall back to
+ * `BRAIN_INTEGRITY_DEFAULTS` via `resolveIntegrity`.
+ *
+ * Every field is an operator knob, so an out-of-range value is a hard
+ * error at load time and never clamps: a gate that silently reverted to
+ * a laxer mode would be the exact silent degradation this block exists
+ * to remove.
+ */
+export interface BrainIntegrityConfig {
+  /**
+   * Where owner-scoped isolation begins on the context-delivery
+   * surfaces. Defaults to `off` because every module on that path
+   * documents a "null scope is byte-identical" contract, so enabling it
+   * by default would silently narrow existing vaults.
+   */
+  readonly owner_scope_delivery?: GateMode;
+  /**
+   * Where the embedding-store ABI/model/dimension check begins on the
+   * read path. Defaults to `warn` because the sqlite-vec version is not
+   * stable across environments: two peers on different builds would each
+   * see a mismatch, and a hard gate could produce a rebuild loop across
+   * a synced vault.
+   */
+  readonly embedding_abi?: GateMode;
+  /**
+   * How long a context pack stays servable after it was built, in
+   * seconds. Positive integer. The provenance stamp is the primary
+   * invalidator; this window is the backstop for changes a stamp cannot
+   * observe.
+   */
+  readonly pack_validity_seconds?: number;
+}
+
+/**
+ * Concrete (fully-resolved) integrity config. Returned by
+ * `resolveIntegrity(cfg)` so consumers do not branch on optionals.
+ */
+export interface ResolvedBrainIntegrityConfig {
+  readonly owner_scope_delivery: GateMode;
+  readonly embedding_abi: GateMode;
+  readonly pack_validity_seconds: number;
 }
 
 // ----- Doctor / trust-layer shapes -------------------------------------------
