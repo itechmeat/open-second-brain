@@ -84,6 +84,13 @@ export const REPAIR_CODE = Object.freeze({
  * Registry: the single home for every issue class this wave surfaces and
  * its next-command hint. Doctor codes, fixer codes, and the O3 snapshot
  * source codes all resolve here so a hint is defined exactly once.
+ *
+ * no-dead-ends (task 5) widened the population from "issue" to "state a
+ * caller can be left in": a verb that succeeded and printed nothing
+ * forward is the same defect from the caller's side, and giving those
+ * states a code here is what stops the command being retyped inside an
+ * `ok()` string. Nothing iterates this map expecting only faults; every
+ * consumer resolves by code.
  */
 export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map(
   (
@@ -222,6 +229,54 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "state-file",
         issueClass: "state-file health",
         nextCommand: "o2b brain init",
+        autoRepairable: false,
+      },
+      // --- Terminal states (no-dead-ends, task 5) ---
+      // A verb that succeeded and left the caller with nowhere to go.
+      // These are not defects, so `issueClass` reads as the STATE the
+      // caller is in rather than a fault; the field is otherwise the
+      // same short label every other entry carries, and the registry
+      // stays the single place a structural command is written down.
+      {
+        code: "brain-empty",
+        issueClass: "Brain with nothing recorded in it",
+        nextCommand: "o2b brain feedback --topic <topic> --signal=positive --principle <principle>",
+        autoRepairable: false,
+      },
+      {
+        code: "signal-clusters-absent",
+        issueClass: "no active signal clusters to review",
+        nextCommand: "o2b brain feedback --topic <topic> --signal=positive --principle <principle>",
+        autoRepairable: false,
+      },
+      {
+        code: "intentions-absent",
+        issueClass: "no active intention chains",
+        nextCommand: "o2b brain intention set --scope <scope> --text <text>",
+        autoRepairable: false,
+      },
+      {
+        code: "search-index-built",
+        issueClass: "search index up to date",
+        nextCommand: "o2b search query <text>",
+        autoRepairable: false,
+      },
+      {
+        code: "search-index-missing",
+        issueClass: "search index not built",
+        nextCommand: "o2b search index",
+        autoRepairable: false,
+      },
+      {
+        code: "git-history-absent",
+        issueClass: "no ingested git history",
+        nextCommand: "o2b brain git ingest <repo-path>",
+        autoRepairable: false,
+      },
+      {
+        code: "bridge-proposals-absent",
+        issueClass: "no bridge-proposal artifact yet",
+        nextCommand: "o2b brain bridges discover",
         autoRepairable: false,
       },
     ] satisfies ReadonlyArray<DiagnosticSignal>

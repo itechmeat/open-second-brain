@@ -36,6 +36,7 @@ import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
@@ -50,6 +51,10 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
+  // no-dead-ends, task 5: both fail-soft exits below used to carry their
+  // own `- run: <command>` tail inside the status line. They resolve
+  // through the registry now, so the command is written down once.
+  const stream: AdvisoryStream = { command: "brain", argv, jsonRequested: asJson };
   const action = positional[0];
   if (
     action === undefined ||
@@ -85,7 +90,9 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
       const path = join(vault, "Brain", "proposals", "bridges.md");
       if (!existsSync(path)) {
         if (asJson) okJson({ exists: false, proposals: 0 });
-        else ok("no proposals artifact yet - run: o2b brain bridges discover");
+        else ok("no proposals artifact yet");
+        // no-dead-ends, task 5: the exit is this verb's own producer.
+        emitNextStep("bridge-proposals-absent", stream);
         return 0;
       }
       const [meta, body] = parseFrontmatter(path);
@@ -120,7 +127,9 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         (exc.code === "INDEX_MISSING" || exc.code === "SCHEMA_MISMATCH")
       ) {
         if (asJson) okJson({ vec_available: false, proposals: [], reason: "index not built" });
-        else ok("bridges discover: search index not initialised - run: o2b search index");
+        else ok("bridges discover: search index not initialised");
+        // no-dead-ends, task 5: fail-soft, but not silent about the fix.
+        emitNextStep("search-index-missing", stream);
         return 0;
       }
       throw exc;

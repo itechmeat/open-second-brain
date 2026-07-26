@@ -1,5 +1,6 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { bootstrapBrain } from "../../../core/brain/init.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { parse, fail, ok, info, okJson, resolveBrainVault } from "../helpers.ts";
 
 export async function cmdBrainInit(argv: string[]): Promise<number> {
@@ -47,6 +48,12 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
     return fail(`failed to initialize Brain: ${(exc as Error).message ?? exc}`);
   }
 
+  const stream: AdvisoryStream = {
+    command: "brain",
+    argv,
+    jsonRequested: Boolean(flags["json"]),
+  };
+
   if (flags["json"]) {
     okJson({
       vault,
@@ -54,11 +61,17 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
       overwritten: result.overwritten,
       skipped: result.skipped,
     });
-    return 0;
+  } else {
+    ok(`brain initialized: ${vault}`);
+    for (const p of result.created) info(`  created: ${p}`);
+    for (const p of result.overwritten) info(`  overwritten: ${p}`);
+    for (const p of result.skipped) info(`  exists: ${p}`);
   }
-  ok(`brain initialized: ${vault}`);
-  for (const p of result.created) info(`  created: ${p}`);
-  for (const p of result.overwritten) info(`  overwritten: ${p}`);
-  for (const p of result.skipped) info(`  exists: ${p}`);
+
+  // no-dead-ends, task 5. This verb creates the tree and then says
+  // nothing about what goes in it, which is the archetypal dead end:
+  // the whole point of a Brain is the first recorded signal. The rail
+  // keeps the line off the `--json` payload.
+  emitNextStep("brain-empty", stream);
   return 0;
 }

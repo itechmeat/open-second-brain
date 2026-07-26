@@ -1,4 +1,5 @@
 import { buildIntentReview } from "../../../core/brain/intent-review.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
 /**
@@ -29,6 +30,17 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
   }
   if (report.reviews.length === 0) {
     process.stdout.write("  no active signal clusters\n");
+    // no-dead-ends, task 5: clusters are built from the signals in
+    // `Brain/inbox/`, so an empty review means there is nothing to
+    // review yet - the exit is recording one. The flag is read here
+    // rather than assumed false, so the rail, not this branch, stays
+    // the thing that decides what stdout can carry.
+    const stream: AdvisoryStream = {
+      command: "brain",
+      argv,
+      jsonRequested: Boolean(flags["json"]),
+    };
+    emitNextStep("signal-clusters-absent", stream);
   }
   return 0;
 }

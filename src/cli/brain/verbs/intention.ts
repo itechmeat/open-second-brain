@@ -11,6 +11,7 @@ import {
   setIntention,
   showIntention,
 } from "../../../core/brain/intentions.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainIntention(argv: string[]): Promise<number> {
@@ -49,6 +50,9 @@ export async function cmdBrainIntention(argv: string[]): Promise<number> {
     }
     if (intentions.length === 0) {
       ok("no active intentions");
+      // no-dead-ends, task 5: the exit is this verb's own setter.
+      const stream: AdvisoryStream = { command: "brain", argv, jsonRequested: json };
+      emitNextStep("intentions-absent", stream);
       return 0;
     }
     for (const c of intentions) ok(`${c.scope} v${c.version} (${c.updatedAt}): ${c.text}`);

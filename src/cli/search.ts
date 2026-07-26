@@ -81,6 +81,7 @@ import { IndexWatchRunner } from "../core/search/watch-runner.ts";
 import { SafeguardAbortError } from "../core/brain/safeguard.ts";
 import { canonicalNotePath } from "../core/path-safety.ts";
 import { watch, type FSWatcher } from "node:fs";
+import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
 
@@ -1016,6 +1017,20 @@ async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<number> {
 
 // ─── index ────────────────────────────────────────────────────────────────────
 
+/**
+ * Advisory stream for the two index builders (no-dead-ends, task 5).
+ * `index` and `reindex` reach the same terminal state - an index that
+ * now exists and has not been queried - so they name the same exit
+ * through the same registry code.
+ *
+ * The read path is deliberately NOT covered: `search query` self-heals a
+ * missing index by building it, and pointing an operator at the indexer
+ * there would describe a world that self-heal removed.
+ */
+function indexAdvisoryStream(argv: ReadonlyArray<string>, jsonRequested: boolean): AdvisoryStream {
+  return { command: "search", argv, jsonRequested };
+}
+
 async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
@@ -1051,9 +1066,10 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(jsonForStats(stats, cfg)) + "\n");
-    return 0;
+  } else {
+    process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  process.stdout.write(renderStatsHuman(stats, cfg));
+  emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
   return 0;
 }
 
@@ -1256,9 +1272,10 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   });
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(jsonForStats(stats, cfg)) + "\n");
-    return 0;
+  } else {
+    process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  process.stdout.write(renderStatsHuman(stats, cfg));
+  emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
   return 0;
 }
 
