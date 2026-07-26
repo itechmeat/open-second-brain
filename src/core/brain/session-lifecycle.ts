@@ -18,7 +18,11 @@ import { resolveSessionHandoff } from "../config.ts";
 import { writeHandoffNote, type HandoffNoteResult } from "./handoff.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
-import { readLineageLedger, recordLineageObservation } from "./lineage/ledger.ts";
+import {
+  lineageGapSessionIds,
+  readLineageLedger,
+  recordLineageObservation,
+} from "./lineage/ledger.ts";
 import { resolveSessionLineageDetailed } from "./lineage/resolve.ts";
 import { readGitWorkspaceIdentity } from "./git/reader.ts";
 import { type DegradationNotice, formatDegradationNotice } from "../integrity/degradation.ts";
@@ -128,7 +132,15 @@ export async function captureSessionLifecycleEvent(
   // Read-only resolution runs for every session; the ledger only
   // grows for captured, non-dry runs. Fail-soft throughout.
   let lineage: SessionLineage | undefined;
+  /** Continuations that were available and REFUSED. */
   const lineageNotices: DegradationNotice[] = [];
+  /**
+   * Observations that were made and NOT APPENDED. Kept apart from the
+   * abstentions above because they are opposite findings: one says the
+   * resolver declined to link, the other says the history the resolver
+   * will read next time is missing a line.
+   */
+  const lineageDrops: DegradationNotice[] = [];
   if (normalized.sessionId !== undefined) {
     try {
       // Unit C: probe the working state ONCE per lifecycle event, at
@@ -155,13 +167,24 @@ export async function captureSessionLifecycleEvent(
         },
         {
           ledger: readLineageLedger(vault),
+          // Unit C / block C: a session whose observation the writer
+          // lock refused has history the ledger cannot show. Without
+          // this the crutch reads it as brand new and stitches it onto
+          // an unrelated parallel session in the same directory.
+          gapSessionIds: lineageGapSessionIds(vault),
           nowMs: now.getTime(),
           notices: lineageNotices,
         },
       );
       lineage = resolution.lineage;
       if (mayWrite && !opts.dryRun) {
-        recordLineageObservation(vault, {
+        // The return value carries a NAMED gap when the observation was
+        // not appended. Discarding it - which this call site did, as a
+        // bare statement - restored the silent failure the widened
+        // return type exists to remove: the same audit record that
+        // reports a refused continuation can report a lost observation,
+        // and the two are the same class of finding.
+        const recorded = recordLineageObservation(vault, {
           sessionId: normalized.sessionId,
           at: now.toISOString(),
           ...(normalized.cwd !== undefined ? { cwd: normalized.cwd } : {}),
@@ -172,6 +195,7 @@ export async function captureSessionLifecycleEvent(
           ...(lineage.source !== "flat" ? { lineage } : {}),
           ...(workspace !== null ? { workspace } : {}),
         });
+        if (recorded.notice !== undefined) lineageDrops.push(recorded.notice);
       }
     } catch {
       lineage = undefined; // lineage is an enhancement, never a blocker
@@ -347,6 +371,12 @@ export async function captureSessionLifecycleEvent(
       // keeps its previous audit shape exactly.
       ...(lineageNotices.length > 0
         ? { lineage_abstained: lineageNotices.map(formatDegradationNotice) }
+        : {}),
+      // Block C: the observation this event tried to record and could
+      // not. Absent on every successful append, so the ordinary audit
+      // shape is unchanged.
+      ...(lineageDrops.length > 0
+        ? { lineage_dropped: lineageDrops.map(formatDegradationNotice) }
         : {}),
       ...counters,
     },

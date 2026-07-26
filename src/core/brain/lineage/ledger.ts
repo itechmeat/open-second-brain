@@ -19,7 +19,9 @@
  *
  * Everything here is fail-soft: a missing ledger reads as empty,
  * corrupt lines are skipped, and the file is compacted in place
- * (atomic rewrite) once it grows past the line cap.
+ * (atomic rewrite) once it grows past the line cap. Skipped lines are
+ * COUNTED and returned ({@link scanLineageLedger}) rather than merely
+ * dropped - fail-soft for the resolver, reportable for the verifier.
  *
  * ## Integrity (context-integrity-gates, Unit D)
  *
@@ -51,7 +53,7 @@
  * last as a class of bug rather than an instance.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -64,6 +66,7 @@ import type { GitWorkspaceIdentity } from "../git/reader.ts";
 import { computePayloadHash } from "../idempotency-ledger.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync, type LockHandle } from "../sync-lockfile.ts";
+import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vault-identity.ts";
 import type { SessionLineage } from "./types.ts";
 
 /** Crutch link window: a continuation must start this close to the
@@ -81,6 +84,28 @@ const MAX_LEDGER_LINES = 512;
 const RETAIN_LEDGER_LINES = 256;
 /** Gap records retained; the sidecar must not grow without bound either. */
 const MAX_GAP_LINES = 256;
+/**
+ * How long a recorded gap keeps being reported.
+ *
+ * Without an aging policy one burst of writer contention makes
+ * `verifyLineageLedger().ok` false forever and re-emits the same notices
+ * on every doctor run, which trains an operator to ignore the stream the
+ * whole unit exists to populate. A gap is a point-in-time observation,
+ * not a standing defect, so it expires.
+ */
+const GAP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/**
+ * Age at which the SIDECAR's OWN trim lock is treated as abandoned.
+ *
+ * This is a breaker for one lock and one operation, and it is scoped
+ * that narrowly on purpose. The ledger's writer lock never gets one: no
+ * timeout can distinguish a crashed writer from a slow live one, and
+ * killing a live writer's lock corrupts the file it protects. The trim
+ * is different in kind - it is idempotent (keep the newest N records),
+ * it protects diagnostics rather than the ledger, and the alternative is
+ * that one crash inside the trim window disables the bound permanently.
+ */
+const GAP_LOCK_STALE_MS = 60_000;
 
 const STATE_DIR_REL = posix.join(BRAIN_ROOT_REL, ".state");
 const LEDGER_FILE = "session-lineage.jsonl";
@@ -127,7 +152,18 @@ export interface LineageRecordResult {
 /** One recorded gap: an observation that was never appended. */
 export interface LineageGapRecord {
   readonly sessionId: string;
+  /** The OBSERVATION's timestamp, as the caller reported it. */
   readonly at: string;
+  /**
+   * When the gap itself was written, on the recording process's clock.
+   *
+   * Distinct from {@link at} on purpose: `at` is host-supplied and can
+   * name any instant (an imported transcript backfills months-old
+   * events), so aging on it would expire a gap recorded seconds ago.
+   * Empty only for a record written before this field existed, which
+   * then ages on `at` as the best available evidence.
+   */
+  readonly recordedAt: string;
   readonly event: string;
   readonly reason: string;
 }
@@ -297,71 +333,275 @@ function toLine(obs: LineageObservation): LedgerLine {
   };
 }
 
+/** What one parse of the ledger text found, including what it could not use. */
+interface ParsedLedger {
+  readonly lines: LineageLedgerLine[];
+  /**
+   * 1-based file positions of the non-blank lines that are not a usable
+   * ledger record. Recorded rather than discarded: dropping them
+   * silently is what let a wholly destroyed ledger verify as clean, and
+   * the position is what makes one addressable.
+   */
+  readonly skippedLineNumbers: number[];
+}
+
 /**
  * Parse the file into lines, KEEPING the source text of each. The raw
  * text is what compaction writes back, which is how a field this
  * version does not know about survives a rewrite.
  */
-function readLedgerLines(raw: string): LineageLedgerLine[] {
-  const out: LineageLedgerLine[] = [];
-  for (const line of raw.split("\n")) {
-    const trimmed = line.trim();
+function readLedgerLines(raw: string): ParsedLedger {
+  const lines: LineageLedgerLine[] = [];
+  const skippedLineNumbers: number[] = [];
+  const source = raw.split("\n");
+  for (let index = 0; index < source.length; index++) {
+    const trimmed = source[index]!.trim();
     if (trimmed.length === 0) continue;
+    const lineNumber = index + 1;
     try {
       const parsed = JSON.parse(trimmed) as unknown;
-      if (parsed === null || typeof parsed !== "object") continue;
+      if (parsed === null || typeof parsed !== "object") {
+        skippedLineNumbers.push(lineNumber);
+        continue;
+      }
       const candidate = parsed as LedgerLine;
-      if (typeof candidate.sid !== "string" || typeof candidate.at !== "string") continue;
-      out.push({ raw: trimmed, line: candidate });
+      if (typeof candidate.sid !== "string" || typeof candidate.at !== "string") {
+        skippedLineNumbers.push(lineNumber);
+        continue;
+      }
+      lines.push({ raw: trimmed, line: candidate });
     } catch {
-      // Fail-soft: a corrupt line never poisons the ledger.
+      // Fail-soft for the READ path, recorded for the VERIFIER: a corrupt
+      // line never poisons resolution, and never passes unreported.
+      skippedLineNumbers.push(lineNumber);
     }
   }
-  return out;
+  return { lines, skippedLineNumbers };
 }
 
 /**
- * Read the ledger as parsed lines in file order. Fail-soft like every
- * other read here: an unreadable file yields an empty array. Exposed
- * for `verify.ts`, which needs line order and the chain fields that
- * per-session state folds away.
+ * One read of the ledger file, with the three states the old
+ * `LineageLedgerLine[]` return collapsed into an empty array: the file
+ * is absent, the file is present but could not be read, or the file was
+ * read and some of it was not usable.
  */
-export function readLineageLedgerLines(vault: string): LineageLedgerLine[] {
-  try {
-    const path = sessionLineageLedgerPath(vault);
-    if (!existsSync(path)) return [];
-    return readLedgerLines(readFileSync(path, "utf8"));
-  } catch {
-    return [];
-  }
+export interface LineageLedgerScan {
+  /** The ledger file exists on disk. */
+  readonly exists: boolean;
+  /** The file's bytes were obtained. False for an absent or unreadable file. */
+  readonly readable: boolean;
+  /** Usable records, in file order. */
+  readonly lines: ReadonlyArray<LineageLedgerLine>;
+  /** 1-based positions of the non-blank lines that could not be read. */
+  readonly skippedLineNumbers: ReadonlyArray<number>;
 }
 
-/** Read the recorded gaps. Fail-soft; a missing sidecar reads as none. */
-export function readLineageGaps(vault: string): LineageGapRecord[] {
-  const out: LineageGapRecord[] = [];
+/**
+ * Read the ledger as parsed lines in file order, reporting what it could
+ * not use. Fail-soft like every other read here - it never throws, and
+ * an unreadable file yields no lines - but the caller can now tell an
+ * absent ledger from a destroyed one. Exposed for `verify.ts`, which
+ * needs line order and the chain fields that per-session state folds
+ * away.
+ */
+export function scanLineageLedger(vault: string): LineageLedgerScan {
+  const absent = Object.freeze({
+    exists: false,
+    readable: false,
+    lines: Object.freeze([]),
+    skippedLineNumbers: Object.freeze([]),
+  });
+  let path: string;
+  try {
+    path = sessionLineageLedgerPath(vault);
+  } catch {
+    return absent;
+  }
+  if (!existsSync(path)) return absent;
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    return Object.freeze({
+      exists: true,
+      readable: false,
+      lines: Object.freeze([]),
+      skippedLineNumbers: Object.freeze([]),
+    });
+  }
+  const parsed = readLedgerLines(raw);
+  return Object.freeze({
+    exists: true,
+    readable: true,
+    lines: Object.freeze(parsed.lines),
+    skippedLineNumbers: Object.freeze(parsed.skippedLineNumbers),
+  });
+}
+
+/** The sidecar as a whole: what it still lists, and what it no longer can. */
+export interface LineageGapReport {
+  /** The sidecar file exists on disk. */
+  readonly exists: boolean;
+  /** Gap records still within the retention window, oldest first. */
+  readonly records: ReadonlyArray<LineageGapRecord>;
+  /**
+   * Records the sidecar's bound discarded. They are COUNTED, never
+   * listed, so a capped listing is never mistaken for a complete one.
+   */
+  readonly discarded: number;
+  /** True when `discarded > 0`: {@link records} is a suffix, not the whole. */
+  readonly truncated: boolean;
+  /** Dropped observations still on the record: listed plus discarded. */
+  readonly total: number;
+}
+
+export interface ReadLineageGapsOptions {
+  /** Injected clock (epoch ms) for the retention window. */
+  readonly nowMs?: number;
+}
+
+/** One line of the sidecar: either a gap record or the truncation marker. */
+interface ParsedGapFile {
+  readonly records: LineageGapRecord[];
+  /** Records earlier trims discarded, from the accumulator line. */
+  readonly discarded: number;
+  /** When the accumulator was last written; `null` when there is none. */
+  readonly discardedAt: string | null;
+  /** Records this parse dropped because they fell outside retention. */
+  readonly aged: number;
+}
+
+/** Key that distinguishes the accumulator line from a gap record. */
+const GAP_DISCARDED_KEY = "discarded";
+/** Key carrying {@link LineageGapRecord.recordedAt} on the wire. */
+const GAP_RECORDED_AT_KEY = "rat";
+
+function parseGapFile(raw: string, nowMs: number): ParsedGapFile {
+  const records: LineageGapRecord[] = [];
+  let discarded = 0;
+  let discardedAt: string | null = null;
+  let aged = 0;
+  for (const line of raw.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) continue;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    } catch {
+      // A corrupt gap line is itself a gap we cannot name; skip it.
+      continue;
+    }
+    const count = parsed[GAP_DISCARDED_KEY];
+    if (typeof count === "number" && Number.isFinite(count)) {
+      const at = typeof parsed["at"] === "string" ? parsed["at"] : "";
+      if (!isExpired(at, nowMs)) {
+        discarded += Math.max(0, Math.trunc(count));
+        discardedAt = at;
+      }
+      continue;
+    }
+    if (typeof parsed["sid"] !== "string") continue;
+    const at = typeof parsed["at"] === "string" ? parsed["at"] : "";
+    const recordedAt = typeof parsed[GAP_RECORDED_AT_KEY] === "string" ? parsed["rat"] : "";
+    if (isExpired(recordedAt.length > 0 ? recordedAt : at, nowMs)) {
+      aged++;
+      continue;
+    }
+    records.push({
+      sessionId: parsed["sid"],
+      at,
+      recordedAt,
+      event: typeof parsed["event"] === "string" ? parsed["event"] : "unknown",
+      reason: typeof parsed["reason"] === "string" ? parsed["reason"] : "unknown",
+    });
+  }
+  return { records, discarded, discardedAt, aged };
+}
+
+/**
+ * The on-disk form of one gap record. Written by the append AND by the
+ * trim's rewrite, so a trimmed sidecar is byte-comparable with a
+ * freshly appended one and no field is lost in the round trip.
+ */
+function gapLine(record: LineageGapRecord): Record<string, unknown> {
+  return {
+    sid: record.sessionId,
+    at: record.at,
+    ...(record.recordedAt.length > 0 ? { [GAP_RECORDED_AT_KEY]: record.recordedAt } : {}),
+    event: record.event,
+    reason: record.reason,
+  };
+}
+
+/**
+ * True when a recorded instant is older than the retention window. An
+ * undatable record never expires: aging out something whose age is
+ * unknown would be a guess, and this module reports rather than guesses.
+ */
+function isExpired(at: string, nowMs: number): boolean {
+  const ms = Date.parse(at);
+  if (!Number.isFinite(ms)) return false;
+  return nowMs - ms > GAP_RETENTION_MS;
+}
+
+/**
+ * Read the sidecar. Fail-soft; a missing sidecar reads as none.
+ * Records older than {@link GAP_RETENTION_MS} are omitted here as well as
+ * pruned on the next trim, so a vault that has stopped dropping
+ * observations stops reporting them even if nothing writes again.
+ */
+export function readLineageGapReport(
+  vault: string,
+  opts: ReadLineageGapsOptions = {},
+): LineageGapReport {
+  const nowMs = opts.nowMs ?? Date.now();
+  const empty = Object.freeze({
+    exists: false,
+    records: Object.freeze([]),
+    discarded: 0,
+    truncated: false,
+    total: 0,
+  });
+  let raw: string;
   try {
     const path = sessionLineageGapsPath(vault);
-    if (!existsSync(path)) return out;
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      const trimmed = line.trim();
-      if (trimmed.length === 0) continue;
-      try {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        if (typeof parsed["sid"] !== "string") continue;
-        out.push({
-          sessionId: parsed["sid"],
-          at: typeof parsed["at"] === "string" ? parsed["at"] : "",
-          event: typeof parsed["event"] === "string" ? parsed["event"] : "unknown",
-          reason: typeof parsed["reason"] === "string" ? parsed["reason"] : "unknown",
-        });
-      } catch {
-        // A corrupt gap line is itself a gap we cannot name; skip it.
-      }
-    }
+    if (!existsSync(path)) return empty;
+    raw = readFileSync(path, "utf8");
   } catch {
-    // Fail-soft.
+    return empty;
   }
-  return out;
+  const parsed = parseGapFile(raw, nowMs);
+  return Object.freeze({
+    exists: true,
+    records: Object.freeze(parsed.records),
+    discarded: parsed.discarded,
+    truncated: parsed.discarded > 0,
+    total: parsed.records.length + parsed.discarded,
+  });
+}
+
+/** The listed gap records. See {@link readLineageGapReport} for the rest. */
+export function readLineageGaps(
+  vault: string,
+  opts: ReadLineageGapsOptions = {},
+): ReadonlyArray<LineageGapRecord> {
+  return readLineageGapReport(vault, opts).records;
+}
+
+/**
+ * Session ids that spoke but whose observation never reached the ledger.
+ *
+ * This is the OTHER half of "does this session have history of its own".
+ * The crutch's Rule 1 reads the ledger for the session's own line and
+ * treats its absence as proof of a brand-new session; a writer-lock drop
+ * removes exactly that line, so without this set a session that DID
+ * speak looks new and can be stitched onto an unrelated parallel one.
+ * Fail-soft like every read here.
+ */
+export function lineageGapSessionIds(vault: string): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const gap of readLineageGaps(vault)) ids.add(gap.sessionId);
+  return ids;
 }
 
 function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedgerEntry> {
@@ -408,15 +648,7 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
  * belong to `verify.ts`, which reports them to the doctor.
  */
 export function readLineageLedger(vault: string): LineageLedgerState {
-  const path = sessionLineageLedgerPath(vault);
-  if (!existsSync(path)) return new Map();
-  let raw: string;
-  try {
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return new Map();
-  }
-  return buildState(readLedgerLines(raw).map((entry) => entry.line));
+  return buildState(scanLineageLedger(vault).lines.map((entry) => entry.line));
 }
 
 /**
@@ -434,6 +666,31 @@ export function recordLineageObservation(
   vault: string,
   obs: LineageObservation,
 ): LineageRecordResult {
+  // Vault-identity write guard (Unit J), AHEAD OF THE FIRST BYTE: the
+  // `mkdirSync` below materializes `Brain/.state/` under whatever root
+  // it is handed, so asserting after it would refuse a store this
+  // function had already created. A refusal is returned as a named drop,
+  // never thrown, and deliberately does NOT reach the gap sidecar -
+  // writing the diagnostic into the wrong vault is the very thing the
+  // guard just refused.
+  try {
+    assertVaultIdentityForWrite(vault);
+  } catch (err) {
+    return {
+      status: LINEAGE_RECORD_STATUS.dropped,
+      notice:
+        err instanceof VaultIdentityMismatchError
+          ? err.notice
+          : degradationNotice({
+              code: DEGRADATION_CODE.vaultMarkerMismatch,
+              site: LEDGER_SITE,
+              detail:
+                `observation for session ${obs.sessionId} (event ${obs.event}) ` +
+                "was not appended: the vault write guard refused this root",
+            }),
+    };
+  }
+
   let handle: LockHandle | undefined;
   try {
     const path = sessionLineageLedgerPath(vault);
@@ -443,13 +700,16 @@ export function recordLineageObservation(
     } catch (err) {
       // No retry, by the lock's design: a loud named gap beats a silent
       // retry loop that still fails. The gap is exactly what the
-      // sequence numbers above would otherwise leave unexplained.
+      // sequence numbers above would otherwise leave unexplained. The
+      // lock file is NAMED on the notice: a lock left behind by a
+      // SIGKILLed writer disables capture for the life of the vault, and
+      // an operator cannot remove a file the diagnostic never mentions.
+      const errno = err as NodeJS.ErrnoException;
       return recordGap(
         vault,
         obs,
-        (err as NodeJS.ErrnoException).code === "ELOCKED"
-          ? LINEAGE_GAP_REASON.lockBusy
-          : LINEAGE_GAP_REASON.lockFailed,
+        errno.code === "ELOCKED" ? LINEAGE_GAP_REASON.lockBusy : LINEAGE_GAP_REASON.lockFailed,
+        typeof errno.path === "string" ? errno.path : undefined,
       );
     }
 
@@ -457,7 +717,7 @@ export function recordLineageObservation(
     // the chain head and the next sequence number must come from the
     // file as it is now, not as it was before the lock was taken.
     const existing = existsSync(path) ? readFileSync(path, "utf8") : "";
-    const entries = readLedgerLines(existing);
+    const entries = readLedgerLines(existing).lines;
     const body = toLine(obs);
     const { seq, prev } = nextChainPosition(entries);
     const line: LedgerLine = {
@@ -514,26 +774,28 @@ function recordGap(
   vault: string,
   obs: LineageObservation,
   reason: LineageGapReason,
+  lockPath?: string,
 ): LineageRecordResult {
   const notice = degradationNotice({
     code: DEGRADATION_CODE.lineageObservationDropped,
     site: LEDGER_SITE,
+    ...(lockPath !== undefined ? { path: lockPath } : {}),
     detail:
       `observation for session ${obs.sessionId} (event ${obs.event}) ` +
-      `was not appended: ${reason}`,
+      `was not appended: ${reason}` +
+      (lockPath !== undefined ? `; the lock is held at ${lockPath}` : ""),
   });
   try {
     const path = sessionLineageGapsPath(vault);
     mkdirSync(dirname(path), { recursive: true });
-    const record: Record<string, unknown> = {
-      sid: obs.sessionId,
-      at: obs.at,
-      event: obs.event,
-      reason,
-    };
+    const nowMs = Date.now();
     // O_APPEND: concurrent gap writers cannot interleave a short line.
-    appendFileSync(path, `${JSON.stringify(record)}\n`, "utf8");
-    boundGapSidecar(path);
+    appendFileSync(
+      path,
+      `${JSON.stringify(gapLine({ sessionId: obs.sessionId, at: obs.at, recordedAt: new Date(nowMs).toISOString(), event: obs.event, reason }))}\n`,
+      "utf8",
+    );
+    boundGapSidecar(path, nowMs);
   } catch {
     // The gap could not be persisted; the notice still names it.
   }
@@ -541,32 +803,67 @@ function recordGap(
 }
 
 /**
- * Keep the gap sidecar bounded. Takes the sidecar's OWN lock (never the
- * ledger's, so this cannot deadlock against the writer that called it)
- * and skips the trim entirely when that lock is busy - an oversized
- * sidecar is a better outcome than a lost gap record.
+ * Keep the gap sidecar bounded, aged, and HONEST about the difference.
+ *
+ * Three properties, each of which was previously absent:
+ *
+ *   - the bound always applies. The trim takes the sidecar's OWN lock
+ *     (never the ledger's, so it cannot deadlock against the writer that
+ *     called it) and reclaims that lock once it is older than
+ *     {@link GAP_LOCK_STALE_MS} - otherwise one crash inside the trim
+ *     window leaves a lock nothing ever removes and the bound stops
+ *     existing for the life of the vault;
+ *   - records past {@link GAP_RETENTION_MS} are pruned, so a burst of
+ *     contention stops being reported instead of pinning the verifier's
+ *     verdict to `false` permanently;
+ *   - every record the bound removes is ADDED TO AN ACCUMULATOR, so 400
+ *     drops are never presented as the 256 that happen to still be
+ *     listed.
  */
-function boundGapSidecar(path: string): void {
+function boundGapSidecar(path: string, nowMs: number): void {
   let handle: LockHandle | undefined;
   try {
-    if (countLines(readFileSync(path, "utf8")) <= MAX_GAP_LINES) return;
-    handle = acquireLockSync(path);
-    const lines = readFileSync(path, "utf8")
-      .split("\n")
-      .filter((line) => line.trim().length > 0);
-    if (lines.length <= MAX_GAP_LINES) return;
-    atomicWriteFileSync(path, `${lines.slice(-MAX_GAP_LINES).join("\n")}\n`);
+    const before = parseGapFile(readFileSync(path, "utf8"), nowMs);
+    if (before.records.length <= MAX_GAP_LINES && before.aged === 0) return;
+    handle = acquireGapLock(path, nowMs);
+    // Re-read under the lock: another writer may have appended, and the
+    // count that decides the trim must be the current one.
+    const current = parseGapFile(readFileSync(path, "utf8"), nowMs);
+    const kept = current.records.slice(-MAX_GAP_LINES);
+    const discarded = current.discarded + (current.records.length - kept.length);
+    const lines: string[] = [];
+    if (discarded > 0) {
+      lines.push(
+        JSON.stringify({ [GAP_DISCARDED_KEY]: discarded, at: new Date(nowMs).toISOString() }),
+      );
+    }
+    for (const record of kept) lines.push(JSON.stringify(gapLine(record)));
+    atomicWriteFileSync(path, lines.length === 0 ? "" : `${lines.join("\n")}\n`);
   } catch {
-    // Best-effort.
+    // Best-effort: the sidecar is diagnostics, and a failed trim must
+    // never propagate into the capture path that recorded the gap.
   } finally {
     handle?.release();
   }
 }
 
-function countLines(raw: string): number {
-  let count = 0;
-  for (const line of raw.split("\n")) {
-    if (line.trim().length > 0) count++;
+/**
+ * Take the sidecar's trim lock, reclaiming it once when it is provably
+ * abandoned. Scoped to this one lock and this one idempotent operation -
+ * see {@link GAP_LOCK_STALE_MS} for why the ledger's writer lock gets no
+ * such treatment.
+ */
+function acquireGapLock(path: string, nowMs: number): LockHandle {
+  try {
+    return acquireLockSync(path);
+  } catch (err) {
+    const errno = err as NodeJS.ErrnoException;
+    if (errno.code !== "ELOCKED") throw err;
+    const lockPath = typeof errno.path === "string" ? errno.path : `${path}.lock`;
+    if (nowMs - statSync(lockPath).mtimeMs <= GAP_LOCK_STALE_MS) throw err;
+    unlinkSync(lockPath);
+    // Exactly one retry. A second ELOCKED means a live writer took the
+    // lock in between, which is contention rather than abandonment.
+    return acquireLockSync(path);
   }
-  return count;
 }

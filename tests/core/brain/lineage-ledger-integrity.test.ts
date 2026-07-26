@@ -22,10 +22,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
@@ -34,6 +36,7 @@ import { tmpdir } from "node:os";
 import { DEGRADATION_CODE } from "../../../src/core/integrity/degradation.ts";
 import {
   LINEAGE_RECORD_STATUS,
+  readLineageGapReport,
   readLineageLedger,
   recordLineageObservation,
   sessionLineageGapsPath,
@@ -171,7 +174,74 @@ describe("verifyLineageLedger — reports, never refuses", () => {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "not-json\n{\n", "utf8");
     expect(readLineageLedger(tmp).size).toBe(0);
-    expect(() => verifyLineageLedger(tmp)).not.toThrow();
+
+    // The behaviour the name promises: a destroyed ledger is REPORTED,
+    // not silently verified clean. `not.toThrow()` asserted nothing of
+    // the kind - it passed against a verifier that returned ok:true.
+    const report = verifyLineageLedger(tmp);
+    expect(report.ok).toBe(false);
+    expect(report.skipped).toBe(2);
+    expect(report.notices.some((n) => n.code === DEGRADATION_CODE.lineageChainBroken)).toBe(true);
+  });
+
+  test("an all-truncated-JSON ledger is reported, never clean", () => {
+    const path = sessionLineageLedgerPath(tmp);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, '{"sid":"s-1","at":"2026-06-10T08:0\n{"sid":"s-2"\n', "utf8");
+    const report = verifyLineageLedger(tmp);
+    expect(report.lines).toBe(0);
+    expect(report.skipped).toBe(2);
+    expect(report.ok).toBe(false);
+  });
+
+  test("a ledger that exists but holds nothing parseable is not 'no ledger'", () => {
+    const path = sessionLineageLedgerPath(tmp);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "\n\n", "utf8");
+    const report = verifyLineageLedger(tmp);
+    expect(report.exists).toBe(true);
+    expect(report.lines).toBe(0);
+    // A present-but-empty ledger has no findings of its own; the point
+    // is that a consumer can tell it apart from an absent one.
+    expect(verifyLineageLedger(join(tmp, "elsewhere")).exists).toBe(false);
+  });
+
+  test("an unreadable ledger is reported rather than counted as clean", () => {
+    const path = sessionLineageLedgerPath(tmp);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `${JSON.stringify({ sid: "s", at: "x", event: "Stop" })}\n`, "utf8");
+    chmodSync(path, 0o000);
+    try {
+      const report = verifyLineageLedger(tmp);
+      // Running as root defeats the mode bits; skip rather than assert
+      // a permission the environment does not enforce.
+      if (report.readable) return;
+      expect(report.ok).toBe(false);
+      expect(report.notices.some((n) => n.detail.includes("could not be read"))).toBe(true);
+    } finally {
+      chmodSync(path, 0o644);
+    }
+  });
+
+  test("a line stripped of its chain fields is reported once chained lines exist", () => {
+    record("s-1", T0);
+    record("s-2", T0 + 1_000);
+    record("s-3", T0 + 2_000);
+    const path = sessionLineageLedgerPath(tmp);
+    const lines = readFileSync(path, "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0);
+    const { seq: _seq, prev: _prev, h: _h, ...stripped } = JSON.parse(lines[1]!) as RawLine;
+    lines[1] = JSON.stringify(stripped);
+    writeFileSync(path, `${lines.join("\n")}\n`, "utf8");
+
+    // Stripping the chain fields made the line `legacy`, which reset
+    // `previous` and left the FOLLOWING line's `prev` unchecked - so a
+    // tampered middle line passed with ok:true.
+    const report = verifyLineageLedger(tmp);
+    expect(report.legacy).toBe(1);
+    expect(report.ok).toBe(false);
+    expect(report.notices.some((n) => n.code === DEGRADATION_CODE.lineageChainBroken)).toBe(true);
   });
 
   test("a pre-chain ledger is counted as legacy, not as a break", () => {
@@ -296,6 +366,136 @@ describe("recordLineageObservation — writer lock", () => {
     record("s-1", T0);
     // If the previous write leaked its lock this would be dropped.
     expect(record("s-2", T0 + 1_000).status).toBe(LINEAGE_RECORD_STATUS.appended);
+  });
+});
+
+// ----- the gap sidecar's own failure modes ---------------------------------
+
+describe("the gap sidecar is bounded, aged, and honest about both", () => {
+  const DAY_MS = 24 * 60 * 60 * 1000;
+
+  /** Drop `count` observations by holding the ledger's writer lock. */
+  function dropMany(count: number): void {
+    const handle = acquireLockSync(sessionLineageLedgerPath(tmp));
+    try {
+      for (let i = 0; i < count; i++) {
+        expect(record(`d-${i}`, T0 + i).status).toBe(LINEAGE_RECORD_STATUS.dropped);
+      }
+    } finally {
+      handle.release();
+    }
+  }
+
+  function gapFileLines(): string[] {
+    return readFileSync(sessionLineageGapsPath(tmp), "utf8")
+      .split("\n")
+      .filter((line) => line.trim().length > 0);
+  }
+
+  test("a saturated sidecar reports the TOTAL, not the retained count", () => {
+    dropMany(400);
+    const report = readLineageGapReport(tmp);
+    // 400 drops presented as 256 was the defect: the cap is real, and
+    // what it removed is carried as an explicit count beside it.
+    expect(report.records.length).toBe(256);
+    expect(report.truncated).toBe(true);
+    expect(report.discarded).toBe(400 - 256);
+    expect(report.total).toBe(400);
+  });
+
+  test("verification names the unlisted remainder instead of dropping it", () => {
+    dropMany(400);
+    const report = verifyLineageLedger(tmp);
+    expect(report.droppedObservations).toBe(400);
+    expect(report.gapsTruncated).toBe(true);
+    // Bounded itemization, with the rest counted rather than silently cut.
+    expect(report.notices.length).toBeLessThan(40);
+    expect(report.notices.some((n) => n.detail.includes("not itemized"))).toBe(true);
+  });
+
+  /** An oversized sidecar, as a crash inside the trim window leaves it. */
+  function seedOversizedSidecar(count: number): void {
+    const path = sessionLineageGapsPath(tmp);
+    mkdirSync(dirname(path), { recursive: true });
+    const now = new Date().toISOString();
+    writeFileSync(
+      path,
+      Array.from({ length: count }, (_, i) =>
+        JSON.stringify({
+          sid: `old-${i}`,
+          at: now,
+          rat: now,
+          event: "Stop",
+          reason: "write-failed",
+        }),
+      ).join("\n") + "\n",
+      "utf8",
+    );
+  }
+
+  test("a stale trim lock does not disable the bound", () => {
+    seedOversizedSidecar(300);
+    const gapsLock = `${sessionLineageGapsPath(tmp)}.lock`;
+    writeFileSync(gapsLock, "9999999\n", "utf8");
+    const old = new Date(Date.now() - 10 * 60_000);
+    utimesSync(gapsLock, old, old);
+    try {
+      // Before the reclaim path the trim skipped outright on ELOCKED, so
+      // one crash inside that window left the sidecar growing forever.
+      dropMany(1);
+      expect(readLineageGapReport(tmp).records.length).toBe(256);
+      expect(gapFileLines().length).toBe(257); // 256 records + the marker
+    } finally {
+      rmSync(gapsLock, { force: true });
+    }
+  });
+
+  test("a LIVE trim lock is respected — no breaker on a lock in use", () => {
+    seedOversizedSidecar(300);
+    const handle = acquireLockSync(sessionLineageGapsPath(tmp));
+    try {
+      dropMany(1);
+      // Untrimmed: a lock that a live process holds is never taken away.
+      expect(gapFileLines().length).toBe(301);
+    } finally {
+      handle.release();
+    }
+  });
+
+  test("gaps age out, so one contention burst does not pin ok:false forever", () => {
+    dropMany(3);
+    expect(verifyLineageLedger(tmp).ok).toBe(false);
+    const later = Date.now() + 8 * DAY_MS;
+    expect(readLineageGapReport(tmp, { nowMs: later }).total).toBe(0);
+    expect(verifyLineageLedger(tmp, { nowMs: later }).ok).toBe(true);
+  });
+
+  test("aging keys off when the gap was RECORDED, not the observation's own clock", () => {
+    // Every observation here is stamped in the past (T0 is 2026-06-10);
+    // aging on `at` would expire a gap written this instant.
+    dropMany(2);
+    expect(readLineageGapReport(tmp).total).toBe(2);
+  });
+
+  test("the truncation marker expires with the records it counted", () => {
+    dropMany(400);
+    const later = Date.now() + 8 * DAY_MS;
+    const report = readLineageGapReport(tmp, { nowMs: later });
+    expect(report.total).toBe(0);
+    expect(report.truncated).toBe(false);
+  });
+
+  test("the drop notice NAMES the lock file", () => {
+    const lockPath = `${sessionLineageLedgerPath(tmp)}.lock`;
+    const handle = acquireLockSync(sessionLineageLedgerPath(tmp));
+    let result;
+    try {
+      result = record("s-blocked", T0);
+    } finally {
+      handle.release();
+    }
+    expect(result.notice?.path).toBe(lockPath);
+    expect(result.notice?.detail).toContain(lockPath);
   });
 });
 

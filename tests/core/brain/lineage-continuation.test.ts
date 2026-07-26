@@ -31,10 +31,13 @@ import {
 import { CRUTCH_ABSTENTION, resolveCrutchLineage } from "../../../src/core/brain/lineage/crutch.ts";
 import {
   CRUTCH_LINK_WINDOW_MS,
+  LINEAGE_RECORD_STATUS,
+  lineageGapSessionIds,
   readLineageLedger,
   recordLineageObservation,
   sessionLineageLedgerPath,
 } from "../../../src/core/brain/lineage/ledger.ts";
+import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import {
   resolveSessionLineage,
   resolveSessionLineageDetailed,
@@ -465,6 +468,77 @@ describe("resolveSessionLineageDetailed — the abstention reaches the caller", 
   });
 });
 
+// ----- a dropped observation is still the session's own history ------------
+
+describe("resolveCrutchLineage — a DROPPED observation cannot become a FALSE STITCH", () => {
+  /**
+   * Rule 1 ("a session with its own ledger history is parallel, never a
+   * continuation") is tested by the presence of the session's own ledger
+   * line. A writer-lock drop removes exactly that evidence, so without
+   * the gap sidecar the resolver reads a session that DID speak as one
+   * that never has - and stitches it onto an unrelated parallel session.
+   * A false stitch is strictly worse than a missed one, and the
+   * anticipatory cache derives its file from the lineage root, so this
+   * redirects one conversation's cache into another's.
+   */
+  function dropObservation(sessionId: string, atMs: number): void {
+    const handle = acquireLockSync(sessionLineageLedgerPath(tmp));
+    try {
+      const result = recordLineageObservation(tmp, {
+        sessionId,
+        at: new Date(atMs).toISOString(),
+        cwd: "/work",
+        event: "Stop",
+      });
+      expect(result.status).toBe(LINEAGE_RECORD_STATUS.dropped);
+    } finally {
+      handle.release();
+    }
+  }
+
+  test("a session whose only observation was dropped abstains with self-known", () => {
+    seed({ sessionId: "s-parallel", atMs: T0 });
+    dropObservation("s-spoke", T0 + 5_000);
+    expect(readLineageLedger(tmp).has("s-spoke")).toBe(false);
+
+    const result = outcome("s-spoke", { gapSessionIds: lineageGapSessionIds(tmp) });
+    expect(result).toMatchObject({
+      kind: "abstained",
+      reason: CRUTCH_ABSTENTION.selfKnown,
+    });
+  });
+
+  test("without the gap set the same ledger produces the false stitch", () => {
+    // Pins WHY the observation has to be threaded: the ledger alone
+    // cannot tell "never spoke" from "spoke and was dropped".
+    seed({ sessionId: "s-parallel", atMs: T0 });
+    dropObservation("s-spoke", T0 + 5_000);
+    expect(outcome("s-spoke").kind).toBe("linked");
+  });
+
+  test("a session with no gap and no history still links normally", () => {
+    seed({ sessionId: "s-parallel", atMs: T0 });
+    dropObservation("s-spoke", T0 + 5_000);
+    const result = outcome("s-fresh", { gapSessionIds: lineageGapSessionIds(tmp) });
+    expect(result.kind).toBe("linked");
+  });
+
+  test("resolveSessionLineageDetailed threads the gap set through", () => {
+    seed({ sessionId: "s-parallel", atMs: T0 });
+    dropObservation("s-spoke", T0 + 5_000);
+    const resolution = resolveSessionLineageDetailed(
+      { sessionId: "s-spoke", cwd: "/work" },
+      {
+        ledger: readLineageLedger(tmp),
+        gapSessionIds: lineageGapSessionIds(tmp),
+        nowMs: T0 + 30_000,
+      },
+    );
+    expect(resolution.lineage.source).toBe("flat");
+    expect(resolution.crutch).toMatchObject({ reason: CRUTCH_ABSTENTION.selfKnown });
+  });
+});
+
 // ----- the hook path -------------------------------------------------------
 
 describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-free", () => {
@@ -559,5 +633,38 @@ describe("captureSessionLifecycleEvent — fail-closed, fail-soft, credential-fr
     const audit = readFileSync(result.audit_path, "utf8");
     expect(audit).toContain(DEGRADATION_CODE.sessionLinkAbstained);
     expect(audit).toContain(CRUTCH_ABSTENTION.ambiguous);
+  });
+
+  test("a dropped observation reaches the audit record instead of being discarded", async () => {
+    // `recordLineageObservation` returns a NAMED notice when the writer
+    // lock refuses the append; the call site used to be a bare statement
+    // that threw it away, which is a silent failure with extra steps.
+    const handle = acquireLockSync(sessionLineageLedgerPath(vault));
+    let result;
+    try {
+      result = await captureSessionLifecycleEvent(
+        vault,
+        { hook_event_name: "UserPromptSubmit", session_id: "d-1", cwd: repo, prompt: "hi" },
+        { agent: "tester", now: new Date(T0) },
+      );
+    } finally {
+      handle.release();
+    }
+    const audit = JSON.parse(
+      readFileSync(result.audit_path, "utf8").trim().split("\n").at(-1)!,
+    ) as { details: Record<string, unknown> };
+    const dropped = audit.details["lineage_dropped"] as string[];
+    expect(dropped).toBeDefined();
+    expect(dropped[0]).toContain(DEGRADATION_CODE.lineageObservationDropped);
+    expect(dropped[0]).toContain("d-1");
+  });
+
+  test("a successful append leaves the audit shape unchanged", async () => {
+    const result = await captureSessionLifecycleEvent(
+      vault,
+      { hook_event_name: "UserPromptSubmit", session_id: "d-2", cwd: repo, prompt: "hi" },
+      { agent: "tester", now: new Date(T0) },
+    );
+    expect(readFileSync(result.audit_path, "utf8")).not.toContain("lineage_dropped");
   });
 });

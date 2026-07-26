@@ -26,6 +26,14 @@ import {
 export interface ResolveLineageOptions {
   /** Ledger state for the crutch path; omit to disable the crutch. */
   readonly ledger?: LineageLedgerState;
+  /**
+   * Sessions the ledger's gap sidecar records as dropped
+   * (`lineageGapSessionIds`). Threaded straight into the crutch, where
+   * it completes Rule 1: a session whose observation the writer lock
+   * refused still has history, and without this it would be stitched
+   * onto an unrelated parallel session.
+   */
+  readonly gapSessionIds?: ReadonlySet<string>;
   /** Clock injected by the caller (epoch ms). Required for the crutch. */
   readonly nowMs?: number;
   /**
@@ -135,6 +143,7 @@ export function resolveSessionLineageDetailed(
       ledger: opts.ledger,
       nowMs: opts.nowMs ?? 0,
       ...(hints.workspace !== undefined ? { workspace: hints.workspace } : {}),
+      ...(opts.gapSessionIds !== undefined ? { gapSessionIds: opts.gapSessionIds } : {}),
     });
     if (outcome.kind === "linked") {
       return { lineage: outcome.lineage, crutch: outcome };

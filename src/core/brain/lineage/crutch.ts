@@ -11,8 +11,10 @@
  * unrelated conversations merged) is strictly worse than a missed
  * stitch (status quo). A link happens only when ALL hold:
  *
- *   1. the new session has NO ledger history of its own (a session
- *      seen before without a link is a parallel session);
+ *   1. the new session has NO history of its own - neither a ledger
+ *      line NOR a recorded gap (a session seen before without a link is
+ *      a parallel session, and a dropped observation is still a session
+ *      that spoke);
  *   2. a predecessor exists in the SAME cwd, and no other session has
  *      already continued from it;
  *   3. that predecessor's git working state - repo, branch, commit -
@@ -118,6 +120,14 @@ export interface CrutchResolveInput {
   readonly nowMs: number;
   /** Git working state of THIS session, when its `cwd` attested one. */
   readonly workspace?: GitWorkspaceIdentity;
+  /**
+   * Sessions the ledger's gap sidecar records as having spoken without
+   * being appended (`lineageGapSessionIds`). Membership is evidence of
+   * own history exactly as a ledger line is - see Rule 1 above. Omitted
+   * means "no gap evidence available", which is the pre-existing
+   * behaviour and the only reason the field is optional.
+   */
+  readonly gapSessionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -151,6 +161,20 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
     return abstain(
       CRUTCH_ABSTENTION.selfKnown,
       "the session already has ledger history without a link",
+      0,
+    );
+  }
+  // Rule 1, second half. A ledger LINE is only one of the two records
+  // that a session already spoke; a writer-lock drop leaves the other -
+  // a gap in the sidecar. Reading the ledger alone makes a session whose
+  // observation was dropped indistinguishable from one that never
+  // spoke, which turns this fail-closed rule into a FALSE STITCH onto an
+  // unrelated parallel session. Absent evidence is evidence, once it is
+  // recorded that it was lost.
+  if (input.gapSessionIds?.has(sessionId) === true) {
+    return abstain(
+      CRUTCH_ABSTENTION.selfKnown,
+      "the session has a recorded ledger gap: it spoke, and the observation was dropped",
       0,
     );
   }

@@ -70,9 +70,6 @@ const UNGUARDED_WITH_REASON: Readonly<Record<string, string>> = Object.freeze({
     "fail-open injection cache. The hook contract is that a degraded injection " +
     "still returns something; a refusal here would turn a cache miss into a " +
     "broken SessionStart.",
-  "src/core/brain/lineage/ledger.ts":
-    "owned by the lineage/doctor work in flight alongside this change; left " +
-    "untouched deliberately rather than edited by two hands at once.",
   "src/core/brain/maintenance/lease.ts":
     "lock primitive. The lease file is how concurrent maintenance runs " +
     "serialize; the runs it protects are guarded at their own entry points, " +
