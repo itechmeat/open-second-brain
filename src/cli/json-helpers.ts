@@ -2,8 +2,74 @@ const SECRET_KEY_RE = /(?:api[_-]?key|token|secret|password|crypt[_-]?password)/
 const SECRET_ASSIGNMENT_RE =
   /((?:api[_-]?key|token|secret|password|crypt[_-]?password)\s*[=:]\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi;
 
+/** The long flag every verb accepts to request machine-readable output. */
+const JSON_FLAG = "--json";
+const JSON_FLAG_ASSIGNMENT = `${JSON_FLAG}=`;
+
+/**
+ * Argv terminator. `parseFlags` treats every token after it as positional,
+ * so nothing past it can be a flag.
+ */
+const ARGV_TERMINATOR = "--";
+
+/**
+ * True when `argv` requests JSON output as a FLAG rather than as literal
+ * content.
+ *
+ * The scan is faithful to `parseFlags` on the one part of the grammar that
+ * needs no per-verb schema: it stops at `--`, after which `o2b brain note
+ * -- "--json"` is a note whose text is the flag, not a JSON request.
+ *
+ * The remaining ambiguity - a `--json` token sitting in the value position
+ * of a value-taking flag - is undecidable here, because the two `main.ts`
+ * call sites run before per-verb parsing and so have no schema. It stays
+ * conservative: the token counts as a flag, which at worst adds a buffered
+ * envelope. It is NOT resolved by guessing which flags take values, because
+ * guessing wrong in the other direction would drop a real `--json`.
+ * Consumers that need the authoritative answer must read their own parsed
+ * flag - which is exactly what `advisory-rail.ts` requires of its callers.
+ */
 export function wantsJsonFlag(argv: ReadonlyArray<string>): boolean {
-  return argv.some((arg) => arg === "--json" || arg.startsWith("--json="));
+  for (const arg of argv) {
+    if (arg === ARGV_TERMINATOR) return false;
+    if (arg === JSON_FLAG || arg.startsWith(JSON_FLAG_ASSIGNMENT)) return true;
+  }
+  return false;
+}
+
+/**
+ * Top-level commands that render their own JSON under `--json`. Their
+ * stdout is a payload a caller parses, so it is never wrapped by
+ * {@link withJsonFallback} and never safe for advisory chrome.
+ */
+export const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
+  "status",
+  "install",
+  "update",
+  "tool-call",
+  "secrets",
+  "brain",
+  "search",
+  "vault",
+  "discipline",
+  "partner",
+  "doctor",
+  "onboarding",
+]);
+
+/**
+ * True when `command` owns its JSON output rather than being wrapped in the
+ * {@link withJsonFallback} envelope. This is the single fact table behind
+ * two questions: which invocations `main` must wrap, and - via
+ * `advisory-rail.ts` - which stdout streams advisory chrome would corrupt.
+ * It answers the structural question only; whether the caller actually
+ * asked for JSON is the caller's to supply.
+ */
+export function ownsInternalJson(command: string, rest: ReadonlyArray<string>): boolean {
+  if (COMMANDS_WITH_INTERNAL_JSON.has(command)) return true;
+  // `mcp` prints JSON only for the probe; `help` renders the manifest.
+  if (command === "mcp" && rest.includes("--probe")) return true;
+  return command === "help";
 }
 
 export function redactSecrets(value: unknown): unknown {

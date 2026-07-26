@@ -39,7 +39,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
-import { wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
+import { ownsInternalJson, wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
   installCli,
   renderInstallResult,
@@ -872,36 +872,11 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   }
 
   const run = () => dispatchCommand(command, rest);
-  if (wantsJsonFlag(rest) && !commandHasSemanticJson(command, rest)) {
+  if (wantsJsonFlag(rest) && !ownsInternalJson(command, rest)) {
     return await withJsonFallback(command, run);
   }
   return await run();
 }
-
-function commandHasSemanticJson(command: string, rest: ReadonlyArray<string>): boolean {
-  if (!wantsJsonFlag(rest)) return false;
-  if (COMMANDS_WITH_INTERNAL_JSON.has(command)) {
-    return true;
-  }
-  if (command === "mcp" && rest.includes("--probe")) return true;
-  if (command === "help") return true;
-  return false;
-}
-
-const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
-  "status",
-  "install",
-  "update",
-  "tool-call",
-  "secrets",
-  "brain",
-  "search",
-  "vault",
-  "discipline",
-  "partner",
-  "doctor",
-  "onboarding",
-]);
 
 async function dispatchCommand(command: string, rest: string[]): Promise<number> {
   try {
