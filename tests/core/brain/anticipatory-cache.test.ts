@@ -57,7 +57,10 @@ describe("refreshAnticipatoryCache", () => {
       schema: string;
       root_session_id: string;
     };
-    expect(raw.schema).toBe(ANTICIPATORY_SCHEMA_VERSION);
+    // A literal, not the constant: comparing the constant to itself is a
+    // tautology that can never catch an unintended schema-token change.
+    expect(raw.schema).toBe("o2b.anticipatory.v2");
+    expect(ANTICIPATORY_SCHEMA_VERSION).toBe("o2b.anticipatory.v2");
     expect(raw.root_session_id).toBe("root-1");
   });
 
@@ -320,5 +323,46 @@ describe("hook integration", () => {
     );
     const read = readAnticipatoryContext(vault, { sessionId: "hook-2", now: T0 });
     expect(read.cache_state).toBe("miss");
+  });
+});
+
+// ----- A4: the cache keys on the ENFORCED scope, not the requested one ----
+
+describe("owner scope in the cache key", () => {
+  /**
+   * The two writers that warm the cache (the session-lifecycle hook and
+   * `o2b brain anticipate --refresh`) pass no scope; the MCP tool passes
+   * one unconditionally, because `coerceAgentScope(ctx, args, true)` falls
+   * back to `resolveAgentName`, which always returns a string. Keying the
+   * filename on the REQUESTED scope therefore made every MCP read a
+   * permanent miss on a default vault, rebuilding a full `packContext` on
+   * each call - an observable behaviour change with the gate off.
+   */
+  test("a hook-warmed cache is warm for a scoped MCP read under the default gate", () => {
+    const warmed = refreshAnticipatoryCache(vault, { sessionId: "s-scope", now: T0 });
+    expect(warmed.refreshed).toBe(true);
+
+    const read = readAnticipatoryContext(vault, {
+      sessionId: "s-scope",
+      now: T0,
+      agentScope: "agent-a",
+    });
+    expect(read.cache_state).toBe("warm");
+  });
+
+  test("the hook-written path and the scoped read path are the same file", () => {
+    const hookPath = anticipatoryCachePath(vault, "root-1");
+    expect(anticipatoryCachePath(vault, "root-1", "agent-a")).toBe(hookPath);
+    expect(anticipatoryCachePath(vault, "root-1", "agent-b")).toBe(hookPath);
+  });
+
+  test("a second scoped read does not rebuild what the first one already had", () => {
+    refreshAnticipatoryCache(vault, { sessionId: "s-twice", now: T0 });
+    for (const scope of ["agent-a", "agent-b"]) {
+      expect(
+        readAnticipatoryContext(vault, { sessionId: "s-twice", now: T0, agentScope: scope })
+          .cache_state,
+      ).toBe("warm");
+    }
   });
 });

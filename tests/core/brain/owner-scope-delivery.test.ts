@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
-import { regenerateActive } from "../../../src/core/brain/active.ts";
+import { renderActive } from "../../../src/core/brain/active.ts";
 import { anticipatoryCachePath } from "../../../src/core/brain/anticipatory-cache.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 import { renderDigest } from "../../../src/core/brain/digest.ts";
@@ -74,7 +74,9 @@ function makePref(slug: string, owner?: string): void {
 
 /** Every preference-backed delivery surface, rendered as comparable text. */
 function renderAll(agentScope?: string): Record<string, string> {
-  const active = regenerateActive(vault, { now: NOW, ...scopeArg(agentScope) });
+  // The DELIVERY surface for active.md is the render, never the write:
+  // `regenerateActive` writes one shared file for the whole vault.
+  const active = renderActive(vault, { now: NOW, ...scopeArg(agentScope) });
   return {
     pack: JSON.stringify(
       packContext(vault, { maxTokens: 4000, ...scopeArg(agentScope) }).items.map((i) => i.id),
@@ -210,7 +212,8 @@ test("an ownerless preference is visible under every scope", () => {
   }
 });
 
-test("the anticipatory cache path is distinct per owner scope", () => {
+test("the anticipatory cache path is distinct per owner scope under `fail`", () => {
+  setGate(GATE_MODE.fail);
   const none = anticipatoryCachePath(vault, "root-1");
   const a = anticipatoryCachePath(vault, "root-1", OWNER_A);
   const b = anticipatoryCachePath(vault, "root-1", OWNER_B);
@@ -219,3 +222,19 @@ test("the anticipatory cache path is distinct per owner scope", () => {
   // An absent scope keeps the legacy path so warm caches are not orphaned.
   expect(anticipatoryCachePath(vault, "root-1", null)).toBe(none);
 });
+
+/**
+ * The key follows the ENFORCED scope, not the requested one. Under `off`
+ * and `warn` the pack is not narrowed, so a per-scope filename would only
+ * split one identical payload across N files - and, because the MCP tool
+ * always passes a scope while the hook writers never do, would turn every
+ * MCP read into a permanent miss (context-integrity-gates, A4).
+ */
+for (const mode of [null, GATE_MODE.off, GATE_MODE.warn]) {
+  test(`the anticipatory cache path ignores the requested scope under ${mode ?? "an absent gate"}`, () => {
+    setGate(mode);
+    const none = anticipatoryCachePath(vault, "root-1");
+    expect(anticipatoryCachePath(vault, "root-1", OWNER_A)).toBe(none);
+    expect(anticipatoryCachePath(vault, "root-1", OWNER_B)).toBe(none);
+  });
+}

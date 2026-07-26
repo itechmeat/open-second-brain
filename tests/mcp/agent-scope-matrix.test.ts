@@ -16,14 +16,15 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { indexVault, resolveSearchConfig, search } from "../../src/core/search/index.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
-import { brainConfigPath } from "../../src/core/brain/paths.ts";
+import { brainActivePath, brainConfigPath } from "../../src/core/brain/paths.ts";
+import { regenerateActive } from "../../src/core/brain/active.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
@@ -374,6 +375,40 @@ for (const surface of GATED_CALLS) {
     expect(await call(surface.name, surface.args(OWNER_A), OWNER_A)).toContain("owned-by-a");
   });
 }
+
+/**
+ * A3: a per-request visibility filter must never drive a shared write.
+ *
+ * `brain_context` used to reach `regenerateActive(vault, { agentScope })`,
+ * and `regenerateActive` WRITES `Brain/active.md`. Under `fail` a call from
+ * agent-b therefore rewrote the shared file without agent-a's memories -
+ * and `hooks/active-inject.ts` injects that same file into every agent's
+ * SessionStart, while `resources.ts` regenerates it unscoped. The file
+ * thrashed and an agent could lose its own memories from session start.
+ */
+test("brain_context scopes what it returns without narrowing active.md", async () => {
+  setGate(GATE_MODE.fail);
+  regenerateActive(vault);
+  const activePath = brainActivePath(vault);
+  const before = readFileSync(activePath, "utf8");
+  expect(before).toContain("owned-by-a");
+
+  const out = await call("brain_context", {}, OWNER_B);
+  expect(out).not.toContain("owned-by-a");
+  expect(out).toContain("shared");
+
+  // The SHARED file is untouched: same bytes, still carrying every owner.
+  expect(readFileSync(activePath, "utf8")).toBe(before);
+});
+
+test("brain_context creates active.md unscoped on a vault that has none", async () => {
+  setGate(GATE_MODE.fail);
+  const activePath = brainActivePath(vault);
+  rmSync(activePath, { force: true });
+
+  await call("brain_context", {}, OWNER_B);
+  expect(readFileSync(activePath, "utf8")).toContain("owned-by-a");
+});
 
 test("brain_retrieval_plan counts only the memories its caller may see", async () => {
   setGate(GATE_MODE.fail);

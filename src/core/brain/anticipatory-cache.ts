@@ -22,11 +22,11 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import type { StampTokens } from "../integrity/stamp.ts";
 import { packContext, type ContextPackItem } from "./context-pack.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import { packStampRefusal, packStampTokens, type ContextPackStamp } from "./pack-stamp.ts";
+import { resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { searchSessionRecall, type SessionRecallHit } from "./session-recall.ts";
@@ -170,15 +170,30 @@ function safeCacheKey(rootId: string): string {
  * exact file another scope reads back - a disk-persisted leak that
  * outlives the process that caused it.
  *
- * An absent scope keeps the legacy filename byte-for-byte, so warm
- * caches written before the gate existed are still found.
+ * The key uses the ENFORCED scope, resolved here rather than by the
+ * caller, so no call site can key on a scope that does not actually
+ * narrow the payload. That distinction is load-bearing:
+ * `coerceAgentScope(ctx, args, true)` falls back to `resolveAgentName`,
+ * which ALWAYS returns a string (the literal `"agent"` when nothing is
+ * configured), so `brain_anticipatory_context` passes a scope on every
+ * call regardless of the gate - while the two writers that warm the
+ * cache (the session-lifecycle hook and `o2b brain anticipate --refresh`)
+ * pass none. Keying on the REQUESTED scope therefore made the MCP read a
+ * permanent miss on a default vault, rebuilding a full `packContext` on
+ * every call. Under `off` and `warn` the pack is not narrowed either, so
+ * one file is the correct answer as well as the pre-gate one; only `fail`
+ * splits the cache, which is exactly when the payloads genuinely differ.
+ *
+ * An absent or non-enforcing scope keeps the legacy filename
+ * byte-for-byte, so warm caches written before the gate existed are still
+ * found.
  */
 export function anticipatoryCachePath(
   vault: string,
   rootSessionId: string,
   agentScope?: string | null,
 ): string {
-  const scope = normalizeAgentScope(agentScope ?? undefined);
+  const scope = resolveOwnerScopeDelivery(vault, agentScope ?? undefined).enforcedScope;
   const key = safeCacheKey(scope === null ? rootSessionId : `${rootSessionId}\u0000${scope}`);
   return ensureInsideVault(join(vault, CACHE_DIR_REL, `${key}.json`), vault);
 }

@@ -9,7 +9,12 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolveAgentName } from "../../core/config.ts";
 import { brainActivePath, brainDirs } from "../../core/brain/paths.ts";
-import { regenerateActive, type RegenerateActiveResult } from "../../core/brain/active.ts";
+import {
+  regenerateActive,
+  renderActive,
+  type RegenerateActiveResult,
+} from "../../core/brain/active.ts";
+import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
@@ -320,13 +325,13 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   let counts: BrainContextCounts = EMPTY_CONTEXT_COUNTS;
   let error: string | undefined;
   try {
-    // Owner-scope isolation (context-integrity-gates, Unit A). This
-    // surface takes no arguments, so `ServerContext.agentName` is its
-    // only source of identity; the gate decides whether it narrows.
-    counts = regenerateActive(
-      ctx.vault,
-      ctx.agentName === undefined ? {} : { agentScope: ctx.agentName },
-    ).counts;
+    // The SHARED file is regenerated unscoped, always. `active.md` is one
+    // file for the whole vault - injected into every agent's SessionStart
+    // by `hooks/active-inject.ts` and regenerated unscoped by the
+    // `osb://preferences/active` resource - so narrowing the WRITE to this
+    // caller would make it thrash and could drop an agent's own memories
+    // from its session start (context-integrity-gates, A3).
+    counts = regenerateActive(ctx.vault).counts;
   } catch (err) {
     error = (err as Error)?.message ?? String(err);
   }
@@ -352,6 +357,26 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
       generatedAt = null;
     }
   }
+  // Owner-scope isolation (context-integrity-gates, Unit A) applies to
+  // what this ONE caller is handed, not to what is on disk. This surface
+  // takes no arguments, so `ServerContext.agentName` is its only source of
+  // identity, and the gate decides whether it narrows: `enforcedScope` is
+  // non-null only under `fail`, so the branch is dead on a default vault
+  // and the delivered bytes stay the file's own. The re-render reuses the
+  // stamp already on disk so the scoped view names the same generation the
+  // shared file does.
+  if (!error) {
+    const delivery = resolveOwnerScopeDelivery(ctx.vault, ctx.agentName);
+    if (delivery.enforcedScope !== null) {
+      const scoped = renderActive(ctx.vault, {
+        agentScope: delivery.enforcedScope,
+        ...(generatedAt !== null ? { generatedAt } : {}),
+      });
+      content = scoped.document;
+      counts = scoped.counts;
+    }
+  }
+
   content = appendPinnedToContextContent(content, pinned.content);
 
   // Optional vault-root instruction file (v0.10.17). Absent file =

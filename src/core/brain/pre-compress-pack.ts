@@ -17,6 +17,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 
+import { renderActive } from "./active.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
@@ -107,7 +108,25 @@ function collectConfirmed(vault: string, agentScope: string | undefined): Confir
   return out;
 }
 
-function readActiveHead(vault: string): string | null {
+/**
+ * The active-digest head this caller may see.
+ *
+ * `active.md` is ONE file shared by every agent, so under an enforcing
+ * owner-scope gate the file's own bytes are the wrong answer: they carry
+ * every owner's memories. The scoped caller gets an in-memory
+ * {@link renderActive} instead, which is where the ownership predicate
+ * already attaches. Narrowing the FILE to make this read correct is what
+ * `brain_context` used to do, and it made a shared write follow a
+ * per-request filter (context-integrity-gates, A3).
+ *
+ * With no enforced scope - the shipped `off` default - the file is read
+ * verbatim exactly as before, stamp and all.
+ */
+function readActiveHead(vault: string, enforcedScope: string | null): string | null {
+  if (enforcedScope !== null) {
+    const text = renderActive(vault, { agentScope: enforcedScope }).document.trim();
+    return text.length > 0 ? text : null;
+  }
   const path = brainActivePath(vault);
   if (!existsSync(path)) return null;
   try {
@@ -132,7 +151,10 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
   });
   const top = ranked.slice(0, Math.max(0, opts.topK));
 
-  const activeHead = readActiveHead(vault);
+  const activeHead = readActiveHead(
+    vault,
+    resolveOwnerScopeDelivery(vault, opts.agentScope).enforcedScope,
+  );
   const safetyById = new Map<string, ContextSafetyReport>();
   const entries: Array<{ item: string; text: string }> = [];
   if (activeHead !== null) {

@@ -58,13 +58,44 @@ const FRONTMATTER_KIND = "brain-active";
 export interface RegenerateActiveOptions {
   /** Wall clock for `generated_at`. Defaults to `new Date()`. */
   readonly now?: Date;
+}
+
+/**
+ * Options for the RENDER, which — unlike the write — may be narrowed to a
+ * single agent's view.
+ */
+export interface RenderActiveOptions extends RegenerateActiveOptions {
   /**
    * Owner scope for delivery isolation (context-integrity-gates, Unit
    * A). Enforced only when `integrity.owner_scope_delivery` is `fail`;
    * omitted, or under the default `off`, nothing is filtered and the
    * output is byte-identical to a vault without the gate.
+   *
+   * Deliberately absent from {@link RegenerateActiveOptions}: `active.md`
+   * is ONE file shared by every agent on the vault, injected into every
+   * SessionStart by `hooks/active-inject.ts` and regenerated unscoped by
+   * the `osb://preferences/active` MCP resource. A per-request visibility
+   * filter that reached the write would make the file thrash between
+   * narrowed and complete, and an agent could lose its OWN memories from
+   * session start because another agent read the vault last.
    */
   readonly agentScope?: string;
+  /**
+   * `generated_at` stamp for the rendered frontmatter. Defaults to
+   * {@link isoSecond} of `now`. A read-time render passes the stamp
+   * already on disk so its document describes the same generation the
+   * shared file does.
+   */
+  readonly generatedAt?: string;
+}
+
+/** A rendered digest that has NOT been written anywhere. */
+export interface ActiveRender {
+  /** Body only, no frontmatter — what the idempotency check compares. */
+  readonly body: string;
+  /** Frontmatter + body: exactly the bytes a write would store. */
+  readonly document: string;
+  readonly counts: RegenerateActiveResult["counts"];
 }
 
 export interface RegenerateActiveResult {
@@ -89,23 +120,22 @@ export interface RegenerateActiveResult {
 }
 
 /**
- * Regenerate `<vault>/Brain/active.md`. Returns whether the body
- * actually changed (callers don't need to skip the call themselves —
- * the function makes the right decision internally).
+ * Render the active digest WITHOUT writing it.
+ *
+ * The read-time half of this module. `active.md` is a single file shared
+ * by every agent on the vault, so a scope-narrowed view has to be
+ * produced here and delivered to the one caller that asked for it —
+ * never persisted. {@link regenerateActive} is the write, and it never
+ * takes a scope.
  *
  * Errors thrown by individual preference / retired parsers are caught
- * and the offending file is omitted from the render. The function
- * does not raise on parse failures because a single corrupted
- * frontmatter must not break the agent's view of every healthy rule.
- * Corruption is the domain of `brain_doctor`; this writer's job is to
- * surface what is currently knowable.
+ * and the offending file is omitted from the render. This does not raise
+ * on parse failures because a single corrupted frontmatter must not break
+ * the agent's view of every healthy rule. Corruption is the domain of
+ * `brain_doctor`; this render's job is to surface what is knowable.
  */
-export function regenerateActive(
-  vault: string,
-  opts: RegenerateActiveOptions = {},
-): RegenerateActiveResult {
+export function renderActive(vault: string, opts: RenderActiveOptions = {}): ActiveRender {
   const now = opts.now ?? new Date();
-  const path = brainActivePath(vault);
 
   const preferences = readActivePreferences(vault, opts.agentScope);
   const retiredRecent = readRecentlyRetired(vault, RECENTLY_RETIRED_COUNT);
@@ -157,19 +187,9 @@ export function regenerateActive(
     windowDays,
   });
 
-  // `readExistingBody` returns the trimmed body (parseFrontmatter
-  // trims internally), so compare against the trimmed render for an
-  // apples-to-apples byte check.
-  const existingBody = readExistingBody(path);
-  const changed = existingBody === null || existingBody !== body.trim();
-  if (changed) {
-    const document = renderDocument(body, isoSecond(now));
-    atomicWriteFileSync(path, document);
-  }
-
   return {
-    path,
-    changed,
+    body,
+    document: renderDocument(body, opts.generatedAt ?? isoSecond(now)),
     counts: {
       confirmed: confirmed.length,
       quarantine: quarantine.length,
@@ -177,6 +197,34 @@ export function regenerateActive(
       most_applied_30d: mostApplied.length,
     },
   };
+}
+
+/**
+ * Regenerate `<vault>/Brain/active.md`. Returns whether the body
+ * actually changed (callers don't need to skip the call themselves —
+ * the function makes the right decision internally).
+ *
+ * The write is ALWAYS unscoped: see {@link RenderActiveOptions.agentScope}
+ * for why a per-request visibility filter must not reach this file.
+ */
+export function regenerateActive(
+  vault: string,
+  opts: RegenerateActiveOptions = {},
+): RegenerateActiveResult {
+  const now = opts.now ?? new Date();
+  const path = brainActivePath(vault);
+  const rendered = renderActive(vault, { now });
+
+  // `readExistingBody` returns the trimmed body (parseFrontmatter
+  // trims internally), so compare against the trimmed render for an
+  // apples-to-apples byte check.
+  const existingBody = readExistingBody(path);
+  const changed = existingBody === null || existingBody !== rendered.body.trim();
+  if (changed) {
+    atomicWriteFileSync(path, rendered.document);
+  }
+
+  return { path, changed, counts: rendered.counts };
 }
 
 /**
