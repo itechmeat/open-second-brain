@@ -10,6 +10,7 @@ import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
 import { applyRepair } from "../../core/brain/diagnostics.ts";
+import { nextCommandField } from "../../core/brain/next-step.ts";
 import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
@@ -57,17 +58,25 @@ async function toolBrainDoctor(
     format,
     ok,
     strict,
+    // no-dead-ends, task 4: `next_command` is the structural CLI string
+    // the diagnostics registry holds for this code, resolved through the
+    // same `nextCommandField` the `o2b brain doctor --json` renderer
+    // uses so the two surfaces cannot drift. Absent - not null - for a
+    // code with no registered signal, because there is no honest command
+    // to name and a generic one would be invented.
     errors: result.errors.map((i) => ({
       severity: i.severity,
       code: i.code,
       message: i.message,
       ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
+      ...nextCommandField(i.code),
     })),
     warnings: result.warnings.map((i) => ({
       severity: i.severity,
       code: i.code,
       message: i.message,
       ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
+      ...nextCommandField(i.code),
     })),
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
@@ -109,6 +118,7 @@ async function toolBrainDoctor(
             code: u.code,
             ...(u.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, u.path) } : {}),
             message: u.message,
+            ...nextCommandField(u.code),
           })),
         }
       : {}),

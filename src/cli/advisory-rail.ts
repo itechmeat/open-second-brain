@@ -113,3 +113,40 @@ export function emitNextStep(code: string, stream: AdvisoryStream): AdvisoryEmis
   info(line);
   return Object.freeze({ outcome: ADVISORY_OUTCOME.emitted, nextStep, line });
 }
+
+/**
+ * Batch form: emit the DISTINCT next steps for `codes`, in the order
+ * their commands first appear.
+ *
+ * A diagnosis surface reports issues, not exits, and the two are not one
+ * to one: two hundred broken wikilinks share a single repair command,
+ * and two different codes can share one too. Emitting per issue would
+ * bury the answer in repetition, so the de-duplication rule lives here
+ * rather than in each verb that reports a batch - the rail already owns
+ * what reaches stdout, and one rule cannot drift from itself.
+ *
+ * De-duplication is keyed on the resolved COMMAND, not on the code,
+ * because the caller acts on commands. Unregistered codes are returned
+ * once each so the caller can still see, by name, which of its issues
+ * has no registered exit; they never print.
+ */
+export function emitNextSteps(
+  codes: Iterable<string>,
+  stream: AdvisoryStream,
+): ReadonlyArray<AdvisoryEmission> {
+  const seenCommands = new Set<string>();
+  const seenUnregistered = new Set<string>();
+  const emissions: AdvisoryEmission[] = [];
+  for (const code of codes) {
+    const resolved = resolveNextStep(code);
+    if (resolved === null) {
+      if (seenUnregistered.has(code)) continue;
+      seenUnregistered.add(code);
+    } else {
+      if (seenCommands.has(resolved.nextCommand)) continue;
+      seenCommands.add(resolved.nextCommand);
+    }
+    emissions.push(emitNextStep(code, stream));
+  }
+  return Object.freeze(emissions);
+}

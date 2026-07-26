@@ -42,3 +42,30 @@ export function resolveNextStep(code: string): NextStep | null {
     nextCommand: signal.nextCommand,
   });
 }
+
+/**
+ * The additive JSON key every machine-readable surface carries a next
+ * step in. Named once here because the CLI `--json` renderers and their
+ * MCP twins must not drift on the spelling: a consumer that learns the
+ * key from one surface reads it on the other.
+ */
+export const NEXT_COMMAND_KEY = "next_command";
+
+/** The field a resolved code contributes, spread into an issue record. */
+export type NextCommandField = { readonly [NEXT_COMMAND_KEY]?: string };
+
+/** Absent case: an unregistered code contributes no key whatsoever. */
+const NO_NEXT_COMMAND: NextCommandField = Object.freeze({});
+
+/**
+ * Resolve `code` into the object to spread onto a machine-readable issue
+ * record. An unregistered code yields the empty object, so the key is
+ * ABSENT rather than present-and-null - a null would be a value a
+ * consumer has to interpret, and the honest statement is that this code
+ * has no registered exit.
+ */
+export function nextCommandField(code: string): NextCommandField {
+  const step = resolveNextStep(code);
+  if (step === null) return NO_NEXT_COMMAND;
+  return Object.freeze({ [NEXT_COMMAND_KEY]: step.nextCommand });
+}

@@ -8,7 +8,37 @@ import {
   planRemediation,
 } from "../../../core/brain/health/remediation.ts";
 import { loadBrainConfigDetailed, resolveHealth } from "../../../core/brain/policy.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
+import type { DoctorIssue } from "../../../core/brain/types.ts";
+import { emitNextSteps, type AdvisoryStream } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, parse, resolveBrainAgent, usageError } from "../helpers.ts";
+
+/**
+ * One reported issue, machine-readable: the record the doctor produced
+ * plus the structural next command when its code is registered.
+ *
+ * The key is spread LAST so the pre-existing field order is untouched
+ * and an unregistered code produces byte-identical JSON. The builder is
+ * shared with the `brain_doctor` MCP tool through `nextCommandField`, so
+ * the two surfaces cannot disagree on the spelling or on which codes
+ * resolve.
+ */
+function withNextCommand<T extends Pick<DoctorIssue, "code">>(issue: T): Record<string, unknown> {
+  return { ...issue, ...nextCommandField(issue.code) };
+}
+
+/**
+ * One reported issue, human-readable. `label` carries its own trailing
+ * padding because the three streams have never been column-aligned and
+ * this task does not change a byte of what they print; the renderer
+ * exists so the three call sites stop repeating the same template.
+ */
+function renderIssueLine(
+  label: string,
+  issue: Pick<DoctorIssue, "code" | "message"> & { readonly path?: string },
+): string {
+  return `${label} ${issue.code}: ${issue.message}${issue.path ? ` (${issue.path})` : ""}\n`;
+}
 
 export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   const { flags } = parse(argv, {
@@ -60,13 +90,25 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     return fail(`doctor failed: ${(exc as Error).message ?? exc}`);
   }
 
+  // Where an advisory line may legally go. `brain` renders its own JSON,
+  // so under `--json` the rail suppresses every line and the pointer
+  // travels as a payload field instead. The verb never decides this for
+  // itself - see `advisory-rail.ts`.
+  const stream: AdvisoryStream = {
+    command: "brain",
+    argv,
+    jsonRequested: Boolean(flags["json"]),
+  };
+
   if (flags["remediate"]) {
     // Never auto-repair a vault that has structural errors - those need
     // an operator, and remediation assumes a parseable tree.
     if (result.errors.length > 0) {
-      for (const e of result.errors) {
-        process.stdout.write(`[ERROR] ${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}\n`);
-      }
+      for (const e of result.errors) process.stdout.write(renderIssueLine("[ERROR]", e));
+      emitNextSteps(
+        result.errors.map((e) => e.code),
+        stream,
+      );
       return fail("doctor found errors; remediation aborted");
     }
     try {
@@ -89,25 +131,32 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     process.stdout.write(
       JSON.stringify(
         {
-          warnings: result.warnings,
-          errors: result.errors,
-          ...(uncertain.length > 0 ? { uncertain } : {}),
+          warnings: result.warnings.map(withNextCommand),
+          errors: result.errors.map(withNextCommand),
+          ...(uncertain.length > 0 ? { uncertain: uncertain.map(withNextCommand) } : {}),
         },
         null,
         2,
       ) + "\n",
     );
   } else {
-    for (const e of result.errors)
-      process.stdout.write(`[ERROR] ${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}\n`);
-    for (const w of result.warnings)
-      process.stdout.write(`[WARN]  ${w.code}: ${w.message}${w.path ? ` (${w.path})` : ""}\n`);
-    for (const u of uncertain)
-      process.stdout.write(`[UNSURE] ${u.code}: ${u.message}${u.path ? ` (${u.path})` : ""}\n`);
+    for (const e of result.errors) process.stdout.write(renderIssueLine("[ERROR]", e));
+    for (const w of result.warnings) process.stdout.write(renderIssueLine("[WARN] ", w));
+    for (const u of uncertain) process.stdout.write(renderIssueLine("[UNSURE]", u));
     if (result.errors.length === 0 && result.warnings.length === 0 && uncertain.length === 0) {
       ok("brain doctor: clean");
     }
   }
+
+  // no-dead-ends, task 4: the exits, after the diagnosis. Errors first,
+  // then warnings, then the uncertain stream - the order an operator
+  // reads them in. The rail prints nothing under `--json` (the pointer
+  // rode out as `next_command` above) and nothing for a code with no
+  // registered signal.
+  emitNextSteps(
+    [...result.errors, ...result.warnings, ...uncertain].map((issue) => issue.code),
+    stream,
+  );
 
   if (result.errors.length > 0) return 1;
   if (result.warnings.length > 0 && flags["strict"]) return 2;

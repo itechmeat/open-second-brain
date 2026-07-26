@@ -23,6 +23,7 @@ import {
   advisoryIsLegal,
   type AdvisoryEmission,
   emitNextStep,
+  emitNextSteps,
   renderNextStepLine,
 } from "../../src/cli/advisory-rail.ts";
 import {
@@ -189,6 +190,69 @@ describe("advisory rail - whether it is legal here", () => {
         `${command}: true`,
       );
     }
+  });
+});
+
+describe("advisory rail - the batch form (no-dead-ends, task 4)", () => {
+  const HUMAN = { command: "brain", argv: ["doctor"], jsonRequested: false };
+
+  test("codes sharing one command print that command once", async () => {
+    // `broken-wikilink` and `dangling-workrun` are distinct issue
+    // classes with one repair verb between them.
+    const shared = DIAGNOSTIC_SIGNALS.get("broken-wikilink")!.nextCommand;
+    expect(DIAGNOSTIC_SIGNALS.get("dangling-workrun")!.nextCommand).toBe(shared);
+    let emissions: ReadonlyArray<AdvisoryEmission> = [];
+    const out = await captureStdout(() => {
+      emissions = emitNextSteps(
+        ["broken-wikilink", "dangling-workrun", "broken-wikilink", "broken-backlinks"],
+        HUMAN,
+      );
+    });
+    const backlinks = DIAGNOSTIC_SIGNALS.get("broken-backlinks")!.nextCommand;
+    expect(out).toBe(`next: ${shared}\nnext: ${backlinks}\n`);
+    expect(emissions.map((e) => e.outcome)).toEqual([
+      ADVISORY_OUTCOME.emitted,
+      ADVISORY_OUTCOME.emitted,
+    ]);
+  });
+
+  test("an unregistered code is reported once by name and never printed", async () => {
+    let emissions: ReadonlyArray<AdvisoryEmission> = [];
+    const out = await captureStdout(() => {
+      emissions = emitNextSteps(
+        ["no-such-diagnostic-code", "no-such-diagnostic-code", REGISTERED_CODE],
+        HUMAN,
+      );
+    });
+    expect(out).toBe(`next: ${REGISTERED_COMMAND}\n`);
+    expect(emissions.map((e) => e.outcome)).toEqual([
+      ADVISORY_OUTCOME.unregisteredCode,
+      ADVISORY_OUTCOME.emitted,
+    ]);
+  });
+
+  test("no codes means no lines and no emissions", async () => {
+    let emissions: ReadonlyArray<AdvisoryEmission> = [];
+    const out = await captureStdout(() => {
+      emissions = emitNextSteps([], HUMAN);
+    });
+    expect(out).toBe("");
+    expect(emissions).toEqual([]);
+  });
+
+  test("a machine stream still resolves every distinct step, silently", async () => {
+    let emissions: ReadonlyArray<AdvisoryEmission> = [];
+    const out = await captureStdout(() => {
+      emissions = emitNextSteps([REGISTERED_CODE, REGISTERED_CODE], {
+        command: "brain",
+        argv: ["doctor", "--json"],
+        jsonRequested: true,
+      });
+    });
+    expect(out).toBe("");
+    expect(emissions).toHaveLength(1);
+    expect(emissions[0]!.outcome).toBe(ADVISORY_OUTCOME.suppressedMachineStream);
+    expect(emissions[0]!.nextStep!.nextCommand).toBe(REGISTERED_COMMAND);
   });
 });
 
