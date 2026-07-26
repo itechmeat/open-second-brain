@@ -133,6 +133,16 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
           confirmed_at: now.toISOString(),
           status: BRAIN_PREFERENCE_STATUS.confirmed,
           evidenced_by: [`[[${sigResult.id}]]`],
+          // Issue #149: an explicit zero, not an absent value. The
+          // on-disk encoding of "absent" is the literal `null`, and two
+          // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
+          // `null` to negative infinity before sorting - so a rule
+          // force-confirmed a second ago would sort BELOW every rule
+          // that has a number, including one measured at zero. Zero is
+          // also the true Wilson lower bound on no evidence, which is
+          // why the dream pass already pre-seeds it for new
+          // preferences. This writer now matches it.
+          confidence_value: 0,
           ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
         },
         { overwrite: false },

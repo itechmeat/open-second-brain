@@ -188,6 +188,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain stale",
         autoRepairable: false,
       },
+      {
+        // Issue #149. The detector has existed since the hygiene lints
+        // shipped; what it never had was an exit. Recording real use is
+        // the only thing that moves a cold-start rule, and the reporter
+        // reached for a synthetic confidence value precisely because no
+        // surface said so.
+        code: "low-evidence-confirmed",
+        issueClass: "confirmed rule with no recorded use",
+        nextCommand: "o2b brain apply-evidence --pref <id> --artifact <artifact> --result=applied",
+        autoRepairable: false,
+      },
       // --- O3 operator-snapshot source classes ---
       {
         code: "doctor-errors",
