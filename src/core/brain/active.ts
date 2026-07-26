@@ -43,6 +43,7 @@ import {
   loadBrainConfig,
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
+import { isPreferenceVisible } from "./owner-scoped-facts.ts";
 import { parseRetired } from "./preference.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
@@ -138,7 +139,7 @@ export function renderActive(vault: string, opts: RenderActiveOptions = {}): Act
   const now = opts.now ?? new Date();
 
   const preferences = readActivePreferences(vault, opts.agentScope);
-  const retiredRecent = readRecentlyRetired(vault, RECENTLY_RETIRED_COUNT);
+  const retiredRecent = readRecentlyRetired(vault, RECENTLY_RETIRED_COUNT, opts.agentScope);
 
   // Confirmed prefs sort by confidence then id. When provenance trust
   // ordering is on, re-rank stated > deduced > inferred as the primary key
@@ -267,15 +268,29 @@ function readActivePreferences(vault: string, agentScope: string | undefined): B
   return out;
 }
 
-function readRecentlyRetired(vault: string, limit: number): BrainRetired[] {
+/**
+ * Retirement KEEPS ownership (context-integrity-gates, A7): a retired
+ * memory is withdrawn from the active set, never published. The gate
+ * verdict is resolved exactly as it is for the active preferences, so a
+ * vault with the gate off - or a caller with no scope - sees the same
+ * list it always did.
+ */
+function readRecentlyRetired(
+  vault: string,
+  limit: number,
+  agentScope: string | undefined,
+): BrainRetired[] {
   const dirs = brainDirsForWrite(vault);
   if (!existsSync(dirs.retired)) return [];
+  const scope = resolveOwnerScopeDelivery(vault, agentScope).enforcedScope;
   const out: BrainRetired[] = [];
   for (const name of readdirSync(dirs.retired)) {
     if (!name.endsWith(".md")) continue;
     const full = join(dirs.retired, name);
     try {
-      out.push(parseRetired(full));
+      const retired = parseRetired(full);
+      if (scope !== null && !isPreferenceVisible(retired, scope)) continue;
+      out.push(retired);
     } catch {
       // Same rationale as readActivePreferences.
     }

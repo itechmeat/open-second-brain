@@ -990,6 +990,8 @@ export function parseRetired(path: string, options: ParsePreferenceOptions = {})
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
       : {}),
+    // Retirement KEEPS ownership - see `BrainRetired.owner`.
+    ...(optionalOwnerField(meta) !== undefined ? { owner: optionalOwnerField(meta) } : {}),
     ...(optionalScalarString(meta, "superseded_by") !== undefined
       ? { superseded_by: optionalScalarString(meta, "superseded_by") }
       : {}),

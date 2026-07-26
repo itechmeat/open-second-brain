@@ -776,6 +776,21 @@ export interface BrainRetired {
   readonly tags: ReadonlyArray<string>;
   readonly topic: string;
   readonly scope?: string;
+  /**
+   * Owner token, inherited verbatim from the preference
+   * (context-integrity-gates, A7).
+   *
+   * RETIREMENT KEEPS OWNERSHIP. This is the wave's single answer to
+   * "does retirement strip ownership?", and it is `no`: retiring a
+   * memory withdraws it from the active set, it does not PUBLISH it to
+   * every agent on the vault. `moveToRetired` already copied the field
+   * to disk; the field's absence from this type was what made
+   * `isPreferenceVisible` trivially true for a retired record, so the
+   * recently-retired list, the digest's retired section and
+   * `brain_query` each independently treated retired memories as shared
+   * while the agent-source provider did not.
+   */
+  readonly owner?: string;
   readonly principle: string;
   readonly evidenced_by: ReadonlyArray<string>;
   readonly applied_count: number;

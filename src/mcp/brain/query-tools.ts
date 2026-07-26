@@ -114,9 +114,10 @@ async function toolBrainQuery(
         const res = queryByPreference(ctx.vault, preference);
         // Fail closed: an owner-private fact outside the requested scope is
         // indistinguishable from absent, so it cannot leak across owners.
-        // Only active preferences carry an owner; a retired record is shared.
-        const prefOwner =
-          res.preference.kind === "brain-preference" ? res.preference.owner : undefined;
+        // Retirement KEEPS ownership (context-integrity-gates, A7), so a
+        // retired record is read through the same predicate as an active
+        // one - retiring a memory must not publish it.
+        const prefOwner = res.preference.owner;
         if (ownerScope !== null && !isPreferenceVisible({ owner: prefOwner }, ownerScope)) {
           throw new BrainNotFoundError(`preference not found: ${preference}`);
         }
@@ -141,10 +142,7 @@ async function toolBrainQuery(
       const res = queryByTopic(ctx.vault, topic, { showExpired });
       const resultCount = res.signals.length + res.all_log_events.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
-      const topicPrefOwner =
-        res.preference && res.preference.kind === "brain-preference"
-          ? res.preference.owner
-          : undefined;
+      const topicPrefOwner = res.preference?.owner;
       const topicPrefVisible =
         res.preference !== null &&
         res.preference !== undefined &&

@@ -1,5 +1,5 @@
 import { isOwnerVisible, normalizeAgentScope } from "../../graph/agent-scope.ts";
-import { collectAgentSourceContributions, listAgentSources } from "./registry.ts";
+import { collectAgentSourceContributions, summarizeAgentSources } from "./registry.ts";
 import { summarizeAgentContributions } from "./summary.ts";
 import type {
   AgentSourceContribution,
@@ -48,7 +48,18 @@ export function queryAgentSources(
   vault: string,
   opts: AgentSourceQueryOptions = {},
 ): AgentSourceQueryResult {
-  const availableAgents = listAgentSources(vault);
+  const ownerScope = normalizeAgentScope(opts.ownerScope);
+
+  // The ownership filter runs FIRST, and the roster is folded from what
+  // survives it. Listing the agents independently of the filter reported
+  // the withheld contributions' topics verbatim and counted them, so a
+  // correct `total_matched` sat next to a roster that named exactly what
+  // it withheld (context-integrity-gates, A5). An unscoped call filters
+  // nothing, so the roster is the same array it always was.
+  const visible = collectAgentSourceContributions(vault).filter(
+    (contribution) => ownerScope === null || isOwnerVisible(contribution.owner ?? null, ownerScope),
+  );
+  const availableAgents = summarizeAgentSources(visible);
   const availableIds = new Set(availableAgents.map((a) => a.id));
   const selectedAgents = normalizeAgents(
     opts.agents,
@@ -60,12 +71,7 @@ export function queryAgentSources(
   const query = normalizeTextFilter(opts.query);
   const limit = normalizeLimit(opts.limit);
 
-  const ownerScope = normalizeAgentScope(opts.ownerScope);
-
-  const matched = collectAgentSourceContributions(vault).filter((contribution) => {
-    if (ownerScope !== null && !isOwnerVisible(contribution.owner ?? null, ownerScope)) {
-      return false;
-    }
+  const matched = visible.filter((contribution) => {
     if (!contribution.agents.some((agent) => selectedSet.has(agent))) return false;
     if (opts.kind !== undefined && contribution.kind !== opts.kind) return false;
     if (topic !== null && contribution.topic !== topic) return false;

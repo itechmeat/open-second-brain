@@ -318,8 +318,16 @@ export function summarizeContextReceiptSession(
         tokens: entry.tokens,
       }),
     )
+    // Codepoint order for the id tiebreak, not `localeCompare`: the
+    // comparison must be reproducible across hosts, and ICU collation
+    // varies with the runtime locale, so the same receipts could fold to a
+    // different item order on two machines. Matches `stamp.ts` and
+    // `link-ratchet.ts`, which take the same decision for the same reason.
     .toSorted(
-      (a, b) => b.injections - a.injections || b.tokens - a.tokens || a.id.localeCompare(b.id),
+      (a, b) =>
+        b.injections - a.injections ||
+        b.tokens - a.tokens ||
+        (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
     );
 
   return Object.freeze({

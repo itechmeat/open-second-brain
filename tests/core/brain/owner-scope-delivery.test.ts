@@ -23,7 +23,8 @@ import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { buildMorningBrief } from "../../../src/core/brain/morning-brief.ts";
 import { brainConfigPath, brainDirs } from "../../../src/core/brain/paths.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
-import { writePreference } from "../../../src/core/brain/preference.ts";
+import { moveToRetired, writePreference } from "../../../src/core/brain/preference.ts";
+import { preferencePath } from "../../../src/core/brain/paths.ts";
 import {
   collectPreferencePages,
   collectPreferences,
@@ -238,3 +239,48 @@ for (const mode of [null, GATE_MODE.off, GATE_MODE.warn]) {
     expect(anticipatoryCachePath(vault, "root-1", OWNER_B)).toBe(none);
   });
 }
+
+// ----- A7: retirement KEEPS ownership -------------------------------------
+
+/**
+ * Retiring a memory must not PUBLISH it. Before this fix the wave answered
+ * the question three ways: the agent-source provider kept the owner, while
+ * `active.md`'s recently-retired list, the digest's retired section, and
+ * `brain_query` all treated a retired record as shared - because
+ * `BrainRetired` carried no `owner` field, so the visibility predicate was
+ * trivially true for it.
+ */
+test("a retired memory keeps its owner on every delivery surface", () => {
+  setGate(GATE_MODE.fail);
+  makePref("shared");
+  makePref("owned-by-a", OWNER_A);
+  moveToRetired(vault, preferencePath(vault, "owned-by-a"), "stale-no-evidence", {
+    now: NOW,
+    retired_by: "[[Brain/log/2026-05-10]]",
+  });
+
+  const asB = renderActive(vault, { now: NOW, agentScope: OWNER_B });
+  expect(asB.document).not.toContain("owned-by-a");
+  expect(asB.counts.retired_recent).toBe(0);
+  expect(
+    renderDigest(vault, { now: NOW, until: NOW, format: "json", agentScope: OWNER_B }).content,
+  ).not.toContain("owned-by-a");
+
+  // Its own owner still sees it - the memory is withheld, not destroyed.
+  const asA = renderActive(vault, { now: NOW, agentScope: OWNER_A });
+  expect(asA.document).toContain("ret-owned-by-a");
+  expect(asA.counts.retired_recent).toBe(1);
+});
+
+test("with the gate off a retired memory reaches every caller as before", () => {
+  setGate(GATE_MODE.off);
+  makePref("owned-by-a", OWNER_A);
+  moveToRetired(vault, preferencePath(vault, "owned-by-a"), "stale-no-evidence", {
+    now: NOW,
+    retired_by: "[[Brain/log/2026-05-10]]",
+  });
+
+  const asB = renderActive(vault, { now: NOW, agentScope: OWNER_B });
+  expect(asB.document).toContain("ret-owned-by-a");
+  expect(asB.counts.retired_recent).toBe(1);
+});

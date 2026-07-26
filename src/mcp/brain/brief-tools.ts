@@ -29,7 +29,13 @@ import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceIsoDate, coerceFormat } from "../coerce.ts";
+import {
+  AGENT_SCOPE_ARG_NAME,
+  AGENT_SCOPE_SCHEMA,
+  coerceAgentScope,
+  coerceIsoDate,
+  coerceFormat,
+} from "../coerce.ts";
 import {
   coerceIsoTimestampOrDate,
   coerceNonNegativeInteger,
@@ -409,7 +415,40 @@ const BRIEF_VIEW_HANDLERS: Readonly<
   today: toolBrainToday,
 });
 
+/**
+ * The views whose builders thread `agent_scope` through to the ownership
+ * predicate. `agent_scope` is declared once for the whole tool, so the
+ * other five would ACCEPT the argument and discard it - handing a caller
+ * who asked to be isolated another owner's preference ids
+ * (`weekly.retired[].prefId`, `weekly.statusTransitions[].prefId`,
+ * `operator`'s ranked actions) while believing it was scoped. Silently
+ * ignoring an argument a tool accepts is this wave's anti-pattern, so the
+ * views that cannot honour it REFUSE it instead
+ * (context-integrity-gates, A6).
+ *
+ * Threading it through the remaining five is the better end state; it
+ * needs an ownership predicate inside `weekly-brief`, `monthly-review`,
+ * `daily-brief`, `operator-summary` and `today-dashboard`, which is a
+ * change to those builders rather than to this dispatcher.
+ */
+const AGENT_SCOPE_VIEWS: ReadonlySet<string> = new Set(["morning", "digest"]);
+
 async function toolBrainBrief(ctx: ServerContext, args: Record<string, unknown>): Promise<unknown> {
+  const view = typeof args["view"] === "string" ? args["view"] : "";
+  const scopeSupplied =
+    AGENT_SCOPE_ARG_NAME in args &&
+    args[AGENT_SCOPE_ARG_NAME] !== undefined &&
+    args[AGENT_SCOPE_ARG_NAME] !== null;
+  // Only an EXPLICIT argument is refused: the gated surfaces default their
+  // scope from `ServerContext.agentName`, and refusing that would make the
+  // tool unusable for every client that never passes the argument.
+  if (scopeSupplied && view in BRIEF_VIEW_HANDLERS && !AGENT_SCOPE_VIEWS.has(view)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_brief view=${view} cannot honour '${AGENT_SCOPE_ARG_NAME}'; ` +
+        `owner scoping is supported by view=${[...AGENT_SCOPE_VIEWS].join(", view=")}`,
+    );
+  }
   return localizeEnvelope(ctx, await dispatchByView(BRIEF_VIEW_HANDLERS, ctx, args));
 }
 
@@ -489,7 +528,16 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 0,
           description: "view=operator: cap on ranked actions (default 5).",
         },
-        agent_scope: AGENT_SCOPE_SCHEMA,
+        // The one place this argument's shared description is overridden,
+        // and only to name WHICH views honour it - a caller cannot learn
+        // that from a tool-wide declaration, and learning it from a
+        // rejection after the fact is worse. Kept inside the registry
+        // guard's 160-character property-description cap.
+        agent_scope: {
+          ...AGENT_SCOPE_SCHEMA,
+          description:
+            "Optional agent-ownership scope; ownerless memories always match. Accepted by view=morning and view=digest only; other views reject it, never ignore it.",
+        },
       },
       required: ["view"],
       additionalProperties: false,

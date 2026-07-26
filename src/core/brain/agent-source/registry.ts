@@ -23,6 +23,22 @@ export function collectAgentSourceContributions(
 }
 
 export function listAgentSources(vault: string): ReadonlyArray<AgentSourceSummary> {
+  return summarizeAgentSources(collectAgentSourceContributions(vault));
+}
+
+/**
+ * Fold a contribution set into the per-agent roster.
+ *
+ * Takes the set rather than the vault so a caller that has already
+ * filtered - `queryAgentSources` under an owner scope - summarizes what
+ * it may actually see. Building the roster from the vault independently
+ * of the filter published the withheld contributions' topics verbatim and
+ * counted them (context-integrity-gates, A5), which is the existence leak
+ * the ownership boundary exists to prevent.
+ */
+export function summarizeAgentSources(
+  contributions: ReadonlyArray<AgentSourceContribution>,
+): ReadonlyArray<AgentSourceSummary> {
   const byAgent = new Map<
     string,
     {
@@ -33,7 +49,7 @@ export function listAgentSources(vault: string): ReadonlyArray<AgentSourceSummar
     }
   >();
 
-  for (const contribution of collectAgentSourceContributions(vault)) {
+  for (const contribution of contributions) {
     for (const agent of contribution.agents) {
       const current = byAgent.get(agent) ?? {
         providerIds: new Set<string>(),

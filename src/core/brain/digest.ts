@@ -57,6 +57,7 @@ import {
   PREFERENCE_ID_PREFIX,
   resolveOwnerScopeDelivery,
 } from "./preferences-collect.ts";
+import { isPreferenceVisible } from "./owner-scoped-facts.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
@@ -478,7 +479,7 @@ function collectDigestData(
 
   // 2. Iterate retired/ for entries retired in window.
   const retiredEntries: DigestJsonRetired[] = [];
-  const retiredAll = readAllRetired(vault);
+  const retiredAll = readAllRetired(vault, agentScope);
   for (const { ret, path } of retiredAll) {
     void path;
     if (inWindow(ret.retired_at)) {
@@ -735,16 +736,28 @@ interface RetiredWithPath {
   readonly path: string;
 }
 
-function readAllRetired(vault: string): ReadonlyArray<RetiredWithPath> {
+/**
+ * Retirement KEEPS ownership (context-integrity-gates, A7): a retired
+ * memory is withdrawn from the active set, never published to every
+ * agent. Same gate resolution as {@link readAllPreferences}, so an
+ * unscoped digest is byte-identical.
+ */
+function readAllRetired(
+  vault: string,
+  agentScope: string | undefined,
+): ReadonlyArray<RetiredWithPath> {
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.retired)) return [];
+  const scope = resolveOwnerScopeDelivery(vault, agentScope).enforcedScope;
   const out: RetiredWithPath[] = [];
   for (const entry of readdirSync(dirs.retired, { withFileTypes: true })) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     if (!entry.name.startsWith("ret-")) continue;
     const path = join(dirs.retired, entry.name);
     try {
-      out.push({ ret: parseRetired(path), path });
+      const ret = parseRetired(path);
+      if (scope !== null && !isPreferenceVisible(ret, scope)) continue;
+      out.push({ ret, path });
     } catch {
       // ditto
     }

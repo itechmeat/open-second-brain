@@ -4,8 +4,7 @@ import { join } from "node:path";
 import type { BrainLogEntry } from "../log.ts";
 import { readAllLogEntries } from "../query.ts";
 import { brainDirs } from "../paths.ts";
-import { pageOwner } from "../../graph/agent-scope.ts";
-import { parseFrontmatter } from "../../vault.ts";
+import { preferenceOwner } from "../owner-scoped-facts.ts";
 import { parsePreference, parseRetired } from "../preference.ts";
 import { parseSignal } from "../signal.ts";
 import type { BrainPreference, BrainRetired, BrainSignal } from "../types.ts";
@@ -72,10 +71,10 @@ function collectSignals(...dirs: string[]): BrainSignal[] {
 
 /**
  * A parsed preference or retired record with the owner token its page
- * declares (context-integrity-gates, Unit A). The token is read from the
- * frontmatter rather than from the parsed record, so it is resolved the
- * same way for both kinds - `BrainRetired` carries no `owner` field, and
- * a retired page's ownership must not evaporate on retirement.
+ * declares (context-integrity-gates, Unit A). Both kinds carry `owner`
+ * since A7 made retirement KEEP ownership, so the token is read from the
+ * parsed record and resolved through the one shared rule - no second
+ * frontmatter read, and no way for the two kinds to disagree.
  */
 interface OwnedRecord {
   readonly record: BrainPreference | BrainRetired;
@@ -102,7 +101,7 @@ function collectPreferenceDir(dir: string, prefix: "pref-" | "ret-"): OwnedRecor
     const path = join(dir, entry.name);
     try {
       const record = prefix === "pref-" ? parsePreference(path) : parseRetired(path);
-      out.push({ record, owner: pageOwner(parseFrontmatter(path)[0]) });
+      out.push({ record, owner: preferenceOwner(record) });
     } catch {
       continue;
     }

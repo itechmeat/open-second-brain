@@ -410,6 +410,38 @@ test("brain_context creates active.md unscoped on a vault that has none", async 
   expect(readFileSync(activePath, "utf8")).toContain("owned-by-a");
 });
 
+/**
+ * A6: `agent_scope` is declared once for the whole `brain_brief` tool, but
+ * only two of its seven views thread it. The other five returned
+ * preference ids (`weekly.retired[].prefId`, the operator dashboard's
+ * ranked actions) to a caller that believed it was scoped. An argument a
+ * tool accepts and silently ignores is exactly the failure mode this wave
+ * exists to remove, so those views refuse it.
+ */
+test("brain_brief refuses agent_scope on the views that cannot honour it", async () => {
+  const views = ["daily", "weekly", "monthly", "operator", "today"];
+  const outcomes = await Promise.all(
+    views.map((view) =>
+      call("brain_brief", { view, agent_scope: OWNER_B }).then(
+        () => null,
+        (e: unknown) => (e as Error).message,
+      ),
+    ),
+  );
+  for (const [i, message] of outcomes.entries()) {
+    expect(message, `view=${views[i]}`).toContain(
+      `brain_brief view=${views[i]} cannot honour 'agent_scope'`,
+    );
+  }
+});
+
+test("brain_brief still serves those views without the argument", async () => {
+  const served = await Promise.all(
+    ["daily", "weekly", "monthly", "today"].map((view) => call("brain_brief", { view })),
+  );
+  for (const out of served) expect(typeof out).toBe("string");
+});
+
 test("brain_retrieval_plan counts only the memories its caller may see", async () => {
   setGate(GATE_MODE.fail);
   const asA = JSON.parse(
@@ -517,6 +549,46 @@ test("brain_agent_query excludes another owner's preference contributions", asyn
   expect(contributionIds(unscoped)).toEqual(["pref-owned-by-a", "pref-shared"]);
   expect(contributionIds(scoped)).toEqual(["pref-shared"]);
   expect(scoped.total_matched).toBe(1);
+});
+
+/**
+ * A5: the roster must be folded from the SAME filtered set the
+ * contributions are. Built independently of the owner filter it reported
+ * a correct `total_matched` beside an `available_agents` entry naming the
+ * withheld preference's topic verbatim and counting it - which is the
+ * existence leak the boundary exists to prevent.
+ *
+ * The evidence signal carries a DIFFERENT topic from the preference it
+ * evidences, so the preference's topic can only reach the roster through
+ * the preference contribution itself.
+ */
+test("brain_agent_query's roster names only what the caller may see", async () => {
+  writeSignal(vault, {
+    topic: "neutral-topic",
+    signal: "positive",
+    agent: "agent-y",
+    principle: "principle for the neutral signal",
+    created_at: "2026-05-01T00:00:00Z",
+    date: "2026-05-01",
+    slug: "secret-pref",
+  });
+  makePref("secret-pref", OWNER_A);
+
+  const rosterFor = (result: {
+    available_agents: Array<{ id: string; topics: string[]; contribution_count: number }>;
+  }): { topics: string[]; contribution_count: number } => {
+    const entry = result.available_agents.find((a) => a.id === "agent-y");
+    expect(entry).toBeDefined();
+    return entry!;
+  };
+
+  const unscoped = rosterFor(JSON.parse(await call("brain_agent_query", {})));
+  expect(unscoped.topics).toEqual(["neutral-topic", "secret-pref"]);
+  expect(unscoped.contribution_count).toBe(2);
+
+  const scoped = rosterFor(JSON.parse(await call("brain_agent_query", { agent_scope: OWNER_B })));
+  expect(scoped.topics).toEqual(["neutral-topic"]);
+  expect(scoped.contribution_count).toBe(1);
 });
 
 test("brain_file_context and brain_deep_synthesis exclude another owner's page", async () => {
