@@ -78,21 +78,25 @@ describe("dream multi-phase pipeline", () => {
     expect(synth?.metrics["new_unconfirmed"]).toBe(1);
   });
 
-  test("a changed run emits ordered phase checkpoints in the workrun", () => {
+  test("a changed run emits its phase checkpoints where the work lands", () => {
     seed("phase-topic-a", "2026-05-20");
     seed("phase-topic-b", "2026-05-21");
     seed("phase-topic-c", "2026-05-22");
     dream(vault, { now: new Date("2026-05-23T12:00:00Z") });
     const phases = workrunPhases();
-    // The new phase checkpoints appear in order between started/finalized.
+    // Emission order is execution order, not DREAM_PHASE_ORDER
+    // (no-dead-ends, Unit E). `reconcile_complete` trails the mutation
+    // markers because reconcile's only durable output - its audit events -
+    // is written in the log phase; recording it earlier claimed a phase
+    // complete before a single preference had been written.
     const ordered = phases.filter((p) =>
       ["close_complete", "reconcile_complete", "synthesize_complete", "heal_complete"].includes(p),
     );
     expect(ordered).toEqual([
       "close_complete",
-      "reconcile_complete",
       "synthesize_complete",
       "heal_complete",
+      "reconcile_complete",
     ]);
   });
 

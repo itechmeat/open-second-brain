@@ -25,7 +25,11 @@ export const DREAM_PHASE = {
 } as const;
 export type DreamPhase = (typeof DREAM_PHASE)[keyof typeof DREAM_PHASE];
 
-/** Canonical phase order. Readers MUST tolerate unknown future phases. */
+/**
+ * Canonical REPORTING order of `DreamRunSummary.phases`. Readers MUST
+ * tolerate unknown future phases. The workrun journal emits its markers in
+ * execution order instead, which differs: see `WORKRUN_PHASE`.
+ */
 export const DREAM_PHASE_ORDER: ReadonlyArray<DreamPhase> = Object.freeze([
   DREAM_PHASE.close,
   DREAM_PHASE.reconcile,
