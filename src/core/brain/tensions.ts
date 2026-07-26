@@ -586,6 +586,11 @@ function transition(
   verb: TensionTransition,
   opts: TransitionOptions,
 ): TensionRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J). The
+  // page rewrite below precedes `appendLogEvent`, so leaning on that
+  // call's guard would land the new status in the wrong store first -
+  // the same defect `persistTension` was fixed for.
+  assertVaultIdentityForWrite(vault);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new TensionError(`no tension: ${slug}`);
   const rule = TRANSITIONS[verb];

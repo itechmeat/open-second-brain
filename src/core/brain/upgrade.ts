@@ -29,6 +29,7 @@ import { createSnapshot } from "./snapshot.ts";
 import { renderBrainManual } from "./templates.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Public types --------------------------------------------------------
 
@@ -132,6 +133,8 @@ export function applyUpgrade(
   vault: string,
   opts: { agent?: string; now?: Date } = {},
 ): UpgradeApplyResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const plan = planUpgrade(vault);
   if (plan.errors > 0) {
     const messages = plan.files

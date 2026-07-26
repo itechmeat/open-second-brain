@@ -26,6 +26,7 @@ import {
 } from "./canonical.ts";
 import { buildEntityIndex, type EntityIndex } from "./index-builder.ts";
 import type { BrainEntity } from "./types.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Snapshot run-id label for a confirmed entity-label prune. */
 export const ENTITY_PRUNE_SNAPSHOT_LABEL = "entity-prune";
@@ -198,6 +199,9 @@ export function pruneEntityLabels(
   vault: string,
   opts: PruneEntityLabelsOptions = {},
 ): PruneEntityLabelsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // Unconfirmed runs only list candidates, so they stay ungated.
+  if (opts.confirm === true) assertVaultIdentityForWrite(vault);
   const denylist = opts.denylist ?? resolveEntityLabelDenylist(opts.configPath);
   const candidates = findMalformedEntityLabels(vault, { denylist });
 

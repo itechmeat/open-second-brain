@@ -27,6 +27,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isFullSha } from "./reader.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface GitCommitRecord {
   readonly kind: "commit";
@@ -179,6 +180,8 @@ export function appendGitRecords(
   repoKey: string,
   records: ReadonlyArray<GitRecord>,
 ): AppendGitRecordsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const existing = readRecords(vault, repoKey);
   const seenShas = new Set<string>();
   // Tag identity is (name, target): a RETARGETED tag (same name, new
@@ -270,6 +273,8 @@ export function listGitTags(vault: string, repoKey: string): ReadonlyArray<GitTa
 
 /** Watermark write; the sha grammar is enforced before anything lands. */
 export function writeGitState(vault: string, repoKey: string, state: GitState): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!isFullSha(state.lastSha)) {
     throw new Error(`git state lastSha must be a full 40-hex git sha, got: ${state.lastSha}`);
   }

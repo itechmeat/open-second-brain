@@ -28,6 +28,7 @@ import {
 } from "../../graph/frontmatter-relations.ts";
 import type { FrontmatterMap } from "../../types.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const CO_OCCURRENCE_SCHEMA_VERSION = "o2b.cooccurrence.v1";
 
@@ -156,6 +157,8 @@ export function writeCoOccurrenceSuggestions(
   result: CoOccurrenceResult,
   opts: { readonly generatedAt: string },
 ): string {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = join(vault, ARTIFACT_REL);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(

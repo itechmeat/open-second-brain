@@ -21,6 +21,7 @@
 
 import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** On-disk schema version stamped on every metric record. */
 export const METRICS_SCHEMA_VERSION = "o2b.metrics.v1";
@@ -81,6 +82,8 @@ function assertSurface(surface: string): void {
  * Creates `Brain/metrics/` on first write.
  */
 export function appendMetric(vault: string, input: AppendMetricInput): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   assertSurface(input.surface);
   if (!ISO_RE.test(input.runAt)) {
     throw new MetricSurfaceError(

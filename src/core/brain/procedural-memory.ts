@@ -9,6 +9,7 @@ import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
 import { proceduralMemoryIndexPath, proceduralMemoryUsagePath } from "./paths.ts";
 import type { ProceduralEntryKind, ProceduralMemoryEntry, ProceduralOutcome } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 interface UsageRecord {
   readonly usedCount: number;
@@ -312,6 +313,8 @@ function asStringOrNull(value: unknown): string | null {
 }
 
 function writeIndex(vault: string, entries: ReadonlyArray<ProceduralMemoryEntry>): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = proceduralMemoryIndexPath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const payload = JSON.stringify(

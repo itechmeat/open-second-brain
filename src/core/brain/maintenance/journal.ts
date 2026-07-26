@@ -10,6 +10,7 @@
 import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const MAINTENANCE_JOURNAL_CAP = 500;
 
@@ -31,6 +32,8 @@ function journalPath(vault: string): string {
 }
 
 export function appendJournal(vault: string, entry: MaintenanceJournalEntry): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = journalPath(vault);
   mkdirSync(dirname(path), { recursive: true });
   // O_APPEND, one line per call: concurrent gate-refusal writers
@@ -43,6 +46,8 @@ export function appendJournal(vault: string, entry: MaintenanceJournalEntry): vo
 
 /** Trim the journal to the newest `cap` lines. Lease-holder only. */
 export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CAP): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = journalPath(vault);
   const lines = readLines(path);
   if (lines.length <= cap) return;

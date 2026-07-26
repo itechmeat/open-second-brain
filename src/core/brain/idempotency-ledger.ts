@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Month-sharded JSONL root, distinct from `Brain/log/` (the human trail). */
 const IDEMPOTENCY_REL = `${BRAIN_ROOT_REL}/logs/idempotency`;
@@ -155,6 +156,8 @@ export function lookupKey(vault: string, key: string): IdempotencyRecord | null 
  * `payload_mismatch` write nothing.
  */
 export function rememberKey(vault: string, input: RememberKeyInput): RememberKeyResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const key = normaliseKey(input.key);
   const contentHash = requireHash(input.contentHash);
   const createdAt = input.createdAt ?? isoSecond(new Date());

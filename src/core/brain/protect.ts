@@ -34,6 +34,7 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { escapeRegex } from "../strings.ts";
 import { BRAIN_ROOT_REL, brainConfigPath, brainDirs } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Bumped on any structural change to manifest / fence layout. */
 export const PROTECT_SCHEMA_VERSION = 1;
@@ -319,6 +320,8 @@ export function readManifest(vault: string, target: ProtectTarget): ManifestReco
 }
 
 export function writeManifest(vault: string, entry: ManifestRecord): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = manifestPath(vault);
   mkdirSync(join(vault, MANIFEST_DIR), { recursive: true });
   const file: ManifestFile = existsSync(path)
@@ -360,6 +363,8 @@ function readFileOrEmpty(path: string): string {
 }
 
 export function removeManifestEntry(vault: string, target: ProtectTarget): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = manifestPath(vault);
   if (!existsSync(path)) return;
   const file = parseManifestFile(readFileSync(path, "utf8"), path);

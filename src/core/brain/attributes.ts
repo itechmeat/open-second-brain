@@ -17,6 +17,7 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveNotePath } from "./note-path.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import type { SchemaPack } from "./schema-pack.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export class AttributeVocabularyError extends Error {
   readonly type: string;
@@ -131,6 +132,8 @@ export function assignNoteAttribute(
   relPath: string,
   opts: AssignNoteAttributeOptions,
 ): NoteAttributeResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);
   const rawType = metadata["type"];
@@ -156,6 +159,8 @@ export function removeNoteAttribute(
   relPath: string,
   opts: RemoveNoteAttributeOptions,
 ): RemoveNoteAttributeResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const field = normalizeSchemaToken(opts.field);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);

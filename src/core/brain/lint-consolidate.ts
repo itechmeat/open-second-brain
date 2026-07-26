@@ -32,6 +32,7 @@ import {
   readLifecycle,
 } from "./page-meta/lifecycle.ts";
 import { readMergedInto } from "./page-meta/page-id.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface LintFix {
   readonly kind: "fix-merged-link";
@@ -167,6 +168,8 @@ function applyDemotion(path: string): boolean {
 }
 
 export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = opts.now ?? new Date();
   const staleDays = opts.staleDays ?? PAGE_STALE_DAYS_DEFAULT;
   const merge = buildMergeMap(vault);

@@ -59,6 +59,7 @@ import { manifestPath, readManifest, writeManifestAtomic } from "./ingest/conten
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { isoSecond } from "./time.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Run-id label for the snapshot taken before a confirmed source cleanup. */
 const DELETE_BY_SOURCE_SNAPSHOT_LABEL = "delete-by-source";
@@ -492,6 +493,9 @@ export function deleteBySource(
   const canonical = canonicalNotePath(sourceFile);
   const confirm = opts.confirm === true;
   const includeOriginals = opts.includeOriginals === true;
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // Dry-run (the default) plans and writes nothing, so it stays ungated.
+  if (confirm) assertVaultIdentityForWrite(vault);
 
   const { derived, mentions } = traceReferences(vault, sourceFile);
   const originals = findOriginals(vault, canonical);

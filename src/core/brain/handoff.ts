@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { computeSourceStamp, formatSourceStampFrontmatter } from "./freshness.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { resolveSessionScope } from "./session-scope.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 
 export interface HandoffNoteOptions {
@@ -137,6 +138,8 @@ export function buildHandoffNote(
 
 /** Build and persist the note at `Brain/handoffs/<date>-<scope>.md`. */
 export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): HandoffNoteResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = input.now ?? new Date();
   const scope = resolveSessionScope(input.sessionId);
   const dir = join(vault, "Brain", "handoffs");

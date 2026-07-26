@@ -32,6 +32,7 @@ import {
   writeCatchupWatermark,
   type CaptureNote,
 } from "./capture-note.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Telegram command that triggers a catchup reply. */
 export const CATCHUP_COMMAND = "/catchup";
@@ -239,6 +240,8 @@ export function handleCaptureUpdate(
   update: TelegramUpdate,
   opts: HandleUpdateOptions,
 ): HandleUpdateResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = opts.now();
   const at = isoSecond(now);
   const updateId = typeof update.update_id === "number" ? update.update_id : -1;

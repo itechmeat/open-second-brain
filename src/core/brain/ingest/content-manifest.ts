@@ -34,6 +34,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
 const SCHEMA_VERSION = 1 as const;
@@ -169,6 +170,8 @@ function serializeManifest(entries: Record<string, string>): string {
  * nothing (and leaves the file's mtime alone).
  */
 export function writeManifestAtomic(vault: string, entries: Record<string, string>): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = manifestPath(vault);
   const next = serializeManifest(entries);
   if (existsSync(path) && readFileSync(path, "utf8") === next) {

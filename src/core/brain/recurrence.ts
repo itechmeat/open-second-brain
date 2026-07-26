@@ -3,6 +3,7 @@ import { dirname } from "node:path";
 
 import { ensureInsideVault } from "../path-safety.ts";
 import { proceduralRecurrencePath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export type RecurrenceCommitment = "exploring" | "leaning" | "decided" | "locked";
 export type RecurrenceAction = "learn" | "forget";
@@ -231,6 +232,8 @@ function commitmentForSupport(
 }
 
 function appendEvent(vault: string, event: RecurrenceEvent): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = proceduralRecurrencePath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   appendFileSync(path, `${JSON.stringify(event)}\n`, { encoding: "utf8" });

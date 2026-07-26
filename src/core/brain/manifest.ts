@@ -14,6 +14,7 @@ import { join, relative } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const BRAIN_MANIFEST_SCHEMA_VERSION = 1 as const;
 
@@ -298,6 +299,8 @@ export function readManifestSidecar(vault: string, runId: string): BrainManifest
  * indent so a manual `cat` or `git diff` stays readable.
  */
 export function writeManifestSidecar(vault: string, runId: string, manifest: BrainManifest): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = manifestSidecarPath(vault, runId);
   atomicWriteFileSync(path, JSON.stringify(manifest, null, 2) + "\n");
 }

@@ -56,6 +56,7 @@ import { NoteTitleResolutionError, resolveNoteTarget } from "./notes/note-title-
 import { loadGuardrailsConfigSafe } from "./policy.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** The `marker_writeback` guardrail flag name, surfaced in refusals. */
 export const MARKER_WRITEBACK_GUARDRAIL = "marker_writeback";
@@ -192,6 +193,11 @@ export async function applyMarkerWritebacks(
   vault: string,
   opts: MarkerWritebackOptions,
 ): Promise<MarkerWritebackReport> {
+  // Vault-identity write guard (context-integrity-gates, Unit J). Apply
+  // mode writes attributes, an audit event, and consumes markers through
+  // `rewriteMarkers`, which takes an absolute path and no vault of its
+  // own; this is the entry point that has one.
+  if (opts.apply) assertVaultIdentityForWrite(vault);
   const guardrailEnabled = loadGuardrailsConfigSafe(vault).marker_writeback;
   if (opts.apply && !guardrailEnabled) {
     throw new MarkerWritebackGuardrailError(

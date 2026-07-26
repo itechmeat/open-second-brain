@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
 import { isoSecond } from "../time.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
 const SCHEMA_VERSION = 1 as const;
@@ -174,6 +175,8 @@ export function recordCompleted(
   now: Date,
 ): boolean {
   if (!checkpointingEnabled()) return false;
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const prev = readCheckpoint(vault, planId);
   const merged = new Set<string>(prev?.completed ?? []);
   for (const p of paths) merged.add(canonicalNotePath(p));
@@ -196,6 +199,8 @@ export function recordCompleted(
  * existed.
  */
 export function clearCheckpoint(vault: string, planId: string): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = checkpointPath(vault, planId);
   if (!existsSync(path)) return false;
   rmSync(path);

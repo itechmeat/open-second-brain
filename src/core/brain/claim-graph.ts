@@ -33,6 +33,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { brainDirs, claimGraphPath } from "./paths.ts";
 import { isTombstoned, normalizeChainLink, resolveChainTip } from "./lifecycle/tombstone.ts";
 import { isValidAt } from "./lifecycle/temporal-replace.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -195,6 +196,8 @@ export function buildClaimGraph(vault: string, opts: BuildClaimGraphOptions = {}
 
 /** Persist a projection to `Brain/claim-graph.json`. */
 export function writeClaimGraph(vault: string, graph: ClaimGraph): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   atomicWriteFileSync(claimGraphPath(vault), `${JSON.stringify(graph, null, 2)}\n`);
 }
 

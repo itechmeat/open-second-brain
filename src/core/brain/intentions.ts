@@ -17,6 +17,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import { isoDate, isoSecond } from "./time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface IntentionChain {
   readonly scope: string;
@@ -113,6 +114,8 @@ function parseChain(vault: string, scope: string): IntentionChain | null {
 
 /** Create or update the scoped intention; prior text lands in history. */
 export function setIntention(vault: string, input: SetIntentionInput): IntentionChain {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const scope = resolveSessionScope(input.scope);
   const now = input.now ?? new Date();
   const text = input.text.trim();
@@ -162,6 +165,8 @@ export function moveIntentionToHistory(
   vault: string,
   input: MoveIntentionInput,
 ): MoveIntentionResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const scope = resolveSessionScope(input.scope);
   const now = input.now ?? new Date();
   const activePath = intentionPath(vault, scope);

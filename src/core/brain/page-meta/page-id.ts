@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { brainDirs } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const MERGE_CHAIN_MAX_DEPTH = 5;
 
@@ -120,6 +121,8 @@ export function resolveCanonicalId(vault: string, startId: string): string {
  * and which is the secondary; this function only writes the pointer.
  */
 export function setMergedInto(vault: string, secondaryId: string, canonicalId: string): string {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!isValidPageId(secondaryId)) {
     throw new MergeChainError(
       "MALFORMED",

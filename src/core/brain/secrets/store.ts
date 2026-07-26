@@ -18,6 +18,7 @@ import lockfile from "proper-lockfile";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { brainDirsForWrite } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
@@ -110,6 +111,11 @@ function withSecretsLock<T>(vault: string, fn: () => T): T {
 }
 
 export function setSecret(vault: string, input: SetSecretInput): SecretMetadata {
+  // Vault-identity write guard (context-integrity-gates, Unit J), AHEAD
+  // of `loadOrCreateKey`: that call mints a keyfile and creates the 0700
+  // state directory, so a guard sitting on the trailing audit append
+  // would have already put key material in the wrong vault.
+  assertVaultIdentityForWrite(vault);
   const name = input.name.trim().toLowerCase();
   if (!NAME_RE.test(name)) {
     throw new Error(
@@ -165,6 +171,8 @@ export function listSecrets(vault: string): SecretMetadata[] {
 }
 
 export function removeSecret(vault: string, name: string, ctx: SecretAuditContext): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const normalized = name.trim().toLowerCase();
   const removed = withSecretsLock(vault, () => {
     const file = readStore(vault);
@@ -190,12 +198,19 @@ export interface ResolvedSecret {
  * Decrypt one secret for the exec path. THE ONLY reader of secret
  * material; everything it returns must go straight into a subprocess
  * env and nowhere else. Audited as `secret_resolved_for_exec`.
+ *
+ * READ-SHAPED BUT A WRITER. It stamps `last_used_at` through
+ * {@link touchLastUsed} and appends a custody record, so it carries the
+ * vault-identity guard like any other writer. The guard is at the top,
+ * ahead of `loadOrCreateKey`, which would otherwise mint a keyfile in
+ * the wrong store before the refusal.
  */
 export function resolveSecretForExec(
   vault: string,
   name: string,
   ctx: SecretAuditContext = { agent: "cli", now: new Date() },
 ): ResolvedSecret {
+  assertVaultIdentityForWrite(vault);
   const file = readStore(vault);
   const normalized = name.trim().toLowerCase();
   const stored = file.secrets[normalized];
@@ -254,6 +269,12 @@ function writeStore(vault: string, file: SecretsFile): void {
   renameSync(tmp, path);
 }
 
+/**
+ * Stamp `last_used_at`. Private, and reached only from
+ * {@link resolveSecretForExec}, which carries the vault-identity guard
+ * at its entry point - the assertion is not repeated here so there stays
+ * exactly one guard per public entry point.
+ */
 function touchLastUsed(vault: string, name: string, now: Date): void {
   // Re-read under the lock: the snapshot the resolver decrypted from
   // may be stale by the time the usage stamp lands.

@@ -25,6 +25,7 @@ import {
 } from "../vault.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { planHealEnrichmentPrepared, prepareHealPhrases } from "./heal-enrich.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface HealRunResult {
   /** Pages scanned (outside the Brain root). */
@@ -40,6 +41,8 @@ export interface HealRunResult {
  * scan/enrich counts. Writes only changed pages.
  */
 export function runHealEnrichment(vault: string): HealRunResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   // BRAIN_ROOT_REL is the Brain dir name relative to the vault (its
   // first path segment is the dir to skip). The skipDirs option REPLACES
   // the default exclusions, so the Brain root is added to the standard

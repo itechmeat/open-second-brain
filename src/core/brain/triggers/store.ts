@@ -28,6 +28,7 @@ import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatterText } from "../../vault.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   isTriggerKind,
   isTriggerStatus,
@@ -242,6 +243,8 @@ export function createTriggers(
   candidates: ReadonlyArray<InsightCandidate>,
   opts: CreateTriggersOptions,
 ): CreateTriggersResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   // Serialize the check-then-write against concurrent scans (CLI and
   // MCP can both reach this): without the lock two callers could each
   // observe "no twin" and persist duplicates for one cooldown key.
@@ -349,6 +352,8 @@ export function transitionTrigger(
   action: TriggerAction,
   opts: TransitionOptions,
 ): TriggerRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const record = listTriggers(vault, { now: opts.now }).find((r) => r.id === id);
   if (record === undefined) throw new Error(`unknown trigger: ${id}`);
   if (!OPEN_STATUSES.has(record.effectiveStatus)) {
@@ -375,6 +380,8 @@ export function markTriggersDelivered(
   opts: TransitionOptions,
 ): void {
   if (ids.length === 0) return;
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const wanted = new Set(ids);
   const nowIso = opts.now.toISOString();
   for (const record of listTriggers(vault, { now: opts.now })) {

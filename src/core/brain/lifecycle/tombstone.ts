@@ -36,6 +36,7 @@ import { BRAIN_ROOT_REL } from "../paths.ts";
 import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_TOMBSTONE_STATUS } from "../types.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -182,6 +183,8 @@ function relForVault(vault: string, absPath: string): string {
  * existing state is returned with `changed: false`.
  */
 export function tombstone(input: TombstoneInput): TombstoneResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(input.vault);
   const reason = sanitiseTextField(input.reason, {
     maxLen: REASON_MAX_LEN,
     singleLine: true,

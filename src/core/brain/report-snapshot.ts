@@ -27,6 +27,7 @@ import { join } from "node:path";
 
 import { discoverConfig } from "../config.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const REPORT_SNAPSHOT_SCHEMA_VERSION = "o2b.report-snapshot.v1";
 
@@ -160,6 +161,8 @@ export function writeReportSnapshot(
   date: string,
   payload: unknown,
 ): string {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const dir = reportsDir(vault, surface);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${date}.json`);

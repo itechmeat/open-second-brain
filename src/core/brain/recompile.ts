@@ -19,6 +19,7 @@ import { appendAuditRecord } from "../reliability/audit.ts";
 import { scanFreshness } from "./freshness.ts";
 import { writeHandoffNote } from "./handoff.ts";
 import { brainDirsForWrite, BRAIN_SNAPSHOTS_REL } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { isoDate } from "./time.ts";
@@ -130,6 +131,11 @@ async function readTranscriptTurns(transcript: string): Promise<SessionTurn[] | 
  * hygiene `archive` / `forget` actions.
  */
 export function archivePage(vault: string, page: string, now: Date): string {
+  // Vault-identity write guard (context-integrity-gates, Unit J). This is
+  // a public export reached from hygiene `archive`/`forget` as well as
+  // from the recompile executor, so it carries its own assertion ahead of
+  // the `mkdirSync` + `renameSync` pair rather than relying on a caller.
+  assertVaultIdentityForWrite(vault);
   const dir = join(vault, BRAIN_SNAPSHOTS_REL, `hygiene-${isoDate(now)}`);
   mkdirSync(dir, { recursive: true });
   let target = join(dir, basename(page));
@@ -152,6 +158,11 @@ export async function executeRecompile(
   opts: ExecuteRecompileOptions,
 ): Promise<RecompileResult> {
   const dryRun = opts.dryRun === true;
+  // Vault-identity write guard (context-integrity-gates, Unit J). The
+  // per-entry loop is fail-soft, so a guard reached only from inside it
+  // would be recorded as an ordinary entry error instead of refusing the
+  // run; a dry run previews and writes nothing, so it stays ungated.
+  if (!dryRun) assertVaultIdentityForWrite(vault);
   const rederived: string[] = [];
   const archived: string[] = [];
   const manual: string[] = [];

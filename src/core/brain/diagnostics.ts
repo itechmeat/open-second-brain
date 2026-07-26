@@ -54,6 +54,7 @@ import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 import { normaliseWikilinkTarget } from "./wikilink.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Diagnostics-signal model --------------------------------------------
 
@@ -561,6 +562,9 @@ export interface ApplyRepairOptions {
  * changed disk. Idempotent: a second non-dry-run call finds nothing to do.
  */
 export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutcome {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // A dry run previews and writes nothing, so it stays ungated.
+  if (opts.dryRun !== true) assertVaultIdentityForWrite(vault);
   const plan = planRepair(vault);
   const needsReview = plan.fixes.filter((f) => !f.applicable);
   const applicable = plan.fixes.filter((f) => f.applicable);

@@ -20,6 +20,7 @@ import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath } from "./paths.ts";
 import { loadBrainConfig, resolveHealth } from "./policy.ts";
 import { isValidIsoInstant } from "./health/iso-time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Operational failure surfacing a bad value or an unwritable config. */
 export class HealthBaselineError extends Error {
@@ -46,6 +47,8 @@ export function readHealthBaseline(vault: string): string | null {
  * update to a last-writer-wins overwrite.
  */
 export async function writeHealthBaseline(vault: string, value: string | null): Promise<void> {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (value !== null && !isValidIsoInstant(value)) {
     throw new HealthBaselineError(
       `not an ISO-8601 date (YYYY-MM-DD) or timestamp: ${JSON.stringify(value)}`,

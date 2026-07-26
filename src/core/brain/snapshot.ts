@@ -57,6 +57,7 @@ import {
   snapshotPath,
   validateRunId,
 } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -401,6 +402,11 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
  * on the same dir returns `deleted: []`.
  */
 export function pruneSnapshots(vault: string, retentionCount: number): PruneSnapshotsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J). This is
+  // the most destructive operation in the module - an `rmSync` over
+  // archives - and it was the only one of the three without the guard
+  // its `createSnapshot` and `restoreSnapshot` siblings carry.
+  assertVaultIdentityForWrite(vault);
   if (!Number.isInteger(retentionCount) || retentionCount < 0) {
     throw new Error(
       `pruneSnapshots: retentionCount must be a non-negative integer; got ${retentionCount}`,

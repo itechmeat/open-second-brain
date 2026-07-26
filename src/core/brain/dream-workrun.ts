@@ -33,6 +33,7 @@ import {
 import { dirname, join } from "node:path";
 
 import { dreamRunsDir, dreamWorkrunPath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
  * Canonical phase identifiers. Five forward-progress phases plus the
@@ -73,6 +74,8 @@ export interface WorkrunHandle {
  * phase. Creates the workrun directory on demand.
  */
 export function openWorkrun(vault: string, runId: string): WorkrunHandle {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = dreamWorkrunPath(vault, runId);
   mkdirSync(dirname(path), { recursive: true });
   let closed = false;

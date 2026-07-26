@@ -38,6 +38,7 @@ import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
 import { dream, type DreamOptions, type DreamRunSummary } from "./dream.ts";
 import { isoSecond } from "./time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const DREAM_STAGE_SCHEMA_VERSION = "o2b.dream-stage.v1";
 
@@ -239,6 +240,8 @@ function renderReport(runId: string, stagedAt: string, plan: DreamStagePlan): st
  * Read-only against live Brain state.
  */
 export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBundle {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const summary = dream(vault, {
     now: opts.now,
     dryRun: true,
@@ -387,6 +390,8 @@ export function applyDreamBundle(
   runId: string,
   opts: DreamStageOptions,
 ): DreamStageApplyOutcome {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const validation = validateDreamBundle(vault, runId, opts);
   if (!validation.valid) {
     return Object.freeze({ applied: false, validation });
@@ -431,6 +436,8 @@ export function applyDreamBundle(
 
 /** Remove one staged bundle. True when it existed. */
 export function discardDreamBundle(vault: string, runId: string): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!isValidRunId(runId)) return false;
   const dir = join(stagedRoot(vault), runId);
   if (!existsSync(dir)) return false;

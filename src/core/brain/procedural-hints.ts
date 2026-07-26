@@ -4,6 +4,7 @@ import { dirname } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { proceduralHintsPath } from "./paths.ts";
 import { readProceduralGraph, type ProceduralGraphProjection } from "./procedural-graph.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface ProceduralHintEntry {
   readonly node_id: string;
@@ -20,6 +21,8 @@ export function rebuildProceduralHints(
   vault: string,
   opts: { now?: Date; graph?: ProceduralGraphProjection } = {},
 ): ProceduralHintsProjection {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const graph = opts.graph ?? readProceduralGraph(vault);
   const now = opts.now ?? new Date();
   const entries: ProceduralHintEntry[] = [];

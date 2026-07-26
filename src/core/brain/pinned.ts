@@ -171,11 +171,18 @@ export interface PinnedBatchResult extends PinnedContext {
  * absent `replace` target, or an over-budget final projection throws
  * {@link PinnedBatchError} and leaves `Brain/pinned.md` byte-for-byte
  * unchanged.
+ *
+ * Carries the same vault-identity guard as the single-operation surface.
+ * Both modes are the one `brain_pinned_context` tool writing the one
+ * file, so a batch that wrote where a single `write` refused would make
+ * the guard a property of the argument shape rather than of the vault.
  */
 export function applyPinnedOperations(
   vault: string,
   operations: ReadonlyArray<PinnedOperation>,
 ): PinnedBatchResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new PinnedBatchError("invalid_operation", -1, "operations must be a non-empty array");
   }

@@ -37,6 +37,7 @@ import { resolveNotePath } from "../note-path.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { normalizeChainLink, SUPERSEDED_BY_KEY } from "./tombstone.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 // ----- Constants ------------------------------------------------------------
 
@@ -157,6 +158,8 @@ function relForVault(vault: string, absPath: string): string {
  * `temporal-replace` event.
  */
 export function temporalReplace(input: TemporalReplaceInput): TemporalReplaceResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(input.vault);
   let absPred: string;
   let absSucc: string;
   try {

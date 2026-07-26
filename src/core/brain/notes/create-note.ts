@@ -19,6 +19,7 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { writeFrontmatterAtomic } from "../../vault.ts";
 import { inspectPath, resolveVaultScope } from "../../vault-scope/index.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode = "invalid_path" | "excluded" | "exists" | "outside_vault";
@@ -121,6 +122,10 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
  * vault-relative path; throws {@link CreateNoteError} on any refusal.
  */
 export function createNote(vault: string, input: CreateNoteInput): CreateNoteResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J). This
+  // backs `brain_create_note`, `brain_append_note`, and
+  // `brain_update_note` - the headline note writers.
+  assertVaultIdentityForWrite(vault);
   const { relPath, abs } = resolveNoteTarget(vault, input.path);
 
   mkdirSync(dirname(abs), { recursive: true });

@@ -39,6 +39,7 @@ import type {
   TruthState,
 } from "./types.ts";
 import { TRUTH_SCHEMA_VERSION } from "./types.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Default cap on retained claim events (explicit sweep only). */
 export const CLAIM_EVENT_MAX_COUNT = 10000;
@@ -91,6 +92,8 @@ export function appendClaimEvent(
   input: AppendClaimInput,
   opts: { readonly configPath?: string } = {},
 ): AppendClaimResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const entity = normalizeEntityName(input.entity);
   const aspect = normalizeEntityName(input.aspect);
   if (entity === "") throw new Error("claim entity must not be empty");
@@ -264,6 +267,8 @@ function coerceClaim(
 }
 
 export function writeTruthState(vault: string, state: TruthState): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   mkdirSync(truthDir(vault), { recursive: true });
   writeFileSync(truthStatePath(vault), JSON.stringify(state, null, 2) + "\n");
 }
@@ -348,6 +353,8 @@ export interface ClaimSweepOptions {
  * history.
  */
 export function sweepClaimEvents(vault: string, opts: ClaimSweepOptions): ClaimSweepOutcome {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const maxEvents = opts.maxEvents ?? CLAIM_EVENT_MAX_COUNT;
   const dir = truthDir(vault);
   let names: string[];

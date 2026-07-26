@@ -5,6 +5,7 @@ import { appendAuditRecord } from "../reliability/audit.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
 import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import {
   parseSchemaPack,
   renderSchemaBlock,
@@ -126,6 +127,10 @@ export async function applySchemaMutations(
   mutations: ReadonlyArray<SchemaMutation>,
   opts: ApplySchemaMutationsOptions,
 ): Promise<ApplySchemaMutationsResult> {
+  // Vault-identity write guard (context-integrity-gates, Unit J), ahead
+  // of the `_brain.yaml` rewrite - the trailing audit append is far too
+  // late to stop a schema landing in the wrong store.
+  assertVaultIdentityForWrite(vault);
   const configPath = brainConfigPath(vault);
   const now = opts.now ?? new Date();
   return await withFileLock(configPath, { staleMs: opts.lockStaleMs ?? 30_000, retries: 3 }, () => {

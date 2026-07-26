@@ -27,6 +27,7 @@ import { buildRegionDocument, mergeRegions } from "../regions.ts";
 import type { Region } from "../regions.ts";
 import { scanProject } from "./scan.ts";
 import type { ModuleFact, ProjectFacts } from "./scan.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface GenerateArchDocsResult {
   readonly repoKey: string;
@@ -128,6 +129,8 @@ function upsertNote(
 
 /** Generate or refresh architecture notes for one project tree. */
 export function generateArchDocs(vault: string, projectRoot: string): GenerateArchDocsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const facts = scanProject(projectRoot);
   const key = deriveRepoKey(facts.root);
   const dir = join(vault, "Brain", "projects", "arch", key);

@@ -36,6 +36,7 @@ import {
 } from "../../vault.ts";
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -196,6 +197,8 @@ export function writeBridgeProposals(
   report: BridgeDiscoveryReport,
   opts: { readonly now: Date },
 ): string {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = proposalsPath(vault);
   const lines: string[] = [
     "# Bridge proposals",
@@ -250,6 +253,8 @@ export function readDismissedBridges(vault: string): Set<string> {
 
 /** Persist one dismissal; returns true when it was new. */
 export function dismissBridge(vault: string, source: string, target: string): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const key = bridgePairKey(source, target);
   const dismissed = readDismissedBridges(vault);
   if (dismissed.has(key)) return false;

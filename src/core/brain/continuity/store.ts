@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { safeContinuityPayload } from "./redaction.ts";
 import { CLIP_PROTECTED_PAYLOAD_KEYS, CONTINUITY_SCHEMA_VERSION } from "./types.ts";
 import type {
@@ -137,6 +138,11 @@ export function appendContinuityRecords(
   if (!Array.isArray(inputs) || inputs.length === 0) {
     throw new Error("appendContinuityRecords: inputs must be a non-empty array");
   }
+
+  // Vault-identity write guard (context-integrity-gates, Unit J),
+  // ahead of the phase-3 shard appends. Backs `brain_session_checkpoint`
+  // and every telemetry writer that funnels through the continuity log.
+  assertVaultIdentityForWrite(vault);
 
   // Phase 1 — build + validate ALL records before any disk mutation.
   // buildRecord sanitises payloads; continuityLogPath validates the month
@@ -276,6 +282,10 @@ function buildRecord(
 }
 
 function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J). The
+  // single-record funnel: guarding here covers every public entry point
+  // that appends one record rather than a batch.
+  assertVaultIdentityForWrite(vault);
   const path = continuityLogPath(vault, record.createdAt.slice(0, 7));
   mkdirSync(join(vault, CONTINUITY_REL), { recursive: true });
   const handle = acquireLockSync(path);

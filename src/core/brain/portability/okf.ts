@@ -65,6 +65,7 @@ import {
 } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const OKF_SCHEMA_VERSION = "1";
 export const OKF_PRODUCER = "open-second-brain";
@@ -630,6 +631,8 @@ export function importOkfBundle(
   bundle: ParsedOkfBundle,
   opts: OkfImportOptions = {},
 ): OkfImportResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const trusted = opts.trusted === true;
   const nowIso = isoSecond(opts.now ?? new Date());
   const written: string[] = [];

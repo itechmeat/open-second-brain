@@ -29,6 +29,7 @@ import { packStampRefusal, packStampTokens, type ContextPackStamp } from "./pack
 import { resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { searchSessionRecall, type SessionRecallHit } from "./session-recall.ts";
 
 /**
@@ -285,12 +286,21 @@ function cacheRefusal(vault: string, cached: CacheFile, now: Date): string | nul
 
 /**
  * Refresh the cache for the session's lineage root unless a fresh copy
- * already exists (TTL debounce). Never throws.
+ * already exists (TTL debounce).
+ *
+ * Fail-soft by design: every cache-building error is swallowed and
+ * reported as `refreshed: false`. The ONE exception is the vault-identity
+ * refusal, which is raised ahead of the try so it cannot be mistaken for
+ * an ordinary cache miss - the only caller (the session-lifecycle hook)
+ * already catches, so the hook still fails open, but it fails open
+ * WITHOUT having written the cache into the wrong store.
  */
 export function refreshAnticipatoryCache(
   vault: string,
   input: RefreshAnticipatoryCacheInput,
 ): RefreshAnticipatoryCacheResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const rootId = resolveRootId(vault, input.sessionId);
   const path = anticipatoryCachePath(vault, rootId, input.agentScope);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;

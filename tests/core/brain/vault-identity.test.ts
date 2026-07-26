@@ -20,23 +20,40 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, posix, relative } from "node:path";
 
 import { regenerateActive } from "../../../src/core/brain/active.ts";
+import { refreshAnticipatoryCache } from "../../../src/core/brain/anticipatory-cache.ts";
 import { ensureDefaultAttentionFlows } from "../../../src/core/brain/attention-flows.ts";
 import { writeCaptureNote } from "../../../src/core/brain/capture/capture-note.ts";
+import {
+  appendContinuityRecord,
+  appendContinuityRecords,
+} from "../../../src/core/brain/continuity/store.ts";
+import { recordDeadEnd } from "../../../src/core/brain/dead-ends.ts";
 import { recordDecision } from "../../../src/core/brain/decisions/record.ts";
+import { appendDecisionChangeReceipt } from "../../../src/core/brain/decisions/receipts.ts";
 import { distillSource } from "../../../src/core/brain/distill/distill-source.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
 import { writeExactState, clearExactState } from "../../../src/core/brain/exact-state.ts";
 import { collectExportRows } from "../../../src/core/brain/export.ts";
-import { promoteGapsToTasks } from "../../../src/core/brain/gaps/gap-loop.ts";
+import {
+  autoCloseRecalledGaps,
+  promoteGapsToTasks,
+} from "../../../src/core/brain/gaps/gap-loop.ts";
+import { writeHandoffNote } from "../../../src/core/brain/handoff.ts";
 import { appendEditHistory } from "../../../src/core/brain/health/edit-history.ts";
 import { recordThesis } from "../../../src/core/brain/health/thesis.ts";
+import { applyHygienePlan } from "../../../src/core/brain/hygiene/apply.ts";
+import type { HygienePlan } from "../../../src/core/brain/hygiene/plan.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { setIntention } from "../../../src/core/brain/intentions.ts";
+import { assignNoteLabel } from "../../../src/core/brain/labels.ts";
 import { regenerateLessons } from "../../../src/core/brain/lessons.ts";
+import { recordLineageObservation } from "../../../src/core/brain/lineage/ledger.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { createNote } from "../../../src/core/brain/notes/create-note.ts";
 import { addObligation } from "../../../src/core/brain/obligations.ts";
 import { brainDirs, brainDirsForWrite } from "../../../src/core/brain/paths.ts";
 import {
@@ -48,21 +65,38 @@ import {
 import { setPinned } from "../../../src/core/brain/pin.ts";
 import {
   appendPinnedContext,
+  applyPinnedOperations,
   clearPinnedContext,
   writePinnedContext,
 } from "../../../src/core/brain/pinned.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { appendPrefAudit } from "../../../src/core/brain/pref-audit.ts";
+import type { RecallResultSet, RecallRetriever } from "../../../src/core/brain/recall-inject.ts";
+import { archivePage } from "../../../src/core/brain/recompile.ts";
 import { writeResearchReport } from "../../../src/core/brain/research/research.ts";
 import { writeRollupLedger } from "../../../src/core/brain/rollup-ladder.ts";
+import { parseSchemaPack } from "../../../src/core/brain/schema-pack.ts";
+import { applySchemaMutations } from "../../../src/core/brain/schema-mutate.ts";
+import {
+  removeSecret,
+  resolveSecretForExec,
+  setSecret,
+} from "../../../src/core/brain/secrets/store.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { retireSignal } from "../../../src/core/brain/signal-retire.ts";
 import { learnSkillProposals } from "../../../src/core/brain/skill-proposals.ts";
+import { pruneSnapshots } from "../../../src/core/brain/snapshot.ts";
 import { computeBrainStatus } from "../../../src/core/brain/status.ts";
-import { persistTension } from "../../../src/core/brain/tensions.ts";
+import { confirmTension, persistTension } from "../../../src/core/brain/tensions.ts";
+import { createTriggers } from "../../../src/core/brain/triggers/store.ts";
+import type { InsightCandidate } from "../../../src/core/brain/triggers/types.ts";
+import { appendClaimEvent, writeTruthState } from "../../../src/core/brain/truth/store.ts";
+import { TRUTH_SCHEMA_VERSION } from "../../../src/core/brain/truth/types.ts";
 import { PREF_AUDIT_OP } from "../../../src/core/brain/types.ts";
 import { runBrainWatchdog } from "../../../src/core/brain/watchdog.ts";
 import { applyWriteBatch } from "../../../src/core/brain/write-batch.ts";
+import { createWriteSession } from "../../../src/core/brain/write-session/store.ts";
+import type { WriteSessionRecord } from "../../../src/core/brain/write-session/types.ts";
 import {
   VaultIdentityMismatchError,
   readVaultIdentity,
@@ -90,6 +124,25 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
   resetVaultIdentityPins();
 });
+
+/** One-finding hygiene plan that archives `page`. */
+function archivePlan(page: string): HygienePlan {
+  return {
+    selected: [
+      {
+        id: "usefulness:guard",
+        detector: "usefulness",
+        severity: "action",
+        title: "archive the guard page",
+        targets: [page],
+        proposed_action: "archive",
+        evidence: {},
+      },
+    ],
+    excluded_review: [],
+    unknown_ids: [],
+  };
+}
 
 describe("vault identity marker", () => {
   test("writing is idempotent and records no machine-local path", () => {
@@ -146,6 +199,23 @@ describe("brainDirsForWrite", () => {
     expect(error.message).toContain(vault);
   });
 
+  test("a replacement marker of identical size is still caught", () => {
+    // The guard memoizes (inode, size, mtime) so the hot write path costs
+    // one stat instead of an open-read-parse. Two markers minted by
+    // `writeVaultIdentity` serialize to the same byte length, so this
+    // pins that the memo keys on more than size.
+    const first = writeVaultIdentity(vault);
+    brainDirsForWrite(vault);
+    const firstBytes = readFileSync(vaultIdentityPath(vault)).length;
+
+    rmSync(vaultIdentityPath(vault));
+    const replacement = writeVaultIdentity(vault);
+    expect(replacement.vault_id).not.toBe(first.vault_id);
+    expect(readFileSync(vaultIdentityPath(vault)).length).toBe(firstBytes);
+
+    expect(() => brainDirsForWrite(vault)).toThrow(VaultIdentityMismatchError);
+  });
+
   test("a matching marker never refuses, however many writes follow", () => {
     writeVaultIdentity(vault);
     for (let i = 0; i < 3; i++) expect(() => brainDirsForWrite(vault)).not.toThrow();
@@ -162,8 +232,8 @@ describe("the guard fires on Brain write paths", () => {
   interface WriteCase {
     readonly name: string;
     /** Bring the vault into the state the write needs. */
-    readonly seed?: (vault: string) => void;
-    readonly write: (vault: string) => void;
+    readonly seed?: (vault: string) => void | Promise<void>;
+    readonly write: (vault: string) => void | Promise<void>;
   }
 
   const SIGNAL_INPUT = {
@@ -188,6 +258,125 @@ describe("the guard fires on Brain write paths", () => {
     evidenced_by: [],
   } as const;
 
+  const SECRET_INPUT = {
+    name: "guard-secret",
+    value: "s3cret-material",
+    allow: ["echo *"],
+    agent: "test-agent",
+    now: NOW,
+  } as const;
+
+  const GUARD_PAGE_REL = posix.join("Brain", "notes", "guard-page.md");
+
+  function guardPagePath(vaultRoot: string): string {
+    return join(vaultRoot, "Brain", "notes", "guard-page.md");
+  }
+
+  function writeGuardPage(vaultRoot: string): void {
+    mkdirSync(join(vaultRoot, "Brain", "notes"), { recursive: true });
+    writeFileSync(guardPagePath(vaultRoot), "---\ntitle: Guard\n---\n\nGuarded page.\n", "utf8");
+  }
+
+  const TENSION_FINDING = {
+    aId: "note-a",
+    bId: "note-b",
+    subject: "write guard",
+    jaccard: 0.9,
+    aSign: "positive",
+    bSign: "negative",
+    aQuote: "the guard covers writes",
+    bQuote: "the guard does not cover writes",
+    action: "ask_user",
+  } as const;
+
+  /** Slug the seeded tension landed under, captured for the transition. */
+  let seededTensionSlug = "";
+
+  function seedOpenGapTask(vaultRoot: string): void {
+    const dir = join(vaultRoot, "Brain", "gap-tasks");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "guard-gap.md"),
+      [
+        "---",
+        "kind: brain-gap-task",
+        "gap_key: guard-gap",
+        "gap_topic: guard topic",
+        "status: open",
+        'occurrences: "3"',
+        "created_at: 2026-07-26T00:00:00Z",
+        "---",
+        "",
+        "Recurring recall gap.",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+  }
+
+  const RECALL_RETRIEVER: RecallRetriever = () =>
+    Promise.resolve({
+      candidates: [
+        {
+          path: "Brain/x.md",
+          title: "X",
+          score: 0.92,
+          searchType: "hybrid",
+          startLine: 1,
+          endLine: 2,
+        },
+      ],
+      total: 1,
+    } satisfies RecallResultSet);
+
+  function seedSnapshotArchive(vaultRoot: string): void {
+    const dir = join(vaultRoot, "Brain", ".snapshots");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "2026-07-26T00-00-00Z.tar.zst"), "not a real archive", "utf8");
+  }
+
+  const WRITE_SESSION_NOW = "2026-07-26T00:00:00Z";
+
+  function writeSessionRecord(id: string): WriteSessionRecord {
+    return {
+      id,
+      kind: "artifact",
+      status: "needs-llm-step",
+      step: "artifact",
+      agent: "test-agent",
+      createdAt: WRITE_SESSION_NOW,
+      updatedAt: WRITE_SESSION_NOW,
+      expiresAt: "2026-07-27T00:00:00Z",
+      attempts: 0,
+      retryCap: 3,
+      targetPath: "Brain/notes/guard-session.md",
+      intent: "create",
+      requireReview: false,
+      prompt: "Guard the write path.",
+      schemaType: null,
+      topic: null,
+      personas: [],
+      responses: {},
+      pendingArtifact: null,
+      lastErrors: [],
+      failReason: null,
+    };
+  }
+
+  const TRIGGER_CANDIDATE: InsightCandidate = {
+    kind: "contradiction",
+    urgency: "high",
+    reason: "pref-a contradicts pref-b on the same scope",
+    suggestedAction: "Review both preferences and retire one",
+    sourceArtifacts: ["[[pref-a]]", "[[pref-b]]"],
+    contextSnippets: ["pref-a: do X", "pref-b: never do X"],
+    cooldownKey: "contradiction:pref-a:pref-b",
+  };
+
+  const LABEL_PACK = parseSchemaPack(
+    ["schema_version: 1", "schema:", "  labels:", "    - priority=high"].join("\n") + "\n",
+  );
+
   const CASES: ReadonlyArray<WriteCase> = [
     {
       name: "writeSignal",
@@ -196,7 +385,7 @@ describe("the guard fires on Brain write paths", () => {
     {
       name: "appendLogEvent",
       write: (v) =>
-        appendLogEvent(v, {
+        void appendLogEvent(v, {
           timestamp: "2026-07-26T00:00:00Z",
           eventType: "note",
           agent: "test-agent",
@@ -420,53 +609,286 @@ describe("the guard fires on Brain write paths", () => {
           { kind: "create_note", path: "guard-note.md", content: "guarded" },
         ]),
     },
+
+    // ----- Writers whose only guard was a TRAILING audit append --------
+    //
+    // Every one of these put bytes on disk and raised the mismatch
+    // afterwards. The secret custody store is the worst: the keyfile and
+    // the encrypted store landed in the wrong vault, outside `Brain/`,
+    // where the first cut of this harness could not even see them.
+    {
+      name: "setSecret",
+      write: (v) => void setSecret(v, SECRET_INPUT),
+    },
+    {
+      name: "removeSecret",
+      seed: (v) => void setSecret(v, SECRET_INPUT),
+      write: (v) => void removeSecret(v, SECRET_INPUT.name, { agent: "test-agent", now: NOW }),
+    },
+    {
+      // The read-shaped surface that still writes: it stamps
+      // `last_used_at` and appends a custody record.
+      name: "resolveSecretForExec",
+      seed: (v) => void setSecret(v, SECRET_INPUT),
+      write: (v) =>
+        void resolveSecretForExec(v, SECRET_INPUT.name, { agent: "test-agent", now: NOW }),
+    },
+    {
+      name: "applySchemaMutations",
+      write: async (v) => {
+        await applySchemaMutations(v, [{ op: "add_link_type", token: "guards" }], {
+          actor: "test-agent",
+          now: NOW,
+        });
+      },
+    },
+    {
+      name: "archivePage",
+      seed: (v) => void writeGuardPage(v),
+      write: (v) => void archivePage(v, guardPagePath(v), NOW),
+    },
+    {
+      name: "applyHygienePlan",
+      seed: (v) => void writeGuardPage(v),
+      write: async (v) => {
+        await applyHygienePlan(v, archivePlan(guardPagePath(v)), {
+          agent: "test-agent",
+          now: NOW,
+        });
+      },
+    },
+
+    // ----- Unguarded writers inside modules counted as guarded ---------
+    //
+    // `brain_pinned_context` refused a mismatched vault in single-op
+    // mode and wrote to it in `operations` batch mode - same tool, same
+    // file, same call.
+    {
+      name: "applyPinnedOperations",
+      write: (v) => void applyPinnedOperations(v, [{ op: "write", content: "guarded" }]),
+    },
+    {
+      name: "confirmTension",
+      seed: (v) => {
+        seededTensionSlug = persistTension(v, TENSION_FINDING, { now: NOW }).record.slug;
+      },
+      write: (v) => void confirmTension(v, seededTensionSlug, { now: NOW }),
+    },
+    {
+      name: "autoCloseRecalledGaps",
+      seed: (v) => void seedOpenGapTask(v),
+      write: async (v) => {
+        await autoCloseRecalledGaps(v, RECALL_RETRIEVER, { confidenceFloor: 0.5, now: NOW });
+      },
+    },
+    {
+      name: "pruneSnapshots",
+      seed: (v) => void seedSnapshotArchive(v),
+      write: (v) => void pruneSnapshots(v, 0),
+    },
+
+    // ----- High-traffic MCP-reachable writers with no guard at all -----
+    {
+      name: "createNote",
+      write: (v) => void createNote(v, { path: "notes/guard-created.md", content: "x" }),
+    },
+    {
+      name: "appendContinuityRecord",
+      write: (v) =>
+        void appendContinuityRecord(v, {
+          kind: "session_turn",
+          createdAt: "2026-07-26T00:00:00Z",
+          payload: { session_id: "guard", turn_id: "t-1", role: "user", text: "guarded" },
+        }),
+    },
+    {
+      name: "appendContinuityRecords",
+      write: (v) =>
+        void appendContinuityRecords(v, [
+          {
+            kind: "session_turn",
+            createdAt: "2026-07-26T00:00:00Z",
+            payload: { session_id: "guard", turn_id: "t-2", role: "user", text: "guarded" },
+          },
+        ]),
+    },
+    {
+      name: "recordDeadEnd",
+      write: (v) =>
+        void recordDeadEnd(v, {
+          approach: "Trailing audit append as a write guard",
+          reason: "the bytes land before the refusal",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "appendDecisionChangeReceipt",
+      write: (v) =>
+        void appendDecisionChangeReceipt(v, {
+          ts: "2026-07-26T00:00:00Z",
+          subject: "pref-guard-pref",
+          before: "confidence:medium(0.55)",
+          after: "confidence:high(0.88)",
+          evidenceTriggers: [],
+          confidenceDelta: 0.33,
+          alternatives: [],
+          actor: "test-agent",
+          rationale: "guard the write path",
+          reasonCode: "confidence-refresh",
+        }),
+    },
+    {
+      name: "createWriteSession",
+      write: (v) => void createWriteSession(v, WRITE_SESSION_NOW, (id) => writeSessionRecord(id)),
+    },
+    {
+      name: "appendClaimEvent",
+      write: (v) =>
+        void appendClaimEvent(v, {
+          ts: "2026-07-26T00:00:00Z",
+          agent: "test-agent",
+          entity: "Guard Subject",
+          aspect: "employer",
+          value: "Anthropic",
+          source: "[[Brain/notes/guard.md]]",
+        }),
+    },
+    {
+      name: "writeTruthState",
+      write: (v) =>
+        void writeTruthState(v, {
+          version: TRUTH_SCHEMA_VERSION,
+          events: 0,
+          updatedAt: null,
+          slots: [],
+          conflicts: [],
+        }),
+    },
+    {
+      name: "setIntention",
+      write: (v) =>
+        void setIntention(v, {
+          scope: "guard",
+          text: "Guard the write path",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "createTriggers",
+      write: (v) => void createTriggers(v, [TRIGGER_CANDIDATE], { now: NOW }),
+    },
+    {
+      name: "assignNoteLabel",
+      seed: (v) => void writeGuardPage(v),
+      write: (v) =>
+        void assignNoteLabel(v, GUARD_PAGE_REL, {
+          dimension: "priority",
+          value: "high",
+          pack: LABEL_PACK,
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "writeHandoffNote",
+      write: (v) =>
+        void writeHandoffNote(v, {
+          turns: [
+            {
+              turnId: "t-1",
+              timestamp: "2026-07-26T00:00:00Z",
+              role: "user",
+              text: "guard the write path",
+            },
+          ],
+          sessionId: "guard-session",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "refreshAnticipatoryCache",
+      seed: (v) =>
+        void recordLineageObservation(v, {
+          sessionId: "guard-child",
+          at: NOW.toISOString(),
+          event: "SessionStart",
+          lineage: { rootId: "guard-root", parentId: "guard-root", depth: 1, source: "payload" },
+        }),
+      write: (v) =>
+        void refreshAnticipatoryCache(v, {
+          sessionId: "guard-child",
+          signalText: "guarding the write path",
+          now: NOW,
+        }),
+    },
   ];
 
   for (const testCase of CASES) {
-    test(`${testCase.name} refuses a vault whose marker changed`, () => {
+    test(`${testCase.name} refuses a vault whose marker changed`, async () => {
       bootstrapBrain(vault, { configPath });
-      testCase.seed?.(vault);
+      await testCase.seed?.(vault);
       // Pin what this process has been writing to.
       brainDirsForWrite(vault);
 
       // The store under this path is now a different vault.
       rmSync(vaultIdentityPath(vault));
       writeVaultIdentity(vault);
-      const before = snapshotBrainTree(vault);
+      const before = snapshotVaultTree(vault);
 
-      expect(() => testCase.write(vault)).toThrow(VaultIdentityMismatchError);
-      // Refusing AFTER the bytes landed is not refusing. A writer that
-      // trips the guard only on a downstream log append has already
-      // materialized a page in the wrong store, so the guard has to sit
-      // at the writer's own entry point, ahead of its first write.
-      expect(snapshotBrainTree(vault)).toEqual(before);
+      let raised: unknown;
+      try {
+        await testCase.write(vault);
+      } catch (err) {
+        raised = err;
+      }
+      // The byte assertion comes FIRST and deliberately so. Refusing
+      // AFTER the bytes landed is not refusing: a writer that trips the
+      // guard only on a downstream log append has already materialized a
+      // page in the wrong store. Asserting the throw first would report
+      // "it threw" and hide the bytes, which is exactly how this class of
+      // defect survived the previous review.
+      expect(snapshotVaultTree(vault)).toEqual(before);
+      expect(raised).toBeInstanceOf(VaultIdentityMismatchError);
     });
   }
 });
 
 /**
- * Content digest of every file under `<vault>/Brain/`, keyed by
- * vault-relative path. Used to assert that a refused write left no
- * trace - the identity marker itself is excluded because the harness
- * rewrites it between the snapshot and the call.
+ * Digest of EVERY file under the vault root, keyed by vault-relative
+ * path, PLUS one entry per directory.
+ *
+ * The whole root, not just `Brain/`: the secret custody store lives in
+ * `<vault>/.open-second-brain/secrets/` and `createNote` authors notes
+ * anywhere the vault scope allows, so a `Brain/`-only walk cannot see
+ * the bytes those writers land - which is precisely why the secrets
+ * store shipped with its guard behind the first byte.
+ *
+ * Directories are recorded because a bare `mkdirSync` leaves no file
+ * behind: `loadOrCreateKey` creates the 0700 secrets directory before it
+ * writes anything, and a file-only digest would call that "no trace".
+ * The identity marker is excluded because the harness rewrites it
+ * between the snapshot and the call.
  */
-function snapshotBrainTree(vaultRoot: string): Record<string, string> {
-  const brainRoot = join(vaultRoot, "Brain");
+function snapshotVaultTree(vaultRoot: string): Record<string, string> {
   const markerRel = relative(vaultRoot, vaultIdentityPath(vaultRoot));
   const out: Record<string, string> = {};
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
+      const rel = relative(vaultRoot, abs);
       if (entry.isDirectory()) {
+        out[`${rel}/`] = "<dir>";
         walk(abs);
         continue;
       }
-      const rel = relative(vaultRoot, abs);
       if (rel === markerRel) continue;
       out[rel] = createHash("sha256").update(readFileSync(abs)).digest("hex");
     }
   };
-  if (existsSync(brainRoot)) walk(brainRoot);
+  if (existsSync(vaultRoot)) walk(vaultRoot);
   return out;
 }
 

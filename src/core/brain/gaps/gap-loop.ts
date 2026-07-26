@@ -216,6 +216,10 @@ export async function autoCloseRecalledGaps(
   retriever: RecallRetriever,
   opts: { confidenceFloor?: number; now: Date },
 ): Promise<GapAutoCloseResult> {
+  // Vault-identity write guard (context-integrity-gates, Unit J), like
+  // its sibling `promoteGapsToTasks`: closing a task rewrites the note's
+  // frontmatter, so it is a write path, not a read.
+  assertVaultIdentityForWrite(vault);
   const floor = opts.confidenceFloor ?? GAP_LOOP_AUTO_CLOSE_FLOOR;
   const closed: string[] = [];
   const kept: string[] = [];

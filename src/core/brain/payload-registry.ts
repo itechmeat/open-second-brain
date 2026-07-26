@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface PayloadRegistryOptions {
   readonly vault: string;
@@ -72,6 +73,10 @@ export class PayloadRegistry {
   }
 
   private put(text: string): ExternalizedPayload {
+    // Vault-identity write guard (context-integrity-gates, Unit J). The
+    // registry externalizes oversized payloads into `Brain/.payloads/`,
+    // so this is the class's only byte-producing path.
+    assertVaultIdentityForWrite(this.vault);
     const sha256 = createHash("sha256").update(text, "utf8").digest("hex");
     const ref = `${PAYLOAD_REF_PREFIX}${sha256}`;
     const placeholder = `[payload: ${ref} chars=${text.length}]`;

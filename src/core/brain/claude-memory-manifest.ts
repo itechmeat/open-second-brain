@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface ClaudeMemoryManifestEntry {
   readonly pref_id: string;
@@ -51,6 +52,8 @@ export function loadManifest(vault: string): ClaudeMemoryManifest {
 }
 
 export function saveManifest(vault: string, m: ClaudeMemoryManifest): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const p = manifestPath(vault);
   mkdirSync(dirname(p), { recursive: true });
   atomicWriteFileSync(p, JSON.stringify(m, null, 2) + "\n");

@@ -28,6 +28,7 @@ import {
 } from "../../graph/frontmatter-relations.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import { loadVaultMap, resolveTokens } from "./role-tokens.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const GRAPH_VERSION = "1";
 
@@ -201,6 +202,8 @@ export function importVaultGraph(
   graph: { nodes?: ReadonlyArray<unknown> },
   opts: { mode?: GraphImportMode } = {},
 ): GraphImportResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const mode: GraphImportMode = opts.mode ?? "skip";
   const result: GraphImportResult = {
     created: [],

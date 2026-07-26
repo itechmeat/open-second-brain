@@ -12,6 +12,7 @@ import {
   skillProposalRejectedPath,
 } from "./paths.ts";
 import type { ProceduralMemoryEntry } from "./types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export type ProceduralGraphNodeKind = "procedure" | "skill" | "runbook" | "proposal" | "entity";
 export type ProceduralGraphEdgeKind =
@@ -50,6 +51,8 @@ export function rebuildProceduralGraph(
   vault: string,
   opts: ProceduralGraphBuildOptions = {},
 ): ProceduralGraphProjection {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = opts.now ?? new Date();
   const nodes: ProceduralGraphNode[] = [];
   const edges: ProceduralGraphEdge[] = [];

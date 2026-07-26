@@ -39,6 +39,7 @@ import {
   significantTerms,
 } from "../search/coverage.ts";
 import type { CompletenessVerdict } from "../search/types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Longest single normalized term kept; longer tokens are dropped as a
  * privacy guard (a 40+ char alnum run is far likelier a secret/id than a
@@ -205,6 +206,8 @@ export function recordQueryDemand(
       ? { coverage: clamp01(input.coverage) }
       : {}),
   };
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = queryDemandLogPath(vault);
   mkdirSync(ensureInsideVault(dirname(path), vault), { recursive: true });
   const handle = acquireLockSync(path);

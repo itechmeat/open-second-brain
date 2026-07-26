@@ -18,6 +18,7 @@ import { parseFrontmatterText, slugify, writeFrontmatterAtomic } from "../vault.
 import type { FrontmatterMap } from "../types.ts";
 import { allocateSlug } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Active dead-ends kept before overflow archives the oldest. */
 export const DEAD_END_MAX_ACTIVE = 100;
@@ -82,6 +83,8 @@ function renderBody(approach: string, reason: string, context: string | null): s
  * suffixes, matching the signal naming discipline.
  */
 export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordDeadEndResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const approach = sanitiseTextField(input.approach, {
     maxLen: APPROACH_MAX_LEN,
     singleLine: true,

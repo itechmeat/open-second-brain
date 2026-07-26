@@ -31,6 +31,7 @@ import { getGraphSnapshot } from "./graph-index.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isoSecond } from "../time.ts";
 import { formatFrontmatter, parseFrontmatter } from "../../vault.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const COMMUNITY_DEFAULT_MIN_SIZE = 4;
 export const COMMUNITY_MAX_ITERATIONS = 20;
@@ -239,6 +240,8 @@ export function materializeClusterNotes(
   communities: ReadonlyArray<Community>,
   opts: MaterializeClusterNotesOptions,
 ): MaterializeClusterNotesResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const dir = clustersDir(vault);
   mkdirSync(dir, { recursive: true });
   const writeNote = opts.writeNote ?? atomicWriteFileSync;

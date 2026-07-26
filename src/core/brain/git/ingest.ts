@@ -39,6 +39,7 @@ import {
   writeGitState,
 } from "./store.ts";
 import type { GitCommitRecord, GitRecord, GitTagRecord } from "./store.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const DEFAULT_MAX_COUNT = 1000;
 
@@ -110,6 +111,8 @@ export function ingestGitHistory(
   repoPath: string,
   opts: IngestGitHistoryOptions = {},
 ): IngestGitHistoryResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const repo = resolve(repoPath);
   const key = deriveRepoKey(repo);
   const maxCount = opts.maxCount ?? DEFAULT_MAX_COUNT;

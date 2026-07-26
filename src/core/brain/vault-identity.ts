@@ -49,7 +49,7 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -179,11 +179,82 @@ export class VaultIdentityMismatchError extends Error {
 const PINNED_IDENTITIES = new Map<string, string>();
 
 /**
+ * Inode identity of the marker file the last assertion parsed, per
+ * resolved root.
+ *
+ * The guard sits on EVERY write, including append-heavy telemetry loops
+ * that record tens of thousands of rows in one run, so the per-call cost
+ * has to be one syscall rather than an open-read-parse. `writeVaultIdentity`
+ * goes through `atomicWriteFileSync` - a temp file plus a rename - so a
+ * replaced marker always arrives with a new inode. Matching on
+ * (inode, size, mtime) therefore proves the bytes are the ones already
+ * parsed; anything else falls through to a full re-read.
+ */
+interface MarkerStamp {
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly vaultId: string;
+}
+const MARKER_STAMPS = new Map<string, MarkerStamp>();
+
+/** Resolved marker path per root; see {@link currentVaultId}. */
+const MARKER_PATHS = new Map<string, string>();
+
+/**
  * Drop every pin. Exported for tests, which run many vaults in one
  * process; production code has no reason to call it.
  */
 export function resetVaultIdentityPins(): void {
   PINNED_IDENTITIES.clear();
+  MARKER_STAMPS.clear();
+  MARKER_PATHS.clear();
+}
+
+/**
+ * The marker's `vault_id`, re-read only when the file on disk is not
+ * byte-for-byte the one the last call parsed. `null` for absent,
+ * unreadable, or malformed - the same collapse {@link readVaultIdentity}
+ * performs, for the same reason.
+ */
+function currentVaultId(root: string): string | null {
+  // `vaultIdentityPath` runs the full containment check (lexical plus a
+  // realpath walk of the deepest existing ancestor). That is the right
+  // price once per root and the wrong price once per appended row, so
+  // the resolved path is memoized alongside the marker stamp.
+  let path = MARKER_PATHS.get(root);
+  if (path === undefined) {
+    path = vaultIdentityPath(root);
+    MARKER_PATHS.set(root, path);
+  }
+  let stat;
+  try {
+    stat = statSync(path);
+  } catch {
+    MARKER_STAMPS.delete(root);
+    return null;
+  }
+  const cached = MARKER_STAMPS.get(root);
+  if (
+    cached !== undefined &&
+    cached.ino === stat.ino &&
+    cached.size === stat.size &&
+    cached.mtimeMs === stat.mtimeMs
+  ) {
+    return cached.vaultId;
+  }
+  const identity = readVaultIdentity(root);
+  if (identity === null) {
+    MARKER_STAMPS.delete(root);
+    return null;
+  }
+  MARKER_STAMPS.set(root, {
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+    vaultId: identity.vault_id,
+  });
+  return identity.vault_id;
 }
 
 /**
@@ -214,8 +285,8 @@ export function resetVaultIdentityPins(): void {
  */
 export function assertVaultIdentityForWrite(vault: string, sink?: DegradationNotice[]): void {
   const root = resolve(vault);
-  const identity = readVaultIdentity(root);
-  if (identity === null) {
+  const vaultId = currentVaultId(root);
+  if (vaultId === null) {
     if (sink !== undefined) {
       emitDegradationNotice(sink, {
         code: DEGRADATION_CODE.vaultMarkerAbsent,
@@ -231,15 +302,12 @@ export function assertVaultIdentityForWrite(vault: string, sink?: DegradationNot
 
   const pinned = PINNED_IDENTITIES.get(root);
   if (pinned === undefined) {
-    PINNED_IDENTITIES.set(root, identity.vault_id);
+    PINNED_IDENTITIES.set(root, vaultId);
     return;
   }
-  if (pinned === identity.vault_id) return;
+  if (pinned === vaultId) return;
 
-  const mismatch = compareStamps(
-    { [VAULT_ID_FIELD]: pinned },
-    { [VAULT_ID_FIELD]: identity.vault_id },
-  )[0];
+  const mismatch = compareStamps({ [VAULT_ID_FIELD]: pinned }, { [VAULT_ID_FIELD]: vaultId })[0];
   // compareStamps reports every differing field and the two ids differ,
   // so exactly one mismatch is guaranteed here.
   const evidence = mismatch as StampMismatch;

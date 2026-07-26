@@ -35,6 +35,7 @@ import {
 } from "../../vault.ts";
 import { listContinuityRecords } from "../continuity/store.ts";
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Identity-strength tiers, strongest first. `inferred` is opt-in. */
 export const IDENTITY_STRENGTH = Object.freeze({
@@ -188,6 +189,9 @@ export function runRepairLane(
   if (apply && opts.confirm !== REPAIR_CONFIRM_PHRASE) {
     throw new RepairConfirmationError();
   }
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // A non-apply run reports decisions and writes nothing.
+  if (apply) assertVaultIdentityForWrite(vault);
 
   const threshold = opts.confidenceThreshold ?? REPAIR_CONFIDENCE_THRESHOLD;
   const writeCap = Math.max(0, Math.floor(opts.writeCap ?? REPAIR_WRITE_CAP));
@@ -302,7 +306,7 @@ function clampConfidence(value: number): number {
 }
 
 function pairId(source: string, target: string): string {
-  return `${source} ${target}`;
+  return `${source}\0${target}`;
 }
 
 /** Mask wikilink and code spans so a mention inside them is not counted. */

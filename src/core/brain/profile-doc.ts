@@ -18,6 +18,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { buildMorningBrief } from "./morning-brief.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const PROFILE_DOC_REL = join("Brain", "profile.md");
 export const O2BFS_MARKER_FILE = ".o2bfs";
@@ -97,6 +98,8 @@ export interface WriteProfileResult {
 
 /** Materialize `Brain/profile.md` and the `.o2bfs` root marker. */
 export function writeProfileDoc(vault: string, opts: ProfileDocOptions): WriteProfileResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const doc = buildProfileDoc(vault, opts);
   const path = join(vault, PROFILE_DOC_REL);
   atomicWriteFileSync(path, doc.text);

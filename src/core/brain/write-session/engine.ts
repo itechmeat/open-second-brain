@@ -45,6 +45,7 @@ import {
   type WriteSessionIntent,
   type WriteSessionRecord,
 } from "./types.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export const DEFAULT_RETRY_CAP = 3;
 export const DEFAULT_TTL_MS = 24 * 3600 * 1000;
@@ -338,6 +339,9 @@ export function commitArtifact(
   artifact: string,
   now: string,
 ): WriteSessionEnvelope {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+
   // Last-line-of-defense containment: `validateTargetPath` runs at open
   // time and is purely lexical (it rejects `..`/backslashes/NUL but is
   // blind to symlinked ancestors), and the persisted session record is

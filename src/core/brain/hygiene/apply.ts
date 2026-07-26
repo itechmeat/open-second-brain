@@ -24,6 +24,7 @@ import { mergePreferences } from "../merge.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { archivePage, executeRecompile, planRecompile } from "../recompile.ts";
 import { appendClaimEvent } from "../truth/store.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HygienePlan } from "./plan.ts";
 import type { HygieneFinding } from "./types.ts";
 
@@ -147,6 +148,12 @@ export async function applyHygienePlan(
       errors: Object.freeze([]),
     });
   }
+
+  // Vault-identity write guard (context-integrity-gates, Unit J), after
+  // the dry-run early return and before the first executor. The per-
+  // finding loop is fail-soft, so an assertion reached only from inside
+  // an executor would be filed as a finding error instead of refusing.
+  assertVaultIdentityForWrite(vault);
 
   const applied: HygieneAppliedAction[] = [];
   const errors: { finding_id: string; message: string }[] = [];

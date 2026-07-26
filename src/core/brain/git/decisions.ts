@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { listGitCommits } from "./store.ts";
 import type { GitCommitRecord } from "./store.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 const CONVENTIONAL_BREAKING_RE = /^[a-z]+(\([^)]*\))?!:/;
 const REVERT_RE = /^revert\b/i;
@@ -108,6 +109,8 @@ export interface MineCommitDecisionsResult {
 
 /** Mine one repo's ingested commits into ADR candidate notes. */
 export function mineCommitDecisions(vault: string, repoKey: string): MineCommitDecisionsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const commits = listGitCommits(vault, repoKey);
   const dir = join(vault, "Brain", "decisions", "candidates");
   let created = 0;

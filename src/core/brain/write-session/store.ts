@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:f
 import { join } from "node:path";
 
 import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "../../fs-atomic.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   isTerminalWriteSessionStatus,
   type WriteSessionError,
@@ -229,6 +230,8 @@ function applyTtl(record: WriteSessionRecord, nowIso: string): WriteSessionRecor
 
 /** Persist a session record atomically (updates an EXISTING session). */
 export function saveWriteSession(vault: string, record: WriteSessionRecord): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   mkdirSync(writeSessionDir(vault), { recursive: true });
   atomicWriteFileSync(writeSessionPath(vault, record.id), serializeRecord(record));
 }
@@ -245,6 +248,8 @@ export function createWriteSession(
   nowIso: string,
   build: (id: string) => WriteSessionRecord,
 ): WriteSessionRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   mkdirSync(writeSessionDir(vault), { recursive: true });
   for (let attempt = 0; attempt < 10_000; attempt++) {
     const id = allocateWriteSessionId(vault, nowIso);
@@ -320,6 +325,8 @@ export function listWriteSessions(
 
 /** Remove one session file (idempotent). */
 export function deleteWriteSession(vault: string, id: string): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   rmSync(writeSessionPath(vault, id), { force: true });
 }
 
@@ -333,6 +340,8 @@ export interface SweepWriteSessionsResult {
  * files are also removed - they can never transition anywhere.
  */
 export function sweepWriteSessions(vault: string, nowIso: string): SweepWriteSessionsResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const dir = writeSessionDir(vault);
   if (!existsSync(dir)) return Object.freeze({ removed: 0, kept: 0 });
   let removed = 0;

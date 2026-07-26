@@ -31,6 +31,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { brainConfigPath } from "./paths.ts";
 import { parseBrainYaml } from "./yaml-parse.ts";
 import { BrainConfigError, formatPrimaryAgentYamlValue, validateBrainConfig } from "./policy.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
  * Result of {@link setPrimaryAgent}. `previous` is the value on disk
@@ -57,6 +58,8 @@ const LINE_RE = /^primary_agent:.*$/m;
  * the loader will reject on the next read.
  */
 export function setPrimaryAgent(vault: string, name: string | null): SetPrimaryAgentResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = brainConfigPath(vault);
   if (!existsSync(path)) {
     throw new BrainConfigError(

@@ -16,6 +16,7 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveNotePath } from "./note-path.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import { upsertEntity } from "./entities/registry.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { SchemaPack } from "./schema-pack.ts";
 
 export const LABEL_ENTITY_CATEGORY = "label";
@@ -127,6 +128,8 @@ export function assignNoteLabel(
   relPath: string,
   opts: AssignNoteLabelOptions,
 ): NoteLabelResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const assignment = validateLabelAssignment(opts.pack, opts.dimension, opts.value);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);
@@ -157,6 +160,8 @@ export function removeNoteLabel(
   relPath: string,
   opts: RemoveNoteLabelOptions,
 ): RemoveNoteLabelResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const dimension = normalizeSchemaToken(opts.dimension);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);

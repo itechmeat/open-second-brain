@@ -32,6 +32,7 @@ import { join } from "node:path";
 import { BRAIN_INBOX_REL } from "./paths.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** One signal that carries a preserved turn instant but no `authored_at`. */
 export interface AuthoredAtBackfillCandidate {
@@ -103,6 +104,9 @@ export function planAuthoredAtBackfill(
   opts: AuthoredAtBackfillOptions = {},
 ): AuthoredAtBackfillResult {
   const apply = opts.apply === true;
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  // Planning without `apply` writes nothing, so it stays ungated.
+  if (apply) assertVaultIdentityForWrite(vault);
   const inbox = join(vault, BRAIN_INBOX_REL);
   const candidates: AuthoredAtBackfillCandidate[] = [];
   let scanned = 0;

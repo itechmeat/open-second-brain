@@ -30,6 +30,7 @@ import { join } from "node:path";
 import { resolveDeviceId } from "../../config.ts";
 import { appendLogEvent } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Schema tag stamped on every receipt line. */
 export const DECISION_CHANGE_SCHEMA_VERSION = "decision_change.v1";
@@ -217,6 +218,8 @@ export function appendDecisionChangeReceipt(
   vault: string,
   input: AppendReceiptInput,
 ): AppendReceiptResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   // Closed-schema gate: reject any unexpected field before doing anything.
   for (const key of Object.keys(input)) {
     if (!ALLOWED_INPUT_KEYS.has(key)) {

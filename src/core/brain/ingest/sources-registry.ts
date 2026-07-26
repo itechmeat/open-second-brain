@@ -22,6 +22,7 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { parseFrontmatter } from "../../vault.ts";
 import { BRAIN_SOURCES_REL } from "../paths.ts";
 import { BRAIN_SOURCE_KIND } from "./ingest.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface IngestedSource {
   /** Vault-relative POSIX path of the summary page - the id for get/delete. */
@@ -129,6 +130,8 @@ export function getIngestedSource(vault: string, id: string): IngestedSourceDeta
  * outside `Brain/sources` or a non-source page is never deleted.
  */
 export function deleteIngestedSource(vault: string, id: string): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const abs = resolveSourceAbs(vault, id);
   if (abs === null || !existsSync(abs)) return false;
   let meta: FrontmatterMap;

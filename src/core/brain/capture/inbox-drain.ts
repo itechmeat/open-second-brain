@@ -30,6 +30,7 @@ import { addObligation, obligationExists, parseCadence, ObligationError } from "
 import { ingestSource } from "../ingest/ingest.ts";
 import { isoSecond } from "../time.ts";
 import { archiveCapture, listStagedCaptures, type CaptureNote } from "./capture-note.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Explicit leading token that classifies a capture as an obligation. */
 export const CAPTURE_OBLIGATION_MARKER = "@obligation";
@@ -223,6 +224,8 @@ function dirOf(abs: string): string {
 
 /** Classify and (in apply mode) route every staged capture. */
 export function drainInbox(vault: string, opts: DrainOptions): DrainReport {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const items: DrainItem[] = [];
   let routed = 0;
   let unroutable = 0;
