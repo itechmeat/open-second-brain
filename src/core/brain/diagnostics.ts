@@ -229,9 +229,16 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
 );
 
 /**
- * Resolve a signal by code. Unknown codes fall back to a generic
- * doctor-run hint so a newly-added lint still renders a next command
- * without a formatter having to invent one.
+ * Resolve a signal by code, LENIENTLY. An unregistered code does not
+ * resolve: this function fabricates a generic `o2b brain doctor` signal
+ * whose `issueClass` is the raw code. That value is invented here, it is
+ * not a registry entry, and it does not mean the code is known.
+ *
+ * Kept for its two existing consumers (the O3 operator snapshot and the
+ * repair planner's unfixable aggregation), whose output shape predates
+ * this release. New consumers MUST use `resolveNextStep` in
+ * `next-step.ts`, which returns an explicit absent result instead of a
+ * guessed command.
  */
 export function resolveSignal(code: string): DiagnosticSignal {
   const known = DIAGNOSTIC_SIGNALS.get(code);
