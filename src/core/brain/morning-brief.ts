@@ -14,7 +14,7 @@
  */
 
 import { brainDirs } from "./paths.ts";
-import { collectPreferences } from "./preferences-collect.ts";
+import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { readLogDay } from "./log-jsonl.ts";
 import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
@@ -55,6 +55,13 @@ export interface MorningBriefOptions {
   readonly maxCharsPerMemory?: number;
   /** Total character cap across the brief; <= 0 / undefined disables. */
   readonly maxTotalChars?: number;
+  /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Enforced only when `integrity.owner_scope_delivery` is `fail`;
+   * omitted, or under the default `off`, nothing is filtered and the
+   * output is byte-identical to a vault without the gate.
+   */
+  readonly agentScope?: string;
 }
 
 interface ConfirmedPref {
@@ -64,13 +71,15 @@ interface ConfirmedPref {
   readonly createdAt: string;
 }
 
-function collectConfirmed(vault: string): ConfirmedPref[] {
+function collectConfirmed(vault: string, agentScope: string | undefined): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
   const out: ConfirmedPref[] = [];
   // Listing and parse come from the shared delivery-path walk
   // (context-integrity-gates, Unit A); the confirmed-status filter is
   // this surface's own and stays here.
-  for (const { pref } of collectPreferences(dir)) {
+  for (const { pref } of collectPreferences(dir, {
+    ownerScope: resolveOwnerScopeDelivery(vault, agentScope),
+  }).entries) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
     out.push({
       id: pref.id,
@@ -148,7 +157,7 @@ const TIMELINE_HEADER = "## Recent activity";
 export function buildMorningBrief(vault: string, opts: MorningBriefOptions): MorningBrief {
   const lookbackDays = opts.lookbackDays ?? 7;
 
-  const ranked = collectConfirmed(vault).toSorted((a, b) => {
+  const ranked = collectConfirmed(vault, opts.agentScope).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;

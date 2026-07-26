@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { packContext, type ContextPackItem } from "./context-pack.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
@@ -51,6 +52,14 @@ export interface RefreshAnticipatoryCacheInput {
   readonly now: Date;
   readonly ttlSeconds?: number;
   readonly maxTokens?: number;
+  /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Part of the cache IDENTITY, not just the pack build: a bundle
+   * assembled under one scope must never be served under another, which
+   * a path keyed only on the lineage root would allow between two agents
+   * sharing one conversation lineage.
+   */
+  readonly agentScope?: string;
 }
 
 export interface RefreshAnticipatoryCacheResult {
@@ -66,6 +75,14 @@ export interface ReadAnticipatoryContextInput {
   readonly now: Date;
   readonly ttlSeconds?: number;
   readonly maxTokens?: number;
+  /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Part of the cache IDENTITY, not just the pack build: a bundle
+   * assembled under one scope must never be served under another, which
+   * a path keyed only on the lineage root would allow between two agents
+   * sharing one conversation lineage.
+   */
+  readonly agentScope?: string;
 }
 
 export interface ReadAnticipatoryContextResult {
@@ -99,11 +116,26 @@ function safeCacheKey(rootId: string): string {
   return `${prefix}-${digest}`;
 }
 
-export function anticipatoryCachePath(vault: string, rootSessionId: string): string {
-  return ensureInsideVault(
-    join(vault, CACHE_DIR_REL, `${safeCacheKey(rootSessionId)}.json`),
-    vault,
-  );
+/**
+ * Cache file for a lineage root under an owner scope.
+ *
+ * The scope is part of the KEY, not merely of the payload. The cache
+ * persists a context pack to disk, so a path keyed only on the lineage
+ * root would let one agent's refresh materialize its memories into the
+ * exact file another scope reads back - a disk-persisted leak that
+ * outlives the process that caused it.
+ *
+ * An absent scope keeps the legacy filename byte-for-byte, so warm
+ * caches written before the gate existed are still found.
+ */
+export function anticipatoryCachePath(
+  vault: string,
+  rootSessionId: string,
+  agentScope?: string | null,
+): string {
+  const scope = normalizeAgentScope(agentScope ?? undefined);
+  const key = safeCacheKey(scope === null ? rootSessionId : `${rootSessionId}\u0000${scope}`);
+  return ensureInsideVault(join(vault, CACHE_DIR_REL, `${key}.json`), vault);
 }
 
 function resolveRootId(vault: string, sessionId: string): string {
@@ -138,8 +170,12 @@ function buildContext(
   sessionId: string,
   signalText: string | undefined,
   maxTokens: number,
+  agentScope: string | undefined,
 ): AnticipatoryContext {
-  const pack = packContext(vault, { maxTokens });
+  const pack = packContext(vault, {
+    maxTokens,
+    ...(agentScope !== undefined ? { agentScope } : {}),
+  });
   const signal = signalText?.trim() ?? "";
   const hits =
     signal.length > 0
@@ -157,7 +193,7 @@ export function refreshAnticipatoryCache(
   input: RefreshAnticipatoryCacheInput,
 ): RefreshAnticipatoryCacheResult {
   const rootId = resolveRootId(vault, input.sessionId);
-  const path = anticipatoryCachePath(vault, rootId);
+  const path = anticipatoryCachePath(vault, rootId, input.agentScope);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
   const maxTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
   try {
@@ -173,7 +209,13 @@ export function refreshAnticipatoryCache(
         return Object.freeze({ refreshed: false, rootSessionId: rootId, path });
       }
     }
-    const context = buildContext(vault, input.sessionId, input.signalText, maxTokens);
+    const context = buildContext(
+      vault,
+      input.sessionId,
+      input.signalText,
+      maxTokens,
+      input.agentScope,
+    );
     const signal = input.signalText?.trim();
     const cache: CacheFile = {
       schema: ANTICIPATORY_SCHEMA_VERSION,
@@ -201,7 +243,7 @@ export function readAnticipatoryContext(
   input: ReadAnticipatoryContextInput,
 ): ReadAnticipatoryContextResult {
   const rootId = resolveRootId(vault, input.sessionId);
-  const path = anticipatoryCachePath(vault, rootId);
+  const path = anticipatoryCachePath(vault, rootId, input.agentScope);
   const ttlMs = (input.ttlSeconds ?? DEFAULT_ANTICIPATORY_TTL_SECONDS) * 1_000;
   const requestedTokens = input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS;
   const cached = readCacheFile(path);
@@ -223,6 +265,7 @@ export function readAnticipatoryContext(
         input.sessionId,
         cached.signal,
         input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
+        input.agentScope,
       ),
     });
   }
@@ -234,6 +277,7 @@ export function readAnticipatoryContext(
       input.sessionId,
       undefined,
       input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
+      input.agentScope,
     ),
   });
 }

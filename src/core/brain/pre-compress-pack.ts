@@ -18,7 +18,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { brainActivePath, brainDirs } from "./paths.ts";
-import { collectPreferences } from "./preferences-collect.ts";
+import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
@@ -71,6 +71,13 @@ export interface PreCompressOptions {
   readonly receipt?: ContextReceiptOptions;
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
+  /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Enforced only when `integrity.owner_scope_delivery` is `fail`;
+   * omitted, or under the default `off`, nothing is filtered and the
+   * output is byte-identical to a vault without the gate.
+   */
+  readonly agentScope?: string;
 }
 
 interface ConfirmedPref {
@@ -80,13 +87,15 @@ interface ConfirmedPref {
   readonly createdAt: string;
 }
 
-function collectConfirmed(vault: string): ConfirmedPref[] {
+function collectConfirmed(vault: string, agentScope: string | undefined): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
   const out: ConfirmedPref[] = [];
   // Listing and parse come from the shared delivery-path walk
   // (context-integrity-gates, Unit A); the confirmed-status filter is
   // this surface's own and stays here.
-  for (const { pref } of collectPreferences(dir)) {
+  for (const { pref } of collectPreferences(dir, {
+    ownerScope: resolveOwnerScopeDelivery(vault, agentScope),
+  }).entries) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
     out.push({
       id: pref.id,
@@ -116,7 +125,7 @@ function readActiveHead(vault: string): string | null {
  */
 export function buildPreCompressPack(vault: string, opts: PreCompressOptions): PreCompressPack {
   const startedAtMs = Date.now();
-  const ranked = collectConfirmed(vault).toSorted((a, b) => {
+  const ranked = collectConfirmed(vault, opts.agentScope).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;

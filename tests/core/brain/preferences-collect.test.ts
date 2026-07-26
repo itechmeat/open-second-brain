@@ -52,8 +52,8 @@ test("constants name the on-disk grammar the delivery path shares", () => {
 test("an absent directory collects nothing rather than throwing", () => {
   const missing = join(vault, "Brain", "does-not-exist");
   expect(listPreferenceFiles(missing)).toEqual([]);
-  expect(collectPreferences(missing)).toEqual([]);
-  expect(collectPreferencePages(missing)).toEqual([]);
+  expect(collectPreferences(missing).entries).toEqual([]);
+  expect(collectPreferencePages(missing).entries).toEqual([]);
 });
 
 test("listing keeps readdirSync order and drops non-markdown names", () => {
@@ -97,7 +97,7 @@ test("collectPreferences parses each file and skips an unparseable one", () => {
   makePref("alpha");
   writeFileSync(join(dir, "pref-broken.md"), "not frontmatter at all\n");
 
-  const collected = collectPreferences(dir);
+  const collected = collectPreferences(dir).entries;
   expect(collected.map((c) => c.pref.id)).toEqual(["pref-alpha"]);
   expect(collected[0]!.name).toBe("pref-alpha.md");
   expect(collected[0]!.path).toBe(join(dir, "pref-alpha.md"));
@@ -109,7 +109,7 @@ test("collectPreferencePages returns raw frontmatter and body without throwing",
   makePref("alpha");
   writeFileSync(join(dir, "pref-freeform.md"), "---\ntopic: freeform\n---\nbody text\n");
 
-  const pages = collectPreferencePages(dir);
+  const pages = collectPreferencePages(dir).entries;
   const byName = new Map(pages.map((p) => [p.name, p]));
   expect(byName.get("pref-freeform.md")!.meta["topic"]).toBe("freeform");
   expect(byName.get("pref-freeform.md")!.body.trim()).toBe("body text");

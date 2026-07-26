@@ -9,10 +9,22 @@
  * places it could be forgotten. This module is that walk, once, so the
  * owner predicate has exactly one place to attach.
  *
+ * ## The ownership predicate lives here, once
+ *
+ * {@link isOwnerVisible} is the vault's single isolation rule; this
+ * module is where the delivery path consults it. The predicate never
+ * engages on its own: a caller must pass the verdict of
+ * {@link resolveOwnerScopeDelivery}, which reads
+ * `integrity.owner_scope_delivery` and only grants narrowing under
+ * `fail`. With the gate on its shipped `off` default every surface here
+ * is byte-for-byte what it was before the gate existed, which is the
+ * contract `agent-scope.ts`, `search/types.ts` and `result-filters.ts`
+ * all state: a null scope is byte-identical to today.
+ *
  * ## What belongs here, and what does not
  *
- * Here: locating candidate files and turning each into a parsed value,
- * plus (from Unit A's enforcement step) the ownership predicate.
+ * Here: locating candidate files, turning each into a parsed value, and
+ * the ownership predicate.
  *
  * NOT here: every DOMAIN filter the surfaces apply after the walk -
  * tombstone exclusion, `status === confirmed`, recency windows. Those
@@ -46,9 +58,13 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
+import { GATE_MODE, type GateMode } from "../integrity/stamp.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatterWithNotices } from "../vault.ts";
+import { isPreferenceVisible } from "./owner-scoped-facts.ts";
+import { loadIntegrityConfigSafe } from "./policy.ts";
 import { parsePreference } from "./preference.ts";
 import type { BrainPreference } from "./types.ts";
 
@@ -86,6 +102,86 @@ export interface PreferenceScanOptions {
    * candidate and is rejected later by the parse, exactly as before.
    */
   readonly regularFilesOnly?: boolean;
+  /**
+   * The gate's verdict on ownership isolation, from
+   * {@link resolveOwnerScopeDelivery}. Omitted / `null` applies no
+   * ownership filtering at all, which is the shipped default and the
+   * reason an existing vault stays byte-identical.
+   *
+   * A bare scope string is deliberately NOT accepted: passing the gate's
+   * verdict is the only way to filter, so no delivery surface can narrow
+   * a vault without the operator having asked for it.
+   *
+   * The rule itself is {@link isOwnerVisible}, reused rather than
+   * restated: an ownerless memory is shared and always kept, an owned
+   * one is kept only for its own scope, and a memory whose owner cannot
+   * be determined is DROPPED - see {@link CollectedPage.unreadable}.
+   */
+  readonly ownerScope?: OwnerScopeDelivery | null;
+}
+
+/**
+ * What a collect call returned, plus the evidence that the ownership
+ * predicate fired.
+ *
+ * The count is what keeps `warn` from being a mode that does nothing:
+ * under `warn` the predicate is still evaluated and the count is still
+ * reported, but nothing is withheld, so an operator can watch the gate
+ * take effect before tightening it to `fail`.
+ */
+export interface PreferenceCollection<T> {
+  readonly entries: ReadonlyArray<T>;
+  /**
+   * How many entries the ownership predicate rejected. Non-zero only
+   * when a scope was requested under `warn` or `fail`; under `fail`
+   * those entries are absent from {@link entries}, under `warn` they are
+   * still present and the count is the only trace.
+   */
+  readonly hiddenByOwnerScope: number;
+}
+
+/**
+ * The delivery path's reading of `integrity.owner_scope_delivery`.
+ *
+ * `enforcedScope` and `requestedScope` are deliberately separate: the
+ * gate decides whether a requested scope may NARROW delivery, and only
+ * `fail` grants that. Under `warn` the caller still knows what was asked
+ * for, so it can report; under `off` it knows nothing at all, so a
+ * consumer wired to this struct structurally cannot emit a new field or
+ * warning while the gate is off - the same property
+ * {@link checkStamp} gives the stamp consumers.
+ */
+export interface OwnerScopeDelivery {
+  /** The operator-chosen mode, echoed so a report can name it. */
+  readonly mode: GateMode;
+  /** Scope that narrows the result. Non-null only under `fail`. */
+  readonly enforcedScope: string | null;
+  /** Scope the caller asked for. Null under `off`, and when none was asked. */
+  readonly requestedScope: string | null;
+}
+
+/**
+ * Resolve a caller-requested agent scope against the vault's
+ * `integrity.owner_scope_delivery` gate.
+ *
+ * The config load is the SAFE form: these surfaces must keep working on
+ * a vault that has never run `o2b brain init`, and an unreadable config
+ * is not a reason to change what a delivery surface returns.
+ */
+export function resolveOwnerScopeDelivery(
+  vault: string,
+  requested: string | undefined,
+): OwnerScopeDelivery {
+  const mode = loadIntegrityConfigSafe(vault).owner_scope_delivery;
+  if (mode === GATE_MODE.off) {
+    return Object.freeze({ mode, enforcedScope: null, requestedScope: null });
+  }
+  const requestedScope = normalizeAgentScope(requested);
+  return Object.freeze({
+    mode,
+    enforcedScope: mode === GATE_MODE.fail ? requestedScope : null,
+    requestedScope,
+  });
 }
 
 /** A preference file parsed through the preference schema. */
@@ -136,18 +232,26 @@ export function listPreferenceFiles(
 export function collectPreferences(
   dir: string,
   opts: PreferenceScanOptions = {},
-): ReadonlyArray<CollectedPreference> {
-  const out: CollectedPreference[] = [];
+): PreferenceCollection<CollectedPreference> {
+  const gate = ownerGate(opts);
+  const entries: CollectedPreference[] = [];
+  let hiddenByOwnerScope = 0;
   for (const file of listPreferenceFiles(dir, opts)) {
     let pref: BrainPreference;
     try {
+      // An unparseable file is already fail-closed: it is omitted under
+      // every scope, so its unknowable owner can never leak.
       pref = parsePreference(file.path);
     } catch {
       continue;
     }
-    out.push({ ...file, pref });
+    if (gate !== null && !isPreferenceVisible(pref, gate.scope)) {
+      hiddenByOwnerScope += 1;
+      if (gate.enforce) continue;
+    }
+    entries.push({ ...file, pref });
   }
-  return out;
+  return { entries, hiddenByOwnerScope };
 }
 
 /**
@@ -160,12 +264,71 @@ export function collectPreferences(
 export function collectPreferencePages(
   dir: string,
   opts: PreferenceScanOptions = {},
-): ReadonlyArray<CollectedPage> {
-  const out: CollectedPage[] = [];
+): PreferenceCollection<CollectedPage> {
+  const gate = ownerGate(opts);
+  const entries: CollectedPage[] = [];
+  let hiddenByOwnerScope = 0;
   for (const file of listPreferenceFiles(dir, opts)) {
     const [meta, body, notices] = parseFrontmatterWithNotices(file.path, { site: COLLECT_SITE });
     const unreadable = notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable);
-    out.push({ ...file, meta, body, unreadable });
+    if (gate !== null) {
+      // Fail CLOSED on an unreadable page, matching `applyAgentScope` on
+      // the search side. `parseFrontmatter` resolves an unreadable file
+      // to empty metadata, which reads as "ownerless" and would leak an
+      // owner-private body under an active scope; an unknowable owner is
+      // treated as somebody else's instead.
+      const visible = !unreadable && isOwnerVisible(pageOwner(meta), gate.scope);
+      if (!visible) {
+        hiddenByOwnerScope += 1;
+        if (gate.enforce) continue;
+      }
+    }
+    entries.push({ ...file, meta, body, unreadable });
   }
-  return out;
+  return { entries, hiddenByOwnerScope };
+}
+
+/**
+ * The one-line report a delivery surface emits when the ownership gate
+ * observed something, or `null` when there is nothing to say.
+ *
+ * Reported ONLY under `warn`, and deliberately so. `warn` withholds
+ * nothing, so naming a count reveals no more than the delivered content
+ * already does, and it is the whole point of the mode: an operator can
+ * watch what `fail` would remove before tightening the gate. Under
+ * `fail` the memories ARE withheld, and a count would tell one agent
+ * that another agent's private memories exist - the existence leak the
+ * search side avoids by making a hidden chunk indistinguishable from an
+ * absent one. So `fail` says nothing at all.
+ *
+ * A surface with no report channel simply does not call this; it is the
+ * mode's meaning that differs, never the delivered bytes.
+ */
+export function formatOwnerScopeWarning(
+  delivery: OwnerScopeDelivery,
+  hiddenByOwnerScope: number,
+): string | null {
+  if (delivery.mode !== GATE_MODE.warn) return null;
+  if (delivery.requestedScope === null || hiddenByOwnerScope <= 0) return null;
+  return (
+    `owner scope ${JSON.stringify(delivery.requestedScope)}: ${hiddenByOwnerScope} ` +
+    `memory item(s) owned by another agent were delivered; set ` +
+    `integrity.owner_scope_delivery to ${GATE_MODE.fail} to withhold them`
+  );
+}
+
+/**
+ * Reduce the gate verdict to what the walk needs: the scope to evaluate
+ * against, and whether a rejection actually withholds the entry.
+ * `null` means "do not evaluate at all", which is the `off` default and
+ * the no-scope-requested case.
+ */
+function ownerGate(
+  opts: PreferenceScanOptions,
+): { readonly scope: string; readonly enforce: boolean } | null {
+  const delivery = opts.ownerScope;
+  if (delivery === undefined || delivery === null) return null;
+  const scope = delivery.requestedScope;
+  if (scope === null) return null;
+  return { scope, enforce: delivery.enforcedScope !== null };
 }

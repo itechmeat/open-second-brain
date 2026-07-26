@@ -44,7 +44,7 @@ import {
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
 import { parseRetired } from "./preference.ts";
-import { collectPreferences } from "./preferences-collect.ts";
+import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
@@ -58,6 +58,13 @@ const FRONTMATTER_KIND = "brain-active";
 export interface RegenerateActiveOptions {
   /** Wall clock for `generated_at`. Defaults to `new Date()`. */
   readonly now?: Date;
+  /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Enforced only when `integrity.owner_scope_delivery` is `fail`;
+   * omitted, or under the default `off`, nothing is filtered and the
+   * output is byte-identical to a vault without the gate.
+   */
+  readonly agentScope?: string;
 }
 
 export interface RegenerateActiveResult {
@@ -100,7 +107,7 @@ export function regenerateActive(
   const now = opts.now ?? new Date();
   const path = brainActivePath(vault);
 
-  const preferences = readActivePreferences(vault);
+  const preferences = readActivePreferences(vault, opts.agentScope);
   const retiredRecent = readRecentlyRetired(vault, RECENTLY_RETIRED_COUNT);
 
   // Confirmed prefs sort by confidence then id. When provenance trust
@@ -193,14 +200,16 @@ export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptio
 
 // ----- Scan helpers --------------------------------------------------------
 
-function readActivePreferences(vault: string): BrainPreference[] {
+function readActivePreferences(vault: string, agentScope: string | undefined): BrainPreference[] {
   const dirs = brainDirs(vault);
   // The shared delivery-path walk (context-integrity-gates, Unit A) owns
   // the listing and the parse; a corrupted or status/folder-mismatched
   // file is omitted there, and `brain_doctor` is the surface that flags
   // it. See the module docblock for the rationale.
   const out: BrainPreference[] = [];
-  for (const { pref } of collectPreferences(dirs.preferences)) {
+  for (const { pref } of collectPreferences(dirs.preferences, {
+    ownerScope: resolveOwnerScopeDelivery(vault, agentScope),
+  }).entries) {
     // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
     // superseded-non-tip) preference remains on disk for audit but
     // never appears in the active-preferences digest.

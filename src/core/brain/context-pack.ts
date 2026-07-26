@@ -24,7 +24,12 @@ import {
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
-import { collectPreferencePages } from "./preferences-collect.ts";
+import {
+  collectPreferencePages,
+  formatOwnerScopeWarning,
+  resolveOwnerScopeDelivery,
+  type OwnerScopeDelivery,
+} from "./preferences-collect.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { preferChainTips } from "./inject-governor.ts";
 import { tensionWarningsForContextItems } from "./tensions.ts";
@@ -202,6 +207,13 @@ export interface ContextPackOptions {
    */
   readonly densityRanking?: boolean;
   /**
+   * Owner scope for delivery isolation (context-integrity-gates, Unit
+   * A). Enforced only when `integrity.owner_scope_delivery` is `fail`;
+   * omitted, or under the default `off`, no candidate is filtered and
+   * the pack is byte-identical to a vault without the gate.
+   */
+  readonly agentScope?: string;
+  /**
    * Belief lifecycle suite (A4, t_d9365884): keep superseded ancestors in
    * the pack instead of collapsing each supersedes-chain to its live tip.
    * The explicit historical flag - history is opt-in, never inferred from
@@ -254,9 +266,14 @@ function withOptionalLanes(
   };
 }
 
-function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[] {
+function collectCandidates(
+  vault: string,
+  delimitUntrusted: boolean,
+  ownerScope: OwnerScopeDelivery,
+): { readonly candidates: Candidate[]; readonly hiddenByOwnerScope: number } {
   const dirs = brainDirs(vault);
   const out: Candidate[] = [];
+  let hiddenByOwnerScope = 0;
   for (const dir of [dirs.preferences, dirs.retired]) {
     // Shared delivery-path walk (context-integrity-gates, Unit A). This
     // surface reads raw frontmatter rather than the preference schema:
@@ -270,7 +287,9 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
     // the "Why most readers keep the two-tuple form" section in
     // src/core/vault.ts. A pack returns injected content and carries no
     // per-candidate report, so it opens no channel of its own.
-    for (const { name, path: full, meta, body } of collectPreferencePages(dir)) {
+    const collected = collectPreferencePages(dir, { ownerScope });
+    hiddenByOwnerScope += collected.hiddenByOwnerScope;
+    for (const { name, path: full, meta, body } of collected.entries) {
       // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
       // superseded-non-tip) memory stays on disk for audit but is never
       // injected into a context pack.
@@ -327,7 +346,7 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
       });
     }
   }
-  return out;
+  return { candidates: out, hiddenByOwnerScope };
 }
 
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
@@ -356,9 +375,15 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // of replacements injects only the current belief; `includeHistorical`
   // keeps the whole chain (explicit flag, never inferred). A vault with no
   // supersession chains passes through byte-identically.
-  const candidates = preferChainTips(collectCandidates(vault, delimitUntrusted), {
+  const ownerScope = resolveOwnerScopeDelivery(vault, opts.agentScope);
+  const collected = collectCandidates(vault, delimitUntrusted, ownerScope);
+  const candidates = preferChainTips(collected.candidates, {
     historical: opts.includeHistorical === true,
   }).kept;
+  // Reported only under `warn`, where nothing was withheld - see
+  // `formatOwnerScopeWarning` for why `fail` stays silent.
+  const ownerScopeWarning = formatOwnerScopeWarning(ownerScope, collected.hiddenByOwnerScope);
+  const ownerScopeWarnings = ownerScopeWarning === null ? [] : [ownerScopeWarning];
 
   // Focus boost (within-tier only): computed once per candidate, 0 for
   // every candidate when no active focus is supplied, so the default
@@ -562,6 +587,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       ...withOptionalLanes(opts, finalItems),
     },
     startedAtMs,
+    ownerScopeWarnings,
   );
 }
 
@@ -570,6 +596,13 @@ function finalizeContextPackReport(
   opts: ContextPackOptions,
   report: ContextPackReport,
   startedAtMs: number,
+  /**
+   * Gate reports that are not per-item tension warnings, currently the
+   * owner-scope observation. Empty on every path that has no candidates
+   * to observe, so the `warnings` key stays absent and the pack stays
+   * byte-identical.
+   */
+  extraWarnings: ReadonlyArray<string> = [],
 ): ContextPackReport {
   let enriched = report;
   // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
@@ -580,8 +613,9 @@ function finalizeContextPackReport(
     vault,
     report.items.map((item) => item.id),
   );
-  if (tensionWarnings.length > 0) {
-    enriched = { ...enriched, warnings: tensionWarnings };
+  const warnings = [...extraWarnings, ...tensionWarnings];
+  if (warnings.length > 0) {
+    enriched = { ...enriched, warnings };
   }
   // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
   // with the option absent the thunk never runs, and a broken
