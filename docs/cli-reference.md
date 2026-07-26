@@ -398,6 +398,58 @@ additive `suppressed` object with per-detector counts; nothing is ever
 hidden silently. An invalid config value is an explicit error at load,
 and with no watermark set every output is byte-identical to v1.37.0.
 
+### Context integrity gates (since v1.39.0)
+
+```text
+o2b search query --agent-scope <name>    restrict results to pages that are ownerless or owned by <name>
+o2b search expand --agent-scope <name>   same rule on the chunk drill-down; a withheld chunk is indistinguishable from an absent one
+o2b brain sgrep --agent-scope <name>     same rule on the structured grep surface
+bun run link-ratchet                     measure the vault-wide broken-link count and record it as the new ceiling
+bun run link-ratchet:check               fail with exit 1 when the count has risen above the committed ceiling
+```
+
+Three gates live in an optional `integrity:` block in `_brain.yaml`:
+`owner_scope_delivery` (default `off`), `embedding_abi` (default
+`warn`), and `pack_validity_seconds` (default 900). The two gate keys
+take `off`, `warn`, or `fail`; an unrecognised mode or a non-positive
+validity is an explicit config error at load, never a clamped default.
+
+`owner_scope_delivery` governs the preference-backed delivery surfaces -
+the context pack, the pre-compress pack, the morning brief, the digest,
+and `active.md`. The search-backed surfaces above filter whenever a
+scope is passed and are not gated. Ownership fails closed: a page whose
+frontmatter cannot be read, and a page whose `owner:` is present but not
+a plain string, are withheld from a scoped caller rather than treated as
+shared. Retiring a memory keeps its owner.
+
+`embedding_abi` compares the recorded embedding model, dimension, and
+sqlite-vec version against the running ones on every read-mode open.
+`o2b search check` reports a drift with a copy-pasteable fix regardless
+of the gate, because it is a diagnostic the operator ran deliberately
+and refuses nothing; `o2b search status` reports it under `warn`; under
+`fail` the read-mode open raises a named error. A store predating the
+stamp is reported, never refused, and nothing is rebuilt automatically -
+the self-heal path rebuilds keyword data only and would leave stale
+vectors in place.
+
+The broken-link ratchet counts link rows the read-time resolution ladder
+cannot resolve and compares them against `link-ratchet.json` at the
+repository root. `--check` is the same code path with writing disabled,
+so detection is identical between the two forms; it exits 1 on a rise
+and names the write form as the fix. A subject that measures nothing -
+empty, missing, or fully excluded - is an explicit unmeasurable state,
+not a ceiling of zero, and the count is refused unless the index's last
+run was a forced full pass.
+
+`o2b brain doctor` gains an `uncertain` stream for conditions it
+attempted but cannot claim completed cleanly: frontmatter lines the
+parser dropped, lineage-ledger findings, stale lock files, and a missing
+vault identity marker. These render as `[UNSURE]` lines and appear in
+`--json` under `uncertain`; they do not affect the exit code. A vault
+with no `Brain/` layer is now reported as a named `brain-root-absent`
+warning instead of `clean`, which means `o2b brain doctor --strict`
+exits 2 on an un-initialized vault where it previously exited 0.
+
 ## Stability and trust (since v1.0.0)
 
 ```text

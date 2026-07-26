@@ -133,6 +133,9 @@ with backup/sync. It describes:
 - schema version + dream / retire / confidence / snapshot thresholds;
 - optional `notes.read_paths` (user-authored folders the agent may read);
 - optional `temporal:`, `link_graph:`, `guardrails:`, `discipline_report:` tuning blocks;
+- optional `integrity:` gates (`owner_scope_delivery`, `embedding_abi`,
+  `pack_validity_seconds`) that decide where a mismatch is reported and
+  where it is refused;
 - `vault.ignore_paths` (exclusion policy for every vault walker).
 
 It must not contain secrets.

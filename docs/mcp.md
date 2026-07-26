@@ -571,3 +571,39 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   baseline date; the verdict is computed from the surfaced findings, the
   key is absent whenever nothing is hidden, and with no watermark set
   the output is byte-identical to v1.37.0.
+- Since v1.39.0 eleven content-returning tools accept an optional
+  `agent_scope` argument (`brain_context_pack`, `brain_pre_compress_pack`,
+  `brain_anticipatory_context`, `brain_brief`, `brain_retrieval_plan`,
+  `brain_file_context`, `brain_search_expand`, `brain_deep_synthesis`,
+  `brain_search_by_source`, `brain_agent_query`, `second_brain_query`),
+  joining `brain_search` and `brain_query` which already had one. A page
+  that is ownerless matches every scope; an owner-tagged page matches
+  only its owner; a page whose ownership cannot be read is withheld. The
+  preference-backed surfaces additionally require
+  `integrity.owner_scope_delivery` to be `warn` or `fail`; the
+  search-backed ones filter whenever a scope is passed. Five `brain_brief`
+  views that cannot honour a scope (`daily`, `weekly`, `monthly`,
+  `operator`, `today`) reject an explicit `agent_scope` with
+  `INVALID_PARAMS` naming the view rather than accepting and ignoring it.
+  The tool count is unchanged at 108 and no output schema changed.
+- Since v1.39.0 `brain_context_receipts` accepts a third `summary`
+  operation, plus `since`, `until`, and `max_receipts`. The summary folds
+  existing receipt records for one session into counts, distinct items,
+  and per-item injection frequency and token cost. Receipt emission is
+  opt-in, so a window with no receipts returns `recorded: false` carrying
+  no counters at all - a consumer must branch before it can read a
+  number, so "nobody enabled receipts" can never be read as "retrieval
+  injected nothing". An uncomparable `since`/`until` value is rejected
+  with `INVALID_PARAMS` rather than filtered into an empty result.
+- Since v1.39.0 `brain_doctor` additively carries an `uncertain` array
+  for conditions the doctor attempted but cannot claim completed
+  cleanly - dropped frontmatter lines, lineage-ledger findings, stale
+  lock files, and a missing vault identity marker. The key is absent
+  when there is nothing to report. `brain_hygiene` likewise gains an
+  additive top-level `link_integrity` key, which reports
+  `measured: false` with a reason rather than a misleading zero when the
+  index's last run was not a forced full pass.
+- Since v1.39.0 `brain_anticipatory_context` reports a `cache_refusal`
+  reason when a cached pack is refused because the vault state it was
+  built from has moved or its validity window has expired, instead of
+  silently serving or silently rebuilding.
