@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 
 // Shared temp scratch for both vault and machine-config directories.
 // Tests that need to assert the "missing machine config" path can

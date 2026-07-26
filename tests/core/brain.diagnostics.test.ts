@@ -22,7 +22,7 @@ import {
   resolveSignal,
 } from "../../src/core/brain/diagnostics.ts";
 import { brainConfigPath, brainDirs, dreamWorkrunPath } from "../../src/core/brain/paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { readLogDay, listLogDates } from "../../src/core/brain/log-jsonl.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";

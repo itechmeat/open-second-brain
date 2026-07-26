@@ -12,7 +12,7 @@ import { join } from "node:path";
 
 import { runDoctor } from "../../src/core/brain/doctor.ts";
 import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 

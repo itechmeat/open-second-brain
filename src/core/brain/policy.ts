@@ -308,6 +308,24 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
 const INTEGRITY_GATE_KEYS = ["owner_scope_delivery", "embedding_abi"] as const;
 
 /**
+ * Sub-key vocabularies for the blocks whose validator branch does not
+ * derive them from a default table. Named once so the parser, the
+ * forward-compat unknown-key warning and the configuration-template
+ * ratchet all read the same list.
+ */
+const DISCIPLINE_REPORT_KEYS = ["enabled", "timezone", "watched_paths", "known_agents"] as const;
+const HYGIENE_KEYS = ["resolver_cmd", "dedup_threshold"] as const;
+const ANTICIPATORY_KEYS = ["ttl_seconds", "max_tokens"] as const;
+const RECALL_KEYS = ["degradation"] as const;
+
+/**
+ * Optional `retire:` sub-key with no default. Declared here because
+ * `mergeBlock` derives a block's vocabulary from its default table, and
+ * a key whose default is "absent" has no entry there.
+ */
+const RETIRE_OPTIONAL_KEYS = ["confirmed_evidence_min_threshold"] as const;
+
+/**
  * How long a context pack stays servable after it was built, when
  * `_brain.yaml` omits `integrity.pack_validity_seconds`.
  *
@@ -588,56 +606,11 @@ export const loadSnapshotRetentionSafe = makeSafeLoader(
   DEFAULT_BRAIN_CONFIG.snapshots.retention_count,
 );
 
-/**
- * Serialised default `_brain.yaml`. Hand-formatted to match the design
- * doc verbatim — `brain init` writes this byte string so the file the
- * user sees is the file the docs describe.
- */
-export const DEFAULT_BRAIN_CONFIG_YAML = `schema_version: 1
-
-# Optional. When set, dream runs from a different agent emit a stderr
-# warning and a non_primary_agent payload row. The vault should have a
-# single dream-running runtime even when it is shared across devices
-# via Syncthing.
-primary_agent: null
-
-dream:
-  candidate_threshold: 3
-  unconfirmed_window_days: 14
-  contradiction_window_days: 14
-
-retire:
-  stale_evidence_days: 90
-
-confidence:
-  # low_max_applied gates the "low-evidence-confirmed" doctor warning
-  # and the auto-promotion of unconfirmed preferences to confirmed.
-  low_max_applied: 2
-  # Band thresholds on the numeric confidence_value (Wilson lower
-  # bound times freshness decay). value >= high_min ⇒ high;
-  # value >= medium_min ⇒ medium; else low.
-  medium_min: 0.40
-  high_min: 0.75
-
-snapshots:
-  retention_count: 10
-
-# Vault-wide exclusion policy. Single source of truth for every
-# vault walker (search indexer, scan-inline, future scanners).
-# Entries without a slash match a directory name anywhere in the
-# tree; entries with a slash match a vault-relative POSIX path
-# exactly. Remove the block to fall back to the built-in defaults;
-# set ignore_paths to an empty list to disable exclusions entirely.
-vault:
-  ignore_paths:
-    - .git
-    - node_modules
-    - .open-second-brain
-    - .obsidian
-    - .trash
-    - .stversions
-    - Brain/.snapshots
-`;
+// The serialised default `_brain.yaml` (`DEFAULT_BRAIN_CONFIG_YAML`) is
+// GENERATED from the default tables above and lives in
+// `config-template.ts`. It cannot live here: the generator reads these
+// tables, so importing it back would make `policy.ts` and
+// `config-template.ts` mutually dependent at module-evaluation time.
 
 const YAML_STRING_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
@@ -780,6 +753,24 @@ export function validateBrainConfig(parsed: unknown, source: string | null = nul
 export interface ValidateResult {
   readonly config: BrainConfig;
   readonly warnings: ReadonlyArray<BrainConfigLoadWarning>;
+  /**
+   * Every key this validation run branched on, top-level and per-block.
+   * Recorded by construction (see {@link KeyIndexCollector}) rather than
+   * from a hand-maintained list, so it can never disagree with what the
+   * validator actually understands. Consumed by the configuration-template
+   * ratchet.
+   */
+  readonly knownKeys: BrainConfigKeyIndex;
+}
+
+/**
+ * The set of configuration keys the validator understands, as observed
+ * during one validation run.
+ */
+export interface BrainConfigKeyIndex {
+  readonly topLevel: ReadonlySet<string>;
+  /** Block key → sub-keys that block declares. Scalar keys are absent. */
+  readonly subKeys: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export function validateBrainConfigDetailed(
@@ -791,12 +782,14 @@ export function validateBrainConfigDetailed(
   }
   const obj = parsed as Record<string, unknown>;
   const warnings: BrainConfigLoadWarning[] = [];
-  // Populated by every `hasBlock`/`mergeBlock` call below; drives the
-  // forward-compat "unknown top-level field" check at the end of this
-  // function. `schema_version` is seeded directly since its presence is
-  // checked by an inverted `if (!(... in obj))` immediately below, not
-  // through either helper.
-  const knownBlockKeys = new Set<string>(["schema_version"]);
+  // Populated by every `hasBlock`/`mergeBlock`/`warnUnknownKeys` call
+  // below; drives the forward-compat "unknown top-level field" check at
+  // the end of this function and the template ratchet.
+  // `schema_version` is seeded directly since its presence is checked by
+  // an inverted `if (!(... in obj))` immediately below, not through
+  // either helper.
+  const knownBlockKeys = new KeyIndexCollector();
+  knownBlockKeys.addTop("schema_version");
 
   // schema_version is mandatory and must be in the supported set.
   if (!("schema_version" in obj)) {
@@ -885,8 +878,19 @@ export function validateBrainConfigDetailed(
     DEFAULT_BRAIN_CONFIG.retire as unknown as Readonly<Record<string, number>>,
     source,
     knownBlockKeys,
+    RETIRE_OPTIONAL_KEYS,
   );
   requirePositiveInteger("retire.stale_evidence_days", retire.stale_evidence_days, source);
+  // Optional destructive-from-confirmed gate (v0.12.0). Validated here
+  // and carried into the typed config below; an out-of-range value is a
+  // hard error rather than a silently ignored knob.
+  if (retire.confirmed_evidence_min_threshold !== undefined) {
+    requirePositiveInteger(
+      "retire.confirmed_evidence_min_threshold",
+      retire.confirmed_evidence_min_threshold,
+      source,
+    );
+  }
 
   const confidence = mergeBlock(
     "confidence",
@@ -989,7 +993,7 @@ export function validateBrainConfigDetailed(
       vault = { ignore_paths: Object.freeze(validated) };
     }
     // Forward-compat: unknown sub-keys under `vault:` → warning.
-    warnUnknownKeys(rawMap, ["ignore_paths"], "vault", source, warnings);
+    warnUnknownKeys(rawMap, ["ignore_paths"], "vault", source, warnings, knownBlockKeys);
   }
 
   // Optional `active.{most_applied_window_days, most_applied_limit}`
@@ -1065,6 +1069,7 @@ export function validateBrainConfigDetailed(
       "active",
       source,
       warnings,
+      knownBlockKeys,
     );
     active = {
       ...(mostApplied !== undefined ? { most_applied: mostApplied } : {}),
@@ -1106,6 +1111,7 @@ export function validateBrainConfigDetailed(
       "lessons",
       source,
       warnings,
+      knownBlockKeys,
     );
     lessons = {
       ...(halfLife !== undefined ? { half_life_days: halfLife } : {}),
@@ -1127,6 +1133,14 @@ export function validateBrainConfigDetailed(
       });
     } else {
       const drObj = dr as Record<string, unknown>;
+      warnUnknownKeys(
+        drObj,
+        DISCIPLINE_REPORT_KEYS,
+        "discipline_report",
+        source,
+        warnings,
+        knownBlockKeys,
+      );
       let ok = true;
 
       // enabled: boolean
@@ -1306,6 +1320,7 @@ export function validateBrainConfigDetailed(
       "guardrails",
       source,
       warnings,
+      knownBlockKeys,
     );
 
     if (Object.keys(partial).length > 0) {
@@ -1334,7 +1349,14 @@ export function validateBrainConfigDetailed(
       requirePositiveInteger("rollup.identity_threshold", rawMap["identity_threshold"], source);
       partial.identity_threshold = rawMap["identity_threshold"] as number;
     }
-    warnUnknownKeys(rawMap, ["fact_threshold", "identity_threshold"], "rollup", source, warnings);
+    warnUnknownKeys(
+      rawMap,
+      ["fact_threshold", "identity_threshold"],
+      "rollup",
+      source,
+      warnings,
+      knownBlockKeys,
+    );
     rollup = partial;
   }
 
@@ -1404,6 +1426,7 @@ export function validateBrainConfigDetailed(
       "link_graph",
       source,
       warnings,
+      knownBlockKeys,
     );
     linkGraph = Object.keys(partialLg).length > 0 ? (partialLg as BrainLinkGraphConfig) : {};
   }
@@ -1469,6 +1492,7 @@ export function validateBrainConfigDetailed(
       "temporal",
       source,
       warnings,
+      knownBlockKeys,
     );
     temporal = Object.keys(partialTp).length > 0 ? (partialTp as BrainTemporalConfig) : {};
   }
@@ -1533,6 +1557,7 @@ export function validateBrainConfigDetailed(
       "health",
       source,
       warnings,
+      knownBlockKeys,
     );
     health = Object.keys(partialH).length > 0 ? (partialH as BrainHealthConfig) : {};
   }
@@ -1579,6 +1604,7 @@ export function validateBrainConfigDetailed(
       "integrity",
       source,
       warnings,
+      knownBlockKeys,
     );
     integrity = Object.keys(partialIt).length > 0 ? (partialIt as BrainIntegrityConfig) : {};
   }
@@ -1642,7 +1668,7 @@ export function validateBrainConfigDetailed(
       partialNotes["read_paths"] = cleaned;
     }
     // Forward-compat: unknown sub-keys under `notes:` → warning.
-    warnUnknownKeys(notesObj, ["read_paths"], "notes", source, warnings);
+    warnUnknownKeys(notesObj, ["read_paths"], "notes", source, warnings, knownBlockKeys);
     notes = Object.keys(partialNotes).length > 0 ? (partialNotes as BrainNotesConfig) : {};
   }
 
@@ -1684,7 +1710,7 @@ export function validateBrainConfigDetailed(
       });
       partial[key] = cleaned;
     }
-    warnUnknownKeys(sessionsObj, LIST_KEYS, "sessions", source, warnings);
+    warnUnknownKeys(sessionsObj, LIST_KEYS, "sessions", source, warnings, knownBlockKeys);
     sessions = partial as BrainSessionsConfig;
   }
 
@@ -1760,6 +1786,7 @@ export function validateBrainConfigDetailed(
       "schema",
       source,
       warnings,
+      knownBlockKeys,
     );
     try {
       const declarations = validateSchemaDeclarations(partialSchema);
@@ -1810,6 +1837,7 @@ export function validateBrainConfigDetailed(
       }
       partial.dedup_threshold = threshold;
     }
+    warnUnknownKeys(rawMap, HYGIENE_KEYS, "hygiene", source, warnings, knownBlockKeys);
     hygiene = Object.freeze(partial);
   }
 
@@ -1827,6 +1855,7 @@ export function validateBrainConfigDetailed(
       requirePositiveInteger("anticipatory.max_tokens", rawMap["max_tokens"], source);
       partial.max_tokens = rawMap["max_tokens"] as number;
     }
+    warnUnknownKeys(rawMap, ANTICIPATORY_KEYS, "anticipatory", source, warnings, knownBlockKeys);
     anticipatory = Object.freeze(partial);
   }
 
@@ -1847,6 +1876,7 @@ export function validateBrainConfigDetailed(
       }
       partial.degradation = mode;
     }
+    warnUnknownKeys(rawMap, RECALL_KEYS, "recall", source, warnings, knownBlockKeys);
     recall = Object.freeze(partial);
   }
 
@@ -1894,7 +1924,7 @@ export function validateBrainConfigDetailed(
       partial.default_scope = trimmed;
     }
     // Forward-compat: unknown sub-keys under `feedback:` → warning.
-    warnUnknownKeys(rawMap, ["default_scope"], "feedback", source, warnings);
+    warnUnknownKeys(rawMap, ["default_scope"], "feedback", source, warnings, knownBlockKeys);
     feedback = Object.freeze(partial);
   }
 
@@ -1905,7 +1935,7 @@ export function validateBrainConfigDetailed(
   // its own message format (distinct from `warnUnknownKeys`'s
   // `block.key: ...` shape), pinned by an existing test.
   for (const key of Object.keys(obj)) {
-    if (!knownBlockKeys.has(key)) {
+    if (!knownBlockKeys.topLevel.has(key)) {
       warnings.push({
         path: source ?? "<config>",
         message: `unknown top-level field '${key}' ignored (forward-compat)`,
@@ -1927,6 +1957,13 @@ export function validateBrainConfigDetailed(
     },
     retire: {
       stale_evidence_days: retire.stale_evidence_days as number,
+      // Absent stays absent: `undefined` is the documented "gate off"
+      // state the dream pass branches on, so spreading the key in
+      // unconditionally would change `retire` from omitting it to
+      // carrying an explicit undefined.
+      ...(retire.confirmed_evidence_min_threshold !== undefined
+        ? { confirmed_evidence_min_threshold: retire.confirmed_evidence_min_threshold as number }
+        : {}),
     },
     confidence: {
       low_max_applied: confidence.low_max_applied as number,
@@ -1955,7 +1992,7 @@ export function validateBrainConfigDetailed(
     ...(feedback !== undefined ? { feedback } : {}),
   };
 
-  return { config, warnings };
+  return { config, warnings, knownKeys: knownBlockKeys };
 }
 
 // ----- Helpers --------------------------------------------------------------
@@ -1999,8 +2036,10 @@ function warnUnknownKeys(
   blockName: string,
   source: string | null,
   warnings: BrainConfigLoadWarning[],
+  knownBlockKeys: KeyIndexCollector,
 ): void {
   const knownSet = known instanceof Set ? known : new Set(known);
+  knownBlockKeys.addSub(blockName, knownSet);
   for (const key of Object.keys(map)) {
     if (!knownSet.has(key)) {
       warnings.push({
@@ -2016,9 +2055,11 @@ function mergeBlock(
   raw: unknown,
   fallback: Readonly<Record<string, number>>,
   source: string | null,
-  knownBlockKeys: Set<string>,
+  knownBlockKeys: KeyIndexCollector,
+  optionalKeys: ReadonlyArray<string> = [],
 ): Record<string, unknown> {
-  knownBlockKeys.add(blockKey);
+  knownBlockKeys.addTop(blockKey);
+  knownBlockKeys.addSub(blockKey, [...Object.keys(fallback), ...optionalKeys]);
   if (raw === undefined) {
     return { ...fallback };
   }
@@ -2042,9 +2083,68 @@ function mergeBlock(
  * warning). A key that is never checked can never be "known", by
  * construction - there is no separate list to forget to update.
  */
-function hasBlock(obj: Record<string, unknown>, key: string, knownBlockKeys: Set<string>): boolean {
-  knownBlockKeys.add(key);
+function hasBlock(
+  obj: Record<string, unknown>,
+  key: string,
+  knownBlockKeys: KeyIndexCollector,
+): boolean {
+  knownBlockKeys.addTop(key);
   return key in obj;
+}
+
+/**
+ * Mutable accumulator behind {@link BrainConfigKeyIndex}. Every helper
+ * that branches on a key registers it here, so the index is a
+ * by-construction record of what the validator understands rather than a
+ * second list that can drift from the first.
+ */
+class KeyIndexCollector implements BrainConfigKeyIndex {
+  readonly topLevel = new Set<string>();
+  readonly subKeys = new Map<string, ReadonlySet<string>>();
+
+  addTop(key: string): void {
+    this.topLevel.add(key);
+  }
+
+  addSub(block: string, keys: Iterable<string>): void {
+    const merged = new Set(this.subKeys.get(block) ?? []);
+    for (const key of keys) merged.add(key);
+    this.subKeys.set(block, merged);
+  }
+}
+
+/**
+ * Probe source label used by {@link brainConfigKnownKeys}. Never reaches
+ * a user-visible surface: the probe discards its warnings.
+ */
+const KEY_INDEX_PROBE_SOURCE = "<brain-config-key-index>";
+
+/**
+ * Every configuration key {@link validateBrainConfigDetailed} branches
+ * on, enumerated by running the validator rather than by reading a list.
+ *
+ * Two passes are needed because a block's sub-key vocabulary is only
+ * declared inside the branch that parses the block: pass one discovers
+ * the top-level keys against a minimal config, pass two re-runs with
+ * every discovered block present but empty so each block's sub-key
+ * registration executes. Scalar top-level keys keep their default value
+ * in pass two - handing `primary_agent` an empty map would (correctly)
+ * be rejected.
+ */
+export function brainConfigKnownKeys(): BrainConfigKeyIndex {
+  const minimal: Record<string, unknown> = {
+    schema_version: BRAIN_CONFIG_SUPPORTED_VERSIONS[0],
+  };
+  const firstPass = validateBrainConfigDetailed(minimal, KEY_INDEX_PROBE_SOURCE).knownKeys;
+  const defaults = DEFAULT_BRAIN_CONFIG as unknown as Record<string, unknown>;
+  const probe: Record<string, unknown> = { ...minimal };
+  for (const key of firstPass.topLevel) {
+    if (key in minimal) continue;
+    const fallback = defaults[key];
+    const isScalar = key in defaults && (fallback === null || typeof fallback !== "object");
+    probe[key] = isScalar ? fallback : {};
+  }
+  return validateBrainConfigDetailed(probe, KEY_INDEX_PROBE_SOURCE).knownKeys;
 }
 
 function requirePositiveInteger(field: string, value: unknown, source: string | null): void {

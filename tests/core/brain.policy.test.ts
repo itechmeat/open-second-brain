@@ -8,13 +8,13 @@ import {
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BrainConfigError,
   DEFAULT_BRAIN_CONFIG,
-  DEFAULT_BRAIN_CONFIG_YAML,
   formatPrimaryAgentYamlValue,
   loadBrainConfig,
   loadBrainConfigDetailed,
   validateBrainConfig,
   validateBrainConfigDetailed,
 } from "../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { resolveSchemaVocabulary } from "../../src/core/brain/schema-vocab.ts";
 
 let tmp: string;
@@ -92,6 +92,35 @@ describe("validateBrainConfig — happy path", () => {
     expect(config.dream.candidate_threshold).toBe(5);
     // Untouched fields fall back to defaults.
     expect(config.dream.unconfirmed_window_days).toBe(14);
+  });
+});
+
+describe("validateBrainConfig — retire block", () => {
+  // Regression: `confirmed_evidence_min_threshold` reached `mergeBlock`
+  // but was dropped when the typed config was assembled, so the
+  // destructive-from-confirmed gate the dream pass reads could never be
+  // switched on from `_brain.yaml` — and no warning said so.
+  test("carries confirmed_evidence_min_threshold through to the typed config", () => {
+    const config = validateBrainConfig(
+      parseBrainYaml("schema_version: 1\nretire:\n  confirmed_evidence_min_threshold: 5\n"),
+      "<test>",
+    );
+    expect(config.retire.confirmed_evidence_min_threshold).toBe(5);
+    expect(config.retire.stale_evidence_days).toBe(90);
+  });
+
+  test("omits the key entirely when the operator did not set it", () => {
+    const config = validateBrainConfig(parseBrainYaml("schema_version: 1\n"), "<test>");
+    expect("confirmed_evidence_min_threshold" in config.retire).toBe(false);
+  });
+
+  test("rejects a non-positive threshold by name instead of ignoring it", () => {
+    expect(() =>
+      validateBrainConfig(
+        parseBrainYaml("schema_version: 1\nretire:\n  confirmed_evidence_min_threshold: 0\n"),
+        "<test>",
+      ),
+    ).toThrow(/retire\.confirmed_evidence_min_threshold/);
   });
 });
 

@@ -35,7 +35,8 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML, formatPrimaryAgentYamlValue } from "./policy.ts";
+import { formatPrimaryAgentYamlValue } from "./policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;

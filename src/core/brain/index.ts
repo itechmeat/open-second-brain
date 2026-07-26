@@ -107,9 +107,9 @@ export type {
 export type { BrainDirs, AllocateSlugOptions, AllocateSlugResult } from "./paths.ts";
 
 // ----- Configuration --------------------------------------------------------
+export { DEFAULT_BRAIN_CONFIG_YAML, renderBrainConfigTemplate } from "./config-template.ts";
 export {
   DEFAULT_BRAIN_CONFIG,
-  DEFAULT_BRAIN_CONFIG_YAML,
   BRAIN_CONFIG_SUPPORTED_VERSIONS,
   BrainConfigError,
   loadBrainConfig,
