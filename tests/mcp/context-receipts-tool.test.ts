@@ -173,6 +173,60 @@ describe("brain_context_receipts tool", () => {
     expect(typeof summary["note"]).toBe("string");
   });
 
+  test("a malformed window bound is INVALID_PARAMS, never an empty window", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    emitContextReceipt(vault, {
+      options: {
+        host: "unit",
+        trigger: "context_pack",
+        createdAt: "2026-06-01T10:00:00Z",
+        sessionId: "s1",
+      },
+      items: [{ id: "pref-a", tokens: 1 }],
+      finalText: "x",
+    });
+    const summarize = async (
+      args: Record<string, unknown>,
+    ): Promise<{ error?: { code: number; message: string } }> =>
+      (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 12,
+        method: "tools/call",
+        params: { name: "brain_context_receipts", arguments: { operation: "summary", ...args } },
+      })) as { error?: { code: number; message: string } };
+
+    // Before this, "yesterday" sorted after every stored timestamp and
+    // the tool answered `recorded: false, note: "no receipts recorded
+    // for this filter"` - a finding about the vault, for a typo.
+    const [word, offset] = await Promise.all([
+      summarize({ since: "yesterday" }),
+      summarize({ until: "2026-06-01T10:00:00+03:00" }),
+    ]);
+    expect(word.error?.message).toContain("canonical UTC");
+    expect(offset.error?.message).toContain("canonical UTC");
+  });
+
+  test("summary counts the receipts that carried nothing", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    emitContextReceipt(vault, {
+      options: {
+        host: "hook",
+        trigger: "session_inject",
+        createdAt: "2026-06-01T10:00:00Z",
+        sessionId: "s2",
+      },
+      items: [],
+      finalText: "degraded-to-cache injection",
+    });
+    const summary = await callReceipts(server, { operation: "summary", session_id: "s2" });
+    expect(summary["receipt_count"]).toBe(1);
+    expect(summary["item_total"]).toBe(0);
+    expect(summary["empty_receipts"]).toBe(1);
+    expect(summary["malformed_receipts"]).toBe(0);
+  });
+
   test("an unknown operation names every branch", async () => {
     const server = new MCPServer({ vault, configPath });
     await initialize(server);

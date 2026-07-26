@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 
-import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
+import {
+  appendContinuityRecord,
+  isCanonicalUtcTimestamp,
+  listContinuityRecords,
+} from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 
@@ -172,11 +176,23 @@ export function listContextReceipts(
 // ----- session-scoped fold (context-integrity-gates, Unit I) --------------
 
 /**
- * Default ceiling on how many receipts one fold reads.
+ * Default ceiling on how many receipts one fold AGGREGATES.
  *
- * `listContinuityRecords` scans every month shard, so an unbounded fold
- * grows with the whole log history. The bound follows the precedent in
- * `summarizeTokenImpact`, with one addition: exceeding it is REPORTED
+ * It is a fold bound, not a scan bound, and the docblock said otherwise
+ * for exactly as long as nobody measured it. Every receipt matching the
+ * window is read into memory first and the bound is applied afterwards,
+ * so the read cost is set by `since` / `until` (which do skip whole
+ * month shards) and by nothing else. Two consequences worth stating:
+ * lowering `maxReceipts` makes the REPORT smaller, never the read; and
+ * the observed-use join the MCP surface performs alongside this fold
+ * walks the same window again through `observedReuseRates`.
+ *
+ * A real scan bound was considered and rejected. It would mean reading
+ * shards newest-first with an early exit, which changes
+ * `listContinuityRecords` for every caller and changes what `truncated`
+ * asserts - from "more receipts matched than were folded" to "the read
+ * stopped early", which cannot report a total at all. The bound that
+ * exists is honest about what it does: exceeding it is REPORTED
  * (`truncated`) rather than silently returning a prefix as if it were
  * the complete answer.
  */
@@ -190,8 +206,39 @@ export interface ContextReceiptFoldFilter {
   readonly since?: string;
   /** Inclusive upper bound on `createdAt` (canonical UTC ISO-8601). */
   readonly until?: string;
-  /** Scan bound; defaults to {@link CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS}. */
+  /** Fold bound; defaults to {@link CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS}. */
   readonly maxReceipts?: number;
+}
+
+/**
+ * A window bound was not a canonical UTC timestamp.
+ *
+ * `since` and `until` are compared LEXICALLY against stored `createdAt`
+ * strings, which is correct for the canonical form and meaningless for
+ * anything else: `"yesterday"` sorts after every `2026-…` timestamp, so
+ * it filters the window down to nothing and the fold reports "no
+ * receipts recorded for this filter". Reporting "nothing happened" for
+ * malformed input is precisely the failure this wave exists to remove,
+ * so a bound that cannot mean what it says is refused instead.
+ */
+export class ContextReceiptWindowError extends Error {
+  /** `since` or `until`. */
+  readonly field: string;
+
+  constructor(field: string, value: string) {
+    super(
+      `context receipt window: ${field} must be a canonical UTC ISO-8601 timestamp ` +
+        `(YYYY-MM-DDTHH:MM:SS[.sss]Z with a real calendar date), got ${JSON.stringify(value)}`,
+    );
+    this.name = "ContextReceiptWindowError";
+    this.field = field;
+  }
+}
+
+/** Throw {@link ContextReceiptWindowError} unless `value` can be compared. */
+export function assertContextReceiptWindowBound(field: string, value: string | undefined): void {
+  if (value === undefined) return;
+  if (!isCanonicalUtcTimestamp(value)) throw new ContextReceiptWindowError(field, value);
 }
 
 /** One artifact's injection history across the folded receipts. */
@@ -238,7 +285,24 @@ export interface ContextReceiptFoldResult {
    * remaining receipts only.
    */
   readonly withheld_receipts: number;
-  /** True when the scan bound cut the input; the figures are a prefix. */
+  /**
+   * Folded receipts that recorded an EMPTY item array.
+   *
+   * A real and expected shape, not a defect: the SessionStart meter
+   * writes `items: []` whenever the injection loader degraded to its
+   * last-good cache, because the sub-bodies it would have attributed
+   * were never emitted. They inflate `receipt_count` while contributing
+   * nothing to the item figures, so they are counted here rather than
+   * disappearing into the difference between two other numbers.
+   */
+  readonly empty_receipts: number;
+  /**
+   * Folded receipts whose `items` field is absent or not an array. A
+   * receipt that cannot be unfolded at all - distinct from one that
+   * deliberately carried nothing.
+   */
+  readonly malformed_receipts: number;
+  /** True when the fold bound cut the input; the figures are a prefix. */
   readonly truncated: boolean;
   readonly max_receipts: number;
 }
@@ -259,6 +323,8 @@ export function summarizeContextReceiptSession(
   vault: string,
   filter: ContextReceiptFoldFilter = {},
 ): ContextReceiptFold {
+  assertContextReceiptWindowBound("since", filter.since);
+  assertContextReceiptWindowBound("until", filter.until);
   const maxReceipts = Math.max(
     1,
     Math.floor(filter.maxReceipts ?? CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS),
@@ -285,6 +351,8 @@ export function summarizeContextReceiptSession(
   const usage = new Map<string, { path?: string; injections: number; tokens: number }>();
   let itemTotal = 0;
   let withheld = 0;
+  let emptyReceipts = 0;
+  let malformedReceipts = 0;
 
   for (const record of folded) {
     if (record.private || record.redacted) {
@@ -292,7 +360,11 @@ export function summarizeContextReceiptSession(
       continue;
     }
     const items = record.payload["items"];
-    if (!Array.isArray(items)) continue;
+    if (!Array.isArray(items)) {
+      malformedReceipts += 1;
+      continue;
+    }
+    if (items.length === 0) emptyReceipts += 1;
     for (const raw of items) {
       if (raw === null || typeof raw !== "object") continue;
       const item = raw as Record<string, unknown>;
@@ -337,6 +409,8 @@ export function summarizeContextReceiptSession(
     distinct_items: usage.size,
     items: Object.freeze(items),
     withheld_receipts: withheld,
+    empty_receipts: emptyReceipts,
+    malformed_receipts: malformedReceipts,
     truncated: matched.length > folded.length,
     max_receipts: maxReceipts,
   });

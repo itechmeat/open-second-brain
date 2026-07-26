@@ -24,6 +24,7 @@ import {
 import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { buildPreCompressPack } from "../../core/brain/pre-compress-pack.ts";
 import {
+  assertContextReceiptWindowBound,
   CONTEXT_RECEIPT_TRIGGERS,
   getContextReceipt,
   isContextReceiptTrigger,
@@ -308,6 +309,24 @@ async function summarizeReceipts(
   const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
   const since = optionalStringArg("brain_context_receipts", args, "since");
   const until = optionalStringArg("brain_context_receipts", args, "until");
+  // Both bounds are compared LEXICALLY against stored `createdAt`
+  // strings. An uncomparable value (`"yesterday"`, a local-time stamp,
+  // `2026-13-01`) silently filters the window to empty and the fold
+  // reports "no receipts recorded for this filter" - "nothing happened"
+  // for what is really malformed input. Refuse it instead.
+  for (const [field, value] of [
+    ["since", since],
+    ["until", until],
+  ] as const) {
+    try {
+      assertContextReceiptWindowBound(field, value);
+    } catch (err) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_context_receipts: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
   const maxReceipts = coercePositiveInteger(
     "brain_context_receipts",
     "max_receipts",
@@ -351,6 +370,13 @@ async function summarizeReceipts(
     item_total: fold.item_total,
     distinct_items: fold.distinct_items,
     withheld_receipts: fold.withheld_receipts,
+    // Receipts that inflate `receipt_count` and contribute no items: an
+    // injection that degraded to cache records `items: []` by design,
+    // and a receipt with no item array at all cannot be unfolded. Both
+    // used to vanish into the gap between `receipt_count` and
+    // `item_total`.
+    empty_receipts: fold.empty_receipts,
+    malformed_receipts: fold.malformed_receipts,
     truncated: fold.truncated,
     max_receipts: fold.max_receipts,
     items: items.map((item) => {
@@ -768,17 +794,19 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         since: {
           type: "string",
-          description: "Summary only: inclusive lower bound on receipt createdAt (UTC ISO-8601).",
+          description:
+            "Summary only: inclusive lower bound on receipt createdAt. Canonical UTC only (YYYY-MM-DDTHH:MM:SS[.sss]Z); anything else is rejected, not filtered to empty.",
         },
         until: {
           type: "string",
-          description: "Summary only: inclusive upper bound on receipt createdAt (UTC ISO-8601).",
+          description:
+            "Summary only: inclusive upper bound on receipt createdAt. Canonical UTC only (YYYY-MM-DDTHH:MM:SS[.sss]Z); anything else is rejected, not filtered to empty.",
         },
         max_receipts: {
           type: "integer",
           minimum: 1,
           description:
-            "Summary only: scan bound on receipts folded. Exceeding it sets `truncated`.",
+            "Summary only: how many matching receipts are AGGREGATED (a fold bound, not a read bound - narrow the read with since/until). Exceeding it sets `truncated`.",
         },
         limit: {
           type: "integer",
