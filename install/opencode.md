@@ -71,6 +71,21 @@ Reports drift when the MCP entries differ from canonical or the
 installed plugin copy differs from the bundled version (for example
 after an Open Second Brain upgrade - re-run apply to refresh it).
 
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target opencode -->
+
+```text
+o2b install --check
+--------------------
+  opencode      ok                $HOME/.config/opencode/opencode.json: both OSB keys present
+```
+
+`$HOME` stands in for your home directory. This block is asserted
+against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift
+from the code.
+
 ## Uninstall
 
 ```bash

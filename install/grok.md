@@ -82,6 +82,20 @@ Reports drift when the `config.toml` MCP tables or the hooks file differ from
 canonical (for example after an Open Second Brain upgrade, or if `bun`/the repo
 moved - re-run apply to refresh the absolute paths).
 
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target grok -->
+
+```text
+o2b install --check
+--------------------
+  grok          ok
+```
+
+This block is asserted against the adapter's real `verify()` output
+by `tests/docs/install-verify-conformance.test.ts`, so it cannot
+drift from the code.
+
 ## Uninstall
 
 ```bash

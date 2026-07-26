@@ -18,6 +18,21 @@ Restart kiro to load the new servers.
 o2b install --check --target kiro
 ```
 
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target kiro -->
+
+```text
+o2b install --check
+--------------------
+  kiro          ok                $HOME/.kiro/settings.json: both OSB keys present
+```
+
+`$HOME` stands in for your home directory. This block is asserted
+against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift
+from the code.
+
 ## Uninstall
 
 ```bash

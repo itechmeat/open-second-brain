@@ -13,6 +13,27 @@ If you cannot install Bun (locked-down environment, unsupported
 architecture), the plugin will not function on that host. No Python
 fallback exists.
 
+## Supported platforms
+
+Linux, macOS and the other POSIX hosts Bun runs on. The default
+configuration path is `$HOME/.config/open-second-brain/config.yaml`,
+a POSIX convention; **Windows is not supported** and the resolver
+refuses by name there (`UnsupportedPlatformError`) rather than
+returning a path that no part of this build would look in. WSL is a
+Linux host and works normally.
+
+To run on an unsupported platform anyway, name the file yourself:
+
+```bash
+export OPEN_SECOND_BRAIN_CONFIG=/explicit/path/to/config.yaml
+# or point the whole configuration root somewhere:
+export XDG_CONFIG_HOME=/explicit/config/root
+```
+
+Both are honoured before the platform check, so nothing else in the
+CLI changes. Everything beyond the config path — path handling, the
+lifecycle hooks, the install adapters — is untested on Windows.
+
 ## Identity (agent name + timezone)
 
 `o2b init` persists two values into `~/.config/open-second-brain/config.yaml`:

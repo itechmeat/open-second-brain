@@ -31,18 +31,82 @@ const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
 /**
- * Resolve the location of the plugin config file.
+ * The one platform whose per-user configuration root is NOT
+ * `$HOME/.config`. Named rather than inferred: the list of platforms
+ * this build serves is a support decision, not a runtime discovery.
+ */
+const UNSUPPORTED_CONFIG_PLATFORMS: ReadonlyArray<string> = Object.freeze(["win32"]);
+
+/**
+ * Raised when the config path cannot be derived on the running
+ * platform. Named and specific because the alternative - returning
+ * `C:\Users\…\.config\open-second-brain\config.yaml` - is a
+ * plausible-looking answer to a question this build cannot answer: the
+ * layout is a POSIX convention, and nothing here (no adapter, no
+ * install document, no path handling) targets Windows.
+ */
+export class UnsupportedPlatformError extends Error {
+  readonly platform: string;
+
+  constructor(platform: string) {
+    super(
+      `open-second-brain has no configuration layout for platform '${platform}': ` +
+        "the default path $HOME/.config/open-second-brain/config.yaml is a POSIX " +
+        "convention and this build does not implement the Windows one. Set " +
+        "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " +
+        "to a configuration root, to choose the location yourself.",
+    );
+    this.name = "UnsupportedPlatformError";
+    this.platform = platform;
+  }
+}
+
+/** Injected view of the environment {@link resolveDefaultConfigPath} reads. */
+export interface ConfigPathEnv {
+  /** `process.platform` value. */
+  readonly platform: string;
+  /** `homedir()` value. */
+  readonly home: string;
+  readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * Resolve the location of the plugin config file from an injected
+ * environment.
+ *
+ * Order: `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, then
+ * `$HOME/.config/open-second-brain/config.yaml`. Only the last step is
+ * platform-bound, so an operator on an unsupported platform still has
+ * two ways to say where the file lives; the refusal fires exactly when
+ * they have said nothing and the convention does not apply.
+ *
+ * @throws {@link UnsupportedPlatformError} on a platform whose per-user
+ *   configuration root is not `$HOME/.config`.
+ */
+export function resolveDefaultConfigPath(source: ConfigPathEnv): string {
+  const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
+  if (override) return expandTilde(override);
+
+  const xdg = source.env["XDG_CONFIG_HOME"];
+  if (xdg) return join(expandTilde(xdg), "open-second-brain", "config.yaml");
+
+  if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
+    throw new UnsupportedPlatformError(source.platform);
+  }
+  return join(source.home, ".config", "open-second-brain", "config.yaml");
+}
+
+/**
+ * Resolve the location of the plugin config file for this process.
  *
  * Order: `OPEN_SECOND_BRAIN_CONFIG` env, `XDG_CONFIG_HOME`, `~/.config/open-second-brain/config.yaml`.
  */
 export function defaultConfigPath(): string {
-  const override = process.env["OPEN_SECOND_BRAIN_CONFIG"];
-  if (override) return expandTilde(override);
-
-  const xdg = process.env["XDG_CONFIG_HOME"];
-  if (xdg) return join(expandTilde(xdg), "open-second-brain", "config.yaml");
-
-  return join(homedir(), ".config", "open-second-brain", "config.yaml");
+  return resolveDefaultConfigPath({
+    platform: process.platform,
+    home: homedir(),
+    env: process.env,
+  });
 }
 
 /**
