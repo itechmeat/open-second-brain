@@ -85,6 +85,19 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("tool-arg", "string-array"),
     ]),
     command(
+      "secrets",
+      "Inspect $secret:NAME references without printing values",
+      [],
+      [
+        command("list", "List $secret:NAME references found in the config", [
+          flag("config", "string"),
+        ]),
+        command("status", "Report whether each referenced secret resolves", [
+          flag("config", "string"),
+        ]),
+      ],
+    ),
+    command(
       "aider",
       "Session-bracketing memory wrapper for Aider",
       [],
@@ -265,6 +278,126 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),
         command("session-hook", "Capture runtime lifecycle hook payloads"),
         command("import-claude-memory", "Import Claude memory feedback"),
+        // no-dead-ends, task 6: the fifty-five brain cases the manifest
+        // never modelled, so neither shell completions nor `o2b help
+        // --json` could name them. Listed in dispatcher order; the
+        // ratchet in `tests/cli/manifest-completeness.test.ts` reads the
+        // dispatcher, so a fifty-sixth cannot land unlisted.
+        command(
+          "lifecycle",
+          "Tombstone or supersede a memory, resolve chain tips, list curator slices",
+        ),
+        command(
+          "claims",
+          "Claim-graph query: current truth, truth at an instant, replaced-by, contested-by",
+        ),
+        command(
+          "decision",
+          "Decision records: record, outcome, rate, show, list, compare, similar, history, recall",
+        ),
+        command(
+          "tension",
+          "Detect and triage persisted contradictions: detect, list, show, confirm, dismiss, resolve",
+        ),
+        command("state", "Overwrite-only exact-state lane keyed by aspect: set, get, list, clear"),
+        command(
+          "health-baseline",
+          "Acknowledge-before watermark for health advisories: set, get, clear",
+        ),
+        command(
+          "vitals",
+          "Governance scorecard: domain diversity, connectivity, orphans, gap pressure",
+        ),
+        command(
+          "bank-export",
+          "Serialise a whole-vault bank bundle: preferences, graph, pages, sources",
+        ),
+        command("bank-import", "Reconstruct the page graph from a bank bundle"),
+        command(
+          "authored-at-backfill",
+          "Backfill authored_at on session-imported signals (dry-run by default)",
+        ),
+        command(
+          "distill",
+          "Condense a source into agent-supplied atomic claims with block provenance",
+        ),
+        command("session-summary", "Session-scoped structured digest: write, get, list"),
+        command(
+          "idea-lineage",
+          "Trace how a derived artifact was reached: observation, synthesis, conclusion",
+        ),
+        command("note-history", "Decompose a note's git history into episodic phases"),
+        command(
+          "diarize",
+          "Subject profile: document set, stated-versus-evidenced gap, needs-LLM skeleton",
+        ),
+        command("okf-export", "Write a portable Open Knowledge Format bundle"),
+        command(
+          "okf-import",
+          "Import an Open Knowledge Format bundle (staged for review by default)",
+        ),
+        command("page-dedup", "Detect, and optionally merge, near-duplicate vault pages"),
+        command("token-footprint", "Report per-category vault token size against a warn threshold"),
+        command("context-pack", "Return a tier-then-recency vault slice under a token budget"),
+        command("context-receipts", "List or show prompt context receipt records"),
+        command(
+          "event-trace",
+          "Join logged events to the continuity records sharing their correlation ids",
+        ),
+        command("context-presets", "Show, suggest, or diff read-only context budget presets"),
+        command(
+          "pre-compact-extract",
+          "Extract typed continuity records from bounded session text",
+        ),
+        command(
+          "post-compact-audit",
+          "Audit pinned-anchor survival after a compaction and re-assert drifted anchors",
+        ),
+        command("recall-telemetry", "List, summarize, or cost opt-in recall telemetry records"),
+        command("knowledge-gaps", "Rank recurring queries the vault answers poorly"),
+        command("skill-proposals", "Learn, list, and review deterministic skill proposals"),
+        command("procedural-memory", "Reconcile or list the procedural memory index and its usage"),
+        command("procedural-graph", "Rebuild or show the procedural graph and hint projections"),
+        command("recurrence", "Inspect and update recurrence and support diagnostics"),
+        command("attention-flows", "Declarative attention recipes over open loops and learnings"),
+        command("obligation", "Recurring obligations with cadence-driven next-due dates"),
+        command("agenda", "Synthesize agenda conflicts and focus blocks from provided events"),
+        command("today", "Today dashboard: due obligations, open loops, recent activity, totals"),
+        command("apply-markers", "Apply @osb set frontmatter write-backs (report by default)"),
+        command("pending", "Review the write-approval queue: list, apply, reject"),
+        command("signal", "Fact signal lifecycle: retire a signal with a reason"),
+        command("telegram-capture", "Inbound Telegram capture bot: long-poll run or catchup"),
+        command("inbox-drain", "Classify and route staged captures (dry-run by default)"),
+        command("repair-lane", "Propose memory-graph edges (dry-run by default)"),
+        command("session-grep", "Search imported session recall turns and summaries"),
+        command("session-describe", "Describe an imported session recall DAG"),
+        command("session-expand", "Expand a session recall node to its source turns"),
+        command("lint", "Self-healing structural checks; --consolidate --apply writes the fixes"),
+        command(
+          "actions",
+          "Ranked maintenance action list over dedup, lint, and footprint findings",
+        ),
+        command("summary", "Operator dashboard: trust verdict, doctor and dream counts, actions"),
+        command(
+          "unlinked",
+          "Raw-text mentions of an artifact's title or aliases outside wikilinks",
+        ),
+        command(
+          "synthesise",
+          "Concept cluster: a target plus its depth-1 linkers, optionally mentions",
+        ),
+        command("moc-audit", "Per-MOC coverage audit: well-covered, fragile, candidate-missing"),
+        command(
+          "timeline",
+          "Chronological event list filtered by preference, topic, kind, or date",
+        ),
+        command(
+          "evolution",
+          "Per-preference or per-topic story: status transitions, evidence, retire",
+        ),
+        command("stale", "Stale preferences, signals, and log files against configured thresholds"),
+        command("daily", "Daily brief: events by kind, status transitions, vault delta"),
+        command("weekly", "Seven-day synthesis: transitions, retired, contradictions, vault delta"),
       ],
     ),
     command(
@@ -279,6 +412,13 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("status", "Print search index status"),
         command("check", "Run search pre-flight diagnostics"),
         command("provider", "Manage embedding provider profiles"),
+        command("expand", "Drill a search card into the fuller note and its raw chunk transcript"),
+        command("focus", "Set, show, or clear the session recall focus bias"),
+        command("feedback", "Record a relevance verdict for one recall result"),
+        command("weights", "Show or reset the learned hybrid ranking weights"),
+        command("rerank-provider", "Manage reranker provider profiles"),
+        command("rerank-fit", "Diagnose whether the configured reranker fits this vault's queries"),
+        command("plan", "Preview the should-read shortlist for a query without reading the notes"),
       ],
     ),
     command(
@@ -300,6 +440,23 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("report", "Render discipline report"),
         command("install", "Install discipline cron"),
         command("uninstall", "Remove discipline cron"),
+      ],
+    ),
+    command(
+      "partner",
+      "Read-only reports on external code-project partners",
+      [],
+      [
+        command(
+          "codegraph",
+          "Codegraph partner reports",
+          [],
+          [
+            command("report", "Report codegraph index status and workspace members", [
+              flag("vault", "string"),
+            ]),
+          ],
+        ),
       ],
     ),
   ],
