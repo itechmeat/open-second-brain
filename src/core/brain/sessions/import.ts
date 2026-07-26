@@ -45,6 +45,7 @@ import {
 } from "./types.ts";
 import { validateBrainFeedbackInput } from "./validate-feedback.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "../capture-boundary.ts";
+import { emitIngestDedupReport } from "../dedup-telemetry.ts";
 import { extractFacts, routeExtractedFacts } from "../fact-extract.ts";
 import { readLineageLedger } from "../lineage/ledger.ts";
 import { resolveSessionLineage } from "../lineage/resolve.ts";
@@ -493,6 +494,18 @@ export async function importSession(
         message: `importSessionRecall failed: ${(err as Error).message ?? String(err)}`,
       });
     }
+  }
+
+  // Dedup observability (Unit F): one record per import run that actually
+  // dropped something, keyed by the portable session identity this import
+  // stamps on every signal it writes. A dry run reports its count and
+  // writes nothing.
+  if (opts.dryRun !== true) {
+    emitIngestDedupReport(vault, {
+      surface: "session_import",
+      sources: [{ ref: sessionKey, exactDeduped: signalsDeduped + factsDeduped }],
+      createdAt: now.toISOString(),
+    });
   }
 
   return Object.freeze({

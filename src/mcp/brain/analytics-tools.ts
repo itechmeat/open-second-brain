@@ -6,6 +6,11 @@
  * BRAIN_TOOLS surface.
  */
 
+import {
+  INGEST_DEDUP_SURFACES,
+  summarizeIngestDedup,
+  type IngestDedupSurface,
+} from "../../core/brain/dedup-telemetry.ts";
 import { buildConceptCluster } from "../../core/brain/link-graph/concept-cluster.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import { selectEvents } from "../../core/brain/temporal/select-events.ts";
@@ -188,6 +193,42 @@ async function toolBrainAttentionFlows(
   );
 }
 
+/**
+ * `view=dedup` - the persisted exact-hash ingest dedup trend.
+ *
+ * Every number here counts an item DROPPED on a sha-256 collision. The
+ * semantic dedup detectors are proposal-only nomination systems that never
+ * drop anything, so this lens deliberately publishes no semantic figure -
+ * see `src/core/brain/dedup-telemetry.ts`.
+ */
+async function toolBrainDedup(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const surface = args["surface"];
+  if (surface !== undefined && surface !== null) {
+    if (
+      typeof surface !== "string" ||
+      !(INGEST_DEDUP_SURFACES as ReadonlyArray<string>).includes(surface)
+    ) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_analytics view=dedup: surface must be one of ${INGEST_DEDUP_SURFACES.join(", ")}`,
+      );
+    }
+  }
+  const since = coerceIsoTimestampOrDate("brain_analytics", "since", args["since"]);
+  const until = coerceIsoTimestampOrDate("brain_analytics", "until", args["until"]);
+  return {
+    vault_path: ctx.vault,
+    ...summarizeIngestDedup(ctx.vault, {
+      ...(typeof surface === "string" ? { surface: surface as IngestDedupSurface } : {}),
+      ...(since !== undefined ? { since } : {}),
+      ...(until !== undefined ? { until } : {}),
+    }),
+  };
+}
+
 const ANALYTICS_VIEW_HANDLERS: Readonly<
   Record<string, (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown>
 > = Object.freeze({
@@ -195,6 +236,7 @@ const ANALYTICS_VIEW_HANDLERS: Readonly<
   attention_flows: toolBrainAttentionFlows,
   belief_evolution: toolBrainBeliefEvolution,
   concept_synthesis: toolBrainConceptSynthesis,
+  dedup: toolBrainDedup,
 });
 
 async function toolBrainAnalytics(
@@ -212,13 +254,13 @@ export const ANALYTICS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_analytics",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Read-only Brain analytics, one tool for every lens: view=timeline (event history), attention_flows, belief_evolution, or concept_synthesis. Replaces the per-lens analytics tools.",
+      "Read-only Brain analytics, one tool for every lens: view=timeline (event history), attention_flows, belief_evolution, concept_synthesis, or dedup (exact-hash ingest dedup trend). Replaces the per-lens analytics tools.",
     inputSchema: {
       type: "object",
       properties: {
         view: {
           type: "string",
-          enum: ["timeline", "attention_flows", "belief_evolution", "concept_synthesis"],
+          enum: ["timeline", "attention_flows", "belief_evolution", "concept_synthesis", "dedup"],
           description: "Which analytics lens to run.",
         },
         pref_id: {
@@ -227,8 +269,13 @@ export const ANALYTICS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         topic: { type: "string", description: "timeline / belief_evolution: target topic slug." },
         kind: { type: "string", description: "view=timeline: restrict to one event kind." },
-        since: { type: "string", description: "view=timeline: inclusive ISO lower bound." },
-        until: { type: "string", description: "view=timeline: exclusive ISO upper bound." },
+        since: { type: "string", description: "view=timeline / dedup: inclusive ISO lower bound." },
+        until: { type: "string", description: "view=timeline / dedup: exclusive ISO upper bound." },
+        surface: {
+          type: "string",
+          enum: ["session_lifecycle", "scan_inline", "session_import"],
+          description: "view=dedup: restrict the trend to one ingest surface.",
+        },
         limit: { type: "integer", minimum: 1, description: "view=timeline: max events returned." },
         id: { type: "string", description: "view=concept_synthesis: target id (e.g. pref-foo)." },
         include_unlinked: {

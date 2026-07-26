@@ -28,6 +28,7 @@
 import { readFileSync } from "node:fs";
 import { relative, sep } from "node:path";
 
+import { emitIngestDedupReport, type IngestDedupSourceCount } from "./dedup-telemetry.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
@@ -78,6 +79,8 @@ export async function scanInline(
   const now = opts.now ?? new Date();
   const errors: ScanInlineErrorEntry[] = [];
   const filesWithMarkers: ScanInlineFileSummary[] = [];
+  /** Per-file exact-hash drop counts, persisted once at the end of the run. */
+  const dedupBySource: IngestDedupSourceCount[] = [];
 
   let scanned = 0;
   let found = 0;
@@ -148,6 +151,7 @@ export async function scanInline(
     filesWithMarkers.push({ path: filePath, markers: markers.length });
 
     const rewriteOps: RewriteOp[] = [];
+    let fileDeduped = 0;
     for (const marker of markers) {
       const hash = computeDedupHash({
         topic: marker.topic,
@@ -158,6 +162,7 @@ export async function scanInline(
       const existing = dedupIndex.get(hash);
       if (existing) {
         deduped++;
+        fileDeduped++;
         if (!opts.dryRun) {
           rewriteOps.push({ marker, signalId: existing.id });
         }
@@ -195,6 +200,13 @@ export async function scanInline(
       }
     }
 
+    if (fileDeduped > 0) {
+      dedupBySource.push({
+        ref: relative(vault, filePath).split(sep).join("/"),
+        exactDeduped: fileDeduped,
+      });
+    }
+
     if (rewriteOps.length > 0 && !opts.dryRun) {
       try {
         await rewriteMarkers(filePath, rewriteOps);
@@ -205,6 +217,17 @@ export async function scanInline(
         });
       }
     }
+  }
+
+  // Dedup observability (Unit F): one record per run that actually
+  // dropped something, keyed by the note being re-ingested. A dry run
+  // reports its count but writes nothing, here as everywhere else.
+  if (!opts.dryRun) {
+    emitIngestDedupReport(vault, {
+      surface: "scan_inline",
+      sources: dedupBySource,
+      createdAt: now.toISOString(),
+    });
   }
 
   return Object.freeze({

@@ -38,6 +38,7 @@ export type ContinuityRecordKind =
   | "session_summary_node"
   | "session_summary_digest"
   | "generation_report"
+  | "ingest_dedup"
   | "mcp_route_latency"
   | "token_impact"
   | "token_impact_outcome"
