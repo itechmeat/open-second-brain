@@ -5,9 +5,10 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   unlinkSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
@@ -15,11 +16,24 @@ import { ensureInsideVault } from "../path-safety.ts";
 import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
 import { rebuildProceduralHints } from "./procedural-hints.ts";
 import { rebuildProceduralGraph } from "./procedural-graph.ts";
-import { reconcileProceduralMemory } from "./procedural-memory.ts";
+import {
+  listProceduralMemory,
+  proceduralEntryId,
+  proceduralSuccessRate,
+  reconcileProceduralMemory,
+} from "./procedural-memory.ts";
+import {
+  clearSkillAcceptJournal,
+  listSkillAcceptJournals,
+  writeSkillAcceptJournal,
+  type SkillAcceptJournalEntry,
+} from "./skill-accept-journal.ts";
+import { acquireLockSync } from "./sync-lockfile.ts";
 import {
   BRAIN_SKILL_PROPOSALS_REL,
   procedurePath,
   proposalWatermarkPath,
+  skillAcceptJournalPath,
   skillProposalAcceptedPath,
   skillProposalPendingPath,
   skillProposalRejectedPath,
@@ -58,6 +72,70 @@ export interface SkillProposalReviewResult {
   readonly procedurePath?: string;
 }
 
+/**
+ * Execution contract supplied at acceptance (no-dead-ends, Unit I). Each
+ * field is a list of structural steps; an absent field writes no key, so a
+ * contract-free acceptance is byte-identical to the pre-contract output.
+ */
+export interface SkillContractInput {
+  readonly prerequisites?: ReadonlyArray<string>;
+  readonly rollback?: ReadonlyArray<string>;
+  readonly sideEffects?: ReadonlyArray<string>;
+  readonly verification?: ReadonlyArray<string>;
+}
+
+export interface SkillProposalAcceptOptions {
+  readonly now?: Date;
+  readonly note?: string;
+  readonly contract?: SkillContractInput;
+}
+
+/** Contract field name -> frontmatter key, in the order they are written. */
+const SKILL_CONTRACT_FIELDS = Object.freeze([
+  ["prerequisites", "prerequisites"],
+  ["rollback", "rollback"],
+  ["sideEffects", "side_effects"],
+  ["verification", "verification"],
+] as const);
+
+/** What a resolved journal did to the sequence it was guarding. */
+export type SkillAcceptRecoveryAction = "rolled_back" | "completed";
+
+export interface SkillAcceptRecovery {
+  readonly slug: string;
+  readonly action: SkillAcceptRecoveryAction;
+}
+
+/**
+ * How a proposal's self-reported support compares with the independently
+ * recorded procedural outcome ledger.
+ *
+ * `unrecorded` is NOT "no failures": it is the absence of evidence either
+ * way, which is why {@link SkillProposalEvidence.recordedSuccessRate} is
+ * null rather than zero in that state. Failures, successes and silence stay
+ * three distinct answers; `mixed` is the honest fourth.
+ */
+export type SkillEvidenceOutcomeState = "unrecorded" | "successful" | "failing" | "mixed";
+
+export interface SkillProposalEvidence {
+  readonly slug: string;
+  readonly id: string;
+  readonly phase: "pending" | "accepted" | "rejected";
+  /** Support the proposal claims from its own pattern match - self-reported. */
+  readonly claimedEvidenceCount: number;
+  readonly claimedConfidence: number;
+  /** Ledger join key, derived from the slug with no lookup. */
+  readonly proceduralEntryId: string;
+  /** False when the procedure has no procedural-memory entry at all. */
+  readonly proceduralEntryPresent: boolean;
+  /** Host-recorded outcomes; null when there is no entry to read them from. */
+  readonly recordedSuccesses: number | null;
+  readonly recordedFailures: number | null;
+  /** null whenever nothing was recorded - never 0, which reads as total failure. */
+  readonly recordedSuccessRate: number | null;
+  readonly outcomeState: SkillEvidenceOutcomeState;
+}
+
 interface ProposalCandidate {
   readonly patternKind: SkillProposalPatternKind;
   readonly key: string;
@@ -83,6 +161,9 @@ const DEFAULT_PROCEDURAL_ROOTS = ["Brain/procedures", "skills"] as const;
 
 /** Version stamped on a freshly-drafted skill; increments on evolution. */
 const SKILL_PROPOSAL_INITIAL_VERSION = 1;
+
+/** Lock basename guarding the accept sequence, inside the proposals root. */
+const ACCEPT_LOCK_NAME = "accept";
 
 /** JSONL ledger of verifier rejections, relative to the vault. */
 const VERIFIER_REJECTION_LEDGER_REL = join(BRAIN_SKILL_PROPOSALS_REL, "verifier-rejections.jsonl");
@@ -269,85 +350,309 @@ export function listPendingSkillProposals(vault: string): ReadonlyArray<{
   return Object.freeze(out);
 }
 
+/**
+ * Accept a pending proposal: archive it, materialize its procedure, drop
+ * the pending copy, reproject.
+ *
+ * The four steps are one compensating transaction. Every step is preceded
+ * by a write-ahead journal stamp (see `skill-accept-journal.ts`), so a
+ * CRASH - which no `catch` can compensate - is resolved by the next accept
+ * or by {@link recoverSkillProposalAccepts}; a thrown error is compensated
+ * inline through the same resolver. Removing the pending copy is the
+ * commit point: before it the sequence rolls back to the pending draft,
+ * after it the sequence rolls forward to rebuilt projections.
+ *
+ * The whole sequence runs under one vault-wide accept lock. That lock is
+ * what makes the sweep of OTHER slugs' journals safe: no second accept can
+ * be mid-sequence while this one resolves what it finds.
+ */
 export function acceptSkillProposal(
   vault: string,
   slug: string,
-  opts: { now?: Date; note?: string } = {},
+  opts: SkillProposalAcceptOptions = {},
 ): SkillProposalReviewResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // Validated before anything touches disk: a malformed contract must not
+  // half-accept a proposal.
+  const contract = contractFrontmatter(opts.contract);
   const now = (opts.now ?? new Date()).toISOString();
-  const pendingPath = skillProposalPendingPath(vault, slug);
-  if (!existsSync(pendingPath)) {
-    throw new Error(`pending skill proposal not found: ${slug}`);
-  }
 
-  const [fm, body] = parseFrontmatter(pendingPath);
-  if (fm["kind"] !== "brain-skill-proposal") {
-    throw new Error(`invalid skill proposal file: ${pendingPath}`);
-  }
-  const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
-  const version = parseVersion(fm["version"]);
-  const acceptedPath = skillProposalAcceptedPath(vault, slug);
-  const procPath = procedurePath(vault, slug);
-
-  writeFrontmatterAtomic(
-    acceptedPath,
-    {
-      ...fm,
-      status: "accepted",
-      version,
-      reviewed_at: now,
-      updated_at: now,
-      ...(opts.note ? { review_note: opts.note } : {}),
-    },
-    body,
-    {
-      overwrite: false,
-      existsErrorKind: "accepted skill proposal",
-      vaultForRelativePath: vault,
-    },
-  );
-
+  const lock = acquireLockSync(acceptLockTarget(vault));
   try {
-    writeFrontmatterAtomic(
-      procPath,
-      {
-        schema_version: 1,
-        kind: "brain-procedure",
-        id: `proc-${slug}`,
-        slug,
-        source_proposal: id,
-        version,
-        created_at: now,
-        updated_at: now,
-        status: "active",
-      },
-      renderAcceptedProcedureBody(id, body),
-      {
-        overwrite: false,
-        existsErrorKind: "procedure",
-        vaultForRelativePath: vault,
-      },
-    );
-  } catch (error) {
-    if (existsSync(acceptedPath)) unlinkSync(acceptedPath);
-    throw error;
+    resolveOutstandingAccepts(vault);
+
+    const pendingPath = skillProposalPendingPath(vault, slug);
+    if (!existsSync(pendingPath)) {
+      throw new Error(`pending skill proposal not found: ${slug}`);
+    }
+
+    const [fm, body] = parseFrontmatter(pendingPath);
+    if (fm["kind"] !== "brain-skill-proposal") {
+      throw new Error(`invalid skill proposal file: ${pendingPath}`);
+    }
+    const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
+    const version = parseVersion(fm["version"]);
+    const acceptedPath = skillProposalAcceptedPath(vault, slug);
+    const procPath = procedurePath(vault, slug);
+
+    let journal: SkillAcceptJournalEntry = {
+      slug,
+      id,
+      phase: "archive",
+      startedAt: now,
+      // Captured up front so a rollback never deletes a file this
+      // sequence did not create.
+      acceptedExisted: existsSync(acceptedPath),
+      procedureExisted: existsSync(procPath),
+    };
+    writeSkillAcceptJournal(vault, journal);
+
+    try {
+      writeFrontmatterAtomic(
+        acceptedPath,
+        {
+          ...fm,
+          status: "accepted",
+          version,
+          reviewed_at: now,
+          updated_at: now,
+          ...(opts.note ? { review_note: opts.note } : {}),
+          ...contract,
+        },
+        body,
+        {
+          overwrite: false,
+          existsErrorKind: "accepted skill proposal",
+          vaultForRelativePath: vault,
+        },
+      );
+
+      journal = { ...journal, phase: "materialize" };
+      writeSkillAcceptJournal(vault, journal);
+      writeFrontmatterAtomic(
+        procPath,
+        {
+          schema_version: 1,
+          kind: "brain-procedure",
+          id: `proc-${slug}`,
+          slug,
+          source_proposal: id,
+          version,
+          created_at: now,
+          updated_at: now,
+          status: "active",
+          ...contract,
+        },
+        renderAcceptedProcedureBody(id, body),
+        {
+          overwrite: false,
+          existsErrorKind: "procedure",
+          vaultForRelativePath: vault,
+        },
+      );
+
+      journal = { ...journal, phase: "commit" };
+      writeSkillAcceptJournal(vault, journal);
+      unlinkSync(pendingPath);
+      rebuildProceduralProjections(vault);
+    } catch (error) {
+      compensateSkillAccept(vault, journal, error);
+    }
+
+    clearSkillAcceptJournal(vault, slug);
+    return {
+      id,
+      slug,
+      status: "accepted",
+      proposalPath: acceptedPath,
+      procedurePath: procPath,
+    };
+  } finally {
+    lock.release();
+  }
+}
+
+/**
+ * Resolve every accept sequence a previous run abandoned. Returns what was
+ * done per slug; an empty array means there was nothing outstanding.
+ */
+export function recoverSkillProposalAccepts(vault: string): ReadonlyArray<SkillAcceptRecovery> {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const lock = acquireLockSync(acceptLockTarget(vault));
+  try {
+    return Object.freeze(resolveOutstandingAccepts(vault));
+  } finally {
+    lock.release();
+  }
+}
+
+/** Lock target guarding the accept sequence and the journal sweep. */
+function acceptLockTarget(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REL, ACCEPT_LOCK_NAME), vault);
+}
+
+/** Caller must already hold {@link acceptLockTarget}. */
+function resolveOutstandingAccepts(vault: string): SkillAcceptRecovery[] {
+  return listSkillAcceptJournals(vault).map((journal) => ({
+    slug: journal.slug,
+    action: resolveSkillAccept(vault, journal),
+  }));
+}
+
+/**
+ * Roll one journaled sequence back or forward.
+ *
+ * The pending copy is the commit witness: the sequence removes it only
+ * once both writes have landed, so its presence means nothing was
+ * committed and the draft must survive untouched.
+ */
+function resolveSkillAccept(
+  vault: string,
+  journal: SkillAcceptJournalEntry,
+): SkillAcceptRecoveryAction {
+  const committed =
+    journal.phase === "commit" && !existsSync(skillProposalPendingPath(vault, journal.slug));
+
+  if (!committed) {
+    if (!journal.acceptedExisted) {
+      rmSync(skillProposalAcceptedPath(vault, journal.slug), { force: true });
+    }
+    if (!journal.procedureExisted) {
+      rmSync(procedurePath(vault, journal.slug), { force: true });
+    }
+    clearSkillAcceptJournal(vault, journal.slug);
+    return "rolled_back";
   }
 
-  unlinkSync(pendingPath);
+  rebuildProceduralProjections(vault);
+  clearSkillAcceptJournal(vault, journal.slug);
+  return "completed";
+}
+
+/**
+ * Inline compensation for a THROWN step. Always rethrows: either the
+ * original error once the sequence has been resolved, or - when the
+ * resolution itself fails - a named error saying the journal was retained
+ * so a later recovery pass can finish the job.
+ */
+function compensateSkillAccept(
+  vault: string,
+  journal: SkillAcceptJournalEntry,
+  error: unknown,
+): never {
+  let repairFailure: unknown = null;
+  try {
+    resolveSkillAccept(vault, journal);
+  } catch (repairError) {
+    repairFailure = repairError;
+  }
+  if (repairFailure !== null) {
+    // The step failure stays the `cause`; the repair failure is named in
+    // the message, and the journal on disk keeps the sequence recoverable.
+    throw new Error(
+      `skill proposal accept failed and could not be resolved (${errorMessage(repairFailure)}); ` +
+        `journal retained for recovery: ${skillAcceptJournalPath(vault, journal.slug)}`,
+      { cause: error },
+    );
+  }
+  throw error;
+}
+
+function errorMessage(value: unknown): string {
+  return value instanceof Error ? value.message : String(value);
+}
+
+/** Rebuild the three projections derived from the procedure tree. */
+function rebuildProceduralProjections(vault: string): void {
   reconcileProceduralMemory(vault, {
     roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
   });
   const graph = rebuildProceduralGraph(vault);
   rebuildProceduralHints(vault, { graph });
-  return {
-    id,
+}
+
+/**
+ * Frontmatter fragment for the execution contract. An absent or empty
+ * field writes no key; a field holding a blank or non-string entry is a
+ * caller error and is refused by name rather than quietly dropped.
+ */
+function contractFrontmatter(
+  contract: SkillContractInput | undefined,
+): Record<string, ReadonlyArray<string>> {
+  if (!contract) return {};
+  const out: Record<string, ReadonlyArray<string>> = {};
+  for (const [field, key] of SKILL_CONTRACT_FIELDS) {
+    const values = contract[field];
+    if (values === undefined || values.length === 0) continue;
+    out[key] = values.map((value) => {
+      if (typeof value !== "string" || value.trim().length === 0) {
+        throw new Error(`skill contract field '${field}' must not contain an empty entry`);
+      }
+      return value.trim();
+    });
+  }
+  return out;
+}
+
+/**
+ * Resolve a proposal's SELF-REPORTED support against the independently
+ * recorded procedural outcome ledger.
+ *
+ * `evidence_count` and `confidence` come from the proposal's own pattern
+ * match, so on their own they corroborate nothing. The ledger written by
+ * `recordProceduralOutcome` is host-supplied and never inferred, and it is
+ * joined here by the entry id derived from the procedure path the accept
+ * path already causes to exist - no lookup table, no second registry.
+ */
+export function resolveSkillProposalEvidence(vault: string, slug: string): SkillProposalEvidence {
+  const found = findReviewedProposal(vault, slug);
+  const fm = found.fm;
+  const entryId = proceduralEntryId(vaultRelative(vault, procedurePath(vault, slug)));
+  const entry = listProceduralMemory(vault).find((candidate) => candidate.id === entryId) ?? null;
+
+  return Object.freeze({
     slug,
-    status: "accepted",
-    proposalPath: acceptedPath,
-    procedurePath: procPath,
-  };
+    id: typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`,
+    phase: found.phase,
+    claimedEvidenceCount: Number.parseInt(String(fm["evidence_count"] ?? "0"), 10) || 0,
+    claimedConfidence: Number.parseFloat(String(fm["confidence"] ?? "0")) || 0,
+    proceduralEntryId: entryId,
+    proceduralEntryPresent: entry !== null,
+    recordedSuccesses: entry?.successCount ?? null,
+    recordedFailures: entry?.failureCount ?? null,
+    recordedSuccessRate: entry === null ? null : proceduralSuccessRate(entry),
+    outcomeState: outcomeState(entry?.successCount ?? 0, entry?.failureCount ?? 0),
+  });
+}
+
+function outcomeState(successes: number, failures: number): SkillEvidenceOutcomeState {
+  if (successes === 0 && failures === 0) return "unrecorded";
+  if (successes > 0 && failures > 0) return "mixed";
+  return failures > 0 ? "failing" : "successful";
+}
+
+/** Locate a proposal in whichever phase holds it, terminal phases first. */
+function findReviewedProposal(
+  vault: string,
+  slug: string,
+): { phase: "pending" | "accepted" | "rejected"; fm: Record<string, unknown> } {
+  const candidates = [
+    ["accepted", skillProposalAcceptedPath(vault, slug)],
+    ["rejected", skillProposalRejectedPath(vault, slug)],
+    ["pending", skillProposalPendingPath(vault, slug)],
+  ] as const;
+  for (const [phase, path] of candidates) {
+    if (!existsSync(path)) continue;
+    const [fm] = parseFrontmatter(path);
+    return { phase, fm: fm as Record<string, unknown> };
+  }
+  throw new Error(`skill proposal not found in any phase: ${slug}`);
+}
+
+function vaultRelative(vault: string, absolute: string): string {
+  return relative(vault, absolute).replaceAll("\\", "/");
 }
 
 export function rejectSkillProposal(
@@ -392,11 +697,7 @@ export function rejectSkillProposal(
   );
 
   unlinkSync(pendingPath);
-  reconcileProceduralMemory(vault, {
-    roots: DEFAULT_PROCEDURAL_ROOTS.map((root) => join(vault, root)),
-  });
-  const graph = rebuildProceduralGraph(vault);
-  rebuildProceduralHints(vault, { graph });
+  rebuildProceduralProjections(vault);
   return { id, slug, status: "rejected", proposalPath: rejectedPath };
 }
 

@@ -189,6 +189,51 @@ describe("procedural learning MCP tools", () => {
     });
     expect(recShow.supportCount).toBe(1);
   });
+
+  test("accept carries the execution contract and evidence resolves it against the ledger", async () => {
+    const server = new MCPServer({ vault });
+    await initialize(server);
+
+    await callTool(server, "brain_skill_proposals", { operation: "learn", min_support: 3 });
+    const listed = await callTool(server, "brain_skill_proposals", { operation: "list" });
+    const slug = (listed.proposals as Array<Record<string, unknown>>)[0]!["slug"] as string;
+
+    await callTool(server, "brain_skill_proposals", {
+      operation: "accept",
+      slug,
+      prerequisites: ["o2b brain doctor --json is clean"],
+      rollback: ["o2b brain pending apply --revert"],
+      side_effects: ["writes Brain/procedures"],
+      verification: ["o2b brain procedures list --json"],
+    });
+
+    const mem = await callTool(server, "brain_procedural_memory", { operation: "list" });
+    const procedure = (mem.entries as Array<Record<string, unknown>>).find(
+      (entry) => entry["sourcePath"] === `Brain/procedures/proc-${slug}.md`,
+    );
+    expect(procedure).toBeDefined();
+    expect(procedure!["prerequisites"]).toEqual(["o2b brain doctor --json is clean"]);
+    expect(procedure!["rollback"]).toEqual(["o2b brain pending apply --revert"]);
+    expect(procedure!["sideEffects"]).toEqual(["writes Brain/procedures"]);
+    expect(procedure!["verification"]).toEqual(["o2b brain procedures list --json"]);
+
+    // Nothing recorded yet: null rate, not a zero that reads as total failure.
+    const before = await callTool(server, "brain_skill_proposals", { operation: "evidence", slug });
+    expect(before.claimedEvidenceCount as number).toBeGreaterThanOrEqual(3);
+    expect(before.proceduralEntryId).toBe(procedure!["id"]);
+    expect(before.recordedSuccessRate).toBeNull();
+    expect(before.outcomeState).toBe("unrecorded");
+
+    await callTool(server, "brain_procedural_memory", {
+      operation: "mark_outcome",
+      id: procedure!["id"],
+      outcome: "failure",
+    });
+    const after = await callTool(server, "brain_skill_proposals", { operation: "evidence", slug });
+    expect(after.recordedFailures).toBe(1);
+    expect(after.recordedSuccessRate).toBe(0);
+    expect(after.outcomeState).toBe("failing");
+  });
 });
 
 function seedContinuity(vaultPath: string): void {

@@ -52,6 +52,11 @@ export const BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-propo
 export const BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
 export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
 export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
+/** Write-ahead journal of in-flight skill-proposal accepts (no-dead-ends, Unit I). */
+export const BRAIN_SKILL_ACCEPT_JOURNAL_REL = posix.join(
+  BRAIN_SKILL_PROPOSALS_REL,
+  "accept-journal",
+);
 export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
 export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
 export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
@@ -335,6 +340,12 @@ export function skillProposalAcceptedPath(vault: string, slug: string): string {
 export function skillProposalRejectedPath(vault: string, slug: string): string {
   const s = validateSlug(slug);
   return ensureInsideVault(join(vault, BRAIN_SKILL_PROPOSALS_REJECTED_REL, `prop-${s}.md`), vault);
+}
+
+/** Accept-journal path: `Brain/skill-proposals/accept-journal/<slug>.json`. */
+export function skillAcceptJournalPath(vault: string, slug: string): string {
+  const s = validateSlug(slug);
+  return ensureInsideVault(join(vault, BRAIN_SKILL_ACCEPT_JOURNAL_REL, `${s}.json`), vault);
 }
 
 /** Accepted procedure reference path: `Brain/procedures/proc-<slug>.md`. */
