@@ -13,6 +13,7 @@ import {
   BRAIN_RETIRED_REL,
   brainConfigPath,
   brainDirs,
+  brainDirsForWrite,
 } from "./paths.ts";
 
 export interface WatchdogOptions {
@@ -72,7 +73,10 @@ export function runBrainWatchdog(vault: string, opts: WatchdogOptions = {}): Bra
   const checks: ProbeCheck[] = [];
   const remediationPlan: WatchdogRemediation[] = [];
   const applied: WatchdogRemediation[] = [];
-  const dirs = brainDirs(vault);
+  // Write-intent unconditionally (context-integrity-gates, Unit J): a
+  // remediating run creates or replaces the directories below, and EVERY
+  // run - probe included - appends its audit record into `dirs.log`.
+  const dirs = brainDirsForWrite(vault);
 
   const configPath = brainConfigPath(vault);
   const configKind = pathKind(configPath);

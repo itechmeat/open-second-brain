@@ -50,7 +50,13 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { buildManifest, manifestSidecarPath, writeManifestSidecar } from "./manifest.ts";
-import { BRAIN_ROOT_REL, brainDirs, snapshotPath, validateRunId } from "./paths.ts";
+import {
+  BRAIN_ROOT_REL,
+  brainDirs,
+  brainDirsForWrite,
+  snapshotPath,
+  validateRunId,
+} from "./paths.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -174,7 +180,7 @@ function detectTooling(): ToolAvailability {
  */
 export function createSnapshot(vault: string, runId: string): CreateSnapshotResult {
   validateRunId(runId);
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   mkdirSync(dirs.snapshots, { recursive: true });
 
   const outPath = snapshotPath(vault, runId);
@@ -566,7 +572,7 @@ export function restoreSnapshot(
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future log emission
   _opts: { now?: Date } = {},
 ): RestoreSnapshotResult {
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   const ext = extractSnapshotToTemp(vault, runId);
   try {
     // Replace every top-level entry under Brain/, EXCEPT `.snapshots/`.

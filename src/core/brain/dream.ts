@@ -70,6 +70,7 @@ import { loadBrainConfig, resolveGuardrails } from "./policy.ts";
 import { applySelfApprovalGuardrail } from "./trust/self-approval-guardrail.ts";
 import {
   brainDirs,
+  brainDirsForWrite,
   dreamWorkrunPath,
   preferencePath,
   processedSignalPath,
@@ -942,7 +943,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     ...(snapshotPathStr ? { snapshot_path: snapshotPathStr } : {}),
     ...(dryRun
       ? { dry_run: true }
-      : { log_path: join(brainDirs(vault).log, `${isoDate(now)}.md`) }),
+      : { log_path: join(brainDirsForWrite(vault).log, `${isoDate(now)}.md`) }),
   } satisfies DreamRunSummary);
 }
 

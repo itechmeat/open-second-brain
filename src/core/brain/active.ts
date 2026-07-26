@@ -46,7 +46,7 @@ import {
 import { parseRetired } from "./preference.ts";
 import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
-import { brainActivePath, brainDirs } from "./paths.ts";
+import { brainActivePath, brainDirsForWrite } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { sortByProvenanceTrust } from "./provenance/trust-order.ts";
 import { BRAIN_PREFERENCE_STATUS, type BrainPreference, type BrainRetired } from "./types.ts";
@@ -201,7 +201,7 @@ export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptio
 // ----- Scan helpers --------------------------------------------------------
 
 function readActivePreferences(vault: string, agentScope: string | undefined): BrainPreference[] {
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   // The shared delivery-path walk (context-integrity-gates, Unit A) owns
   // the listing and the parse; a corrupted or status/folder-mismatched
   // file is omitted there, and `brain_doctor` is the surface that flags
@@ -220,7 +220,7 @@ function readActivePreferences(vault: string, agentScope: string | undefined): B
 }
 
 function readRecentlyRetired(vault: string, limit: number): BrainRetired[] {
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   if (!existsSync(dirs.retired)) return [];
   const out: BrainRetired[] = [];
   for (const name of readdirSync(dirs.retired)) {

@@ -17,7 +17,7 @@ import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
-import { brainDirs } from "../paths.ts";
+import { brainDirsForWrite } from "../paths.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
@@ -275,7 +275,7 @@ function audit(
   name: string,
   details: Record<string, unknown>,
 ): void {
-  appendAuditRecord(join(brainDirs(vault).log, "secret-custody"), {
+  appendAuditRecord(join(brainDirsForWrite(vault).log, "secret-custody"), {
     timestamp: ctx.now.toISOString(),
     actor: ctx.agent,
     action,

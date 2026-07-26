@@ -28,7 +28,7 @@ import { atomicCreateFileSyncExclusive } from "../fs-atomic.ts";
 import { discoverConfig } from "../config.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
-import { brainDirs, ensureInsideVault } from "./paths.ts";
+import { brainDirs, brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { parseSignal, writeSignal, type WriteSignalInput } from "./signal.ts";
 import type { BrainSignal } from "./types.ts";
 
@@ -91,14 +91,14 @@ export interface StageResult {
  * identical to what the inbox would have received.
  */
 export function stagePendingSignal(vault: string, input: WriteSignalInput): StageResult {
-  const res = writeSignal(vault, input, { targetDir: brainDirs(vault).pending });
+  const res = writeSignal(vault, input, { targetDir: brainDirsForWrite(vault).pending });
   return { id: res.id, path: res.path };
 }
 
 /** Validate a pending id and resolve its absolute path inside `Brain/pending/`. */
 function pendingFilePath(vault: string, id: string): string {
   if (!SIGNAL_ID_RE.test(id)) throw new InvalidPendingIdError(id);
-  return ensureInsideVault(join(brainDirs(vault).pending, `${id}.md`), vault);
+  return ensureInsideVault(join(brainDirsForWrite(vault).pending, `${id}.md`), vault);
 }
 
 /** List the staged signals in `Brain/pending/`, sorted by id. */
@@ -127,7 +127,7 @@ export function applyPending(vault: string, id: string): StageResult {
   const src = pendingFilePath(vault, id);
   if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
   const contents = readFileSync(src, "utf8");
-  const dest = ensureInsideVault(join(brainDirs(vault).inbox, `${id}.md`), vault);
+  const dest = ensureInsideVault(join(brainDirsForWrite(vault).inbox, `${id}.md`), vault);
   // Exclusive create: never clobber an existing inbox file with the same id.
   atomicCreateFileSyncExclusive(dest, contents);
   unlinkSync(src);
@@ -171,7 +171,7 @@ export function rejectPending(
   nextMeta["retired_at"] = now.toISOString();
   nextMeta["retired_reason"] = reason;
 
-  const dest = ensureInsideVault(join(brainDirs(vault).retired, `${id}.md`), vault);
+  const dest = ensureInsideVault(join(brainDirsForWrite(vault).retired, `${id}.md`), vault);
   writeFrontmatterAtomic(dest, nextMeta, body, {
     overwrite: false,
     vaultForRelativePath: vault,

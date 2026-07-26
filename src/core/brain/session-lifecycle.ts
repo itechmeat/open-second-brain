@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { appendLogEvent } from "./log.ts";
-import { brainDirs } from "./paths.ts";
+import { brainDirsForWrite } from "./paths.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
@@ -321,7 +321,7 @@ export async function captureSessionLifecycleEvent(
     logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
   }
 
-  const auditPath = appendAuditRecord(join(brainDirs(vault).log, "session-lifecycle"), {
+  const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "session-lifecycle"), {
     timestamp: now.toISOString(),
     actor: opts.agent,
     action: "session_lifecycle_capture",

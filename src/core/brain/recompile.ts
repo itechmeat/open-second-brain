@@ -18,7 +18,7 @@ import { basename, isAbsolute, join } from "node:path";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { scanFreshness } from "./freshness.ts";
 import { writeHandoffNote } from "./handoff.ts";
-import { brainDirs, BRAIN_SNAPSHOTS_REL } from "./paths.ts";
+import { brainDirsForWrite, BRAIN_SNAPSHOTS_REL } from "./paths.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { isoDate } from "./time.ts";
@@ -194,7 +194,7 @@ export async function executeRecompile(
     !dryRun &&
     (rederived.length > 0 || archived.length > 0 || manual.length > 0 || errors.length > 0)
   ) {
-    appendAuditRecord(join(brainDirs(vault).log, "hygiene"), {
+    appendAuditRecord(join(brainDirsForWrite(vault).log, "hygiene"), {
       timestamp: opts.now.toISOString(),
       actor: opts.agent,
       action: "targeted_recompile",

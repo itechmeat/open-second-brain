@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { atomicWriteText } from "../fs-atomic.ts";
 import { withFileLock } from "../reliability/lock.ts";
-import { brainConfigPath, brainDirs } from "./paths.ts";
+import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
 import {
   parseSchemaPack,
   renderSchemaBlock,
@@ -139,7 +139,7 @@ export async function applySchemaMutations(
         parseSchemaPack(candidate);
       },
     });
-    const auditPath = appendAuditRecord(join(brainDirs(vault).log, "schema-mutations"), {
+    const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "schema-mutations"), {
       timestamp: now.toISOString(),
       actor: opts.actor,
       action: "schema_apply_mutations",

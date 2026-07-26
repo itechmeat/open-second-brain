@@ -32,7 +32,7 @@ import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import { resolveWriteApprovalEnabled } from "./pending.ts";
-import { brainDirs } from "./paths.ts";
+import { brainDirsForWrite } from "./paths.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
@@ -346,7 +346,7 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       writeApprovalEnabled = false;
     }
   }
-  const targetDir = writeApprovalEnabled ? brainDirs(vault).pending : undefined;
+  const targetDir = writeApprovalEnabled ? brainDirsForWrite(vault).pending : undefined;
 
   for (const fact of input.facts) {
     const hash = factDedupHash(fact);

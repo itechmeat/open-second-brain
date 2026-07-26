@@ -39,7 +39,7 @@ import { parseFrontmatter } from "../vault.ts";
 import { decayWeight } from "./continuity/usage-signal.ts";
 import { listDeadEnds, type DeadEndEntry } from "./dead-ends.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
-import { brainDirs, brainLessonsPath } from "./paths.ts";
+import { brainDirs, brainDirsForWrite, brainLessonsPath } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
@@ -437,7 +437,8 @@ export function regenerateLessonsQuiet(vault: string, opts: RegenerateLessonsOpt
 // ----- Scan helpers --------------------------------------------------------
 
 function readActivePreferences(vault: string): BrainPreference[] {
-  const dirs = brainDirs(vault);
+  // Only reached from `regenerateLessons`, which writes `Brain/lessons.md`.
+  const dirs = brainDirsForWrite(vault);
   if (!existsSync(dirs.preferences)) return [];
   const out: BrainPreference[] = [];
   for (const name of readdirSync(dirs.preferences)) {

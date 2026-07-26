@@ -191,6 +191,24 @@ export function brainDirs(vault: string): BrainDirs {
  * deliberately uses plain {@link brainDirs}: it is what legitimately
  * creates the tree, so it must not be gated on the marker it is about
  * to write.
+ *
+ * ## Which call sites use this one
+ *
+ * A site is write-intent when EITHER the `BrainDirs` value it produces
+ * forms a path the same flow creates, moves, or deletes (even
+ * conditionally), OR the site is reached only from flows that mutate
+ * the Brain tree. Everything else stays on {@link brainDirs}:
+ *
+ *   - read, query, report, and analysis flows - widening the guard onto
+ *     them would break `src/openclaw/index.ts`, which silently defaults
+ *     to the process working directory, and the hooks, which fail open
+ *     by contract;
+ *   - sites reached from BOTH a mutating flow and a read-only or
+ *     dry-run preview of it, where the guard would fire on a preview;
+ *   - the path builders in this module. They are intent-neutral by
+ *     construction - `preferencePath` serves `parsePreference` and
+ *     `writePreference` alike - so a writer that reaches the tree
+ *     through one of them is guarded at its own entry point, not here.
  */
 export function brainDirsForWrite(vault: string, notices?: DegradationNotice[]): BrainDirs {
   assertVaultIdentityForWrite(vault, notices);

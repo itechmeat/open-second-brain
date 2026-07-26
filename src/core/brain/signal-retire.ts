@@ -30,7 +30,7 @@ import { existsSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendLogEvent } from "./log.ts";
-import { brainDirs, ensureInsideVault } from "./paths.ts";
+import { brainDirsForWrite, ensureInsideVault } from "./paths.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
@@ -113,7 +113,7 @@ export function retireSignal(
     throw new InvalidSignalIdError(trimmed);
   }
 
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   const srcPath = ensureInsideVault(join(dirs.inbox, `${trimmed}.md`), vault);
   const destPath = ensureInsideVault(join(dirs.retired, `${trimmed}.md`), vault);
 

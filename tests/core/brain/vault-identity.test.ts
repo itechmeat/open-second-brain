@@ -13,8 +13,23 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { regenerateActive } from "../../../src/core/brain/active.ts";
+import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { collectExportRows } from "../../../src/core/brain/export.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import { regenerateLessons } from "../../../src/core/brain/lessons.ts";
+import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { brainDirs, brainDirsForWrite } from "../../../src/core/brain/paths.ts";
+import {
+  applyPending,
+  listPending,
+  rejectPending,
+  stagePendingSignal,
+} from "../../../src/core/brain/pending.ts";
+import { writeSignal } from "../../../src/core/brain/signal.ts";
+import { retireSignal } from "../../../src/core/brain/signal-retire.ts";
+import { computeBrainStatus } from "../../../src/core/brain/status.ts";
+import { runBrainWatchdog } from "../../../src/core/brain/watchdog.ts";
 import {
   VaultIdentityMismatchError,
   readVaultIdentity,
@@ -102,6 +117,121 @@ describe("brainDirsForWrite", () => {
     writeVaultIdentity(vault);
     for (let i = 0; i < 3; i++) expect(() => brainDirsForWrite(vault)).not.toThrow();
   });
+});
+
+/**
+ * The guard is only worth its docblock if it fires on the write paths
+ * an operator actually drives, not just on the three call sites the
+ * first cut converted. One row per representative Brain writer; adding
+ * a writer that skips the guard makes its row fail.
+ */
+describe("the guard fires on Brain write paths", () => {
+  interface WriteCase {
+    readonly name: string;
+    /** Bring the vault into the state the write needs. */
+    readonly seed?: (vault: string) => void;
+    readonly write: (vault: string) => void;
+  }
+
+  const SIGNAL_INPUT = {
+    topic: "guard-topic",
+    signal: "positive",
+    agent: "test-agent",
+    principle: "guard the write path",
+    created_at: "2026-07-26T00:00:00Z",
+    date: "2026-07-26",
+    slug: "guard-topic",
+  } as const;
+
+  const CASES: ReadonlyArray<WriteCase> = [
+    {
+      name: "writeSignal",
+      write: (v) => void writeSignal(v, SIGNAL_INPUT),
+    },
+    {
+      name: "appendLogEvent",
+      write: (v) =>
+        appendLogEvent(v, {
+          timestamp: "2026-07-26T00:00:00Z",
+          eventType: "note",
+          agent: "test-agent",
+          body: { text: "guarded" },
+        }),
+    },
+    {
+      name: "retireSignal",
+      seed: (v) => void writeSignal(v, SIGNAL_INPUT),
+      write: (v) => void retireSignal(v, "sig-2026-07-26-guard-topic", { reason: "obsolete" }),
+    },
+    {
+      name: "stagePendingSignal",
+      write: (v) => void stagePendingSignal(v, SIGNAL_INPUT),
+    },
+    {
+      name: "applyPending",
+      seed: (v) => void stagePendingSignal(v, SIGNAL_INPUT),
+      write: (v) => void applyPending(v, "sig-2026-07-26-guard-topic"),
+    },
+    {
+      name: "rejectPending",
+      seed: (v) => void stagePendingSignal(v, SIGNAL_INPUT),
+      write: (v) => void rejectPending(v, "sig-2026-07-26-guard-topic", "not durable"),
+    },
+    {
+      name: "regenerateActive",
+      write: (v) => void regenerateActive(v),
+    },
+    {
+      name: "regenerateLessons",
+      write: (v) => void regenerateLessons(v),
+    },
+    {
+      // Every watchdog run appends an audit record under `Brain/log/`,
+      // so the probe form is a write path too - not only the remediating
+      // one, which also creates and replaces directories.
+      name: "runBrainWatchdog",
+      write: (v) => void runBrainWatchdog(v, { remediate: true }),
+    },
+  ];
+
+  for (const testCase of CASES) {
+    test(`${testCase.name} refuses a vault whose marker changed`, () => {
+      bootstrapBrain(vault, { configPath });
+      testCase.seed?.(vault);
+      // Pin what this process has been writing to.
+      brainDirsForWrite(vault);
+
+      // The store under this path is now a different vault.
+      rmSync(vaultIdentityPath(vault));
+      writeVaultIdentity(vault);
+
+      expect(() => testCase.write(vault)).toThrow(VaultIdentityMismatchError);
+    });
+  }
+});
+
+/**
+ * The other half of the contract: widening the guard onto read paths
+ * would break the fail-open surfaces (`src/openclaw`, the hooks), so a
+ * read must stay indifferent to the marker.
+ */
+describe("the guard stays off read paths", () => {
+  const READS: ReadonlyArray<{ name: string; read: (vault: string) => void }> = [
+    { name: "listPending", read: (v) => void listPending(v) },
+    { name: "runDoctor", read: (v) => void runDoctor(v) },
+    { name: "computeBrainStatus", read: (v) => void computeBrainStatus(v) },
+    { name: "collectExportRows", read: (v) => void collectExportRows(v) },
+  ];
+
+  for (const testCase of READS) {
+    test(`${testCase.name} is indifferent to a changed marker`, () => {
+      bootstrapBrain(vault, { configPath });
+      brainDirsForWrite(vault);
+      rmSync(vaultIdentityPath(vault));
+      writeVaultIdentity(vault);
+      expect(() => testCase.read(vault)).not.toThrow();
+    });
+  }
 });
 
 describe("bootstrap path", () => {
