@@ -3,10 +3,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DEGRADATION_CODE } from "../../src/core/integrity/degradation.ts";
 import {
   extractWikilinks,
   listVaultPages,
   parseFrontmatter,
+  parseFrontmatterText,
+  parseFrontmatterTextWithNotices,
+  parseFrontmatterWithNotices,
   slugify,
   writeFrontmatter,
 } from "../../src/core/vault.ts";
@@ -111,6 +115,110 @@ describe("parseFrontmatter", () => {
     const [meta, body] = parseFrontmatter("/nonexistent/file.md");
     expect(meta).toEqual({});
     expect(body).toBe("");
+  });
+});
+
+describe("parseFrontmatterWithNotices", () => {
+  test("a dash-prefixed non-list line yields exactly one notice naming the line", () => {
+    // `-foo` is pinned above as "simply ignored as a non-key/value line".
+    // Ignoring it is still the right control flow; what was missing is the
+    // trace. The parse result must stay identical to `parseFrontmatterText`.
+    const text = "---\nkey: value\n-foo\nother: end\n---\n\nBody.\n";
+    const [meta, body, notices] = parseFrontmatterTextWithNotices(text);
+    expect(meta["key"]).toBe("value");
+    expect(meta["other"]).toBe("end");
+    expect(meta["-foo"]).toBeUndefined();
+    expect(body).toBe("Body.");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.code).toBe(DEGRADATION_CODE.frontmatterLineDropped);
+    expect(notices[0]!.detail).toContain("-foo");
+  });
+
+  test("supported grammar produces no notices at all", () => {
+    // The block-list regression from 426d06f8 is SUPPORTED grammar, so it
+    // must parse and stay silent. Blank lines and `#` comments are content
+    // the format expects to skip and are likewise not drops.
+    const text =
+      "---\nkind: brain-signal\n\n# a comment\ntags:\n  - brain\n  - brain/signal\n  -\ninline: [x, y]\nsummary:\ntopic: foo\n---\n\nBody.\n";
+    const [meta, , notices] = parseFrontmatterTextWithNotices(text);
+    expect(meta["tags"]).toEqual(["brain", "brain/signal", ""]);
+    expect(meta["inline"]).toEqual(["x", "y"]);
+    expect(meta["summary"]).toBe("");
+    expect(notices).toEqual([]);
+  });
+
+  test("a note with no frontmatter block at all produces no notices", () => {
+    const [meta, body, notices] = parseFrontmatterTextWithNotices("Just a note.");
+    expect(meta).toEqual({});
+    expect(body).toBe("Just a note.");
+    expect(notices).toEqual([]);
+  });
+
+  test("an orphan block-list item outside any open key is reported", () => {
+    // A dash item with no preceding `key:` header has nowhere to land, so
+    // the scanner drops it. Today that is structurally silent.
+    const text = "---\n- orphan\ntitle: T\n---\n\nBody.\n";
+    const [meta, , notices] = parseFrontmatterTextWithNotices(text);
+    expect(meta["title"]).toBe("T");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.code).toBe(DEGRADATION_CODE.frontmatterLineDropped);
+    expect(notices[0]!.detail).toContain("orphan");
+  });
+
+  test("every dropped line is reported, and the notice carries the caller's site and path", () => {
+    const text = "---\nkey: value\n-foo\n> folded\ntitle: T\n---\n\nBody.\n";
+    const [, , notices] = parseFrontmatterTextWithNotices(text, {
+      site: "unit-test",
+      path: "notes/a.md",
+    });
+    expect(notices).toHaveLength(2);
+    for (const n of notices) {
+      expect(n.site).toBe("unit-test");
+      expect(n.path).toBe("notes/a.md");
+    }
+  });
+
+  test("an unreadable file yields one frontmatter-unreadable notice naming the path", () => {
+    const missing = join(tmp, "nope", "gone.md");
+    const [meta, body, notices] = parseFrontmatterWithNotices(missing);
+    expect(meta).toEqual({});
+    expect(body).toBe("");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.code).toBe(DEGRADATION_CODE.frontmatterUnreadable);
+    expect(notices[0]!.path).toBe(missing);
+  });
+
+  test("the path form attributes line drops to the file it read", () => {
+    const path = join(tmp, "note.md");
+    writeFileSync(path, "---\nkey: value\n-foo\n---\n\nBody.\n");
+    const [meta, , notices] = parseFrontmatterWithNotices(path, { site: "unit-test" });
+    expect(meta["key"]).toBe("value");
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.path).toBe(path);
+    expect(notices[0]!.site).toBe("unit-test");
+  });
+
+  test("the two-tuple functions delegate and stay byte-identical", () => {
+    const text = "---\nkey: value\n-foo\ntags:\n  - a\n---\n\nBody.\n";
+    const [meta, body] = parseFrontmatterText(text);
+    const [metaN, bodyN] = parseFrontmatterTextWithNotices(text);
+    expect(meta).toEqual(metaN);
+    expect(body).toBe(bodyN);
+
+    const path = join(tmp, "note.md");
+    writeFileSync(path, text);
+    const [fileMeta, fileBody] = parseFrontmatter(path);
+    const [fileMetaN, fileBodyN, notices] = parseFrontmatterWithNotices(path);
+    expect(fileMeta).toEqual(fileMetaN);
+    expect(fileBody).toBe(fileBodyN);
+    expect(notices).toHaveLength(1);
+  });
+
+  test("a very long dropped line is truncated in the notice detail", () => {
+    const long = "x".repeat(500);
+    const [, , notices] = parseFrontmatterTextWithNotices(`---\n${long}\n---\n\nBody.\n`);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.detail.length).toBeLessThan(300);
   });
 });
 
