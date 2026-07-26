@@ -9,16 +9,35 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { regenerateActive } from "../../../src/core/brain/active.ts";
+import { ensureDefaultAttentionFlows } from "../../../src/core/brain/attention-flows.ts";
+import { writeCaptureNote } from "../../../src/core/brain/capture/capture-note.ts";
+import { recordDecision } from "../../../src/core/brain/decisions/record.ts";
+import { distillSource } from "../../../src/core/brain/distill/distill-source.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { upsertEntity } from "../../../src/core/brain/entities/registry.ts";
+import { writeExactState, clearExactState } from "../../../src/core/brain/exact-state.ts";
 import { collectExportRows } from "../../../src/core/brain/export.ts";
+import { promoteGapsToTasks } from "../../../src/core/brain/gaps/gap-loop.ts";
+import { appendEditHistory } from "../../../src/core/brain/health/edit-history.ts";
+import { recordThesis } from "../../../src/core/brain/health/thesis.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { regenerateLessons } from "../../../src/core/brain/lessons.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { addObligation } from "../../../src/core/brain/obligations.ts";
 import { brainDirs, brainDirsForWrite } from "../../../src/core/brain/paths.ts";
 import {
   applyPending,
@@ -26,10 +45,24 @@ import {
   rejectPending,
   stagePendingSignal,
 } from "../../../src/core/brain/pending.ts";
+import { setPinned } from "../../../src/core/brain/pin.ts";
+import {
+  appendPinnedContext,
+  clearPinnedContext,
+  writePinnedContext,
+} from "../../../src/core/brain/pinned.ts";
+import { writePreference } from "../../../src/core/brain/preference.ts";
+import { appendPrefAudit } from "../../../src/core/brain/pref-audit.ts";
+import { writeResearchReport } from "../../../src/core/brain/research/research.ts";
+import { writeRollupLedger } from "../../../src/core/brain/rollup-ladder.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { retireSignal } from "../../../src/core/brain/signal-retire.ts";
+import { learnSkillProposals } from "../../../src/core/brain/skill-proposals.ts";
 import { computeBrainStatus } from "../../../src/core/brain/status.ts";
+import { persistTension } from "../../../src/core/brain/tensions.ts";
+import { PREF_AUDIT_OP } from "../../../src/core/brain/types.ts";
 import { runBrainWatchdog } from "../../../src/core/brain/watchdog.ts";
+import { applyWriteBatch } from "../../../src/core/brain/write-batch.ts";
 import {
   VaultIdentityMismatchError,
   readVaultIdentity,
@@ -143,6 +176,18 @@ describe("the guard fires on Brain write paths", () => {
     slug: "guard-topic",
   } as const;
 
+  const NOW = new Date("2026-07-26T00:00:00Z");
+
+  const PREF_INPUT = {
+    slug: "guard-pref",
+    topic: "guard-topic",
+    principle: "guard the write path",
+    created_at: "2026-07-26T00:00:00Z",
+    unconfirmed_until: "2026-08-02T00:00:00Z",
+    status: "unconfirmed",
+    evidenced_by: [],
+  } as const;
+
   const CASES: ReadonlyArray<WriteCase> = [
     {
       name: "writeSignal",
@@ -192,6 +237,189 @@ describe("the guard fires on Brain write paths", () => {
       name: "runBrainWatchdog",
       write: (v) => void runBrainWatchdog(v, { remediate: true }),
     },
+
+    // ----- Writers that reach the tree through a `paths.ts` builder -----
+    //
+    // These never touch `brainDirs`, so `brainDirsForWrite` cannot cover
+    // them. `writePreference` is the headline: the single most important
+    // writer in the system, and the one the first cut of the guard missed.
+    {
+      name: "writePreference",
+      write: (v) => void writePreference(v, PREF_INPUT),
+    },
+    {
+      name: "setPinned",
+      seed: (v) => void writePreference(v, PREF_INPUT),
+      write: (v) => void setPinned(v, `pref-${PREF_INPUT.slug}`, true),
+    },
+    {
+      name: "appendPrefAudit",
+      write: (v) =>
+        void appendPrefAudit(v, {
+          pref_id: `pref-${PREF_INPUT.slug}`,
+          op: PREF_AUDIT_OP.create,
+          agent: "test-agent",
+          revision_before: null,
+          revision_after: 1,
+          hash_before: null,
+          hash_after: "abc",
+        }),
+    },
+    {
+      name: "appendEditHistory",
+      write: (v) =>
+        void appendEditHistory(v, PREF_INPUT.slug, [
+          {
+            ts: "2026-07-26T00:00:00Z",
+            agent: "test-agent",
+            revision: 1,
+            field: "principle",
+            before: "a",
+            after: "b",
+          },
+        ]),
+    },
+    {
+      name: "writePinnedContext",
+      write: (v) => void writePinnedContext(v, "guarded"),
+    },
+    {
+      name: "appendPinnedContext",
+      write: (v) => void appendPinnedContext(v, "guarded"),
+    },
+    {
+      name: "clearPinnedContext",
+      write: (v) => void clearPinnedContext(v),
+    },
+    {
+      name: "writeExactState",
+      write: (v) => void writeExactState(v, "guard-aspect", "value"),
+    },
+    {
+      name: "clearExactState",
+      seed: (v) => void writeExactState(v, "guard-aspect", "value"),
+      write: (v) => void clearExactState(v, "guard-aspect"),
+    },
+    {
+      name: "upsertEntity",
+      write: (v) =>
+        void upsertEntity(v, {
+          category: "person",
+          name: "Guard Subject",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "recordDecision",
+      write: (v) =>
+        void recordDecision(v, {
+          title: "Guard the write path",
+          chosen: "guard at the writer entry point",
+          assumption: "the builders stay intent-neutral",
+          reviewDate: "2026-08-26",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "recordThesis",
+      write: (v) =>
+        void recordThesis(v, {
+          statement: "the write guard must cover the preference writer",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "addObligation",
+      write: (v) =>
+        void addObligation(v, {
+          title: "Review the write guard",
+          cadence: "monthly",
+          agent: "test-agent",
+          now: NOW,
+        }),
+    },
+    {
+      name: "persistTension",
+      write: (v) =>
+        void persistTension(
+          v,
+          {
+            aId: "note-a",
+            bId: "note-b",
+            subject: "write guard",
+            jaccard: 0.9,
+            aSign: "positive",
+            bSign: "negative",
+            aQuote: "the guard covers writes",
+            bQuote: "the guard does not cover writes",
+            action: "ask_user",
+          },
+          { now: NOW },
+        ),
+    },
+    {
+      name: "writeResearchReport",
+      write: (v) =>
+        void writeResearchReport(
+          v,
+          {
+            title: "Guarded report",
+            findings: [{ statement: "the guard fires", sources: ["src-a"] }],
+            sources: ["src-a"],
+          },
+          { agent: "test-agent", now: NOW },
+        ),
+    },
+    {
+      name: "distillSource",
+      write: (v) =>
+        void distillSource(
+          v,
+          {
+            sourcePath: "sources/guard.md",
+            claims: [{ text: "the guard fires" }],
+          },
+          { agent: "test-agent", now: NOW },
+        ),
+    },
+    {
+      name: "writeCaptureNote",
+      write: (v) =>
+        void writeCaptureNote(v, {
+          body: "guarded capture",
+          provenance: {
+            source: "telegram",
+            sender: "1",
+            capturedAt: "2026-07-26T00:00:00Z",
+          },
+        }),
+    },
+    {
+      name: "promoteGapsToTasks",
+      write: (v) => void promoteGapsToTasks(v, { now: NOW }),
+    },
+    {
+      name: "learnSkillProposals",
+      write: (v) => void learnSkillProposals(v, { now: NOW }),
+    },
+    {
+      name: "ensureDefaultAttentionFlows",
+      write: (v) => void ensureDefaultAttentionFlows(v),
+    },
+    {
+      name: "writeRollupLedger",
+      write: (v) => void writeRollupLedger(v, { version: 1, baselines: {}, produced: {} }),
+    },
+    {
+      name: "applyWriteBatch",
+      write: (v) =>
+        void applyWriteBatch(v, [
+          { kind: "create_note", path: "guard-note.md", content: "guarded" },
+        ]),
+    },
   ];
 
   for (const testCase of CASES) {
@@ -204,11 +432,43 @@ describe("the guard fires on Brain write paths", () => {
       // The store under this path is now a different vault.
       rmSync(vaultIdentityPath(vault));
       writeVaultIdentity(vault);
+      const before = snapshotBrainTree(vault);
 
       expect(() => testCase.write(vault)).toThrow(VaultIdentityMismatchError);
+      // Refusing AFTER the bytes landed is not refusing. A writer that
+      // trips the guard only on a downstream log append has already
+      // materialized a page in the wrong store, so the guard has to sit
+      // at the writer's own entry point, ahead of its first write.
+      expect(snapshotBrainTree(vault)).toEqual(before);
     });
   }
 });
+
+/**
+ * Content digest of every file under `<vault>/Brain/`, keyed by
+ * vault-relative path. Used to assert that a refused write left no
+ * trace - the identity marker itself is excluded because the harness
+ * rewrites it between the snapshot and the call.
+ */
+function snapshotBrainTree(vaultRoot: string): Record<string, string> {
+  const brainRoot = join(vaultRoot, "Brain");
+  const markerRel = relative(vaultRoot, vaultIdentityPath(vaultRoot));
+  const out: Record<string, string> = {};
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(abs);
+        continue;
+      }
+      const rel = relative(vaultRoot, abs);
+      if (rel === markerRel) continue;
+      out[rel] = createHash("sha256").update(readFileSync(abs)).digest("hex");
+    }
+  };
+  if (existsSync(brainRoot)) walk(brainRoot);
+  return out;
+}
 
 /**
  * The other half of the contract: widening the guard onto read paths

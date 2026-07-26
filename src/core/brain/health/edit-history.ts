@@ -15,6 +15,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { preferenceHistoryPath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface EditHistoryEntry {
   /** ISO timestamp of the mutation. */
@@ -76,6 +77,8 @@ export function appendEditHistory(
   slug: string,
   entries: ReadonlyArray<EditHistoryEntry>,
 ): number {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (entries.length === 0) return 0;
   const path = preferenceHistoryPath(vault, slug);
   const seen = new Set(readEditHistory(vault, slug).map(dedupKey));

@@ -32,6 +32,7 @@ import {
 } from "../../vault.ts";
 import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
 import {
   renderProvenanceSection,
@@ -110,6 +111,8 @@ export function ingestSource(
   input: IngestSourceInput,
   opts: IngestSourceOptions,
 ): IngestSourceResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const canonicalSource = canonicalNotePath(input.sourcePath);
   const preExtract = opts.preExtract === true ? runPreExtract(vault, canonicalSource) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;

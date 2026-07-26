@@ -20,6 +20,7 @@ import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.t
 import { normalizeRelationTarget } from "../../graph/frontmatter-relations.ts";
 import { isoSecond } from "../time.ts";
 import { entityPath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   assertValidEntityLabel,
   entityIdentityKey,
@@ -219,6 +220,8 @@ function allocateEntityId(index: EntityIndex, category: string, name: string): s
 // ----- Operations ------------------------------------------------------------
 
 export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEntityResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const category = validateEntityCategory(input.category);
   // Label quality gate (A1): strip Markdown/punctuation decoration BEFORE
   // normalisation and reject structurally-junk or denylisted names with a
@@ -314,6 +317,8 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
 }
 
 export function relateEntities(vault: string, input: RelateEntitiesInput): BrainEntity {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const relation = normalizeRelation(input.relation);
   if (!isKnownRelation(relation)) {
     throw new Error(
@@ -362,6 +367,8 @@ export function archiveEntity(
   ref: EntityRef,
   opts: ArchiveEntityOptions,
 ): BrainEntity {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const index = buildEntityIndex(vault);
   let target: BrainEntity | null;
   if (opts.restore) {

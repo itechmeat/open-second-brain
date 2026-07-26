@@ -26,6 +26,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { slugify } from "../vault.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { obligationPath, obligationsArchiveDir, obligationsDir, validateIsoDate } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoDate, isoSecond } from "./time.ts";
 
 /**
@@ -243,6 +244,8 @@ function parsePage(vault: string, slug: string): ObligationPage | null {
 
 /** Create a recurring obligation page. */
 export function addObligation(vault: string, input: AddObligationInput): ObligationPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const title = input.title.trim();
   if (title.length === 0) throw new ObligationError("obligation title must not be empty");
   const cadence = parseCadence(input.cadence);
@@ -274,6 +277,8 @@ export function addObligation(vault: string, input: AddObligationInput): Obligat
 
 /** Record a completion and advance next-due by one cadence interval. */
 export function completeObligation(vault: string, input: CompleteObligationInput): ObligationPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new ObligationError(`no obligation: ${slug}`);
@@ -346,6 +351,8 @@ export function listObligations(
 
 /** Retire an obligation into Brain/obligations/archive/. */
 export function removeObligation(vault: string, slug: string): RemoveObligationResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const normalized = slugify(slug);
   const activePath = obligationPath(vault, normalized);
   if (!existsSync(activePath)) throw new ObligationError(`no obligation: ${normalized}`);

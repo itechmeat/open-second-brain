@@ -43,6 +43,7 @@ import {
 import { appendLogEvent } from "./log.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { tensionPath, tensionsDir } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_HEALTH_DEFAULTS } from "./policy.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainSignalSign } from "./types.ts";
@@ -398,6 +399,8 @@ export function persistTension(
   finding: NoteContradictionFinding,
   opts: PersistTensionOptions = {},
 ): PersistTensionResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const { idLow, idHigh, signLow, signHigh, quoteLow, quoteHigh } = canonicalPair(finding);
   const slug = tensionSlug(finding);
   const dedupKey = tensionDedupKey(finding);

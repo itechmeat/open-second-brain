@@ -27,6 +27,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { prefAuditPath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
 
@@ -99,6 +100,8 @@ export function appendPrefAudit(
   input: AppendPrefAuditInput,
   opts: { now?: Date } = {},
 ): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   // No-op when an `update` did not change the preference content. Both
   // hashes present and equal => counter-only churn, nothing meaningful
   // to record. Lifecycle ops always record (see module docstring).

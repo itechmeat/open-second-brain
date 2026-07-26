@@ -3,6 +3,7 @@ import { join } from "node:path";
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { attentionFlowsDir, brainDirs } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { listProceduralMemory } from "./procedural-memory.ts";
 import { listPendingSkillProposals } from "./skill-proposals.ts";
 import { listRecurrenceEntries } from "./recurrence.ts";
@@ -41,6 +42,8 @@ export interface AttentionFlowEvaluation {
 }
 
 export function ensureDefaultAttentionFlows(vault: string): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const dir = attentionFlowsDir(vault);
   mkdirSync(dir, { recursive: true });
   const defaultPath = join(dir, "open-loops.md");

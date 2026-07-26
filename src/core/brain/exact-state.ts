@@ -23,6 +23,7 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { brainStateDir, exactStatePath, validateSlug } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Frontmatter `kind` marking a page as an exact-state lane artifact. */
 export const EXACT_STATE_KIND = "exact-state";
@@ -96,6 +97,8 @@ export function writeExactState(
   value: unknown,
   now: number = Date.now(),
 ): ExactStateEntry {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const slug = validateAspect(aspect);
   const normalised = normaliseValue(value);
   if (normalised.length > MAX_EXACT_STATE_VALUE_LEN) {
@@ -152,6 +155,8 @@ export function listExactState(vault: string): ExactStateEntry[] {
 
 /** Remove an aspect. Returns whether it existed before the call. */
 export function clearExactState(vault: string, aspect: string): boolean {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = exactStatePath(vault, validateAspect(aspect));
   if (!existsSync(path)) return false;
   rmSync(path, { force: true });

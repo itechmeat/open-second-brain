@@ -27,6 +27,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
 import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { distillationPagePath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   renderProvenanceSection,
   sourceIdentityHash,
@@ -129,6 +130,8 @@ export function distillSource(
   input: DistillSourceInput,
   opts: DistillSourceOptions,
 ): DistillSourceResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   validate(input);
 
   const canonicalSource = canonicalNotePath(input.sourcePath);

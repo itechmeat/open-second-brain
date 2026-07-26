@@ -45,6 +45,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { parseFrontmatter, slugify } from "../../vault.ts";
 import { nextDueDate, parseCadence, type ObligationCadence } from "../obligations.ts";
 import { thesesDir, thesisPath, validateIsoDate } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { type BrainSignalSign, type BrainCommitmentTier } from "../types.ts";
 import { readCommitmentTier, validateCommitmentTier } from "../commitment.ts";
@@ -241,6 +242,8 @@ function parsePage(vault: string, slug: string): ThesisPage | null {
 
 /** Create a declared-thesis page. Refuses to clobber an existing slug. */
 export function recordThesis(vault: string, input: RecordThesisInput): ThesisPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const statement = input.statement.trim();
   if (statement.length === 0) throw new ThesisError("thesis statement must not be empty");
   const cadence = parseCadence(input.cadence ?? "monthly");
@@ -272,6 +275,8 @@ export function recordThesis(vault: string, input: RecordThesisInput): ThesisPag
 
 /** Revise a thesis; bumps `last_updated` to now (or the injected clock). */
 export function updateThesis(vault: string, input: UpdateThesisInput): ThesisPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new ThesisError(`no thesis: ${slug}`);
@@ -310,6 +315,8 @@ export function recordThesisSupport(
   slug: string,
   opts: { date?: string; now?: Date } = {},
 ): ThesisPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const normalized = slugify(slug);
   const prior = parsePage(vault, normalized);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);
@@ -323,6 +330,8 @@ export function recordThesisSupport(
 
 /** Formally close a thesis (the graveyard's recommended action). */
 export function closeThesis(vault: string, slug: string): ThesisPage {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const normalized = slugify(slug);
   const prior = parsePage(vault, normalized);
   if (prior === null) throw new ThesisError(`no thesis: ${normalized}`);

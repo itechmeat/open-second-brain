@@ -25,6 +25,7 @@ import { canonicalNotePath } from "../../path-safety.ts";
 import { slugify, writeFrontmatterAtomic } from "../../vault.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { reportPagePath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
   ExternalFetchError,
@@ -128,6 +129,8 @@ export function writeResearchReport(
   input: ResearchReportInput,
   opts: ResearchReportOptions,
 ): ResearchReportResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   validate(input);
 
   const date = isoDate(opts.now);

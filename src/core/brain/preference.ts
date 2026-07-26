@@ -47,6 +47,7 @@ import {
   type BrainSchemaVocabulary,
 } from "./schema-vocab.ts";
 import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -311,6 +312,11 @@ export function writePreference(
   input: WritePreferenceInput,
   options: WritePreferenceOptions = {},
 ): WritePreferenceResult {
+  // Vault-identity guard (context-integrity-gates, Unit J). This writer
+  // reaches the tree through `preferencePath`, not `brainDirs`, so
+  // `brainDirsForWrite` cannot cover it - the assertion has to sit at
+  // the entry point, ahead of the field validation and every write.
+  assertVaultIdentityForWrite(vault);
   if (!input.slug?.trim()) throw new Error("preference missing field: slug");
   if (!input.topic?.trim()) throw new Error("preference missing field: topic");
   if (!input.principle?.trim()) {

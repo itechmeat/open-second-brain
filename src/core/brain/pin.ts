@@ -34,6 +34,7 @@ import { regenerateActiveQuiet } from "./active.ts";
 import { appendLogEvent, type BrainLogEntry } from "./log.ts";
 import { parsePreference } from "./preference.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainPreference } from "./types.ts";
 import { renderPrefLink } from "./wikilink.ts";
@@ -77,6 +78,8 @@ export function setPinned(
   value: boolean,
   opts: SetPinnedOptions = {},
 ): SetPinnedResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (typeof prefId !== "string" || !prefId.trim()) {
     throw new Error("setPinned missing field: pref_id");
   }

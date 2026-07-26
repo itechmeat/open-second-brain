@@ -24,6 +24,7 @@ import {
   skillProposalPendingPath,
   skillProposalRejectedPath,
 } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { listContinuityRecords, type ContinuityRecord } from "./continuity/store.ts";
 
 export type SkillProposalPatternKind =
@@ -90,6 +91,8 @@ export function learnSkillProposals(
   vault: string,
   opts: SkillProposalLearnOptions = {},
 ): SkillProposalLearnResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = opts.now ?? new Date();
   const minSupport = Math.max(2, opts.minSupport ?? DEFAULT_MIN_SUPPORT);
 
@@ -271,6 +274,8 @@ export function acceptSkillProposal(
   slug: string,
   opts: { now?: Date; note?: string } = {},
 ): SkillProposalReviewResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const now = (opts.now ?? new Date()).toISOString();
   const pendingPath = skillProposalPendingPath(vault, slug);
   if (!existsSync(pendingPath)) {
@@ -350,6 +355,8 @@ export function rejectSkillProposal(
   slug: string,
   opts: { now?: Date; note: string },
 ): SkillProposalReviewResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!opts.note.trim()) {
     throw new Error("rejecting skill proposal requires a non-empty note");
   }

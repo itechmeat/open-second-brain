@@ -209,6 +209,8 @@ export function brainDirs(vault: string): BrainDirs {
  *     construction - `preferencePath` serves `parsePreference` and
  *     `writePreference` alike - so a writer that reaches the tree
  *     through one of them is guarded at its own entry point, not here.
+ *     Those writers call `assertVaultIdentityForWrite` directly; see
+ *     its docblock for the two call surfaces and why they differ.
  */
 export function brainDirsForWrite(vault: string, notices?: DegradationNotice[]): BrainDirs {
   assertVaultIdentityForWrite(vault, notices);

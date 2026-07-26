@@ -25,6 +25,7 @@ import { ensureInsideVault, vaultRelative } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { computeContentHash, verifyContentHash } from "../content-hash.ts";
 import { brainDirs, preferencePath } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { parsePreference } from "../preference.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
@@ -337,6 +338,8 @@ export function applyRemediation(
   plan: RemediationPlan,
   opts: ApplyRemediationOptions,
 ): RemediationOutcome {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const applied: RemediationStep[] = [];
   const skipped: RemediationStep[] = [];
   let budget = plan.stepCap;

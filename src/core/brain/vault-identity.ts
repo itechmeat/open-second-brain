@@ -194,6 +194,23 @@ export function resetVaultIdentityPins(): void {
  * {@link VaultIdentityMismatchError} when the root's marker differs from
  * the one this process pinned. Never throws for an absent, unreadable,
  * or malformed marker.
+ *
+ * ## Two call surfaces, one assertion
+ *
+ * Brain writers reach the vault tree two ways, and both funnel here.
+ *
+ *   - Writers that resolve a whole directory set call
+ *     `brainDirsForWrite`, which is a thin wrapper over this function.
+ *   - Writers that build a single path with one of the `paths.ts`
+ *     builders (`preferencePath`, `entityPath`, `decisionPath`, …) call
+ *     this function DIRECTLY, at their own entry point.
+ *
+ * The second surface exists because the builders are intent-neutral by
+ * construction: `preferencePath` serves `parsePreference` and
+ * `writePreference` alike, so asserting inside the builder would refuse
+ * reads. The assertion therefore belongs to the writer, and it belongs
+ * BEFORE the writer's first byte - a refusal that arrives after the page
+ * is on disk has already materialized the wrong store.
  */
 export function assertVaultIdentityForWrite(vault: string, sink?: DegradationNotice[]): void {
   const root = resolve(vault);

@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { brainPinnedPath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export const MAX_PINNED_CONTEXT_LEN = 20_000;
 
@@ -51,6 +52,8 @@ function commitPinnedContent(
   normalised: string,
   operation: "write" | "append",
 ): PinnedContext {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   assertWithinPinnedBudget(normalised, operation);
   const path = brainPinnedPath(vault);
   atomicWriteFileSync(path, normalised.length > 0 ? `${normalised}\n` : "");
@@ -58,6 +61,8 @@ function commitPinnedContent(
 }
 
 export function clearPinnedContext(vault: string): PinnedContext {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const path = brainPinnedPath(vault);
   atomicWriteFileSync(path, "");
   return { path, present: true, content: "" };

@@ -32,6 +32,7 @@ import { parseFrontmatter, slugify } from "../../vault.ts";
 import { appendLogEvent } from "../log.ts";
 import { addObligation } from "../obligations.ts";
 import { decisionPath, decisionsDir, obligationPath, validateIsoDate } from "../paths.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { isoSecond } from "../time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainCommitmentTier } from "../types.ts";
@@ -348,6 +349,8 @@ export function ensureReviewObligation(
   vault: string,
   input: { title: string; reviewDate: string; agent: string; now?: Date },
 ): { slug: string; created: boolean } {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const obligationTitle = reviewObligationTitle(input.title);
   const slug = slugify(obligationTitle);
   if (existsSync(obligationPath(vault, slug))) {
@@ -371,6 +374,8 @@ export function ensureReviewObligation(
  * existing decision slug (an update is a distinct, later operation).
  */
 export function recordDecision(vault: string, input: RecordDecisionInput): RecordDecisionResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const title = requireField(input.title, "title");
   const chosen = requireField(input.chosen, "chosen");
   const assumption = requireField(input.assumption, "assumption");
@@ -456,6 +461,8 @@ export function recordDecision(vault: string, input: RecordDecisionInput): Recor
  * an empty outcome with a typed error.
  */
 export function backfillOutcome(vault: string, input: BackfillOutcomeInput): DecisionRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);
@@ -506,6 +513,8 @@ export function backfillOutcome(vault: string, input: BackfillOutcomeInput): Dec
  * Rejects an unknown slug or an out-of-range rating with a typed error.
  */
 export function updateRating(vault: string, input: UpdateRatingInput): DecisionRecord {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   const slug = slugify(input.slug);
   const prior = parsePage(vault, slug);
   if (prior === null) throw new DecisionError(`no decision: ${slug}`);

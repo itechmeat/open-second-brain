@@ -40,6 +40,7 @@ import {
 } from "./apply-evidence.ts";
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
 
 /** Separator inserted between the existing body and appended text. */
@@ -182,6 +183,8 @@ export function applyWriteBatch(
   vault: string,
   operations: ReadonlyArray<WriteOperation>,
 ): WriteBatchResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   if (!Array.isArray(operations) || operations.length === 0) {
     throw new WriteBatchError("invalid_operation", -1, "operations must be a non-empty array");
   }

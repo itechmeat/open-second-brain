@@ -24,6 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import type { BrainConfig } from "./types.ts";
 import { rollupLedgerPath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** New facts since the last rollup that trigger a fact -> rollup step. */
 export const DEFAULT_FACT_ROLLUP_THRESHOLD = 20;
@@ -127,6 +128,8 @@ export function readRollupLedger(vault: string): RollupLedger | null {
 
 /** Persist the ledger. Called only when a rung fired. */
 export function writeRollupLedger(vault: string, ledger: RollupLedger): void {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
   atomicWriteFileSync(rollupLedgerPath(vault), `${JSON.stringify(ledger, null, 2)}\n`);
 }
 

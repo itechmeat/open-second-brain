@@ -13,6 +13,7 @@ import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
 import { claudeMemoryBackend } from "./agent-backend/claude.ts";
 import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface ImportClaudeMemoryOpts {
   readonly vault: string;
@@ -78,6 +79,11 @@ function mergePreservingEvidence(existingBody: string, freshBody: string): strin
 }
 
 export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMemoryResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J). The
+  // dry-run form writes nothing, so it stays a read and is not gated -
+  // guarding a preview would refuse the very inspection an operator
+  // runs to decide whether the resolved vault is the intended one.
+  if (opts.mode === "apply") assertVaultIdentityForWrite(opts.vault);
   const backend = opts.backend ?? claudeMemoryBackend;
   assertSafeMemoryPath(opts.memoryDir, opts.allowArbitraryMemoryPath ?? false);
   if (!existsSync(opts.memoryDir)) {
