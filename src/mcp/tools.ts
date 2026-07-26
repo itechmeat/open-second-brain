@@ -41,6 +41,7 @@ import { SKILL_TOOLS } from "./skill-tools.ts";
 import { buildHydrateTool, TOOL_HYDRATE_NAME } from "./hydrate-tool.ts";
 import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-identity.ts";
 import { vaultRelative } from "../core/path-safety.ts";
+import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../core/graph/agent-scope.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { coerceStr, coerceInt } from "./coerce.ts";
@@ -150,8 +151,16 @@ async function toolQuery(
   }
   const pattern = coerceStr(args, "pattern", false);
   const limit = coerceInt(args, "limit", 50, 1, 500);
+  // Owner-scope isolation (context-integrity-gates, Unit A). This
+  // surface lists pages straight off the filesystem rather than through
+  // search, so it applies the rule itself - over the frontmatter
+  // `listVaultPages` has already parsed, so an unscoped call does no
+  // extra work and returns exactly what it always did.
+  const scope = normalizeAgentScope(coerceStr(args, "agent_scope", false) ?? undefined);
 
-  const pages = listVaultPages(ctx.vault);
+  const pages = listVaultPages(ctx.vault).filter(
+    (p) => scope === null || isOwnerVisible(pageOwner(p.metadata), scope),
+  );
   const needle = pattern ? pattern.toLowerCase() : null;
   const matched: Array<Record<string, unknown>> = [];
   for (const p of pages) {
@@ -362,6 +371,11 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
             minimum: 1,
             maximum: 500,
             description: "Maximum number of matched pages to return (default 50).",
+          },
+          agent_scope: {
+            type: "string",
+            description:
+              "Optional owner scope: a page declaring an `owner:` is listed only for its own scope; ownerless pages always list. Absent = no filtering.",
           },
         },
         additionalProperties: false,

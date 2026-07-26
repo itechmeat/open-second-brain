@@ -181,11 +181,16 @@ async function toolBrainAgentQuery(
   const topic = coerceStr(args, "topic", false);
   const query = coerceStr(args, "query", false);
   const kind = coerceAgentContributionKind(args, "kind");
+  // Owner-scope isolation (context-integrity-gates, Unit A): the
+  // provenance view reads the same preference and retired pages the
+  // delivery surfaces do, so it honours the same ownership rule.
+  const ownerScope = coerceStr(args, "agent_scope", false);
   return queryAgentSources(ctx.vault, {
     agents: coerceStrList(args, "agents"),
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),
     ...(kind !== null ? { kind } : {}),
+    ...(ownerScope !== null ? { ownerScope } : {}),
     limit: coerceInt(args, "limit", 50, 1, 500),
   }) as unknown as Record<string, unknown>;
 }
@@ -550,6 +555,11 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           maximum: 500,
           description: "Maximum contributions returned. Defaults to 50.",
+        },
+        agent_scope: {
+          type: "string",
+          description:
+            "Optional owner scope: a contribution whose page declares an `owner:` returns only to its own scope; ownerless ones always match. Absent = no filtering.",
         },
       },
       additionalProperties: false,

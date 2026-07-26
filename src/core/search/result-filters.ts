@@ -250,27 +250,37 @@ export function applyScopeFilter(
   });
 }
 
+/**
+ * May a caller scoped to `scope` see the page at this vault-relative
+ * path? The one place the ownership rule meets the filesystem, so every
+ * surface that owns a path - ranked search results, source-derived
+ * pages, any future one - resolves ownership identically.
+ *
+ * FAILS CLOSED: a page whose frontmatter cannot be parsed has an
+ * unknowable owner and is hidden under an active scope rather than
+ * leaked. This is stricter than visibility scoping's fail-open default -
+ * deliberate, because agent-scope is an isolation boundary.
+ */
+export function isPathOwnerVisible(
+  vault: string,
+  path: string,
+  scope: string,
+  frontmatterCache: Map<string, FrontmatterMap>,
+): boolean {
+  let owner: string | null;
+  try {
+    owner = pageOwner(readCachedFrontmatter(frontmatterCache, vault, path));
+  } catch {
+    return false;
+  }
+  return isOwnerVisible(owner, scope);
+}
+
 export function applyAgentScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: string,
   vault: string,
   frontmatterCache: Map<string, FrontmatterMap>,
 ): ReadonlyArray<BrainSearchResult> {
-  // Fail-closed sentinel: a page whose frontmatter cannot be parsed has
-  // an unknowable owner, so under an active scope it is dropped rather
-  // than leaked. This is stricter than visibility scoping's fail-open
-  // default - deliberate, because agent-scope is an isolation boundary.
-  const UNPARSEABLE = " unparseable-owner";
-  const ownerFor = (path: string): string => {
-    try {
-      return pageOwner(readCachedFrontmatter(frontmatterCache, vault, path)) ?? "";
-    } catch {
-      return UNPARSEABLE;
-    }
-  };
-  return ranked.filter((r) => {
-    const owner = ownerFor(r.path);
-    if (owner === UNPARSEABLE) return false; // fail closed
-    return isOwnerVisible(owner === "" ? null : owner, scope);
-  });
+  return ranked.filter((r) => isPathOwnerVisible(vault, r.path, scope, frontmatterCache));
 }

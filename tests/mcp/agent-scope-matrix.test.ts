@@ -25,6 +25,7 @@ import { indexVault, resolveSearchConfig, search } from "../../src/core/search/i
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { brainConfigPath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
@@ -73,6 +74,9 @@ const SCOPED_SURFACES: ReadonlyArray<ScopedSurface> = [
   { name: "brain_search_expand", source: SCOPE_SOURCE.argument, gated: false },
   { name: "brain_file_context", source: SCOPE_SOURCE.argument, gated: false },
   { name: "brain_deep_synthesis", source: SCOPE_SOURCE.argument, gated: false },
+  { name: "brain_search_by_source", source: SCOPE_SOURCE.argument, gated: false },
+  { name: "second_brain_query", source: SCOPE_SOURCE.argument, gated: false },
+  { name: "brain_agent_query", source: SCOPE_SOURCE.argument, gated: false },
 ];
 
 /**
@@ -81,20 +85,30 @@ const SCOPED_SURFACES: ReadonlyArray<ScopedSurface> = [
  * forgotten — this is the honest half of the matrix.
  */
 const UNSCOPED_CONTENT: ReadonlyArray<{ readonly name: string; readonly reason: string }> = [
-  { name: "brain_search_by_source", reason: "source-keyed recall; not in this wave's scope" },
   { name: "brain_session_grep", reason: "session transcript lane, not owner-taggable pages" },
   { name: "brain_session_expand", reason: "session transcript lane, not owner-taggable pages" },
   { name: "brain_session_summary", reason: "session transcript lane, not owner-taggable pages" },
   { name: "brain_session_describe", reason: "session transcript lane, not owner-taggable pages" },
-  { name: "brain_note_history", reason: "per-note git history for a path the caller names" },
-  { name: "brain_artifact_get", reason: "replays a payload this process already returned" },
-  { name: "second_brain_query", reason: "facade over brain_search; not in this wave's scope" },
-  { name: "brain_agent_query", reason: "agent-authored view; not in this wave's scope" },
+  {
+    name: "brain_note_history",
+    reason:
+      "git commit metadata (subjects, authors, dates) for a path the caller already names, " +
+      "read from the repository rather than from page frontmatter. Every response shape it " +
+      "can produce - no repo, no commits, N phases - is distinguishable from a refusal, so a " +
+      "filter here would announce the existence of the page it is meant to hide while the " +
+      "same history stays readable through git itself.",
+  },
+  {
+    name: "brain_artifact_get",
+    reason:
+      "replays, by opaque id, a payload this process already returned to this caller - and " +
+      "already filtered under whatever scope produced it. The stored envelope keeps no page " +
+      "identity, so there is nothing left to re-apply the ownership rule to.",
+  },
   {
     name: "brain_pre_compact_extract",
     reason: "extracts from caller-supplied text, not the vault",
   },
-  { name: "brain_memory_bridge", reason: "cross-vault bridge; not in this wave's scope" },
   { name: "brain_recall_gate", reason: "verdict over a caller-supplied question, no bodies" },
 ];
 
@@ -144,6 +158,7 @@ const NON_CONTENT: ReadonlyArray<string> = [
   "brain_lifecycle",
   "brain_maintenance",
   "brain_mcp_landscape",
+  "brain_memory_bridge",
   "brain_moc_audit",
   "brain_note",
   "brain_obligation",
@@ -261,6 +276,21 @@ async function call(
   return JSON.stringify(await tool(name).handler({ ...ctx, agentName }, args));
 }
 
+/** Vault-relative paths a listing surface returned. */
+function pagePaths(result: { pages: Array<{ path: string }> }): string[] {
+  return result.pages.map((p) => p.path);
+}
+
+/** Entry ids a source-trace surface returned. */
+function entryIds(result: { entries: Array<{ id: string }> }): string[] {
+  return result.entries.map((e) => e.id);
+}
+
+/** Contribution ids a provenance surface returned, sorted. */
+function contributionIds(result: { contributions: Array<{ id: string }> }): string[] {
+  return result.contributions.map((c) => c.id).toSorted();
+}
+
 // ----- the mechanism --------------------------------------------------------
 
 test("the matrix classifies every tool exactly once", () => {
@@ -371,6 +401,66 @@ test("brain_search_expand refuses another owner's chunk as if it were absent", a
   await expect(
     call("brain_search_expand", { chunk_id: hit!.chunkId, agent_scope: OWNER_B }),
   ).rejects.toThrow(`chunk not found: ${hit!.chunkId}`);
+});
+
+test("second_brain_query excludes another owner's pages from the listing", async () => {
+  const unscoped = JSON.parse(await call("second_brain_query", { limit: 500 }));
+  const scoped = JSON.parse(await call("second_brain_query", { limit: 500, agent_scope: OWNER_B }));
+  expect(pagePaths(unscoped)).toContain("notes/owned-a.md");
+  expect(pagePaths(unscoped)).toContain("Brain/preferences/pref-owned-by-a.md");
+  expect(pagePaths(scoped)).not.toContain("notes/owned-a.md");
+  expect(pagePaths(scoped)).not.toContain("Brain/preferences/pref-owned-by-a.md");
+  // The shared pages survive, and the reported total is the visible one -
+  // a count that still included the hidden pages would leak their number.
+  expect(pagePaths(scoped)).toContain("notes/shared.md");
+  expect(scoped.total_pages).toBe(scoped.pages.length);
+  expect(scoped.total_pages).toBeLessThan(unscoped.total_pages);
+});
+
+test("brain_search_by_source excludes another owner's derived pages", async () => {
+  const sourceFile = "sources/paper.md";
+  const derived = join(vault, "Brain", "sources");
+  mkdirSync(derived, { recursive: true });
+  writeFileSync(
+    join(derived, "src-owned-a.md"),
+    `---\nid: src-owned-a\nowner: ${OWNER_A}\nsource_path: ${sourceFile}\n---\n\nderived for a\n`,
+  );
+  writeFileSync(
+    join(derived, "src-shared.md"),
+    `---\nid: src-shared\nsource_path: ${sourceFile}\n---\n\nderived for everyone\n`,
+  );
+
+  const unscoped = JSON.parse(await call("brain_search_by_source", { source_file: sourceFile }));
+  const scoped = JSON.parse(
+    await call("brain_search_by_source", { source_file: sourceFile, agent_scope: OWNER_B }),
+  );
+  expect(entryIds(unscoped).toSorted()).toEqual(["src-owned-a", "src-shared"]);
+  expect(entryIds(scoped)).toEqual(["src-shared"]);
+  expect(scoped.total).toBe(1);
+});
+
+test("brain_agent_query excludes another owner's preference contributions", async () => {
+  // A preference contribution only surfaces once its evidence signals
+  // exist, because the contribution's agents are read from them.
+  for (const slug of ["shared", "owned-by-a"]) {
+    writeSignal(vault, {
+      topic: slug,
+      signal: "positive",
+      agent: "agent-x",
+      principle: `principle for ${slug}`,
+      created_at: "2026-05-01T00:00:00Z",
+      date: "2026-05-01",
+      slug,
+    });
+  }
+
+  const unscoped = JSON.parse(await call("brain_agent_query", { kind: "preference" }));
+  const scoped = JSON.parse(
+    await call("brain_agent_query", { kind: "preference", agent_scope: OWNER_B }),
+  );
+  expect(contributionIds(unscoped)).toEqual(["pref-owned-by-a", "pref-shared"]);
+  expect(contributionIds(scoped)).toEqual(["pref-shared"]);
+  expect(scoped.total_matched).toBe(1);
 });
 
 test("brain_file_context and brain_deep_synthesis exclude another owner's page", async () => {

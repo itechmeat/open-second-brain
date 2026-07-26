@@ -21,6 +21,9 @@ import {
   type SourceCleanupPlan,
 } from "../../core/brain/source-cleanup.ts";
 import { resolveAgentName } from "../../core/config.ts";
+import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
+import { isPathOwnerVisible } from "../../core/search/result-filters.ts";
+import type { FrontmatterMap } from "../../core/types.ts";
 import { coerceBoolOptional, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -124,10 +127,22 @@ async function toolBrainSearchBySource(
 ): Promise<Record<string, unknown>> {
   const sourceFile = coerceStr(args, "source_file", true)!;
   const hits = searchBySourceFile(ctx.vault, sourceFile);
+  // Owner-scope isolation (context-integrity-gates, Unit A). Every entry
+  // names a Brain page, so the ownership rule applies through the same
+  // path-based resolver the ranked search path uses - including its
+  // fail-closed treatment of frontmatter that will not parse. `total`
+  // counts what is returned; a total over the hidden pages would leak
+  // their number. An absent scope filters nothing.
+  const scope = normalizeAgentScope(coerceStr(args, "agent_scope", false) ?? undefined);
+  const cache = new Map<string, FrontmatterMap>();
+  const visible =
+    scope === null
+      ? hits
+      : hits.filter((entry) => isPathOwnerVisible(ctx.vault, entry.path, scope, cache));
   return {
     source_file: sourceFile,
-    total: hits.length,
-    entries: hits.map(serializeEntry),
+    total: visible.length,
+    entries: visible.map(serializeEntry),
   };
 }
 
@@ -321,6 +336,11 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         source_file: {
           type: "string",
           description: "Exact source identity to trace: a vault-relative path or a URL.",
+        },
+        agent_scope: {
+          type: "string",
+          description:
+            "Optional owner scope: a derived page declaring an `owner:` is returned only to its own scope; ownerless pages always match. Absent = no filtering.",
         },
       },
       required: ["source_file"],

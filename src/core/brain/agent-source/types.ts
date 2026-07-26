@@ -11,6 +11,13 @@ export interface AgentSourceContribution {
   readonly title: string;
   readonly text: string;
   readonly path?: string;
+  /**
+   * Owner token the underlying page declares, when it can declare one
+   * (context-integrity-gates, Unit A). Absent means shared: either the
+   * page carries no `owner:`, or the contribution has no page behind it
+   * at all (a log event), which is not owner-taggable by construction.
+   */
+  readonly owner?: string;
   readonly data: Readonly<Record<string, unknown>>;
 }
 

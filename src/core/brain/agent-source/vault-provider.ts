@@ -4,6 +4,8 @@ import { join } from "node:path";
 import type { BrainLogEntry } from "../log.ts";
 import { readAllLogEntries } from "../query.ts";
 import { brainDirs } from "../paths.ts";
+import { pageOwner } from "../../graph/agent-scope.ts";
+import { parseFrontmatter } from "../../vault.ts";
 import { parsePreference, parseRetired } from "../preference.ts";
 import { parseSignal } from "../signal.ts";
 import type { BrainPreference, BrainRetired, BrainSignal } from "../types.ts";
@@ -30,8 +32,8 @@ function collectVaultContributions(vault: string): ReadonlyArray<AgentSourceCont
   for (const signal of signals) {
     contributions.push(signalContribution(signal));
   }
-  for (const preference of collectPreferences(dirs.preferences, dirs.retired)) {
-    contributions.push(preferenceContribution(preference, signalAgentById));
+  for (const owned of collectPreferences(dirs.preferences, dirs.retired)) {
+    contributions.push(preferenceContribution(owned, signalAgentById));
   }
   for (const entry of readAllLogEntries(vault)) {
     const contribution = logContribution(entry);
@@ -68,22 +70,28 @@ function collectSignals(...dirs: string[]): BrainSignal[] {
   return signals;
 }
 
-function collectPreferences(
-  preferencesDir: string,
-  retiredDir: string,
-): Array<BrainPreference | BrainRetired> {
+/**
+ * A parsed preference or retired record with the owner token its page
+ * declares (context-integrity-gates, Unit A). The token is read from the
+ * frontmatter rather than from the parsed record, so it is resolved the
+ * same way for both kinds - `BrainRetired` carries no `owner` field, and
+ * a retired page's ownership must not evaporate on retirement.
+ */
+interface OwnedRecord {
+  readonly record: BrainPreference | BrainRetired;
+  readonly owner: string | null;
+}
+
+function collectPreferences(preferencesDir: string, retiredDir: string): OwnedRecord[] {
   return [
     ...collectPreferenceDir(preferencesDir, "pref-"),
     ...collectPreferenceDir(retiredDir, "ret-"),
   ];
 }
 
-function collectPreferenceDir(
-  dir: string,
-  prefix: "pref-" | "ret-",
-): Array<BrainPreference | BrainRetired> {
+function collectPreferenceDir(dir: string, prefix: "pref-" | "ret-"): OwnedRecord[] {
   if (!existsSync(dir)) return [];
-  const out: Array<BrainPreference | BrainRetired> = [];
+  const out: OwnedRecord[] = [];
   const entries = readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -93,7 +101,8 @@ function collectPreferenceDir(
     }
     const path = join(dir, entry.name);
     try {
-      out.push(prefix === "pref-" ? parsePreference(path) : parseRetired(path));
+      const record = prefix === "pref-" ? parsePreference(path) : parseRetired(path);
+      out.push({ record, owner: pageOwner(parseFrontmatter(path)[0]) });
     } catch {
       continue;
     }
@@ -123,9 +132,10 @@ function signalContribution(signal: BrainSignal): AgentSourceContribution {
 }
 
 function preferenceContribution(
-  preference: BrainPreference | BrainRetired,
+  owned: OwnedRecord,
   signalAgentById: ReadonlyMap<string, string>,
 ): AgentSourceContribution {
+  const preference = owned.record;
   const agents = new Set<string>();
   for (const evidence of preference.evidenced_by) {
     const id = normaliseWikilinkTarget(evidence);
@@ -141,6 +151,7 @@ function preferenceContribution(
     timestamp: preference.kind === "brain-retired" ? preference.retired_at : preference.created_at,
     topic: preference.topic,
     ...(preference.scope !== undefined ? { scope: preference.scope } : {}),
+    ...(owned.owner !== null ? { owner: owned.owner } : {}),
     title: preference.topic,
     text: [preference.topic, preference.status, preference.principle].join("\n"),
     data: {

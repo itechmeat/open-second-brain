@@ -1,3 +1,4 @@
+import { isOwnerVisible, normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { collectAgentSourceContributions, listAgentSources } from "./registry.ts";
 import { summarizeAgentContributions } from "./summary.ts";
 import type {
@@ -12,6 +13,14 @@ export interface AgentSourceQueryOptions {
   readonly query?: string;
   readonly kind?: AgentSourceContributionKind;
   readonly limit?: number;
+  /**
+   * Owner scope of the caller (context-integrity-gates, Unit A). A
+   * contribution whose page declares a different owner is withheld;
+   * ownerless contributions - including every log event, which has no
+   * page to own it - always match. Absent filters nothing, so an
+   * unscoped call is byte-identical to before.
+   */
+  readonly ownerScope?: string;
 }
 
 export interface AgentSourceQueryFilters {
@@ -51,7 +60,12 @@ export function queryAgentSources(
   const query = normalizeTextFilter(opts.query);
   const limit = normalizeLimit(opts.limit);
 
+  const ownerScope = normalizeAgentScope(opts.ownerScope);
+
   const matched = collectAgentSourceContributions(vault).filter((contribution) => {
+    if (ownerScope !== null && !isOwnerVisible(contribution.owner ?? null, ownerScope)) {
+      return false;
+    }
     if (!contribution.agents.some((agent) => selectedSet.has(agent))) return false;
     if (opts.kind !== undefined && contribution.kind !== opts.kind) return false;
     if (topic !== null && contribution.topic !== topic) return false;
