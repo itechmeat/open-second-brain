@@ -42,6 +42,22 @@ export interface ServerContext {
    * back through it. Optional so manually-built contexts stay valid.
    */
   readonly artifactStore?: ArtifactStore;
+  /**
+   * Resolved agent identity for this server process
+   * (context-integrity-gates, Unit A), from `resolveAgentName`.
+   *
+   * It exists because `brain_context` — the documented session-bootstrap
+   * surface — takes NO arguments at all (`{properties:{},
+   * additionalProperties:false}`), so it has no other way to learn who
+   * is asking. It is the fallback scope for the GATED preference-backed
+   * surfaces only: those cannot narrow anything unless the operator has
+   * set `integrity.owner_scope_delivery` to `fail`. The ungated
+   * search-backed surfaces deliberately do NOT fall back to it, because
+   * defaulting a scope there would narrow every search in every vault.
+   *
+   * Optional so a manually-built context stays valid and unscoped.
+   */
+  readonly agentName?: string;
 }
 
 export interface ToolDefinition {

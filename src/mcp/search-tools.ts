@@ -38,7 +38,13 @@ import {
 import { assessRecallAdequacy } from "../core/brain/recall-adequacy.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
-import { coerceBoolOptional, coerceStr, coerceStringOptional } from "./coerce.ts";
+import {
+  AGENT_SCOPE_SCHEMA,
+  coerceAgentScope,
+  coerceBoolOptional,
+  coerceStr,
+  coerceStringOptional,
+} from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import { projectScoreBreakdown } from "../core/search/enrich.ts";
@@ -1002,6 +1008,7 @@ const FILE_CONTEXT_INPUT_SCHEMA: Record<string, unknown> = {
     file_path: { type: "string", minLength: 1, maxLength: 1024 },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     min_bytes: { type: "integer", minimum: 0, maximum: 10_000_000 },
+    agent_scope: AGENT_SCOPE_SCHEMA,
   },
   required: ["file_path"],
   additionalProperties: false,
@@ -1051,7 +1058,9 @@ async function toolBrainFileContext(
   });
 
   try {
+    const agentScope = coerceAgentScope(ctx, args, false);
     const outcome = await fileContextRecall(config, {
+      ...(agentScope !== undefined ? { agentScope } : {}),
       filePath,
       ...(limit !== undefined ? { limit } : {}),
       ...(minBytes !== undefined ? { minBytes } : {}),
@@ -1110,6 +1119,7 @@ const SEARCH_EXPAND_INPUT_SCHEMA: Record<string, unknown> = {
       maxLength: 32,
       description: "Pagination cursor returned as next_cursor by a prior expand call.",
     },
+    agent_scope: AGENT_SCOPE_SCHEMA,
   },
   required: ["chunk_id"],
   additionalProperties: false,
@@ -1171,6 +1181,7 @@ async function toolBrainSearchExpand(
   }
   const rawLimit = coerceIntInRange(args, "raw_limit", 1, MCP_LIMIT_MAX);
   const cursor = coerceStringOptional(args, "cursor", 32);
+  const expandScope = coerceAgentScope(ctx, args, false);
   const config = resolveSearchConfig({
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
@@ -1180,6 +1191,7 @@ async function toolBrainSearchExpand(
     result = await withTimeout(
       expandHit(config, {
         chunkId: rawChunk,
+        ...(expandScope !== undefined ? { agentScope: expandScope } : {}),
         ...(rawLimit !== undefined ? { rawLimit } : {}),
         ...(cursor !== undefined ? { cursor } : {}),
       }),

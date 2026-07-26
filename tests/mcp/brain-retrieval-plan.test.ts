@@ -97,7 +97,7 @@ describe("brain_retrieval_plan", () => {
     expect(plan["marginal_stop"]).toBeDefined();
   });
 
-  test("exposes no mutating parameters (only question + token_budget)", async () => {
+  test("exposes no mutating parameters (question, token_budget, agent_scope)", async () => {
     const server = new MCPServer({ vault });
     await initialize(server);
     const r = (await server.handleRequest({
@@ -110,7 +110,11 @@ describe("brain_retrieval_plan", () => {
     };
     const tool = r.result.tools.find((t) => t.name === "brain_retrieval_plan")!;
     const props = (tool.inputSchema as { properties: Record<string, unknown> }).properties;
-    expect(Object.keys(props).toSorted()).toEqual(["question", "token_budget"]);
+    // `agent_scope` (context-integrity-gates, Unit A) is a READ filter:
+    // it narrows the pack the advice is computed over, and the surface
+    // stays read-only. The pin exists to catch a mutating parameter
+    // being added, not to freeze the read parameters.
+    expect(Object.keys(props).toSorted()).toEqual(["agent_scope", "question", "token_budget"]);
     expect((tool.inputSchema as { additionalProperties?: boolean }).additionalProperties).toBe(
       false,
     );

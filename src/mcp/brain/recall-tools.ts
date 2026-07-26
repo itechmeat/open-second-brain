@@ -65,6 +65,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
+import { AGENT_SCOPE_SCHEMA, coerceAgentScope } from "../coerce.ts";
 
 /** Recall-quality benchmark over an inline dataset. */
 async function toolBrainBenchmark(
@@ -347,11 +348,11 @@ async function toolBrainRetrievalPlan(
     "token_budget",
     args["token_budget"],
   );
-  const plan = buildRetrievalPlan(
-    ctx.vault,
-    question,
-    tokenBudget !== undefined ? { tokenBudget } : {},
-  );
+  const agentScope = coerceAgentScope(ctx, args, true);
+  const plan = buildRetrievalPlan(ctx.vault, question, {
+    ...(tokenBudget !== undefined ? { tokenBudget } : {}),
+    ...(agentScope !== undefined ? { agentScope } : {}),
+  });
   return { vault_path: ctx.vault, ...serializeRetrievalPlan(plan) };
 }
 
@@ -1033,6 +1034,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 1,
           description: "Optional context-pack token budget to model (default 2000).",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["question"],
       additionalProperties: false,

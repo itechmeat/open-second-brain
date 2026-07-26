@@ -85,6 +85,43 @@ export function coerceStringOptional(
   return v;
 }
 
+/**
+ * Input-schema fragment for the owner-scope argument
+ * (context-integrity-gates, Unit A). Declared once so eleven tools
+ * cannot grow eleven descriptions of the same argument.
+ */
+export const AGENT_SCOPE_ARG_NAME = "agent_scope";
+
+/** Longest accepted owner token; an agent name, not a document. */
+const AGENT_SCOPE_MAX_LEN = 128;
+
+export const AGENT_SCOPE_SCHEMA = Object.freeze({
+  type: "string",
+  description:
+    "Optional agent-ownership scope; shared (ownerless) memories always match, owner-tagged memories only their owner. Absent = no ownership filtering.",
+});
+
+/**
+ * Read the owner scope a content-returning tool was called with.
+ *
+ * `fallbackToServerIdentity` is for the GATED preference-backed
+ * surfaces: with no explicit argument they scope to the process's own
+ * agent identity, which is what makes `owner_scope_delivery: fail`
+ * effective for clients that never pass the argument. It is safe there
+ * and only there, because those surfaces filter nothing until the
+ * operator sets the gate. The ungated search-backed surfaces pass
+ * `false`, so an omitted argument keeps them byte-identical.
+ */
+export function coerceAgentScope(
+  ctx: { readonly agentName?: string },
+  args: Record<string, unknown>,
+  fallbackToServerIdentity: boolean,
+): string | undefined {
+  const explicit = coerceStringOptional(args, AGENT_SCOPE_ARG_NAME, AGENT_SCOPE_MAX_LEN);
+  if (explicit !== undefined) return explicit;
+  return fallbackToServerIdentity ? ctx.agentName : undefined;
+}
+
 export function coerceIsoDate(args: Record<string, unknown>, key: string): Date | null {
   const raw = coerceStr(args, key, false);
   if (raw === null) return null;

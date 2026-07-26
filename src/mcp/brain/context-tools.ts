@@ -320,7 +320,13 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   let counts: BrainContextCounts = EMPTY_CONTEXT_COUNTS;
   let error: string | undefined;
   try {
-    counts = regenerateActive(ctx.vault).counts;
+    // Owner-scope isolation (context-integrity-gates, Unit A). This
+    // surface takes no arguments, so `ServerContext.agentName` is its
+    // only source of identity; the gate decides whether it narrows.
+    counts = regenerateActive(
+      ctx.vault,
+      ctx.agentName === undefined ? {} : { agentScope: ctx.agentName },
+    ).counts;
   } catch (err) {
     error = (err as Error)?.message ?? String(err);
   }

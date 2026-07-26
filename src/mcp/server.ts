@@ -115,6 +115,11 @@ export class MCPServer {
       repoRoot: this.repoRoot,
       capabilityReport: this.capabilityReport,
       artifactStore: this.artifactStore,
+      // Owner-scope isolation (context-integrity-gates, Unit A): the
+      // only source of identity for `brain_context`, which takes no
+      // arguments. Resolved per access, like `resolveAgentName`'s other
+      // callers, so a config edit takes effect without a restart.
+      agentName: resolveAgentName(this.configPath ?? undefined),
     };
   }
 

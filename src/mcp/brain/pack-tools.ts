@@ -43,7 +43,13 @@ import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/bra
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceStr, coerceStrList, coerceBool } from "../coerce.ts";
+import {
+  AGENT_SCOPE_SCHEMA,
+  coerceAgentScope,
+  coerceStr,
+  coerceStrList,
+  coerceBool,
+} from "../coerce.ts";
 import {
   coercePositiveInteger,
   optionalStringArg,
@@ -115,8 +121,10 @@ async function toolBrainContextPack(
   // gated on the density_ranking_context_pack config key (default off)
   // so the default pack stays byte-identical to the tier → recency order.
   const densityRanking = resolveDensityRankingContextPack(ctx.configPath ?? undefined);
+  const agentScope = coerceAgentScope(ctx, args, true);
   const report = packContext(ctx.vault, {
     maxTokens,
+    ...(agentScope !== undefined ? { agentScope } : {}),
     ...(densityRanking ? { densityRanking: true } : {}),
     ...(sessionFocus !== null ? { sessionFocus } : {}),
     ...(query ? { query } : {}),
@@ -407,8 +415,10 @@ async function toolBrainPreCompressPack(
   );
   const receipt = receiptOptionsFromArgs("brain_pre_compress_pack", args, "pre_compress", "mcp");
   const telemetry = telemetryOptionsFromArgs("brain_pre_compress_pack", args, "mcp");
+  const agentScope = coerceAgentScope(ctx, args, true);
   const pack = buildPreCompressPack(ctx.vault, {
     topK,
+    ...(agentScope !== undefined ? { agentScope } : {}),
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
     ...(configuredDegradation(ctx.vault) !== undefined
@@ -490,11 +500,13 @@ async function toolBrainAnticipatoryContext(
   } catch {
     // defaults apply; a broken config never blocks a read
   }
+  const anticipatoryScope = coerceAgentScope(ctx, args, true);
   const now = new Date();
   if (coerceBool(args, "refresh") === true) {
     const signal = coerceStr(args, "signal_text");
     refreshAnticipatoryCache(ctx.vault, {
       sessionId,
+      ...(anticipatoryScope !== undefined ? { agentScope: anticipatoryScope } : {}),
       ...(typeof signal === "string" && signal.trim() !== "" ? { signalText: signal } : {}),
       now,
       ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
@@ -504,6 +516,7 @@ async function toolBrainAnticipatoryContext(
   const result = readAnticipatoryContext(ctx.vault, {
     sessionId,
     now,
+    ...(anticipatoryScope !== undefined ? { agentScope: anticipatoryScope } : {}),
     ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
   });
@@ -612,6 +625,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional turn id recorded on emitted telemetry.",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["max_tokens"],
       additionalProperties: false,
@@ -787,6 +801,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional turn id recorded on emitted telemetry.",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       additionalProperties: false,
     },
@@ -857,6 +872,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Latest prompt/signal text steering the refreshed bundle.",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["session_id"],
       additionalProperties: false,

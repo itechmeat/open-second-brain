@@ -29,7 +29,7 @@ import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceIsoDate, coerceFormat } from "../coerce.ts";
+import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceIsoDate, coerceFormat } from "../coerce.ts";
 import {
   coerceIsoTimestampOrDate,
   coerceNonNegativeInteger,
@@ -56,9 +56,11 @@ async function toolBrainMorningBrief(
     args["max_total_chars"],
   );
   const now = new Date();
+  const agentScope = coerceAgentScope(ctx, args, true);
   const brief = buildMorningBrief(ctx.vault, {
     now,
     topK,
+    ...(agentScope !== undefined ? { agentScope } : {}),
     lookbackDays,
     ...(maxCharsPerMemory !== undefined ? { maxCharsPerMemory } : {}),
     ...(maxTotalChars !== undefined ? { maxTotalChars } : {}),
@@ -112,11 +114,13 @@ async function toolBrainDigest(
   // snapshot render, and the snapshot date key all describe the same
   // window even when the caller omitted `until`.
   const effectiveUntil = until ?? new Date();
+  const agentScope = coerceAgentScope(ctx, args, true);
   const result = renderDigest(ctx.vault, {
     ...(since ? { since } : {}),
     until: effectiveUntil,
     format,
     linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
+    ...(agentScope !== undefined ? { agentScope } : {}),
   });
 
   const envelope: Record<string, unknown> = {
@@ -136,6 +140,7 @@ async function toolBrainDigest(
           until: effectiveUntil,
           format: "json",
           linkOutputFormat: resolveLinkOutputFormat(ctx.configPath ?? undefined),
+          ...(agentScope !== undefined ? { agentScope } : {}),
         }).content;
   let parsedSnapshot: unknown = null;
   try {
@@ -484,6 +489,7 @@ export const BRIEF_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 0,
           description: "view=operator: cap on ranked actions (default 5).",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["view"],
       additionalProperties: false,

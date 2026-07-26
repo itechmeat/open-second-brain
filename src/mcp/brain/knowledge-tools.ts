@@ -61,7 +61,7 @@ import {
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
-import { coerceStr, coerceBool } from "../coerce.ts";
+import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceBool } from "../coerce.ts";
 import { coercePositiveInteger } from "./shared.ts";
 
 /** Forward-looking projection envelope; read-only fold. */
@@ -347,7 +347,12 @@ async function toolBrainDeepSynthesis(
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
-  const report = await deepSynthesis(searchConfig, topic, { now, limit });
+  const agentScope = coerceAgentScope(ctx, args, false);
+  const report = await deepSynthesis(searchConfig, topic, {
+    now,
+    limit,
+    ...(agentScope !== undefined ? { agentScope } : {}),
+  });
   let triggersCreated: number | undefined;
   if (enqueue) {
     const result = createTriggers(ctx.vault, synthesisCandidates(report), {
@@ -831,6 +836,7 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description: "Enqueue contradiction/gap findings into the trigger queue.",
         },
+        agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["topic"],
       additionalProperties: false,

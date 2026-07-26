@@ -108,7 +108,11 @@ export interface RetrievalPlanAdvice {
 
 export interface RetrievalPlanDeps {
   /** Context pack producer; defaults to a read-only {@link packContext}. */
-  readonly pack?: (vault: string, budget: number) => ContextPackReport;
+  readonly pack?: (
+    vault: string,
+    budget: number,
+    agentScope: string | undefined,
+  ) => ContextPackReport;
   /** Token-impact summary; defaults to {@link summarizeTokenImpact}. */
   readonly tokenImpact?: (vault: string) => TokenImpactSummary;
   /** Route latency summary; defaults to {@link summarizeMcpRouteLatency}. */
@@ -117,6 +121,15 @@ export interface RetrievalPlanDeps {
   readonly surfaceVocabulary?: ReadonlySet<string>;
   /** Context-pack token budget; defaults to {@link DEFAULT_PLAN_TOKEN_BUDGET}. */
   readonly tokenBudget?: number;
+  /**
+   * Owner scope for the pack the advice is computed over
+   * (context-integrity-gates, Unit A). The plan returns no memory
+   * bodies, but its item count and density curve are derived from them,
+   * so advice built over memories the caller may not see would describe
+   * a pack it can never receive. Gated like every other
+   * preference-backed surface; omitted filters nothing.
+   */
+  readonly agentScope?: string;
 }
 
 // ----- Composition ----------------------------------------------------------
@@ -130,8 +143,16 @@ function summarySurfaceVocabulary(vault: string): ReadonlySet<string> {
 }
 
 /** Read-only default pack: no receipt, telemetry, or metric, so nothing is written. */
-function defaultPack(vault: string, budget: number): ContextPackReport {
-  return packContext(vault, { maxTokens: budget, densityRanking: true });
+function defaultPack(
+  vault: string,
+  budget: number,
+  agentScope: string | undefined,
+): ContextPackReport {
+  return packContext(vault, {
+    maxTokens: budget,
+    densityRanking: true,
+    ...(agentScope !== undefined ? { agentScope } : {}),
+  });
 }
 
 function graphExpansionFor(intent: QueryIntent): RetrievalPlanGraphExpansion {
@@ -215,7 +236,7 @@ export function buildRetrievalPlan(
   const vocab = deps.surfaceVocabulary ?? summarySurfaceVocabulary(vault);
   const queryPlan = buildQueryPlan(question, [], null, vocab);
 
-  const pack = (deps.pack ?? defaultPack)(vault, budget);
+  const pack = (deps.pack ?? defaultPack)(vault, budget, deps.agentScope);
   const items = pack.items;
   const densityCurve = items.map((i) => i.density ?? 0);
   const tokens = items.map((i) => i.tokens);
