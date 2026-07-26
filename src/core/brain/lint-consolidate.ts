@@ -183,8 +183,16 @@ function applyDemotion(path: string): boolean {
 }
 
 export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Vault-identity write guard (context-integrity-gates, Unit J), placed
+  // per the one rule the appliers share: at the entry point, before any
+  // other work, and only when the call will write. See the write-guard
+  // section of `applier-capability.ts`.
+  //
+  // It used to run unconditionally, ahead of this branch. The read-only
+  // `o2b brain actions` verb calls this function in report mode, so a
+  // root the guard refuses took down a ranking command that never
+  // intended to write a byte - the guard's own contract inverted.
+  if (opts.apply) assertVaultIdentityForWrite(vault);
   const now = opts.now ?? new Date();
   const staleDays = opts.staleDays ?? PAGE_STALE_DAYS_DEFAULT;
   const merge = buildMergeMap(vault);
