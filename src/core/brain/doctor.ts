@@ -103,6 +103,8 @@ import {
   type ResolvedBrainHealthConfig,
   type TrustVerdict,
 } from "./types.ts";
+import { scanStaleLocks } from "./sync-lockfile.ts";
+import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 import { normaliseWikilinkTarget, parseArtifactRef } from "./wikilink.ts";
 
 // ----- Public types ---------------------------------------------------------
@@ -466,6 +468,28 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     /* doctor never throws */
   }
 
+  // Unit J: a resolved root with no identity marker. An absent marker
+  // cannot tell an old vault from a wrong one, so it is uncertainty
+  // rather than a warning - but it is the exact shape a mis-resolved
+  // root takes, and the doctor reporting such a root clean is what let
+  // one pass the single command an operator runs to check the store.
+  try {
+    collectVaultMarkerUncertainty(vault, uncertain);
+  } catch {
+    /* doctor never throws */
+  }
+
+  // Lock files left behind by a crashed writer. `scanStaleLocks` has
+  // documented itself as "the brain doctor surfaces these" since it was
+  // written and had no caller: a SIGKILLed process leaves a `.lock` that
+  // no breaker may safely remove, so the ONLY recovery is an operator
+  // deleting it, and the only way that happens is if something names it.
+  try {
+    collectStaleLockUncertainty(vault, uncertain);
+  } catch {
+    /* doctor never throws */
+  }
+
   // v0.14.0 semantic-health pass. Best-effort like every other lint:
   // a failure here must not poison the structural warning / error
   // stream. The report is attached to the result even on a clean run
@@ -572,8 +596,55 @@ function collectLineageLedgerUncertainty(vault: string, out: DoctorUncertainEntr
   for (const notice of report.notices) {
     out.push({
       code: notice.code,
-      path: report.path,
+      path: notice.path ?? report.path,
       message: notice.detail,
+    });
+  }
+}
+
+/**
+ * Report a resolved root that carries no vault identity marker.
+ *
+ * The producer is pure, throws nothing, and treats a corrupt marker as
+ * absent - the same collapse `readVaultIdentity` performs, because a
+ * truncated sync must not be reported as a wrong vault.
+ */
+function collectVaultMarkerUncertainty(vault: string, out: DoctorUncertainEntry[]): void {
+  const notice = vaultMarkerAbsentNotice(vault);
+  if (notice === null) return;
+  out.push({
+    code: notice.code,
+    ...(notice.path !== undefined ? { path: notice.path } : {}),
+    message: notice.detail,
+  });
+}
+
+/** Code for a `.lock` file the doctor found under the Brain tree. */
+const STALE_LOCK_CODE = "stale-lock";
+
+/**
+ * Report every `.lock` file under `Brain/`.
+ *
+ * Deliberately NOT age-filtered and deliberately not removed. The lock
+ * primitive is a single-attempt exclusive create with no breaker, by
+ * design: no timeout can distinguish a crashed writer from a slow live
+ * one, and killing a live writer's lock corrupts what it protects. So
+ * this reports the condition and leaves the judgment to the operator -
+ * which is the whole reason a lock a crash left behind must be nameable
+ * at all. A lock held by a healthy concurrent writer shows up here too,
+ * and is uncertainty rather than a warning for exactly that reason.
+ */
+function collectStaleLockUncertainty(vault: string, out: DoctorUncertainEntry[]): void {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.brain)) return;
+  for (const lockPath of scanStaleLocks(dirs.brain)) {
+    out.push({
+      code: STALE_LOCK_CODE,
+      path: lockPath,
+      message:
+        "a writer lock is present; while it is held every write it guards is refused. " +
+        "If no process owns it (a crash leaves one behind) remove the file by hand - " +
+        "nothing breaks it automatically, because a live writer cannot be told from a dead one",
     });
   }
 }

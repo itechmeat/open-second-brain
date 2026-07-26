@@ -92,6 +92,26 @@ async function toolBrainDoctor(
       lines: w.lines,
       ceiling: w.ceiling,
     })),
+    // context-integrity-gates: the third diagnostic stream. Frontmatter
+    // lines the scanner dropped, lineage-ledger findings, an unmarked
+    // vault root and stale writer locks all land in `uncertain`, and
+    // until now the CLI was its only reader - so an agent driving the
+    // doctor over MCP could not see any of them. A named failure no
+    // consumer reads is still a silent failure.
+    //
+    // Omitted when empty, mirroring the CLI and `runDoctor` itself, so a
+    // clean vault's payload is byte-identical to the pre-`uncertain`
+    // shape. Additive-safe: this tool declares no `outputSchema`, so no
+    // structured-output contract constrains the key set.
+    ...(result.uncertain !== undefined && result.uncertain.length > 0
+      ? {
+          uncertain: result.uncertain.map((u) => ({
+            code: u.code,
+            ...(u.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, u.path) } : {}),
+            message: u.message,
+          })),
+        }
+      : {}),
   };
 }
 

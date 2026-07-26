@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -28,6 +29,10 @@ beforeEach(() => {
   }
   mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
+  // Unit J: an unmarked root is itself reported through `uncertain`, so
+  // the "clean tree emits no uncertain key" assertion needs the marker
+  // `o2b brain init` would have stamped on a real vault.
+  writeVaultIdentity(vault);
   configPath = join(tmp, "config.yaml");
   writeFileSync(
     configPath,

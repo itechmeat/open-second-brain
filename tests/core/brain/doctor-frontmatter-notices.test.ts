@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
+import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 import { DEGRADATION_CODE } from "../../../src/core/integrity/degradation.ts";
 
 let tmp: string;
@@ -29,6 +30,10 @@ beforeEach(() => {
   }
   mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
   writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n");
+  // Unit J: an unmarked root is an uncertainty finding in its own
+  // right, so a fixture standing for a clean vault carries the marker
+  // `o2b brain init` would have stamped.
+  writeVaultIdentity(vault);
 });
 
 afterEach(() => {

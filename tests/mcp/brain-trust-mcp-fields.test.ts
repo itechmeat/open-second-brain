@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { resetVaultIdentityPins, writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 
 let tmp: string;
 let vault: string;
@@ -36,9 +37,11 @@ beforeEach(() => {
   }
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
   atomicWriteFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
+  resetVaultIdentityPins();
 });
 
 afterEach(() => {
+  resetVaultIdentityPins();
   rmSync(tmp, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
   for (const [k, v] of Object.entries(savedEnv)) {
@@ -96,6 +99,51 @@ describe("brain_doctor MCP wrapper - trust fields", () => {
     const out = await callTool(server, "brain_doctor", {});
     expect(out["trust_verdict"]).toBe("clean");
     expect(out["instruction_file_warnings"]).toEqual([]);
+  });
+
+  test("the uncertain stream reaches an MCP caller, not only the terminal", async () => {
+    // The whole degradation stream - frontmatter lines the scanner
+    // dropped, lineage-ledger findings, an unmarked vault root, stale
+    // writer locks - was rendered by the CLI alone. An agent driving the
+    // doctor over MCP could not see any of it.
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_doctor", {});
+    const uncertain = out["uncertain"] as Array<{
+      code: string;
+      path?: string;
+      message: string;
+    }>;
+    expect(Array.isArray(uncertain)).toBe(true);
+    // This fixture builds the Brain tree by hand, so it carries no
+    // identity marker - the exact shape a mis-resolved root takes.
+    const marker = uncertain.find((u) => u.code === "vault-marker-absent");
+    expect(marker).toBeDefined();
+    expect(marker!.message.length).toBeGreaterThan(0);
+  });
+
+  test("a frontmatter drop reaches brain_doctor under its own code", async () => {
+    mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "notes", "odd.md"),
+      "---\ntitle: Odd\ntopic: odd\n-foo\n---\n\nBody.\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_doctor", {});
+    const uncertain = out["uncertain"] as Array<{ code: string; path?: string }>;
+    const hit = uncertain.find((u) => u.code === "frontmatter-line-dropped");
+    expect(hit).toBeDefined();
+    // Paths are vault-relative on the wire, exactly like errors/warnings.
+    expect(hit!.path).toBe("Brain/notes/odd.md");
+  });
+
+  test("a vault with nothing uncertain omits the key entirely", async () => {
+    writeVaultIdentity(vault);
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_doctor", {});
+    expect(Object.hasOwn(out, "uncertain")).toBe(false);
   });
 
   test("long CLAUDE.md surfaces instruction_file_warnings via brain_doctor", async () => {

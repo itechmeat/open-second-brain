@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { runDoctor } from "../../src/core/brain/doctor.ts";
 import { brainConfigPath, brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+import { writeVaultIdentity } from "../../src/core/brain/vault-identity.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let tmp: string;
@@ -32,6 +33,10 @@ beforeEach(() => {
     mkdirSync(d, { recursive: true });
   }
   atomicWriteFileSync(brainConfigPath(tmp), DEFAULT_BRAIN_CONFIG_YAML);
+  // Unit J: an unmarked root is itself an uncertainty finding, so a
+  // fixture that stands for a CLEAN vault has to carry what `o2b brain
+  // init` would have stamped on it.
+  writeVaultIdentity(tmp);
 });
 
 afterEach(() => {
