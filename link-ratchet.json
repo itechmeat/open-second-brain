@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "definition": "sql:links.target_document_id-null@1",
+  "subjects": [
+    {
+      "path": "templates/brain-starter",
+      "dangling": 55
+    }
+  ]
+}

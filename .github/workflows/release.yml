@@ -47,6 +47,9 @@ jobs:
       - name: Verify manifest version sync
         run: bun run sync-version:check
 
+      - name: Broken-link ratchet
+        run: bun run link-ratchet:check
+
       - name: Run TypeScript typecheck
         run: bun run typecheck
 

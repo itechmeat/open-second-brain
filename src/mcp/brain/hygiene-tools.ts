@@ -30,6 +30,12 @@ import {
   type HygieneScanReport,
 } from "../../core/brain/hygiene/types.ts";
 import { executeRecompile, planRecompile } from "../../core/brain/recompile.ts";
+import { resolveSearchConfig } from "../../core/search/index.ts";
+import {
+  DANGLING_LINK_DEFINITION,
+  measureFromIndex,
+  type LinkRatchetMeasurement,
+} from "../../core/search/link-ratchet.ts";
 import { coerceBool } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -84,6 +90,54 @@ function findingView(vault: string, finding: HygieneFinding): Record<string, unk
   };
 }
 
+/**
+ * Vault-wide link integrity, reported beside the detector findings
+ * (context-integrity-gates, unit G).
+ *
+ * An ADDITIVE top-level key, not a fifth detector: `HYGIENE_DETECTOR_IDS`
+ * is a closed tuple validated in three places including this tool's own
+ * input-schema enum, so extending it would change the tool contract.
+ *
+ * Read-only over the index the operator's searches already use, and
+ * refused unless that index records a full resolution pass - so
+ * `measured: false` with a reason is a real outcome here, never
+ * flattened into a zero.
+ */
+async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unknown>> {
+  let measurement: LinkRatchetMeasurement;
+  try {
+    measurement = await measureFromIndex(
+      resolveSearchConfig({
+        vault: ctx.vault,
+        ...(ctx.configPath ? { configPath: ctx.configPath } : {}),
+      }),
+    );
+  } catch (e) {
+    // A read-only scan is never failed by the reporting layer.
+    return {
+      definition: DANGLING_LINK_DEFINITION,
+      measured: false,
+      reason: "index-unreadable",
+      detail: e instanceof Error ? e.message : String(e),
+    };
+  }
+  if (!measurement.measurable) {
+    return {
+      definition: measurement.definition,
+      measured: false,
+      reason: measurement.reason,
+      detail: measurement.detail,
+    };
+  }
+  return {
+    definition: measurement.definition,
+    measured: true,
+    dangling: measurement.dangling,
+    links: measurement.links,
+    documents: measurement.documents,
+  };
+}
+
 async function toolBrainHygiene(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -135,6 +189,7 @@ async function toolBrainHygiene(
       counts: report.counts,
       findings: report.findings.map((finding) => findingView(ctx.vault, finding)),
       errors: report.errors,
+      link_integrity: await linkIntegrityView(ctx),
     };
   }
 

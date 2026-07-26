@@ -58,6 +58,8 @@ import {
   Store,
   EMBEDDING_PREFIX_QUERY_STATE_KEY,
   EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
+  LAST_FULL_INDEX_AT_STATE_KEY,
+  LAST_INDEXED_AT_STATE_KEY,
 } from "./store.ts";
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { SearchError } from "./types.ts";
@@ -521,8 +523,11 @@ async function indexInto(
     }
 
     const now = new Date().toISOString();
-    store.setState("last_indexed_at", now);
-    if (opts?.force) store.setState("last_full_index_at", now);
+    store.setState(LAST_INDEXED_AT_STATE_KEY, now);
+    // The SAME instant on a forced run: their equality is the
+    // "this index resolved the whole vault" predicate the broken-link
+    // ratchet verifies before it trusts a count (unit G).
+    if (opts?.force) store.setState(LAST_FULL_INDEX_AT_STATE_KEY, now);
 
     // Bump the corpus-generation revision whenever the index actually
     // changed, so the persistent query cache (v0.20.0) is invalidated
@@ -857,8 +862,8 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     const model = store.getState("embedding_model");
     const dimRaw = store.getState("embedding_dimension");
     const dim = dimRaw ? Number(dimRaw) : null;
-    const last = store.getState("last_indexed_at");
-    const full = store.getState("last_full_index_at");
+    const last = store.getState(LAST_INDEXED_AT_STATE_KEY);
+    const full = store.getState(LAST_FULL_INDEX_AT_STATE_KEY);
 
     const warnings: string[] = [];
     if (config.semantic.enabled && !store.vecLoaded()) {

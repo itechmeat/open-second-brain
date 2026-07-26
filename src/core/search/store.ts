@@ -82,6 +82,28 @@ export const EMBEDDING_VEC_VERSION_STATE_KEY = "embedding_vec_version";
  */
 export const EMBEDDING_ABI_FIX_COMMAND = "o2b search reindex --embeddings";
 
+/**
+ * `index_state` keys stamped by every index run (`last_indexed_at`) and
+ * by a FORCED one only (`last_full_index_at`). Both carry the same ISO
+ * instant when the run was forced, which is what makes their equality a
+ * usable "the last run resolved the whole vault" predicate - the
+ * precondition the broken-link ratchet verifies before it trusts a
+ * dangling count (context-integrity-gates, unit G).
+ */
+export const LAST_INDEXED_AT_STATE_KEY = "last_indexed_at";
+export const LAST_FULL_INDEX_AT_STATE_KEY = "last_full_index_at";
+
+/** Vault-wide link-resolution census (see {@link Store.linkResolutionCounts}). */
+export interface LinkResolutionCounts {
+  /**
+   * Link rows carrying a target path. Tag rows have `target_path IS
+   * NULL` and are excluded - a tag has nothing to resolve to.
+   */
+  readonly total: number;
+  /** Rows whose target path never materialized into a document id. */
+  readonly dangling: number;
+}
+
 /** The query/passage instruction prefixes active for an index run. */
 export interface EmbeddingPrefixPair {
   readonly query: string;
@@ -1345,6 +1367,35 @@ export class Store {
       "UPDATE links SET target_document_id = (SELECT id FROM documents WHERE documents.path = links.target_path) " +
         "WHERE target_path IS NOT NULL",
     );
+  }
+
+  /**
+   * Vault-wide link-resolution census (context-integrity-gates, unit G).
+   *
+   * `dangling` is the SQL definition of a broken link:
+   * `target_document_id IS NULL AND target_path IS NOT NULL` - a link
+   * that named a target and whose target never materialized into a
+   * document id through {@link resolveLinkTargets} or
+   * {@link resolveAliasTargets}. Index-backed on both columns
+   * (`idx_links_target_doc`, `idx_links_target_path`).
+   *
+   * This is DELIBERATELY stricter than the read-time ladder used by
+   * {@link resolvedDocLinkPairs} and its siblings, which additionally
+   * accept a `<target>.md` exact match and an unambiguous basename
+   * suffix: a basename-style `[[note]]` counts here even though a
+   * reader would resolve it. The SQL form is the one that is stable,
+   * reproducible and index-backed, which is what a ratchet needs; the
+   * ceiling file records which definition produced its number.
+   */
+  linkResolutionCounts(): LinkResolutionCounts {
+    const row = this.db
+      .query<{ total: number; dangling: number | null }, []>(
+        "SELECT count(*) AS total, " +
+          "sum(CASE WHEN target_document_id IS NULL THEN 1 ELSE 0 END) AS dangling " +
+          "FROM links WHERE target_path IS NOT NULL",
+      )
+      .get();
+    return Object.freeze({ total: row?.total ?? 0, dangling: row?.dangling ?? 0 });
   }
 
   // ── doc aliases (v7, link-recall-intelligence) ─────────────────────────────
