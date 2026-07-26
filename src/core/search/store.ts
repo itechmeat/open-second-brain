@@ -47,6 +47,15 @@ import {
 export const EMBEDDING_PREFIX_QUERY_STATE_KEY = "embedding_prefix_query";
 export const EMBEDDING_PREFIX_PASSAGE_STATE_KEY = "embedding_prefix_passage";
 
+/**
+ * `index_state` keys behind the corpus-generation fingerprint. Named so
+ * the class accessors and {@link readCorpusGenerationSync} cannot drift
+ * into two spellings of the same key.
+ */
+export const EMBEDDING_MODEL_STATE_KEY = "embedding_model";
+export const EMBEDDING_DIMENSION_STATE_KEY = "embedding_dimension";
+export const INDEX_REVISION_STATE_KEY = "index_revision";
+
 /** The query/passage instruction prefixes active for an index run. */
 export interface EmbeddingPrefixPair {
   readonly query: string;
@@ -222,6 +231,61 @@ function tryLoadVecExtension(db: Database): boolean {
     return true;
   } catch {
     return false;
+  }
+}
+
+/**
+ * Corpus-generation fingerprint read WITHOUT opening a {@link Store}.
+ *
+ * `Store.open` is async (the write path acquires a lock) and a read open
+ * refuses a schema mismatch, so neither form is usable from a
+ * synchronous caller that only wants to observe the index's identity and
+ * must keep working when there is no index at all. The context pack's
+ * provenance stamp (context-integrity-gates, Unit B) is exactly that
+ * caller. It lives here rather than beside the caller because this
+ * module is the single SQL boundary for the index.
+ *
+ * Returns `null` - "unrecorded", per `integrity/stamp.ts` - when the
+ * index file is absent or cannot be read. That is DISTINCT from a
+ * recorded generation string: a vault that gains or loses its index
+ * drifts from `null` to a value (or back) and the stamp comparison names
+ * it, rather than treating "nothing to compare" as agreement.
+ *
+ * The schema version comes from the file itself, not from
+ * {@link LATEST_SCHEMA_VERSION}: an index still at an older schema is a
+ * different corpus state, and folding it onto the current constant would
+ * hide precisely that.
+ */
+export function readCorpusGenerationSync(dbPath: string): string | null {
+  if (!existsSync(dbPath)) return null;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    const read = (key: string): string | null =>
+      db.query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?").get(key)
+        ?.value ?? null;
+    const dimRaw = read(EMBEDDING_DIMENSION_STATE_KEY);
+    const dim = dimRaw === null ? null : Number(dimRaw);
+    const revRaw = read(INDEX_REVISION_STATE_KEY);
+    const rev = revRaw === null ? 0 : Number(revRaw);
+    return computeCorpusGeneration({
+      embeddingModel: read(EMBEDDING_MODEL_STATE_KEY),
+      embeddingDimension: dim !== null && Number.isFinite(dim) ? dim : null,
+      schemaVersion: readSchemaVersion(db),
+      indexRevision: Number.isFinite(rev) && rev >= 0 ? Math.floor(rev) : 0,
+    });
+  } catch {
+    return null;
+  } finally {
+    try {
+      db.close();
+    } catch {
+      /* a close failure cannot change what was already read */
+    }
   }
 }
 
@@ -549,14 +613,14 @@ export class Store {
 
   /** Monotonic counter bumped on every index mutation; 0 if never set. */
   indexRevision(): number {
-    const raw = this.getState("index_revision");
+    const raw = this.getState(INDEX_REVISION_STATE_KEY);
     const n = raw === null ? 0 : Number(raw);
     return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
   }
 
   /** Increment the index revision. Called after a mutating index run. */
   bumpIndexRevision(): void {
-    this.setState("index_revision", String(this.indexRevision() + 1));
+    this.setState(INDEX_REVISION_STATE_KEY, String(this.indexRevision() + 1));
   }
 
   /**
@@ -565,10 +629,10 @@ export class Store {
    * embedding change or content reindex invalidates cached results.
    */
   corpusGeneration(): string {
-    const dimRaw = this.getState("embedding_dimension");
+    const dimRaw = this.getState(EMBEDDING_DIMENSION_STATE_KEY);
     const dim = dimRaw === null ? null : Number(dimRaw);
     return computeCorpusGeneration({
-      embeddingModel: this.getState("embedding_model"),
+      embeddingModel: this.getState(EMBEDDING_MODEL_STATE_KEY),
       embeddingDimension: dim !== null && Number.isFinite(dim) ? dim : null,
       schemaVersion: LATEST_SCHEMA_VERSION,
       indexRevision: this.indexRevision(),
@@ -986,8 +1050,8 @@ export class Store {
     dimension: number | null,
     prefixes?: EmbeddingPrefixPair,
   ): ModelChangeOutcome {
-    const prevModel = this.getState("embedding_model");
-    const prevDimRaw = this.getState("embedding_dimension");
+    const prevModel = this.getState(EMBEDDING_MODEL_STATE_KEY);
+    const prevDimRaw = this.getState(EMBEDDING_DIMENSION_STATE_KEY);
     const prevDim = prevDimRaw === null ? null : Number(prevDimRaw);
 
     const modelChanged = prevModel !== null && model !== null && prevModel !== model;
@@ -1018,8 +1082,8 @@ export class Store {
       console.error(
         `embedding model changed from ${prevModel}/${prevDim} to ${model}/${dimension}, embeddings cleared`,
       );
-      this.deleteState("embedding_model");
-      this.deleteState("embedding_dimension");
+      this.deleteState(EMBEDDING_MODEL_STATE_KEY);
+      this.deleteState(EMBEDDING_DIMENSION_STATE_KEY);
     } else if (prefixChanged) {
       // Model/dimension unchanged: the prefix change alone triggers the clear.
       this.clearEmbeddings();
@@ -1030,8 +1094,8 @@ export class Store {
       );
     }
 
-    if (model !== null) this.setState("embedding_model", model);
-    if (dimension !== null) this.setState("embedding_dimension", String(dimension));
+    if (model !== null) this.setState(EMBEDDING_MODEL_STATE_KEY, model);
+    if (dimension !== null) this.setState(EMBEDDING_DIMENSION_STATE_KEY, String(dimension));
     if (prefixes !== undefined) {
       this.setState(EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
       this.setState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);

@@ -524,6 +524,10 @@ async function toolBrainAnticipatoryContext(
     cache_state: result.cache_state,
     root_session_id: result.root_session_id,
     ...(result.generated_at !== undefined ? { generated_at: result.generated_at } : {}),
+    // Present only when a fresh-by-the-clock entry was refused on its
+    // provenance stamp or validity window, so an ordinary miss stays
+    // byte-identical (context-integrity-gates, Unit B).
+    ...(result.cache_refusal !== undefined ? { cache_refusal: result.cache_refusal } : {}),
     items: result.context.items.map((item) => ({
       id: item.id,
       tier: item.tier,

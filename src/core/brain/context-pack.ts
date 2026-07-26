@@ -68,6 +68,7 @@ import {
   type ContextLanesReport,
 } from "./context-lanes.ts";
 import { buildAttentionContextBlock } from "./attention-flows.ts";
+import { buildPackStamp, type ContextPackStamp } from "./pack-stamp.ts";
 import { scoreSessionFocusTarget, sessionFocusIsActive } from "../search/session-focus.ts";
 import type { SearchSessionFocus } from "../search/types.ts";
 
@@ -136,6 +137,25 @@ export interface ContextPackReport {
    * keeps the report byte-identical.
    */
   readonly warnings?: ReadonlyArray<string>;
+  /**
+   * Provenance stamp and validity window (context-integrity-gates, Unit
+   * B). Present ONLY when the caller passed
+   * {@link ContextPackOptions.stamp}, so a pack that never asked to be
+   * persisted stays byte-identical - the same conditional shape `lanes`
+   * and `density` use.
+   */
+  readonly stamp?: ContextPackStamp;
+}
+
+/**
+ * Opt into a provenance stamp on the report. The clock is INJECTED
+ * rather than read here: the persisting caller (the anticipatory cache)
+ * already owns an event time, and the stamp's window must agree with the
+ * timestamps that caller records rather than with a second wall-clock
+ * reading taken microseconds later.
+ */
+export interface PackStampOptions {
+  readonly now: Date;
 }
 
 export interface ContextPackOptions {
@@ -220,6 +240,13 @@ export interface ContextPackOptions {
    * the query. Omitted/false injects only chain tips.
    */
   readonly includeHistorical?: boolean;
+  /**
+   * Opt-in provenance stamp (context-integrity-gates, Unit B). Required
+   * by any caller that PERSISTS a pack, so the persisted copy can be
+   * verified against the vault on read instead of being trusted forever.
+   * Omitted keeps the report byte-identical.
+   */
+  readonly stamp?: PackStampOptions;
 }
 
 interface Candidate {
@@ -349,6 +376,17 @@ function collectCandidates(
   return { candidates: out, hiddenByOwnerScope };
 }
 
+/**
+ * A stamped call is statically known to return a stamped report, so a
+ * persisting caller never has to handle an "impossible" absent stamp -
+ * the case that would otherwise invite exactly the silent fallback this
+ * wave removes.
+ */
+export function packContext(
+  vault: string,
+  opts: ContextPackOptions & { readonly stamp: PackStampOptions },
+): ContextPackReport & { readonly stamp: ContextPackStamp };
+export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport;
 export function packContext(vault: string, opts: ContextPackOptions): ContextPackReport {
   const startedAtMs = Date.now();
   if (!Number.isFinite(opts.maxTokens) || opts.maxTokens <= 0) {
@@ -616,6 +654,13 @@ function finalizeContextPackReport(
   const warnings = [...extraWarnings, ...tensionWarnings];
   if (warnings.length > 0) {
     enriched = { ...enriched, warnings };
+  }
+  // Provenance stamp (context-integrity-gates, Unit B). Attached in the
+  // one funnel every return path already passes through, so the
+  // zero-budget early return is stamped exactly like the full pack and
+  // no future exit can forget it. Absent option → absent key.
+  if (opts.stamp !== undefined) {
+    enriched = { ...enriched, stamp: buildPackStamp(vault, opts.stamp.now) };
   }
   // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
   // with the option absent the thunk never runs, and a broken

@@ -23,13 +23,24 @@ import { join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
+import type { StampTokens } from "../integrity/stamp.ts";
 import { packContext, type ContextPackItem } from "./context-pack.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
+import { packStampRefusal, packStampTokens, type ContextPackStamp } from "./pack-stamp.ts";
 import { resolveSessionLineage } from "./lineage/resolve.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { searchSessionRecall, type SessionRecallHit } from "./session-recall.ts";
 
-export const ANTICIPATORY_SCHEMA_VERSION = "o2b.anticipatory.v1";
+/**
+ * Cache-file schema token. Bumped to `v2` by context-integrity-gates
+ * (Unit B) because a `v1` file carries no provenance stamp: reusing the
+ * version would leave those entries readable as UNSTAMPED hits, which is
+ * exactly the "trusted forever" state the stamp exists to remove.
+ * `readCacheFile` already rejects a schema mismatch, so the bump needs no
+ * migration - every pre-existing file simply reads as a miss and is
+ * rebuilt on the next refresh.
+ */
+export const ANTICIPATORY_SCHEMA_VERSION = "o2b.anticipatory.v2";
 
 /** Default debounce/freshness window. */
 export const DEFAULT_ANTICIPATORY_TTL_SECONDS = 120;
@@ -90,7 +101,23 @@ export interface ReadAnticipatoryContextResult {
   readonly root_session_id: string;
   /** Stamp of the cache that answered (warm reads only). */
   readonly generated_at?: string;
+  /**
+   * Why an otherwise-fresh cache entry was REFUSED rather than served
+   * (context-integrity-gates, Unit B): its provenance stamp drifted from
+   * the vault, or its validity window closed. Present only on a refusal,
+   * so an ordinary miss or a TTL-stale read stays byte-identical. The
+   * refusal is named rather than silent precisely so a stale bundle and
+   * a broken mechanism stay distinguishable.
+   */
+  readonly cache_refusal?: string;
   readonly context: AnticipatoryContext;
+}
+
+/** On-disk form of {@link ContextPackStamp} (snake_case, like its siblings). */
+interface CacheStamp {
+  readonly tokens: Record<string, string | null>;
+  readonly generated_at: string;
+  readonly expires_at: string;
 }
 
 interface CacheFile {
@@ -101,7 +128,25 @@ interface CacheFile {
   /** Token budget the cached pack was built under (variant field). */
   readonly max_tokens: number;
   readonly signal?: string;
+  /** What the cached pack was derived from, and when it stops being servable. */
+  readonly stamp: CacheStamp;
   readonly context: AnticipatoryContext;
+}
+
+function toCacheStamp(stamp: ContextPackStamp): CacheStamp {
+  return {
+    tokens: { ...stamp.tokens },
+    generated_at: stamp.generatedAt,
+    expires_at: stamp.expiresAt,
+  };
+}
+
+function fromCacheStamp(stamp: CacheStamp): ContextPackStamp {
+  return {
+    tokens: stamp.tokens as StampTokens,
+    generatedAt: stamp.generated_at,
+    expiresAt: stamp.expires_at,
+  };
 }
 
 /**
@@ -159,29 +204,68 @@ function readCacheFile(path: string): CacheFile | null {
     if (!Array.isArray(cache.context.items) || !Array.isArray(cache.context.session_hits)) {
       return null;
     }
+    // An entry that carries no readable stamp is a miss, never an
+    // unstamped hit: the whole point of the stamp is that a persisted
+    // pack is verified rather than trusted, and a file that cannot be
+    // verified has nothing to offer over rebuilding.
+    if (!isCacheStamp(cache.stamp)) return null;
     return cache;
   } catch {
     return null; // corrupt cache reads as a miss by contract
   }
 }
 
-function buildContext(
-  vault: string,
-  sessionId: string,
-  signalText: string | undefined,
-  maxTokens: number,
-  agentScope: string | undefined,
-): AnticipatoryContext {
+function isCacheStamp(value: unknown): value is CacheStamp {
+  if (value === null || typeof value !== "object") return false;
+  const stamp = value as CacheStamp;
+  if (typeof stamp.generated_at !== "string" || typeof stamp.expires_at !== "string") return false;
+  return stamp.tokens !== null && typeof stamp.tokens === "object" && !Array.isArray(stamp.tokens);
+}
+
+interface BuildBundleInput {
+  readonly sessionId: string;
+  readonly signalText: string | undefined;
+  readonly maxTokens: number;
+  readonly agentScope: string | undefined;
+  /** Injected clock; the stamp's window is anchored to it. */
+  readonly now: Date;
+}
+
+interface BuiltBundle {
+  readonly context: AnticipatoryContext;
+  readonly stamp: ContextPackStamp;
+}
+
+function buildBundle(vault: string, input: BuildBundleInput): BuiltBundle {
   const pack = packContext(vault, {
-    maxTokens,
-    ...(agentScope !== undefined ? { agentScope } : {}),
+    maxTokens: input.maxTokens,
+    ...(input.agentScope !== undefined ? { agentScope: input.agentScope } : {}),
+    stamp: { now: input.now },
   });
-  const signal = signalText?.trim() ?? "";
+  const signal = input.signalText?.trim() ?? "";
   const hits =
     signal.length > 0
-      ? searchSessionRecall(vault, { query: signal, sessionId, limit: DEFAULT_SESSION_HITS }).hits
+      ? searchSessionRecall(vault, {
+          query: signal,
+          sessionId: input.sessionId,
+          limit: DEFAULT_SESSION_HITS,
+        }).hits
       : Object.freeze([] as SessionRecallHit[]);
-  return Object.freeze({ items: pack.items, session_hits: hits });
+  return {
+    context: Object.freeze({ items: pack.items, session_hits: hits }),
+    stamp: pack.stamp,
+  };
+}
+
+/**
+ * Why a cached entry must not be served, or `null` when it may be.
+ * Shared by the refresh debounce and the read so the two can never
+ * disagree about what "still valid" means - a warm-but-drifted entry
+ * that survived the debounce would be refused on every read and never
+ * rebuilt until its TTL lapsed.
+ */
+function cacheRefusal(vault: string, cached: CacheFile, now: Date): string | null {
+  return packStampRefusal(fromCacheStamp(cached.stamp), packStampTokens(vault), now);
 }
 
 /**
@@ -203,19 +287,30 @@ export function refreshAnticipatoryCache(
     // deliberately NOT part of the cache identity - it changes every
     // prompt, and invalidating on it would defeat the debounce that
     // makes hook-driven refresh affordable.
+    //
+    // The stamp overrides the debounce (context-integrity-gates, Unit
+    // B): a drifted or expired entry rebuilds even inside the TTL,
+    // because the stamp - not the clock - is the primary invalidator.
+    // Without this the read side would refuse the same drifted entry on
+    // every turn and never get a replacement until the TTL lapsed.
     if (existing !== null && existing.max_tokens === maxTokens) {
       const age = input.now.getTime() - Date.parse(existing.generated_at);
-      if (Number.isFinite(age) && age >= 0 && age < ttlMs) {
+      if (
+        Number.isFinite(age) &&
+        age >= 0 &&
+        age < ttlMs &&
+        cacheRefusal(vault, existing, input.now) === null
+      ) {
         return Object.freeze({ refreshed: false, rootSessionId: rootId, path });
       }
     }
-    const context = buildContext(
-      vault,
-      input.sessionId,
-      input.signalText,
+    const bundle = buildBundle(vault, {
+      sessionId: input.sessionId,
+      signalText: input.signalText,
       maxTokens,
-      input.agentScope,
-    );
+      agentScope: input.agentScope,
+      now: input.now,
+    });
     const signal = input.signalText?.trim();
     const cache: CacheFile = {
       schema: ANTICIPATORY_SCHEMA_VERSION,
@@ -224,7 +319,8 @@ export function refreshAnticipatoryCache(
       generated_at: input.now.toISOString(),
       max_tokens: maxTokens,
       ...(signal !== undefined && signal.length > 0 ? { signal } : {}),
-      context,
+      stamp: toCacheStamp(bundle.stamp),
+      context: bundle.context,
     };
     mkdirSync(join(vault, CACHE_DIR_REL), { recursive: true });
     atomicWriteFileSync(path, `${JSON.stringify(cache, null, 2)}\n`);
@@ -250,34 +346,53 @@ export function readAnticipatoryContext(
   if (cached !== null) {
     const age = input.now.getTime() - Date.parse(cached.generated_at);
     if (cached.max_tokens === requestedTokens && Number.isFinite(age) && age >= 0 && age < ttlMs) {
+      // Fresh by the clock is not the same as valid. The stamp decides
+      // whether the persisted bundle still describes this vault, and an
+      // expired window decides when a bundle stops being servable even
+      // if nothing observable drifted.
+      const refusal = cacheRefusal(vault, cached, input.now);
+      if (refusal === null) {
+        return Object.freeze({
+          cache_state: "warm" as const,
+          root_session_id: rootId,
+          generated_at: cached.generated_at,
+          context: cached.context,
+        });
+      }
       return Object.freeze({
-        cache_state: "warm" as const,
+        cache_state: "miss" as const,
         root_session_id: rootId,
-        generated_at: cached.generated_at,
-        context: cached.context,
+        cache_refusal: refusal,
+        context: buildBundle(vault, {
+          sessionId: input.sessionId,
+          signalText: cached.signal,
+          maxTokens: requestedTokens,
+          agentScope: input.agentScope,
+          now: input.now,
+        }).context,
       });
     }
     return Object.freeze({
       cache_state: "stale" as const,
       root_session_id: rootId,
-      context: buildContext(
-        vault,
-        input.sessionId,
-        cached.signal,
-        input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
-        input.agentScope,
-      ),
+      context: buildBundle(vault, {
+        sessionId: input.sessionId,
+        signalText: cached.signal,
+        maxTokens: requestedTokens,
+        agentScope: input.agentScope,
+        now: input.now,
+      }).context,
     });
   }
   return Object.freeze({
     cache_state: "miss" as const,
     root_session_id: rootId,
-    context: buildContext(
-      vault,
-      input.sessionId,
-      undefined,
-      input.maxTokens ?? DEFAULT_ANTICIPATORY_MAX_TOKENS,
-      input.agentScope,
-    ),
+    context: buildBundle(vault, {
+      sessionId: input.sessionId,
+      signalText: undefined,
+      maxTokens: requestedTokens,
+      agentScope: input.agentScope,
+      now: input.now,
+    }).context,
   });
 }
