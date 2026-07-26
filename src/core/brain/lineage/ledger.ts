@@ -26,6 +26,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import type { GitWorkspaceIdentity } from "../git/reader.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import type { SessionLineage } from "./types.ts";
 
@@ -51,6 +52,14 @@ export interface LineageObservation {
   readonly compressionEvidence?: boolean;
   /** Resolved lineage to persist alongside the observation. */
   readonly lineage?: SessionLineage;
+  /**
+   * Git working state the observation was made in
+   * (context-integrity-gates, Unit C). Absent when the session's `cwd`
+   * is not inside a repository or the bounded probe found nothing; the
+   * remote is already canonicalized, so no credential reaches this
+   * record.
+   */
+  readonly workspace?: GitWorkspaceIdentity;
 }
 
 export interface LineageLedgerEntry {
@@ -63,6 +72,13 @@ export interface LineageLedgerEntry {
   readonly compressionEvidence: boolean;
   /** Last persisted lineage for the session, if any. */
   readonly lineage?: SessionLineage;
+  /**
+   * Last attested git working state for the session, if any. Carried
+   * forward from the newest observation that reported one, exactly as
+   * `cwd` is - a probe that came back empty on one event does not erase
+   * what the session already attested.
+   */
+  readonly workspace?: GitWorkspaceIdentity;
 }
 
 export type LineageLedgerState = ReadonlyMap<string, LineageLedgerEntry>;
@@ -81,6 +97,35 @@ interface LedgerLine {
   readonly root?: string;
   readonly depth?: number;
   readonly src?: SessionLineage["source"];
+  /** Canonical remote identity (Unit C). Never carries a credential. */
+  readonly repo?: string;
+  readonly branch?: string;
+  readonly commit?: string;
+}
+
+/**
+ * Project a workspace identity onto its line fields, omitting the ones
+ * git could not attest. A key that is absent means "not attested" - the
+ * distinction the fail-closed match predicate turns on.
+ */
+function workspaceFields(
+  workspace: GitWorkspaceIdentity | undefined,
+): Pick<LedgerLine, "repo" | "branch" | "commit"> {
+  if (workspace === undefined) return {};
+  return {
+    ...(workspace.repo !== null ? { repo: workspace.repo } : {}),
+    ...(workspace.branch !== null ? { branch: workspace.branch } : {}),
+    ...(workspace.commit !== null ? { commit: workspace.commit } : {}),
+  };
+}
+
+/** Inverse of {@link workspaceFields}; `undefined` when nothing was attested. */
+function readWorkspace(line: LedgerLine): GitWorkspaceIdentity | undefined {
+  const repo = typeof line.repo === "string" ? line.repo : null;
+  const branch = typeof line.branch === "string" ? line.branch : null;
+  const commit = typeof line.commit === "string" ? line.commit : null;
+  if (repo === null && branch === null && commit === null) return undefined;
+  return Object.freeze({ repo, branch, commit });
 }
 
 function toLine(obs: LineageObservation): LedgerLine {
@@ -98,6 +143,7 @@ function toLine(obs: LineageObservation): LedgerLine {
           src: obs.lineage.source,
         }
       : {}),
+    ...workspaceFields(obs.workspace),
   };
 }
 
@@ -134,6 +180,7 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
             source: line.src,
           })
         : prev?.lineage;
+    const workspace = readWorkspace(line) ?? prev?.workspace;
     state.set(line.sid, {
       sessionId: line.sid,
       firstSeenMs: prev === undefined ? atMs : Math.min(prev.firstSeenMs, atMs),
@@ -146,6 +193,7 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
       lastEvent: line.event ?? prev?.lastEvent ?? "unknown",
       compressionEvidence: line.ce === true,
       ...(lineage !== undefined ? { lineage } : {}),
+      ...(workspace !== undefined ? { workspace } : {}),
     });
   }
   return state;
@@ -202,6 +250,7 @@ export function recordLineageObservation(vault: string, obs: LineageObservation)
                   src: entry.lineage.source,
                 }
               : {}),
+            ...workspaceFields(entry.workspace),
           }),
         )
         .join("\n");

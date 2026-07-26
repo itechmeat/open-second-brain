@@ -17,6 +17,8 @@
  *     every ambiguous case.
  */
 
+import type { GitWorkspaceIdentity } from "../git/reader.ts";
+
 export type SessionLineageSource = "payload" | "crutch" | "flat";
 
 export interface SessionLineage {
@@ -41,6 +43,14 @@ export interface LineageHints {
   readonly compressionDepth?: number | null;
   /** Working directory the host reported for the session, if any. */
   readonly cwd?: string;
+  /**
+   * Git working state observed at `cwd` (context-integrity-gates, Unit
+   * C): repo, branch and commit, which join `cwd` as required-match
+   * predicates for the interim crutch. Passed IN rather than probed
+   * here so lineage resolution stays a pure function of its inputs -
+   * the shell-out lives at the capture boundary, once per hook.
+   */
+  readonly workspace?: GitWorkspaceIdentity;
 }
 
 /**

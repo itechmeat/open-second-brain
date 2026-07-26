@@ -19,7 +19,9 @@ import { writeHandoffNote, type HandoffNoteResult } from "./handoff.ts";
 import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { readLineageLedger, recordLineageObservation } from "./lineage/ledger.ts";
-import { resolveSessionLineage } from "./lineage/resolve.ts";
+import { resolveSessionLineageDetailed } from "./lineage/resolve.ts";
+import { readGitWorkspaceIdentity } from "./git/reader.ts";
+import { type DegradationNotice, formatDegradationNotice } from "../integrity/degradation.ts";
 import { isCompressionEvidenceEvent, type SessionLineage } from "./lineage/types.ts";
 import { refreshAnticipatoryCache } from "./anticipatory-cache.ts";
 
@@ -126,9 +128,17 @@ export async function captureSessionLifecycleEvent(
   // Read-only resolution runs for every session; the ledger only
   // grows for captured, non-dry runs. Fail-soft throughout.
   let lineage: SessionLineage | undefined;
+  const lineageNotices: DegradationNotice[] = [];
   if (normalized.sessionId !== undefined) {
     try {
-      lineage = resolveSessionLineage(
+      // Unit C: probe the working state ONCE per lifecycle event, at
+      // the capture boundary, so the resolver below stays a pure
+      // function of its inputs. Two bounded git invocations; a
+      // directory outside any repository attests nothing and costs one
+      // failed spawn.
+      const workspace =
+        normalized.cwd !== undefined ? readGitWorkspaceIdentity(normalized.cwd) : null;
+      const resolution = resolveSessionLineageDetailed(
         {
           sessionId: normalized.sessionId,
           ...(normalized.parentSessionId !== undefined
@@ -141,9 +151,15 @@ export async function captureSessionLifecycleEvent(
             ? { compressionDepth: normalized.compressionDepth }
             : {}),
           ...(normalized.cwd !== undefined ? { cwd: normalized.cwd } : {}),
+          ...(workspace !== null ? { workspace } : {}),
         },
-        { ledger: readLineageLedger(vault), nowMs: now.getTime() },
+        {
+          ledger: readLineageLedger(vault),
+          nowMs: now.getTime(),
+          notices: lineageNotices,
+        },
       );
+      lineage = resolution.lineage;
       if (mayWrite && !opts.dryRun) {
         recordLineageObservation(vault, {
           sessionId: normalized.sessionId,
@@ -154,6 +170,7 @@ export async function captureSessionLifecycleEvent(
             ? { compressionEvidence: true }
             : {}),
           ...(lineage.source !== "flat" ? { lineage } : {}),
+          ...(workspace !== null ? { workspace } : {}),
         });
       }
     } catch {
@@ -324,6 +341,12 @@ export async function captureSessionLifecycleEvent(
             lineage_depth: chainLineage.depth,
             lineage_source: chainLineage.source,
           }
+        : {}),
+      // Unit C: a continuation that was AVAILABLE and refused. Absent
+      // on the ordinary flat path, so a session with nothing to link to
+      // keeps its previous audit shape exactly.
+      ...(lineageNotices.length > 0
+        ? { lineage_abstained: lineageNotices.map(formatDegradationNotice) }
         : {}),
       ...counters,
     },
