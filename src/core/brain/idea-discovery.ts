@@ -15,7 +15,7 @@ import { join } from "node:path";
 
 import { buildMorningBrief, type MorningBriefOpenQuestion } from "./morning-brief.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
-import { parseFrontmatterText } from "../vault.ts";
+import { parseFrontmatter } from "../vault.ts";
 import type { InsightCandidate, TriggerKind } from "./triggers/types.ts";
 
 const DAY_MS = 24 * 3600 * 1000;
@@ -174,12 +174,18 @@ export function discoverIdeas(
       const age = ageDays(absPath, opts.now);
       if (age < agingSignalDays) continue;
       let topic = name.slice(0, -".md".length);
-      try {
-        const [meta] = parseFrontmatterText(readFileSync(absPath, "utf8"));
-        if (typeof meta["topic"] === "string" && meta["topic"] !== "") topic = meta["topic"];
-      } catch {
-        // keep the filename-derived topic
-      }
+      // Unit F: this site used to do its own `readFileSync` inside a
+      // `catch {}` that silently kept the filename-derived topic - the one
+      // genuinely reachable swallow among the frontmatter readers, since
+      // the read is outside the parser. `parseFrontmatter` owns the read
+      // now, so a failure is named at the source (a
+      // `frontmatter-unreadable` notice) instead of here, and still
+      // returns an empty map - which leaves the filename-derived topic in
+      // place, exactly as before. A ranked candidate list has no report
+      // field; see the "Why most readers keep the two-tuple form" section
+      // in src/core/vault.ts for where the condition IS reported.
+      const [meta] = parseFrontmatter(absPath);
+      if (typeof meta["topic"] === "string" && meta["topic"] !== "") topic = meta["topic"];
       candidates.push(
         Object.freeze({
           kind: "idea_direction" as const,

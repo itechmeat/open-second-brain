@@ -21,6 +21,29 @@
  * {@link parseFrontmatter} and {@link parseFrontmatterText} delegate to the
  * siblings and discard the notices, so every call site not yet converted is
  * byte-identical.
+ *
+ * ### Why most readers keep the two-tuple form
+ *
+ * Two consequences follow from the parser being a scanner rather than a
+ * YAML parser, and they are the reason the conversion is deliberately
+ * partial:
+ *
+ *   1. `parseFrontmatter` CANNOT throw. It reads inside its own `try` and
+ *      everything after that is string work. Every `catch { … }` wrapped
+ *      around nothing but a `parseFrontmatter` call is therefore
+ *      unreachable, and the arm that "handles" the failure has never run.
+ *      Those arms are removed where the `try` guards nothing else; the
+ *      control flow is provably identical because the branch was dead.
+ *   2. A reader that returns a plain value - a list of recipes, a graph
+ *      node, a ranked candidate set - has nowhere to put a notice.
+ *      Widening its return type would create a channel with no consumer,
+ *      which is the same silence in a new shape.
+ *
+ * The condition itself is not lost, because it is observable centrally:
+ * {@link listVaultPages}'s opt-in sink feeds `o2b brain doctor`, which
+ * sweeps the whole `Brain/` tree unconditionally, and the search indexer
+ * reports per-file notices through `IndexStats.frontmatterNotices`. A
+ * per-call channel at every reader would duplicate that, not add to it.
  */
 
 import { createHash } from "node:crypto";
@@ -456,21 +479,49 @@ export function extractWikilinks(content: string): string[] {
 export interface ListVaultPagesOptions {
   readonly skipDirs?: ReadonlyArray<string>;
   readonly skipFiles?: ReadonlyArray<string>;
+  /**
+   * Opt-in diagnostic sink (unit F). When supplied, the walk appends a
+   * notice for every directory it could not read and every frontmatter
+   * line it dropped, each carrying the absolute path it happened to.
+   *
+   * The sink is OPT-IN rather than a widened return type so a caller
+   * that has nowhere to report stays byte-identical and pays nothing.
+   * The walk's control flow does not depend on it: an unreadable
+   * subtree is skipped and a page with a dropped line is still listed,
+   * exactly as before.
+   */
+  readonly notices?: DegradationNotice[];
+  /** Site recorded on the notices; defaults to `vault.listVaultPages`. */
+  readonly site?: string;
 }
+
+const LIST_VAULT_PAGES_SITE = "vault.listVaultPages";
 
 /**
  * Walk the vault and return every Markdown page with parsed frontmatter
  * metadata. Pages are sorted by title (case-insensitive). Excluded dirs/files
  * mirror the Python defaults.
+ *
+ * Pass `opts.notices` to collect what the walk discarded — see
+ * {@link ListVaultPagesOptions}.
  */
 export function listVaultPages(vaultDir: string, opts: ListVaultPagesOptions = {}): VaultPage[] {
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
 
   const pages: VaultPage[] = [];
-  walk(vaultDir, vaultDir, skipDirs, skipFiles, pages);
+  walk(vaultDir, vaultDir, skipDirs, skipFiles, pages, {
+    sink: opts.notices,
+    site: opts.site ?? LIST_VAULT_PAGES_SITE,
+  });
   pages.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
   return pages;
+}
+
+/** Where {@link walk} reports what it discarded, and under which name. */
+interface WalkNoticeSink {
+  readonly sink: DegradationNotice[] | undefined;
+  readonly site: string;
 }
 
 /**
@@ -528,18 +579,30 @@ function walk(
   skipDirs: Set<string>,
   skipFiles: Set<string>,
   out: VaultPage[],
+  notices: WalkNoticeSink,
 ): void {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    // Unit F: an unreadable directory used to make an entire subtree
+    // vanish from the listing with no trace. The walk still returns
+    // (fail-soft, as before); the branch is now named.
+    if (notices.sink !== undefined) {
+      emitDegradationNotice(notices.sink, {
+        code: DEGRADATION_CODE.vaultWalkEntrySkipped,
+        site: notices.site,
+        path: dir,
+        detail: `directory listing failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
     return;
   }
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name)) continue;
-      walk(root, full, skipDirs, skipFiles, out);
+      walk(root, full, skipDirs, skipFiles, out, notices);
       continue;
     }
     if (!entry.isFile()) continue;
@@ -548,12 +611,13 @@ function walk(
     const rel = relative(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p))) continue;
-    let meta: FrontmatterMap;
-    try {
-      [meta] = parseFrontmatter(full);
-    } catch {
-      continue;
-    }
+    // The former `catch { continue }` here was unreachable: the parser
+    // is a line scanner over a string it read inside its own try, so it
+    // cannot throw. What it CAN do is drop a line or fail the read, and
+    // both now reach the sink instead of vanishing. The page is still
+    // listed either way - identical control flow.
+    const [meta, , pageNotices] = parseFrontmatterWithNotices(full, { site: notices.site });
+    if (notices.sink !== undefined) notices.sink.push(...pageNotices);
     const titleVal = meta["title"];
     const title = typeof titleVal === "string" && titleVal ? titleVal : stem(entry.name);
     out.push({ title, path: full, metadata: meta });

@@ -328,7 +328,14 @@ function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
     try {
       sig = parseSignal(path);
     } catch {
-      // Corrupted frontmatter is the doctor's concern; queries skip.
+      // Unit F, deliberately NOT converted: this catch does not swallow a
+      // frontmatter read. `parseSignal` is the typed validator and its
+      // throw is a real, reachable signal (missing required field, bad
+      // status/folder pairing) that `o2b brain doctor` already reports as
+      // an ERROR against this exact path. Emitting a degradation notice
+      // here would duplicate an existing finding at a lower severity.
+      // The line-level drops underneath it are reported by the doctor's
+      // Brain sweep - see src/core/vault.ts.
       continue;
     }
     if (sig.topic === topic) out.push(sig);
@@ -363,7 +370,10 @@ function findPreferenceForTopic(
       const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
       if (parsed.topic === topic) return parsed;
     } catch {
-      // Doctor's job, not query's.
+      // Unit F, deliberately NOT converted - same reasoning as
+      // collectSignals above: `parsePreference` / `parseRetired` throw on
+      // typed validation, which the doctor already reports as an error
+      // against this path. Not a swallowed frontmatter read.
       continue;
     }
   }

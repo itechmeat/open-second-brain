@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { DEGRADATION_CODE } from "../../src/core/integrity/degradation.ts";
+import { DEGRADATION_CODE, type DegradationNotice } from "../../src/core/integrity/degradation.ts";
 import {
   extractWikilinks,
   listVaultPages,
@@ -396,5 +396,44 @@ describe("listVaultPages", () => {
     const pages = listVaultPages(tmp);
     expect(pages.length).toBe(1);
     expect(pages[0]!.title).toBe("page");
+  });
+
+  test("an opt-in notices sink collects dropped frontmatter lines per page", () => {
+    writeFileSync(join(tmp, "clean.md"), "---\ntitle: Alpha\ntags:\n  - a\n---\n\nContent.");
+    writeFileSync(join(tmp, "odd.md"), "---\ntitle: Beta\n-foo\n---\n\nContent.");
+    const notices: DegradationNotice[] = [];
+    const pages = listVaultPages(tmp, { notices });
+    // Control flow unchanged: the odd page is still listed.
+    expect(pages.length).toBe(2);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.code).toBe(DEGRADATION_CODE.frontmatterLineDropped);
+    expect(notices[0]!.path).toBe(join(tmp, "odd.md"));
+  });
+
+  test("the notices sink stays empty for a vault with supported grammar only", () => {
+    writeFileSync(join(tmp, "clean.md"), "---\ntitle: Alpha\ntags:\n  - a\n---\n\nContent.");
+    writeFileSync(join(tmp, "plain.md"), "No frontmatter at all.");
+    const notices: DegradationNotice[] = [];
+    listVaultPages(tmp, { notices });
+    expect(notices).toEqual([]);
+  });
+
+  test("a directory the walker cannot read is reported instead of vanishing", () => {
+    writeFileSync(join(tmp, "page.md"), "Content.");
+    const locked = join(tmp, "locked");
+    mkdirSync(locked);
+    writeFileSync(join(locked, "inner.md"), "Inner.");
+    chmodSync(locked, 0o000);
+    const notices: DegradationNotice[] = [];
+    try {
+      const pages = listVaultPages(tmp, { notices });
+      // Same control flow as before: the unreadable subtree is skipped.
+      expect(pages.length).toBe(1);
+      expect(notices).toHaveLength(1);
+      expect(notices[0]!.code).toBe(DEGRADATION_CODE.vaultWalkEntrySkipped);
+      expect(notices[0]!.path).toBe(locked);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
   });
 });

@@ -180,15 +180,17 @@ function detectProcedureSourceProposal(vault: string, sourcePath: string): strin
     return null;
   }
   if (!existsSync(absPath)) return null;
-  try {
-    const [fm] = parseFrontmatter(absPath);
-    if (typeof fm["source_proposal"] === "string" && fm["source_proposal"].trim()) {
-      return fm["source_proposal"].trim();
-    }
-    return null;
-  } catch {
-    return null;
+  // Unit F: `parseFrontmatter` cannot throw (it reads inside its own try;
+  // everything after is string work), so the `catch { return null }` that
+  // stood here was unreachable - and redundant, since a failed read
+  // yields an empty map and falls through to the same `return null`.
+  // Dropped lines are reported centrally; see the "Why most readers keep
+  // the two-tuple form" section in src/core/vault.ts.
+  const [fm] = parseFrontmatter(absPath);
+  if (typeof fm["source_proposal"] === "string" && fm["source_proposal"].trim()) {
+    return fm["source_proposal"].trim();
   }
+  return null;
 }
 
 function listProposals(vault: string): ProceduralGraphNode[] {
@@ -204,26 +206,29 @@ function listProposals(vault: string): ProceduralGraphNode[] {
     for (const name of readDirSorted(dir)) {
       if (!name.endsWith(".md")) continue;
       const absPath = `${dir}/${name}`;
-      try {
-        const [fm] = parseFrontmatter(absPath);
-        if (fm["kind"] !== "brain-skill-proposal") continue;
-        const id = typeof fm["id"] === "string" ? fm["id"] : `proposal-${basename(name, ".md")}`;
-        out.push({
-          id,
-          kind: "proposal",
-          title:
-            typeof fm["slug"] === "string"
-              ? `Proposal: ${fm["slug"]}`
-              : `Proposal: ${basename(name, ".md")}`,
-          sourcePath: `Brain/skill-proposals/${status}/${name}`,
-          metadata: {
-            status,
-            pattern_kind: fm["pattern_kind"] ?? null,
-          },
-        });
-      } catch {
-        continue;
-      }
+      // Unit F: unreachable `catch { continue }` removed - nothing in this
+      // body throws (`parseFrontmatter` reads inside its own try, and the
+      // rest is property reads and `basename`). A file whose frontmatter
+      // could not be read yields an empty map, fails the `kind` check on
+      // the next line, and is skipped exactly as the dead branch intended.
+      // See the "Why most readers keep the two-tuple form" section in
+      // src/core/vault.ts for where the condition IS reported.
+      const [fm] = parseFrontmatter(absPath);
+      if (fm["kind"] !== "brain-skill-proposal") continue;
+      const id = typeof fm["id"] === "string" ? fm["id"] : `proposal-${basename(name, ".md")}`;
+      out.push({
+        id,
+        kind: "proposal",
+        title:
+          typeof fm["slug"] === "string"
+            ? `Proposal: ${fm["slug"]}`
+            : `Proposal: ${basename(name, ".md")}`,
+        sourcePath: `Brain/skill-proposals/${status}/${name}`,
+        metadata: {
+          status,
+          pattern_kind: fm["pattern_kind"] ?? null,
+        },
+      });
     }
   }
   return out;

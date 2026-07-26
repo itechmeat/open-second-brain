@@ -118,12 +118,14 @@ function normalizedList(meta: FrontmatterMap, key: string): string[] {
 }
 
 function toNode(vault: string, absPath: string): ClaimNode | null {
-  let meta: FrontmatterMap;
-  try {
-    [meta] = parseFrontmatter(absPath);
-  } catch {
-    return null;
-  }
+  // Unit F: `parseFrontmatter` cannot throw (it reads inside its own try;
+  // everything after is string work), so the `catch { return null }` that
+  // stood here was unreachable - and redundant, because a failed read
+  // yields an empty map and the very next line already returns null for
+  // it. Dropped lines are reported centrally; see the "Why most readers
+  // keep the two-tuple form" section in src/core/vault.ts. A claim node
+  // is a graph vertex with no report field, so it opens no channel here.
+  const [meta] = parseFrontmatter(absPath);
   if (Object.keys(meta).length === 0) return null;
   const rel = relative(vault, absPath).split("\\").join("/");
   const id = normalizeChainLink(absPath);

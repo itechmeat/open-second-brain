@@ -76,16 +76,37 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     }
   }
 
+  // Unit F. `uncertain` is a third stream beside warnings and errors:
+  // sub-operations the doctor attempted but cannot claim completed
+  // cleanly. It is emitted ONLY when non-empty, so a clean vault's
+  // output - JSON and human alike - is byte-identical to before, and it
+  // deliberately does not feed the exit code: uncertainty is not a
+  // failure, and folding it into `--strict` would turn an unreadable
+  // field into a broken build.
+  const uncertain = result.uncertain ?? [];
+
   if (flags["json"]) {
     process.stdout.write(
-      JSON.stringify({ warnings: result.warnings, errors: result.errors }, null, 2) + "\n",
+      JSON.stringify(
+        {
+          warnings: result.warnings,
+          errors: result.errors,
+          ...(uncertain.length > 0 ? { uncertain } : {}),
+        },
+        null,
+        2,
+      ) + "\n",
     );
   } else {
     for (const e of result.errors)
       process.stdout.write(`[ERROR] ${e.code}: ${e.message}${e.path ? ` (${e.path})` : ""}\n`);
     for (const w of result.warnings)
       process.stdout.write(`[WARN]  ${w.code}: ${w.message}${w.path ? ` (${w.path})` : ""}\n`);
-    if (result.errors.length === 0 && result.warnings.length === 0) ok("brain doctor: clean");
+    for (const u of uncertain)
+      process.stdout.write(`[UNSURE] ${u.code}: ${u.message}${u.path ? ` (${u.path})` : ""}\n`);
+    if (result.errors.length === 0 && result.warnings.length === 0 && uncertain.length === 0) {
+      ok("brain doctor: clean");
+    }
   }
 
   if (result.errors.length > 0) return 1;

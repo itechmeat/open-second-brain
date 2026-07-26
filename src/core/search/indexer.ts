@@ -42,7 +42,8 @@ import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
 import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
 import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
 import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
-import { parseFrontmatterText } from "../vault.ts";
+import type { DegradationNotice } from "../integrity/degradation.ts";
+import { parseFrontmatterTextWithNotices } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
@@ -94,6 +95,9 @@ export interface IndexVaultOptions {
   readonly signal?: AbortSignal;
 }
 
+/** Site recorded on the frontmatter notices an index run collects. */
+const INDEX_FRONTMATTER_SITE = "search.indexVault";
+
 interface MutableStats {
   added: number;
   updated: number;
@@ -103,6 +107,7 @@ interface MutableStats {
   embeddingsComputed: number;
   embeddingsRetries: number;
   errors: Array<{ readonly path: string; readonly message: string }>;
+  frontmatterNotices: DegradationNotice[];
   relationViolations: IndexStats["relationViolations"];
   tierDrift: IndexStats["tierDrift"];
   aliasResolved: number;
@@ -120,6 +125,7 @@ function newStats(): MutableStats {
     embeddingsComputed: 0,
     embeddingsRetries: 0,
     errors: [],
+    frontmatterNotices: [],
     relationViolations: [],
     tierDrift: [],
     aliasResolved: 0,
@@ -140,6 +146,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     embeddingsComputed: s.embeddingsComputed,
     embeddingsRetries: s.embeddingsRetries,
     errors: Object.freeze([...s.errors]),
+    frontmatterNotices: Object.freeze([...s.frontmatterNotices]),
     relationViolations: Object.freeze([...s.relationViolations]),
     tierDrift: Object.freeze([...s.tierDrift]),
     aliasResolved: s.aliasResolved,
@@ -320,7 +327,15 @@ async function indexInto(
         // The document's declared frontmatter `type` is persisted so
         // the link-constraint post-pass can join endpoint types
         // without re-reading files (v6).
-        const [frontmatter] = parseFrontmatterText(content);
+        // Unit F: the scanner drops a line it cannot express instead of
+        // failing, so a note keeps indexing while a field silently
+        // vanishes. Collect what it dropped; the run reports it and
+        // nothing about the indexing changes.
+        const [frontmatter, , fmNotices] = parseFrontmatterTextWithNotices(content, {
+          site: INDEX_FRONTMATTER_SITE,
+          path: file.relPath,
+        });
+        for (const n of fmNotices) stats.frontmatterNotices.push(n);
         const docId = store.upsertDocument({
           path: file.relPath,
           title: chunkResult.title,

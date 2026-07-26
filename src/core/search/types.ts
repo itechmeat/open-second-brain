@@ -4,6 +4,7 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §12, §14.
  */
 
+import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type {
@@ -273,6 +274,26 @@ export interface IndexStats {
     readonly path: string;
     readonly message: string;
   }>;
+  /**
+   * Frontmatter lines this run's scanner could not express as a
+   * `key: value` pair or a block-list item, and therefore dropped
+   * (unit F). The `path` on each notice is vault-relative.
+   *
+   * A separate field rather than an entry in `errors` on purpose:
+   * `errors` means "this file did not index", drives the `N error(s)`
+   * count in the watch summary, and is rendered under an `errors:`
+   * heading by `o2b search index`. A dropped frontmatter line is none
+   * of those - the file indexes fine, it just lost a field. Folding it
+   * into `errors` would change the meaning of an existing field and the
+   * reported error count for vaults that index cleanly today.
+   *
+   * Scoped to the files this run actually read: the mtime/size fastpath
+   * skips unchanged documents, so an unchanged malformed file is
+   * reported by the run that last read it, not by every run. Use
+   * `--force` (or `o2b brain doctor`, which scans the Brain tree
+   * unconditionally) for a full sweep.
+   */
+  readonly frontmatterNotices: ReadonlyArray<DegradationNotice>;
   /**
    * Typed edges blocked by the schema pack's `link_constraints` during
    * this run's materialization post-pass

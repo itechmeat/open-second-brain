@@ -105,12 +105,16 @@ export function parseClaudeMemoryFile(text: string): ClaudeMemoryParseResult {
   if (!m) {
     return { kind: "skip", skipReason: "missing or malformed frontmatter" };
   }
-  let fm: Record<string, unknown>;
-  try {
-    fm = parseFrontmatterBlock(m[1]!);
-  } catch {
-    return { kind: "skip", skipReason: "frontmatter is not valid YAML" };
-  }
+  // Unit F: the `catch` that stood here returned a
+  // "frontmatter is not valid YAML" skip. `parseFrontmatterBlock` is a
+  // line scanner with no `throw` anywhere in it or in the two pure string
+  // helpers it calls, so that arm was unreachable and the skip reason it
+  // named could never be produced - a diagnostic that reads as coverage
+  // and provides none. Unsupported grammar is dropped line-by-line by
+  // that scanner, exactly as in `parseFrontmatterText`, and the shapes it
+  // cannot express fall out of the `type` / `name` / `description` checks
+  // below with a skip reason that is actually reachable.
+  const fm = parseFrontmatterBlock(m[1]!);
   const name = typeof fm["name"] === "string" ? fm["name"].trim() : "";
   const description = typeof fm["description"] === "string" ? fm["description"].trim() : "";
   // Claude Code Memory uses two frontmatter shapes for the `type` field:

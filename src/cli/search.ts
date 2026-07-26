@@ -14,6 +14,7 @@
  */
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
+import { formatDegradationNotice } from "../core/integrity/degradation.ts";
 import {
   createSafeguard,
   resolveSafeguardTimeoutMs,
@@ -1155,6 +1156,18 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
       embeddings_retries: stats.embeddingsRetries,
     },
     errors: stats.errors.map((e) => ({ path: e.path, message: e.message })),
+    // Unit F. Conditional so a vault with no malformed frontmatter emits
+    // exactly the payload it emitted before this field existed.
+    ...(stats.frontmatterNotices.length > 0
+      ? {
+          frontmatter_notices: stats.frontmatterNotices.map((n) => ({
+            code: n.code,
+            site: n.site,
+            ...(n.path !== undefined ? { path: n.path } : {}),
+            detail: n.detail,
+          })),
+        }
+      : {}),
     duration_ms: stats.durationMs,
     vault: cfg.vault,
     db_path: cfg.dbPath,
@@ -1176,6 +1189,14 @@ function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string 
   if (stats.errors.length > 0) {
     lines.push(`  errors:`);
     for (const e of stats.errors) lines.push(`    - ${e.path}: ${e.message}`);
+  }
+  // Unit F. Below the errors block and only when non-empty: these files
+  // indexed successfully, they just lost a frontmatter field.
+  if (stats.frontmatterNotices.length > 0) {
+    lines.push(`  frontmatter:`);
+    for (const n of stats.frontmatterNotices) {
+      lines.push(`    - ${formatDegradationNotice(n)}`);
+    }
   }
   lines.push(`done in ${(stats.durationMs / 1000).toFixed(1)}s`);
   return lines.join("\n") + "\n";

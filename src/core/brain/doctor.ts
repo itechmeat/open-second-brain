@@ -41,7 +41,13 @@ import { join, relative } from "node:path";
 
 import { realpathInsideVault, vaultRelative } from "../path-safety.ts";
 import { REMOVED_TOOLS } from "../removed-surfaces.ts";
-import { extractWikilinks, listVaultBasenames, parseFrontmatter } from "../vault.ts";
+import type { DegradationNotice } from "../integrity/degradation.ts";
+import {
+  extractWikilinks,
+  listVaultBasenames,
+  listVaultPages,
+  parseFrontmatter,
+} from "../vault.ts";
 import { computeActiveBudgetPressure } from "./active-budget-pressure.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
 import { buildBacklinkIndex } from "./backlinks.ts";
@@ -410,6 +416,20 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     /* doctor never throws */
   }
 
+  // Unit F: frontmatter lines the scanner dropped anywhere under
+  // Brain/. Reported as UNCERTAINTY, not as a warning or an error: the
+  // note is still on disk and still indexes, but the doctor cannot
+  // claim it verified every field it declared, because a field it
+  // could not read is indistinguishable from a field that is absent.
+  // (That ambiguity is exactly what produced the spurious
+  // `missing field: tags` errors fixed in 426d06f8.)
+  const uncertain: DoctorUncertainEntry[] = [];
+  try {
+    collectFrontmatterUncertainty(vault, uncertain);
+  } catch {
+    /* doctor never throws */
+  }
+
   // v0.14.0 semantic-health pass. Best-effort like every other lint:
   // a failure here must not poison the structural warning / error
   // stream. The report is attached to the result even on a clean run
@@ -468,8 +488,42 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     trust_verdict: trustVerdict,
     ...(verificationCounts !== undefined ? { verification_delta_summary: verificationCounts } : {}),
     instruction_file_warnings: instructionWarnings,
+    // Conditional so a clean vault's result - and therefore the CLI's
+    // `--json` payload - is byte-identical to the shape it had before
+    // this field had a producer.
+    ...(uncertain.length > 0 ? { uncertain: Object.freeze(uncertain) } : {}),
     ...(semanticReport !== undefined ? { semantic_health: semanticReport } : {}),
   });
+}
+
+/** Site recorded on the notices the doctor's Brain-tree sweep collects. */
+const DOCTOR_FRONTMATTER_SITE = "brain.doctor";
+
+/**
+ * Sweep every Markdown file under `Brain/` for frontmatter the line
+ * scanner could not express, and fold each notice into the doctor's
+ * `uncertain` stream.
+ *
+ * One walk, through the same shared helper every other converted site
+ * uses ({@link listVaultPages} with its opt-in notice sink), so there is
+ * no second definition of "what counts as a dropped line".
+ *
+ * Unlike an index run - which reads only the files whose mtime or size
+ * moved - this sweep is unconditional, which is what makes the doctor
+ * the complete view of the condition.
+ */
+function collectFrontmatterUncertainty(vault: string, out: DoctorUncertainEntry[]): void {
+  const dirs = brainDirs(vault);
+  if (!existsSync(dirs.brain)) return;
+  const notices: DegradationNotice[] = [];
+  listVaultPages(dirs.brain, { notices, site: DOCTOR_FRONTMATTER_SITE });
+  for (const notice of notices) {
+    out.push({
+      code: notice.code,
+      ...(notice.path !== undefined ? { path: notice.path } : {}),
+      message: notice.detail,
+    });
+  }
 }
 
 // ----- Semantic health (v0.14.0) --------------------------------------------

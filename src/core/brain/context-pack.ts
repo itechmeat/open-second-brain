@@ -262,13 +262,14 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md")) continue;
       const full = join(dir, name);
-      let meta: Record<string, unknown>;
-      let body: string;
-      try {
-        [meta, body] = parseFrontmatter(full);
-      } catch {
-        continue;
-      }
+      // Unit F: `parseFrontmatter` cannot throw (it reads inside its own
+      // try; everything after is string work), so the `catch { continue }`
+      // that stood here was unreachable and reported nothing. Dropped
+      // lines and unreadable reads are reported centrally instead - see
+      // the "Why most readers keep the two-tuple form" section in
+      // src/core/vault.ts. A pack returns injected content and carries no
+      // per-candidate report, so it opens no channel of its own.
+      const [meta, body] = parseFrontmatter(full);
       // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
       // superseded-non-tip) memory stays on disk for audit but is never
       // injected into a context pack.
