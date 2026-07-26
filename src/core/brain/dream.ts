@@ -255,6 +255,32 @@ export interface DreamRunSummary {
   readonly dry_run?: boolean;
 }
 
+/**
+ * Per-run overrides for the dream gates that otherwise live in
+ * `Brain/_brain.yaml` (no-dead-ends, Unit E). An override applies to the
+ * one run it is passed to and is NEVER written back, so a targeted pass
+ * needs no config edit and no remembering to revert: the stored
+ * configuration is byte-identical after a run that overrode it.
+ *
+ * Deliberately a named field per gate rather than a general config
+ * overlay. An audit of the `dream:` and `retire:` blocks found exactly one
+ * boolean gate an operator flips to steer a pass
+ * (`dream.heal_enrich_enabled`); `retire.confirmed_evidence_min_threshold`
+ * is a numeric evidence floor, not a phase switch, and is deliberately
+ * absent. A general overlay would let any resolved key be replaced for one
+ * run - far more surface than the one switch that motivated this - and the
+ * design doc records the narrow form as the default choice.
+ */
+export interface DreamGateOverrides {
+  /**
+   * Overrides `dream.heal_enrich_enabled` for this run only. `true` runs
+   * the opt-in heal enrichment on a vault whose config leaves it off;
+   * `false` skips it on a vault whose config turns it on. Omitted: the
+   * configured value decides, exactly as before.
+   */
+  readonly heal_enrich?: boolean;
+}
+
 export interface DreamOptions {
   /** Wall clock for the run. Defaults to `new Date()`. */
   readonly now?: Date;
@@ -270,13 +296,22 @@ export interface DreamOptions {
    */
   readonly agentName?: string;
   /**
-   * Cooperative deadline (t_06784b8d): checkpointed at entry and at
-   * the phase seams (pre-mutation, post-promote, pre-finalize). A
-   * tripped guard on the mutation path leaves the durable workrun
+   * Cooperative deadline (t_06784b8d). Checkpointed at exactly five
+   * points, in order: entry, before the pre-run snapshot, before the
+   * first mutation, after the mutation writes, and immediately before
+   * the workrun is finalised. The last one (no-dead-ends, Unit E) covers
+   * the tail that used to run unguarded - the log events, the rollup
+   * ledger write, snapshot pruning and the active/lessons regeneration.
+   * A tripped guard on the mutation path leaves the durable workrun
    * dangling, which is exactly the integrity contract - the next
    * pass spots and reports it.
    */
   readonly safeguard?: import("./safeguard.ts").Safeguard;
+  /**
+   * Per-run gate overrides (no-dead-ends, Unit E). Additive: omitted, the
+   * run reads every gate from `Brain/_brain.yaml` exactly as before.
+   */
+  readonly gates?: DreamGateOverrides;
 }
 
 // ----- Internal scan types ------------------------------------------------
@@ -288,6 +323,11 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const dryRun = opts.dryRun === true;
   opts.safeguard?.checkpoint();
   const cfg = loadBrainConfig(vault);
+  // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
+  // this run, the configured value decides when it is absent. Resolved
+  // once, here, so the heal branch below has a single source of truth and
+  // nothing writes the decision back to `_brain.yaml`.
+  const healEnrichEnabled = opts.gates?.heal_enrich ?? cfg.dream.heal_enrich_enabled === true;
   let runId = formatRunId(now);
   const wikilinkToRun = `[[Brain/log/${isoDate(now)}]]`;
 
@@ -447,7 +487,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //      skip-corrupted-frontmatter, dream summary).
   const moved: string[] = [];
   // F6: count of user pages the opt-in heal phase enriched (0 unless
-  // dream.heal_enrich_enabled).
+  // the heal gate resolved on - see `healEnrichEnabled`).
   let healEnriched = 0;
   // v0.12.0 Brain Integrity Suite: declined retires accumulate here.
   // Always declared (even when no gate is configured) so the eventual
@@ -462,13 +502,16 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   opts.safeguard?.checkpoint();
   if (!dryRun) {
     workrun = openWorkrun(vault, runId);
+    // Truthful checkpoints (no-dead-ends, Unit E). A marker means every
+    // durable effect attributed to that phase is already on disk, so a
+    // crash leaves a journal whose last marker names work that genuinely
+    // finished. Cluster and close are the only two phases whose work
+    // provably ends here: clustering is pure planning that produces no
+    // file at all, and close's single artifact - the pre-run snapshot -
+    // was written just above. Every other marker moved down to the point
+    // where that phase's writes land; see the emission notes there.
     workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
-    // Multi-phase dream (F2): close + reconcile are complete by the time
-    // we reach the mutation path - the scan and contradiction planning
-    // both ran before the `changed` gate. Emit their checkpoints here in
-    // order; synthesize + heal follow the write loops below.
     workrun.checkpoint(WORKRUN_PHASE.closeComplete);
-    workrun.checkpoint(WORKRUN_PHASE.reconcileComplete);
   }
 
   if (!dryRun) {
@@ -583,6 +626,14 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       }
     }
 
+    // Synthesize is durable here and nowhere earlier: every new
+    // unconfirmed preference, every refreshed preference and every
+    // confidence receipt has landed. `promote_complete` is the pre-F2
+    // name for the same writes, so it moves with it rather than being
+    // left behind claiming a batch that had not started.
+    workrun?.checkpoint(WORKRUN_PHASE.promoteComplete);
+    workrun?.checkpoint(WORKRUN_PHASE.synthesizeComplete);
+
     for (const r of plan.retires) {
       const fromPath = preferencePath(vault, r.slug);
       if (!existsSync(fromPath)) continue;
@@ -642,6 +693,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       }
     }
 
+    // Every planned retire has been moved (or explicitly gated) by here.
+    workrun?.checkpoint(WORKRUN_PHASE.retireComplete);
+
     for (const sig of plan.signalsToMove.values()) {
       const dest = processedSignalPath(vault, sig.date, sig.slug);
       try {
@@ -660,34 +714,27 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     // the retire/move mutations (heal-after-mutations). Off by default so
     // the default install stays byte-identical; a failure is a warning,
     // never fatal to the dream pass.
-    if (cfg.dream.heal_enrich_enabled === true) {
+    if (healEnrichEnabled) {
       try {
         healEnriched = runHealEnrichment(vault).enriched;
       } catch (err) {
         process.stderr.write(`warning: heal enrichment failed: ${(err as Error).message}\n`);
       }
     }
+    // Heal's second half (the optional enrichment) is durable here; its
+    // first half was the retire loop above. The marker sits at the later
+    // of the two, so it is never a claim about work still to come.
+    workrun?.checkpoint(WORKRUN_PHASE.healComplete);
   } else {
     // Dry-run still reports the move list so the caller's summary is
     // accurate, but it does not touch disk.
     for (const sig of plan.signalsToMove.values()) moved.push(sig.id);
   }
 
-  // v0.12.0 Brain Integrity Suite: mark promote + retire phases. The
-  // dream.ts execution loop runs promote (writePreference) then retire
-  // (moveToRetired) sequentially; one checkpoint covers both
-  // mutations so the workrun stays compact yet recovery-meaningful.
+  // Post-mutation safeguard checkpoint: every state-changing write for
+  // this run is on disk, so a deadline that has passed stops the run here
+  // rather than part-way through the audit tail.
   opts.safeguard?.checkpoint();
-  if (workrun !== null) {
-    workrun.checkpoint(WORKRUN_PHASE.promoteComplete);
-    // Multi-phase dream (F2): synthesize = the promote/confirm writes
-    // just completed; heal = the retire (and, when enabled, enrichment)
-    // writes. Emit the phase checkpoints in order alongside the legacy
-    // promote/retire markers (readers tolerate the extra phases).
-    workrun.checkpoint(WORKRUN_PHASE.synthesizeComplete);
-    workrun.checkpoint(WORKRUN_PHASE.retireComplete);
-    workrun.checkpoint(WORKRUN_PHASE.healComplete);
-  }
 
   // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
   // log body and the DreamRunSummary stay consistent — both views must
@@ -758,6 +805,14 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
         },
       });
     }
+    // Reconcile's only durable artifact is the pair of event loops just
+    // above: the classification itself is in-memory and vanishes with the
+    // process. The pre-mutation burst used to claim this phase complete
+    // before a single preference had been written, which is precisely the
+    // journal-lies failure this release removes. The marker therefore
+    // trails `heal_complete` in the file - emission order is execution
+    // order, not the reporting order of DREAM_PHASE_ORDER.
+    workrun?.checkpoint(WORKRUN_PHASE.reconcileComplete);
 
     for (const suppressed of plan.signalsSuppressed) {
       writeEvent(vault, {
@@ -882,6 +937,14 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     regenerateLessonsQuiet(vault, { now });
   }
 
+  // Pre-finalize safeguard checkpoint (no-dead-ends, Unit E). Everything
+  // between the post-mutation checkpoint and this line - the log events,
+  // the rollup ledger write, snapshot pruning, the active/lessons
+  // regeneration - used to run with no deadline check at all, so a run
+  // already past its budget still reached `finalized`. Tripping here
+  // leaves the workrun dangling, which is the documented contract.
+  opts.safeguard?.checkpoint();
+
   // v0.12.0 Brain Integrity Suite: finalise the durable workrun
   // immediately before constructing the summary. Any crash building
   // the summary leaves the workrun dangling for the next pass to
@@ -972,7 +1035,12 @@ export function shouldGateRetireFromConfirmed(
 
 // ----- Scan ---------------------------------------------------------------
 
-function scanBrain(vault: string): ScanResult {
+/**
+ * Read the whole `Brain/` tree into memory. Pure: it opens no writer, takes
+ * no clock and touches nothing on disk, which is why it is the one part of
+ * the pass that is provably runnable on its own (see `dream-step.ts`).
+ */
+export function scanBrain(vault: string): ScanResult {
   const dirs = brainDirs(vault);
   const signals: SignalRecord[] = [];
   const preferences: PreferenceRecord[] = [];

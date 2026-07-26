@@ -36,9 +36,16 @@ import { dreamRunsDir, dreamWorkrunPath } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
- * Canonical phase identifiers. Five forward-progress phases plus the
- * sticky `interrupted` terminal. The dream pass emits them in the
- * order declared; readers MUST tolerate unknown future phases.
+ * Canonical phase identifiers. Nine forward-progress phases plus the
+ * sticky `interrupted` terminal. Readers MUST tolerate unknown future
+ * phases.
+ *
+ * Emission order is EXECUTION order, not the order declared here and not
+ * `DREAM_PHASE_ORDER` (which is the reporting order of the summary). A
+ * marker is written at the point where that phase's durable output has
+ * landed, so `reconcile_complete` trails `heal_complete`: reconcile's only
+ * artifacts are audit events written in the log phase. See the emission
+ * notes in `dream.ts`.
  */
 export const WORKRUN_PHASE = Object.freeze({
   started: "started",
@@ -48,8 +55,8 @@ export const WORKRUN_PHASE = Object.freeze({
   finalized: "finalized",
   interrupted: "interrupted",
   // Brain lifecycle suite (Feature 2): multi-phase dream checkpoints.
-  // Emitted in order between `started` and `finalized`. Readers tolerate
-  // unknown phases, so adding these is backward-compatible.
+  // Emitted between `started` and `finalized`, each where its phase's
+  // writes land. Readers tolerate unknown phases.
   closeComplete: "close_complete",
   reconcileComplete: "reconcile_complete",
   synthesizeComplete: "synthesize_complete",
