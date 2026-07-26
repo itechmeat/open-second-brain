@@ -15,12 +15,28 @@
  * categories with a natural-language word list - that would break the
  * language-agnostic guarantee. Absent agent extraction, no digest is
  * written (no fabricated empty summary).
+ *
+ * Project scope. A digest may carry the `project` axis of the composite
+ * scope vocabulary (`src/core/scope-key.ts`), normalized by the SAME slug
+ * rule as the session axis and folded into the dedupe key through the
+ * canonical {@link compositeScopeKey}, so the same content under two
+ * projects is two digests. With the axis absent the key is byte-identical
+ * to the pre-project world - `compositeScopeKey` contributes the empty
+ * string - which is what keeps every digest already on disk deduping.
+ *
+ * NAMING CAUTION: this `project` is the retrieval/dedup scope axis that
+ * `brain_search` filters on as `project_scope`. It is NOT the unrelated
+ * `o2b brain project link|list|remove|status` verb, which links a code
+ * directory to its owning vault at the CONFIGURATION level. The two share
+ * a word and nothing else; do not wire one to the other.
  */
 
 import { createHash } from "node:crypto";
 
+import { compositeScopeKey } from "../scope-key.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
+import { resolveSessionScope, SessionScopeError } from "./session-scope.ts";
 
 export class SessionSummaryError extends Error {
   constructor(message: string) {
@@ -40,6 +56,12 @@ export interface SessionSummaryInput {
   readonly host?: string;
   /** Turn ids the digest was distilled from; recorded as lineage edges. */
   readonly sourceTurnIds?: ReadonlyArray<string>;
+  /**
+   * Raw project-scope value; normalized by the shared slug rule. A value
+   * with no alphanumeric is a caller error, never a silent drop to
+   * unscoped.
+   */
+  readonly project?: string;
   readonly createdAt?: string;
 }
 
@@ -52,9 +74,36 @@ export interface SessionSummaryDigest {
   readonly nextSteps: ReadonlyArray<string>;
   readonly createdAt: string;
   readonly host?: string;
+  /** Normalized project-scope slug; absent when the digest is unscoped. */
+  readonly project?: string;
 }
 
 const KIND = "session_summary_digest";
+
+/** Name of the project axis, used in both the payload key and error text. */
+const PROJECT_FIELD = "project";
+
+/**
+ * Normalize a raw project value through the shared session-scope slug
+ * rule. Deliberately STRICT where {@link scopeFromFrontmatter} is
+ * tolerant: frontmatter is untrusted bulk input where an unusable value
+ * may contribute no scope, but this is an explicit caller argument, and
+ * silently normalizing it to "unscoped" would file the digest somewhere
+ * the caller never asked for.
+ */
+function normalizeProject(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  try {
+    return resolveSessionScope(raw);
+  } catch (error) {
+    if (error instanceof SessionScopeError) {
+      throw new SessionSummaryError(
+        `session summary ${PROJECT_FIELD} requires at least one alphanumeric: ${JSON.stringify(raw)}`,
+      );
+    }
+    throw error;
+  }
+}
 
 /**
  * Validate the agent-supplied categories, dedupe by content hash, and
@@ -86,8 +135,16 @@ export function appendSessionSummary(
   }
 
   const host = input.host?.trim();
+  const project = normalizeProject(input.project);
   const contentHash = hash(JSON.stringify([request ?? "", decisions, learnings, nextSteps]));
-  const dedupeKey = [KIND, sessionId, contentHash].join(":");
+  // Canonical scope contribution: the empty string when the axis is
+  // absent, so an unscoped digest keys byte-identically to every digest
+  // written before the axis existed. A changed key would silently stop
+  // deduplicating the whole existing store.
+  const scopeKey = compositeScopeKey({ owner: null, session: null, project: project ?? null });
+  const dedupeKey = [KIND, sessionId, contentHash, ...(scopeKey.length > 0 ? [scopeKey] : [])].join(
+    ":",
+  );
 
   const existing = findByDedupeKey(vault, dedupeKey);
   if (existing !== null) return toDigest(existing);
@@ -104,6 +161,7 @@ export function appendSessionSummary(
       learnings,
       next_steps: nextSteps,
       ...(host !== undefined && host.length > 0 ? { host } : {}),
+      ...(project !== undefined ? { [PROJECT_FIELD]: project } : {}),
       content_hash: contentHash,
       dedupe_key: dedupeKey,
     },
@@ -123,19 +181,33 @@ export function getSessionSummary(vault: string, sessionId: string): SessionSumm
 
 export interface ListSessionSummariesOptions {
   readonly sessionId?: string;
+  /** Raw project value; normalized by the same rule the write applies. */
+  readonly project?: string;
 }
 
-/** All digests, oldest first; optionally scoped to one session. */
+/**
+ * All digests, oldest first; optionally scoped to one session and/or one
+ * project.
+ *
+ * The project filter is an exact match on the normalized slug, mirroring
+ * the sibling session filter. It deliberately does NOT use
+ * {@link scopeAxisReachable}: that helper governs RETRIEVAL, where an
+ * unscoped shared page must stay visible to every scoped request. This is
+ * an explicit narrowing of a list, so an unscoped digest is not in the
+ * asked-for project and is not returned.
+ */
 export function listSessionSummaries(
   vault: string,
   opts: ListSessionSummariesOptions = {},
 ): ReadonlyArray<SessionSummaryDigest> {
   const scope = opts.sessionId?.trim();
+  const project = normalizeProject(opts.project);
   return Object.freeze(
     sessionDigestRecords(vault)
       .filter(
         (record) => scope === undefined || String(record.payload["session_id"] ?? "") === scope,
       )
+      .filter((record) => project === undefined || readProject(record.payload) === project)
       .map(toDigest),
   );
 }
@@ -165,6 +237,7 @@ function buildSourceRefs(
 function toDigest(record: ContinuityRecord): SessionSummaryDigest {
   const payload = record.payload;
   const host = typeof payload["host"] === "string" ? (payload["host"] as string) : undefined;
+  const project = readProject(payload);
   return Object.freeze({
     id: record.id,
     sessionId: String(payload["session_id"] ?? ""),
@@ -174,7 +247,13 @@ function toDigest(record: ContinuityRecord): SessionSummaryDigest {
     nextSteps: readList(payload["next_steps"]),
     createdAt: record.createdAt,
     ...(host !== undefined ? { host } : {}),
+    ...(project !== undefined ? { [PROJECT_FIELD]: project } : {}),
   });
+}
+
+function readProject(payload: ContinuityRecord["payload"]): string | undefined {
+  const value = payload[PROJECT_FIELD];
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function findByDedupeKey(vault: string, dedupeKey: string): ContinuityRecord | null {
