@@ -290,6 +290,18 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain bridges discover",
         autoRepairable: false,
       },
+      {
+        code: "cli-config-absent",
+        issueClass: "no machine configuration file",
+        nextCommand: "o2b init --vault <path> --name <name>",
+        autoRepairable: false,
+      },
+      {
+        code: "staged-captures-pending",
+        issueClass: "staged captures previewed but not routed",
+        nextCommand: "o2b brain inbox-drain --apply",
+        autoRepairable: false,
+      },
     ] satisfies ReadonlyArray<DiagnosticSignal>
   ).map((s) => [s.code, Object.freeze(s)]),
 );

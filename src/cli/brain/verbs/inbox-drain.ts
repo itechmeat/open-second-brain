@@ -14,6 +14,7 @@ import {
   type DrainItem,
   type DrainReport,
 } from "../../../core/brain/capture/inbox-drain.ts";
+import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 function itemJson(item: DrainItem): Record<string, unknown> {
@@ -45,6 +46,7 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
     apply: { type: "boolean" },
     json: { type: "boolean" },
   });
+  const asJson = flags["json"] === true;
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveBrainAgent(flags, config);
   const report = drainInbox(vault, { apply: flags["apply"] === true, agent, now: new Date() });
@@ -63,7 +65,14 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
     `  routed ${report.routed}, unroutable ${report.unroutable}, archive-failed ${report.archiveFailed}`,
   );
   if (!flags["apply"] && report.items.length > 0) {
-    ok("  re-run with --apply to route and archive");
+    // no-dead-ends, task 7: the terminal-state census found this
+    // hand-written pointer, which the rail-detection could not see. One
+    // mechanism, one line format.
+    emitNextStep("staged-captures-pending", {
+      command: "brain",
+      argv,
+      jsonRequested: asJson,
+    });
   }
   return 0;
 }

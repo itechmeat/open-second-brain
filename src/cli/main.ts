@@ -39,6 +39,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
+import { emitNextStep } from "./advisory-rail.ts";
 import { ownsInternalJson, wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
   installCli,
@@ -100,6 +101,17 @@ async function cmdStatus(argv: string[]): Promise<number> {
     if (semantic.off && semantic.hint) {
       process.stdout.write(`semantic: off (${semantic.hint})\n`);
     }
+  }
+  // no-dead-ends, task 7: the terminal-state census found this one. With
+  // no configuration file there is nothing else this verb can report and
+  // nothing the caller can do with the report, so it names the command
+  // that creates one. With a config present it stays byte-identical.
+  if (!result.exists) {
+    emitNextStep("cli-config-absent", {
+      command: "status",
+      argv,
+      jsonRequested: Boolean(flags["json"]),
+    });
   }
   return 0;
 }
