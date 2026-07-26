@@ -30,7 +30,13 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
-import { brainDirs, logPath, logShardJsonlPath, logShardPath, validateIsoDate } from "./paths.ts";
+import {
+  brainDirsForWrite,
+  logPath,
+  logShardJsonlPath,
+  logShardPath,
+  validateIsoDate,
+} from "./paths.ts";
 import { isValidDeviceId, resolveDeviceId } from "../config.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
@@ -291,7 +297,7 @@ export function appendLogEvent(
   const ts = parseIsoUtc(event.timestamp);
   const path = logShardPath(vault, ts.date, deviceId);
   const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
-  const logDir = brainDirs(vault).log;
+  const logDir = brainDirsForWrite(vault).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
   const eventBody =
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"

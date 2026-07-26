@@ -38,7 +38,7 @@ import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
-import { allocateSlug, brainDirs, validateIsoDate } from "./paths.ts";
+import { allocateSlug, brainDirsForWrite, validateIsoDate } from "./paths.ts";
 import {
   isKnownSchemaToken,
   validateSchemaToken,
@@ -295,7 +295,10 @@ export function writeSignal(
     }
   }
 
-  const dirs = brainDirs(vault);
+  // Write-intent variant (Unit J): a signal write is the path that
+  // materializes a mis-resolved root, so it asserts the vault identity
+  // before allocating a filename under it.
+  const dirs = brainDirsForWrite(vault);
   const allocated = allocateSlug({
     vault,
     targetDir: options.targetDir ?? dirs.inbox,

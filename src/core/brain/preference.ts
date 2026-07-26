@@ -46,7 +46,7 @@ import {
   validateSchemaToken,
   type BrainSchemaVocabulary,
 } from "./schema-vocab.ts";
-import { brainDirs, preferencePath, retiredPath, validateSlug } from "./paths.ts";
+import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -1034,7 +1034,7 @@ export function moveToRetired(
   // canonical `preferences/` folder. Doing this check *before* any I/O
   // means a buggy caller cannot trick us into deleting an unrelated
   // file: a misrouted call fails fast with no destructive side effect.
-  const dirs = brainDirs(vault);
+  const dirs = brainDirsForWrite(vault);
   if (dirname(prefPath) !== dirs.preferences) {
     throw new Error(`moveToRetired: source path was not under preferences/: ${prefPath}`);
   }

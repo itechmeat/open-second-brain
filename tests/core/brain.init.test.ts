@@ -62,11 +62,14 @@ describe("bootstrapBrain — empty vault", () => {
     // in v0.11.0; the operating manual lives at Brain/_BRAIN.md only.)
     expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(true);
     expect(existsSync(join(vault, "Brain", "_BRAIN.md"))).toBe(true);
+    // The vault identity marker is stamped by the bootstrap path
+    // (context-integrity-gates, Unit J).
+    expect(existsSync(join(vault, "Brain", "vault-id.json"))).toBe(true);
 
-    // Counts: six created (_brain.yaml, _BRAIN.md, and the four
-    // Brain/bases/*.base view definitions stamped at init), none
-    // overwritten, none skipped.
-    expect(result.created.length).toBe(6);
+    // Counts: seven created (vault-id.json, _brain.yaml, _BRAIN.md, and
+    // the four Brain/bases/*.base view definitions stamped at init),
+    // none overwritten, none skipped.
+    expect(result.created.length).toBe(7);
     expect(result.overwritten.length).toBe(0);
     expect(result.skipped.length).toBe(0);
 

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -92,8 +92,13 @@ describe("o2b vault profile / map", () => {
   test("profile create / switch / list", async () => {
     await bootstrap();
     const env = { OPEN_SECOND_BRAIN_CONFIG: config };
+    // The profile target must be a real directory: activation validates
+    // it at switch time (context-integrity-gates, Unit J), where before
+    // it deferred the failure to whichever later process wrote first.
+    const workVault = join(tmp, "work-vault");
+    mkdirSync(workVault, { recursive: true });
     expect(
-      (await runCli(["vault", "profile", "create", "work", "/srv/v/work"], { env })).returncode,
+      (await runCli(["vault", "profile", "create", "work", workVault], { env })).returncode,
     ).toBe(0);
     expect((await runCli(["vault", "profile", "switch", "work"], { env })).returncode).toBe(0);
     const list = await runCli(["vault", "profile", "list", "--json"], { env });

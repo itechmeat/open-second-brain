@@ -27,6 +27,8 @@ import { existsSync } from "node:fs";
 import { join, posix } from "node:path";
 
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+import type { DegradationNotice } from "../integrity/degradation.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 
@@ -171,6 +173,28 @@ export function brainDirs(vault: string): BrainDirs {
     bases: ensureInsideVault(join(vault, BRAIN_BASES_REL), vault),
     snapshots: ensureInsideVault(join(vault, BRAIN_SNAPSHOTS_REL), vault),
   };
+}
+
+/**
+ * {@link brainDirs} for a caller that is about to WRITE.
+ *
+ * Identical directories, plus the vault-identity assertion in front of
+ * them (context-integrity-gates, Unit J). The write-intent variant
+ * exists because the guard belongs on the write side only: read paths
+ * must stay unaffected, and a blanket assertion inside `brainDirs`
+ * would fire on every listing, every doctor pass, and every fail-soft
+ * hook that merely inspects the tree.
+ *
+ * An unmarked root emits a `vault-marker-absent` notice into `notices`
+ * and proceeds; a root whose marker differs from the one this process
+ * pinned raises `VaultIdentityMismatchError`. The bootstrap path
+ * deliberately uses plain {@link brainDirs}: it is what legitimately
+ * creates the tree, so it must not be gated on the marker it is about
+ * to write.
+ */
+export function brainDirsForWrite(vault: string, notices?: DegradationNotice[]): BrainDirs {
+  assertVaultIdentityForWrite(vault, notices);
+  return brainDirs(vault);
 }
 
 /** Path of `Brain/_brain.yaml`. */

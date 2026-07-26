@@ -12,7 +12,7 @@
  * depend on it without a cycle.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
@@ -105,14 +105,38 @@ export function createProfile(configPath: string, name: string, vault: string): 
   save(configPath, data);
 }
 
-/** Activate a named profile. Throws if the profile does not exist. */
+/**
+ * Activate a named profile. Throws if the profile does not exist, or if
+ * its recorded vault path is not an existing directory.
+ *
+ * The directory check exists because activation used to succeed against
+ * a path that was never there, and the failure surfaced in a LATER
+ * process - as a Brain tree materialized under the mis-resolved root by
+ * the first write, which is indistinguishable from a vault where
+ * nothing has been recorded yet (context-integrity-gates, Unit J). The
+ * check is on the MUTATING call only; `resolveActiveProfileVault` stays
+ * read-only and never throws.
+ */
 export function switchProfile(configPath: string, name: string): void {
   const data = load(configPath);
-  if (!data.profiles[name]) {
+  const profile = data.profiles[name];
+  if (!profile) {
     throw new Error(`unknown profile '${name}'`);
+  }
+  if (!isDirectory(profile.vault)) {
+    throw new Error(`profile '${name}' points at a path that is not a directory: ${profile.vault}`);
   }
   data.active = name;
   save(configPath, data);
+}
+
+/** True when `path` exists and is a directory. Never throws. */
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**

@@ -34,6 +34,7 @@ import {
   brainManualPath,
   vaultRelative,
 } from "./paths.ts";
+import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML, formatPrimaryAgentYamlValue } from "./policy.ts";
 import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
 
@@ -240,6 +241,16 @@ export function bootstrapBrain(
   ]) {
     mkdirSync(dir, { recursive: true });
   }
+
+  // 1b. `Brain/vault-id.json` — the vault identity marker (Unit J). The
+  //     bootstrap path is what legitimately creates a Brain tree, so it
+  //     stamps the marker rather than being gated on it. Idempotent: a
+  //     vault that already has an identity keeps it, since rotating the
+  //     id would make every synced peer look like a different store.
+  const identityPath = vaultIdentityPath(vault);
+  const identityExisted = existsSync(identityPath);
+  writeVaultIdentity(vault);
+  if (!identityExisted) created.push(vaultRelative(identityPath, vault));
 
   // 2. `_brain.yaml` — default config (with optional primary_agent).
   const brainYamlPath = brainConfigPath(vault);

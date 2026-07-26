@@ -66,12 +66,20 @@ describe("clean vault", () => {
     expect(res.warnings).toEqual([]);
   });
 
-  test("a vault without Brain/ at all reports zero issues (no Brain layer present is acceptable)", () => {
+  test("a vault without Brain/ at all is named, not reported clean", () => {
+    // Until context-integrity-gates (Unit J) this asserted zero warnings
+    // AND a `clean` trust verdict. That assertion encoded the defect
+    // rather than the contract: a root with no Brain layer is exactly
+    // the shape a MIS-RESOLVED vault takes, so the one command an
+    // operator runs to check the store certified the wrong root as fine.
+    // An un-initialized vault is still not an ERROR, so `errors` stays
+    // empty; the condition is now a named warning.
     const fresh = mkdtempSync(join(tmpdir(), "o2b-doctor-no-brain-"));
     try {
       const res = runDoctor(fresh);
       expect(res.errors).toEqual([]);
-      expect(res.warnings).toEqual([]);
+      expect(res.warnings.map((w) => w.code)).toEqual(["brain-root-absent"]);
+      expect(res.trust_verdict).not.toBe("clean");
     } finally {
       rmSync(fresh, { recursive: true, force: true });
     }

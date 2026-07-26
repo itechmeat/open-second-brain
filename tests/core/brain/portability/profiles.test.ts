@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -49,14 +49,30 @@ describe("profile registry", () => {
   });
 
   test("switch sets the active pointer", () => {
-    createProfile(configPath, "work", "/srv/vaults/work");
+    const workVault = join(home, "work-vault");
+    mkdirSync(workVault, { recursive: true });
+    createProfile(configPath, "work", workVault);
     switchProfile(configPath, "work");
     expect(listProfiles(configPath).active).toBe("work");
-    expect(resolveActiveProfileVault(configPath)).toBe("/srv/vaults/work");
+    expect(resolveActiveProfileVault(configPath)).toBe(workVault);
   });
 
   test("switching to an unknown profile throws", () => {
     expect(() => switchProfile(configPath, "ghost")).toThrow();
+  });
+
+  test("switching to a profile whose vault is not a directory fails at switch time", () => {
+    // Unit J: activation used to succeed and fail in a LATER process,
+    // where the first write would materialize the mis-resolved root.
+    createProfile(configPath, "ghost-vault", join(home, "does-not-exist"));
+    expect(() => switchProfile(configPath, "ghost-vault")).toThrow(/not a directory/);
+    // The active pointer is unchanged, so nothing resolves to it.
+    expect(listProfiles(configPath).active).toBeNull();
+
+    const filePath = join(home, "a-file");
+    atomicWriteFileSync(filePath, "not a vault\n");
+    createProfile(configPath, "file-vault", filePath);
+    expect(() => switchProfile(configPath, "file-vault")).toThrow(/not a directory/);
   });
 
   test("resolveActiveProfileVault is null with no active profile", () => {
@@ -79,9 +95,11 @@ describe("profile registry", () => {
 
 describe("resolveVault integration", () => {
   test("returns the active profile's vault when one is active", () => {
-    createProfile(configPath, "work", "/srv/vaults/work");
+    const workVault = join(home, "work-vault");
+    mkdirSync(workVault, { recursive: true });
+    createProfile(configPath, "work", workVault);
     switchProfile(configPath, "work");
-    expect(resolveVault(configPath)).toBe("/srv/vaults/work");
+    expect(resolveVault(configPath)).toBe(workVault);
   });
 
   test("falls back to the config vault when no profile is active (back-compat)", () => {

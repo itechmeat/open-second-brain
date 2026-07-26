@@ -210,21 +210,44 @@ export interface RunDoctorResult {
 
 // ----- Entry point ----------------------------------------------------------
 
+/** Issue code for a resolved root that carries no Brain layer. */
+const BRAIN_ROOT_ABSENT_CODE = "brain-root-absent";
+
 export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctorResult {
   const issues: DoctorIssue[] = [];
 
   const dirs = brainDirs(vault);
   if (!existsSync(dirs.brain)) {
-    // No Brain layer present is not an error here — `o2b brain init`
-    // is the right command, but a vault without Brain is allowed in
-    // v0.9. Return clean. v0.10.16: emit the new trust-layer fields
-    // with their clean / empty defaults for shape symmetry with the
-    // normal-return path.
+    // A root with no Brain layer is NOT clean (context-integrity-gates,
+    // Unit J). It is exactly the shape a mis-resolved vault takes, and
+    // reporting it as clean is what let a wrong root pass the one
+    // command an operator runs to check the store. It is still not an
+    // error - an un-initialized vault is legitimate - so it is reported
+    // as a named warning plus an `uncertain` entry: every check below
+    // was skipped, so nothing about this root has actually been
+    // verified.
+    const message =
+      `no Brain layer at ${dirs.brain}; run \`o2b brain init\` if this is the ` +
+      "intended vault, otherwise the resolved vault root is wrong";
     return Object.freeze({
-      warnings: Object.freeze([]),
+      warnings: Object.freeze([
+        {
+          severity: "warning",
+          code: BRAIN_ROOT_ABSENT_CODE,
+          path: dirs.brain,
+          message,
+        } satisfies DoctorIssue,
+      ]),
       errors: Object.freeze([]),
-      trust_verdict: "clean" as TrustVerdict,
+      trust_verdict: "watch" as TrustVerdict,
       instruction_file_warnings: Object.freeze([]),
+      uncertain: Object.freeze([
+        {
+          code: BRAIN_ROOT_ABSENT_CODE,
+          path: dirs.brain,
+          message: "every Brain check was skipped: the layer is absent",
+        },
+      ]),
     });
   }
 
