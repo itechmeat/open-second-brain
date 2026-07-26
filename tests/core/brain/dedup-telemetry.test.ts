@@ -28,7 +28,7 @@ import {
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { scanInline } from "../../../src/core/brain/inline-scan.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-template.ts";
 import { captureSessionLifecycleEvent } from "../../../src/core/brain/session-lifecycle.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
