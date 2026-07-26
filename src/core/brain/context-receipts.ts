@@ -169,6 +169,171 @@ export function listContextReceipts(
   return Object.freeze(receipts);
 }
 
+// ----- session-scoped fold (context-integrity-gates, Unit I) --------------
+
+/**
+ * Default ceiling on how many receipts one fold reads.
+ *
+ * `listContinuityRecords` scans every month shard, so an unbounded fold
+ * grows with the whole log history. The bound follows the precedent in
+ * `summarizeTokenImpact`, with one addition: exceeding it is REPORTED
+ * (`truncated`) rather than silently returning a prefix as if it were
+ * the complete answer.
+ */
+export const CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS = 500;
+
+export interface ContextReceiptFoldFilter {
+  readonly trigger?: ContextReceiptTrigger;
+  readonly host?: string;
+  readonly sessionId?: string;
+  /** Inclusive lower bound on `createdAt` (canonical UTC ISO-8601). */
+  readonly since?: string;
+  /** Inclusive upper bound on `createdAt` (canonical UTC ISO-8601). */
+  readonly until?: string;
+  /** Scan bound; defaults to {@link CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS}. */
+  readonly maxReceipts?: number;
+}
+
+/** One artifact's injection history across the folded receipts. */
+export interface ContextReceiptItemUsage {
+  readonly id: string;
+  /** Vault-relative path, when the receipts recorded one. */
+  readonly path?: string;
+  /** How many of the folded receipts injected this artifact. */
+  readonly injections: number;
+  /** Summed recorded token cost across those injections. */
+  readonly tokens: number;
+}
+
+/**
+ * The filtered window held no receipts at all.
+ *
+ * This is a DIFFERENT statement from "every counter is zero", and the
+ * difference is the point: receipt emission is opt-in, so a vault where
+ * nobody asked for receipts has recorded nothing, and reporting counts
+ * of zero would present the absence of a mechanism as a finding about
+ * retrieval. The shape carries no counters, so a consumer cannot read
+ * one without first branching on `recorded`.
+ */
+export interface ContextReceiptFoldEmpty {
+  readonly recorded: false;
+  readonly max_receipts: number;
+}
+
+/** The fold over a non-empty window. */
+export interface ContextReceiptFoldResult {
+  readonly recorded: true;
+  /** Receipts folded, including any withheld from item aggregation. */
+  readonly receipt_count: number;
+  /** Total item occurrences across the aggregated receipts. */
+  readonly item_total: number;
+  /** Distinct artifacts behind those occurrences. */
+  readonly distinct_items: number;
+  /** Per-artifact frequency and token cost, most-injected first. */
+  readonly items: ReadonlyArray<ContextReceiptItemUsage>;
+  /**
+   * Receipts the redactor flagged private or redacted. They are counted
+   * but never unfolded, so redacted content cannot re-enter the vault
+   * through an aggregate. The three item figures above describe the
+   * remaining receipts only.
+   */
+  readonly withheld_receipts: number;
+  /** True when the scan bound cut the input; the figures are a prefix. */
+  readonly truncated: boolean;
+  readonly max_receipts: number;
+}
+
+export type ContextReceiptFold = ContextReceiptFoldEmpty | ContextReceiptFoldResult;
+
+/**
+ * Join `context_receipt` records across a window into one retrieval
+ * picture: how many injections happened, how many distinct artifacts
+ * they carried, and how often and how expensively each one was injected.
+ *
+ * Read-only. Every field folded here was already durable on the record;
+ * what did not exist was the join - `listContextReceipts` has only ever
+ * mapped one summary per record, so nothing could answer "what did this
+ * session actually keep re-injecting?".
+ */
+export function summarizeContextReceiptSession(
+  vault: string,
+  filter: ContextReceiptFoldFilter = {},
+): ContextReceiptFold {
+  const maxReceipts = Math.max(
+    1,
+    Math.floor(filter.maxReceipts ?? CONTEXT_RECEIPT_FOLD_MAX_RECEIPTS),
+  );
+  const matched = listContinuityRecords(vault, {
+    kind: "context_receipt",
+    ...(filter.since !== undefined ? { since: filter.since } : {}),
+    ...(filter.until !== undefined ? { until: filter.until } : {}),
+  })
+    .filter((record) =>
+      matchesReceiptFilter(record, {
+        ...(filter.trigger !== undefined ? { trigger: filter.trigger } : {}),
+        ...(filter.host !== undefined ? { host: filter.host } : {}),
+        ...(filter.sessionId !== undefined ? { sessionId: filter.sessionId } : {}),
+      }),
+    )
+    .toReversed();
+
+  if (matched.length === 0) {
+    return Object.freeze({ recorded: false as const, max_receipts: maxReceipts });
+  }
+
+  const folded = matched.slice(0, maxReceipts);
+  const usage = new Map<string, { path?: string; injections: number; tokens: number }>();
+  let itemTotal = 0;
+  let withheld = 0;
+
+  for (const record of folded) {
+    if (record.private || record.redacted) {
+      withheld += 1;
+      continue;
+    }
+    const items = record.payload["items"];
+    if (!Array.isArray(items)) continue;
+    for (const raw of items) {
+      if (raw === null || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      const id = item["id"];
+      if (typeof id !== "string" || id.length === 0) continue;
+      itemTotal += 1;
+      const path = typeof item["path"] === "string" ? item["path"] : undefined;
+      const tokens = typeof item["tokens"] === "number" ? item["tokens"] : 0;
+      const current = usage.get(id) ?? { injections: 0, tokens: 0 };
+      current.injections += 1;
+      current.tokens += tokens;
+      if (current.path === undefined && path !== undefined) current.path = path;
+      usage.set(id, current);
+    }
+  }
+
+  const items = [...usage.entries()]
+    .map(([id, entry]) =>
+      Object.freeze({
+        id,
+        ...(entry.path !== undefined ? { path: entry.path } : {}),
+        injections: entry.injections,
+        tokens: entry.tokens,
+      }),
+    )
+    .toSorted(
+      (a, b) => b.injections - a.injections || b.tokens - a.tokens || a.id.localeCompare(b.id),
+    );
+
+  return Object.freeze({
+    recorded: true as const,
+    receipt_count: folded.length,
+    item_total: itemTotal,
+    distinct_items: usage.size,
+    items: Object.freeze(items),
+    withheld_receipts: withheld,
+    truncated: matched.length > folded.length,
+    max_receipts: maxReceipts,
+  });
+}
+
 export function getContextReceipt(vault: string, id: string): ContinuityRecord | null {
   return (
     listContinuityRecords(vault, { kind: "context_receipt" }).find((record) => record.id === id) ??

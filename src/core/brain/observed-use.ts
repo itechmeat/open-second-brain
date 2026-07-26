@@ -142,12 +142,42 @@ export interface ObservedReuse {
 }
 
 /**
- * Fold every `recall_observed_use` record into a per-artifact reuse map,
- * keyed by `path` when present else `id`. Order-insensitive.
+ * Narrows {@link observedReuseRates} from its lifetime default to one
+ * session or one window. Every field is optional and an empty filter is
+ * byte-identical to the unfiltered lifetime fold, so no existing caller
+ * changes behaviour.
  */
-export function observedReuseRates(vault: string): Map<string, ObservedReuse> {
+export interface ObservedReuseFilter {
+  /** Only records carrying this `session_id`. */
+  readonly sessionId?: string;
+  /** Inclusive lower bound on `createdAt` (canonical UTC ISO-8601). */
+  readonly since?: string;
+  /** Inclusive upper bound on `createdAt` (canonical UTC ISO-8601). */
+  readonly until?: string;
+}
+
+/**
+ * Fold `recall_observed_use` records into a per-artifact reuse map,
+ * keyed by `path` when present else `id`. Order-insensitive.
+ *
+ * Unfiltered this is the lifetime rate ranking consumes. A filter makes
+ * the same fold answerable for one session or one window, which is what
+ * a session-scoped retrieval report needs: a lifetime rate cannot say
+ * whether the material injected THIS session was used.
+ */
+export function observedReuseRates(
+  vault: string,
+  filter: ObservedReuseFilter = {},
+): Map<string, ObservedReuse> {
   const acc = new Map<string, { used: number; ignored: number; contradicted: number }>();
-  for (const record of listContinuityRecords(vault, { kind: "recall_observed_use" })) {
+  for (const record of listContinuityRecords(vault, {
+    kind: "recall_observed_use",
+    ...(filter.since !== undefined ? { since: filter.since } : {}),
+    ...(filter.until !== undefined ? { until: filter.until } : {}),
+  })) {
+    if (filter.sessionId !== undefined && record.payload["session_id"] !== filter.sessionId) {
+      continue;
+    }
     const entries = record.payload["entries"];
     if (!Array.isArray(entries)) continue;
     for (const raw of entries) {

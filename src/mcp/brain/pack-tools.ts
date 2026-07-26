@@ -29,8 +29,10 @@ import {
   isContextReceiptTrigger,
   listContextReceipts,
   summarizeContextReceipt,
+  summarizeContextReceiptSession,
   type ContextReceiptOptions,
 } from "../../core/brain/context-receipts.ts";
+import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import {
   diffContextPreset,
   getContextPreset,
@@ -274,7 +276,104 @@ async function toolBrainContextReceipts(
     };
   }
 
-  throw new MCPError(INVALID_PARAMS, "brain_context_receipts: operation must be list or show");
+  if (operation === "summary") return summarizeReceipts(ctx, args);
+
+  throw new MCPError(
+    INVALID_PARAMS,
+    "brain_context_receipts: operation must be list, show, or summary",
+  );
+}
+
+/**
+ * Session-scoped retrieval report (context-integrity-gates, Unit I): a
+ * read-only fold over receipts that already exist, joined to the
+ * observed-use verdicts for the same window.
+ *
+ * A window with no receipts reports exactly that. Receipt emission is
+ * opt-in, so counters of zero would describe a mechanism nobody enabled
+ * rather than a retrieval finding.
+ */
+async function summarizeReceipts(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const trigger = optionalStringArg("brain_context_receipts", args, "trigger");
+  if (trigger !== undefined && !isContextReceiptTrigger(trigger)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_context_receipts: trigger must be one of ${CONTEXT_RECEIPT_TRIGGERS.join(", ")}`,
+    );
+  }
+  const host = optionalStringArg("brain_context_receipts", args, "host");
+  const sessionId = optionalStringArg("brain_context_receipts", args, "session_id");
+  const since = optionalStringArg("brain_context_receipts", args, "since");
+  const until = optionalStringArg("brain_context_receipts", args, "until");
+  const maxReceipts = coercePositiveInteger(
+    "brain_context_receipts",
+    "max_receipts",
+    args["max_receipts"],
+  );
+  const limit = coercePositiveInteger("brain_context_receipts", "limit", args["limit"]);
+
+  const window = {
+    ...(trigger !== undefined ? { trigger } : {}),
+    ...(host !== undefined ? { host } : {}),
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  };
+  const fold = summarizeContextReceiptSession(ctx.vault, {
+    ...window,
+    ...(maxReceipts !== undefined ? { maxReceipts } : {}),
+  });
+  if (!fold.recorded) {
+    return {
+      vault_path: ctx.vault,
+      recorded: false,
+      max_receipts: fold.max_receipts,
+      note: "no receipts recorded for this filter; receipt emission is opt-in per call",
+    };
+  }
+
+  // Observed use is folded over the SAME window, so a per-item verdict
+  // describes this session rather than the artifact's lifetime rate.
+  const reuse = observedReuseRates(ctx.vault, {
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  });
+  const items = limit === undefined ? fold.items : fold.items.slice(0, limit);
+
+  return {
+    vault_path: ctx.vault,
+    recorded: true,
+    receipt_count: fold.receipt_count,
+    item_total: fold.item_total,
+    distinct_items: fold.distinct_items,
+    withheld_receipts: fold.withheld_receipts,
+    truncated: fold.truncated,
+    max_receipts: fold.max_receipts,
+    items: items.map((item) => {
+      const observed = reuse.get(item.path ?? item.id);
+      return {
+        id: item.id,
+        ...(item.path !== undefined ? { path: item.path } : {}),
+        injections: item.injections,
+        tokens: item.tokens,
+        ...(observed !== undefined
+          ? {
+              observed: {
+                used: observed.used,
+                ignored: observed.ignored,
+                contradicted: observed.contradicted,
+                total: observed.total,
+                score: observed.score,
+              },
+            }
+          : {}),
+      };
+    }),
+  };
 }
 
 // ----- brain_event_trace ---------------------------------------------------
@@ -640,14 +739,15 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_context_receipts",
     description:
-      "List context receipt summaries or show one full receipt by id. Receipts are append-only continuity records emitted by opt-in context injection callers. Read-only.",
+      "List context receipt summaries, show one full receipt by id, or fold a window into a retrieval summary (distinct items, per-item injection frequency, token cost, observed use). Receipts are append-only continuity records emitted by opt-in injection callers. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["list", "show"],
-          description: "Use list for summaries, show for one full receipt by id.",
+          enum: ["list", "show", "summary"],
+          description:
+            "list returns summaries, show returns one full receipt by id, summary folds a window into a retrieval report.",
         },
         id: {
           type: "string",
@@ -664,12 +764,27 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         session_id: {
           type: "string",
-          description: "Optional list filter by recorded session id.",
+          description: "Optional list/summary filter by recorded session id.",
+        },
+        since: {
+          type: "string",
+          description: "Summary only: inclusive lower bound on receipt createdAt (UTC ISO-8601).",
+        },
+        until: {
+          type: "string",
+          description: "Summary only: inclusive upper bound on receipt createdAt (UTC ISO-8601).",
+        },
+        max_receipts: {
+          type: "integer",
+          minimum: 1,
+          description:
+            "Summary only: scan bound on receipts folded. Exceeding it sets `truncated`.",
         },
         limit: {
           type: "integer",
           minimum: 1,
-          description: "Optional maximum number of summaries to return.",
+          description:
+            "Maximum summaries to return (list) or item rows to return (summary; `distinct_items` still reports the full count).",
         },
       },
       required: ["operation"],

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { emitContextReceipt } from "../../src/core/brain/context-receipts.ts";
+import { emitObservedUse } from "../../src/core/brain/observed-use.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
@@ -117,5 +118,71 @@ describe("brain_context_receipts tool", () => {
     });
     expect(show["id"]).toBe(receipt.id);
     expect((show["payload"] as Record<string, unknown>)["session_id"]).toBe("session-mcp");
+  });
+
+  test("summary folds a session and joins the observed-use verdicts", async () => {
+    for (const [createdAt, tokens] of [
+      ["2026-05-21T14:00:00.000Z", 10],
+      ["2026-05-21T14:05:00.000Z", 14],
+    ] as const) {
+      emitContextReceipt(vault, {
+        options: {
+          host: "mcp-test",
+          trigger: "context_pack",
+          createdAt,
+          sessionId: "session-fold",
+        },
+        finalText: "pack",
+        items: [{ id: "pref-alpha", path: "Brain/preferences/pref-alpha.md", tokens }],
+      });
+    }
+    emitObservedUse(vault, {
+      createdAt: "2026-05-21T14:10:00.000Z",
+      host: "mcp-test",
+      sessionId: "session-fold",
+      entries: [{ id: "pref-alpha", path: "Brain/preferences/pref-alpha.md", verdict: "USED" }],
+    });
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const summary = await callReceipts(server, {
+      operation: "summary",
+      session_id: "session-fold",
+    });
+    expect(summary["recorded"]).toBe(true);
+    expect(summary["receipt_count"]).toBe(2);
+    expect(summary["distinct_items"]).toBe(1);
+    expect(summary["item_total"]).toBe(2);
+    expect(summary["truncated"]).toBe(false);
+    const items = summary["items"] as Array<Record<string, unknown>>;
+    expect(items[0]).toMatchObject({
+      id: "pref-alpha",
+      injections: 2,
+      tokens: 24,
+      observed: { used: 1, ignored: 0, contradicted: 0, total: 1 },
+    });
+  });
+
+  test("summary over a vault with no receipts says so instead of returning zeros", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const summary = await callReceipts(server, { operation: "summary" });
+    expect(summary["recorded"]).toBe(false);
+    expect(summary["receipt_count"]).toBeUndefined();
+    expect(summary["items"]).toBeUndefined();
+    expect(typeof summary["note"]).toBe("string");
+  });
+
+  test("an unknown operation names every branch", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 11,
+      method: "tools/call",
+      params: { name: "brain_context_receipts", arguments: { operation: "nope" } },
+    })) as { error?: { message: string }; result?: { content: ReadonlyArray<{ text: string }> } };
+    const text = response.error?.message ?? response.result?.content[0]?.text ?? "";
+    expect(text).toContain("summary");
   });
 });
