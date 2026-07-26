@@ -13,7 +13,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 
 // Shared temp scratch for both vault and machine-config directories.
 // Tests that need to assert the "missing machine config" path can
@@ -42,19 +42,14 @@ describe("bootstrapBrain — empty vault", () => {
   test("creates every Brain directory and the three managed files", () => {
     const result = bootstrapBrain(vault, { configPath });
 
-    // Directories: every entry in brainDirs() must exist as a real dir.
+    // Directories: EVERY entry in brainDirs() must exist as a real dir.
+    // Enumerated from the struct rather than from a hand-written list, so
+    // a directory added to `brainDirs` cannot be declared and then left
+    // uncreated — which is exactly how `pending` and `entities` went
+    // missing (downstream writers made them lazily instead).
     const dirs = brainDirs(vault);
-    for (const dir of [
-      dirs.brain,
-      dirs.inbox,
-      dirs.processed,
-      dirs.preferences,
-      dirs.retired,
-      dirs.log,
-      dirs.bases,
-      dirs.snapshots,
-    ]) {
-      expect(existsSync(dir)).toBe(true);
+    for (const [name, dir] of Object.entries(dirs)) {
+      expect(`${name}:${existsSync(dir)}`).toBe(`${name}:true`);
       expect(statSync(dir).isDirectory()).toBe(true);
     }
 
@@ -112,6 +107,22 @@ describe("bootstrapBrain — idempotent rerun", () => {
     bootstrapBrain(vault, { configPath });
     // Second pass must not throw even though every directory exists.
     expect(() => bootstrapBrain(vault, { configPath })).not.toThrow();
+  });
+
+  test("a directory created by hand between runs survives the second pass", () => {
+    bootstrapBrain(vault, { configPath });
+    const dirs = brainDirs(vault);
+    // Drop a marker into each declared directory; a second bootstrap must
+    // leave every one of them in place (mkdir -p, never mkdir -p after rm).
+    for (const dir of Object.values(dirs)) {
+      writeFileSync(join(dir, "marker.txt"), "kept\n", "utf8");
+    }
+    const second = bootstrapBrain(vault, { configPath });
+    expect(second.created.length).toBe(0);
+    expect(second.overwritten.length).toBe(0);
+    for (const dir of Object.values(dirs)) {
+      expect(readFileSync(join(dir, "marker.txt"), "utf8")).toBe("kept\n");
+    }
   });
 });
 

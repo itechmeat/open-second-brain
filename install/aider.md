@@ -34,6 +34,21 @@ o2b install --check --target aider
 Confirms both the managed block and the sidecar context file are
 on disk.
 
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target aider -->
+
+```text
+o2b install --check
+--------------------
+  aider         ok                $HOME/.aider.conf.yml: managed block present; sidecar ok
+```
+
+`$HOME` stands in for your home directory. This block is asserted
+against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift
+from the code.
+
 ## Uninstall
 
 ```bash

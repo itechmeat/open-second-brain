@@ -35,7 +35,8 @@ import {
   vaultRelative,
 } from "./paths.ts";
 import { vaultIdentityPath, writeVaultIdentity } from "./vault-identity.ts";
-import { DEFAULT_BRAIN_CONFIG_YAML, formatPrimaryAgentYamlValue } from "./policy.ts";
+import { formatPrimaryAgentYamlValue } from "./policy.ts";
+import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { BASE_TEMPLATE_FILES, BASES_TEMPLATE_DIR, renderBrainManual } from "./templates.ts";
 
 const STARTER_TARGETS = ["preferences", "retired", "inbox", "log"] as const;
@@ -228,17 +229,15 @@ export function bootstrapBrain(
   // 1. Directories. mkdirSync({ recursive: true }) is idempotent and
   //    does not throw on existing paths, so we do not track create
   //    counts for directories — only files end up in the report.
+  //
+  //    Enumerated from `brainDirs` rather than from a list repeated
+  //    here: a hand-written list is how `pending` and `entities` came to
+  //    be DECLARED by `brainDirs` and never created (their writers made
+  //    them lazily, so a freshly-bootstrapped vault was missing two of
+  //    the ten directories it advertises). Iterating the struct makes
+  //    "declared but not created" unrepresentable.
   const dirs = brainDirs(vault);
-  for (const dir of [
-    dirs.brain,
-    dirs.inbox,
-    dirs.processed,
-    dirs.preferences,
-    dirs.retired,
-    dirs.log,
-    dirs.bases,
-    dirs.snapshots,
-  ]) {
+  for (const dir of Object.values(dirs)) {
     mkdirSync(dir, { recursive: true });
   }
 

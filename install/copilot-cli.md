@@ -26,6 +26,21 @@ o2b install --check --target copilot-cli
 Verify queries `copilot mcp list` when the CLI is available, or
 inspects the fallback file otherwise.
 
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target copilot-cli -->
+
+```text
+o2b install --check
+--------------------
+  copilot-cli   ok                both OSB names registered with copilot CLI
+```
+
+`$HOME` stands in for your home directory. This block is asserted
+against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift
+from the code.
+
 ## Uninstall
 
 ```bash

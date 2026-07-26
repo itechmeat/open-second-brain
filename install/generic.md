@@ -48,6 +48,27 @@ file — the consuming runtime may still depend on it. The
 uninstall step prints the path so the operator can clean it up by
 hand.
 
+## Verify
+
+```bash
+o2b install --check --target generic
+```
+
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target generic -->
+
+```text
+o2b install --check
+--------------------
+  generic       ok                generic: payload written to $HOME/osb-mcp.json (runtime wiring is operator-managed)
+```
+
+`$HOME/osb-mcp.json` is whatever path `--out` was given. This block
+is asserted against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift
+from the code.
+
 ## Notes
 
 - Detection always reports `not-installed` (there is no canonical
