@@ -34,15 +34,25 @@ import {
 import { readMergedInto } from "./page-meta/page-id.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
+/**
+ * The two structural repairs this pass performs, spelled once. They are
+ * also the codes the applier capability table publishes for this module,
+ * and the capability test binds the two together.
+ */
+export const LINT_CONSOLIDATE_KIND = Object.freeze({
+  mergedLink: "fix-merged-link",
+  staleStableDemotion: "demote-stale-stable",
+} as const);
+
 export interface LintFix {
-  readonly kind: "fix-merged-link";
+  readonly kind: typeof LINT_CONSOLIDATE_KIND.mergedLink;
   readonly path: string;
   readonly from: string;
   readonly to: string;
 }
 
 export interface LintDemotion {
-  readonly kind: "demote-stale-stable";
+  readonly kind: typeof LINT_CONSOLIDATE_KIND.staleStableDemotion;
   readonly id: string;
   readonly path: string;
   readonly ageDays: number;
@@ -99,7 +109,12 @@ function scanFileForMergedLinks(
   const rewritten = raw.replace(WIKILINK_TARGET_RE, (match, target, suffix) => {
     const canonical = merge.forward.get(target);
     if (!canonical) return match;
-    fixes.push({ kind: "fix-merged-link", path, from: target, to: canonical });
+    fixes.push({
+      kind: LINT_CONSOLIDATE_KIND.mergedLink,
+      path,
+      from: target,
+      to: canonical,
+    });
     return `[[${canonical}${suffix ?? ""}]]`;
   });
   return { fixes, rewritten };
@@ -135,7 +150,7 @@ function detectStaleStable(vault: string, now: Date, staleDays: number): LintDem
     if (age < staleDays) continue;
     const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
     out.push({
-      kind: "demote-stale-stable",
+      kind: LINT_CONSOLIDATE_KIND.staleStableDemotion,
       id,
       path,
       ageDays: Math.floor(age),

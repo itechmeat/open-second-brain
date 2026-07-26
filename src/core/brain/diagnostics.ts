@@ -45,6 +45,8 @@ import { resolveAgentName } from "../config.ts";
 import { vaultRelative } from "../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 
+import { UnclassifiedRepairCodeError, requireMechanicalRepair } from "./applier-capability.ts";
+
 import { collectAllBasenames, runDoctor } from "./doctor.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { appendLogEvent } from "./log.ts";
@@ -577,6 +579,16 @@ const FIXERS: ReadonlyArray<Fixer> = Object.freeze([walGapFixer, orphanedReferen
 const FIXER_BY_CODE: ReadonlyMap<string, Fixer> = new Map(FIXERS.map((f) => [f.code, f]));
 const COVERED_DOCTOR_CODES: ReadonlySet<string> = new Set(FIXERS.map((f) => f.coversDoctorCode));
 
+/**
+ * The classes this module's fixers repair, as a read-only set. Exported
+ * so the applier capability table can be checked against the registry
+ * that actually decides (no-dead-ends, task 8) rather than against a
+ * hand-maintained copy of it.
+ */
+export const REPAIR_FIXER_CODES: ReadonlySet<string> = Object.freeze(
+  new Set(FIXERS.map((f) => f.code)),
+);
+
 // ----- Planner --------------------------------------------------------------
 
 /**
@@ -647,8 +659,11 @@ export interface ApplyRepairOptions {
  * changed disk. Idempotent: a second non-dry-run call finds nothing to do.
  */
 export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutcome {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  // A dry run previews and writes nothing, so it stays ungated.
+  // Vault-identity write guard (context-integrity-gates, Unit J), placed
+  // per the one rule the three appliers now share: at the entry point,
+  // before any other work, and only when the call will write. A dry run
+  // previews and writes nothing, so it stays ungated. See the write-guard
+  // section of `applier-capability.ts`.
   if (opts.dryRun !== true) assertVaultIdentityForWrite(vault);
   const plan = planRepair(vault);
   const needsReview = plan.fixes.filter((f) => !f.applicable);
@@ -668,8 +683,15 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   const timestamp = isoSecond(opts.now ?? new Date());
   const applied: AppliedFix[] = [];
   for (const item of applicable) {
+    // The capability table is the published statement that this code has
+    // a mechanical repair; the registry is the thing that performs it.
+    // Consulting the table first turns a disagreement between the two
+    // into a named error instead of the silent `continue` that used to
+    // stand here - which would have dropped an applicable item on the
+    // floor and still reported success.
+    requireMechanicalRepair(item.code);
     const fixer = FIXER_BY_CODE.get(item.code);
-    if (!fixer) continue;
+    if (fixer === undefined) throw new UnclassifiedRepairCodeError(item.code);
     const result = fixer.apply(vault, item);
     if (!result) continue; // idempotent no-op: nothing changed, no event
     const res = appendLogEvent(vault, {

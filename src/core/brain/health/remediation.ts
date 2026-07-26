@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { ensureInsideVault, vaultRelative } from "../../path-safety.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
+import { REPAIR_VERDICT, requireRepairCapability } from "../applier-capability.ts";
 import { computeContentHash, verifyContentHash } from "../content-hash.ts";
 import { brainDirs, preferencePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -92,16 +93,40 @@ export interface RemediationOutcome {
   readonly dryRun: boolean;
 }
 
+/** The finding codes this planner emits, spelled once. */
+const REMEDIATION_CODE = Object.freeze({
+  widePermissions: "wide-permissions",
+  contentHashDrift: "content-hash-drift",
+  contradictoryPreferences: "contradictory-preferences",
+  staleClaim: "stale-claim",
+  conceptGap: "concept-gap",
+} as const);
+
 // Fixed dependency order: bookkeeping repairs first, then semantic
 // review steps. Pinned explicitly so the plan is identical on every
 // Syncthing peer.
 const CODE_ORDER: ReadonlyMap<string, number> = new Map([
-  ["wide-permissions", 0],
-  ["content-hash-drift", 1],
-  ["contradictory-preferences", 2],
-  ["stale-claim", 3],
-  ["concept-gap", 4],
+  [REMEDIATION_CODE.widePermissions, 0],
+  [REMEDIATION_CODE.contentHashDrift, 1],
+  [REMEDIATION_CODE.contradictoryPreferences, 2],
+  [REMEDIATION_CODE.staleClaim, 3],
+  [REMEDIATION_CODE.conceptGap, 4],
 ]);
+
+/**
+ * The step classification for a finding code, read from the published
+ * applier capability table rather than decided here (no-dead-ends, task
+ * 8). Before that table existed each applier carried its own private
+ * verdict, so "is this auto-fixable?" had three answers that nothing kept
+ * in agreement. A code the table does not classify raises
+ * `UnclassifiedRepairCodeError` - defaulting it to needs-review would
+ * quietly hide a planner and table that had drifted apart.
+ */
+function classify(code: string): RemediationClass {
+  return requireRepairCapability(code).verdict === REPAIR_VERDICT.mechanical
+    ? "auto-safe"
+    : "needs-review";
+}
 
 /**
  * Scan `Brain/preferences/` for confirmed preferences whose stored
@@ -206,10 +231,10 @@ export function planRemediation(
 
   for (const perm of findings.widePermissions ?? []) {
     steps.push({
-      code: "wide-permissions",
+      code: REMEDIATION_CODE.widePermissions,
       action: "harden-permissions",
       target: perm.path,
-      classification: "auto-safe",
+      classification: classify(REMEDIATION_CODE.widePermissions),
       detail:
         `chmod ${perm.isDir ? "0700" : "0600"} ${perm.path} ` +
         `(currently ${perm.mode.toString(8).padStart(3, "0")})`,
@@ -218,37 +243,37 @@ export function planRemediation(
 
   for (const slug of findings.driftedSlugs) {
     steps.push({
-      code: "content-hash-drift",
+      code: REMEDIATION_CODE.contentHashDrift,
       action: "restamp-content-hash",
       target: slug,
-      classification: "auto-safe",
+      classification: classify(REMEDIATION_CODE.contentHashDrift),
       detail: `re-stamp _content_hash for pref-${slug} from its current content`,
     });
   }
   for (const c of findings.contradictions) {
     steps.push({
-      code: "contradictory-preferences",
+      code: REMEDIATION_CODE.contradictoryPreferences,
       action: "review",
       target: `${c.aId}|${c.bId}`,
-      classification: "needs-review",
+      classification: classify(REMEDIATION_CODE.contradictoryPreferences),
       detail: `reconcile or retire one of [[${c.aId}]] / [[${c.bId}]]`,
     });
   }
   for (const s of findings.staleClaims) {
     steps.push({
-      code: "stale-claim",
+      code: REMEDIATION_CODE.staleClaim,
       action: "review",
       target: s.id,
-      classification: "needs-review",
+      classification: classify(REMEDIATION_CODE.staleClaim),
       detail: `re-confirm or retire [[${s.id}]]`,
     });
   }
   for (const g of findings.conceptGaps) {
     steps.push({
-      code: "concept-gap",
+      code: REMEDIATION_CODE.conceptGap,
       action: "review",
       target: g.term,
-      classification: "needs-review",
+      classification: classify(REMEDIATION_CODE.conceptGap),
       detail: `capture a dedicated preference for '${g.term}'`,
     });
   }
@@ -338,8 +363,14 @@ export function applyRemediation(
   plan: RemediationPlan,
   opts: ApplyRemediationOptions,
 ): RemediationOutcome {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
+  // Vault-identity write guard (context-integrity-gates, Unit J), placed
+  // per the one rule the three appliers now share: at the entry point,
+  // before any other work, and only when the call will write. See the
+  // write-guard section of `applier-capability.ts`. This applier used to
+  // assert unconditionally, so a preview - the surface an operator
+  // reaches for to find out what is wrong - was refused on a root where
+  // nothing would have been written.
+  if (!opts.dryRun) assertVaultIdentityForWrite(vault);
   const applied: RemediationStep[] = [];
   const skipped: RemediationStep[] = [];
   let budget = plan.stepCap;

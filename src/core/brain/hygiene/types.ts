@@ -18,14 +18,21 @@ export type HygieneSeverity = "info" | "warning" | "action";
 /**
  * Closed action vocabulary. `review` is the universal safe default -
  * anything an automated remediation should not touch lands there.
+ *
+ * Declared as a runtime tuple, like {@link HYGIENE_DETECTOR_IDS} above,
+ * so the applier capability table can be checked against the whole
+ * vocabulary rather than against whichever members a test remembered.
  */
-export type HygieneProposedAction =
-  | "merge"
-  | "supersede"
-  | "archive"
-  | "recompile"
-  | "forget"
-  | "review";
+export const HYGIENE_PROPOSED_ACTIONS = [
+  "merge",
+  "supersede",
+  "archive",
+  "recompile",
+  "forget",
+  "review",
+] as const;
+
+export type HygieneProposedAction = (typeof HYGIENE_PROPOSED_ACTIONS)[number];
 
 export interface HygieneFinding {
   /** Deterministic id: `<detector>:<sha256-prefix of targets>`. */

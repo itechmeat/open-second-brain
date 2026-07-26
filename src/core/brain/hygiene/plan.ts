@@ -3,11 +3,17 @@
  * (continuity-hygiene-freshness suite; kanban t_698db8f7).
  *
  * `apply` never acts on a raw scan: the operator (or a surface acting
- * for them) selects finding ids out of a scan report, and `review`
- * findings are structurally excluded - they have no automated
- * remediation by definition.
+ * for them) selects finding ids out of a scan report, and findings whose
+ * proposed action the applier capability table refuses are structurally
+ * excluded - they have no automated remediation by definition.
+ *
+ * Which actions those are is not decided here (no-dead-ends, task 8): the
+ * table is the one published statement of what each applier can repair,
+ * and an action it does not classify raises rather than being routed to a
+ * default.
  */
 
+import { REPAIR_VERDICT, requireRepairCapability } from "../applier-capability.ts";
 import type { HygieneFinding, HygieneScanReport } from "./types.ts";
 
 export interface HygienePlan {
@@ -40,7 +46,7 @@ export function buildHygienePlan(
       unknown.push(id);
       continue;
     }
-    if (finding.proposed_action === "review") {
+    if (requireRepairCapability(finding.proposed_action).verdict === REPAIR_VERDICT.refused) {
       excludedReview.push(id);
       continue;
     }

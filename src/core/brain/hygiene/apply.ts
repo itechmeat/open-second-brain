@@ -140,6 +140,15 @@ export async function applyHygienePlan(
   opts: HygieneApplyOptions,
 ): Promise<HygieneApplyResult> {
   const dryRun = opts.dryRun === true;
+  // Vault-identity write guard (context-integrity-gates, Unit J), placed
+  // per the one rule the three appliers now share: at the entry point,
+  // before any other work, and only when the call will write. See the
+  // write-guard section of `applier-capability.ts` for why. The "before
+  // any other work" half is this applier's own rationale - the per-finding
+  // loop below is fail-soft, so an assertion reached from inside an
+  // executor would be filed as one finding's error instead of refusing.
+  if (!dryRun) assertVaultIdentityForWrite(vault);
+
   if (dryRun) {
     return Object.freeze({
       dry_run: true,
@@ -148,12 +157,6 @@ export async function applyHygienePlan(
       errors: Object.freeze([]),
     });
   }
-
-  // Vault-identity write guard (context-integrity-gates, Unit J), after
-  // the dry-run early return and before the first executor. The per-
-  // finding loop is fail-soft, so an assertion reached only from inside
-  // an executor would be filed as a finding error instead of refusing.
-  assertVaultIdentityForWrite(vault);
 
   const applied: HygieneAppliedAction[] = [];
   const errors: { finding_id: string; message: string }[] = [];
