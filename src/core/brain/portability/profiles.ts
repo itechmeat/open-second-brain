@@ -15,7 +15,14 @@
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
+import lockfile from "proper-lockfile";
+
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+
+/** Bounded-retry budget for the registry lock: 10 x 50ms ~ 500ms. */
+const LOCK_MAX_ATTEMPTS = 10;
+const LOCK_RETRY_MS = 50;
+const LOCK_STALE_MS = 10_000;
 
 export interface VaultProfile {
   readonly name: string;
@@ -95,14 +102,77 @@ export function listProfiles(configPath: string): ProfilesListing {
   return { profiles, active: data.active };
 }
 
-/** Create (or update) a named profile pointing at a vault path. */
+/**
+ * Create a named profile pointing at a vault path.
+ *
+ * Refuses three things it used to accept:
+ *
+ *   - an existing name. The assignment was a silent overwrite, so a typo'd
+ *     `create` retargeted a live profile and the old path was gone with no
+ *     record of it. Renaming or repointing is a deliberate act, not a
+ *     side effect of `create`.
+ *   - a target that is not a directory, with the same error shape
+ *     {@link switchProfile} already uses. Checking only at switch time let
+ *     a mistyped path sit in the registry until activation.
+ *   - an unserialized mutation. Load-mutate-save over one JSON file loses
+ *     an update when two processes (CLI plus MCP server, two agents)
+ *     create at once, and the loser vanishes without an error.
+ *
+ * The exclusivity check is inside the lock, so it is a decision on the
+ * same bytes that are written back rather than a TOCTOU read.
+ */
 export function createProfile(configPath: string, name: string, vault: string): void {
   const trimmed = name.trim();
   if (trimmed.length === 0) throw new Error("profile name must not be empty");
-  if (vault.trim().length === 0) throw new Error("profile vault must not be empty");
-  const data = load(configPath);
-  data.profiles[trimmed] = { vault: vault.trim() };
-  save(configPath, data);
+  const trimmedVault = vault.trim();
+  if (trimmedVault.length === 0) throw new Error("profile vault must not be empty");
+  assertVaultDirectory(trimmed, trimmedVault);
+
+  withRegistryLock(configPath, () => {
+    const data = load(configPath);
+    if (Object.hasOwn(data.profiles, trimmed)) {
+      throw new Error(`profile '${trimmed}' already exists`);
+    }
+    data.profiles[trimmed] = { vault: trimmedVault };
+    save(configPath, data);
+  });
+}
+
+/**
+ * Serialize a registry mutation on the directory that holds it - the same
+ * bounded-retry sync lock `resolveDeviceId` and the log writer take on
+ * their own directories. `proper-lockfile`'s sync API refuses the
+ * `retries` option, so the loop is spelled out; a lock still busy after
+ * the budget surfaces as ELOCKED rather than a lost update.
+ */
+function withRegistryLock<T>(configPath: string, mutate: () => T): T {
+  const dir = dirname(profilesPath(configPath));
+  mkdirSync(dir, { recursive: true });
+  let release: (() => void) | undefined;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < LOCK_MAX_ATTEMPTS; attempt++) {
+    try {
+      release = lockfile.lockSync(dir, { stale: LOCK_STALE_MS, realpath: false });
+      break;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
+      lastError = err;
+      if (attempt < LOCK_MAX_ATTEMPTS - 1) Bun.sleepSync(LOCK_RETRY_MS);
+    }
+  }
+  if (!release) throw lastError;
+  try {
+    return mutate();
+  } finally {
+    release();
+  }
+}
+
+/** Shared by create and switch so both refuse a bad target identically. */
+function assertVaultDirectory(name: string, vault: string): void {
+  if (!isDirectory(vault)) {
+    throw new Error(`profile '${name}' points at a path that is not a directory: ${vault}`);
+  }
 }
 
 /**
@@ -118,16 +188,16 @@ export function createProfile(configPath: string, name: string, vault: string): 
  * read-only and never throws.
  */
 export function switchProfile(configPath: string, name: string): void {
-  const data = load(configPath);
-  const profile = data.profiles[name];
-  if (!profile) {
-    throw new Error(`unknown profile '${name}'`);
-  }
-  if (!isDirectory(profile.vault)) {
-    throw new Error(`profile '${name}' points at a path that is not a directory: ${profile.vault}`);
-  }
-  data.active = name;
-  save(configPath, data);
+  withRegistryLock(configPath, () => {
+    const data = load(configPath);
+    const profile = data.profiles[name];
+    if (!profile) {
+      throw new Error(`unknown profile '${name}'`);
+    }
+    assertVaultDirectory(name, profile.vault);
+    data.active = name;
+    save(configPath, data);
+  });
 }
 
 /** True when `path` exists and is a directory. Never throws. */
