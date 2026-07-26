@@ -64,7 +64,7 @@ import { readActiveSessionFocus } from "./session-focus.ts";
 import { applyTemporalBridge } from "./temporal-bridge.ts";
 import { resolveTimeRange } from "./time-range.ts";
 import { eventTimeInRange, parseValidityWindow, type ValidityWindow } from "./validity.ts";
-import { Store } from "./store.ts";
+import { contradictedAbiFields, formatEmbeddingAbiDrift, Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
   BrainSearchResult,
@@ -433,6 +433,24 @@ export async function search(
       semanticAttempted = semOutcome.attempted;
       semHits = semOutcome.hits;
       for (const w of semOutcome.warnings) warnings.push(w);
+      // Embedding-ABI drift on the QUERY path (context-integrity-gates,
+      // Unit E). The read open already ran the gated comparison; until
+      // now nothing on this path looked at the result, so under the
+      // shipped `warn` default a caller was served neighbours out of a
+      // vector table written by another build with nothing to observe.
+      //
+      // Attached to the queries it actually describes: only when the
+      // semantic lane RAN, so a keyword-only query stays byte-identical,
+      // and only for fields the index CONTRADICTS. An unrecorded token
+      // is a store predating the stamp - true of every index built
+      // before this release - and repeating it on every query would
+      // make the warning worthless; it stays on `search status`,
+      // `second_brain_status` and `search check`, which is where an
+      // operator goes looking.
+      if (semanticAttempted) {
+        const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
+        if (contradicted.length > 0) warnings.push(formatEmbeddingAbiDrift(contradicted));
+      }
     }
 
     // Hybrid-degrade signal (Search & Recall Quality Suite): one

@@ -55,6 +55,7 @@ import {
   serializeEvidencePack,
   serializeSearchCard,
   serializeIndexStatus,
+  serializeStampMismatches,
   SEARCH_LIMIT_MIN,
   SEARCH_LIMIT_MAX,
 } from "../core/search/index.ts";
@@ -1337,13 +1338,7 @@ function jsonForCheck(r: IndexCheckReport): unknown {
     // Emitted only on drift, so a matching store's JSON is byte-identical
     // to the pre-gate output (context-integrity-gates, Unit E).
     ...(r.embeddingAbi.length > 0
-      ? {
-          embedding_abi: r.embeddingAbi.map((m) => ({
-            field: m.field,
-            recorded: m.expected,
-            runtime: m.actual,
-          })),
-        }
+      ? { embedding_abi: serializeStampMismatches(r.embeddingAbi) }
       : {}),
     warnings: r.warnings,
     fatal: r.fatal,

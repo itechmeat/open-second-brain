@@ -1301,13 +1301,25 @@ export async function buildSearchStatusBlock(ctx: ServerContext): Promise<Record
     }
     // Token-budget conscious: pick the MCP subset out of the shared
     // serializer's full field set rather than re-declaring the mapping.
+    //
+    // `warnings` used to be dropped with the rest, which is how an
+    // agent driving the vault entirely over MCP could not observe
+    // embedding-ABI drift at any setting short of `fail`
+    // (context-integrity-gates, Unit E): the drift line, the
+    // instruction-prefix line and the "sqlite-vec unavailable" line all
+    // died here. It is now spread back in only when non-empty, so a
+    // healthy vault's block is byte-identical and the token cost lands
+    // exactly on the vaults that have something to say. The structured
+    // `embedding_abi` field rides through in `rest` on the same
+    // condition, so an agent can branch instead of matching text.
     const {
       embedding_signature: _embeddingSignature,
       estimated_refresh_cost_usd: _estimatedRefreshCostUsd,
-      warnings: _warnings,
+      warnings,
       ...rest
     } = serializeIndexStatus(snap);
-    return rest;
+    const reportable = Array.isArray(warnings) ? warnings : [];
+    return reportable.length > 0 ? { ...rest, warnings: reportable } : rest;
   } catch (e) {
     return { exists: false, error: e instanceof Error ? e.message : String(e) };
   }

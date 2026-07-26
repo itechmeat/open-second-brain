@@ -852,6 +852,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
         embeddingKeyPresent: !!config.semantic.apiKey,
         lastIndexedAt: null,
         lastFullIndexAt: null,
+        embeddingAbi: Object.freeze([]),
         warnings: Object.freeze([]),
       });
     }
@@ -902,8 +903,16 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     // has `integrity.embedding_abi` off. Gated on stored vectors for the
     // same reason the prefix warning above is - an index with no
     // embeddings has nothing that could be incomparable.
-    const abiDrift = store.embeddingAbiMismatches();
-    if (config.semantic.enabled && counts.embeddings > 0 && abiDrift.length > 0) {
+    //
+    // Reported twice, deliberately: as one operator-facing line here and
+    // as the structured `embeddingAbi` field below. The MCP status block
+    // carries both, so an agent can branch on the field instead of
+    // matching on message text.
+    const abiDrift =
+      config.semantic.enabled && counts.embeddings > 0
+        ? store.embeddingAbiMismatches()
+        : Object.freeze([] as ReadonlyArray<StampMismatch>);
+    if (abiDrift.length > 0) {
       warnings.push(formatEmbeddingAbiDrift(abiDrift));
     }
 
@@ -939,6 +948,7 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       embeddingKeyPresent: !!config.semantic.apiKey,
       lastIndexedAt: last,
       lastFullIndexAt: full,
+      embeddingAbi: abiDrift,
       warnings: Object.freeze(warnings),
     });
   } finally {

@@ -4,7 +4,25 @@
  * field-by-field the way independently hand-written copies do.
  */
 
+import type { StampMismatch } from "../integrity/stamp.ts";
 import type { IndexStatusSnapshot, SearchCard } from "./types.ts";
+
+/**
+ * Wire shape for a stamp comparison. `recorded` is what the index
+ * wrote, `runtime` what this build would write; a `recorded` of `null`
+ * is a field the index never stamped. Shared by `o2b search check`,
+ * `o2b search status --json` and the MCP `search.*` status block, so
+ * one drift cannot be described three ways.
+ */
+export function serializeStampMismatches(
+  mismatches: ReadonlyArray<StampMismatch>,
+): Array<Record<string, unknown>> {
+  return mismatches.map((m) => ({
+    field: m.field,
+    recorded: m.expected,
+    runtime: m.actual,
+  }));
+}
 
 /** Layer-1 card projection - identical shape on both the CLI and MCP surfaces. */
 export function serializeSearchCard(c: SearchCard): Record<string, unknown> {
@@ -44,6 +62,11 @@ export function serializeIndexStatus(s: IndexStatusSnapshot): Record<string, unk
     embedding_key_present: s.embeddingKeyPresent,
     last_indexed_at: s.lastIndexedAt,
     last_full_index_at: s.lastFullIndexAt,
+    // Emitted only on drift, so a matching store's JSON is byte-identical
+    // to the pre-gate output (context-integrity-gates, Unit E).
+    ...(s.embeddingAbi.length > 0
+      ? { embedding_abi: serializeStampMismatches(s.embeddingAbi) }
+      : {}),
     warnings: s.warnings,
   };
 }

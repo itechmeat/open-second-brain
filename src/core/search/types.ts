@@ -382,6 +382,21 @@ export interface IndexStatusSnapshot {
   readonly embeddingKeyPresent: boolean;
   readonly lastIndexedAt: string | null;
   readonly lastFullIndexAt: string | null;
+  /**
+   * Embedding-ABI fields whose recorded token no longer matches this
+   * build, as the GATED read open found them (context-integrity-gates,
+   * Unit E). Structurally empty whenever `integrity.embedding_abi` is
+   * `off`, which is what distinguishes this from the ungated
+   * {@link IndexCheckReport.embeddingAbi}: `search check` is a
+   * diagnostic the operator explicitly ran and refuses nothing, while
+   * status reports what the serving path actually enforced.
+   *
+   * The same condition also appears in {@link warnings} as one
+   * operator-facing line. This field is the machine-readable side of
+   * it, so an agent does not have to match on message text; both are
+   * emitted only when there is drift.
+   */
+  readonly embeddingAbi: ReadonlyArray<StampMismatch>;
   readonly warnings: ReadonlyArray<string>;
 }
 

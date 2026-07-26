@@ -207,6 +207,9 @@ test("indexStatus surfaces the drift as a reindex-required warning", async () =>
   const warning = status.warnings.find((w) => w.includes(EMBEDDING_DIMENSION_STATE_KEY));
   expect(warning).toBeDefined();
   expect(warning!).toContain(EMBEDDING_ABI_FIX_COMMAND);
+  // The same finding, machine-readable, so a consumer need not match on
+  // message text. Both sides are emitted under one condition.
+  expect(status.embeddingAbi.map((m) => m.field)).toContain(EMBEDDING_DIMENSION_STATE_KEY);
 });
 
 test("indexStatus on a matching store adds no ABI warning", async () => {
@@ -234,6 +237,25 @@ test("`search check` reports the stored-vs-runtime mismatch with a copy-pasteabl
       (r) => r.includes(EMBEDDING_DIMENSION_STATE_KEY) && r.includes(EMBEDDING_ABI_FIX_COMMAND),
     ),
   ).toBe(true);
+});
+
+test("under `off` the diagnostic still reports what the serving path stopped enforcing", async () => {
+  if (!sqliteVecLoadable()) return;
+  writeGate("off");
+  writeMd(vault, "a.md", "# A\n\nA note with vectors.");
+  await indexVault(cfg(), { embeddings: true });
+  await tamper((s) => s.setState(EMBEDDING_DIMENSION_STATE_KEY, "8"));
+
+  // The split is deliberate and must survive any later "unify these two"
+  // refactor: `indexStatus` reports what the GATED read open enforced,
+  // so `off` silences it; `indexCheck` is a diagnostic the operator
+  // explicitly ran and refuses nothing, so it compares ungated.
+  const status = await indexStatus(cfg());
+  expect(status.embeddingAbi).toEqual([]);
+  expect(status.warnings.some((w) => w.includes(EMBEDDING_ABI_FIX_COMMAND))).toBe(false);
+
+  const report = await indexCheck(cfg());
+  expect(report.embeddingAbi.map((m) => m.field)).toContain(EMBEDDING_DIMENSION_STATE_KEY);
 });
 
 test("`search check` on a matching store reports no ABI drift", async () => {

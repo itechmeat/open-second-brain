@@ -476,6 +476,24 @@ export function runtimeEmbeddingAbi(
 }
 
 /**
+ * The subset of an ABI comparison the index actually CONTRADICTS: it
+ * recorded a token and that token disagrees with this build.
+ *
+ * A mismatch whose recorded side is `null` is an UNRECORDED field - a
+ * store written before that token was stamped. An absent marker cannot
+ * tell an old store from a wrong one, so it is reported on the
+ * diagnostic surfaces and never drives a refusal or a per-read warning.
+ * Both consumers of that distinction (the `fail` verdict's refusal and
+ * the query path's warning) route through here rather than restating
+ * the predicate, so they cannot drift on what counts as contradicted.
+ */
+export function contradictedAbiFields(
+  mismatches: ReadonlyArray<StampMismatch>,
+): ReadonlyArray<StampMismatch> {
+  return mismatches.filter((m) => m.expected !== null);
+}
+
+/**
  * One operator-facing line for embedding-ABI drift. Shared by the read
  * open's refusal, the status warning and the `search check`
  * recommendation, so the three cannot describe the same condition
@@ -818,7 +836,7 @@ export class Store {
     const check = checkStamp(recorded, runtime, mode);
     this.abiDrift = check.mismatches;
     if (check.verdict !== STAMP_VERDICT.fail) return;
-    const drifted = check.mismatches.filter((m) => m.expected !== null);
+    const drifted = contradictedAbiFields(check.mismatches);
     if (drifted.length === 0) return;
     throw new SearchError("EMBEDDING_DIMENSION_MISMATCH", formatEmbeddingAbiDrift(drifted));
   }
