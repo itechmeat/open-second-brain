@@ -29,6 +29,14 @@ export interface FileContextOptions {
   readonly limit?: number;
   /** Skip files smaller than this many bytes. Default 1500. */
   readonly minBytes?: number;
+  /**
+   * Owner-scope isolation (context-integrity-gates, Unit A). Threaded
+   * straight into `SearchOptions.agentScope`, so an owner-private page
+   * is returned only to its own scope and an ownerless page always is.
+   * Omitted / blank applies no ownership filtering, which keeps an
+   * unscoped call byte-identical.
+   */
+  readonly agentScope?: string;
 }
 
 export interface FileContextResult {
@@ -90,7 +98,11 @@ export async function fileContextRecall(
     return frozenResult(opts.filePath, true, "below_size_gate", query, []);
   }
 
-  const outcome = await search(config, { query, limit });
+  const outcome = await search(config, {
+    query,
+    limit,
+    ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
+  });
   return frozenResult(opts.filePath, false, null, query, outcome.results);
 }
 

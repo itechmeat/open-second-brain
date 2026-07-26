@@ -680,6 +680,7 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     property: { type: "string-array" },
     degree: { type: "string-array" },
     visibility: { type: "string-array" },
+    "agent-scope": { type: "string" },
     "query-doc": { type: "string" },
     expand: { type: "boolean" },
     disclosure: { type: "string" },
@@ -751,6 +752,12 @@ async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<number> {
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
+    // Owner-scope isolation (context-integrity-gates, Unit A): an
+    // owner-private page is returned only to its own scope. Omitting the
+    // flag applies no ownership filtering at all.
+    ...(typeof flags["agent-scope"] === "string"
+      ? { agentScope: flags["agent-scope"] as string }
+      : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
     ...(flags["expand"] === true ? { expand: true } : {}),
     ...(disclosureRaw === "cards" ? { disclosure: "cards" as const } : {}),
@@ -928,6 +935,7 @@ async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<number> {
     chunk: { type: "string" },
     "raw-limit": { type: "string" },
     cursor: { type: "string" },
+    "agent-scope": { type: "string" },
     json: { type: "boolean" },
   });
   const chunkId = Number(flags["chunk"]);
@@ -948,6 +956,9 @@ async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<number> {
       chunkId,
       ...(rawLimit !== undefined ? { rawLimit } : {}),
       ...(typeof flags["cursor"] === "string" ? { cursor: flags["cursor"] as string } : {}),
+      ...(typeof flags["agent-scope"] === "string"
+        ? { agentScope: flags["agent-scope"] as string }
+        : {}),
     });
   } catch (e) {
     if (e instanceof SearchError) {

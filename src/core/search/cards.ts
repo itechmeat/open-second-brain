@@ -4,7 +4,10 @@
  * into its fuller note (layer 2) and paginated raw chunks (layer 3).
  */
 
+import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
+import type { FrontmatterMap } from "../types.ts";
 import { formatLinePointer } from "./line-numbering.ts";
+import { readCachedFrontmatter } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -63,6 +66,21 @@ export function cardSnippet(content: string): string {
  * self-heals — a card can only exist because a prior search built the
  * index, and a rebuild would WRITE it. The layer-2/3 data is pure store
  * reads (`hydrateChunks` + `getChunksByDocument`), never a new index.
+ *
+ * ## Ownership (context-integrity-gates, Unit A)
+ *
+ * `chunkId` is a SEQUENTIAL INTEGER, so without a check this is an
+ * enumeration surface for whole note bodies: walking the integers
+ * returns every document in the vault, ranking and query filters
+ * bypassed entirely. Under an `agentScope` the resolved path's owner is
+ * checked with the same {@link isOwnerVisible} rule the ranked filter
+ * uses, and a refusal is {@link notFound} — byte-for-byte the error an
+ * absent chunk produces. A distinguishable refusal would still leak: it
+ * would confirm that the chunk exists and belongs to someone else,
+ * which is exactly what enumeration is looking for.
+ *
+ * An omitted or blank scope filters nothing, so an unscoped call is
+ * byte-identical.
  */
 export async function expandHit(
   config: ResolvedSearchConfig,
@@ -71,11 +89,15 @@ export async function expandHit(
   if (!Number.isInteger(input.chunkId) || input.chunkId < 1) {
     throw new SearchError("INVALID_INPUT", "chunkId must be a positive integer");
   }
+  const agentScope = normalizeAgentScope(input.agentScope);
   const store = await Store.open(config, { mode: "read" });
   try {
     const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);
     if (hit === undefined) {
-      throw new SearchError("INVALID_INPUT", `chunk not found: ${input.chunkId}`);
+      throw notFound(input.chunkId);
+    }
+    if (agentScope !== null && !ownerVisible(config, hit.path, agentScope)) {
+      throw notFound(input.chunkId);
     }
     // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
     // their concatenation; the raw transcript (layer 3) is the same rows.
@@ -113,5 +135,32 @@ export async function expandHit(
     });
   } finally {
     await store.close();
+  }
+}
+
+/**
+ * The single construction of the drill-down's not-found error. Both the
+ * absent-chunk branch and the ownership refusal call it, so the two
+ * cannot drift into distinguishable messages.
+ */
+function notFound(chunkId: number): SearchError {
+  return new SearchError("INVALID_INPUT", `chunk not found: ${chunkId}`);
+}
+
+/**
+ * Is the note at `path` reachable under `scope`? Fails CLOSED on an
+ * unreadable page, matching `applyAgentScope` on the ranked path: an
+ * owner that cannot be determined is treated as somebody else's rather
+ * than as shared.
+ */
+function ownerVisible(config: ResolvedSearchConfig, path: string, scope: string): boolean {
+  // One hit, so the cache is a formality — it exists because
+  // `readCachedFrontmatter` is the shared reader, and reusing it keeps
+  // this check on the same parse semantics as the ranked filter.
+  const cache = new Map<string, FrontmatterMap>();
+  try {
+    return isOwnerVisible(pageOwner(readCachedFrontmatter(cache, config.vault, path)), scope);
+  } catch {
+    return false;
   }
 }

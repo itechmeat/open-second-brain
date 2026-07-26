@@ -15,6 +15,7 @@ export async function cmdBrainSgrep(argv: string[]): Promise<number> {
     vault: { type: "string" },
     limit: { type: "string" },
     "keyword-only": { type: "boolean" },
+    "agent-scope": { type: "string" },
     json: { type: "boolean" },
   });
   const config = defaultConfigPath();
@@ -23,7 +24,8 @@ export async function cmdBrainSgrep(argv: string[]): Promise<number> {
   const query = positional[0];
   if (!query || query.trim() === "") {
     return fail(
-      "usage: o2b brain sgrep <query> [path-prefix] [--limit N] [--keyword-only] [--json]",
+      "usage: o2b brain sgrep <query> [path-prefix] [--limit N] [--keyword-only]" +
+        " [--agent-scope NAME] [--json]",
     );
   }
   const pathPrefix = positional[1];
@@ -41,6 +43,9 @@ export async function cmdBrainSgrep(argv: string[]): Promise<number> {
       limit,
       keywordOnly: flags["keyword-only"] === true,
       ...(pathPrefix !== undefined ? { pathPrefix } : {}),
+      ...(typeof flags["agent-scope"] === "string"
+        ? { agentScope: flags["agent-scope"] as string }
+        : {}),
     });
     if (json) {
       okJson({

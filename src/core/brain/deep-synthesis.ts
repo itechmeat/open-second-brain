@@ -222,6 +222,14 @@ export interface DeepSynthesisOptions {
   readonly limit?: number;
   /** A matched note older than this counts as a stale claim. Default 90. */
   readonly staleAgeDays?: number;
+  /**
+   * Owner-scope isolation (context-integrity-gates, Unit A). Threaded
+   * straight into `SearchOptions.agentScope`, so an owner-private page
+   * is returned only to its own scope and an ownerless page always is.
+   * Omitted / blank applies no ownership filtering, which keeps an
+   * unscoped call byte-identical.
+   */
+  readonly agentScope?: string;
 }
 
 const CHECKED = Object.freeze([
@@ -358,7 +366,12 @@ export async function deepSynthesis(
   // can produce many chunks, and capping before the per-document
   // dedupe would let it crowd every other note out of the dossier.
   const rawLimit = Math.min(100, Math.max(limit * 3, limit));
-  const outcome = await search(config, { query: topic, limit: rawLimit, keywordOnly: true });
+  const outcome = await search(config, {
+    query: topic,
+    limit: rawLimit,
+    keywordOnly: true,
+    ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
+  });
 
   // Dedupe chunk hits into per-document notes (best score wins), THEN
   // apply the note limit.

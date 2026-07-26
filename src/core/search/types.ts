@@ -445,6 +445,14 @@ export interface ExpandHitInput {
   readonly rawLimit?: number;
   /** Opaque pagination cursor returned as `next_cursor` by a prior call. */
   readonly cursor?: string;
+  /**
+   * Owner-scope isolation (context-integrity-gates, Unit A). `chunkId`
+   * is a sequential integer, so an unchecked drill-down enumerates whole
+   * note bodies. Under a scope, another owner's chunk is refused with
+   * the SAME error an absent chunk produces - a distinguishable refusal
+   * would confirm the chunk exists. Omitted / blank filters nothing.
+   */
+  readonly agentScope?: string;
 }
 
 /**
