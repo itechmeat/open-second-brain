@@ -24,6 +24,7 @@ import {
 import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { buildPreCompressPack } from "../../core/brain/pre-compress-pack.ts";
 import {
+  CONTEXT_RECEIPT_TRIGGERS,
   getContextReceipt,
   isContextReceiptTrigger,
   listContextReceipts,
@@ -233,7 +234,7 @@ async function toolBrainContextReceipts(
     if (trigger !== undefined && !isContextReceiptTrigger(trigger)) {
       throw new MCPError(
         INVALID_PARAMS,
-        "brain_context_receipts: trigger must be context_pack or pre_compress",
+        `brain_context_receipts: trigger must be one of ${CONTEXT_RECEIPT_TRIGGERS.join(", ")}`,
       );
     }
     const host = optionalStringArg("brain_context_receipts", args, "host");
@@ -654,7 +655,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         trigger: {
           type: "string",
-          enum: ["context_pack", "pre_compress"],
+          enum: [...CONTEXT_RECEIPT_TRIGGERS],
           description: "Optional list filter by injection trigger.",
         },
         host: {

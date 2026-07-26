@@ -5,7 +5,11 @@ import { join } from "node:path";
 
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
-import { emitContextReceipt } from "../../../src/core/brain/context-receipts.ts";
+import {
+  CONTEXT_RECEIPT_TRIGGERS,
+  emitContextReceipt,
+  isContextReceiptTrigger,
+} from "../../../src/core/brain/context-receipts.ts";
 import { brainActivePath } from "../../../src/core/brain/paths.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
@@ -105,6 +109,33 @@ describe("context receipts", () => {
         extra: { host: "override" },
       }),
     ).toThrow("context receipt extra key collides with payload field: host");
+  });
+
+  test("the trigger vocabulary names the SessionStart eager layer", () => {
+    // Unit H: the eager layer emits receipts too, so a reader can tell a
+    // hook injection from a pack build instead of seeing only pack builds.
+    expect(isContextReceiptTrigger("session_inject")).toBe(true);
+    expect(isContextReceiptTrigger("not_a_trigger")).toBe(false);
+    expect([...CONTEXT_RECEIPT_TRIGGERS]).toEqual([
+      "context_pack",
+      "pre_compress",
+      "session_inject",
+    ]);
+  });
+
+  test("an item records its byte size beside its token estimate", () => {
+    const record = emitContextReceipt(vault, {
+      options: {
+        host: "unit-test",
+        trigger: "session_inject",
+        createdAt: "2026-05-31T12:20:00Z",
+      },
+      items: [{ id: "active-body", bytes: 12, tokens: 3 }],
+      finalText: "body",
+    });
+    const item = (record.payload["items"] as ReadonlyArray<Record<string, unknown>>)[0]!;
+    expect(item["bytes"]).toBe(12);
+    expect(item["tokens"]).toBe(3);
   });
 });
 

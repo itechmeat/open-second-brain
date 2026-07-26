@@ -4,7 +4,16 @@ import { appendContinuityRecord, listContinuityRecords } from "./continuity/stor
 import type { ContinuityRecord } from "./continuity/types.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
 
-export type ContextReceiptTrigger = "context_pack" | "pre_compress";
+/**
+ * What produced the injected context a receipt accounts for.
+ *
+ * `context_pack` and `pre_compress` are the two pack builders. Unit H of
+ * the context-integrity-gates wave adds `session_inject`: the SessionStart
+ * eager layer, which until now emitted context that nothing measured. The
+ * vocabulary is closed - a reader switching over it can enumerate every
+ * injection surface that exists.
+ */
+export type ContextReceiptTrigger = "context_pack" | "pre_compress" | "session_inject";
 
 export interface ContextReceiptOptions {
   readonly host: string;
@@ -19,6 +28,13 @@ export interface ContextReceiptItemInput {
   readonly path?: string;
   readonly text?: string;
   readonly tokens?: number;
+  /**
+   * UTF-8 byte size of the item. Tokens are an estimate derived from
+   * bytes; recording both keeps the estimate auditable against the exact
+   * measurement it came from. Optional, so a caller that has no byte
+   * figure records exactly what it knows.
+   */
+  readonly bytes?: number;
   readonly tier?: string;
   readonly trimmed?: boolean;
   readonly safetyFiltered?: boolean;
@@ -92,6 +108,7 @@ export function emitContextReceipt(
     original_rank: index + 1,
     ...(item.path ? { path: item.path } : {}),
     ...(item.tokens !== undefined ? { tokens: item.tokens } : {}),
+    ...(item.bytes !== undefined ? { bytes: item.bytes } : {}),
     ...(item.tier ? { tier: item.tier } : {}),
     ...(item.trimmed !== undefined ? { trimmed: item.trimmed } : {}),
     ...(item.safetyFiltered !== undefined ? { safety_filtered: item.safetyFiltered } : {}),
@@ -188,8 +205,15 @@ function adequacySummary(
 }
 
 export function isContextReceiptTrigger(value: unknown): value is ContextReceiptTrigger {
-  return value === "context_pack" || value === "pre_compress";
+  return value === "context_pack" || value === "pre_compress" || value === "session_inject";
 }
+
+/** Every trigger, in declaration order, for schemas and error messages. */
+export const CONTEXT_RECEIPT_TRIGGERS: ReadonlyArray<ContextReceiptTrigger> = Object.freeze([
+  "context_pack",
+  "pre_compress",
+  "session_inject",
+]);
 
 function sha256(text: string): string {
   return createHash("sha256").update(text, "utf8").digest("hex");

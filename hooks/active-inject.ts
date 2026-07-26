@@ -43,6 +43,9 @@ import { loadInjectContextFailOpen } from "../src/core/brain/inject-failopen.ts"
 import { collectRuntimeNotices, renderRuntimeNotices } from "../src/core/brain/runtime-notices.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
+import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
+import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
+import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
 
 /**
  * Best-effort hook audit line. Never throws: a failure to record must never
@@ -132,12 +135,16 @@ async function main(): Promise<void> {
     // degrades to the last-good cache (or empty) on any error, never emitting
     // a partial or poisoned payload. A successful non-empty body refreshes the
     // last-good snapshot.
-    const { context } = await loadInjectContextFailOpen({
+    const meter: InjectionMeter = { sources: [], budgetChars: null };
+    const { context, source } = await loadInjectContextFailOpen({
       vault,
       key: "active",
-      assemble: () => assembleActiveContext(vault),
-      audit: (source) =>
-        auditHook(vault, "inject_failopen_degraded", { hook: "active-inject", source }),
+      assemble: () => assembleActiveContext(vault, meter),
+      audit: (degradedSource) =>
+        auditHook(vault, "inject_failopen_degraded", {
+          hook: "active-inject",
+          source: degradedSource,
+        }),
     });
     if (context.length === 0) return;
 
@@ -148,26 +155,147 @@ async function main(): Promise<void> {
       },
     };
     process.stdout.write(JSON.stringify(out) + "\n");
+
+    // Measure LAST, so the injected context is already on stdout before the
+    // meter can spend a millisecond of the ceiling. See recordInjectionSize.
+    recordInjectionSize(vault, { hookEventName, loaderSource: source, context, meter });
   } finally {
     disarm();
   }
+}
+
+// ----- injection-size meter (context-integrity-gates, Unit H) --------------
+
+/**
+ * One injected sub-body, captured while it is still a separate string.
+ *
+ * `assembleActiveContext` joins its parts and returns one string, so this
+ * is the only point at which per-source attribution exists at all. The
+ * name is a stable structural identifier, never derived from content.
+ */
+interface InjectionSource {
+  readonly name: string;
+  readonly text: string;
+}
+
+/** Mutable accumulator threaded through the assembly, read after it returns. */
+interface InjectionMeter {
+  readonly sources: InjectionSource[];
+  /** The `inject_budget_chars` the budgeted sub-bodies were charged against. */
+  budgetChars: number | null;
+}
+
+/** Sub-body identifiers recorded per injection. Structural, not content-derived. */
+const SOURCE_RUNTIME_NOTICES = "runtime-notices";
+const SOURCE_ACTIVE_BODY = "active-body";
+const SOURCE_LESSONS_BODY = "lessons-body";
+
+const UTF8 = new TextEncoder();
+
+function byteLength(text: string): number {
+  return UTF8.encode(text).length;
+}
+
+interface RecordInjectionSizeInput {
+  readonly hookEventName: string;
+  readonly loaderSource: InjectContextSource;
+  readonly context: string;
+  readonly meter: InjectionMeter;
+}
+
+/**
+ * Record what this hook actually injected: total bytes and tokens, plus
+ * per-source attribution when the assembly is what got emitted.
+ *
+ * SCOPE. This measures THIS hook only. `gap-agenda`, `recall-inject`, and
+ * `nav-inject` are separate processes with their own `additionalContext`,
+ * so the session preamble as a whole is larger than any figure recorded
+ * here and cannot be assembled from inside this process.
+ *
+ * ATTRIBUTION. The measurement is taken after the fail-open loader
+ * returns, so it describes the emitted bytes rather than the attempted
+ * ones. When the loader degraded to its last-good cache the sub-bodies in
+ * `meter` were never emitted (assembly threw), so the record says
+ * `sources_measured: false` and carries no items - a per-source breakdown
+ * of zeros would be a finding that never happened.
+ *
+ * FAIL-SOFT. The whole body sits in one try/catch. The receipt sink takes
+ * a continuity-store lock and writes to disk; contention, a read-only
+ * vault, or a directory that is really a file must not become a new
+ * failure surface on the SessionStart path. Nothing here can change the
+ * hook's exit code, and the injected context is already on stdout by the
+ * time this runs.
+ */
+function recordInjectionSize(vault: string, input: RecordInjectionSizeInput): void {
+  try {
+    const measured = input.loaderSource === "fresh";
+    const totalBytes = byteLength(input.context);
+    emitContextReceipt(vault, {
+      options: { host: "hook", trigger: "session_inject" },
+      items: measured
+        ? input.meter.sources.map((source) => ({
+            id: source.name,
+            bytes: byteLength(source.text),
+            tokens: estimateTokens(source.text),
+          }))
+        : [],
+      finalText: input.context,
+      ...(input.meter.budgetChars !== null && measured
+        ? {
+            budget: {
+              inject_budget_chars: input.meter.budgetChars,
+              // Both budgeted sub-bodies are charged against the SAME
+              // configured ceiling, so the effective ceiling is this
+              // count times `inject_budget_chars`. Recorded as two
+              // numbers rather than implied by one.
+              budgeted_source_count: budgetedSourceCount(input.meter),
+            },
+          }
+        : {}),
+      extra: {
+        injection: {
+          hook_event: input.hookEventName,
+          loader_source: input.loaderSource,
+          sources_measured: measured,
+          total_bytes: totalBytes,
+          total_tokens: estimateTokens(input.context),
+        },
+      },
+    });
+  } catch {
+    // The meter is diagnostics. A failure to record must never disturb an
+    // injection that already succeeded.
+  }
+}
+
+/** How many recorded sources were charged against `inject_budget_chars`. */
+function budgetedSourceCount(meter: InjectionMeter): number {
+  return meter.sources.filter(
+    (source) => source.name === SOURCE_ACTIVE_BODY || source.name === SOURCE_LESSONS_BODY,
+  ).length;
 }
 
 /**
  * Assemble the injected context body. Returns an empty string when there is
  * legitimately nothing to inject (no active.md, empty body); throws on a
  * genuine read error so the fail-open loader degrades to the last-good cache.
+ *
+ * Every non-empty sub-body is recorded into `meter` as it is produced -
+ * the join below is where per-source attribution stops existing.
  */
-function assembleActiveContext(vault: string): string {
+function assembleActiveContext(vault: string, meter: InjectionMeter): string {
   // Runtime-state notices ride the same injection surface as active.md so the
   // agent is proactively aware of a degraded/transient condition (semantic
   // search fell back to lexical, index missing/rebuilding, read-only vault)
   // without a diagnostic round-trip. Best-effort and computed with no network;
   // an empty list keeps the injected body byte-identical to before.
   const noticesBlock = renderRuntimeNotices(collectRuntimeNotices(vault));
+  if (noticesBlock.length > 0) {
+    meter.sources.push({ name: SOURCE_RUNTIME_NOTICES, text: noticesBlock });
+  }
 
   const activePath = brainActivePath(vault);
-  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath) : "";
+  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, meter) : "";
 
   const parts = [noticesBlock, activeBody].filter((p) => p.length > 0);
   return parts.join("\n\n");
@@ -178,7 +306,7 @@ function assembleActiveContext(vault: string): string {
  * the body is empty; throws on a genuine read error (permissions, fs stall) so
  * the fail-open loader degrades to the last-good cache.
  */
-function readActiveBody(vault: string, activePath: string): string {
+function readActiveBody(vault: string, activePath: string, meter: InjectionMeter): string {
   const body = readFileSync(activePath, "utf8");
 
   // Drop the `kind: brain-active / generated_at` frontmatter - it
@@ -199,6 +327,7 @@ function readActiveBody(vault: string, activePath: string): string {
   } catch {
     // intentional fallback - a corrupted _brain.yaml is doctor's job
   }
+  meter.budgetChars = budget;
 
   // Auto-load the lessons digest alongside active.md so the agent gets
   // the unified, signed, recency-scored corpus (preferences + dead-ends)
@@ -207,9 +336,13 @@ function readActiveBody(vault: string, activePath: string): string {
   // the active-preferences injection above.
   const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
 
-  return lessonsBody === null
-    ? budgetActiveBody(trimmed, budget)
-    : `${budgetActiveBody(trimmed, budget)}\n\n${lessonsBody}`;
+  const budgetedActive = budgetActiveBody(trimmed, budget);
+  meter.sources.push({ name: SOURCE_ACTIVE_BODY, text: budgetedActive });
+  if (lessonsBody !== null) {
+    meter.sources.push({ name: SOURCE_LESSONS_BODY, text: lessonsBody });
+  }
+
+  return lessonsBody === null ? budgetedActive : `${budgetedActive}\n\n${lessonsBody}`;
 }
 
 /**
