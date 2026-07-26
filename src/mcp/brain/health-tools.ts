@@ -12,9 +12,37 @@ import { runDoctor } from "../../core/brain/doctor.ts";
 import { applyRepair } from "../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
+import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBool, coerceFormat } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
+
+/**
+ * One reported issue, as an MCP caller sees it.
+ *
+ * The projection is an explicit allowlist rather than a spread of the
+ * record, so a field added to `DoctorIssue` reaches this surface only
+ * when it is listed. `field` / `target` / `sources` (no-dead-ends, task
+ * 12) are listed for exactly that reason - the CLI's `--json` renderer
+ * carries them by spreading the record, and the two surfaces must not
+ * disagree about what a broken-link finding contains.
+ *
+ * Every added key is conditional on the value being present, so an issue
+ * that carries none of them produces the byte-identical payload it did
+ * before they existed.
+ */
+function issueView(ctx: ServerContext, issue: DoctorIssue): Record<string, unknown> {
+  return {
+    severity: issue.severity,
+    code: issue.code,
+    message: issue.message,
+    ...(issue.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, issue.path) } : {}),
+    ...(issue.field !== undefined ? { field: issue.field } : {}),
+    ...(issue.target !== undefined ? { target: issue.target } : {}),
+    ...(issue.sources !== undefined ? { sources: issue.sources } : {}),
+    ...nextCommandField(issue.code),
+  };
+}
 
 async function toolBrainDoctor(
   ctx: ServerContext,
@@ -64,20 +92,8 @@ async function toolBrainDoctor(
     // uses so the two surfaces cannot drift. Absent - not null - for a
     // code with no registered signal, because there is no honest command
     // to name and a generic one would be invented.
-    errors: result.errors.map((i) => ({
-      severity: i.severity,
-      code: i.code,
-      message: i.message,
-      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
-      ...nextCommandField(i.code),
-    })),
-    warnings: result.warnings.map((i) => ({
-      severity: i.severity,
-      code: i.code,
-      message: i.message,
-      ...(i.path !== undefined ? { path: vaultRelativeSafe(ctx.vault, i.path) } : {}),
-      ...nextCommandField(i.code),
-    })),
+    errors: result.errors.map((i) => issueView(ctx, i)),
+    warnings: result.warnings.map((i) => issueView(ctx, i)),
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
     // because nothing here downgrades the `ok` flag - actions are

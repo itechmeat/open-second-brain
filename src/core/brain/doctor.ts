@@ -1174,6 +1174,12 @@ function checkWikilinks(
           severity: "warning",
           code: "broken-wikilink",
           path,
+          // no-dead-ends, task 12: the field and the target ride as
+          // fields as well as inside the sentence, so a consumer acts on
+          // values rather than on a regex over prose. The message is
+          // unchanged - the human surface still reads it.
+          field,
+          target,
           message: `field '${field}' references missing basename '${target}'`,
         });
       }
@@ -1210,6 +1216,13 @@ function checkBrokenBacklinks(
     issues.push({
       severity: "warning",
       code: "broken-backlinks",
+      // no-dead-ends, task 12. This issue has no `path` - the whole
+      // finding is that no file with this basename exists - so before
+      // these fields the referencing sources were reachable only by
+      // splitting the tail of the sentence on ", ". The message keeps
+      // them too; the human surface is unchanged.
+      target,
+      sources,
       message:
         `[[${target}]] is referenced by ${sources.length} source(s) but no file with that ` +
         `basename exists under Brain/: ${sources.join(", ")}`,

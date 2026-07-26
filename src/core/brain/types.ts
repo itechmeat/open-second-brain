@@ -1759,6 +1759,25 @@ export interface DoctorIssue {
   readonly path?: string;
   /** Human-readable description, suitable for `--text` rendering. */
   readonly message: string;
+  /**
+   * Frontmatter field the broken reference sits in (`broken-wikilink`).
+   *
+   * no-dead-ends, task 12. The field name and the target below used to
+   * exist only inside `message`, so an applier deciding prune-versus-
+   * review had to regex the sentence - which is how a detector and an
+   * applier come to disagree about what was detected. Both are optional
+   * because only the link codes carry them; every other issue is
+   * byte-identical to what it was.
+   */
+  readonly field?: string;
+  /** Wikilink target that resolves to nothing (`broken-wikilink`, `broken-backlinks`). */
+  readonly target?: string;
+  /**
+   * Basenames of the artifacts that reference {@link target}
+   * (`broken-backlinks`). The dangling target has no file, so the issue
+   * carries no `path`; these sources are what an operator can act on.
+   */
+  readonly sources?: ReadonlyArray<string>;
 }
 
 /**
