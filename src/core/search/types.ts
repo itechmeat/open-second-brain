@@ -5,6 +5,7 @@
  */
 
 import type { DegradationNotice } from "../integrity/degradation.ts";
+import type { StampMismatch } from "../integrity/stamp.ts";
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type {
@@ -393,6 +394,19 @@ export interface IndexCheckReport {
   readonly embeddingKeyResolved: boolean;
   readonly providerReachable: boolean | null;
   readonly providerReason: string | null;
+  /**
+   * Embedding-ABI fields whose token recorded in the index no longer
+   * matches this build - model, dimension, or sqlite-vec version
+   * (context-integrity-gates, Unit E). Empty when they agree, when
+   * there is no index to read, or when semantic search is disabled;
+   * the CLI emits the field only when non-empty, so a matching store's
+   * output is byte-identical.
+   *
+   * `expected` is what the index recorded and `actual` what this build
+   * would produce; an `expected` of `null` is a store written before the
+   * field was stamped, which is reported and never treated as wrong.
+   */
+  readonly embeddingAbi: ReadonlyArray<StampMismatch>;
   readonly warnings: ReadonlyArray<string>;
   readonly fatal: ReadonlyArray<string>;
   /**

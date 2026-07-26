@@ -20,6 +20,16 @@ import lockfile from "proper-lockfile";
 
 import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
 
+import { loadIntegrityConfigSafe } from "../brain/policy.ts";
+import {
+  checkStamp,
+  compareStamps,
+  formatStampMismatch,
+  STAMP_VERDICT,
+  type StampMismatch,
+  type StampTokens,
+} from "../integrity/stamp.ts";
+
 import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
@@ -55,6 +65,22 @@ export const EMBEDDING_PREFIX_PASSAGE_STATE_KEY = "embedding_prefix_passage";
 export const EMBEDDING_MODEL_STATE_KEY = "embedding_model";
 export const EMBEDDING_DIMENSION_STATE_KEY = "embedding_dimension";
 export const INDEX_REVISION_STATE_KEY = "index_revision";
+
+/**
+ * sqlite-vec version the stored vectors were written against
+ * (context-integrity-gates, Unit E). `SELECT vec_version()` was already
+ * executed on every extension load and the row discarded every time;
+ * this key is where it now lands, so the ABI the vectors were produced
+ * under can be compared later instead of assumed.
+ */
+export const EMBEDDING_VEC_VERSION_STATE_KEY = "embedding_vec_version";
+
+/**
+ * The single remediation for embedding-ABI drift, named once so the
+ * store's refusal, the status warning and the `search check`
+ * recommendation cannot grow three spellings of the same instruction.
+ */
+export const EMBEDDING_ABI_FIX_COMMAND = "o2b search reindex --embeddings";
 
 /** The query/passage instruction prefixes active for an index run. */
 export interface EmbeddingPrefixPair {
@@ -218,7 +244,18 @@ function ensureFts5(db: Database): void {
   }
 }
 
-function tryLoadVecExtension(db: Database): boolean {
+/**
+ * Load sqlite-vec and return the version it reports, or `null` when the
+ * extension is unavailable.
+ *
+ * The `vec_version()` probe was always executed and its row always
+ * discarded; returning it costs nothing and is what lets the ABI the
+ * vectors were written against be stamped rather than assumed
+ * (context-integrity-gates, Unit E). `null` doubles as the
+ * "not loaded" signal, so there is exactly one source of truth for both
+ * facts.
+ */
+function tryLoadVecExtension(db: Database): string | null {
   try {
     // sqlite-vec is an optional dependency. Wrap the import + load so
     // a missing platform package degrades to "extension unavailable"
@@ -227,10 +264,10 @@ function tryLoadVecExtension(db: Database): boolean {
     const vec = require("sqlite-vec") as { getLoadablePath(): string };
     db.loadExtension(vec.getLoadablePath());
     // Confirm by calling vec_version() — guards against partial loads.
-    db.query("SELECT vec_version()").get();
-    return true;
+    const row = db.query<{ v: string }, []>("SELECT vec_version() AS v").get();
+    return typeof row?.v === "string" ? row.v : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -257,17 +294,7 @@ function tryLoadVecExtension(db: Database): boolean {
  * hide precisely that.
  */
 export function readCorpusGenerationSync(dbPath: string): string | null {
-  if (!existsSync(dbPath)) return null;
-  let db: Database;
-  try {
-    db = new Database(dbPath, { readonly: true });
-  } catch {
-    return null;
-  }
-  try {
-    const read = (key: string): string | null =>
-      db.query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?").get(key)
-        ?.value ?? null;
+  return withReadonlyIndex(dbPath, (read, db) => {
     const dimRaw = read(EMBEDDING_DIMENSION_STATE_KEY);
     const dim = dimRaw === null ? null : Number(dimRaw);
     const revRaw = read(INDEX_REVISION_STATE_KEY);
@@ -278,6 +305,50 @@ export function readCorpusGenerationSync(dbPath: string): string | null {
       schemaVersion: readSchemaVersion(db),
       indexRevision: Number.isFinite(rev) && rev >= 0 ? Math.floor(rev) : 0,
     });
+  });
+}
+
+/**
+ * Embedding-ABI tokens recorded in an index, without opening a
+ * {@link Store}.
+ *
+ * `indexCheck` needs these and cannot get them from its own probe: it
+ * deliberately runs against an IN-MEMORY database and never touches the
+ * real index, so a stored-versus-runtime comparison there has no stored
+ * side unless one is read explicitly.
+ *
+ * `null` means the index is absent or unreadable - not that its ABI
+ * matches.
+ */
+export function readEmbeddingAbiSync(dbPath: string): StampTokens | null {
+  return withReadonlyIndex(dbPath, (read) => recordedEmbeddingAbi(read));
+}
+
+/**
+ * Run `read` against a read-only handle on the index, or return `null`
+ * when there is no readable index. Shared by the synchronous peeks so
+ * "absent", "corrupt" and "unreadable" collapse to one answer in one
+ * place rather than once per caller.
+ */
+function withReadonlyIndex<T>(
+  dbPath: string,
+  read: (state: (key: string) => string | null, db: Database) => T,
+): T | null {
+  if (!existsSync(dbPath)) return null;
+  let db: Database;
+  try {
+    db = new Database(dbPath, { readonly: true });
+  } catch {
+    return null;
+  }
+  try {
+    return read(
+      (key: string): string | null =>
+        db
+          .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
+          .get(key)?.value ?? null,
+      db,
+    );
   } catch {
     return null;
   } finally {
@@ -287,6 +358,46 @@ export function readCorpusGenerationSync(dbPath: string): string | null {
       /* a close failure cannot change what was already read */
     }
   }
+}
+
+/** The ABI tokens an index recorded, read through any state accessor. */
+function recordedEmbeddingAbi(state: (key: string) => string | null): StampTokens {
+  return {
+    [EMBEDDING_MODEL_STATE_KEY]: state(EMBEDDING_MODEL_STATE_KEY),
+    [EMBEDDING_DIMENSION_STATE_KEY]: state(EMBEDDING_DIMENSION_STATE_KEY),
+    [EMBEDDING_VEC_VERSION_STATE_KEY]: state(EMBEDDING_VEC_VERSION_STATE_KEY),
+  };
+}
+
+/**
+ * The ABI tokens the CURRENT build and configuration would produce. The
+ * counterpart of {@link recordedEmbeddingAbi}, kept beside it so the two
+ * sides of the comparison can never cover different fields.
+ */
+export function runtimeEmbeddingAbi(
+  config: ResolvedSearchConfig,
+  vecVersion: string | null,
+): StampTokens {
+  return {
+    [EMBEDDING_MODEL_STATE_KEY]: config.semantic.model,
+    [EMBEDDING_DIMENSION_STATE_KEY]:
+      config.semantic.dimension === null ? null : String(config.semantic.dimension),
+    [EMBEDDING_VEC_VERSION_STATE_KEY]: vecVersion,
+  };
+}
+
+/**
+ * One operator-facing line for embedding-ABI drift. Shared by the read
+ * open's refusal, the status warning and the `search check`
+ * recommendation, so the three cannot describe the same condition
+ * differently or name different fixes.
+ */
+export function formatEmbeddingAbiDrift(mismatches: ReadonlyArray<StampMismatch>): string {
+  return (
+    `embedding ABI drift between the stored index and this build ` +
+    `(${mismatches.map(formatStampMismatch).join("; ")}); stored vectors are not ` +
+    `comparable to queries embedded now. Run: ${EMBEDDING_ABI_FIX_COMMAND}`
+  );
 }
 
 /** Parse a JSON-encoded drift value; a corrupt cell surfaces as-is. */
@@ -435,19 +546,25 @@ function vecToBuffer(values: ReadonlyArray<number> | Float32Array): Buffer {
 export class Store {
   private db: Database;
   private readonly config: ResolvedSearchConfig;
+  private readonly loadedVecVersion: string | null;
   private readonly _vecLoaded: boolean;
   private readonly release: (() => Promise<void>) | null;
   private closed = false;
+  /** Empty unless a gated read-mode open found ABI drift; see {@link embeddingAbiMismatches}. */
+  private abiDrift: ReadonlyArray<StampMismatch> = Object.freeze([]);
 
   private constructor(
     db: Database,
     config: ResolvedSearchConfig,
-    vecLoaded: boolean,
+    vecVersion: string | null,
     release: (() => Promise<void>) | null,
   ) {
     this.db = db;
     this.config = config;
-    this._vecLoaded = vecLoaded;
+    this.loadedVecVersion = vecVersion;
+    // One source of truth: the version is present exactly when the
+    // extension loaded, so "loaded" is derived rather than tracked twice.
+    this._vecLoaded = vecVersion !== null;
     this.release = release;
   }
 
@@ -499,8 +616,14 @@ export class Store {
             `index schema version ${version} != ${LATEST_SCHEMA_VERSION}. Run: o2b search reindex`,
           );
         }
-        const vecLoaded = loadVec && tryLoadVecExtension(db);
-        return new Store(db, config, vecLoaded, null);
+        const vecVersion = loadVec ? tryLoadVecExtension(db) : null;
+        const store = new Store(db, config, vecVersion, null);
+        // The read path is where the silent-garbage window actually is:
+        // `ensureEmbeddingModel` runs only on a write open, so every MCP
+        // query reached `semanticTopK` - and a `chunk_vec` of unknown
+        // declared width - with nothing having compared anything.
+        store.resolveEmbeddingAbi();
+        return store;
       } catch (e) {
         db.close();
         throw e;
@@ -529,8 +652,8 @@ export class Store {
       applyPragmas(db);
       applyMigrations(db, { ftsTokenize: config.ftsTokenize });
       ensureFts5(db);
-      const vecLoaded = loadVec && tryLoadVecExtension(db);
-      const store = new Store(db, config, vecLoaded, release);
+      const vecVersion = loadVec ? tryLoadVecExtension(db) : null;
+      const store = new Store(db, config, vecVersion, release);
       store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension, {
         query: config.semantic.queryPrefix ?? "",
         passage: config.semantic.passagePrefix ?? "",
@@ -552,6 +675,63 @@ export class Store {
 
   vecLoaded(): boolean {
     return this._vecLoaded;
+  }
+
+  /** sqlite-vec version this connection loaded, or null when unavailable. */
+  vecVersion(): string | null {
+    return this.loadedVecVersion;
+  }
+
+  /**
+   * Embedding-ABI fields whose recorded token no longer matches this
+   * build (context-integrity-gates, Unit E).
+   *
+   * Empty when the stamps agree, when semantic search is disabled, and -
+   * structurally - whenever `integrity.embedding_abi` is `off`, so a
+   * consumer wired to this accessor cannot report anything while the
+   * operator has the gate off. A mismatch whose recorded side is `null`
+   * is an UNRECORDED field (a store predating the stamp), which is
+   * reported but never refused: an absent marker cannot tell an old
+   * store from a wrong one.
+   */
+  embeddingAbiMismatches(): ReadonlyArray<StampMismatch> {
+    return this.abiDrift;
+  }
+
+  /**
+   * Compare the recorded embedding ABI against this build's, under the
+   * operator's gate. Called on the READ open, which is where nothing
+   * checked before.
+   *
+   * Runs only when semantic search is enabled, because that is the only
+   * configuration that can reach `semanticTopK`; with it disabled the
+   * configured model and dimension are null and every comparison would
+   * be against nothing.
+   *
+   * The pure comparison runs FIRST and short-circuits, so the
+   * overwhelmingly common no-drift open never pays for a config read.
+   * When there is drift, {@link checkStamp} re-runs it under the
+   * resolved mode and remains the single authority on what `off`, `warn`
+   * and `fail` mean.
+   *
+   * It reports and refuses; it never rebuilds. `vec_version()` is not
+   * stable across environments, so two peers on different sqlite-vec
+   * builds each see a mismatch - an automatic rebuild here would loop
+   * across a synced vault, which is why the default is `warn` and why
+   * the remediation is a command the operator runs.
+   */
+  private resolveEmbeddingAbi(): void {
+    if (!this.config.semantic.enabled) return;
+    const recorded = recordedEmbeddingAbi((key) => this.getState(key));
+    const runtime = runtimeEmbeddingAbi(this.config, this.loadedVecVersion);
+    if (compareStamps(recorded, runtime).length === 0) return;
+    const mode = loadIntegrityConfigSafe(this.config.vault).embedding_abi;
+    const check = checkStamp(recorded, runtime, mode);
+    this.abiDrift = check.mismatches;
+    if (check.verdict !== STAMP_VERDICT.fail) return;
+    const drifted = check.mismatches.filter((m) => m.expected !== null);
+    if (drifted.length === 0) return;
+    throw new SearchError("EMBEDDING_DIMENSION_MISMATCH", formatEmbeddingAbiDrift(drifted));
   }
 
   schemaVersion(): number {
@@ -1084,6 +1264,10 @@ export class Store {
       );
       this.deleteState(EMBEDDING_MODEL_STATE_KEY);
       this.deleteState(EMBEDDING_DIMENSION_STATE_KEY);
+      // The recorded sqlite-vec version described the vectors that were
+      // just cleared, so it must not outlive them: leaving it would
+      // claim an ABI for storage that no longer holds any.
+      this.deleteState(EMBEDDING_VEC_VERSION_STATE_KEY);
     } else if (prefixChanged) {
       // Model/dimension unchanged: the prefix change alone triggers the clear.
       this.clearEmbeddings();
@@ -1096,6 +1280,13 @@ export class Store {
 
     if (model !== null) this.setState(EMBEDDING_MODEL_STATE_KEY, model);
     if (dimension !== null) this.setState(EMBEDDING_DIMENSION_STATE_KEY, String(dimension));
+    // Same shape as the model and dimension above: recorded only when
+    // this build actually has a value. With the extension unavailable
+    // there is nothing to record, and writing a placeholder would be a
+    // claim about storage this process never touched.
+    if (this.loadedVecVersion !== null) {
+      this.setState(EMBEDDING_VEC_VERSION_STATE_KEY, this.loadedVecVersion);
+    }
     if (prefixes !== undefined) {
       this.setState(EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
       this.setState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);

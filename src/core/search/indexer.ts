@@ -47,8 +47,14 @@ import { parseFrontmatterTextWithNotices } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
+import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
+
 import {
   acquireWriterLock,
+  EMBEDDING_ABI_FIX_COMMAND,
+  formatEmbeddingAbiDrift,
+  readEmbeddingAbiSync,
+  runtimeEmbeddingAbi,
   Store,
   EMBEDDING_PREFIX_QUERY_STATE_KEY,
   EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
@@ -885,6 +891,17 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       }
     }
 
+    // Embedding-ABI drift (context-integrity-gates, Unit E). The read
+    // open already ran the gated comparison, so this only surfaces what
+    // it found: empty when the stamps agree AND whenever the operator
+    // has `integrity.embedding_abi` off. Gated on stored vectors for the
+    // same reason the prefix warning above is - an index with no
+    // embeddings has nothing that could be incomparable.
+    const abiDrift = store.embeddingAbiMismatches();
+    if (config.semantic.enabled && counts.embeddings > 0 && abiDrift.length > 0) {
+      warnings.push(formatEmbeddingAbiDrift(abiDrift));
+    }
+
     // Best-effort spend estimate to bring stale/missing embeddings current.
     // Only scan chunk content when the active model is actually priced.
     const activeModel =
@@ -961,6 +978,8 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
   let sqliteOk = false;
   let fts5Ok = false;
   let vecExtension: "loaded" | "unavailable" | "not-attempted" = "not-attempted";
+  /** Runtime ABI token; captured from the probe rather than re-queried. */
+  let vecVersion: string | null = null;
   try {
     // Use an in-memory DB so the check never touches the real index.
     const { Database } = await import("bun:sqlite");
@@ -980,7 +999,8 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const vec = require("sqlite-vec") as { getLoadablePath(): string };
         db.loadExtension(vec.getLoadablePath());
-        db.query("SELECT vec_version()").get();
+        const row = db.query<{ v: string }, []>("SELECT vec_version() AS v").get();
+        vecVersion = typeof row?.v === "string" ? row.v : null;
         vecExtension = "loaded";
       } catch (e) {
         vecExtension = "unavailable";
@@ -1017,6 +1037,21 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     }
   }
 
+  // Stored-versus-runtime embedding ABI (context-integrity-gates, Unit
+  // E). The probe above deliberately runs in memory and never touches
+  // the real index, so the stored side is read explicitly here - without
+  // it there is nothing to compare against.
+  //
+  // This is the DIAGNOSTIC surface, so it compares ungated: an operator
+  // who ran `search check` asked to be told. The gate governs the read
+  // path, which is where a comparison can refuse; a report cannot.
+  const recordedAbi = config.semantic.enabled ? readEmbeddingAbiSync(config.dbPath) : null;
+  const embeddingAbi =
+    recordedAbi === null
+      ? Object.freeze([] as ReadonlyArray<StampMismatch>)
+      : compareStamps(recordedAbi, runtimeEmbeddingAbi(config, vecVersion));
+  if (embeddingAbi.length > 0) warnings.push(formatEmbeddingAbiDrift(embeddingAbi));
+
   // §E.2 — Actionable hints derived from the check state.
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
@@ -1026,6 +1061,7 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     embeddingKeyResolved,
     vecExtension,
     providerReachable,
+    embeddingAbi,
   });
 
   return Object.freeze({
@@ -1033,6 +1069,7 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     indexDirWritable,
     sqliteOk,
     fts5Ok,
+    embeddingAbi,
     vecExtension,
     embeddingKeyResolved,
     providerReachable,
@@ -1048,10 +1085,21 @@ interface BuildRecommendationsInput {
   readonly embeddingKeyResolved: boolean;
   readonly vecExtension: "loaded" | "unavailable" | "not-attempted";
   readonly providerReachable: boolean | null;
+  readonly embeddingAbi: ReadonlyArray<StampMismatch>;
 }
 
 function buildRecommendations(input: BuildRecommendationsInput): string[] {
   const recs: string[] = [];
+
+  // Embedding-ABI drift is the one condition here whose remediation is a
+  // single command, so it is named verbatim and copy-pasteable.
+  if (input.embeddingAbi.length > 0) {
+    recs.push(
+      `Stored vectors were written under a different embedding ABI ` +
+        `(${input.embeddingAbi.map(formatStampMismatch).join("; ")}). Run: ` +
+        `${EMBEDDING_ABI_FIX_COMMAND}`,
+    );
+  }
 
   if (input.config.semantic.enabled && !input.embeddingKeyResolved) {
     recs.push(

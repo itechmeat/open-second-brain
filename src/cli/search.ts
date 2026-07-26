@@ -15,6 +15,7 @@
 
 import { defaultConfigPath, resolveVault } from "../core/config.ts";
 import { formatDegradationNotice } from "../core/integrity/degradation.ts";
+import { formatStampMismatch } from "../core/integrity/stamp.ts";
 import {
   createSafeguard,
   resolveSafeguardTimeoutMs,
@@ -1333,6 +1334,17 @@ function jsonForCheck(r: IndexCheckReport): unknown {
     embedding_key_resolved: r.embeddingKeyResolved,
     provider_reachable: r.providerReachable,
     provider_reason: r.providerReason,
+    // Emitted only on drift, so a matching store's JSON is byte-identical
+    // to the pre-gate output (context-integrity-gates, Unit E).
+    ...(r.embeddingAbi.length > 0
+      ? {
+          embedding_abi: r.embeddingAbi.map((m) => ({
+            field: m.field,
+            recorded: m.expected,
+            runtime: m.actual,
+          })),
+        }
+      : {}),
     warnings: r.warnings,
     fatal: r.fatal,
     recommendations: r.recommendations,
@@ -1348,6 +1360,10 @@ function renderCheckHuman(r: IndexCheckReport): string {
   lines.push(`fts5_ok:               ${ok(r.fts5Ok)}`);
   lines.push(`vec_extension:         ${r.vecExtension}`);
   lines.push(`embedding_key:         ${ok(r.embeddingKeyResolved)}`);
+  // Only on drift: a matching store renders exactly as before.
+  for (const m of r.embeddingAbi) {
+    lines.push(`embedding_abi:         ${formatStampMismatch(m)}`);
+  }
   if (r.providerReachable !== null) {
     lines.push(`provider_reachable:    ${r.providerReachable ? "OK" : "FAIL"}`);
     if (r.providerReason) lines.push(`provider_reason:       ${r.providerReason}`);
