@@ -58,6 +58,7 @@ import {
 } from "./entities/semantic-dedup.ts";
 import { findMalformedEntityLabels } from "./entities/label-hygiene.ts";
 import { buildCaptureBoundary } from "./capture-boundary.ts";
+import { verifyLineageLedger } from "./lineage/verify.ts";
 import { verifyContentHash } from "./content-hash.ts";
 import { readTierDriftCount } from "./frontmatter-tiers.ts";
 import { scanDanglingWorkruns } from "./dream-workrun.ts";
@@ -430,6 +431,18 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     /* doctor never throws */
   }
 
+  // Unit D: session-lineage ledger integrity - a line edited after it
+  // was written, a line removed from the middle, or an observation the
+  // writer could not append. Uncertainty rather than an error for the
+  // same reason as above: continuity still resolves from this ledger,
+  // but the doctor cannot claim the history it read is the history that
+  // was written.
+  try {
+    collectLineageLedgerUncertainty(vault, uncertain);
+  } catch {
+    /* doctor never throws */
+  }
+
   // v0.14.0 semantic-health pass. Best-effort like every other lint:
   // a failure here must not poison the structural warning / error
   // stream. The report is attached to the result even on a clean run
@@ -521,6 +534,22 @@ function collectFrontmatterUncertainty(vault: string, out: DoctorUncertainEntry[
     out.push({
       code: notice.code,
       ...(notice.path !== undefined ? { path: notice.path } : {}),
+      message: notice.detail,
+    });
+  }
+}
+
+/**
+ * Fold every session-lineage ledger finding into the doctor's
+ * `uncertain` stream. The verifier is read-only and never throws, so
+ * this needs no guard of its own beyond the doctor's blanket one.
+ */
+function collectLineageLedgerUncertainty(vault: string, out: DoctorUncertainEntry[]): void {
+  const report = verifyLineageLedger(vault);
+  for (const notice of report.notices) {
+    out.push({
+      code: notice.code,
+      path: report.path,
       message: notice.detail,
     });
   }

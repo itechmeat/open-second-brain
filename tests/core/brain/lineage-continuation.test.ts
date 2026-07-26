@@ -384,14 +384,21 @@ describe("lineage ledger — workspace identity round-trip", () => {
   });
 
   test("compaction preserves the workspace identity", () => {
-    seed({ sessionId: "s-keep", atMs: T0 + 10_000_000, workspace: WS_MAIN });
-    for (let i = 0; i < 600; i++) {
-      recordLineageObservation(tmp, {
-        sessionId: `filler-${i}`,
-        at: new Date(T0 + i * 1_000).toISOString(),
-        event: "Stop",
-      });
-    }
+    // Compaction retains the most recent LINES verbatim, so the line
+    // under test has to be inside the retention window when the rewrite
+    // runs - which is the realistic case, the ledger being append-only.
+    const filler = (from: number, count: number): void => {
+      for (let i = from; i < from + count; i++) {
+        recordLineageObservation(tmp, {
+          sessionId: `filler-${i}`,
+          at: new Date(T0 + i * 1_000).toISOString(),
+          event: "Stop",
+        });
+      }
+    };
+    filler(0, 510);
+    seed({ sessionId: "s-keep", atMs: T0 + 510_000, workspace: WS_MAIN });
+    filler(511, 5); // crosses the cap and rewrites the file
     expect(readLineageLedger(tmp).get("s-keep")?.workspace).toEqual(WS_MAIN);
   });
 });
