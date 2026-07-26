@@ -153,8 +153,20 @@ export function compareStamps(
  * docblock. Otherwise the drift is reported and the mode decides whether
  * the verdict is a warning or a refusal; the caller owns what it does
  * with each.
+ *
+ * A mode outside the closed vocabulary THROWS. The types stop most of
+ * them, but a value crossing a `JSON.parse` or an `as` cast does not
+ * meet the compiler, and the previous `mode === fail ? fail : warn`
+ * shape resolved every such value to the SOFTEST verdict - an
+ * unrecognised token silently becoming a warning is indistinguishable
+ * from an operator who asked for one.
  */
 export function checkStamp(expected: StampTokens, actual: StampTokens, mode: GateMode): StampCheck {
+  if (!isGateMode(mode)) {
+    throw new Error(
+      `unknown gate mode ${JSON.stringify(mode)}; expected one of ${GATE_MODES.join(", ")}`,
+    );
+  }
   if (mode === GATE_MODE.off) {
     return Object.freeze({
       mode,

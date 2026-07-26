@@ -23,6 +23,13 @@
  *   - `brain_tree` observes the bytes the pack itself reads, via path,
  *     mtime and size.
  *
+ * `brain_tree` covers the preference and retired directories AND
+ * `Brain/_brain.yaml`. The config is not a memory, but `packContext`
+ * reads it and its `untrusted_source_delimiting` flag changes the bodies
+ * the pack emits - so a pack built before that flag flipped would
+ * otherwise compare equal to the vault state after it, which is exactly
+ * the staleness this stamp exists to name.
+ *
  * `buildManifest` was considered for the second role and rejected: it
  * sha256-hashes every file on every call, which is not affordable on a
  * hook-driven path. Path + mtime + size is.
@@ -43,9 +50,10 @@ import { statSync } from "node:fs";
 
 import { compareStamps, formatStampMismatch, type StampTokens } from "../integrity/stamp.ts";
 import { vaultRelative } from "../path-safety.ts";
-import { resolveIndexPath } from "../search/paths.ts";
-import { readCorpusGenerationSync } from "../search/store.ts";
-import { brainDirs } from "./paths.ts";
+import { resolveSearchConfig } from "../search/index.ts";
+import { peekCorpusGenerationSync } from "../search/store.ts";
+import { defaultConfigPath } from "../config.ts";
+import { brainConfigPath, brainDirs } from "./paths.ts";
 import { loadIntegrityConfigSafe } from "./policy.ts";
 import { listPreferenceFiles } from "./preferences-collect.ts";
 
@@ -99,18 +107,12 @@ function brainTreeToken(vault: string): string {
   const lines: string[] = [];
   for (const dir of [dirs.preferences, dirs.retired]) {
     for (const file of listPreferenceFiles(dir)) {
-      let mtime = UNSTATTABLE;
-      let size = UNSTATTABLE;
-      try {
-        const stat = statSync(file.path);
-        mtime = String(Math.trunc(stat.mtimeMs));
-        size = String(stat.size);
-      } catch {
-        /* recorded as UNSTATTABLE above - a state, not an omission */
-      }
-      lines.push([vaultRelative(file.path, vault), mtime, size].join(DIGEST_FIELD_SEP));
+      lines.push(digestLine(vault, file.path));
     }
   }
+  // The config the pack reads. Always digested, present or not: an
+  // ABSENT config is a state, and creating one must move the token.
+  lines.push(digestLine(vault, brainConfigPath(vault)));
   lines.sort();
   return createHash("sha256")
     .update(lines.join("\n"))
@@ -119,19 +121,71 @@ function brainTreeToken(vault: string): string {
 }
 
 /**
- * Index path as the search layer itself resolves it, so the stamp
- * observes the database `search()` would read. The config-file key is
- * not consulted - a pack has no config path - which is why the env
- * override is honoured directly.
+ * One digested line: vault-relative path, mtime, size. A path that
+ * cannot be stat'ed - absent, or unreadable - records {@link UNSTATTABLE}
+ * for both, which is a value and not an omission, so the file appearing
+ * or disappearing moves the digest.
  */
-function packIndexPath(vault: string): string {
-  return resolveIndexPath(vault, process.env["OPEN_SECOND_BRAIN_SEARCH_DB"] ?? null);
+function digestLine(vault: string, path: string): string {
+  let mtime = UNSTATTABLE;
+  let size = UNSTATTABLE;
+  try {
+    const stat = statSync(path);
+    mtime = String(Math.trunc(stat.mtimeMs));
+    size = String(stat.size);
+  } catch {
+    /* recorded as UNSTATTABLE above - a state, not an omission */
+  }
+  return [vaultRelative(path, vault), mtime, size].join(DIGEST_FIELD_SEP);
+}
+
+/**
+ * Recorded when the index file EXISTS but cannot be opened or queried.
+ *
+ * A distinct recorded value, not `null`. `null` means unrecorded, and
+ * two unrecorded sides are not a finding by `stamp.ts`'s contract - so
+ * folding a corrupt index onto "no index" would make a pack stamped
+ * before the corruption compare EQUAL to one validated after it. The
+ * sentinel keeps the two states apart and makes the repair itself a
+ * named drift.
+ */
+export const CORPUS_GENERATION_UNREADABLE = "index-unreadable";
+
+export interface PackStampSourceOptions {
+  /**
+   * Config file to resolve the index location through. Defaults to the
+   * process's own config path; passed explicitly by callers that have
+   * one, and by tests, which must not read the operator's.
+   */
+  readonly configPath?: string;
+}
+
+/**
+ * Index path as the search layer itself resolves it, so the stamp
+ * observes the database `search()` would read.
+ *
+ * This goes through `resolveSearchConfig`, not the env variable alone.
+ * The env-only form missed the config-file `search_db_path` key, so on a
+ * vault configured that way the stamp peeked at a database that was not
+ * there: `corpus_generation` read `null` on both the stamping and the
+ * validating side, "two unrecorded sides are not a finding" applied, and
+ * half the pack stamp was permanently inert while claiming otherwise.
+ */
+function packIndexPath(vault: string, configPath: string | undefined): string {
+  return resolveSearchConfig({ vault, configPath: configPath ?? defaultConfigPath() }).dbPath;
 }
 
 /** The live tokens for `vault`, right now. */
-export function packStampTokens(vault: string): StampTokens {
+export function packStampTokens(vault: string, opts: PackStampSourceOptions = {}): StampTokens {
+  const peek = peekCorpusGenerationSync(packIndexPath(vault, opts.configPath));
+  const corpusGeneration =
+    peek.kind === "read"
+      ? peek.value
+      : peek.kind === "unreadable"
+        ? CORPUS_GENERATION_UNREADABLE
+        : null;
   return Object.freeze({
-    [PACK_STAMP_FIELD.corpusGeneration]: readCorpusGenerationSync(packIndexPath(vault)),
+    [PACK_STAMP_FIELD.corpusGeneration]: corpusGeneration,
     [PACK_STAMP_FIELD.brainTree]: brainTreeToken(vault),
   });
 }
@@ -145,10 +199,14 @@ export function packStampTokens(vault: string): StampTokens {
  * has never run `o2b brain init`, and an unreadable config is not a
  * reason to change what the pack returns.
  */
-export function buildPackStamp(vault: string, now: Date): ContextPackStamp {
+export function buildPackStamp(
+  vault: string,
+  now: Date,
+  opts: PackStampSourceOptions = {},
+): ContextPackStamp {
   const validitySeconds = loadIntegrityConfigSafe(vault).pack_validity_seconds;
   return Object.freeze({
-    tokens: packStampTokens(vault),
+    tokens: packStampTokens(vault, opts),
     generatedAt: now.toISOString(),
     expiresAt: new Date(now.getTime() + validitySeconds * 1_000).toISOString(),
   });

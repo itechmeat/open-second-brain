@@ -15,6 +15,7 @@ import { join } from "node:path";
 
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 import {
+  CORPUS_GENERATION_UNREADABLE,
   PACK_STAMP_FIELD,
   buildPackStamp,
   packStampRefusal,
@@ -38,6 +39,9 @@ afterEach(() => {
 });
 
 const T0 = new Date("2026-06-10T12:00:00Z");
+
+/** A config path that does not exist, so no operator config leaks in. */
+const ABSENT_CONFIG = join(tmpdir(), "o2b-pack-stamp-no-such-config.yaml");
 
 function writePref(slug: string, body: string, mtimeSeconds: number): string {
   const path = join(vault, "Brain", "preferences", `pref-${slug}.md`);
@@ -193,5 +197,89 @@ describe("packContext stamp option", () => {
   test("a stamped empty-budget pack still carries its stamp", () => {
     const report = packContext(vault, { maxTokens: 0, stamp: { now: T0 } });
     expect(report.stamp).toBeDefined();
+  });
+});
+
+/**
+ * `packIndexPath` consulted only `OPEN_SECOND_BRAIN_SEARCH_DB`, while
+ * `resolveSearchConfig` also honours the config-file `search_db_path`.
+ * On a vault configured that way the stamp read a database that was not
+ * there, `corpus_generation` was `null` on both sides, "two unrecorded
+ * sides are not a finding" applied, and half the pack stamp was
+ * permanently inert - while its own docblock claimed it observed the
+ * database `search()` would read.
+ */
+describe("packStampTokens observes the index search() would read", () => {
+  test("a config-file search_db_path is honoured, not just the env var", async () => {
+    const home = mkdtempSync(join(tmpdir(), "o2b-pack-stamp-cfg-"));
+    const dbPath = join(home, "elsewhere.sqlite");
+    const configPath = join(home, "config.yaml");
+    writeFileSync(configPath, `vault: "${vault}"\nsearch_db_path: "${dbPath}"\n`, "utf8");
+    writeFileSync(join(vault, "note.md"), "# Note\n\nbody\n", "utf8");
+    try {
+      await indexVault(makeConfig({ vault, dbPath }), {});
+      const generation = packStampTokens(vault, { configPath })[PACK_STAMP_FIELD.corpusGeneration];
+      expect(generation).not.toBeNull();
+      // The default location holds no database, so the env-only
+      // resolution this replaces still reads as unrecorded.
+      expect(packStampTokens(vault, { configPath: join(home, "absent.yaml") })).toHaveProperty(
+        PACK_STAMP_FIELD.corpusGeneration,
+        null,
+      );
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a corrupt index is recorded as unreadable, not as unrecorded", async () => {
+    const home = mkdtempSync(join(tmpdir(), "o2b-pack-stamp-corrupt-"));
+    const dbPath = join(home, "corrupt.sqlite");
+    const configPath = join(home, "config.yaml");
+    writeFileSync(configPath, `vault: "${vault}"\nsearch_db_path: "${dbPath}"\n`, "utf8");
+    writeFileSync(dbPath, "this is not a sqlite database", "utf8");
+    try {
+      const generation = packStampTokens(vault, { configPath })[PACK_STAMP_FIELD.corpusGeneration];
+      // Not null: an index that exists and cannot be read is a state, and
+      // collapsing it onto "no index" makes both sides agree by accident.
+      expect(generation).not.toBeNull();
+      expect(generation).toBe(CORPUS_GENERATION_UNREADABLE);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+/**
+ * `brain_tree` digested only the preference and retired directories,
+ * while `packContext` also reads `Brain/_brain.yaml` - whose
+ * `untrusted_source_delimiting` flag changes the emitted bodies. A pack
+ * built before the flag flipped therefore compared EQUAL to the vault
+ * state after it, which is exactly the staleness the stamp exists to
+ * name. The digest was extended rather than the docblock narrowed: the
+ * config is one stat, and it changes what the pack returns.
+ */
+describe("brain_tree covers every input packContext reads", () => {
+  test("flipping a config flag moves the digest", () => {
+    const configFile = join(vault, "Brain", "_brain.yaml");
+    writeFileSync(configFile, "schema_version: 1\n", "utf8");
+    const before = packStampTokens(vault, { configPath: ABSENT_CONFIG })[
+      PACK_STAMP_FIELD.brainTree
+    ];
+    writeFileSync(
+      configFile,
+      "schema_version: 1\nguardrails:\n  untrusted_source_delimiting: true\n",
+      "utf8",
+    );
+    const after = packStampTokens(vault, { configPath: ABSENT_CONFIG })[PACK_STAMP_FIELD.brainTree];
+    expect(after).not.toBe(before);
+  });
+
+  test("creating the config where there was none moves the digest", () => {
+    const before = packStampTokens(vault, { configPath: ABSENT_CONFIG })[
+      PACK_STAMP_FIELD.brainTree
+    ];
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n", "utf8");
+    const after = packStampTokens(vault, { configPath: ABSENT_CONFIG })[PACK_STAMP_FIELD.brainTree];
+    expect(after).not.toBe(before);
   });
 });

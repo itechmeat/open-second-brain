@@ -99,7 +99,16 @@ export type LinkRatchetUnmeasurableReason =
   /** The last index run was not a forced full pass. */
   | "partial-resolution"
   /** The index does not cover every markdown file under the subject. */
-  | "index-incomplete";
+  | "index-incomplete"
+  /**
+   * The subject exists but holds no indexable markdown at all - emptied,
+   * renamed, sparse-checked-out, or fully excluded by its own ignore
+   * rules. A count over nothing satisfies every completeness guard and
+   * reads as `dangling: 0`, which is a clean bill of health for a
+   * subject nobody measured; the write form would then commit that zero
+   * as a permanent ceiling.
+   */
+  | "subject-empty";
 
 export type LinkRatchetMeasurement =
   | {
@@ -279,6 +288,13 @@ export async function measureVault(vaultDir: string): Promise<LinkRatchetMeasure
       );
     }
     const walked = countWalkedFiles(config);
+    if (walked === 0) {
+      return unmeasurable(
+        "subject-empty",
+        `no indexable markdown under ${vaultDir}; a count over an empty subject ` +
+          "would read as zero dangling and pass every completeness guard",
+      );
+    }
     const measurement = await measureFromIndex(config);
     if (measurement.measurable && measurement.documents !== walked) {
       return unmeasurable(

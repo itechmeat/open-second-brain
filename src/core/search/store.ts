@@ -345,7 +345,16 @@ function tryLoadVecExtension(db: Database): string | null {
  * hide precisely that.
  */
 export function readCorpusGenerationSync(dbPath: string): string | null {
-  return withReadonlyIndex(dbPath, (read, db) => {
+  const peek = peekCorpusGenerationSync(dbPath);
+  return peek.kind === "read" ? peek.value : null;
+}
+
+/**
+ * {@link readCorpusGenerationSync} with the three outcomes kept apart, so
+ * a caller that must not treat a corrupt index as "no index" can tell.
+ */
+export function peekCorpusGenerationSync(dbPath: string): IndexPeek<string | null> {
+  return peekReadonlyIndex(dbPath, (read, db) => {
     const dimRaw = read(EMBEDDING_DIMENSION_STATE_KEY);
     const dim = dimRaw === null ? null : Number(dimRaw);
     const revRaw = read(INDEX_REVISION_STATE_KEY);
@@ -376,32 +385,49 @@ export function readEmbeddingAbiSync(dbPath: string): StampTokens | null {
 }
 
 /**
- * Run `read` against a read-only handle on the index, or return `null`
- * when there is no readable index. Shared by the synchronous peeks so
- * "absent", "corrupt" and "unreadable" collapse to one answer in one
- * place rather than once per caller.
+ * Outcome of a synchronous peek at the index.
+ *
+ * ABSENT and UNREADABLE used to collapse to one `null`, which is wrong
+ * for a stamp: "no index here" and "an index that exists and is corrupt"
+ * are different states of the world, and a caller that records both as
+ * unrecorded makes two such sides compare EQUAL - "two unrecorded sides
+ * are not a finding" - so a corrupt index silently agrees with a missing
+ * one. They are now separate arms and the caller chooses.
  */
-function withReadonlyIndex<T>(
+export type IndexPeek<T> =
+  | { readonly kind: "read"; readonly value: T }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly detail: string };
+
+/**
+ * Run `read` against a read-only handle on the index, naming which of
+ * the three outcomes occurred. Shared by the synchronous peeks so the
+ * classification lives in one place rather than once per caller.
+ */
+function peekReadonlyIndex<T>(
   dbPath: string,
   read: (state: (key: string) => string | null, db: Database) => T,
-): T | null {
-  if (!existsSync(dbPath)) return null;
+): IndexPeek<T> {
+  if (!existsSync(dbPath)) return { kind: "absent" };
   let db: Database;
   try {
     db = new Database(dbPath, { readonly: true });
-  } catch {
-    return null;
+  } catch (e) {
+    return { kind: "unreadable", detail: e instanceof Error ? e.message : String(e) };
   }
   try {
-    return read(
-      (key: string): string | null =>
-        db
-          .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
-          .get(key)?.value ?? null,
-      db,
-    );
-  } catch {
-    return null;
+    return {
+      kind: "read",
+      value: read(
+        (key: string): string | null =>
+          db
+            .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
+            .get(key)?.value ?? null,
+        db,
+      ),
+    };
+  } catch (e) {
+    return { kind: "unreadable", detail: e instanceof Error ? e.message : String(e) };
   } finally {
     try {
       db.close();
@@ -409,6 +435,18 @@ function withReadonlyIndex<T>(
       /* a close failure cannot change what was already read */
     }
   }
+}
+
+/**
+ * {@link peekReadonlyIndex} collapsed to `T | null` for the callers that
+ * genuinely cannot act on the distinction.
+ */
+function withReadonlyIndex<T>(
+  dbPath: string,
+  read: (state: (key: string) => string | null, db: Database) => T,
+): T | null {
+  const peek = peekReadonlyIndex(dbPath, read);
+  return peek.kind === "read" ? peek.value : null;
 }
 
 /** The ABI tokens an index recorded, read through any state accessor. */

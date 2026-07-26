@@ -156,6 +156,13 @@ export interface ContextPackReport {
  */
 export interface PackStampOptions {
   readonly now: Date;
+  /**
+   * Config file the stamp resolves the search-index location through.
+   * Threaded rather than defaulted at the leaf so a caller that already
+   * knows its config path stamps against the database `search()` would
+   * actually read for it, not the one the process default names.
+   */
+  readonly configPath?: string;
 }
 
 export interface ContextPackOptions {
@@ -660,7 +667,9 @@ function finalizeContextPackReport(
   // zero-budget early return is stamped exactly like the full pack and
   // no future exit can forget it. Absent option → absent key.
   if (opts.stamp !== undefined) {
-    enriched = { ...enriched, stamp: buildPackStamp(vault, opts.stamp.now) };
+    const stampSource =
+      opts.stamp.configPath !== undefined ? { configPath: opts.stamp.configPath } : {};
+    enriched = { ...enriched, stamp: buildPackStamp(vault, opts.stamp.now, stampSource) };
   }
   // Gated emissions route through the lazy emit kernel (t_5d7aa7c5):
   // with the option absent the thunk never runs, and a broken

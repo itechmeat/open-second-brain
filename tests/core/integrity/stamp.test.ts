@@ -203,3 +203,25 @@ describe("formatStampMismatch", () => {
     expect(formatStampMismatch(m)).toBe(formatStampMismatch({ ...m }));
   });
 });
+
+/**
+ * The gate vocabulary is closed, and `checkStamp` used to coerce
+ * anything that was not `off` or `fail` into `warn` - so a mode that
+ * reached it from an unvalidated path resolved to the softest verdict.
+ * A gate that softens on an unrecognised token is indistinguishable from
+ * an operator who asked for a warning, which is the class of silent
+ * degradation this seam exists to remove.
+ */
+describe("checkStamp rejects a mode outside the closed vocabulary", () => {
+  test("an unknown mode throws instead of resolving to warn", () => {
+    expect(() => checkStamp({ a: "1" }, { a: "2" }, "lenient" as unknown as GateMode)).toThrow(
+      /lenient/,
+    );
+  });
+
+  test("every declared mode is accepted", () => {
+    for (const mode of GATE_MODES) {
+      expect(() => checkStamp({ a: "1" }, { a: "2" }, mode)).not.toThrow();
+    }
+  });
+});

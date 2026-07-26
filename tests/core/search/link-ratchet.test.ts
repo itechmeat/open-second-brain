@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -270,5 +270,49 @@ describe("judgeSubject", () => {
       detail: "no index",
     });
     expect(v.status).toBe("unmeasurable");
+  });
+});
+
+/**
+ * A present-but-empty subject used to measure `dangling: 0` and PASS:
+ * `walked === 0` and `documents === 0` satisfy both completeness guards,
+ * so a subject that was emptied, renamed, sparse-checked-out, or fully
+ * excluded by its own ignore rules produced a clean bill of health -
+ * and the write form then committed `0` as a permanent ceiling for a
+ * subject nobody measured.
+ */
+describe("an empty subject is unmeasurable, not clean", () => {
+  test("measureVault reports subject-empty rather than zero dangling", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-ratchet-empty-"));
+    try {
+      const measurement = await measureVault(dir);
+      expect(measurement.measurable).toBe(false);
+      if (!measurement.measurable) {
+        expect(measurement.reason).toBe("subject-empty");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a subject whose only markdown is excluded by its own rules is subject-empty", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-ratchet-excluded-"));
+    try {
+      mkdirSync(join(dir, "Brain"), { recursive: true });
+      writeFileSync(
+        join(dir, "Brain", "_brain.yaml"),
+        "schema_version: 1\nvault:\n  ignore_paths:\n    - notes\n",
+        "utf8",
+      );
+      mkdirSync(join(dir, "notes"), { recursive: true });
+      writeFileSync(join(dir, "notes", "a.md"), "# A\n\n[[missing]]\n", "utf8");
+      const measurement = await measureVault(dir);
+      expect(measurement.measurable).toBe(false);
+      if (!measurement.measurable) {
+        expect(measurement.reason).toBe("subject-empty");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
