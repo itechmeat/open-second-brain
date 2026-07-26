@@ -12,6 +12,8 @@ import {
   learnSkillProposals,
   listPendingSkillProposals,
   rejectSkillProposal,
+  resolveSkillProposalEvidence,
+  type SkillContractInput,
 } from "../../core/brain/skill-proposals.ts";
 import { deriveSkillUsage } from "../../core/brain/skill-usage.ts";
 import {
@@ -58,10 +60,16 @@ async function toolBrainSkillProposals(
   if (operation === "accept") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
     const note = optionalStringArg("brain_skill_proposals", args, "note");
-    const reviewed = note
-      ? acceptSkillProposal(ctx.vault, slug, { note })
-      : acceptSkillProposal(ctx.vault, slug);
+    const contract = readSkillContract(args);
+    const reviewed = acceptSkillProposal(ctx.vault, slug, {
+      ...(note ? { note } : {}),
+      ...(contract ? { contract } : {}),
+    });
     return { ...reviewed };
+  }
+  if (operation === "evidence") {
+    const slug = requiredStringArg("brain_skill_proposals", args, "slug");
+    return { ...resolveSkillProposalEvidence(ctx.vault, slug) };
   }
   if (operation === "reject") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
@@ -78,8 +86,29 @@ async function toolBrainSkillProposals(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_skill_proposals: operation must be one of learn|list|accept|reject|usage",
+    "brain_skill_proposals: operation must be one of learn|list|accept|reject|usage|evidence",
   );
+}
+
+/**
+ * Read the optional execution contract from an accept payload. Returns
+ * undefined when the caller supplied none, so the accept path stays
+ * byte-identical to a pre-contract acceptance.
+ */
+function readSkillContract(args: Record<string, unknown>): SkillContractInput | undefined {
+  const prerequisites = coerceStrList(args, "prerequisites");
+  const rollback = coerceStrList(args, "rollback");
+  const sideEffects = coerceStrList(args, "side_effects");
+  const verification = coerceStrList(args, "verification");
+  if (
+    prerequisites.length === 0 &&
+    rollback.length === 0 &&
+    sideEffects.length === 0 &&
+    verification.length === 0
+  ) {
+    return undefined;
+  }
+  return { prerequisites, rollback, sideEffects, verification };
 }
 
 async function toolBrainProceduralMemory(
@@ -221,13 +250,13 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
     description:
-      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), and read per-skill invocation usage counts (usage).",
+      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), read per-skill invocation usage counts (usage), and resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["learn", "list", "accept", "reject", "usage"],
+          enum: ["learn", "list", "accept", "reject", "usage", "evidence"],
           description: "Tool operation.",
         },
         min_support: {
@@ -237,11 +266,31 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         slug: {
           type: "string",
-          description: "Proposal slug for accept/reject.",
+          description: "Proposal slug for accept/reject/evidence.",
         },
         note: {
           type: "string",
           description: "Optional review note; required for reject.",
+        },
+        prerequisites: {
+          type: "array",
+          items: { type: "string" },
+          description: "accept only: conditions that must hold before the procedure runs.",
+        },
+        rollback: {
+          type: "array",
+          items: { type: "string" },
+          description: "accept only: steps that undo the procedure.",
+        },
+        side_effects: {
+          type: "array",
+          items: { type: "string" },
+          description: "accept only: state the procedure changes outside its own output.",
+        },
+        verification: {
+          type: "array",
+          items: { type: "string" },
+          description: "accept only: checks that confirm the procedure worked.",
         },
       },
       required: ["operation"],

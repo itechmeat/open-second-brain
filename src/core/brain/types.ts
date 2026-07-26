@@ -1081,6 +1081,18 @@ export interface ProceduralMemoryEntry {
    */
   readonly successCount: number;
   readonly failureCount: number;
+  /**
+   * Execution contract read back from the procedure's frontmatter
+   * (no-dead-ends, Unit I). Written by the skill-proposal accept path and
+   * surfaced here so the four fields are a contract a caller can act on
+   * rather than decoration on a file nobody parses. Same shape and reader
+   * as {@link ProceduralMemoryEntry.triggers}: absent frontmatter reads as
+   * an empty list, so a pre-contract vault is unaffected.
+   */
+  readonly prerequisites: ReadonlyArray<string>;
+  readonly rollback: ReadonlyArray<string>;
+  readonly sideEffects: ReadonlyArray<string>;
+  readonly verification: ReadonlyArray<string>;
 }
 
 // ----- Configuration (`Brain/_brain.yaml`) ----------------------------------

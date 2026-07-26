@@ -81,14 +81,19 @@ export function listProceduralMemory(vault: string): ReadonlyArray<ProceduralMem
       entries?: Array<ProceduralMemoryEntry>;
     };
     if (!Array.isArray(parsed.entries)) return Object.freeze([]);
-    // Normalize additive outcome fields so a pre-outcome index (written
-    // before t_703f7b18) reads with defaults instead of `undefined`.
+    // Normalize additive fields so an older index reads with defaults
+    // instead of `undefined`: the outcome counters (pre-t_703f7b18) and the
+    // four contract lists (pre no-dead-ends Unit I).
     return Object.freeze(
       parsed.entries.map((entry) =>
         Object.freeze({
           ...entry,
           successCount: typeof entry.successCount === "number" ? entry.successCount : 0,
           failureCount: typeof entry.failureCount === "number" ? entry.failureCount : 0,
+          prerequisites: asStringArray(entry.prerequisites),
+          rollback: asStringArray(entry.rollback),
+          sideEffects: asStringArray(entry.sideEffects),
+          verification: asStringArray(entry.verification),
         }),
       ),
     );
@@ -222,7 +227,7 @@ function collectEntries(vault: string, roots: ReadonlyArray<string>): Procedural
 
       const [fm, body] = parseFrontmatter(filePath);
       const title = extractTitle(body, rel);
-      const id = entryId(rel);
+      const id = proceduralEntryId(rel);
       out.push({
         id,
         kind: detectedKind,
@@ -237,6 +242,14 @@ function collectEntries(vault: string, roots: ReadonlyArray<string>): Procedural
         usedCount: 0,
         successCount: 0,
         failureCount: 0,
+        // Execution contract (no-dead-ends, Unit I). Same reader as the
+        // trigger/tag/permission lists above: absent frontmatter is an
+        // empty list, so a procedure written before the contract existed
+        // reads exactly as it did.
+        prerequisites: asStringArray(fm["prerequisites"]),
+        rollback: asStringArray(fm["rollback"]),
+        sideEffects: asStringArray(fm["side_effects"]),
+        verification: asStringArray(fm["verification"]),
       });
     }
   }
@@ -293,7 +306,14 @@ function toVaultRelative(vault: string, absPath: string): string {
   return rel;
 }
 
-function entryId(sourcePath: string): string {
+/**
+ * Join key of a procedural-memory entry: `pmem-` plus the first 12 hex of
+ * the sha256 of its VAULT-RELATIVE source path. Pure and lookup-free, so a
+ * caller that knows a procedure's path (the skill-proposal accept path
+ * knows it from the slug) can address its outcome record without reading
+ * the index.
+ */
+export function proceduralEntryId(sourcePath: string): string {
   const hash = createHash("sha256").update(sourcePath, "utf8").digest("hex").slice(0, 12);
   return `pmem-${hash}`;
 }
