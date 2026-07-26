@@ -12,6 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { emitIngestDedupReport } from "../../src/core/brain/dedup-telemetry.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -153,6 +154,37 @@ describe("brain_analytics", () => {
     >;
     expect(result).toBeDefined();
     expect(typeof result).toBe("object");
+  });
+
+  test("view=dedup summarises the persisted exact-hash ingest dedup records", async () => {
+    emitIngestDedupReport(vault, {
+      surface: "scan_inline",
+      sources: [{ ref: "Daily/2026-07-01.md", exactDeduped: 3 }],
+      createdAt: "2026-07-01T10:00:00.000Z",
+    });
+    const result = (await run("brain_analytics", { view: "dedup" })) as Record<string, unknown>;
+    expect(result["total_records"]).toBe(1);
+    expect(result["total_exact_deduped"]).toBe(3);
+    expect(result["by_surface"]).toEqual({ scan_inline: 3 });
+    expect(result["trend"]).toEqual([
+      { at: "2026-07-01T10:00:00.000Z", surface: "scan_inline", exact_deduped: 3 },
+    ]);
+    // The semantic detectors nominate and never drop, so no key on this
+    // surface may be read as a semantic drop count.
+    for (const key of Object.keys(result)) expect(key).not.toContain("semantic");
+  });
+
+  test("view=dedup on a vault that deduped nothing reports zeros, not a fabricated row", async () => {
+    const result = (await run("brain_analytics", { view: "dedup" })) as Record<string, unknown>;
+    expect(result["total_records"]).toBe(0);
+    expect(result["total_exact_deduped"]).toBe(0);
+    expect(result["trend"]).toEqual([]);
+  });
+
+  test("view=dedup rejects an unknown surface filter by name", async () => {
+    await expect(
+      run("brain_analytics", { view: "dedup", surface: "not_a_surface" }),
+    ).rejects.toThrow(/surface/);
   });
 
   test("invalid view raises a clear error", async () => {

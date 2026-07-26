@@ -108,3 +108,65 @@ describe("brain_session_summary tool", () => {
     expect((scoped["digests"] as Array<Record<string, unknown>>)[0]!["session_id"]).toBe("a");
   });
 });
+
+describe("brain_session_summary project scope (Task 18)", () => {
+  test("write carries the normalized project and list filters by it", async () => {
+    const written = payload(
+      await call({
+        operation: "write",
+        session_id: "p1",
+        project_scope: "Open Second/Brain -- v2!",
+        decisions: ["scoped"],
+      }),
+    );
+    expect(written["written"]).toBe(true);
+    expect((written["digest"] as Record<string, unknown>)["project"]).toBe("open-second-brain-v2");
+
+    await call({ operation: "write", session_id: "p2", decisions: ["unscoped"] });
+
+    const all = payload(await call({ operation: "list" }));
+    expect(all["count"]).toBe(2);
+    const scoped = payload(
+      await call({ operation: "list", project_scope: "OPEN SECOND BRAIN V2" }),
+    );
+    expect(scoped["count"]).toBe(1);
+    expect((scoped["digests"] as Array<Record<string, unknown>>)[0]!["session_id"]).toBe("p1");
+  });
+
+  test("a digest written with no project omits the field entirely", async () => {
+    const written = payload(
+      await call({ operation: "write", session_id: "plain", decisions: ["d"] }),
+    );
+    const digest = written["digest"] as Record<string, unknown>;
+    expect("project" in digest).toBe(false);
+  });
+
+  test("a malformed project is an invalid-params error naming the argument", async () => {
+    const response = await call({
+      operation: "write",
+      session_id: "bad",
+      project_scope: "***",
+      decisions: ["d"],
+    });
+    expect(response.error).toBeDefined();
+    const error = response.error as { code: number; message: string };
+    expect(error.code).toBe(-32602);
+    expect(error.message).toMatch(/project/);
+  });
+
+  test("a non-string project is an invalid-params error", async () => {
+    const response = await call({
+      operation: "write",
+      session_id: "bad2",
+      project_scope: 42,
+      decisions: ["d"],
+    });
+    expect((response.error as { code: number }).code).toBe(-32602);
+  });
+
+  test("the tool advertises project_scope, matching the brain_search filter name", () => {
+    const tool = buildToolTable("full").find((entry) => entry.name === "brain_session_summary");
+    const properties = (tool!.inputSchema as { properties: Record<string, unknown> }).properties;
+    expect(properties["project_scope"]).toBeDefined();
+  });
+});

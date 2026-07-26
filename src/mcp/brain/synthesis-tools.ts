@@ -29,6 +29,7 @@ import {
   type IdeaLineageResult,
 } from "../../core/brain/idea-lineage.ts";
 import { decomposeNoteHistory } from "../../core/brain/note-history.ts";
+import { coerceStringOptional } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -55,6 +56,18 @@ function stringArrayArg(
   return value as ReadonlyArray<string>;
 }
 
+/**
+ * Argument name for the project scope axis. Deliberately identical to the
+ * `brain_search` filter (`src/mcp/search-tools.ts`) so an agent that knows
+ * one knows the other; the core field it maps to is the `project` axis of
+ * `CompositeScope`. Not to be confused with `o2b brain project`, the
+ * unrelated configuration-level code-directory link.
+ */
+const PROJECT_SCOPE_ARG = "project_scope";
+
+/** Longest accepted raw project token, matching the `brain_search` filter. */
+const PROJECT_SCOPE_MAX_LEN = 128;
+
 function serializeDigest(digest: SessionSummaryDigest): Record<string, unknown> {
   return {
     id: digest.id,
@@ -65,6 +78,7 @@ function serializeDigest(digest: SessionSummaryDigest): Record<string, unknown> 
     next_steps: digest.nextSteps,
     created_at: digest.createdAt,
     ...(digest.host !== undefined ? { host: digest.host } : {}),
+    ...(digest.project !== undefined ? { project: digest.project } : {}),
   };
 }
 
@@ -85,6 +99,7 @@ async function toolBrainSessionSummary(
     const nextSteps = stringArrayArg(args, "next_steps");
     const host = args["host"];
     const sourceTurnIds = stringArrayArg(args, "source_turn_ids");
+    const project = coerceStringOptional(args, PROJECT_SCOPE_ARG, PROJECT_SCOPE_MAX_LEN);
     try {
       const digest = appendSessionSummary(ctx.vault, {
         sessionId,
@@ -94,6 +109,7 @@ async function toolBrainSessionSummary(
         ...(nextSteps !== undefined ? { nextSteps } : {}),
         ...(typeof host === "string" ? { host } : {}),
         ...(sourceTurnIds !== undefined ? { sourceTurnIds } : {}),
+        ...(project !== undefined ? { project } : {}),
       });
       return { written: true, digest: serializeDigest(digest) };
     } catch (error) {
@@ -116,8 +132,19 @@ async function toolBrainSessionSummary(
     typeof sessionIdRaw === "string" && sessionIdRaw.trim().length > 0
       ? sessionIdRaw.trim()
       : undefined;
-  const digests = listSessionSummaries(ctx.vault, sessionId !== undefined ? { sessionId } : {});
-  return { count: digests.length, digests: digests.map(serializeDigest) };
+  const project = coerceStringOptional(args, PROJECT_SCOPE_ARG, PROJECT_SCOPE_MAX_LEN);
+  try {
+    const digests = listSessionSummaries(ctx.vault, {
+      ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(project !== undefined ? { project } : {}),
+    });
+    return { count: digests.length, digests: digests.map(serializeDigest) };
+  } catch (error) {
+    if (error instanceof SessionSummaryError) {
+      throw new MCPError(INVALID_PARAMS, error.message);
+    }
+    throw error;
+  }
 }
 
 const CHECKPOINT_TOOL = "brain_session_checkpoint";
@@ -344,6 +371,11 @@ export const SYNTHESIS_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "write: turn ids the digest was distilled from (lineage edges).",
         },
         host: { type: "string", description: "write: originating runtime (claude, codex, ...)." },
+        [PROJECT_SCOPE_ARG]: {
+          type: "string",
+          description:
+            "Project scope axis; same name and slug rule as the brain_search filter. write: scopes the digest and its dedupe key; list: filters by it. Unsluggable = error.",
+        },
       },
       required: ["operation"],
       additionalProperties: false,

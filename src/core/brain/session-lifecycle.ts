@@ -6,6 +6,7 @@ import { appendLogEvent } from "./log.ts";
 import { brainDirsForWrite } from "./paths.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
 import { extractFacts, routeExtractedFacts } from "./fact-extract.ts";
+import { emitIngestDedupReport } from "./dedup-telemetry.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { writeSignal } from "./signal.ts";
@@ -343,6 +344,20 @@ export async function captureSessionLifecycleEvent(
   let logPath: string | undefined;
   if (mayWrite && !opts.dryRun) {
     logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
+    // Dedup observability (Unit F): persist the exact-hash drop counts
+    // this event produced, keyed by the session being re-ingested.
+    // Signals and facts are one count - both are items this event tried
+    // to ingest and dropped on a sha-256 collision.
+    emitIngestDedupReport(vault, {
+      surface: "session_lifecycle",
+      sources: [
+        {
+          ref: normalized.sessionId ?? UNKNOWN_SESSION_REF,
+          exactDeduped: counters.signals_deduped + counters.facts_deduped,
+        },
+      ],
+      createdAt: now.toISOString(),
+    });
   }
 
   const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "session-lifecycle"), {
@@ -647,8 +662,11 @@ function appendLifecycleLog(
   }).logPath;
 }
 
+/** Stand-in session identity when the host payload carries none. */
+const UNKNOWN_SESSION_REF = "unknown";
+
 function sessionReference(payload: NormalizedPayload): string {
-  return `session:${payload.sessionId ?? "unknown"}#${payload.event}`;
+  return `session:${payload.sessionId ?? UNKNOWN_SESSION_REF}#${payload.event}`;
 }
 
 function readNonEmptyString(value: unknown): string | undefined {

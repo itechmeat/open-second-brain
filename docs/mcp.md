@@ -43,7 +43,7 @@ flags for a narrower per-process full server.
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
-| `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis`.                          | `view`                                         |
+| `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
 | `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, and a selectable recall `profile` (`fast \| balanced \| thorough`). | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
 | `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores`, also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag over the gate-telemetry relevance scores plus the epistemic mix; thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
@@ -138,7 +138,15 @@ deterministic media/base64 sanitization. `brain_session_grep`,
 recall DAG populated by CLI `import-session --recall` or the core API.
 `brain_session_summary` accepts `operation: "write"|"get"|"list"` (write takes
 `session_id` plus any of `request`, `decisions`, `learnings`, `next_steps`,
-`source_turn_ids`, `host`). `brain_idea_lineage` accepts `id` and optional
+`source_turn_ids`, `host`, `project_scope`). `project_scope` is the same
+project axis `brain_search` filters on, normalized to the same `[a-z0-9-]` slug:
+on `write` it files the digest under that project and folds it into the dedupe
+key, so the same content under two projects is two digests; on `list` it returns
+only that project's digests. Omitted, the digest and its dedupe key are
+byte-identical to the pre-project shape. A value with no alphanumeric is an
+`INVALID_PARAMS` error naming the argument, never a silent drop to unscoped.
+This is unrelated to the `o2b brain project` verb, which links a code directory
+to its owning vault at the configuration level. `brain_idea_lineage` accepts `id` and optional
 `max_depth`. `brain_note_history` accepts `path` and optional `gap_hours` /
 `max_count`.
 `brain_recall_gate` accepts optional `previous_prompt` and
