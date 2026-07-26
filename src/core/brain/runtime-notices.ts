@@ -17,11 +17,15 @@
  */
 
 import { existsSync } from "node:fs";
+import { join } from "node:path";
 
 import lockfile from "proper-lockfile";
 
 import { resolveSearchConfig } from "../search/index.ts";
 import { checkVaultWriteable } from "../doctor.ts";
+import { BRAIN_ROOT_REL } from "./paths.ts";
+import { brainConfigReadFailure } from "./policy.ts";
+import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 
 export type RuntimeNoticeSeverity = "info" | "warning";
 
@@ -60,6 +64,45 @@ export function collectRuntimeNotices(
         code: "vault_read_only",
         severity: "warning",
         message: `Vault is not writable, so memory writes will fail (${writeable.message}). Fix permissions on ${vault} or point VAULT_DIR at a writable vault.`,
+      });
+    }
+  } catch {
+    // best-effort
+  }
+
+  // Vault identity: a Brain tree with no identity marker cannot tell an
+  // old vault from a mis-resolved root, and the write guard can only warn
+  // about it (context-integrity-gates, Unit J). Gated on the tree already
+  // existing, because a root nothing has written to yet is not a wrong
+  // store - it is a vault waiting for `o2b brain init`, and nagging before
+  // that command runs would make the notice noise instead of signal.
+  try {
+    if (existsSync(join(vault, BRAIN_ROOT_REL))) {
+      const absent = vaultMarkerAbsentNotice(vault);
+      if (absent !== null) {
+        notices.push({
+          code: "vault_marker_absent",
+          severity: "warning",
+          message: `${absent.detail} (${absent.path})`,
+        });
+      }
+    }
+  } catch {
+    // best-effort
+  }
+
+  // An unreadable `_brain.yaml`: every `load*ConfigSafe` reader falls
+  // back, and for the integrity gates that fallback is now the STRICT
+  // one rather than the defaults. Either way the operator's settings are
+  // not the ones in force, so the condition has to be visible instead of
+  // inferable from a gate that suddenly refuses.
+  try {
+    const failure = brainConfigReadFailure(vault);
+    if (failure !== null) {
+      notices.push({
+        code: "brain_config_unreadable",
+        severity: "warning",
+        message: `Brain/_brain.yaml could not be read, so configured settings are not in force and the integrity gates fall back to their strictest mode (${failure}). Fix the file, then re-run.`,
       });
     }
   } catch {

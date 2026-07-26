@@ -40,12 +40,38 @@
  * it is identical on every peer and survives a `mv` of the vault.
  *
  * The comparison is consequently against the identity THIS PROCESS
- * pinned on its first write, not against an external expectation. That
- * catches the store changing underneath a live process - a profile
- * switch, a remount, a restored backup of a different vault - which is
- * precisely a write landing somewhere other than where the process
- * believes it is writing. A cold-start mis-resolution lands in the
- * absent-marker branch above and is surfaced by the doctor.
+ * pinned on its first write, not against an external expectation.
+ *
+ * ## Exactly what the guard can and cannot catch
+ *
+ * Stated precisely, because the previous wording implied more.
+ *
+ * The ONLY condition that raises {@link VaultIdentityMismatchError} is:
+ * a root this process has already written to, whose marker is present
+ * and now holds a DIFFERENT id than the one pinned on that first write.
+ * That is the store changing underneath a live process - a profile
+ * switch, a remount, a restored backup of a different vault.
+ *
+ * Everything else passes, by construction and not by oversight:
+ *
+ *   - A COLD-START MIS-RESOLUTION passes. A typo in `VAULT_DIR` yields a
+ *     root with no marker, the first write pins nothing, and the write
+ *     proceeds. Nothing durable records which vault the process meant,
+ *     so there is no expectation to compare against; inventing one from
+ *     a machine-local path would refuse every write on a synced peer.
+ *     What this case gets instead is a `vault-marker-absent` notice -
+ *     see {@link vaultMarkerAbsentNotice}, which the runtime-notice
+ *     channel reports on any Brain tree lacking a marker.
+ *   - A DELETED marker passes. Absence is indistinguishable from a fresh
+ *     vault and refusing would break `o2b brain init`.
+ *   - A CORRUPT marker passes, as absence, for the same reason.
+ *   - TWO DISTINCT VAULTS in one process both pass. Pins are keyed by
+ *     resolved root, deliberately: a CLI or MCP server legitimately
+ *     serves more than one vault.
+ *
+ * The mechanism is therefore a same-path, same-process consistency
+ * check plus a standing report on unmarked roots. It is not, and does
+ * not claim to be, proof that the resolved root is the intended one.
  */
 
 import { randomBytes } from "node:crypto";
@@ -258,6 +284,34 @@ function currentVaultId(root: string): string | null {
 }
 
 /**
+ * The `vault-marker-absent` notice for `vault`, or `null` when the
+ * resolved root carries a readable marker.
+ *
+ * This is the READ-SIDE half of the unit, and the only place the absent
+ * branch is described. Two callers exist and they need the same record
+ * for different reasons: {@link assertVaultIdentityForWrite} emits it
+ * into a write-path sink, and the diagnostic surfaces report it as a
+ * standing condition of the root.
+ *
+ * A corrupt or unparseable marker reads as ABSENT here, exactly as it
+ * does in {@link readVaultIdentity}: the two cannot be distinguished
+ * without guessing, and guessing wrong turns a truncated sync into a
+ * refusal.
+ */
+export function vaultMarkerAbsentNotice(vault: string): DegradationNotice | null {
+  const root = resolve(vault);
+  if (currentVaultId(root) !== null) return null;
+  return degradationNotice({
+    code: DEGRADATION_CODE.vaultMarkerAbsent,
+    site: SITE,
+    path: root,
+    detail:
+      "resolved vault root carries no identity marker; " +
+      "run `o2b brain init` on this root if it is the intended vault",
+  });
+}
+
+/**
  * Assert that a write may proceed against `vault`.
  *
  * Emits a `vault-marker-absent` notice into `sink` (when one is given)
@@ -288,14 +342,10 @@ export function assertVaultIdentityForWrite(vault: string, sink?: DegradationNot
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {
-      emitDegradationNotice(sink, {
-        code: DEGRADATION_CODE.vaultMarkerAbsent,
-        site: SITE,
-        path: root,
-        detail:
-          "resolved vault root carries no identity marker; " +
-          "run `o2b brain init` on this root if it is the intended vault",
-      });
+      const absent = vaultMarkerAbsentNotice(root);
+      // `currentVaultId` just reported no readable marker, so the notice
+      // is non-null; the check keeps the types honest rather than casting.
+      if (absent !== null) emitDegradationNotice(sink, absent);
     }
     return;
   }

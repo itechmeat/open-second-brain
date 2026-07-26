@@ -466,15 +466,69 @@ export const loadTemporalConfigSafe = makeSafeLoader(resolveTemporal, BRAIN_TEMP
 export const loadGuardrailsConfigSafe = makeSafeLoader(resolveGuardrails, BRAIN_GUARDRAIL_DEFAULTS);
 
 /**
- * Load + resolve the `integrity:` block, falling back to
- * `BRAIN_INTEGRITY_DEFAULTS` when the config file is missing, malformed,
- * or otherwise unreadable. The search layer reads its gate on a store
- * open, which must keep working on a vault that has never run
- * `o2b brain init`; falling back means the gate lands on its documented
- * default rather than the read failing on a config problem it has no
- * part in.
+ * Gate modes used when `_brain.yaml` EXISTS but cannot be read.
+ *
+ * Not the defaults: the defaults encode "this operator has said nothing",
+ * and an unreadable file is the opposite - the operator said something
+ * and we cannot tell what. Collapsing that to the defaults turns
+ * `owner_scope_delivery: fail` into `off`, which disables an isolation
+ * boundary because of a typo somewhere else in the file, with no signal
+ * on any surface. Erring to the strictest mode makes the same typo loud
+ * and reversible instead of quiet and permanent.
+ *
+ * `pack_validity_seconds` is not a gate and has no strict direction, so
+ * it keeps the default window.
  */
-export const loadIntegrityConfigSafe = makeSafeLoader(resolveIntegrity, BRAIN_INTEGRITY_DEFAULTS);
+export const BRAIN_INTEGRITY_STRICT_FALLBACK: ResolvedBrainIntegrityConfig = Object.freeze({
+  owner_scope_delivery: GATE_MODE.fail,
+  embedding_abi: GATE_MODE.fail,
+  pack_validity_seconds: PACK_VALIDITY_SECONDS_DEFAULT,
+}) as ResolvedBrainIntegrityConfig;
+
+/**
+ * Why `_brain.yaml` could not be read, or `null` when it reads fine or
+ * does not exist.
+ *
+ * Exists so the unreadable-config condition is NAMEABLE on a surface
+ * rather than only inferable from a gate that suddenly refuses. The
+ * runtime-notice channel reports it; `loadIntegrityConfigSafe` uses the
+ * same distinction to choose its fallback.
+ */
+export function brainConfigReadFailure(vault: string): string | null {
+  if (!existsSync(brainConfigPath(vault))) return null;
+  try {
+    loadBrainConfig(vault);
+    return null;
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+/**
+ * Load + resolve the `integrity:` block.
+ *
+ * Two failure modes, deliberately NOT collapsed into one:
+ *
+ *   - CONFIG ABSENT - a vault that has never run `o2b brain init`. The
+ *     search layer reads its gate on a store open and must keep working
+ *     there, so the gates land on `BRAIN_INTEGRITY_DEFAULTS`. This is the
+ *     case the safe-loader pattern legitimately defends.
+ *   - CONFIG PRESENT BUT UNREADABLE - a bad gate token, or any unrelated
+ *     syntax error anywhere else in the file. Falling back to the
+ *     defaults here would silently turn an operator's
+ *     `owner_scope_delivery: fail` into `off`. It resolves to
+ *     {@link BRAIN_INTEGRITY_STRICT_FALLBACK} instead, and
+ *     {@link brainConfigReadFailure} names the cause.
+ */
+export function loadIntegrityConfigSafe(vault: string): ResolvedBrainIntegrityConfig {
+  try {
+    return resolveIntegrity(loadBrainConfig(vault));
+  } catch {
+    return existsSync(brainConfigPath(vault))
+      ? BRAIN_INTEGRITY_STRICT_FALLBACK
+      : BRAIN_INTEGRITY_DEFAULTS;
+  }
+}
 
 /**
  * Load the configured `feedback.default_scope`, or `undefined` when the

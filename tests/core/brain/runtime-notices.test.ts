@@ -7,6 +7,7 @@ import {
   collectRuntimeNotices,
   renderRuntimeNotices,
 } from "../../../src/core/brain/runtime-notices.ts";
+import { writeVaultIdentity } from "../../../src/core/brain/vault-identity.ts";
 
 let vault: string;
 let configPath: string;
@@ -107,4 +108,50 @@ test("renderRuntimeNotices formats a compact block and is empty when clean", () 
   expect(block).toContain("Runtime notices:");
   expect(block).toContain("no key");
   expect(block).toContain("build it");
+});
+
+test("an initialized vault with no identity marker yields a marker notice", () => {
+  writeConfig("");
+  seedIndex();
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
+  expect(codes).toContain("vault_marker_absent");
+});
+
+test("a vault with no Brain tree yields no marker notice", () => {
+  // Nothing has been written here, so there is no store to be wrong
+  // about - and `o2b brain init` must not be nagged at before it runs.
+  writeConfig("");
+  seedIndex();
+  const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
+  expect(codes).not.toContain("vault_marker_absent");
+});
+
+test("a marked vault yields no marker notice", () => {
+  writeConfig("");
+  seedIndex();
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  writeVaultIdentity(vault);
+  const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
+  expect(codes).not.toContain("vault_marker_absent");
+});
+
+test("an unreadable _brain.yaml is named rather than silently defaulted", () => {
+  writeConfig("");
+  seedIndex();
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  writeVaultIdentity(vault);
+  writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 9\n", "utf8");
+  const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
+  expect(codes).toContain("brain_config_unreadable");
+});
+
+test("a readable _brain.yaml yields no config notice", () => {
+  writeConfig("");
+  seedIndex();
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  writeVaultIdentity(vault);
+  writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 1\n", "utf8");
+  const codes = collectRuntimeNotices(vault, { configPath, env: {} }).map((n) => n.code);
+  expect(codes).not.toContain("brain_config_unreadable");
 });

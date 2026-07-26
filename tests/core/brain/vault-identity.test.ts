@@ -102,6 +102,7 @@ import {
   readVaultIdentity,
   resetVaultIdentityPins,
   vaultIdentityPath,
+  vaultMarkerAbsentNotice,
   writeVaultIdentity,
 } from "../../../src/core/brain/vault-identity.ts";
 import type { DegradationNotice } from "../../../src/core/integrity/degradation.ts";
@@ -914,6 +915,88 @@ describe("the guard stays off read paths", () => {
       expect(() => testCase.read(vault)).not.toThrow();
     });
   }
+});
+
+/**
+ * The absent-marker half used to be reachable only by passing an optional
+ * sink no production call site passed, and the module docblock claimed the
+ * doctor surfaced it while `runDoctor` imported nothing from here. These
+ * pin the replacement: one exported check that reads the marker, and one
+ * production channel that reports it.
+ */
+describe("vaultMarkerAbsentNotice", () => {
+  test("names an unmarked root with the closed-vocabulary code", () => {
+    const notice = vaultMarkerAbsentNotice(vault);
+    expect(notice).not.toBeNull();
+    expect(notice!.code).toBe("vault-marker-absent");
+    expect(notice!.site).toBe("vault-identity");
+    expect(notice!.path).toBe(vault);
+  });
+
+  test("is silent once the root carries a marker", () => {
+    writeVaultIdentity(vault);
+    expect(vaultMarkerAbsentNotice(vault)).toBeNull();
+  });
+
+  test("treats a malformed marker as absent, never as a mismatch", () => {
+    writeFileSync(vaultIdentityPath(vault), "{ not json", "utf8");
+    expect(vaultMarkerAbsentNotice(vault)?.code).toBe("vault-marker-absent");
+  });
+
+  test("is the same record the write-path sink receives", () => {
+    const notices: DegradationNotice[] = [];
+    brainDirsForWrite(vault, notices);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toEqual(vaultMarkerAbsentNotice(vault)!);
+  });
+});
+
+/**
+ * The honest limit of the mechanism, asserted rather than described: the
+ * only reachable refusal is same-path, marker-changed, mid-process.
+ */
+describe("what the guard does NOT catch", () => {
+  test("a cold-start mis-resolution proceeds and is reported, not refused", () => {
+    // The reviewer's probe: a never-existent sibling root.
+    const wrong = `${vault}t`;
+    try {
+      expect(() =>
+        appendLogEvent(wrong, {
+          timestamp: "2026-07-26T00:00:00Z",
+          eventType: "note",
+          agent: "test-agent",
+          body: { text: "mis-resolved" },
+        }),
+      ).not.toThrow();
+      // The bytes really did land under the wrong root - the guard has no
+      // durable expectation to compare a cold start against.
+      expect(existsSync(join(wrong, "Brain", "log"))).toBe(true);
+      // What it gets instead is a named notice on that root.
+      expect(vaultMarkerAbsentNotice(wrong)?.code).toBe("vault-marker-absent");
+    } finally {
+      rmSync(wrong, { recursive: true, force: true });
+    }
+  });
+
+  test("two distinct roots in one process are independent", () => {
+    const other = mkdtempSync(join(tmpdir(), "o2b-vault-identity-other-"));
+    try {
+      mkdirSync(join(other, "Brain"), { recursive: true });
+      writeVaultIdentity(vault);
+      writeVaultIdentity(other);
+      expect(() => brainDirsForWrite(vault)).not.toThrow();
+      expect(() => brainDirsForWrite(other)).not.toThrow();
+    } finally {
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+
+  test("a deleted marker stops refusing rather than starting to", () => {
+    writeVaultIdentity(vault);
+    brainDirsForWrite(vault);
+    rmSync(vaultIdentityPath(vault));
+    expect(() => brainDirsForWrite(vault)).not.toThrow();
+  });
 });
 
 describe("bootstrap path", () => {

@@ -9,12 +9,18 @@
  * to `off` is precisely the silent degradation the wave removes.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
 import {
   BRAIN_INTEGRITY_DEFAULTS,
+  BRAIN_INTEGRITY_STRICT_FALLBACK,
   BrainConfigError,
+  brainConfigReadFailure,
+  loadIntegrityConfigSafe,
   PACK_VALIDITY_SECONDS_DEFAULT,
   resolveIntegrity,
   validateBrainConfigDetailed,
@@ -197,5 +203,59 @@ describe("integrity config block", () => {
       const { warnings } = validate(HEAD + `integrity:\n  ${key}: ${value}\n`);
       expect(warnings.some((w) => w.message.includes(`integrity.${key}`))).toBe(false);
     }
+  });
+});
+
+/**
+ * `loadIntegrityConfigSafe` used to be a bare `try { … } catch { return
+ * defaults }`, which made ANY `_brain.yaml` problem - a bad gate token or
+ * an unrelated syntax error a hundred lines away - silently turn
+ * `owner_scope_delivery: fail` into `off`. An isolation boundary
+ * disabled by a typo, with no signal on any surface, is the exact class
+ * of degradation this block exists to gate.
+ */
+describe("loadIntegrityConfigSafe distinguishes absent from unreadable", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-integrity-safe-"));
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test("a never-initialized vault gets the documented defaults", () => {
+    expect(loadIntegrityConfigSafe(vault)).toEqual(BRAIN_INTEGRITY_DEFAULTS);
+    expect(brainConfigReadFailure(vault)).toBeNull();
+  });
+
+  test("an unrelated syntax error does NOT disable the isolation gate", () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\nnotes:\n  read_paths: 5\n",
+      "utf8",
+    );
+    const resolved = loadIntegrityConfigSafe(vault);
+    expect(resolved.owner_scope_delivery).not.toBe(GATE_MODE.off);
+    expect(resolved).toEqual(BRAIN_INTEGRITY_STRICT_FALLBACK);
+  });
+
+  test("an unreadable config is nameable rather than silent", () => {
+    writeFileSync(join(vault, "Brain", "_brain.yaml"), "schema_version: 9\n", "utf8");
+    const failure = brainConfigReadFailure(vault);
+    expect(failure).not.toBeNull();
+    expect(failure!.length).toBeGreaterThan(0);
+  });
+
+  test("a valid config still resolves exactly what the operator wrote", () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: warn\n",
+      "utf8",
+    );
+    expect(loadIntegrityConfigSafe(vault).owner_scope_delivery).toBe(GATE_MODE.warn);
+    expect(brainConfigReadFailure(vault)).toBeNull();
   });
 });
