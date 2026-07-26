@@ -13,10 +13,9 @@
  * are reported in `pagesSkipped` with their estimated cost.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { parseFrontmatter } from "../vault.ts";
 import { canonicalNotePath } from "../path-safety.ts";
 import { loadGuardrailsConfigSafe } from "./policy.ts";
 import {
@@ -25,6 +24,7 @@ import {
   type ContextSafetyReport,
 } from "./safety/context-guard.ts";
 import { brainDirs } from "./paths.ts";
+import { collectPreferencePages } from "./preferences-collect.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { preferChainTips } from "./inject-governor.ts";
 import { tensionWarningsForContextItems } from "./tensions.ts";
@@ -258,18 +258,19 @@ function collectCandidates(vault: string, delimitUntrusted: boolean): Candidate[
   const dirs = brainDirs(vault);
   const out: Candidate[] = [];
   for (const dir of [dirs.preferences, dirs.retired]) {
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith(".md")) continue;
-      const full = join(dir, name);
-      // Unit F: `parseFrontmatter` cannot throw (it reads inside its own
-      // try; everything after is string work), so the `catch { continue }`
-      // that stood here was unreachable and reported nothing. Dropped
-      // lines and unreadable reads are reported centrally instead - see
-      // the "Why most readers keep the two-tuple form" section in
-      // src/core/vault.ts. A pack returns injected content and carries no
-      // per-candidate report, so it opens no channel of its own.
-      const [meta, body] = parseFrontmatter(full);
+    // Shared delivery-path walk (context-integrity-gates, Unit A). This
+    // surface reads raw frontmatter rather than the preference schema:
+    // it injects the BODY, and it walks the retired directory alongside
+    // the preferences one, where the preference schema does not apply.
+    //
+    // Unit F: `parseFrontmatter` cannot throw (it reads inside its own
+    // try; everything after is string work), so the `catch { continue }`
+    // that stood here was unreachable and reported nothing. Dropped
+    // lines and unreadable reads are reported centrally instead - see
+    // the "Why most readers keep the two-tuple form" section in
+    // src/core/vault.ts. A pack returns injected content and carries no
+    // per-candidate report, so it opens no channel of its own.
+    for (const { name, path: full, meta, body } of collectPreferencePages(dir)) {
       // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
       // superseded-non-tip) memory stays on disk for audit but is never
       // injected into a context pack.

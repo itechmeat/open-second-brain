@@ -15,11 +15,10 @@
  * the only ordering inputs are confidence, creation time, and id.
  */
 
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
 
 import { brainActivePath, brainDirs } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
+import { collectPreferences } from "./preferences-collect.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
@@ -83,16 +82,11 @@ interface ConfirmedPref {
 
 function collectConfirmed(vault: string): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
   const out: ConfirmedPref[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
-    let pref;
-    try {
-      pref = parsePreference(join(dir, name));
-    } catch {
-      continue;
-    }
+  // Listing and parse come from the shared delivery-path walk
+  // (context-integrity-gates, Unit A); the confirmed-status filter is
+  // this surface's own and stays here.
+  for (const { pref } of collectPreferences(dir)) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
     out.push({
       id: pref.id,

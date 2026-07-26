@@ -43,7 +43,8 @@ import {
   loadBrainConfig,
   loadGuardrailsConfigSafe,
 } from "./policy.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
+import { parseRetired } from "./preference.ts";
+import { collectPreferences } from "./preferences-collect.ts";
 import { BRAIN_TOMBSTONE_STATUS } from "./types.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
@@ -194,23 +195,17 @@ export function regenerateActiveQuiet(vault: string, opts: RegenerateActiveOptio
 
 function readActivePreferences(vault: string): BrainPreference[] {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return [];
+  // The shared delivery-path walk (context-integrity-gates, Unit A) owns
+  // the listing and the parse; a corrupted or status/folder-mismatched
+  // file is omitted there, and `brain_doctor` is the surface that flags
+  // it. See the module docblock for the rationale.
   const out: BrainPreference[] = [];
-  for (const name of readdirSync(dirs.preferences)) {
-    if (!name.endsWith(".md")) continue;
-    const full = join(dirs.preferences, name);
-    try {
-      const pref = parsePreference(full);
-      // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
-      // superseded-non-tip) preference remains on disk for audit but
-      // never appears in the active-preferences digest.
-      if ((pref.status as string) === BRAIN_TOMBSTONE_STATUS) continue;
-      out.push(pref);
-    } catch {
-      // Corrupted or status/folder-mismatched file — silently omit
-      // here. `brain_doctor` is the surface that flags it. See the
-      // module docblock for the rationale.
-    }
+  for (const { pref } of collectPreferences(dirs.preferences)) {
+    // Belief lifecycle suite (t_7d5a3589): a tombstoned (incl.
+    // superseded-non-tip) preference remains on disk for audit but
+    // never appears in the active-preferences digest.
+    if ((pref.status as string) === BRAIN_TOMBSTONE_STATUS) continue;
+    out.push(pref);
   }
   return out;
 }

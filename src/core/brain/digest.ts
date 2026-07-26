@@ -51,7 +51,8 @@ import {
   loadBrainConfig,
 } from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
-import { parsePreference, parseRetired } from "./preference.ts";
+import { parseRetired } from "./preference.ts";
+import { collectPreferences, PREFERENCE_ID_PREFIX } from "./preferences-collect.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import {
@@ -698,19 +699,15 @@ interface PreferenceWithPath {
 
 function readAllPreferences(vault: string): ReadonlyArray<PreferenceWithPath> {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.preferences)) return [];
-  const out: PreferenceWithPath[] = [];
-  for (const entry of readdirSync(dirs.preferences, { withFileTypes: true })) {
-    if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
-    if (!entry.name.startsWith("pref-")) continue;
-    const path = join(dirs.preferences, entry.name);
-    try {
-      out.push({ pref: parsePreference(path), path });
-    } catch {
-      // The doctor reports corruption; digest skips silently.
-    }
-  }
-  return out;
+  // Shared delivery-path walk (context-integrity-gates, Unit A). This
+  // surface's listing is the strictest of the five - regular files only,
+  // and only `pref-*` names - so both rules are passed as options rather
+  // than unified away. The doctor reports corruption; digest skips
+  // silently, which is what the collector's parse already does.
+  return collectPreferences(dirs.preferences, {
+    namePrefix: PREFERENCE_ID_PREFIX,
+    regularFilesOnly: true,
+  }).map(({ pref, path }) => ({ pref, path }));
 }
 
 interface RetiredWithPath {

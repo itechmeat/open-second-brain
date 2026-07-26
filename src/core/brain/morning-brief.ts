@@ -13,11 +13,8 @@
  * recall-budget primitive so one oversized entry cannot dominate.
  */
 
-import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
-
 import { brainDirs } from "./paths.ts";
-import { parsePreference } from "./preference.ts";
+import { collectPreferences } from "./preferences-collect.ts";
 import { applyCharBudget } from "./recall-budget.ts";
 import { readLogDay } from "./log-jsonl.ts";
 import { renderActivityTimeline, type ActivityItem } from "./render/activity-line.ts";
@@ -69,16 +66,11 @@ interface ConfirmedPref {
 
 function collectConfirmed(vault: string): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
   const out: ConfirmedPref[] = [];
-  for (const name of readdirSync(dir)) {
-    if (!name.endsWith(".md")) continue;
-    let pref;
-    try {
-      pref = parsePreference(join(dir, name));
-    } catch {
-      continue;
-    }
+  // Listing and parse come from the shared delivery-path walk
+  // (context-integrity-gates, Unit A); the confirmed-status filter is
+  // this surface's own and stays here.
+  for (const { pref } of collectPreferences(dir)) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
     out.push({
       id: pref.id,
