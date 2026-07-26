@@ -2,9 +2,9 @@
  * Vault-wide broken-link ratchet (context-integrity-gates, unit G).
  *
  * Pins the three properties the gate rests on:
- *   - the SQL dangling definition (`target_document_id IS NULL AND
- *     target_path IS NOT NULL`), including its deliberate divergence
- *     from the read-time resolution ladder;
+ *   - the counting definition: a link is broken when the READ-TIME
+ *     resolution ladder cannot resolve it, so a basename wikilink a
+ *     reader follows is not counted and an ambiguous one is;
  *   - determinism: two measurements over an unchanged vault agree;
  *   - the full-resolution precondition: a count taken after an
  *     incremental run is reported as UNMEASURABLE, never as a number
@@ -30,6 +30,7 @@ import {
   type LinkRatchetMeasurement,
 } from "../../../src/core/search/link-ratchet.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
+import { Store } from "../../../src/core/search/store.ts";
 import { writeMd } from "../../helpers/search-fixtures.ts";
 
 let tmp: string;
@@ -40,10 +41,10 @@ beforeEach(() => {
   vault = join(tmp, "vault");
   // notes/a.md carries five link rows with a target path plus one tag:
   //   [[notes/b.md]]  → resolves by exact path
-  //   [[b]]           → SQL-dangling, read-time resolvable (divergence)
-  //   [[gone]]        → dangling, no such document
+  //   [[b]]           → resolves by unambiguous basename (ladder rung 3)
+  //   [[gone]]        → unresolvable, no such document
   //   (notes/c.md)    → resolves by exact path
-  //   (missing.md)    → dangling, no such document
+  //   (missing.md)    → unresolvable, no such document
   //   #topic          → tag, target_path IS NULL, never counted
   writeMd(
     vault,
@@ -70,15 +71,58 @@ function measured(m: LinkRatchetMeasurement): number {
   return m.dangling;
 }
 
-describe("SQL dangling definition", () => {
-  test("counts exactly the links with a target path and no materialized target", async () => {
+describe("unresolved-after-the-ladder definition", () => {
+  test("counts exactly the links the read-time ladder cannot resolve", async () => {
     const m = await measureVault(vault);
     expect(m.measurable).toBe(true);
-    expect(measured(m)).toBe(3);
+    expect(measured(m)).toBe(2);
     if (m.measurable) {
       expect(m.links).toBe(5);
       expect(m.documents).toBe(3);
       expect(m.definition).toBe(DANGLING_LINK_DEFINITION);
+    }
+  });
+
+  test("a basename wikilink a reader resolves does not raise the count", async () => {
+    const before = await measureVault(vault);
+    // `notes/c.md` exists and its basename is unambiguous, so `[[c]]` is
+    // a healthy edit - the exact case that made the SQL predicate fire on
+    // a vault written in Obsidian-style basename links.
+    writeMd(vault, "notes/d.md", "# D\n\nSee [[c]].\n");
+    const after = await measureVault(vault);
+    expect(measured(after)).toBe(measured(before));
+  });
+
+  test("an ambiguous basename stays counted - the ladder refuses to guess", async () => {
+    const before = await measureVault(vault);
+    // Two nested documents named `dup` make `[[dup]]` unresolvable at read
+    // time, so it is broken by the same definition the reader applies.
+    writeMd(vault, "one/dup.md", "# Dup one\n");
+    writeMd(vault, "two/dup.md", "# Dup two\n");
+    writeMd(vault, "notes/e.md", "# E\n\nSee [[dup]].\n");
+    const after = await measureVault(vault);
+    expect(measured(after)).toBe(measured(before) + 1);
+  });
+
+  test("the count agrees with the ladder the readers use", async () => {
+    // One link row per distinct edge, so the DISTINCT in
+    // `resolvedDocLinkPairs` cannot mask a disagreement: whatever that
+    // ladder resolves is exactly what this gate does not count.
+    const agree = join(tmp, "agree");
+    writeMd(agree, "x.md", "# X\n\nSee [[y]], [[z.md]] and [[gone]].\n");
+    writeMd(agree, "sub/y.md", "# Y\n");
+    writeMd(agree, "z.md", "# Z\n");
+    const config = ratchetSearchConfig(agree, join(tmp, "agree.sqlite"));
+    await indexVault(config, { force: true });
+    const store = await Store.open(config, { mode: "read" });
+    try {
+      const counts = store.linkResolutionCounts();
+      const resolvable = store.resolvedDocLinkPairs().length;
+      expect(counts.total).toBe(3);
+      expect(counts.total - counts.unresolved).toBe(resolvable);
+      expect(counts.unresolved).toBe(1);
+    } finally {
+      await store.close();
     }
   });
 
@@ -115,7 +159,7 @@ describe("full-resolution precondition", () => {
     const dbPath = join(tmp, "index.sqlite");
     const config = ratchetSearchConfig(vault, dbPath);
     await indexVault(config, { force: true });
-    expect(measured(await measureFromIndex(config))).toBe(3);
+    expect(measured(await measureFromIndex(config))).toBe(2);
 
     // An incremental pass leaves `last_indexed_at` ahead of
     // `last_full_index_at`; the resolution state is then not provably

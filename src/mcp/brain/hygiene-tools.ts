@@ -98,6 +98,11 @@ function findingView(vault: string, finding: HygieneFinding): Record<string, unk
  * is a closed tuple validated in three places including this tool's own
  * input-schema enum, so extending it would change the tool contract.
  *
+ * `dangling` counts the link rows the READ-TIME resolution ladder
+ * leaves unresolved - broken as the reader of this vault experiences
+ * it, not as the raw `target_document_id` column reports it. The
+ * `definition` key names the rule that produced the number.
+ *
  * Read-only over the index the operator's searches already use, and
  * refused unless that index records a full resolution pass - so
  * `measured: false` with a reason is a real outcome here, never

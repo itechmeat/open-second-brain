@@ -3,7 +3,16 @@
  * Vault-wide broken-link ratchet gate (context-integrity-gates, unit G).
  *
  * Measures every vault root named in `link-ratchet.json` and compares
- * the dangling-link count against the committed ceiling. The write form
+ * the broken-link count against the committed ceiling.
+ *
+ * A link is broken when the READ-TIME resolution ladder cannot resolve
+ * it - the same ladder the readers follow, shared from `store.ts`. The
+ * narrower `target_document_id IS NULL` predicate this gate first
+ * shipped with counted every basename wikilink as broken (55 of 55 rows
+ * on `templates/brain-starter`), so it rose on healthy edits; the
+ * definition token in the ceiling file records which rule produced a
+ * number, and a ceiling written under the old one is refused rather
+ * than compared. The write form
  * records what it measured; the `--check` form is the SAME code path
  * with writing disabled, so what CI detects and what the write form
  * records can never diverge - the shape `scripts/sync-version.ts`
@@ -95,13 +104,23 @@ export async function runLinkRatchet(opts: LinkRatchetRunOptions): Promise<LinkR
   const path = join(opts.root, CEILING_FILE);
   let ceiling: LinkRatchetCeiling;
   try {
-    ceiling = parseCeiling(readFileSync(path, "utf8"));
+    // Only the write form may read a ceiling recorded under an older
+    // counting definition - it is the command the refusal names as the
+    // fix, so it has to be able to re-measure and record the new one.
+    ceiling = parseCeiling(readFileSync(path, "utf8"), { allowForeignDefinition: !opts.check });
   } catch (e) {
     opts.stderr(`${e instanceof Error ? e.message : String(e)}\n`);
     return { exitCode: 1, verdicts: [] };
   }
 
   opts.stdout(`canonical definition: ${DANGLING_LINK_DEFINITION}\n`);
+  const comparable = ceiling.definition === DANGLING_LINK_DEFINITION;
+  if (!comparable) {
+    opts.stdout(
+      `${label("redefining")}recorded under '${ceiling.definition}'; ` +
+        "every subject is re-measured and the committed counts are replaced\n",
+    );
+  }
 
   // Each subject is measured in its own temporary workspace, so the
   // order of resolution cannot affect any result; reporting is in
@@ -112,6 +131,7 @@ export async function runLinkRatchet(opts: LinkRatchetRunOptions): Promise<LinkR
         subject.path,
         subject.dangling,
         await measureVault(join(opts.root, subject.path)),
+        { comparable },
       ),
     ),
   );
@@ -125,6 +145,9 @@ export async function runLinkRatchet(opts: LinkRatchetRunOptions): Promise<LinkR
   if (unmeasured.length === 0) {
     const next: LinkRatchetCeiling = {
       ...ceiling,
+      // What is recorded is what THIS build counted, never the token the
+      // file happened to carry.
+      definition: DANGLING_LINK_DEFINITION,
       subjects: verdicts.map((v) => ({
         path: v.subject,
         dangling: v.measurement.measurable ? v.measurement.dangling : v.ceiling,

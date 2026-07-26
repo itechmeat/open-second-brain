@@ -10,26 +10,36 @@
  *
  * ## What "dangling" means here
  *
- * The SQL definition, and only it: `target_document_id IS NULL AND
- * target_path IS NOT NULL`. Tags carry no target path and are excluded.
+ * A link row that carries a target path and that the READ-TIME
+ * resolution ladder cannot resolve to any document. The ladder is the
+ * one every reader already follows - `store.resolvedDocLinkPairs()` and
+ * its siblings - and it lives in exactly one place,
+ * `RESOLVED_LINK_TARGET_SQL` in `store.ts`: a materialized id, then a
+ * `<target>.md` exact match, then an unambiguous basename. Tags carry
+ * no target path and are excluded.
  *
- * This diverges, knowingly, from the read-time resolution ladder in
- * `store.resolvedDocLinkPairs()` and its siblings, which accept three
- * forms in order - a materialized id, a `<target>.md` exact match, then
- * an unambiguous basename suffix. A basename-style `[[note]]` is
- * therefore SQL-dangling here while a reader resolves it perfectly
- * well, and in an Obsidian-shaped vault that is the common case: the
- * number this module produces is NOT an estimate of user-visible link
- * rot, it is a reproducible census of unmaterialized link rows.
+ * ## Why not the narrower SQL predicate
  *
- * The SQL form is chosen because it is the one that is stable,
- * index-backed (`idx_links_target_doc`) and reproducible across
- * machines, which is what a ratchet needs. The cost of the divergence
- * is that adding a legitimate basename wikilink raises the count as
- * much as adding a broken one does - so the ceiling file records
- * {@link DANGLING_LINK_DEFINITION} beside the count, and a later change
- * of definition is refused at parse time rather than being mistaken for
- * link rot.
+ * The first cut of this gate counted `target_document_id IS NULL AND
+ * target_path IS NOT NULL`, chosen for stability and index-backing.
+ * Measurement refuted it: `templates/brain-starter` reported 55
+ * dangling out of 55 link rows - every row in the vault - because that
+ * vault is written in basename wikilinks (`[[pref-x]]`), which the
+ * ladder resolves and the raw predicate does not. Under that
+ * definition, adding a healthy basename link raises the count exactly
+ * as adding a broken one does, so the gate fires on correct edits and
+ * gets routinely bumped. A gate nobody believes is the misleading
+ * signal this wave exists to remove, so the definition follows the
+ * reader instead: {@link DANGLING_LINK_DEFINITION} names the rule that
+ * produced a number, and a ceiling recorded under a different one is
+ * refused at parse time rather than being read as link rot.
+ *
+ * Determinism survives the move. Every rung is index-backed
+ * (`idx_links_target_path`, the UNIQUE `documents.path`,
+ * `idx_documents_basename`), the ambiguous-basename rung resolves to
+ * nothing rather than guessing, alias collisions resolve first-wins by
+ * sorted document path, and `walkVault` sorts every listing - so two
+ * runs over an unchanged subject agree, which the tests assert.
  *
  * ## The full-resolution precondition
  *
@@ -63,7 +73,7 @@ import { walkVault } from "./walker.ts";
  * the `@n` suffix whenever the predicate changes, so a redefinition
  * fails the comparison loudly instead of reading as link rot.
  */
-export const DANGLING_LINK_DEFINITION = "sql:links.target_document_id-null@1";
+export const DANGLING_LINK_DEFINITION = "ladder:links-unresolved-after-read-resolution@2";
 
 /** Schema version of `link-ratchet.json`, per `schemas/brain/` convention. */
 export const LINK_RATCHET_SCHEMA_VERSION = 1;
@@ -95,7 +105,10 @@ export type LinkRatchetMeasurement =
   | {
       readonly measurable: true;
       readonly definition: string;
-      /** Link rows matching {@link DANGLING_LINK_DEFINITION}. */
+      /**
+       * Link rows matching {@link DANGLING_LINK_DEFINITION}: those the
+       * read-time ladder leaves unresolved.
+       */
       readonly dangling: number;
       /** Link rows carrying a target path (the denominator). */
       readonly links: number;
@@ -121,7 +134,13 @@ export interface LinkRatchetCeiling {
   readonly subjects: ReadonlyArray<LinkRatchetSubject>;
 }
 
-export type LinkRatchetStatus = "level" | "drop" | "rise" | "unmeasurable";
+export type LinkRatchetStatus =
+  | "level"
+  | "drop"
+  | "rise"
+  | "unmeasurable"
+  /** Measured, but under a rule the recorded ceiling did not use. */
+  | "redefined";
 
 export interface LinkRatchetVerdict {
   readonly subject: string;
@@ -206,7 +225,7 @@ export async function measureFromIndex(
     return Object.freeze({
       measurable: true as const,
       definition: DANGLING_LINK_DEFINITION,
-      dangling: links.dangling,
+      dangling: links.unresolved,
       links: links.total,
       documents: store.counts().documents,
     });
@@ -275,19 +294,32 @@ export async function measureVault(vaultDir: string): Promise<LinkRatchetMeasure
   }
 }
 
+export interface JudgeSubjectOptions {
+  /**
+   * Whether the recorded ceiling was produced by the rule this build
+   * counts with. False makes the comparison meaningless, so the verdict
+   * reports `redefined` instead of inventing a rise or a drop.
+   * Defaults to true.
+   */
+  readonly comparable?: boolean;
+}
+
 /** Compare one measurement against its committed ceiling. */
 export function judgeSubject(
   subject: string,
   ceiling: number,
   measurement: LinkRatchetMeasurement,
+  options: JudgeSubjectOptions = {},
 ): LinkRatchetVerdict {
   const status: LinkRatchetStatus = !measurement.measurable
     ? "unmeasurable"
-    : measurement.dangling > ceiling
-      ? "rise"
-      : measurement.dangling < ceiling
-        ? "drop"
-        : "level";
+    : options.comparable === false
+      ? "redefined"
+      : measurement.dangling > ceiling
+        ? "rise"
+        : measurement.dangling < ceiling
+          ? "drop"
+          : "level";
   return Object.freeze({ subject, ceiling, status, measurement });
 }
 
@@ -298,13 +330,30 @@ function asRecord(value: unknown, what: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+export interface ParseCeilingOptions {
+  /**
+   * Accept a ceiling recorded under a different counting definition,
+   * returning it with that definition preserved so the caller can see
+   * the numbers are incomparable.
+   *
+   * Only the WRITE form passes this. The refusal names
+   * {@link LINK_RATCHET_FIX_COMMAND} as the remedy, so that command has
+   * to be able to read the very file the comparison rejects - otherwise
+   * a definition change could never be adopted. `--check` keeps the
+   * refusal, which is what makes a redefinition a reviewable diff
+   * rather than a silent reinterpretation of the gate.
+   */
+  readonly allowForeignDefinition?: boolean;
+}
+
 /**
  * Parse a committed ceiling file, refusing anything that cannot be
- * compared: a foreign schema version, a foreign counting definition, a
+ * compared: a foreign schema version, a foreign counting definition
+ * (unless {@link ParseCeilingOptions.allowForeignDefinition}), a
  * non-integer count, a duplicate subject, or an empty subject list (a
  * gate with nothing to measure is not a gate).
  */
-export function parseCeiling(text: string): LinkRatchetCeiling {
+export function parseCeiling(text: string, options: ParseCeilingOptions = {}): LinkRatchetCeiling {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -319,9 +368,13 @@ export function parseCeiling(text: string): LinkRatchetCeiling {
         `${LINK_RATCHET_SCHEMA_VERSION}`,
     );
   }
-  if (doc["definition"] !== DANGLING_LINK_DEFINITION) {
+  const rawDefinition = doc["definition"];
+  if (typeof rawDefinition !== "string" || rawDefinition.length === 0) {
+    throw new LinkRatchetError("ceiling 'definition' must be a non-empty string");
+  }
+  if (rawDefinition !== DANGLING_LINK_DEFINITION && options.allowForeignDefinition !== true) {
     throw new LinkRatchetError(
-      `ceiling definition '${String(doc["definition"])}' is not the current ` +
+      `ceiling definition '${rawDefinition}' is not the current ` +
         `'${DANGLING_LINK_DEFINITION}': the counts are not comparable, ` +
         `re-measure with: ${LINK_RATCHET_FIX_COMMAND}`,
     );
@@ -349,7 +402,7 @@ export function parseCeiling(text: string): LinkRatchetCeiling {
   }
   return Object.freeze({
     schema_version: LINK_RATCHET_SCHEMA_VERSION,
-    definition: DANGLING_LINK_DEFINITION,
+    definition: rawDefinition,
     subjects: Object.freeze(subjects),
   });
 }

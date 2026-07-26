@@ -69,17 +69,30 @@ function writeCeiling(subjects: ReadonlyArray<{ path: string; dangling: number }
   );
 }
 
+/** A ceiling recorded under a definition this build no longer counts by. */
+function writeLegacyCeiling(): void {
+  writeFileSync(
+    join(root, CEILING_FILE),
+    JSON.stringify({
+      schema_version: LINK_RATCHET_SCHEMA_VERSION,
+      definition: "legacy-definition",
+      subjects: [{ path: "subject", dangling: 99 }],
+    }),
+    "utf8",
+  );
+}
+
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), "o2b-ratchet-script-"));
-  // Two dangling links: [[gone]] and (missing.md). [[b]] is dangling too
-  // under the SQL definition, so the honest baseline is three.
+  // Two broken links: [[gone]] and (missing.md). [[b]] resolves through
+  // the read-time ladder (`b.md` exact), so the honest baseline is two.
   writeMd(
     join(root, "subject"),
     "a.md",
     ["# A", "", "[[b.md]] [[b]] [[gone]] [nope](missing.md)", ""].join("\n"),
   );
   writeMd(join(root, "subject"), "b.md", "# B\n");
-  writeCeiling([{ path: "subject", dangling: 3 }]);
+  writeCeiling([{ path: "subject", dangling: 2 }]);
 });
 
 afterEach(() => {
@@ -101,7 +114,7 @@ describe("the gate", () => {
     expect(check.out).toContain("RISE:");
     expect(check.err).toContain(LINK_RATCHET_FIX_COMMAND);
     // Refused, not recorded: the committed ceiling is untouched.
-    expect(parseCeiling(ceilingText()).subjects[0]!.dangling).toBe(3);
+    expect(parseCeiling(ceilingText()).subjects[0]!.dangling).toBe(2);
   });
 
   test("fixing links and rerunning the write form lowers the ceiling", async () => {
@@ -135,19 +148,28 @@ describe("the gate", () => {
     expect(ceilingText()).toBe(before);
   });
 
-  test("a ceiling file recorded under a foreign definition fails rather than comparing", async () => {
-    writeFileSync(
-      join(root, CEILING_FILE),
-      JSON.stringify({
-        schema_version: LINK_RATCHET_SCHEMA_VERSION,
-        definition: "legacy-definition",
-        subjects: [{ path: "subject", dangling: 3 }],
-      }),
-      "utf8",
-    );
+  test("a ceiling file recorded under a foreign definition fails --check rather than comparing", async () => {
+    writeLegacyCeiling();
     const r = await run(true);
     expect(r.exitCode).toBe(1);
     expect(r.err).toContain("definition");
+  });
+
+  test("the write form re-measures a foreign definition instead of deadlocking on it", async () => {
+    // The refusal above names `bun run link-ratchet` as the fix, so that
+    // command must actually be able to record the new definition -
+    // otherwise a definition change can never be adopted.
+    writeLegacyCeiling();
+    const write = await run(false);
+    expect(write.exitCode).toBe(0);
+    // The stale count (99) is replaced by a real measurement under the
+    // current rule, and the recorded definition follows it.
+    const recorded = parseCeiling(ceilingText());
+    expect(recorded.definition).toBe(DANGLING_LINK_DEFINITION);
+    expect(recorded.subjects[0]!.dangling).toBe(2);
+    // An incomparable number is never dressed up as a rise or a drop.
+    expect(write.out).toContain("REDEFINED:");
+    expect(write.out).not.toContain("RISE:");
   });
 });
 

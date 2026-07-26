@@ -100,9 +100,38 @@ export interface LinkResolutionCounts {
    * NULL` and are excluded - a tag has nothing to resolve to.
    */
   readonly total: number;
-  /** Rows whose target path never materialized into a document id. */
-  readonly dangling: number;
+  /**
+   * Rows the read-time resolution ladder cannot resolve to any
+   * document - broken links as a reader experiences them.
+   */
+  readonly unresolved: number;
 }
+
+/**
+ * The READ-TIME link-resolution ladder, as one SQL expression over a
+ * `links` row aliased `l`, yielding the resolved document id or NULL.
+ *
+ * Three rungs, in order: the materialized `target_document_id` that
+ * `resolveLinkTargets` / `resolveAliasTargets` wrote, then a
+ * `<target>.md` exact path match, then an UNAMBIGUOUS nested-basename
+ * match (`basename = target` with exactly one such nested document -
+ * a top-level `target.md` has no leading slash and belongs to the exact
+ * rung above).
+ *
+ * Defined once and shared by {@link Store.resolvedDocLinkPairs} (which
+ * follows it) and {@link Store.linkResolutionCounts} (which counts what
+ * it leaves over), so "resolvable" and "broken" can never drift apart
+ * into two different opinions of the same vault.
+ */
+const RESOLVED_LINK_TARGET_SQL =
+  "COALESCE(" +
+  "  l.target_document_id, " +
+  "  (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
+  "  (SELECT d.id FROM documents d " +
+  "     WHERE d.basename = l.target_path AND instr(d.path, '/') > 0 " +
+  "     AND 1 = (SELECT COUNT(*) FROM documents d2 " +
+  "              WHERE d2.basename = l.target_path AND instr(d2.path, '/') > 0))" +
+  ")";
 
 /** The query/passage instruction prefixes active for an index run. */
 export interface EmbeddingPrefixPair {
@@ -1372,30 +1401,33 @@ export class Store {
   /**
    * Vault-wide link-resolution census (context-integrity-gates, unit G).
    *
-   * `dangling` is the SQL definition of a broken link:
-   * `target_document_id IS NULL AND target_path IS NOT NULL` - a link
-   * that named a target and whose target never materialized into a
-   * document id through {@link resolveLinkTargets} or
-   * {@link resolveAliasTargets}. Index-backed on both columns
-   * (`idx_links_target_doc`, `idx_links_target_path`).
+   * `unresolved` counts the link rows that carry a target path and that
+   * {@link RESOLVED_LINK_TARGET_SQL} - the SAME ladder
+   * {@link resolvedDocLinkPairs} follows - cannot resolve to any
+   * document. That is what "broken" means to a reader: a materialized
+   * id, a `<target>.md` exact match, and an unambiguous basename all
+   * count as resolved, and only what survives all three rungs is
+   * reported.
    *
-   * This is DELIBERATELY stricter than the read-time ladder used by
-   * {@link resolvedDocLinkPairs} and its siblings, which additionally
-   * accept a `<target>.md` exact match and an unambiguous basename
-   * suffix: a basename-style `[[note]]` counts here even though a
-   * reader would resolve it. The SQL form is the one that is stable,
-   * reproducible and index-backed, which is what a ratchet needs; the
-   * ceiling file records which definition produced its number.
+   * The narrower `target_document_id IS NULL` predicate is NOT used
+   * here. It also fires on every basename-style `[[note]]`, which the
+   * ladder resolves perfectly well and which an Obsidian-shaped vault
+   * is written in - a count that rises on a healthy edit is a gate that
+   * gets bumped rather than obeyed.
+   *
+   * Index-backed on every rung: `idx_links_target_path` bounds the
+   * scan, `documents.path` is UNIQUE, and the basename rungs
+   * equality-join `idx_documents_basename`.
    */
   linkResolutionCounts(): LinkResolutionCounts {
     const row = this.db
-      .query<{ total: number; dangling: number | null }, []>(
+      .query<{ total: number; unresolved: number | null }, []>(
         "SELECT count(*) AS total, " +
-          "sum(CASE WHEN target_document_id IS NULL THEN 1 ELSE 0 END) AS dangling " +
-          "FROM links WHERE target_path IS NOT NULL",
+          `sum(CASE WHEN ${RESOLVED_LINK_TARGET_SQL} IS NULL THEN 1 ELSE 0 END) AS unresolved ` +
+          "FROM links l WHERE l.target_path IS NOT NULL",
       )
       .get();
-    return Object.freeze({ total: row?.total ?? 0, dangling: row?.dangling ?? 0 });
+    return Object.freeze({ total: row?.total ?? 0, unresolved: row?.unresolved ?? 0 });
   }
 
   // ── doc aliases (v7, link-recall-intelligence) ─────────────────────────────
@@ -1506,22 +1538,11 @@ export class Store {
   resolvedDocLinkPairs(): Array<{ readonly source: number; readonly target: number }> {
     const rows = this.db
       .query<{ source: number; target: number | null }, []>(
-        // Resolution ladder: materialized id, then `<target>.md` exact
-        // (path is UNIQUE + indexed), then an UNAMBIGUOUS nested-basename
-        // match. The basename branch equality-joins idx_documents_basename
-        // and mirrors the old `SUBSTR(path) = '/'||target||'.md'` scan
-        // exactly: a `/`-aligned basename suffix is precisely
-        // `basename = target AND path is nested` (top-level `target.md`
-        // has no leading slash and is owned by the exact branch above).
+        // The ladder itself lives in RESOLVED_LINK_TARGET_SQL, shared
+        // with `linkResolutionCounts` so the edges this yields and the
+        // rows that gate counts as broken are two views of one rule.
         "SELECT DISTINCT l.source_document_id AS source, " +
-          "  COALESCE(" +
-          "    l.target_document_id, " +
-          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-          "    (SELECT d.id FROM documents d " +
-          "       WHERE d.basename = l.target_path AND instr(d.path, '/') > 0 " +
-          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE d2.basename = l.target_path AND instr(d2.path, '/') > 0))" +
-          "  ) AS target " +
+          `  ${RESOLVED_LINK_TARGET_SQL} AS target ` +
           "FROM links l WHERE l.target_path IS NOT NULL",
       )
       .all();
