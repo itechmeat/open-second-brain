@@ -1035,7 +1035,12 @@ export function shouldGateRetireFromConfirmed(
 
 // ----- Scan ---------------------------------------------------------------
 
-function scanBrain(vault: string): ScanResult {
+/**
+ * Read the whole `Brain/` tree into memory. Pure: it opens no writer, takes
+ * no clock and touches nothing on disk, which is why it is the one part of
+ * the pass that is provably runnable on its own (see `dream-step.ts`).
+ */
+export function scanBrain(vault: string): ScanResult {
   const dirs = brainDirs(vault);
   const signals: SignalRecord[] = [];
   const preferences: PreferenceRecord[] = [];
