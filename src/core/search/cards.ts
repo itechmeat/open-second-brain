@@ -4,10 +4,9 @@
  * into its fuller note (layer 2) and paginated raw chunks (layer 3).
  */
 
-import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../graph/agent-scope.ts";
-import type { FrontmatterMap } from "../types.ts";
+import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
-import { readCachedFrontmatter } from "./result-filters.ts";
+import { isPathOwnerVisible } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -73,7 +72,7 @@ export function cardSnippet(content: string): string {
  * enumeration surface for whole note bodies: walking the integers
  * returns every document in the vault, ranking and query filters
  * bypassed entirely. Under an `agentScope` the resolved path's owner is
- * checked with the same {@link isOwnerVisible} rule the ranked filter
+ * checked with the same {@link isPathOwnerVisible} rule the ranked filter
  * uses, and a refusal is {@link notFound} — byte-for-byte the error an
  * absent chunk produces. A distinguishable refusal would still leak: it
  * would confirm that the chunk exists and belongs to someone else,
@@ -152,15 +151,15 @@ function notFound(chunkId: number): SearchError {
  * unreadable page, matching `applyAgentScope` on the ranked path: an
  * owner that cannot be determined is treated as somebody else's rather
  * than as shared.
+ *
+ * Delegates to {@link isPathOwnerVisible} rather than restating the rule,
+ * so the drill-down and the ranked filter cannot drift on what "closed"
+ * means — including the unreadable-file verdict, which an empty
+ * frontmatter map cannot express.
  */
 function ownerVisible(config: ResolvedSearchConfig, path: string, scope: string): boolean {
-  // One hit, so the cache is a formality — it exists because
-  // `readCachedFrontmatter` is the shared reader, and reusing it keeps
-  // this check on the same parse semantics as the ranked filter.
-  const cache = new Map<string, FrontmatterMap>();
-  try {
-    return isOwnerVisible(pageOwner(readCachedFrontmatter(cache, config.vault, path)), scope);
-  } catch {
-    return false;
-  }
+  // One hit, so the cache is a formality — it exists because the shared
+  // reader takes one, and reusing it keeps this check on exactly the
+  // same parse semantics as the ranked filter.
+  return isPathOwnerVisible(config.vault, path, scope, new Map());
 }

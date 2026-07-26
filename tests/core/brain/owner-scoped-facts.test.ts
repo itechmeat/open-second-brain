@@ -19,6 +19,7 @@ import {
   isPreferenceVisible,
   preferenceOwner,
 } from "../../../src/core/brain/owner-scoped-facts.ts";
+import { OWNER_UNRESOLVED } from "../../../src/core/graph/agent-scope.ts";
 import { QUERY_TOOLS } from "../../../src/mcp/brain/query-tools.ts";
 import type { ServerContext } from "../../../src/mcp/tool-contract.ts";
 
@@ -63,10 +64,22 @@ function enableOwnerScoping(): void {
 const queryHandler = QUERY_TOOLS.find((t) => t.name === "brain_query")!.handler;
 
 describe("owner-visibility filter (pure)", () => {
-  test("preferenceOwner normalizes and treats blank as null", () => {
+  test("preferenceOwner normalizes, and only an ABSENT owner is null", () => {
     expect(preferenceOwner({ owner: "  Agent-A " })).toBe("agent-a");
-    expect(preferenceOwner({ owner: "" })).toBeNull();
     expect(preferenceOwner({})).toBeNull();
+  });
+
+  /**
+   * A blank or list-shaped `owner:` is a claim this parser cannot
+   * resolve; reading it as ownerless would share the memory with every
+   * agent (context-integrity-gates, A2). It resolves to the poison token
+   * instead, which no requested scope can equal.
+   */
+  test("an unresolvable owner is withheld under any scope, shared under none", () => {
+    expect(preferenceOwner({ owner: "" })).toBe(OWNER_UNRESOLVED);
+    expect(isPreferenceVisible({ owner: "" }, "agent-a")).toBe(false);
+    expect(isPreferenceVisible({ owner: OWNER_UNRESOLVED }, "agent-b")).toBe(false);
+    expect(isPreferenceVisible({ owner: OWNER_UNRESOLVED }, null)).toBe(true);
   });
 
   test("no requested scope: everything visible (byte-identical default)", () => {

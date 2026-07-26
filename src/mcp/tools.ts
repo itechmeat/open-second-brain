@@ -43,8 +43,9 @@ import { normalizeAgentArgument, PLACEHOLDER_AGENT_VALUES } from "../core/agent-
 import { vaultRelative } from "../core/path-safety.ts";
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../core/graph/agent-scope.ts";
 import { listVaultPages } from "../core/vault.ts";
+import { DEGRADATION_CODE, type DegradationNotice } from "../core/integrity/degradation.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
-import { coerceStr, coerceInt } from "./coerce.ts";
+import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { CAPABILITY_DIAGNOSTIC_TOOL } from "./capabilities.ts";
@@ -156,11 +157,30 @@ async function toolQuery(
   // search, so it applies the rule itself - over the frontmatter
   // `listVaultPages` has already parsed, so an unscoped call does no
   // extra work and returns exactly what it always did.
-  const scope = normalizeAgentScope(coerceStr(args, "agent_scope", false) ?? undefined);
+  //
+  // FAILS CLOSED, matching `isPathOwnerVisible` on the search path: the
+  // walk's diagnostic sink names every page whose file it could not read,
+  // and an unreadable page has an unknowable owner. Without the sink an
+  // unreadable page parses to empty metadata, reads as ownerless, and is
+  // shared with every scope. The sink is collected only under an active
+  // scope, so an unscoped call allocates nothing extra.
+  const scope = normalizeAgentScope(coerceAgentScope(ctx, args, false));
 
-  const pages = listVaultPages(ctx.vault).filter(
-    (p) => scope === null || isOwnerVisible(pageOwner(p.metadata), scope),
+  const notices: DegradationNotice[] = [];
+  const listed =
+    scope === null ? listVaultPages(ctx.vault) : listVaultPages(ctx.vault, { notices });
+  const unreadable = new Set(
+    notices
+      .filter((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable)
+      .map((n) => n.path)
+      .filter((path): path is string => path !== undefined),
   );
+  const pages =
+    scope === null
+      ? listed
+      : listed.filter(
+          (p) => !unreadable.has(p.path) && isOwnerVisible(pageOwner(p.metadata), scope),
+        );
   const needle = pattern ? pattern.toLowerCase() : null;
   const matched: Array<Record<string, unknown>> = [];
   for (const p of pages) {
@@ -372,11 +392,7 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
             maximum: 500,
             description: "Maximum number of matched pages to return (default 50).",
           },
-          agent_scope: {
-            type: "string",
-            description:
-              "Optional owner scope: a page declaring an `owner:` is listed only for its own scope; ownerless pages always list. Absent = no filtering.",
-          },
+          agent_scope: AGENT_SCOPE_SCHEMA,
         },
         additionalProperties: false,
       },

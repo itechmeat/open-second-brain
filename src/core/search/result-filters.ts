@@ -8,8 +8,9 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-import { parseFrontmatter } from "../vault.ts";
+import { parseFrontmatterWithNotices } from "../vault.ts";
 import { BRAIN_STATE_REL } from "../brain/paths.ts";
+import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
 import { isVisible, pageVisibility } from "../graph/visibility.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
@@ -30,22 +31,61 @@ import {
 import type { BrainSearchResult } from "./types.ts";
 
 /**
+ * A cached frontmatter read, plus whether the file could be read at all.
+ *
+ * The two are inseparable because `parseFrontmatter` resolves an
+ * unreadable file to EMPTY metadata, which is byte-indistinguishable from
+ * a genuinely field-less page. Every fail-open filter is right to ignore
+ * the difference; the ownership boundary is not, and would leak an
+ * owner-private page the moment its file is deleted, renamed, or made
+ * unreadable after the last index run.
+ */
+export interface CachedFrontmatter {
+  readonly meta: FrontmatterMap;
+  /** True when the file itself could not be READ, so nothing is known. */
+  readonly unreadable: boolean;
+}
+
+/** Per-`search()`-call frontmatter read cache, keyed by vault-relative path. */
+export type FrontmatterCache = Map<string, CachedFrontmatter>;
+
+/**
  * One frontmatter read per (vault, path) pair, shared across every filter
- * stage of a single `search()` call. `parseFrontmatter` never throws (a
- * read failure resolves to empty metadata internally), so caching the raw
- * result changes no call site's fallback behaviour - it only stops the
- * same file being read and parsed once per stage instead of once total.
+ * stage of a single `search()` call, carrying the read verdict alongside
+ * the parsed map — see {@link CachedFrontmatter}.
+ */
+export function readCachedFrontmatterEntry(
+  cache: FrontmatterCache,
+  vault: string,
+  path: string,
+): CachedFrontmatter {
+  const cached = cache.get(path);
+  if (cached !== undefined) return cached;
+  const [meta, , notices] = parseFrontmatterWithNotices(join(vault, path), {
+    site: FRONTMATTER_CACHE_SITE,
+  });
+  const entry: CachedFrontmatter = Object.freeze({
+    meta,
+    unreadable: notices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable),
+  });
+  cache.set(path, entry);
+  return entry;
+}
+
+/** Attribution recorded on the notices this cache's reads produce. */
+const FRONTMATTER_CACHE_SITE = "search.result-filters";
+
+/**
+ * The parsed map alone, for the filters that treat an unreadable page and
+ * a field-less page identically (every fail-open one). The ownership
+ * boundary must use {@link readCachedFrontmatterEntry} instead.
  */
 export function readCachedFrontmatter(
-  cache: Map<string, FrontmatterMap>,
+  cache: FrontmatterCache,
   vault: string,
   path: string,
 ): FrontmatterMap {
-  const cached = cache.get(path);
-  if (cached !== undefined) return cached;
-  const [meta] = parseFrontmatter(join(vault, path));
-  cache.set(path, meta);
-  return meta;
+  return readCachedFrontmatterEntry(cache, vault, path).meta;
 }
 
 const EXACT_STATE_LANE_PREFIX = `${BRAIN_STATE_REL}/`;
@@ -79,7 +119,7 @@ export function applyExactStateBarrier(
 export function buildTerminalPaths(
   vault: string,
   results: ReadonlyArray<BrainSearchResult>,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlySet<string> {
   const terminal = new Set<string>();
   const seen = new Set<string>();
@@ -106,7 +146,7 @@ export function buildTerminalPaths(
 export function applyStatusFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => {
     try {
@@ -122,7 +162,7 @@ export function applyPropertyFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   filters: ReadonlyMap<string, ReadonlyArray<string>>,
   vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   const reader = (path: string): Record<string, unknown> | null => {
     try {
@@ -210,7 +250,7 @@ export function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: ReadonlySet<string>,
   vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   const tagsFor = (path: string): string[] => {
     try {
@@ -234,7 +274,7 @@ export function applyScopeFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   requested: CompositeScope,
   vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => {
     let pageScope: CompositeScope;
@@ -256,31 +296,32 @@ export function applyScopeFilter(
  * surface that owns a path - ranked search results, source-derived
  * pages, any future one - resolves ownership identically.
  *
- * FAILS CLOSED: a page whose frontmatter cannot be parsed has an
- * unknowable owner and is hidden under an active scope rather than
- * leaked. This is stricter than visibility scoping's fail-open default -
- * deliberate, because agent-scope is an isolation boundary.
+ * FAILS CLOSED: a page whose file cannot be READ has an unknowable owner
+ * and is hidden under an active scope rather than leaked - the routine
+ * trigger being a document still in the index whose file was deleted,
+ * renamed, or made unreadable since the last index run. The verdict comes
+ * from {@link readCachedFrontmatterEntry} rather than from an empty
+ * metadata map, because the parser resolves an unreadable file to `{}`
+ * and never throws, so a `catch` arm here would be dead code. This is
+ * stricter than visibility scoping's fail-open default - deliberate,
+ * because agent-scope is an isolation boundary.
  */
 export function isPathOwnerVisible(
   vault: string,
   path: string,
   scope: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): boolean {
-  let owner: string | null;
-  try {
-    owner = pageOwner(readCachedFrontmatter(frontmatterCache, vault, path));
-  } catch {
-    return false;
-  }
-  return isOwnerVisible(owner, scope);
+  const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
+  if (entry.unreadable) return false;
+  return isOwnerVisible(pageOwner(entry.meta), scope);
 }
 
 export function applyAgentScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: string,
   vault: string,
-  frontmatterCache: Map<string, FrontmatterMap>,
+  frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
   return ranked.filter((r) => isPathOwnerVisible(vault, r.path, scope, frontmatterCache));
 }

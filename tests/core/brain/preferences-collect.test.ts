@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,8 @@ import {
 } from "../../../src/core/brain/preferences-collect.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
+import { GATE_MODE } from "../../../src/core/integrity/stamp.ts";
+import type { OwnerScopeDelivery } from "../../../src/core/brain/preferences-collect.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
@@ -114,4 +116,58 @@ test("collectPreferencePages returns raw frontmatter and body without throwing",
   expect(byName.get("pref-freeform.md")!.meta["topic"]).toBe("freeform");
   expect(byName.get("pref-freeform.md")!.body.trim()).toBe("body text");
   expect(byName.get("pref-alpha.md")!.meta["kind"]).toBe("brain-preference");
+});
+
+// ----- A2: a present-but-unresolvable `owner:` is never ownerless ----------
+
+/** The gate verdict an operator who set `fail` produces for `scope`. */
+function enforcing(scope: string): OwnerScopeDelivery {
+  return Object.freeze({
+    mode: GATE_MODE.fail,
+    enforcedScope: scope,
+    requestedScope: scope,
+  });
+}
+
+/**
+ * Rewrite the preference's scalar `owner:` into a block-style YAML
+ * sequence — the shape Obsidian Properties writes for any list-valued
+ * field, and the shape `parseFrontmatterText` has parsed into an array
+ * since commit 426d06f8.
+ */
+function makeListOwnedPref(slug: string, owners: ReadonlyArray<string>): void {
+  makePref(slug, { owner: owners[0] });
+  const path = join(brainDirs(vault).preferences, `pref-${slug}.md`);
+  const text = readFileSync(path, "utf8");
+  const block = ["owner:", ...owners.map((o) => `  - ${o}`)].join("\n");
+  writeFileSync(path, text.replace(`owner: ${owners[0]}`, block));
+}
+
+test("a list-valued owner is withheld from every scope, not shared with all", () => {
+  const dir = brainDirs(vault).preferences;
+  makePref("shared");
+  makeListOwnedPref("listed", ["agent-a", "agent-b"]);
+
+  for (const scope of ["agent-a", "agent-b"]) {
+    const collected = collectPreferences(dir, { ownerScope: enforcing(scope) });
+    expect(collected.entries.map((c) => c.pref.id)).toEqual(["pref-shared"]);
+    expect(collected.hiddenByOwnerScope).toBe(1);
+
+    const pages = collectPreferencePages(dir, { ownerScope: enforcing(scope) });
+    expect(pages.entries.map((p) => p.name)).toEqual(["pref-shared.md"]);
+    expect(pages.hiddenByOwnerScope).toBe(1);
+  }
+});
+
+test("with the gate off, a list-valued owner changes nothing", () => {
+  const dir = brainDirs(vault).preferences;
+  makePref("shared");
+  makeListOwnedPref("listed", ["agent-a"]);
+
+  const collected = collectPreferences(dir);
+  expect(collected.entries.map((c) => c.pref.id).toSorted()).toEqual([
+    "pref-listed",
+    "pref-shared",
+  ]);
+  expect(collected.hiddenByOwnerScope).toBe(0);
 });

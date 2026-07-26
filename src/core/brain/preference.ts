@@ -48,6 +48,7 @@ import {
 } from "./schema-vocab.ts";
 import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { OWNER_UNRESOLVED } from "../graph/agent-scope.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -805,9 +806,7 @@ export function parsePreference(
     ...(optionalScalarString(meta, "scope") !== undefined
       ? { scope: optionalScalarString(meta, "scope") }
       : {}),
-    ...(optionalScalarString(meta, "owner") !== undefined
-      ? { owner: optionalScalarString(meta, "owner") }
-      : {}),
+    ...(optionalOwnerField(meta) !== undefined ? { owner: optionalOwnerField(meta) } : {}),
     ...(provenance !== null ? { provenance } : {}),
     ...(optionalScalarString(meta, "freshness_trend") !== undefined
       ? { freshness_trend: optionalScalarString(meta, "freshness_trend") }
@@ -1370,6 +1369,26 @@ function optionalNumber(meta: Record<string, unknown>, field: string, fallback: 
     return n;
   }
   throw new Error(`preference field '${field}' must be a number`);
+}
+
+/**
+ * Read the `owner:` frontmatter field (context-integrity-gates, Unit A).
+ *
+ * Distinct from {@link optionalScalarString} because a present-but-
+ * non-string value must NOT read as absent here: Obsidian Properties
+ * writes any list-shaped field as a YAML sequence, and `owner:` parsed as
+ * an array would otherwise make an owner-private memory ownerless — that
+ * is, shared with every agent. Such a claim resolves to
+ * {@link OWNER_UNRESOLVED}, which no requested scope can equal, so the
+ * memory reads as somebody else's. A usable string is stored VERBATIM,
+ * exactly as before; normalization for comparison stays in
+ * `preferenceOwner`.
+ */
+function optionalOwnerField(meta: Record<string, unknown>): string | undefined {
+  const raw = meta["owner"];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") return OWNER_UNRESOLVED;
+  return raw.trim() === "" ? undefined : raw;
 }
 
 function optionalScalarString(meta: Record<string, unknown>, field: string): string | undefined {

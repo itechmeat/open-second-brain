@@ -16,7 +16,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -415,6 +415,27 @@ test("second_brain_query excludes another owner's pages from the listing", async
   expect(pagePaths(scoped)).toContain("notes/shared.md");
   expect(scoped.total_pages).toBe(scoped.pages.length);
   expect(scoped.total_pages).toBeLessThan(unscoped.total_pages);
+});
+
+/**
+ * A5/A8: the listing must fail CLOSED on an unreadable page, matching
+ * `brain_search_by_source` and the ranked search path. Empty frontmatter
+ * from a failed read is byte-indistinguishable from a genuinely ownerless
+ * page, so without the walk's diagnostic sink an owner-tagged page becomes
+ * shared the moment its file stops being readable.
+ */
+test("second_brain_query hides a page it cannot read from a scoped caller", async () => {
+  const target = join(vault, "notes", "owned-a.md");
+  chmodSync(target, 0o000);
+  try {
+    const scoped = JSON.parse(
+      await call("second_brain_query", { limit: 500, agent_scope: OWNER_B }),
+    );
+    expect(pagePaths(scoped)).not.toContain("notes/owned-a.md");
+    expect(pagePaths(scoped)).toContain("notes/shared.md");
+  } finally {
+    chmodSync(target, 0o644);
+  }
 });
 
 test("brain_search_by_source excludes another owner's derived pages", async () => {

@@ -12,7 +12,6 @@
 import { statSync } from "node:fs";
 import { join } from "node:path";
 
-import type { FrontmatterMap } from "../types.ts";
 import { normalizeVisibilityScope } from "../graph/visibility.ts";
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { canonicalSourceSetKey, normalizeScopeFilter, rrfKey } from "../scope-key.ts";
@@ -98,6 +97,7 @@ import {
   buildTerminalPaths,
   readCachedFrontmatter,
   supersedeFadeAdjuster,
+  type FrontmatterCache,
 } from "./result-filters.ts";
 import { applyRelationPolarityPhase, applyTraversal } from "./graph-phases.ts";
 import { buildEvidenceVerification, coverageOverChunks } from "./evidence-verification.ts";
@@ -242,7 +242,7 @@ export async function search(
     // Shared across every frontmatter-reading filter stage below (Plan 1,
     // 1.3) so a candidate path already read by one stage is not re-read
     // and re-parsed by the next.
-    const frontmatterCache = new Map<string, FrontmatterMap>();
+    const frontmatterCache: FrontmatterCache = new Map();
 
     // Opt-in local expansion (t_2fa95db1): an explicit structured
     // document always wins; expansion only fills the gap. The lex lane's

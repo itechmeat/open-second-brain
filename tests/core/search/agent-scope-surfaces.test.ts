@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,3 +142,92 @@ test("expandHit with a blank scope is byte-identical to an unscoped call", async
   const blank = await expandHit(config, { chunkId: foreign, agentScope: "   " });
   expect(JSON.stringify(blank)).toBe(JSON.stringify(unscoped));
 });
+
+// ----- A1: the isolation boundary must fail CLOSED -------------------------
+
+/**
+ * A document still in the index whose FILE is gone (deleted, renamed, or
+ * made unreadable since the last index run) has an unknowable owner. Both
+ * `isPathOwnerVisible` and `expandHit`'s per-hit check document that they
+ * fail closed; this pins that they actually do, on the ranked path and on
+ * the drill-down.
+ */
+test("a deleted owner-tagged file is hidden from another owner, not shared", async () => {
+  const foreign = await chunkIdFor("notes/owned-a.md");
+  rmSync(join(vault, "notes", "owned-a.md"));
+
+  const scoped = await search(config, { query: QUERY, limit: 20, agentScope: OWNER_B });
+  expect(scoped.results.map((r) => r.path)).not.toContain("notes/owned-a.md");
+
+  const refused = await expandHit(config, { chunkId: foreign, agentScope: OWNER_B }).then(
+    () => null,
+    (e: unknown) => e as SearchError,
+  );
+  expect(refused).toBeInstanceOf(SearchError);
+  expect(refused!.message).toBe(`chunk not found: ${foreign}`);
+});
+
+test("an unreadable owner-tagged file is hidden from another owner", async () => {
+  const target = join(vault, "notes", "owned-a.md");
+  const foreign = await chunkIdFor("notes/owned-a.md");
+  chmodSync(target, 0o000);
+  try {
+    const scoped = await search(config, { query: QUERY, limit: 20, agentScope: OWNER_B });
+    expect(scoped.results.map((r) => r.path)).not.toContain("notes/owned-a.md");
+    const refused = await expandHit(config, { chunkId: foreign, agentScope: OWNER_B }).then(
+      () => null,
+      (e: unknown) => e as SearchError,
+    );
+    expect(refused).toBeInstanceOf(SearchError);
+  } finally {
+    chmodSync(target, 0o644);
+  }
+});
+
+test("an unscoped call still serves a deleted file's indexed chunk", async () => {
+  const chunkId = await chunkIdFor("notes/owned-a.md");
+  rmSync(join(vault, "notes", "owned-a.md"));
+  const unscoped = await search(config, { query: QUERY, limit: 20 });
+  expect(unscoped.results.map((r) => r.path)).toContain("notes/owned-a.md");
+  expect((await expandHit(config, { chunkId })).note.path).toBe("notes/owned-a.md");
+});
+
+// ----- A2: a present-but-unusable `owner:` is never ownerless --------------
+
+const LIST_OWNER_SHAPES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+  ["block", `owner:\n  - ${OWNER_A}\n  - ${OWNER_B}`],
+  ["inline", `owner: [${OWNER_A}, ${OWNER_B}]`],
+  ["mapping", `owner:\n  name: ${OWNER_A}`],
+]);
+
+for (const [shape, frontmatter] of LIST_OWNER_SHAPES) {
+  test(`a ${shape}-shaped owner: is withheld from a scoped caller, not shared`, async () => {
+    const rel = `notes/owner-${shape}.md`;
+    writeFileSync(
+      join(vault, rel),
+      `---\n${frontmatter}\n---\n\n${QUERY} ${PROBE_TERMS} ${shape} owner\n`,
+    );
+    await indexVault(config, {});
+
+    const unscoped = await search(config, { query: QUERY, limit: 20 });
+    expect(unscoped.results.map((r) => r.path)).toContain(rel);
+
+    const perScope = await Promise.all(
+      [OWNER_A, OWNER_B].map((scope) =>
+        search(config, { query: QUERY, limit: 20, agentScope: scope }),
+      ),
+    );
+    for (const scoped of perScope) {
+      expect(scoped.results.map((r) => r.path)).not.toContain(rel);
+    }
+
+    const chunkId = (await search(config, { query: QUERY, limit: 20 })).results.find(
+      (r) => r.path === rel,
+    )!.chunkId;
+    const refused = await expandHit(config, { chunkId, agentScope: OWNER_A }).then(
+      () => null,
+      (e: unknown) => e as SearchError,
+    );
+    expect(refused).toBeInstanceOf(SearchError);
+  });
+}

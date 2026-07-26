@@ -14,12 +14,20 @@
  * is visible exactly as today.
  */
 
-import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
+import { isOwnerVisible, ownerToken } from "../graph/agent-scope.ts";
 import type { BrainPreference } from "./types.ts";
 
-/** The normalized owner token of a preference, or null when ownerless. */
+/**
+ * The normalized owner token of a preference, or null when ownerless.
+ *
+ * Resolves through {@link ownerToken}, the same function `pageOwner` uses,
+ * so a preference whose page declared an unresolvable `owner:` (a YAML
+ * list, a nested mapping) carries the same `OWNER_UNRESOLVED` verdict here
+ * as the page does on the search path — never `null`, which would publish
+ * it to every scope.
+ */
 export function preferenceOwner(pref: Pick<BrainPreference, "owner">): string | null {
-  return pageOwner({ owner: pref.owner ?? "" });
+  return ownerToken(pref.owner);
 }
 
 /**
