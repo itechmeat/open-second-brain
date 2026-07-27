@@ -157,8 +157,14 @@ export function renderActive(vault: string, opts: RenderActiveOptions = {}): Act
     .toSorted(sortByIdAscending);
 
   // Read window/limit from `_brain.yaml:active.most_applied_*`. The
-  // loader throws on a malformed `_brain.yaml`; we fall back to
-  // defaults so a corrupted config never blocks the active digest.
+  // strict loader throws when the file is ABSENT too, and a vault that
+  // has never run `brain init` must still get its digest, so that case
+  // lands on the defaults here.
+  //
+  // The catch only ever sees that case: an unreadable `_brain.yaml`
+  // already raised out of `loadGuardrailsConfigSafe` above, which is
+  // deliberate - a config the operator wrote but broke must not quietly
+  // resolve to defaults on a surface the agent reads as its rule set.
   let windowDays = MOST_APPLIED_WINDOW_DAYS_DEFAULT;
   let limit = MOST_APPLIED_LIMIT_DEFAULT;
   try {
@@ -168,7 +174,7 @@ export function renderActive(vault: string, opts: RenderActiveOptions = {}): Act
       limit = cfg.active.most_applied.limit;
     }
   } catch {
-    // intentional fallback — config error is doctor's job to surface
+    // intentional fallback — an uninitialised vault has no config to read
   }
 
   // Most-applied draws from the active candidates (confirmed +

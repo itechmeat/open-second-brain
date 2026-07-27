@@ -3,11 +3,20 @@
  * for vaults where that read cannot succeed.
  *
  * One reason to change: what happens when the config file is missing,
- * unreadable, or malformed. The strict entry points ({@link
- * loadBrainConfig}) throw; the `*Safe` entry points exist because several
- * read surfaces must keep working on a vault that has never run
- * `o2b brain init`, and each one documents which of the two failure modes
- * it is defending against.
+ * unreadable, or malformed. Those are TWO conditions, not one, and every
+ * entry point here splits on the same predicate:
+ *
+ *   - ABSENT - a vault that has never run `o2b brain init`. There are no
+ *     operator settings to contradict, so the documented defaults are the
+ *     configuration. The `*Safe` entry points exist for exactly this, so
+ *     a freshly-cloned vault keeps working.
+ *   - PRESENT BUT UNREADABLE - malformed YAML, a block that does not
+ *     validate, a permission error, a directory in the file's place. The
+ *     operator's settings exist and are not in force; answering with the
+ *     defaults would revert them silently and leave the vault looking
+ *     healthy. The `*Safe` entry points do not absorb this.
+ *
+ * The strict entry point ({@link loadBrainConfig}) throws on both.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -84,76 +93,115 @@ export function loadBrainConfigDetailed(vault: string): LoadBrainConfigResult {
 }
 
 /**
- * Factory for the "load + resolve a block, fall back to its defaults on
- * ANY failure" pattern repeated at every `load*ConfigSafe` below (missing
- * `_brain.yaml`, malformed YAML, or a validation error all collapse to
- * the same fallback - these are read surfaces for vaults that may not
- * have run `brain init` yet, not strict config consumers).
+ * Whether `<vault>/Brain/_brain.yaml` is there at all.
+ *
+ * The ONE predicate every reader in this module splits on, so "absent"
+ * cannot come to mean two different things on two surfaces. It is
+ * deliberately existence and nothing more: a file that exists but cannot
+ * be opened is present, and its contents are not the defaults.
  */
-function makeSafeLoader<T>(
+function brainConfigExists(vault: string): boolean {
+  return existsSync(brainConfigPath(vault));
+}
+
+/**
+ * Factory for the "resolve a block, tolerating a vault that has never
+ * run `o2b brain init`" pattern repeated at every `load*ConfigSafe`
+ * below.
+ *
+ * Exactly ONE condition is absorbed, and it is named: `_brain.yaml` is
+ * ABSENT. A vault with no config has no operator settings to contradict,
+ * so the block defaults ARE the configuration, and these read surfaces
+ * keep working on a freshly-cloned vault.
+ *
+ * Every other failure propagates as a {@link BrainConfigError}: malformed
+ * YAML, a block that parses but does not validate, a permission error, a
+ * directory where the file should be. All four mean the operator's
+ * settings exist and are NOT the ones in force, and answering with the
+ * defaults would make that vault indistinguishable from a healthy one
+ * while silently reverting whatever they configured. This is the same
+ * split {@link loadIntegrityConfigSafe} makes; it differs only in what it
+ * does with the unreadable case, and says why at its own site.
+ */
+function makeAbsentTolerantLoader<T>(
   resolveFn: (config: BrainConfig) => T,
   fallback: T,
 ): (vault: string) => T {
   return (vault: string): T => {
-    try {
-      return resolveFn(loadBrainConfig(vault));
-    } catch {
-      return fallback;
-    }
+    if (!brainConfigExists(vault)) return fallback;
+    return resolveFn(loadBrainConfig(vault));
   };
 }
 
 /**
  * Load + resolve the `notes:` block, falling back to
- * `BRAIN_NOTES_DEFAULTS` when the config file is missing, malformed,
- * or otherwise unreadable. Same pattern as `loadTemporalConfigSafe`.
- * Used by `scan-inline` and any future scanner so a freshly-cloned
- * vault that has not been `brain init`-ed still produces a clean
- * "no user folders to read" result.
+ * `BRAIN_NOTES_DEFAULTS` when the config file is absent. Used by
+ * `scan-inline` and every other note walk so a freshly-cloned vault that
+ * has not been `brain init`-ed still produces a clean "no user folders to
+ * read" result. On an unreadable config it raises: an empty root list is
+ * indistinguishable from a scan that found nothing, and a scanner that
+ * silently walks the wrong folders is worse than one that stops.
  */
-export const loadNotesConfigSafe = makeSafeLoader(resolveNotes, BRAIN_NOTES_DEFAULTS);
+export const loadNotesConfigSafe = makeAbsentTolerantLoader(resolveNotes, BRAIN_NOTES_DEFAULTS);
 
 /**
  * Load + resolve the `temporal:` block, falling back to
- * `BRAIN_TEMPORAL_DEFAULTS` when the config file is missing,
- * malformed, or otherwise unreadable. Used by every temporal
- * consumer (MCP wrappers, CLI verbs) so a freshly-initialised vault
- * still produces a useful report.
+ * `BRAIN_TEMPORAL_DEFAULTS` when the config file is absent. Used by every
+ * temporal consumer (MCP wrappers, CLI verbs) so a freshly-initialised
+ * vault still produces a useful report; each of those callers is a verb
+ * or a tool that can report the raise on an unreadable config, and the
+ * operator snapshot already degrades its own way rather than reading
+ * all-clear.
  */
-export const loadTemporalConfigSafe = makeSafeLoader(resolveTemporal, BRAIN_TEMPORAL_DEFAULTS);
+export const loadTemporalConfigSafe = makeAbsentTolerantLoader(
+  resolveTemporal,
+  BRAIN_TEMPORAL_DEFAULTS,
+);
 
 /**
  * Load + resolve the `guardrails:` block, falling back to
- * `BRAIN_GUARDRAIL_DEFAULTS` when the config file is missing, malformed,
- * or otherwise unreadable. Used by agent-facing surfaces (e.g. the
- * context pack) that must work on a vault without a full `brain init`;
- * the opt-in toggles therefore default off rather than throwing.
+ * `BRAIN_GUARDRAIL_DEFAULTS` when the config file is absent. Used by
+ * agent-facing surfaces (e.g. the context pack) that must work on a vault
+ * without a full `brain init`; the opt-in toggles therefore default off
+ * there. They must NOT default off on a vault where the operator turned
+ * one on and then broke the file: every flag in this block is a
+ * containment or isolation switch, so a quiet revert to `false` is the
+ * gate silently opening.
  */
-export const loadGuardrailsConfigSafe = makeSafeLoader(resolveGuardrails, BRAIN_GUARDRAIL_DEFAULTS);
+export const loadGuardrailsConfigSafe = makeAbsentTolerantLoader(
+  resolveGuardrails,
+  BRAIN_GUARDRAIL_DEFAULTS,
+);
 
 /**
  * Load the configured `feedback.default_scope`, or `undefined` when the
- * config file is missing, malformed, or carries no feedback block. Used
- * by the feedback write surfaces so a vault without a full `brain init`
- * stays scope-less (byte-identical to pre-feature behaviour) instead of
- * throwing when the signal is recorded.
+ * config file is absent or carries no feedback block. Used by the
+ * feedback write surfaces so a vault without a full `brain init` stays
+ * scope-less (byte-identical to pre-feature behaviour) instead of
+ * throwing when the signal is recorded. An unreadable config raises
+ * before the write: a signal recorded under the wrong scope is a durable
+ * record no later fix reaches.
  */
-export const loadFeedbackDefaultScopeSafe = makeSafeLoader(
+export const loadFeedbackDefaultScopeSafe = makeAbsentTolerantLoader(
   (config: BrainConfig) => config.feedback?.default_scope,
   undefined as string | undefined,
 );
 
 /**
  * Load the configured snapshot `retention_count`, falling back to the
- * default when the config file is missing, malformed, or otherwise
- * unreadable. The destructive-snapshot gate uses this so a vault that
- * has not run `brain init` still prunes to a sane bound rather than
- * throwing mid-cleanup. This is the SAME `snapshots.retention_count`
- * the dream pass reads via `loadBrainConfig`; the safe variant just
- * tolerates an uninitialised vault the way every other read surface
- * does.
+ * default when the config file is absent, so a vault that has not run
+ * `brain init` still prunes to a sane bound. This is the SAME
+ * `snapshots.retention_count` the dream pass reads via
+ * {@link loadBrainConfig}.
+ *
+ * An unreadable config raises, and the prune is the one caller that most
+ * needs it to: pruning is destructive, and doing it at a GUESSED
+ * retention deletes archives the operator asked to keep. The
+ * destructive-snapshot gate already catches a prune failure and warns on
+ * stderr with the operation's result intact, so the raise costs a
+ * deferred cleanup and buys a named cause.
  */
-export const loadSnapshotRetentionSafe = makeSafeLoader(
+export const loadSnapshotRetentionSafe = makeAbsentTolerantLoader(
   (config: BrainConfig) => config.snapshots.retention_count,
   DEFAULT_BRAIN_CONFIG.snapshots.retention_count,
 );
@@ -168,7 +216,7 @@ export const loadSnapshotRetentionSafe = makeSafeLoader(
  * same distinction to choose its fallback.
  */
 export function brainConfigReadFailure(vault: string): string | null {
-  if (!existsSync(brainConfigPath(vault))) return null;
+  if (!brainConfigExists(vault)) return null;
   try {
     loadBrainConfig(vault);
     return null;
@@ -192,13 +240,18 @@ export function brainConfigReadFailure(vault: string): string | null {
  *     `owner_scope_delivery: fail` into `off`. It resolves to
  *     {@link BRAIN_INTEGRITY_STRICT_FALLBACK} instead, and
  *     {@link brainConfigReadFailure} names the cause.
+ *
+ * This is the one reader that resolves rather than raises on the second
+ * case, and the reason is its caller: the search layer reads its gate on
+ * every store open, including inside a fail-soft path, so a throw there
+ * would take out recall instead of tightening it. Resolving STRICT is
+ * what makes that safe - the unreadable config cannot loosen a gate, it
+ * can only close one.
  */
 export function loadIntegrityConfigSafe(vault: string): ResolvedBrainIntegrityConfig {
   try {
     return resolveIntegrity(loadBrainConfig(vault));
   } catch {
-    return existsSync(brainConfigPath(vault))
-      ? BRAIN_INTEGRITY_STRICT_FALLBACK
-      : BRAIN_INTEGRITY_DEFAULTS;
+    return brainConfigExists(vault) ? BRAIN_INTEGRITY_STRICT_FALLBACK : BRAIN_INTEGRITY_DEFAULTS;
   }
 }
