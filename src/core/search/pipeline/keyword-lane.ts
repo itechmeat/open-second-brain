@@ -80,7 +80,7 @@ export function runKeywordLane(input: KeywordLaneInput): KeywordLaneOutcome {
   // their bm25). Skipped for short/CJK/low-selectivity queries and when
   // disabled - leaving hits byte-identical.
   if (recall.trigramPrefilterEnabled && store.chunkCount() >= recall.trigramPrefilterMinChunks) {
-    mergeTrigramCandidates(input, hits);
+    mergeTrigramCandidates(input, hits, warnings);
   }
 
   return { hits, plan, warnings };
@@ -119,16 +119,26 @@ function expandWithSynonyms(
   return { plan, hits: kwOutcome.hits, warnings: kwOutcome.warnings };
 }
 
-/** Append the trigram candidates the keyword pool does not already hold. */
-function mergeTrigramCandidates(input: KeywordLaneInput, hits: KeywordHit[]): void {
+/**
+ * Append the trigram candidates the keyword pool does not already hold.
+ * The lane only broadens the pool, so a fault in it degrades this step
+ * (no candidates, one warning) rather than failing the search.
+ */
+function mergeTrigramCandidates(
+  input: KeywordLaneInput,
+  hits: KeywordHit[],
+  warnings: string[],
+): void {
   const { store, recall, query, limit, pathPrefix } = input;
   const trigramPlan = planTrigramPrefilter(query);
   if (trigramPlan.mode !== "match") return;
   const corpus = store.chunkCount();
-  const cand = store.trigramCandidates(trigramPlan.ftsQuery, {
+  const outcome = store.trigramCandidates(trigramPlan.ftsQuery, {
     limit: limit * recall.poolMultiplier,
     pathPrefix,
   });
+  for (const w of outcome.warnings) warnings.push(w);
+  const cand = outcome.hits;
   if (cand.length === 0) return;
   if (isLowSelectivity(cand.length, corpus, recall.trigramPrefilterMaxSelectivity)) return;
   const seen = new Set(hits.map((h) => h.chunkId));

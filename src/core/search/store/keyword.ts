@@ -55,10 +55,22 @@ export function rebuildFtsIndex(db: Database): void {
 }
 
 /**
- * Rebuild under the writer lock when this connection does not already
- * hold it (a read-mode store repairing the index in place).
+ * Rebuild under the writer lock when the caller does not already hold it
+ * (a read-mode store repairing the index in place). `heldWriterLock` is
+ * the caller's own ownership of the lock on `dbPath`: a write-mode store
+ * holds it for its whole session and would contend with itself here,
+ * since the lock is a file lock and re-entry from the holder is
+ * INDEX_LOCKED like any other contender.
  */
-export function rebuildFtsIndexWithWriterLock(db: Database, dbPath: string): void {
+export function rebuildFtsIndexWithWriterLock(
+  db: Database,
+  dbPath: string,
+  heldWriterLock: boolean,
+): void {
+  if (heldWriterLock) {
+    rebuildFtsIndex(db);
+    return;
+  }
   const release = acquireWriterLockSync(dbPath);
   try {
     rebuildFtsIndex(db);

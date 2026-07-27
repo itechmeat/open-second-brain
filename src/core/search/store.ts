@@ -681,11 +681,7 @@ export class Store {
   }
 
   rebuildFtsIndexWithWriterLock(): void {
-    if (this.release) {
-      keyword.rebuildFtsIndex(this.db);
-      return;
-    }
-    keyword.rebuildFtsIndexWithWriterLock(this.db, this.config.dbPath);
+    keyword.rebuildFtsIndexWithWriterLock(this.db, this.config.dbPath, this.release !== null);
   }
 
   /**
@@ -703,11 +699,13 @@ export class Store {
    * Trigram candidate lookup over the `chunk_trigram` FTS5 shadow (v9).
    * An opt-in candidate source that broadens large-vault keyword recall
    * with the substring / partial-token matches the word tokenizer misses.
+   * Degrades to no candidates - silently when the optional table is
+   * absent, with a warning for every other fault.
    */
   trigramCandidates(
     trigramQuery: string,
     opts: { readonly limit: number; readonly pathPrefix?: string | null },
-  ): keyword.KeywordHit[] {
+  ): trigram.TrigramCandidateOutcome {
     return trigram.trigramCandidates(this.db, trigramQuery, opts);
   }
 
