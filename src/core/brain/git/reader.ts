@@ -331,6 +331,35 @@ function canonicalRemotePath(pathname: string): string | null {
 }
 
 /**
+ * Resolve the probe's wall-clock budget from an optional caller value.
+ *
+ * Three cases, each stated rather than approximated:
+ *
+ *   - absent: the module default, which is what every production caller
+ *     takes today;
+ *   - a finite number at or below zero: the budget is ALREADY spent, so
+ *     no git runs at all. This is the only way to express an exhausted
+ *     budget; passing a small positive number instead leaves the first
+ *     invocation that much budget and so asserts something about how
+ *     fast the host's git is, not about the probe.
+ *   - anything else finite: floored to whole milliseconds.
+ *
+ * A non-finite value is a caller bug and raises. Substituting the
+ * default there would hand a two-second probe to a caller who believes
+ * it asked for something else, inside a lifecycle hook whose own
+ * process ceiling this must never consume.
+ */
+function resolveProbeBudgetMs(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined) return GIT_PROBE_TIMEOUT_MS;
+  if (!Number.isFinite(timeoutMs)) {
+    throw new TypeError(
+      `readGitWorkspaceIdentity: timeoutMs must be a finite number, got ${timeoutMs}`,
+    );
+  }
+  return timeoutMs <= 0 ? 0 : Math.floor(timeoutMs);
+}
+
+/**
  * Probe `repoPath` for its workspace identity, or `null` when it is not
  * inside a git repository (or the probe's budget ran out).
  *
@@ -350,10 +379,7 @@ export function readGitWorkspaceIdentity(
   repoPath: string,
   opts: { readonly timeoutMs?: number } = {},
 ): GitWorkspaceIdentity | null {
-  const budgetMs =
-    typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
-      ? Math.floor(opts.timeoutMs)
-      : GIT_PROBE_TIMEOUT_MS;
+  const budgetMs = resolveProbeBudgetMs(opts.timeoutMs);
   const deadline = Date.now() + budgetMs;
   const probe = (args: ReadonlyArray<string>): string => {
     const remaining = deadline - Date.now();

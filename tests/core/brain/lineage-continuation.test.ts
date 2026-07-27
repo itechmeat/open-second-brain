@@ -183,7 +183,20 @@ describe("readGitWorkspaceIdentity — hardened, bounded probe", () => {
 
   test("the probe is bounded: an exhausted budget yields no identity, never a hang", () => {
     const repo = initRepo(join(tmp, "repo"), { remote: SECRET_REMOTE });
-    expect(readGitWorkspaceIdentity(repo, { timeoutMs: 1 })).toBeNull();
+    // An exhausted budget is stated, not approximated. This assertion
+    // previously passed `1`, which leaves the first invocation a whole
+    // millisecond of budget and so asserted only that this machine's git
+    // is slower than that - true on a loaded developer box, false on a
+    // fast runner, and a claim about hardware either way.
+    expect(readGitWorkspaceIdentity(repo, { timeoutMs: 0 })).toBeNull();
+    expect(readGitWorkspaceIdentity(repo, { timeoutMs: -1 })).toBeNull();
+  });
+
+  test("a budget that is not a number is a caller bug, and is named", () => {
+    const repo = initRepo(join(tmp, "nan-budget"), { remote: SECRET_REMOTE });
+    // Silently substituting the default would hand back a two-second
+    // probe to a caller who believes it asked for something else.
+    expect(() => readGitWorkspaceIdentity(repo, { timeoutMs: Number.NaN })).toThrow(/timeoutMs/);
   });
 });
 
