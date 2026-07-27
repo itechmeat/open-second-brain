@@ -116,21 +116,48 @@ describe("discoverConfig", () => {
    * set nothing, use the default"; something IS at this path, and whatever
    * the operator configured is not in force. It raises now, exactly as the
    * matching case on `_brain.yaml` does. Full coverage of the two
-   * conditions lives in `config-read-failure.test.ts`.
+   * conditions - including the unreadable directory and the untraversable
+   * parent - lives in `config-read-failure.test.ts`.
    */
   test("raises on a directory in the config file's place", () => {
     expect(() => discoverConfig(tmp)).toThrow(ConfigReadError);
   });
 
-  test("reports invalid utf8 as missing", () => {
+  /**
+   * Corrected assertion, and a corrected name: this used to be called
+   * "reports invalid utf8 as missing" while asserting only that the
+   * returned path equalled the input path - true of every outcome,
+   * including the crash. It never checked `exists` or `data`, and the
+   * behaviour it accepted was neither of the two conditions: a lossy
+   * decode produced `exists: true` with `data: {}`, which every resolver
+   * reads as "the operator set nothing".
+   *
+   * Bytes that do not decode are the canonical PRESENT BUT UNREADABLE
+   * case. The parser's tolerance is a contract about SHAPE (`key: value`
+   * versus nested blocks, parity with the legacy Python reader), not about
+   * encoding, and the write path makes the difference destructive:
+   * `setConfigValue` merges onto what it read, so a lossy decode would
+   * persist the operator's file with every undecodable byte replaced.
+   */
+  test("raises on bytes that are not valid utf8, rather than parsing them lossily", () => {
     const p = join(tmp, "config.yaml");
     writeFileSync(p, Buffer.from([0xff, 0xfe, 0x00]));
-    const r = discoverConfig(p);
-    // Buffer with stray bytes still decodes (TextDecoder) without throwing,
-    // so we don't necessarily report missing. The Python parser is more
-    // strict. Either accept the lossy parse OR report missing — both
-    // are safe. We accept the lossy parse here (matches Bun's readFileSync).
-    expect(r.path).toBe(p);
+    let caught: unknown;
+    try {
+      discoverConfig(p);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ConfigReadError);
+    expect((caught as ConfigReadError).path).toBe(p);
+    expect((caught as ConfigReadError).message).toContain(p);
+  });
+
+  /** The opposite outcome: valid UTF-8 beyond ASCII stays readable. */
+  test("non-ascii utf8 values are read, not refused", () => {
+    const p = join(tmp, "config.yaml");
+    writeFileSync(p, 'instance_name: "Второй мозг"\n', "utf8");
+    expect(discoverConfig(p).data["instance_name"]).toBe("Второй мозг");
   });
 });
 

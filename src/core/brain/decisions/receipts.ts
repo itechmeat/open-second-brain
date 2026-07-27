@@ -148,7 +148,18 @@ export function receiptsDir(vault: string): string {
   return join(vault, "Brain", "truth");
 }
 
-/** The receipt shard this device appends to. */
+/**
+ * The receipt shard this device appends to.
+ *
+ * @throws {@link ConfigReadError} when the device-local config naming this
+ *   device cannot be read. Propagated rather than falling back to the
+ *   legacy un-sharded `decision-change.jsonl`: `resolveDeviceId` would
+ *   otherwise mint and persist a fresh id over a config it could not read
+ *   (see its docblock), and a silent shard switch would scatter one
+ *   device's receipts across two files with nothing recording why. The
+ *   error names the file and the way out; the CLI verb wrapping this call
+ *   prints it, and `O2B_DEVICE_ID` resolves the append without the file.
+ */
 export function receiptShardPath(vault: string, configPath?: string): string {
   const deviceId = resolveDeviceId(configPath);
   const name = deviceId === "" ? "decision-change.jsonl" : `decision-change.${deviceId}.jsonl`;

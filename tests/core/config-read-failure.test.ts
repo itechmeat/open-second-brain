@@ -30,10 +30,14 @@ import { fileURLToPath } from "node:url";
 import {
   ConfigReadError,
   discoverConfig,
+  resolveDeviceId,
+  resolveInstallationSecret,
   resolveSkillAutoAttach,
   resolveVault,
   setConfigValue,
 } from "../../src/core/config.ts";
+import { receiptShardPath } from "../../src/core/brain/decisions/receipts.ts";
+import { claimShardPath } from "../../src/core/brain/truth/store.ts";
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 
@@ -43,6 +47,11 @@ const OWNED_ENV = [
   "VAULT_DIR",
   "OPEN_SECOND_BRAIN_CONFIG",
   "XDG_CONFIG_HOME",
+  // The suite preload pins the device id to "" for deterministic log
+  // shards; the identity tests below need the config path to be the
+  // resolution source, so they own both identity overrides outright.
+  "O2B_DEVICE_ID",
+  "O2B_INSTALLATION_SECRET",
 ] as const;
 
 let tmp: string;
@@ -116,6 +125,69 @@ describe("discoverConfig: present but unreadable config", () => {
       expect((caught as ConfigReadError).message).toContain(path);
     } finally {
       chmodSync(path, 0o600);
+    }
+  });
+
+  /**
+   * The condition an existence check cannot express. `existsSync` answers
+   * `false` for EVERY stat failure, not only ENOENT, so a perfectly
+   * readable config behind a directory that cannot be traversed reported as
+   * absent - the operator's `vault:` and every gate in the file reverting
+   * to its default while the install looked like one that never ran
+   * `o2b init`. Only ENOENT on the path itself is an absence.
+   */
+  test("a config behind an untraversable directory raises, it is not absent", () => {
+    const dir = join(tmp, "locked");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, VALID_CONFIG, "utf8");
+    chmodSync(dir, 0o000);
+    try {
+      let caught: unknown;
+      try {
+        discoverConfig(path);
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ConfigReadError);
+      expect((caught as ConfigReadError).path).toBe(path);
+      expect((caught as ConfigReadError).message).toContain(path);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  /**
+   * Same reasoning at the gate: an untraversable parent must never resolve
+   * a default-OFF flag to `false`, which is indistinguishable from the
+   * operator never having set it.
+   */
+  test("a flag gate behind an untraversable directory raises rather than answering `off`", () => {
+    const dir = join(tmp, "locked");
+    mkdirSync(dir, { recursive: true });
+    const path = join(dir, "config.yaml");
+    writeFileSync(path, VALID_CONFIG, "utf8");
+    chmodSync(dir, 0o000);
+    try {
+      expect(() => resolveSkillAutoAttach(path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  });
+
+  /**
+   * A directory whose contents cannot be listed is still a directory in the
+   * config file's place - the not-a-regular-file refusal, reached through
+   * the stat rather than through a failed read.
+   */
+  test("an unreadable directory in the config file's place raises too", () => {
+    const path = join(tmp, "config.yaml");
+    mkdirSync(path, { recursive: true });
+    chmodSync(path, 0o000);
+    try {
+      expect(() => discoverConfig(path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(path, 0o755);
     }
   });
 
@@ -212,6 +284,83 @@ describe("call sites: an unreadable plugin config is surfaced, never read as `of
     }
     expect(caught).toBeInstanceOf(ConfigReadError);
     expect(readFileSync(path, "utf8")).toBe(VALID_CONFIG);
+  });
+});
+
+/**
+ * Identity resolution on a config that cannot be read.
+ *
+ * The decision this pins: it RAISES. `resolveDeviceId` and
+ * `resolveInstallationSecret` generate-and-persist on a miss, and an
+ * unreadable file is not a miss - proceeding would mint a fresh identity
+ * and write it through `setConfigValue`, which merges onto what it read
+ * and would therefore flatten the operator's config to a single line. A
+ * fresh device id also silently re-shards this device's log; a fresh
+ * installation secret silently changes every `vault://` reference agents
+ * correlate by. Both are worse than a refusal that names the file.
+ */
+describe("identity resolution refuses rather than minting a new identity", () => {
+  /** Config the resolvers would otherwise overwrite. */
+  const IDENTITY_CONFIG = `device_id: "abc12345"\ninstallation_secret: "${"0".repeat(32)}"\n`;
+
+  function brokenConfig(): string {
+    const path = join(tmp, "config.yaml");
+    writeFileSync(path, IDENTITY_CONFIG, "utf8");
+    chmodSync(path, 0o000);
+    return path;
+  }
+
+  test("resolveDeviceId raises and persists nothing", () => {
+    const path = brokenConfig();
+    try {
+      expect(() => resolveDeviceId(path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(readFileSync(path, "utf8")).toBe(IDENTITY_CONFIG);
+  });
+
+  test("resolveInstallationSecret raises and persists nothing", () => {
+    const path = brokenConfig();
+    try {
+      expect(() => resolveInstallationSecret(path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+    expect(readFileSync(path, "utf8")).toBe(IDENTITY_CONFIG);
+  });
+
+  test("the claim shard path raises rather than silently choosing the legacy file", () => {
+    const path = brokenConfig();
+    try {
+      expect(() => claimShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  test("the receipt shard path raises rather than silently choosing the legacy file", () => {
+    const path = brokenConfig();
+    try {
+      expect(() => receiptShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  /**
+   * The env escape hatch survives the raise, exactly as it does for the
+   * flag gates: an operator whose config broke can still name the device
+   * id without the file being opened at all.
+   */
+  test("the device-id env override still answers without opening the file", () => {
+    const path = brokenConfig();
+    process.env["O2B_DEVICE_ID"] = "workstation";
+    try {
+      expect(resolveDeviceId(path)).toBe("workstation");
+    } finally {
+      chmodSync(path, 0o600);
+    }
   });
 });
 

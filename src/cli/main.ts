@@ -12,6 +12,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import {
+  ConfigReadError,
   defaultConfigPath,
   discoverConfig,
   redactMapping,
@@ -925,8 +926,41 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
       process.stderr.write(exc.message + "\n");
       return 1;
     }
+    if (exc instanceof ConfigReadError) {
+      return reportConfigReadError(exc, command, rest);
+    }
     throw exc;
   }
+}
+
+/**
+ * Refusal for a plugin config that is present but unreadable.
+ *
+ * Exit 1, joining `NoVaultConfiguredError` rather than `CliError`: this
+ * command line reserves 2 for a mistake in the argv and 1 for a machine
+ * that cannot answer the question. Nothing about the invocation is wrong
+ * here - the same argv works the moment the file mode does.
+ *
+ * The message needs no assembly. {@link ConfigReadError} carries its own
+ * remedy so that every surface it escapes through (here, an MCP error
+ * envelope, a subcommand's own wrapper) says the same thing.
+ *
+ * A `--json` caller additionally gets a parseable object on stdout. For
+ * every other command the {@link withJsonFallback} envelope already carries
+ * the refusal - it could not before, because a THROWN error escaped the
+ * envelope entirely and left stdout empty. A command that renders its own
+ * JSON is not wrapped, so it would still be the one surface where a machine
+ * consumer sees a non-zero exit and nothing to parse. The keys are the ones
+ * `o2b status --json` and its MCP twin already use for this condition.
+ */
+function reportConfigReadError(exc: ConfigReadError, command: string, rest: string[]): number {
+  process.stderr.write(`error: ${exc.message}\n`);
+  if (wantsJsonFlag(rest) && ownsInternalJson(command, rest)) {
+    process.stdout.write(
+      JSON.stringify({ config_path: exc.path, error: exc.message }, sortedReplacer, 2) + "\n",
+    );
+  }
+  return 1;
 }
 
 if (import.meta.main) {

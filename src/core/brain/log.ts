@@ -256,8 +256,18 @@ export interface AppendLogEventOptions {
    * Per-device shard id (Memory Integrity Suite). Defaults to
    * `resolveDeviceId()` from the device-local config; the empty string
    * forces the legacy un-sharded `<date>.jsonl` / `<date>.md` pair.
-   * Resolution failure (read-only config home, missing HOME) falls back
-   * to the legacy pair too - an append must never fail on identity.
+   *
+   * ANY resolution failure falls back to the legacy pair - a missing HOME,
+   * an unwritable config home, or a config file that is present but cannot
+   * be read (`ConfigReadError`). This caller is the one that absorbs that
+   * error, and it is deliberate rather than an oversight: appending is the
+   * always-on write path behind every hook and every session-capture
+   * event, so failing it turns one bad file mode into a dead session. The
+   * fallback is also not a neutral value invented to look healthy - it is
+   * the documented shard shape the `O2B_DEVICE_ID=""` opt-out selects, it
+   * loses no data, and the log-dir lock still orders concurrent writers.
+   * The condition itself is not swallowed anywhere: every OTHER caller of
+   * `resolveDeviceId` propagates it, and the CLI reports it by name.
    */
   readonly deviceId?: string;
 }
@@ -287,7 +297,9 @@ export function appendLogEvent(
     try {
       deviceId = resolveDeviceId();
     } catch {
-      deviceId = ""; // fail-soft: legacy un-sharded pair
+      // Legacy un-sharded pair. See AppendLogEventOptions.deviceId for why
+      // this one caller absorbs what every other caller propagates.
+      deviceId = "";
     }
   }
   // Parse the timestamp once to extract date + HHMMSS deterministically.

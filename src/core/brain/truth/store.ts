@@ -60,7 +60,18 @@ export function truthStatePath(vault: string): string {
   return join(truthDir(vault), "state.json");
 }
 
-/** The shard this device appends to. */
+/**
+ * The shard this device appends to.
+ *
+ * @throws {@link ConfigReadError} when the device-local config naming this
+ *   device cannot be read. Propagated rather than falling back to the
+ *   legacy un-sharded `claims.jsonl`: `resolveDeviceId` would otherwise
+ *   mint and persist a fresh id over a config it could not read (see its
+ *   docblock), and a silent shard switch would scatter one device's claims
+ *   across two files with nothing recording why. The error names the file
+ *   and the way out; the CLI verb wrapping this call prints it, and
+ *   `O2B_DEVICE_ID` resolves the append without the file.
+ */
 export function claimShardPath(vault: string, configPath?: string): string {
   const deviceId = resolveDeviceId(configPath);
   const name = deviceId === "" ? "claims.jsonl" : `claims.${deviceId}.jsonl`;
