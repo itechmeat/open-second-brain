@@ -11,8 +11,18 @@
 import type { ToolScope } from "./tool-contract.ts";
 
 export interface BuildInstructionsOpts {
-  /** Resolved agent identity (e.g. "hermes-vps-agent"). */
-  readonly agent: string;
+  /**
+   * Resolved agent identity (e.g. "hermes-vps-agent"), or the error
+   * explaining why it could not be resolved.
+   *
+   * The error form exists because the identity comes from the plugin
+   * config, and a config that is present but unreadable has no identity in
+   * it to state. Substituting one would be the worst available answer: the
+   * instructions tell the agent to always log under the name they carry,
+   * so a guessed name is a standing instruction to write under it. The
+   * refusal is rendered in its place instead, naming the file.
+   */
+  readonly agent: string | Error;
   /** Vault path — reserved for future per-vault customisation. */
   readonly vault?: string;
   /** When "writer", return the trimmed writer-surface text. */
@@ -66,6 +76,32 @@ registration step exists or is needed.
 Do not invent substitute workflows for a capability you cannot see:
 hydrate the catalog first; the tool is almost certainly already here.`;
 
+/**
+ * The opening identity sentence of the full-surface instructions.
+ *
+ * Both branches are an instruction, not a report: the resolved branch says
+ * which name to log under, and the unresolved branch says that there is
+ * none and that the writers will refuse until the named file is fixed - so
+ * an agent reading it does not go looking for a name to supply by hand.
+ * The error carries its own remedy (`ConfigReadError` renders the chmod),
+ * so nothing is assembled here.
+ */
+function identityLine(agent: string | Error): string {
+  if (typeof agent === "string") {
+    return (
+      `You are @${agent} on this Open Second Brain vault. ` +
+      "Always log under this identity; do not invent or change the name."
+    );
+  }
+  return (
+    "Your identity on this Open Second Brain vault is UNRESOLVED: " +
+    `${agent.message} Until it is readable, every tool that writes under an ` +
+    "identity refuses and names that file; do not substitute a name of your " +
+    "own. The read-only diagnostics (vault_health, second_brain_status) " +
+    "still answer and report the same condition."
+  );
+}
+
 export function buildInstructions(opts: BuildInstructionsOpts | string): string {
   // Legacy call-site compat: plain string → full-surface branch.
   const agent = typeof opts === "string" ? opts : opts.agent;
@@ -78,8 +114,8 @@ export function buildInstructions(opts: BuildInstructionsOpts | string): string 
   // descriptions and docs/mcp.md; this text carries only the contract
   // that cannot be read off the schemas.
   return (
-    `You are @${agent} on this Open Second Brain vault. ` +
-    "Always log under this identity; do not invent or change the name.\n\n" +
+    identityLine(agent) +
+    "\n\n" +
     "Memory contract: call brain_feedback once per taste signal the " +
     "user expresses; brain_apply_evidence right after producing a " +
     "durable artifact a preference in `Brain/preferences/` scopes to " +

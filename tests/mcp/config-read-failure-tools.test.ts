@@ -62,11 +62,12 @@ afterEach(() => {
 /**
  * Invoke the tool handler with the config unreadable.
  *
- * Deliberately the handler and not `MCPServer.handleRequest`: the server's
- * `context` getter resolves `resolveAgentName` per access and raises on the
- * same broken config BEFORE any handler runs, so a request-level call
- * cannot observe the payload either way. That is a separate site, in
- * `src/mcp/server.ts`, and it is reported rather than patched here.
+ * Deliberately the handler and not `MCPServer.handleRequest`, so this file
+ * pins what the two payloads SAY without also depending on how the request
+ * path reaches them. That path is covered next door, in
+ * `config-read-failure-server.test.ts`: the server used to resolve the
+ * agent name eagerly and raise on the same broken config before any
+ * handler ran, which made both payloads unobservable through `tools/call`.
  */
 async function callTool(name: string): Promise<Record<string, unknown>> {
   const ctx: ServerContext = { vault, configPath, repoRoot: null };

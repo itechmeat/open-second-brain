@@ -14,10 +14,11 @@ import {
   rmSync,
   writeSync,
   closeSync,
+  type Stats,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { isFile } from "./fs-utils.ts";
+import { statOrAbsent } from "./fs-utils.ts";
 import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";
 
@@ -73,15 +74,50 @@ export function checkConfigWriteable(config: string): CheckResult {
   return { name: "config_writeable", ok: true, message: `config writable: ${config}` };
 }
 
+interface ManifestFileProblem {
+  /** True when the path was examined and holds no usable file. */
+  readonly absent: boolean;
+  readonly message: string;
+  readonly fix: string;
+}
+
+/**
+ * Why `path` does not hold a readable manifest file, or null when it does.
+ *
+ * Doctor's whole output is the difference between a file that is not there
+ * and a file that is there and wrong, so it is the one caller that must
+ * not ask `isFile`: that probe answers `false` for an absent file AND for
+ * one this process cannot stat at all - a parent directory without the
+ * execute bit, a symlink loop - so a manifest sitting behind a permission
+ * problem was reported as one that had never been generated, under a
+ * `o2b update` remedy that regenerates it and changes nothing. The two
+ * conditions carry different messages and different fixes.
+ */
+function manifestFileProblem(path: string): ManifestFileProblem | null {
+  let stat: Stats | undefined;
+  try {
+    stat = statOrAbsent(path);
+  } catch (exc) {
+    return {
+      absent: false,
+      message: `unreadable: ${path} (${(exc as Error).message ?? exc})`,
+      fix: `chmod u+r "${path}"`,
+    };
+  }
+  if (stat?.isFile() === true) return null;
+  return { absent: true, message: `missing: ${path}`, fix: MANIFEST_FIX };
+}
+
 interface JsonLoadResult {
   readonly result: CheckResult;
   readonly data: Record<string, unknown> | null;
 }
 
 function loadJsonManifest(path: string, name: string): JsonLoadResult {
-  if (!isFile(path)) {
+  const problem = manifestFileProblem(path);
+  if (problem !== null) {
     return {
-      result: { name, ok: false, message: `missing: ${path}`, fix: MANIFEST_FIX },
+      result: { name, ok: false, message: problem.message, fix: problem.fix },
       data: null,
     };
   }
@@ -230,8 +266,9 @@ export function checkClaudeManifest(path: string): CheckResult {
 }
 
 export function checkHermesManifest(path: string): CheckResult {
-  if (!isFile(path)) {
-    return { name: "hermes_manifest", ok: false, message: `missing: ${path}`, fix: MANIFEST_FIX };
+  const problem = manifestFileProblem(path);
+  if (problem !== null) {
+    return { name: "hermes_manifest", ok: false, message: problem.message, fix: problem.fix };
   }
   let text: string;
   try {
@@ -321,7 +358,8 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
       continue;
     }
     const entryPath = join(repoRoot, entry);
-    if (isFile(entryPath)) {
+    const problem = manifestFileProblem(entryPath);
+    if (problem === null) {
       results.push({
         name: `openclaw_entry_${entry}`,
         ok: true,
@@ -331,8 +369,10 @@ export function checkOpenclawInstallability(repoRoot: string): CheckResult[] {
       results.push({
         name: `openclaw_entry_${entry}`,
         ok: false,
-        message: `missing extension entry: ${entry}`,
-        fix: MANIFEST_FIX,
+        message: problem.absent
+          ? `missing extension entry: ${entry}`
+          : `extension entry ${entry} ${problem.message}`,
+        fix: problem.fix,
       });
     }
   }

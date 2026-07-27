@@ -4,7 +4,11 @@
  * class, including handshake instructions and error semantics.
  */
 
-import { resolveAgentName, resolveMcpRouteMetricsEnabled } from "../core/config.ts";
+import {
+  ConfigReadError,
+  resolveAgentName,
+  resolveMcpRouteMetricsEnabled,
+} from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
@@ -77,9 +81,9 @@ export class MCPServer {
   private readonly capabilityReport: ToolCapabilityReport;
   /**
    * Route-level latency metrics gate (config `mcp_route_metrics_enabled`),
-   * resolved once at construction. Off by default; when on, every tool
-   * call is timed and a payload-safe `mcp_route_latency` continuity
-   * record is emitted (fail-open).
+   * resolved once at construction by {@link routeMetricsGate}. Off by
+   * default; when on, every tool call is timed and a payload-safe
+   * `mcp_route_latency` continuity record is emitted (fail-open).
    */
   private readonly routeMetricsEnabled: boolean;
 
@@ -96,7 +100,7 @@ export class MCPServer {
     });
     this.tools = evaluated.tools;
     this.capabilityReport = evaluated.report;
-    this.routeMetricsEnabled = resolveMcpRouteMetricsEnabled(this.configPath ?? undefined);
+    this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
@@ -109,6 +113,7 @@ export class MCPServer {
   }
 
   get context(): ServerContext {
+    const configPath = this.configPath ?? undefined;
     return {
       vault: this.vault,
       configPath: this.configPath,
@@ -119,7 +124,21 @@ export class MCPServer {
       // only source of identity for `brain_context`, which takes no
       // arguments. Resolved per access, like `resolveAgentName`'s other
       // callers, so a config edit takes effect without a restart.
-      agentName: resolveAgentName(this.configPath ?? undefined),
+      //
+      // A GETTER, not a value, and that is the whole separation this
+      // context makes. `resolveAgentName` raises on a config that is
+      // present but unreadable, and it is right to: the alternative is a
+      // guessed identity, and every write path that takes one records
+      // under it. Resolved eagerly here, that refusal ran before EVERY
+      // handler, including the two read-only diagnostics whose entire job
+      // is to name the file that is broken - so the payload naming it was
+      // computed and then discarded by the condition it described.
+      // Deferred to the point of use, the refusal reaches exactly the
+      // handlers that need an identity (as a tool-level error carrying the
+      // file name), and the handlers that never ask answer normally.
+      get agentName(): string {
+        return resolveAgentName(configPath);
+      },
     };
   }
 
@@ -235,7 +254,14 @@ export class MCPServer {
   private handleInitialize(params: Record<string, unknown>): Record<string, unknown> {
     const clientVersion = params["protocolVersion"];
     const negotiated = typeof clientVersion === "string" ? clientVersion : PROTOCOL_VERSION;
-    const defaultAgent = resolveAgentName(this.configPath ?? undefined);
+    // The handshake is the third site that read the config before any
+    // handler could run, and the one that mattered most: a client whose
+    // `initialize` fails never issues a `tools/call` at all, so a refusal
+    // here withholds the diagnostics along with everything else. It does
+    // not become a guess either - `buildInstructions` renders the reason
+    // in place of the identity line, so the agent is told there is no
+    // identity to log under rather than handed one.
+    const identity = resolveIdentityOrReason(this.configPath ?? undefined);
     return {
       protocolVersion: negotiated,
       capabilities: {
@@ -244,7 +270,7 @@ export class MCPServer {
       },
       serverInfo: { name: this.serverName, version: SERVER_VERSION },
       instructions: buildInstructions({
-        agent: defaultAgent,
+        agent: identity,
         scope: this.scope,
       }),
     };
@@ -304,6 +330,59 @@ export class MCPServer {
       // single tool-level error since JS doesn't distinguish.
       return toolError(message);
     }
+  }
+}
+
+/**
+ * The route-metrics gate for this process, with a config that is present
+ * but UNREADABLE folded to the gate's own default rather than raised.
+ *
+ * This is the only config read on the construction path, so raising here
+ * cost the entire process - no `tools/list`, no `tools/call`, and in
+ * particular no `vault_health`, the surface whose whole job is to name
+ * the file that is broken. It is the same trade `appendLogEvent` makes
+ * with `resolveDeviceId` (see `AppendLogEventOptions.deviceId`): a read
+ * that sits in front of everything turns one bad file mode into a dead
+ * runtime, and the fallback is not a neutral value invented to make a
+ * broken install look healthy - it is this gate's documented default-OFF
+ * state, it loses only telemetry, and nothing else absorbs the condition.
+ * `second_brain_status` and `vault_health` still report the file by name,
+ * and every identity-bearing write still refuses on it.
+ *
+ * Deliberately NOT the same answer as the identity resolvers, because it
+ * is not the same class of problem: an unresolvable identity has no
+ * neutral value - every candidate is a guess that gets written into the
+ * vault under someone's name - while an unresolvable observability toggle
+ * has exactly one, and choosing it writes nothing at all.
+ *
+ * Narrow on purpose: only {@link ConfigReadError} is absorbed, so an
+ * unsupported platform or any other failure to locate the config at all
+ * is still fatal at construction. `OPEN_SECOND_BRAIN_MCP_ROUTE_METRICS_ENABLED`
+ * remains the escape hatch - it is read before the file is opened, so an
+ * operator who wants the metrics on can have them on a broken config.
+ */
+function routeMetricsGate(configPath: string | undefined): boolean {
+  try {
+    return resolveMcpRouteMetricsEnabled(configPath);
+  } catch (err) {
+    if (err instanceof ConfigReadError) return false;
+    throw err;
+  }
+}
+
+/**
+ * The agent identity for the handshake instructions, or the error saying
+ * why there is none. Never a substitute name: see
+ * {@link MCPServer.context} for why `resolveAgentName`'s refusal is kept
+ * rather than defaulted, and `buildInstructions` for what the caller is
+ * told in its place.
+ */
+function resolveIdentityOrReason(configPath: string | undefined): string | ConfigReadError {
+  try {
+    return resolveAgentName(configPath);
+  } catch (err) {
+    if (err instanceof ConfigReadError) return err;
+    throw err;
   }
 }
 

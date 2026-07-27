@@ -16,7 +16,7 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 import type { CheckResult } from "../types.ts";
-import { isDir } from "../fs-utils.ts";
+import { isDir, statOrAbsent } from "../fs-utils.ts";
 import { assessGraphHealth, summarizeGraphHealth } from "./codegraph-health.ts";
 
 const CODE_MANIFESTS: ReadonlyArray<string> = [
@@ -287,7 +287,23 @@ export function checkCodegraph(
  */
 function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): CheckResult {
   const indexDir = join(project, ".codegraph");
-  if (!isDir(indexDir)) {
+  // Stat'ed rather than probed with `isDir`, which answers `false` both for
+  // an index that was never built and for one this process cannot look at.
+  // Only the first is "not indexed", and it is the only one `codegraph
+  // init` clears - telling an operator to re-init an index that is already
+  // there sends them past the permission fault that is the actual cause.
+  let indexed: boolean;
+  try {
+    indexed = statOrAbsent(indexDir)?.isDirectory() === true;
+  } catch (exc) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: index directory unreadable: ${(exc as Error).message ?? exc}`,
+      fix: `chmod u+rx "${indexDir}"`,
+    };
+  }
+  if (!indexed) {
     return {
       name: "code_graph",
       ok: false,
