@@ -300,14 +300,20 @@ describe("scanInline dedup telemetry", () => {
       agent: "tester",
       now: new Date("2026-07-01T10:00:00Z"),
     });
+    // The claim under test is that emitting the dedup record does not change
+    // the result shape - not that the shape is frozen forever. `facts` and
+    // `skills` were added by the routed marker kinds (signals-that-survive,
+    // unit 7); they are counters on the same result, unrelated to this record.
     expect(Object.keys(result).toSorted()).toEqual([
       "created",
       "deduped",
       "errors",
+      "facts",
       "filesWithMarkers",
       "found",
       "malformed",
       "scanned",
+      "skills",
     ]);
   });
 });
