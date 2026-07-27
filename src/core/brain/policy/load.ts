@@ -26,6 +26,7 @@ import { brainConfigPath } from "../paths.ts";
 import { BrainConfigError, type BrainConfigLoadWarning } from "./errors.ts";
 import { validateBrainConfigDetailed } from "./validate.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./defaults.ts";
+import { BRAIN_MOST_APPLIED_DEFAULTS, resolveMostApplied } from "./blocks/active.ts";
 import { BRAIN_NOTES_DEFAULTS, resolveNotes } from "./blocks/notes.ts";
 import { BRAIN_TEMPORAL_DEFAULTS, resolveTemporal } from "./blocks/temporal.ts";
 import { BRAIN_GUARDRAIL_DEFAULTS, resolveGuardrails } from "./blocks/guardrails.ts";
@@ -204,6 +205,24 @@ export const loadFeedbackDefaultScopeSafe = makeAbsentTolerantLoader(
 export const loadSnapshotRetentionSafe = makeAbsentTolerantLoader(
   (config: BrainConfig) => config.snapshots.retention_count,
   DEFAULT_BRAIN_CONFIG.snapshots.retention_count,
+);
+
+/**
+ * Load + resolve `active.most_applied`, falling back to
+ * `BRAIN_MOST_APPLIED_DEFAULTS` when the config file is absent, so a vault
+ * that has never run `brain init` still renders its most-applied section
+ * over the documented window. Read by `active.md` and by the digest, which
+ * report the same section and must agree on its window.
+ *
+ * An unreadable config raises: the section is the operator's own list of
+ * the rules they lean on, and re-windowing it silently would change WHICH
+ * rules appear while the digest looks entirely healthy. Both callers have
+ * a channel for the raise - the CLI verb reports `digest failed: …`, the
+ * MCP tool returns the error - so neither has to guess a window.
+ */
+export const loadActiveMostAppliedSafe = makeAbsentTolerantLoader(
+  resolveMostApplied,
+  BRAIN_MOST_APPLIED_DEFAULTS,
 );
 
 /**

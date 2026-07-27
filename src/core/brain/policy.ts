@@ -45,6 +45,7 @@ export {
 } from "./policy/validate.ts";
 export {
   brainConfigReadFailure,
+  loadActiveMostAppliedSafe,
   loadBrainConfig,
   loadBrainConfigDetailed,
   loadFeedbackDefaultScopeSafe,
@@ -57,6 +58,7 @@ export {
 } from "./policy/load.ts";
 
 export {
+  BRAIN_MOST_APPLIED_DEFAULTS,
   INJECT_BUDGET_CHARS_DEFAULT,
   INJECT_BUDGET_CHARS_MAX,
   INJECT_BUDGET_CHARS_MIN,

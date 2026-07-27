@@ -12,6 +12,7 @@ import { join } from "node:path";
 
 import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
+import { BrainConfigError } from "../../../src/core/brain/policy.ts";
 import { BRAIN_APPLY_RESULT, BRAIN_LOG_EVENT_KIND } from "../../../src/core/brain/types.ts";
 
 let vault: string;
@@ -154,15 +155,23 @@ describe("digest most_applied block — custom config", () => {
     expect(result.content).toContain("## Most-applied (14d)");
   });
 
-  test("malformed _brain.yaml does not break the digest (falls back to defaults)", () => {
+  /**
+   * Corrected assertion. This used to expect the default window on a
+   * malformed `_brain.yaml`, which is the collapse the read split removed:
+   * the operator's window is not in force, and re-windowing silently makes
+   * the digest name a different set of rules while reporting healthy. The
+   * fallback exists for a vault with NO config, and that case keeps its own
+   * coverage in the `defaults` block above.
+   */
+  test("malformed _brain.yaml raises rather than re-windowing the digest", () => {
     writeBrainYaml("this is not yaml\nschema_version: nope\n");
-    const result = renderDigest(vault, {
-      format: "json",
-      now: new Date("2026-05-20T12:00:00Z"),
-      since: new Date("2026-05-19T12:00:00Z"),
-      until: new Date("2026-05-20T12:00:00Z"),
-    });
-    const parsed = JSON.parse(result.content);
-    expect(parsed.most_applied.window_days).toBe(30);
+    expect(() =>
+      renderDigest(vault, {
+        format: "json",
+        now: new Date("2026-05-20T12:00:00Z"),
+        since: new Date("2026-05-19T12:00:00Z"),
+        until: new Date("2026-05-20T12:00:00Z"),
+      }),
+    ).toThrow(BrainConfigError);
   });
 });

@@ -45,11 +45,7 @@ import { computeMostApplied } from "./most-applied.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { collectMaintenanceActions } from "./maintenance/collect.ts";
 import type { ActionItem } from "./maintenance/action-scorer.ts";
-import {
-  MOST_APPLIED_LIMIT_DEFAULT,
-  MOST_APPLIED_WINDOW_DAYS_DEFAULT,
-  loadBrainConfig,
-} from "./policy.ts";
+import { loadActiveMostAppliedSafe } from "./policy.ts";
 import { normaliseWikilinkTarget, renderPrefLink, type LinkOutputFormat } from "./wikilink.ts";
 import { parseRetired } from "./preference.ts";
 import {
@@ -543,20 +539,18 @@ function collectDigestData(
   const agent_summary = computeAgentSummary(vault, since, until);
 
   // Most-applied (Nd) — mirrors the section in `Brain/active.md`.
-  // The window length / limit come from `_brain.yaml`; a corrupted
-  // config falls back to defaults so the digest never breaks on
-  // operator-side schema drift.
-  let mostAppliedWindowDays = MOST_APPLIED_WINDOW_DAYS_DEFAULT;
-  let mostAppliedLimit = MOST_APPLIED_LIMIT_DEFAULT;
-  try {
-    const cfg = loadBrainConfig(vault);
-    if (cfg.active?.most_applied) {
-      mostAppliedWindowDays = cfg.active.most_applied.window_days;
-      mostAppliedLimit = cfg.active.most_applied.limit;
-    }
-  } catch {
-    // fall through to defaults
-  }
+  // The window length / limit come from `_brain.yaml`. A vault that has
+  // never run `brain init` has no window to read and lands on the
+  // documented defaults; a config that is PRESENT but unreadable raises,
+  // because re-windowing this section silently changes which rules it
+  // names while the digest still reports as healthy.
+  //
+  // Unlike `active.md`, nothing earlier on this path raises for us: the
+  // owner-scope gate consulted by `readAllPreferences` above is the
+  // integrity reader, which resolves to its strict fallback rather than
+  // throwing. The split has to happen at this read.
+  const { window_days: mostAppliedWindowDays, limit: mostAppliedLimit } =
+    loadActiveMostAppliedSafe(vault);
   const activePrefs = preferences
     .filter(
       ({ pref }) =>

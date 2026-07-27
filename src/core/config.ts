@@ -7,7 +7,7 @@
  * via parallel suites in tests/core/config.test.ts.
  */
 
-import { mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
@@ -58,6 +58,30 @@ export class UnsupportedPlatformError extends Error {
     );
     this.name = "UnsupportedPlatformError";
     this.platform = platform;
+  }
+}
+
+/**
+ * Raised when the plugin config file is PRESENT but its contents cannot be
+ * obtained: a directory (or any non-regular file) where the file should be,
+ * or a file that cannot be opened.
+ *
+ * Named and specific for the same reason {@link UnsupportedPlatformError}
+ * is: the alternative - reporting the file as absent - is a
+ * plausible-looking answer to a question this module cannot answer. Absent
+ * means "no operator settings, defaults apply"; every gate resolved from
+ * this file is default-OFF, so absorbing an unreadable file turns the
+ * operator's flags off and leaves the install indistinguishable from one
+ * that never set them.
+ */
+export class ConfigReadError extends Error {
+  /** The config file that could not be read. */
+  readonly path: string;
+
+  constructor(path: string, reason: string) {
+    super(`failed to read plugin config ${path}: ${reason}`);
+    this.name = "ConfigReadError";
+    this.path = path;
   }
 }
 
@@ -139,17 +163,52 @@ export function parseSimpleYaml(text: string): Record<string, string> {
   return data;
 }
 
-/** Read and parse the config file, or report it as missing. */
+/**
+ * Read and parse the config file, or report it as missing.
+ *
+ * TWO conditions, not one, and they are kept apart on purpose - the same
+ * split `Brain/_brain.yaml` makes in `brain/policy/load.ts`:
+ *
+ *   - ABSENT - nothing at this path. There are no operator settings to
+ *     contradict, so `exists: false` with no data is the correct answer and
+ *     every resolver above falls back to its documented default. This is
+ *     the common case on any install that has not run `o2b init`.
+ *   - PRESENT BUT UNREADABLE - a non-regular file (a directory in the
+ *     file's place), or a file that cannot be opened. The operator's
+ *     settings exist and are NOT the ones in force. Reporting that as
+ *     absent turned every default-OFF gate resolved from this file back to
+ *     `false` and left the install looking exactly like one that never set
+ *     a flag; {@link ConfigReadError} names the file instead.
+ *
+ * The parse itself has no third condition: {@link parseSimpleYaml} skips
+ * whatever it cannot represent (comments, blank lines, nested blocks), and
+ * that tolerance is deliberate parity with the legacy Python reader.
+ */
 export function discoverConfig(path?: string): ConfigDiscovery {
   const resolved = path ?? defaultConfigPath();
-  if (!isFile(resolved)) {
+  if (!existsSync(resolved)) {
     return { path: resolved, exists: false, data: {} };
   }
+  return { path: resolved, exists: true, data: parseSimpleYaml(readConfigText(resolved)) };
+}
+
+/**
+ * Contents of a config file that is known to exist, or a
+ * {@link ConfigReadError}.
+ *
+ * The regular-file check stays ahead of the read (rather than letting
+ * `readFileSync` raise `EISDIR`) because it also covers the paths a read
+ * cannot survive: a FIFO at the config path would block the process
+ * forever.
+ */
+function readConfigText(resolved: string): string {
+  if (!isFile(resolved)) {
+    throw new ConfigReadError(resolved, "path exists but is not a regular file");
+  }
   try {
-    const text = readFileSync(resolved, "utf8");
-    return { path: resolved, exists: true, data: parseSimpleYaml(text) };
-  } catch {
-    return { path: resolved, exists: false, data: {} };
+    return readFileSync(resolved, "utf8");
+  } catch (err) {
+    throw new ConfigReadError(resolved, (err as Error).message ?? String(err));
   }
 }
 

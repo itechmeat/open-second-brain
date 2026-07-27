@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import {
+  ConfigReadError,
   defaultConfigPath,
   discoverConfig,
   parseSimpleYaml,
@@ -108,10 +109,17 @@ describe("discoverConfig", () => {
     expect(r.data["runtime"]).toBe("hermes");
   });
 
-  test("reports a directory as missing (not a regular file)", () => {
-    const r = discoverConfig(tmp);
-    expect(r.exists).toBe(false);
-    expect(r.data).toEqual({});
+  /**
+   * Corrected assertion: this used to expect `exists: false` for a
+   * directory in the config file's place, which is the collapse the read
+   * split removed. "Missing" is what every resolver reads as "the operator
+   * set nothing, use the default"; something IS at this path, and whatever
+   * the operator configured is not in force. It raises now, exactly as the
+   * matching case on `_brain.yaml` does. Full coverage of the two
+   * conditions lives in `config-read-failure.test.ts`.
+   */
+  test("raises on a directory in the config file's place", () => {
+    expect(() => discoverConfig(tmp)).toThrow(ConfigReadError);
   });
 
   test("reports invalid utf8 as missing", () => {

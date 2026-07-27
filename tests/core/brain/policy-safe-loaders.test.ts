@@ -23,14 +23,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { regenerateActiveQuiet, renderActive } from "../../../src/core/brain/active.ts";
+import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { resolveNoteRoots } from "../../../src/core/brain/notes/note-walk.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import {
   BRAIN_GUARDRAIL_DEFAULTS,
+  BRAIN_MOST_APPLIED_DEFAULTS,
   BRAIN_NOTES_DEFAULTS,
   BRAIN_TEMPORAL_DEFAULTS,
   BrainConfigError,
   DEFAULT_BRAIN_CONFIG,
+  loadActiveMostAppliedSafe,
   loadFeedbackDefaultScopeSafe,
   loadGuardrailsConfigSafe,
   loadIntegrityConfigSafe,
@@ -69,6 +72,11 @@ const SAFE_LOADERS = [
     name: "loadSnapshotRetentionSafe",
     load: loadSnapshotRetentionSafe as (vault: string) => unknown,
     absentValue: DEFAULT_BRAIN_CONFIG.snapshots.retention_count as unknown,
+  },
+  {
+    name: "loadActiveMostAppliedSafe",
+    load: loadActiveMostAppliedSafe as (vault: string) => unknown,
+    absentValue: BRAIN_MOST_APPLIED_DEFAULTS as unknown,
   },
 ] as const;
 
@@ -264,6 +272,35 @@ describe("call sites: an unreadable config is surfaced, never absorbed", () => {
     const combined = written.join("");
     expect(combined).toContain("regenerate active.md failed");
     expect(combined).toContain(brainConfigPath(vault));
+  });
+
+  /**
+   * The digest reads the same `active.most_applied` window as `active.md`,
+   * but nothing on its path raises first (the owner-scope gate it consults
+   * en route is the integrity reader, which resolves rather than throws).
+   * So it needs the split itself: an uninitialised vault renders on the
+   * documented window, a broken config does not quietly re-window the
+   * section an operator reads as their most-applied rules.
+   */
+  test("renderDigest: an uninitialised vault renders on the documented window", () => {
+    const rendered = renderDigest(vault, { format: "json" });
+    const payload = JSON.parse(rendered.content) as {
+      most_applied: { window_days: number; limit: number };
+    };
+    expect(payload.most_applied.window_days).toBe(BRAIN_MOST_APPLIED_DEFAULTS.window_days);
+    expect(payload.most_applied.limit).toBe(BRAIN_MOST_APPLIED_DEFAULTS.limit);
+  });
+
+  test("renderDigest: an unreadable config raises, naming the file", () => {
+    breakConfig();
+    let caught: unknown;
+    try {
+      renderDigest(vault, { format: "json" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(BrainConfigError);
+    expect((caught as BrainConfigError).message).toContain(brainConfigPath(vault));
   });
 });
 

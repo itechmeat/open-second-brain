@@ -8,7 +8,7 @@
  * having been set.
  */
 
-import type { BrainActiveConfig, BrainMostAppliedConfig } from "../../types.ts";
+import type { BrainActiveConfig, BrainConfig, BrainMostAppliedConfig } from "../../types.ts";
 import { requireIntegerInRange } from "../field-checks.ts";
 import { openBlock, warnUnknownKeys, type BlockParseContext } from "../key-index.ts";
 
@@ -27,6 +27,18 @@ export const MOST_APPLIED_LIMIT_MAX = 50;
 export const MOST_APPLIED_WINDOW_DAYS_DEFAULT = 30;
 /** Default top-N limit when `_brain.yaml` lacks `active.most_applied.limit`. */
 export const MOST_APPLIED_LIMIT_DEFAULT = 10;
+
+/**
+ * The window every most-applied consumer uses when `_brain.yaml` does not
+ * configure one. One struct rather than two loose constants, because both
+ * readers of this block (`active.md` and the digest) need the pair
+ * together and a half-taken default would report a window the operator
+ * never chose.
+ */
+export const BRAIN_MOST_APPLIED_DEFAULTS: BrainMostAppliedConfig = Object.freeze({
+  window_days: MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+  limit: MOST_APPLIED_LIMIT_DEFAULT,
+});
 
 /**
  * Character budget for the active.md body injected at SessionStart
@@ -74,6 +86,16 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
     ...(mostApplied !== undefined ? { most_applied: mostApplied } : {}),
     ...(injectBudgetChars !== undefined ? { inject_budget_chars: injectBudgetChars } : {}),
   };
+}
+
+/**
+ * Read side of `active.most_applied`: the configured window, or
+ * {@link BRAIN_MOST_APPLIED_DEFAULTS} when the block (or the whole
+ * `active:` section) was omitted. Shared by `active.md` and the digest so
+ * the two cannot report different windows for the same vault.
+ */
+export function resolveMostApplied(cfg: BrainConfig): BrainMostAppliedConfig {
+  return cfg.active?.most_applied ?? BRAIN_MOST_APPLIED_DEFAULTS;
 }
 
 /**
