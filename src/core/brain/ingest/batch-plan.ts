@@ -21,12 +21,38 @@
  * over natural-language content. Hidden files and dot-directories (`.git`,
  * `.open-second-brain`, ...) are skipped so machine artifacts never masquerade
  * as ingestible sources.
+ *
+ * Discovery is git-aware (t_4b2bd8f7) through the shared
+ * {@link ../../fs/git-discovery.ts} module the hygiene repo scan also composes:
+ * a source directory's own `.gitignore`, its nested `.gitignore` files and its
+ * `.git/info/exclude` all narrow the walk, and a submodule or nested checkout
+ * is not descended into. Layer precedence, lowest first: `.git/info/exclude`,
+ * the source dir's `.gitignore`, each nested `.gitignore` by depth, then the
+ * operator's `--exclude` - so an operator pattern always has the last word.
+ * Discovery stays in-process: shelling out to `git ls-files` would make the
+ * reproducible {@link BatchPlan.planId} depend on an external binary and on
+ * user-global git configuration.
+ *
+ * Path space: layer base directories and the paths matched against them are
+ * both VAULT-relative here, which is the base-dir contract git-discovery
+ * documents. The hygiene scan chooses repo-root-relative instead; the shared
+ * module assumes neither.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { join, posix, relative } from "node:path";
 
-import { IgnoreScope, parseIgnorePatterns } from "../../fs/ignore.ts";
+import {
+  buildRepositoryBaseScope,
+  extendWithDirectoryIgnore,
+  isNestedRepositoryBoundary,
+} from "../../fs/git-discovery.ts";
+import {
+  parseIgnorePatterns,
+  type IgnoreLayer,
+  type IgnoreScope,
+  type IgnoreWarning,
+} from "../../fs/ignore.ts";
 import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { computePlanId, readCheckpoint } from "./checkpoint.ts";
 import { classifyPaths, readManifest } from "./content-manifest.ts";
@@ -77,7 +103,9 @@ export interface BatchPlanOptions {
   /**
    * Gitignore-style patterns (t_e82101a5), matched by the shared
    * {@link parseIgnorePatterns} engine relative to `sourceDir`. Discovered
-   * paths matching any pattern are dropped. Absent/empty → no exclusion.
+   * paths matching any pattern are dropped. Layered ABOVE every ignore file the
+   * repository declares, so an operator pattern - including a `!` re-include -
+   * overrides the repository. Absent/empty → no exclusion.
    */
   readonly exclude?: readonly string[];
 }
@@ -131,6 +159,14 @@ export interface BatchPlan {
    * recorded them completed. Zero on a fresh plan or when `resume` is off.
    */
   readonly resumedCompleted: number;
+  /**
+   * Malformed patterns found in the repository's OWN ignore files (t_4b2bd8f7),
+   * sorted by source then line. Such a pattern produces no rule, so nothing is
+   * silently dropped, and it never fails the plan - the repository is an input,
+   * not operator intent. A malformed operator `--exclude` still throws. Empty on
+   * a tree whose ignore files all compile, and on a tree that declares none.
+   */
+  readonly ignoreWarnings: readonly IgnoreWarning[];
 }
 
 /**
@@ -176,11 +212,25 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   // Optional exclusion (t_e82101a5): reuse the shared ignore engine so there is
   // no second matcher. Patterns are relative to the source dir. A malformed
   // pattern is a user error, surfaced loudly rather than silently ignored.
-  const excludeScope = buildExcludeScope(opts.exclude ?? [], dirRel);
+  const excludeLayer = buildExcludeLayer(opts.exclude ?? [], dirRel);
+
+  // What the repository declares about itself (t_4b2bd8f7), beneath the
+  // operator's layer. The source dir is the repository root for this purpose;
+  // a subpath-scoped walk still starts from the declarations above it.
+  const ignoreWarnings: IgnoreWarning[] = [];
+  const base = buildRepositoryBaseScope(dirAbs, dirRel);
+  ignoreWarnings.push(...base.warnings);
+  const walkScope = extendDownToWalkRoot(base.scope, dirAbs, dirRel, walkRoot, ignoreWarnings);
 
   // Discover ingestible files as canonical vault-relative paths, sorted.
   const discovered: string[] = [];
-  collectIngestible(walkRoot, vault, extensions, excludeScope, discovered);
+  collectIngestible(walkRoot, walkScope, {
+    vault,
+    extensions,
+    excludeLayer,
+    out: discovered,
+    warnings: ignoreWarnings,
+  });
   const discoveredRel = discovered
     .map((abs) => canonicalNotePath(toPosixRel(vault, abs)))
     .toSorted();
@@ -236,7 +286,16 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
     totalBytes: planned.reduce((sum, f) => sum + f.bytes, 0),
     planId,
     resumedCompleted,
+    // Sorted so the plan is fully deterministic: the walk visits directories in
+    // readdir order, which is not guaranteed stable across platforms.
+    ignoreWarnings: ignoreWarnings.toSorted(compareIgnoreWarnings),
   };
+}
+
+/** Order warnings by their ignore file, then by line within it. */
+function compareIgnoreWarnings(a: IgnoreWarning, b: IgnoreWarning): number {
+  if (a.source !== b.source) return a.source < b.source ? -1 : 1;
+  return a.line - b.line;
 }
 
 /**
@@ -275,43 +334,91 @@ function packBatches(
 }
 
 /**
- * Build the exclusion scope from `--exclude` patterns, relative to the source
- * dir. A malformed pattern is a user error and throws (never a silent skip). An
- * empty pattern list yields an empty scope that ignores nothing, keeping the
- * no-flag path byte-identical.
+ * Compile the `--exclude` patterns into one layer, relative to the source dir.
+ * A malformed pattern is a user error and throws (never a silent skip) - unlike
+ * a malformed pattern in the repository's own ignore files, which the operator
+ * did not write and which is reported on {@link BatchPlan.ignoreWarnings}. An
+ * empty pattern list yields `null`, so the no-flag path stacks no layer at all
+ * and stays byte-identical.
  */
-function buildExcludeScope(patterns: readonly string[], baseDir: string): IgnoreScope {
-  if (patterns.length === 0) return IgnoreScope.empty();
+function buildExcludeLayer(patterns: readonly string[], baseDir: string): IgnoreLayer | null {
+  if (patterns.length === 0) return null;
   const { layer, warnings } = parseIgnorePatterns(patterns, baseDir, "--exclude");
   if (warnings.length > 0) {
     const w = warnings[0]!;
     throw new Error(`planBatches: malformed --exclude pattern "${w.pattern}": ${w.reason}`);
   }
-  return IgnoreScope.empty().extend(layer);
+  return layer;
+}
+
+/**
+ * Layer the `.gitignore` of every directory from the source dir (exclusive) down
+ * to the walk root (inclusive), so a `--src-subpath` walk still obeys what the
+ * directories it skipped over declared about their subtrees. A walk root equal
+ * to the source dir traverses nothing and returns `scope` unchanged.
+ */
+function extendDownToWalkRoot(
+  scope: IgnoreScope,
+  sourceDirAbs: string,
+  sourceDirRel: string,
+  walkRoot: string,
+  warnings: IgnoreWarning[],
+): IgnoreScope {
+  let current = scope;
+  let abs = sourceDirAbs;
+  let rel = sourceDirRel;
+  for (const segment of toPosixRel(sourceDirAbs, walkRoot).split(posix.sep)) {
+    if (segment.length === 0) continue;
+    abs = join(abs, segment);
+    rel = posix.join(rel, segment);
+    const extended = extendWithDirectoryIgnore(current, abs, rel);
+    warnings.push(...extended.warnings);
+    current = extended.scope;
+  }
+  return current;
+}
+
+/** Everything the recursive walk needs beyond the current directory and scope. */
+interface WalkContext {
+  readonly vault: string;
+  readonly extensions: ReadonlySet<string>;
+  /** Operator `--exclude`, stacked above every repository layer. Null when absent. */
+  readonly excludeLayer: IgnoreLayer | null;
+  /** Accumulates discovered absolute file paths. */
+  readonly out: string[];
+  /** Accumulates malformed patterns found in the repository's own ignore files. */
+  readonly warnings: IgnoreWarning[];
 }
 
 /**
  * Recursively collect ingestible regular-file absolute paths, skipping hidden
- * entries and anything the exclusion scope matches (t_e82101a5). An excluded
- * directory is pruned so its subtree is never walked.
+ * entries and anything the composed ignore scope matches. An ignored directory
+ * is pruned so its subtree is never walked.
+ *
+ * `scope` already carries the layers governing `dir`; a child directory's own
+ * `.gitignore` is stacked before descending into it, so a deeper file scopes
+ * only what it governs and a nearer `!` re-include wins. The operator's
+ * `--exclude` is applied on top for every match, keeping it above the whole
+ * repository-declared stack no matter how deep the walk goes.
  */
-function collectIngestible(
-  dir: string,
-  vault: string,
-  extensions: ReadonlySet<string>,
-  exclude: IgnoreScope,
-  out: string[],
-): void {
+function collectIngestible(dir: string, scope: IgnoreScope, ctx: WalkContext): void {
+  const effective = ctx.excludeLayer === null ? scope : scope.extend(ctx.excludeLayer);
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (entry.name.startsWith(".")) continue; // hidden file or dot-directory
     const abs = join(dir, entry.name);
-    const rel = toPosixRel(vault, abs);
+    const rel = toPosixRel(ctx.vault, abs);
     if (entry.isDirectory()) {
-      if (exclude.isIgnored(rel, true)) continue;
-      collectIngestible(abs, vault, extensions, exclude, out);
-    } else if (entry.isFile() && extensions.has(extname(entry.name).toLowerCase())) {
-      if (exclude.isIgnored(rel, false)) continue;
-      out.push(abs);
+      // A submodule or nested checkout belongs to another repository's index.
+      // This is a boundary, not an ignore rule, so `--exclude` cannot re-include
+      // it - an operator wanting those files plans against that repository.
+      if (isNestedRepositoryBoundary(abs)) continue;
+      if (effective.isIgnored(rel, true)) continue;
+      const child = extendWithDirectoryIgnore(scope, abs, rel);
+      ctx.warnings.push(...child.warnings);
+      collectIngestible(abs, child.scope, ctx);
+    } else if (entry.isFile() && ctx.extensions.has(extname(entry.name).toLowerCase())) {
+      if (effective.isIgnored(rel, false)) continue;
+      ctx.out.push(abs);
     }
   }
 }
