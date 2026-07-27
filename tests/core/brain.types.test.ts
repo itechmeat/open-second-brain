@@ -95,6 +95,8 @@ describe("BRAIN_* const enums", () => {
       "durability-skip",
       // A4 (t_f79b4fe0) write-time conflict advisory
       "write-conflict-advisory",
+      // signals-that-survive unit 4 (t_75597bb9) unroutable-capture hint
+      "capture-routing-hint",
       // A5 (t_66c12a67) fact signal retire lifecycle
       "signal-retire",
       // Belief lifecycle suite (t_7d5a3589) cross-type tombstone + supersede

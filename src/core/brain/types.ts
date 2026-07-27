@@ -290,6 +290,18 @@ export const BRAIN_LOG_EVENT_KIND = {
    */
   writeConflictAdvisory: "write-conflict-advisory",
   /**
+   * `capture-routing-hint` (signals-that-survive unit 4, t_75597bb9) - a
+   * feedback signal was written that resolved NO scope, so no scoped
+   * recall reaches it. The hint NEVER blocks the write; this event is
+   * its durable, queryable record, and it is what makes the unrouted-
+   * capture rate countable at all - a hint that fires and is never
+   * recorded cannot be measured. Payload carries the missing routing
+   * signal (`missing_signal`), the eligible scope slugs with their
+   * document frequency (`candidates`), and the `agent`. Fires only on
+   * the operator-facing feedback path, never on the extracted-fact path.
+   */
+  captureRoutingHint: "capture-routing-hint",
+  /**
    * `signal-retire` (A5, t_66c12a67) - an extracted fact signal was
    * retired: moved from `Brain/inbox/` into `Brain/retired/` with retire
    * metadata. Signals have no per-signal audit file (only preferences do),
@@ -960,7 +972,7 @@ export interface BrainRollbackLogEvent extends BrainLogEventBase {
 /**
  * `scan-inline` entry — operator ran `o2b brain scan-inline`. Payload
  * keys are counters: `scanned`, `found`, `created`, `deduped`,
- * `malformed`, `errors`, plus the agent identity.
+ * `malformed`, `facts`, `skills`, `errors`, plus the agent identity.
  */
 export interface BrainScanInlineLogEvent extends BrainLogEventBase {
   readonly kind: typeof BRAIN_LOG_EVENT_KIND.scanInline;

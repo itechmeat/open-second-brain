@@ -421,6 +421,21 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b search check",
         autoRepairable: false,
       },
+      // --- Capture-routing states (signals-that-survive, unit 4) ---
+      // A capture that resolved no scope is recorded and unroutable: it
+      // is not a fault - the write is exactly what the operator asked
+      // for - but it leaves the signal in the one bucket no scoped
+      // recall reaches. The exit is to re-record the SAME capture with
+      // the routing signal it lacked, which is why the command carries
+      // `--scope`: without it this entry would be indistinguishable
+      // from `brain-empty`'s.
+      {
+        code: "capture-scope-absent",
+        issueClass: "capture recorded with no routing scope",
+        nextCommand:
+          "o2b brain feedback --topic <topic> --signal=positive --principle <principle> --scope <scope>",
+        autoRepairable: false,
+      },
     ] satisfies ReadonlyArray<DiagnosticSignal>
   ).map((s) => [s.code, Object.freeze(s)]),
 );

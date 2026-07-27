@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
 import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.ts";
-import { adviseIncomingFeedback } from "../../../core/brain/write-advisory.ts";
+import {
+  adviseIncomingFeedback,
+  adviseUnroutableCapture,
+} from "../../../core/brain/write-advisory.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../../core/brain/policy.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
@@ -119,6 +124,15 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     now,
   });
 
+  // Unroutable-capture routing hint (unit 4): the signal above landed
+  // with no scope, so no scoped recall reaches it. Non-blocking, and
+  // silent unless this vault already uses scopes to suggest.
+  const routingHint = adviseUnroutableCapture(vault, {
+    ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+    agent,
+    now,
+  });
+
   let prefResult: { path: string; id: string } | null = null;
   if (flags["force-confirmed"]) {
     try {
@@ -172,6 +186,11 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       signal_id: sigResult.id,
       ...(mirror !== undefined ? { mirror } : {}),
       ...(advisory !== null ? { advisory } : {}),
+      // The machine stream carries the exit as a field, which is where a
+      // forward pointer belongs on a payload the caller parses.
+      ...(routingHint !== null
+        ? { routing_hint: { ...routingHint, ...nextCommandField(routingHint.code) } }
+        : {}),
       ...(prefResult ? { preference_path: prefResult.path, preference_id: prefResult.id } : {}),
     });
     return 0;
@@ -189,6 +208,21 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     for (const c of advisory.conflicts) {
       ok(`  - ${c.pref_id} (jaccard ${c.jaccard.toFixed(3)})`);
     }
+  }
+  if (routingHint !== null) {
+    ok(`routing-hint: no ${routingHint.missing_signal} resolved for this signal`);
+    ok(
+      `  ${routingHint.missing_signal} values in this vault: ` +
+        routingHint.candidates.map((c) => `${c.scope} (${c.documents})`).join(", "),
+    );
+    // The exit is resolved from the registry by the rail; this verb
+    // never assembles a command of its own.
+    const stream: AdvisoryStream = {
+      command: "brain",
+      argv,
+      jsonRequested: Boolean(flags["json"]),
+    };
+    emitNextStep(routingHint.code, stream);
   }
   if (prefResult) {
     ok(`preference: ${prefResult.path}`);

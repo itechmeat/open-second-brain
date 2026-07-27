@@ -35,8 +35,11 @@ import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
 import {
   adviseIncomingFeedback,
+  adviseUnroutableCapture,
+  type CaptureRoutingHint,
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
+import { nextCommandField } from "../../core/brain/next-step.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
@@ -203,6 +206,15 @@ async function toolBrainFeedback(
     now,
   });
 
+  // Unroutable-capture routing hint (unit 4): the signal above resolved
+  // no scope, so no scoped recall reaches it. Non-blocking like the
+  // advisory, and absent entirely when this vault uses no scopes yet.
+  const routingHint: CaptureRoutingHint | null = adviseUnroutableCapture(ctx.vault, {
+    ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+    agent,
+    now,
+  });
+
   let prefResult: { path: string; id: string } | null = null;
   if (forceConfirmed) {
     // Escape hatch: skip the dream pass and create the confirmed rule now.
@@ -253,6 +265,11 @@ async function toolBrainFeedback(
     kind: prefResult ? "preference" : "signal",
     ...(mirror !== undefined ? { mirror } : {}),
     ...(advisory !== null ? { advisory } : {}),
+    // Same key and same resolution as the CLI's `--json` renderer: an
+    // agent that learns the exit on one surface reads it on the other.
+    ...(routingHint !== null
+      ? { routing_hint: { ...routingHint, ...nextCommandField(routingHint.code) } }
+      : {}),
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,
