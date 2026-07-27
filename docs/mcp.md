@@ -651,3 +651,24 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   `ingest_dedup` continuity records into a trend. The counts are exact-hash
   drops only; the semantic layers nominate candidates and never drop, so
   nothing in this view may be read as a semantic discard.
+- Since v1.41.0 `brain_ingest_batch_plan` scopes `src_subpath` by the
+  repository's own declarations, so a scoped plan answers the same about a
+  tree as an unscoped one. Beyond the existing typed error for a value
+  escaping the source root, two refusals are reachable. A `src_subpath` that
+  crosses a submodule or nested checkout is refused with an error naming
+  the boundary directory: those files belong to that repository, no `exclude`
+  pattern can re-open a boundary, and the error says to plan against that
+  repository directly. A `src_subpath` that starts below a directory the
+  repository ignores is not walked: the plan returns no batches and carries
+  an `ignore_warnings` entry whose `source` is `--src-subpath`, naming the
+  ignored directory and the `exclude` `!` re-include that opens it.
+- Since v1.41.0 a batch plan carries `ignore_warnings` whenever the walk
+  could not apply something as declared: a malformed pattern in one of the
+  repository's own ignore files, an ignore file that exists but could not be
+  read, or the `--src-subpath` case above. Each entry carries `source`,
+  `line`, `pattern`, and `reason`; `line` is 0 for a warning that concerns no
+  single pattern line. The key is absent when there is nothing to report, so
+  a tree that declares no ignore files serializes exactly as before. None of
+  these warnings fails the plan - the repository is an input, not operator
+  intent - while a malformed operator `exclude` pattern still fails the call,
+  naming the pattern and the reason it would not compile.

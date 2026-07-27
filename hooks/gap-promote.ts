@@ -76,6 +76,11 @@ async function main(): Promise<void> {
     auditRun(vault, {
       promoted: promotion.created.length,
       skipped: promotion.skipped.length,
+      // Both bounds the run enforces are reported, never dropped: a pruned
+      // count explains a shrinking directory, and a non-zero cap refusal is
+      // the operator's only signal that gap tasks are being turned away.
+      pruned: promotion.pruned.length,
+      capped: promotion.capped,
       closed: closure.closed.length,
       kept: closure.kept.length,
     });

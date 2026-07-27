@@ -277,7 +277,7 @@ Supersession is now consumer-aware: context packs inject only the tip of a super
 ### Source pipeline integrity and operator tooling (since v1.34.0)
 
 ```text
-o2b brain batch-plan          gains --src-subpath <rel> (scope a monorepo ingest to one subtree; escaping the source root is a typed error), --exclude <pattern> (gitignore-style patterns through the shared ignore engine), and --reconcile (diff the plan's dispatched set against checkpoint completions and name every silently-lost source; a complete plan reports an explicit empty gap)
+o2b brain batch-plan          gains --src-subpath <rel> (scope a monorepo ingest to one subtree; escaping the source root is a typed error, and one crossing a submodule or nested checkout is refused outright; a subpath below a directory the repository itself ignores plans nothing and says so as an ignore warning), --exclude <pattern> (gitignore-style patterns through the shared ignore engine), and --reconcile (diff the plan's dispatched set against checkpoint completions and name every silently-lost source; a complete plan reports an explicit empty gap)
 o2b brain pre-extract         <file> [--json] - deterministic no-LLM code-structure extraction (classes, functions, imports, inheritance edges as JSON entity/edge seeds) for TypeScript, JavaScript, and Python; unknown extensions report extracted:false with a reason, never an empty success
 o2b brain scan-citations      [--strict] - promote structural [Source: <name>, YYYY-MM-DD] markers in note prose into dated source-citation events on the temporal timeline; dedup on normalized name + date, malformed markers are reported and skipped (--strict exits nonzero on them)
 o2b brain doctor              gains --repair (preview targeted fixes for doctor-detected classes: dangling workrun checkpoints, dead evidence links; dry-run default) and --repair --apply (perform the fixes idempotently, one typed doctor-repair event each); unfixable classes are reported needs-review; plain doctor and --strict stay read-only
@@ -294,6 +294,23 @@ allowlist, pages whose `schema_type` is not listed are skipped up front and
 reported with a reason (an empty allowlist changes nothing). Both `o2b` and
 `vault-log` treat an early-closed stdout pipe (`o2b ... | head`) as a clean
 exit 0, while any other stdout error now fails loudly.
+
+Ingest discovery applies the repository's own declarations to
+`--src-subpath` as well: the planner descends from the source directory to
+the subpath root and layers each intermediate directory's `.gitignore` on
+the way, so a scoped plan answers the same about a tree as an unscoped one.
+A subpath that starts below a directory the repository ignores is not
+walked: the plan is empty and carries an ignore warning whose source is
+`--src-subpath`, naming the ignored directory and pointing at the `--exclude`
+`!` re-include that opens it. A subpath that crosses a submodule or nested
+checkout is refused with an error naming the boundary directory instead:
+those files belong to that repository, no `--exclude` pattern can re-open a
+boundary, and the error says to plan against that repository directly.
+Ignore warnings print beneath the plan on the human surface and travel as
+the `ignore_warnings` array (`source`, `line`, `pattern`, `reason` per entry)
+under `--json`; `line` is 0 for a warning about no single pattern line,
+which covers both a `--src-subpath` warning and an ignore file that could
+not be read.
 
 ### Trusted recall and memory write surface (since v1.35.0)
 
