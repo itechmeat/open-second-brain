@@ -23,6 +23,16 @@
  * `Brain/inbox/processed/`. A marker whose hash already maps to an
  * existing signal triggers only a rewrite (annotate the source
  * file), not a new signal.
+ *
+ * Three marker kinds are routed here, each into a store that already
+ * carries its own review gate: `feedback` into `Brain/inbox/`, `fact`
+ * into the unconfirmed preferences, and `skill` into the pending
+ * proposal queue (see `marker-routing.ts`). Every routed marker is
+ * consumed through the same `@osb✓` sentinel, so a rescan is a no-op;
+ * a marker whose destination REFUSED it is left live and its refusal
+ * is reported, so the operator can fix the marker and rescan. `loop`
+ * and `set` markers are not routed here - loops are live-derived and
+ * set markers belong to the guarded write-back verb.
  */
 
 import { readFileSync } from "node:fs";
@@ -32,6 +42,7 @@ import { emitIngestDedupReport, type IngestDedupSourceCount } from "./dedup-tele
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
+import { routeCaptureMarker, ROUTED_MARKER_KINDS } from "./marker-routing.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
@@ -68,6 +79,10 @@ export interface ScanInlineResult {
   readonly created: number;
   readonly deduped: number;
   readonly malformed: number;
+  /** Fact markers committed as unconfirmed preferences by this run. */
+  readonly facts: number;
+  /** Skill markers drafted into the pending proposal queue by this run. */
+  readonly skills: number;
   readonly errors: ReadonlyArray<ScanInlineErrorEntry>;
   readonly filesWithMarkers: ReadonlyArray<ScanInlineFileSummary>;
 }
@@ -87,6 +102,8 @@ export async function scanInline(
   let created = 0;
   let deduped = 0;
   let malformed = 0; // reserved — not surfaced separately yet
+  let facts = 0;
+  let skills = 0;
 
   // v0.11.0: explicit `opts.paths` always wins. When absent or empty,
   // fall back to `notes.read_paths` from `_brain.yaml`. An empty
@@ -102,6 +119,8 @@ export async function scanInline(
       created: 0,
       deduped: 0,
       malformed: 0,
+      facts: 0,
+      skills: 0,
       errors: Object.freeze([]) as ReadonlyArray<ScanInlineErrorEntry>,
       filesWithMarkers: Object.freeze([]) as ReadonlyArray<ScanInlineFileSummary>,
     });
@@ -142,15 +161,26 @@ export async function scanInline(
     }
     const discovery = discoverMarkersDetailed(content);
     malformed += discovery.malformed;
-    // Feedback markers only: loop markers are live-derived and never
-    // consumed, and set markers belong to the guarded write-back verb.
-    // Both must not be turned into signals or rewritten here.
-    const markers = discovery.markers.filter(isFeedbackMarker);
-    if (markers.length === 0) continue;
-    found += markers.length;
-    filesWithMarkers.push({ path: filePath, markers: markers.length });
+    const vaultRelSource = relative(vault, filePath).split(sep).join("/");
+    // A named-field rejection on a ROUTED kind is an operator mistake with
+    // a destination behind it, so it is surfaced by name instead of only
+    // counted. Rejections of the other kinds keep their historical
+    // count-only treatment, which `--strict` already turns into an exit.
+    for (const issue of discovery.issues) {
+      if (!ROUTED_MARKER_KINDS.has(issue.kind)) continue;
+      errors.push({ path: filePath, message: issue.message });
+    }
 
     const rewriteOps: RewriteOp[] = [];
+
+    // Feedback markers become inbox signals. Loop markers are live-derived
+    // and never consumed; set markers belong to the guarded write-back
+    // verb. Neither may be turned into a signal or rewritten here.
+    const markers = discovery.markers.filter(isFeedbackMarker);
+    if (markers.length > 0) {
+      found += markers.length;
+      filesWithMarkers.push({ path: filePath, markers: markers.length });
+    }
     let fileDeduped = 0;
     for (const marker of markers) {
       const hash = computeDedupHash({
@@ -170,7 +200,6 @@ export async function scanInline(
       }
       if (opts.dryRun) continue;
       // Create the signal.
-      const vaultRelSource = relative(vault, filePath).split(sep).join("/");
       const sourceList = marker.source
         ? [...marker.source, `[[${vaultRelSource}]]`]
         : [`[[${vaultRelSource}]]`];
@@ -207,6 +236,33 @@ export async function scanInline(
       });
     }
 
+    // Fact and skill markers reach their own gated stores. Per-marker
+    // isolation: a destination that refuses one marker leaves it live and
+    // reports why, and the remaining markers in the file still run.
+    if (!opts.dryRun) {
+      for (const marker of discovery.markers) {
+        if (!ROUTED_MARKER_KINDS.has(marker.kind)) continue;
+        try {
+          const routed = routeCaptureMarker(vault, marker, {
+            sourceRef: `[[${vaultRelSource}]]`,
+            now,
+          });
+          if (routed.created) {
+            if (marker.kind === "fact") facts++;
+            else skills++;
+          }
+          rewriteOps.push({ marker, signalId: routed.id });
+        } catch (err) {
+          errors.push({
+            path: filePath,
+            message: `${marker.kind} marker at line ${marker.originLine} was refused: ${
+              (err as Error).message ?? String(err)
+            }`,
+          });
+        }
+      }
+    }
+
     if (rewriteOps.length > 0 && !opts.dryRun) {
       try {
         await rewriteMarkers(filePath, rewriteOps);
@@ -236,6 +292,8 @@ export async function scanInline(
     created,
     deduped,
     malformed,
+    facts,
+    skills,
     errors: Object.freeze(errors),
     filesWithMarkers: Object.freeze(filesWithMarkers),
   });

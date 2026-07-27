@@ -30,28 +30,72 @@
  * single-line / block parsers — the walker treats null as "this is
  * not a marker" and moves on. CLI `--strict` mode surfaces those
  * misses as warnings separately; the parser itself is silent.
+ *
+ * The one exception to that silence is a rejection attributable to a
+ * NAMED field — a required field that is absent, or one given twice
+ * where a single value is the only unambiguous reading. Those are also
+ * reported as a {@link MarkerParseIssue} through the optional issue
+ * sink both parsers accept, which is how a kind that routes into a
+ * store (`fact`, `skill`) turns a marker an author clearly meant into
+ * an explicit error naming the field instead of a silent drop.
  */
-
-const KNOWN_KINDS: ReadonlySet<string> = new Set(["feedback", "loop", "set"]);
-const KNOWN_SIGNALS: ReadonlyArray<string> = ["positive", "negative"];
 
 /**
- * Required `key=value` fields per marker kind. The single generalisation
- * of the old feedback-specific `topic` / `principle` hard-require. The
- * feedback row reproduces the historical requirement byte-for-byte; the
- * `set` row adds the write-back triple. `loop` is absent here because it
- * is validated structurally by the close-form decision table, not by a
- * flat presence check.
+ * The one kind whose validity is structural rather than a flat presence
+ * check: a loop is resolved by the close-form decision table (see
+ * {@link classifyLoop}), so it has no row in {@link REQUIRED_FIELDS}.
  */
-const REQUIRED_FIELDS: Record<"feedback" | "set", ReadonlyArray<string>> = {
-  feedback: ["topic", "principle"],
-  set: ["note", "field", "value"],
+const LOOP_KIND = "loop";
+
+/** How many values a required field may carry before it turns ambiguous. */
+type RequiredFieldArity = "single" | "repeatable";
+
+/** Marker kinds validated by a flat required-field presence check. */
+type RequiredFieldKind = "feedback" | "set" | "fact" | "skill";
+
+/**
+ * Required `key=value` fields per marker kind, and the arity each one
+ * accepts. The single generalisation of the old feedback-specific
+ * `topic` / `principle` hard-require, and the single source of the kind
+ * vocabulary — {@link KNOWN_KINDS} is derived from these keys plus
+ * {@link LOOP_KIND}, so a kind cannot be half-registered.
+ *
+ * The feedback row reproduces the historical requirement byte-for-byte;
+ * the `set` row carries the write-back triple; the `fact` row carries
+ * what `deriveFact` cannot default (a premise set and the derivation
+ * level); the `skill` row carries what a reviewer needs in order to
+ * judge a proposal (what the skill is called, and what it does).
+ */
+const REQUIRED_FIELDS: Record<RequiredFieldKind, Readonly<Record<string, RequiredFieldArity>>> = {
+  feedback: { topic: "single", principle: "single" },
+  set: { note: "single", field: "single", value: "single" },
+  fact: { topic: "single", principle: "single", premise: "repeatable", level: "single" },
+  skill: { name: "single", body: "single" },
 };
 
-export type MarkerKind = "feedback" | "loop" | "set";
+const KNOWN_KINDS: ReadonlySet<string> = new Set<string>([
+  ...Object.keys(REQUIRED_FIELDS),
+  LOOP_KIND,
+]);
+const KNOWN_SIGNALS: ReadonlyArray<string> = ["positive", "negative"];
+
+export type MarkerKind = RequiredFieldKind | typeof LOOP_KIND;
 export type MarkerSignal = "positive" | "negative";
 export type MarkerShape = "inline" | "block";
 export type LoopForm = "open" | "close";
+
+/** A `key=value`-only body kind: everything except `feedback` and `loop`. */
+type FieldOnlyKind = Exclude<RequiredFieldKind, "feedback">;
+
+/**
+ * True for a known kind whose body carries no positional token, so the
+ * whole remainder is a `key=value` collection. Derived from the kind
+ * vocabulary rather than from a second list, so a new row in
+ * {@link REQUIRED_FIELDS} is routed here without another edit.
+ */
+function isFieldOnlyKind(kind: string): kind is FieldOnlyKind {
+  return KNOWN_KINDS.has(kind) && kind !== "feedback" && kind !== LOOP_KIND;
+}
 
 /**
  * One shape for every marker kind. Per-kind fields are optional and
@@ -62,10 +106,12 @@ export type LoopForm = "open" | "close";
  */
 export interface ParsedMarker {
   readonly kind: MarkerKind;
-  // ── feedback (kind === "feedback") ──
-  readonly signal?: MarkerSignal;
+  // ── feedback (kind === "feedback") and fact (kind === "fact") ──
+  /** The rule's subject and text; both rule-bearing kinds carry them. */
   readonly topic?: string;
   readonly principle?: string;
+  // ── feedback (kind === "feedback") ──
+  readonly signal?: MarkerSignal;
   readonly scope?: string;
   readonly agent?: string;
   /** Feedback free-note, or the `set` target note (`note=` in both). */
@@ -81,6 +127,16 @@ export interface ParsedMarker {
   // ── set (kind === "set") ──
   readonly field?: string;
   readonly value?: string;
+  // ── fact (kind === "fact") ──
+  /** Premise preference ids the conclusion derives from, in source order. */
+  readonly premise?: ReadonlyArray<string>;
+  /** Derivation trust level, verbatim; `deriveFact` owns that vocabulary. */
+  readonly level?: string;
+  // ── skill (kind === "skill") ──
+  /** Human-facing name of the proposed skill; also its identity key. */
+  readonly name?: string;
+  /** What the skill does, carried verbatim into the proposal body. */
+  readonly body?: string;
   // ── common ──
   /** 1-based line number where the marker starts in the source file. */
   readonly originLine: number;
@@ -104,25 +160,210 @@ export type FeedbackMarker = ParsedMarker & {
 /**
  * Type guard: true only for feedback markers. Signal-emitting consumers
  * (`scanInline`, `captureMarkers`, `importSession`) filter on this so
- * loop / set markers are never consumed, rewritten, or turned into
- * signals — loops are live-derived and set markers belong to the
- * guarded write-back verb.
+ * markers of other kinds are never turned into signals — loops are
+ * live-derived, set markers belong to the guarded write-back verb, and
+ * fact / skill markers have their own destinations.
  */
 export function isFeedbackMarker(marker: ParsedMarker): marker is FeedbackMarker {
   return marker.kind === "feedback";
 }
 
-function requiredFieldsPresent(
-  kind: "feedback" | "set",
-  fields: Record<string, string | string[]>,
-): boolean {
-  for (const key of REQUIRED_FIELDS[kind]) {
+/**
+ * A {@link ParsedMarker} narrowed to `kind === "fact"`. Routed through
+ * the derive-fact path, which commits it as an unconfirmed preference.
+ */
+export type FactMarker = ParsedMarker & {
+  readonly kind: "fact";
+  readonly topic: string;
+  readonly principle: string;
+  readonly premise: ReadonlyArray<string>;
+  readonly level: string;
+};
+
+/** Type guard: true only for fact markers. */
+export function isFactMarker(marker: ParsedMarker): marker is FactMarker {
+  return marker.kind === "fact";
+}
+
+/**
+ * A {@link ParsedMarker} narrowed to `kind === "skill"`. Routed to the
+ * pending skill-proposal queue, never to accepted.
+ */
+export type SkillMarker = ParsedMarker & {
+  readonly kind: "skill";
+  readonly name: string;
+  readonly body: string;
+};
+
+/** Type guard: true only for skill markers. */
+export function isSkillMarker(marker: ParsedMarker): marker is SkillMarker {
+  return marker.kind === "skill";
+}
+
+/**
+ * A rejection attributable to a named field, reported through the
+ * optional issue sink both parsers accept. The rejection itself is
+ * unchanged — the parsers still return null — so a kind that does not
+ * route anywhere behaves exactly as before.
+ */
+export interface MarkerParseIssue {
+  readonly kind: MarkerKind;
+  readonly shape: MarkerShape;
+  /** 1-based line the rejected marker starts on. */
+  readonly originLine: number;
+  /** Required fields that were absent or empty. */
+  readonly missingFields: ReadonlyArray<string>;
+  /** Single-valued required fields given more than once, which is ambiguous. */
+  readonly duplicateFields: ReadonlyArray<string>;
+  /** Operator-facing message naming every field in the two lists above. */
+  readonly message: string;
+}
+
+/** Sink the parsers report a {@link MarkerParseIssue} to. */
+export type MarkerIssueSink = (issue: MarkerParseIssue) => void;
+
+/**
+ * Check a collected field set against the kind's required-field row.
+ * Returns true when the marker may be built; otherwise reports one
+ * issue naming every offending field and returns false.
+ *
+ * A `single` field must be exactly one non-empty value: an array means
+ * the key was given twice and there is no unambiguous reading of that,
+ * which is why a repeated `set` note / field / value has always been
+ * rejected. A `repeatable` field must carry at least one non-empty
+ * value.
+ */
+function requiredFieldsPresent(input: {
+  readonly kind: RequiredFieldKind;
+  readonly fields: Record<string, string | string[]>;
+  readonly originLine: number;
+  readonly shape: MarkerShape;
+  readonly onIssue?: MarkerIssueSink | undefined;
+}): boolean {
+  const { kind, fields, originLine, shape, onIssue } = input;
+  const missingFields: string[] = [];
+  const duplicateFields: string[] = [];
+  for (const [key, arity] of Object.entries(REQUIRED_FIELDS[kind])) {
     const value = fields[key];
-    // Non-empty string only. An array (repeated key) or empty value
-    // fails - matching the historical `!topic || !principle` reject.
-    if (typeof value !== "string" || value.length === 0) return false;
+    if (arity === "repeatable") {
+      const values = toValueList(value);
+      if (values.length === 0 || values.some((entry) => entry.length === 0))
+        missingFields.push(key);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      duplicateFields.push(key);
+      continue;
+    }
+    if (typeof value !== "string" || value.length === 0) missingFields.push(key);
   }
-  return true;
+  if (missingFields.length === 0 && duplicateFields.length === 0) return true;
+  onIssue?.({
+    kind,
+    shape,
+    originLine,
+    missingFields: Object.freeze([...missingFields]),
+    duplicateFields: Object.freeze([...duplicateFields]),
+    message: fieldIssueMessage(kind, originLine, missingFields, duplicateFields),
+  });
+  return false;
+}
+
+function fieldIssueMessage(
+  kind: RequiredFieldKind,
+  originLine: number,
+  missingFields: ReadonlyArray<string>,
+  duplicateFields: ReadonlyArray<string>,
+): string {
+  const parts: string[] = [];
+  if (missingFields.length > 0) {
+    parts.push(`${plural("missing required field", missingFields)}: ${missingFields.join(", ")}`);
+  }
+  if (duplicateFields.length > 0) {
+    parts.push(
+      `${plural("repeated single-valued field", duplicateFields)}: ${duplicateFields.join(", ")}`,
+    );
+  }
+  return `@osb ${kind} marker at line ${originLine} is not usable - ${parts.join("; ")}`;
+}
+
+function plural(label: string, fields: ReadonlyArray<string>): string {
+  return fields.length === 1 ? label : `${label}s`;
+}
+
+/** Normalise a collected field value to the list of values it carries. */
+function toValueList(value: string | string[] | undefined): ReadonlyArray<string> {
+  if (Array.isArray(value)) return value;
+  return typeof value === "string" ? [value] : [];
+}
+
+/**
+ * Build the marker for a `key=value`-only kind. Shared by the inline
+ * and block parsers so the two shapes cannot disagree about which field
+ * lands where; the required-field check has already passed.
+ */
+function buildFieldMarker(input: {
+  readonly kind: FieldOnlyKind;
+  readonly fields: Record<string, string | string[]>;
+  readonly originLine: number;
+  readonly originText: string;
+  readonly shape: MarkerShape;
+}): ParsedMarker {
+  const { kind, fields, originLine, originText, shape } = input;
+  const common = { originLine, originText, shape };
+  switch (kind) {
+    case "set":
+      return {
+        kind,
+        note: fields["note"] as string,
+        field: fields["field"] as string,
+        value: fields["value"] as string,
+        ...common,
+      };
+    case "fact":
+      return {
+        kind,
+        topic: fields["topic"] as string,
+        principle: fields["principle"] as string,
+        premise: Object.freeze([...toValueList(fields["premise"])]),
+        level: fields["level"] as string,
+        ...common,
+      };
+    case "skill":
+      return {
+        kind,
+        name: fields["name"] as string,
+        body: fields["body"] as string,
+        ...common,
+      };
+  }
+}
+
+/**
+ * Build a feedback marker from a validated signal token and field set.
+ * Shared by both shapes for the same reason as {@link buildFieldMarker}.
+ */
+function buildFeedbackMarker(input: {
+  readonly signal: string;
+  readonly fields: Record<string, string | string[]>;
+  readonly originLine: number;
+  readonly originText: string;
+  readonly shape: MarkerShape;
+}): ParsedMarker {
+  const { signal, fields, originLine, originText, shape } = input;
+  return {
+    kind: "feedback",
+    signal: signal as MarkerSignal,
+    topic: fields["topic"] as string,
+    principle: fields["principle"] as string,
+    ...(typeof fields["scope"] === "string" ? { scope: fields["scope"] } : {}),
+    ...(typeof fields["agent"] === "string" ? { agent: fields["agent"] } : {}),
+    ...(typeof fields["note"] === "string" ? { note: fields["note"] } : {}),
+    ...(fields["source"] !== undefined ? { source: [...toValueList(fields["source"])] } : {}),
+    originLine,
+    originText,
+    shape,
+  };
 }
 
 /**
@@ -149,7 +390,7 @@ function classifyLoop(input: {
   if (idCount === 1 && (idValue === null || idValue.length === 0)) return null;
   if (words.length >= 1 && words[0] === "close" && idCount >= 1) {
     if (words.length === 1 && idCount === 1 && idValue !== null) {
-      return { kind: "loop", loop: "close", id: idValue, originLine, originText, shape };
+      return { kind: LOOP_KIND, loop: "close", id: idValue, originLine, originText, shape };
     }
     // `close` with extra free text or more than one id - ambiguous.
     return null;
@@ -159,7 +400,7 @@ function classifyLoop(input: {
   const text = words.join(" ").trim();
   if (text.length === 0) return null;
   return {
-    kind: "loop",
+    kind: LOOP_KIND,
     loop: "open",
     text,
     ...(idValue !== null && idCount === 1 ? { id: idValue } : {}),
@@ -177,6 +418,13 @@ export interface MarkerDiscoveryResult {
    * "@osb feedback ..." with missing / invalid required fields is.
    */
   readonly malformed: number;
+  /**
+   * The subset of those failures attributable to a named field, in
+   * document order. A kind that routes into a store turns its own
+   * issues into explicit operator-facing errors; `malformed` still
+   * counts every failure, named or not.
+   */
+  readonly issues: ReadonlyArray<MarkerParseIssue>;
 }
 
 // ── Inline parser ───────────────────────────────────────────────────────────
@@ -189,16 +437,22 @@ export interface MarkerDiscoveryResult {
  *   - the remaining grammar per kind:
  *       feedback -> positional `signal` (KNOWN_SIGNALS) then any number
  *                   of `key=value` pairs (topic + principle required);
- *       set      -> `key=value` pairs (note + field + value required);
  *       loop     -> free text plus an optional `id=` pair, resolved by
- *                   the close-form decision table (see classifyLoop).
+ *                   the close-form decision table (see classifyLoop);
+ *       any other kind -> `key=value` pairs only, validated against its
+ *                   {@link REQUIRED_FIELDS} row.
  *   - a `value` is either unquoted (no whitespace) or `"..."` with `\"`
  *     and `\\` escapes.
  *
  * Returns null on any structural deviation - the walker treats null as
- * "not a marker" and moves on.
+ * "not a marker" and moves on. When the deviation is a named field,
+ * `onIssue` additionally receives a {@link MarkerParseIssue}.
  */
-export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | null {
+export function parseInlineMarker(
+  line: string,
+  lineNo: number,
+  onIssue?: MarkerIssueSink,
+): ParsedMarker | null {
   const originText = line;
   let i = 0;
   const n = line.length;
@@ -220,8 +474,8 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
   if (kindToken === null || !KNOWN_KINDS.has(kindToken)) return null;
   skipWs();
 
-  if (kindToken === "loop") return parseLoopBody();
-  if (kindToken === "set") return parseSetBody();
+  if (kindToken === LOOP_KIND) return parseLoopBody();
+  if (isFieldOnlyKind(kindToken)) return parseFieldBody(kindToken);
 
   // ----- feedback (positional signal + key=value pairs) -------------------
   const signalToken = readBareToken();
@@ -230,43 +484,48 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
 
   const fields = collectFields();
   if (fields === null) return null;
-  if (!requiredFieldsPresent("feedback", fields)) return null;
+  if (
+    !requiredFieldsPresent({
+      kind: "feedback",
+      fields,
+      originLine: lineNo,
+      shape: "inline",
+      onIssue,
+    })
+  ) {
+    return null;
+  }
 
-  const out: ParsedMarker = {
-    kind: "feedback",
-    signal: signalToken as MarkerSignal,
-    topic: fields["topic"] as string,
-    principle: fields["principle"] as string,
-    ...(typeof fields["scope"] === "string" ? { scope: fields["scope"] } : {}),
-    ...(typeof fields["agent"] === "string" ? { agent: fields["agent"] } : {}),
-    ...(typeof fields["note"] === "string" ? { note: fields["note"] } : {}),
-    ...(fields["source"] !== undefined
-      ? {
-          source: Array.isArray(fields["source"])
-            ? [...(fields["source"] as string[])]
-            : [fields["source"] as string],
-        }
-      : {}),
+  return buildFeedbackMarker({
+    signal: signalToken,
+    fields,
     originLine: lineNo,
     originText,
     shape: "inline",
-  };
-  return out;
+  });
 
   // ----- per-kind bodies ---------------------------------------------------
-  function parseSetBody(): ParsedMarker | null {
-    const setFields = collectFields();
-    if (setFields === null) return null;
-    if (!requiredFieldsPresent("set", setFields)) return null;
-    return {
-      kind: "set",
-      note: setFields["note"] as string,
-      field: setFields["field"] as string,
-      value: setFields["value"] as string,
+  function parseFieldBody(kind: FieldOnlyKind): ParsedMarker | null {
+    const bodyFields = collectFields();
+    if (bodyFields === null) return null;
+    if (
+      !requiredFieldsPresent({
+        kind,
+        fields: bodyFields,
+        originLine: lineNo,
+        shape: "inline",
+        onIssue,
+      })
+    ) {
+      return null;
+    }
+    return buildFieldMarker({
+      kind,
+      fields: bodyFields,
       originLine: lineNo,
       originText,
       shape: "inline",
-    };
+    });
   }
 
   function parseLoopBody(): ParsedMarker | null {
@@ -311,14 +570,7 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
       i++; // consume '='
       const value = readValue();
       if (value === null) return null;
-      if (collected[key] === undefined) {
-        collected[key] = value;
-      } else {
-        // Second occurrence: promote to array. (Rare in inline form;
-        // mainly there so `source=a source=b` works.)
-        const prev = collected[key];
-        collected[key] = Array.isArray(prev) ? [...prev, value] : [prev, value];
-      }
+      collectField(collected, key, value);
       skipWs();
     }
     return collected;
@@ -386,25 +638,46 @@ export function parseInlineMarker(line: string, lineNo: number): ParsedMarker | 
   }
 }
 
+/**
+ * Record one occurrence of `key`, promoting a repeat to an array. Both
+ * shapes funnel through this, so `premise=a premise=b` and two
+ * `premise:` lines collect identically, and a repeated single-valued
+ * field is visible to {@link requiredFieldsPresent} as ambiguity rather
+ * than silently last-winning.
+ */
+function collectField(
+  collected: Record<string, string | string[]>,
+  key: string,
+  value: string,
+): void {
+  const prev = collected[key];
+  if (prev === undefined) {
+    collected[key] = value;
+    return;
+  }
+  collected[key] = Array.isArray(prev) ? [...prev, value] : [prev, value];
+}
+
 // ── Block parser ────────────────────────────────────────────────────────────
 
 /**
  * Parse the body of a fenced `osb` block (everything between the open
  * and close fences, exclusive). The body follows a very small subset
  * of YAML: `key: value` per line, optional `# comments`, optional
- * blank lines. Multi-line `note: |` is supported for the `note` field
- * specifically — the only field where multiple lines are common.
+ * blank lines. A `key: |` block scalar carries a multi-line value —
+ * used by the feedback `note` and by the `skill` body.
  *
  * Returns null on the same conditions as inline parsing (unknown kind,
- * missing required field, bad enum).
+ * missing required field, bad enum), reporting named-field rejections
+ * through `onIssue`.
  */
-export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMarker | null {
+export function parseBlockMarker(
+  body: string,
+  fenceStartLine: number,
+  onIssue?: MarkerIssueSink,
+): ParsedMarker | null {
   const lines = body.split("\n");
   const fields: Record<string, string | string[]> = {};
-  // Occurrence count per key. A structural key appearing twice is
-  // ambiguous (which value wins?), so we reject it before dispatch rather
-  // than let the last assignment silently overwrite the earlier one.
-  const keyCounts: Record<string, number> = {};
   let i = 0;
   while (i < lines.length) {
     const raw = lines[i]!;
@@ -419,7 +692,7 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
       continue; // tolerate stray lines silently
     }
     const key = stripped.slice(0, eq).trim();
-    let value: string = stripped.slice(eq + 1).trim();
+    const value: string = stripped.slice(eq + 1).trim();
     if (value === "|") {
       // Multi-line block scalar. Consume indented subsequent lines.
       const parts: string[] = [];
@@ -440,19 +713,17 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
       }
       // Strip trailing empty lines that bled from blank rows.
       while (parts.length > 0 && parts[parts.length - 1] === "") parts.pop();
-      fields[key] = parts.join("\n");
-      keyCounts[key] = (keyCounts[key] ?? 0) + 1;
+      collectField(fields, key, parts.join("\n"));
       continue;
     }
-    fields[key] = stripQuotes(value);
-    keyCounts[key] = (keyCounts[key] ?? 0) + 1;
+    collectField(fields, key, stripQuotes(value));
     i++;
   }
 
   const kind = typeof fields["kind"] === "string" ? fields["kind"] : null;
   if (kind === null || !KNOWN_KINDS.has(kind)) return null;
 
-  if (kind === "loop") {
+  if (kind === LOOP_KIND) {
     // Loop block: a required `text:` free-text field plus an optional
     // `id:` field, run through the same close-form decision table as
     // the inline form (the id is a field here, not inline in the text).
@@ -466,7 +737,7 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
     // Presence-based (not non-empty-based): an empty `id:` still counts as
     // one occurrence so classifyLoop rejects it, and a duplicate `id:`
     // drives idCount > 1 so the ambiguous marker is rejected too.
-    const idCount = keyCounts["id"] ?? 0;
+    const idCount = toValueList(fields["id"]).length;
     return classifyLoop({
       words,
       idValue: idCount === 1 ? idField : null,
@@ -477,54 +748,46 @@ export function parseBlockMarker(body: string, fenceStartLine: number): ParsedMa
     });
   }
 
-  if (kind === "set") {
-    // Fail-closed on duplicate structural keys: a repeated note / field /
-    // value would silently last-win and could mutate the wrong note.
-    if (hasDuplicateKey(keyCounts, ["note", "field", "value"])) return null;
-    if (!requiredFieldsPresent("set", fields)) return null;
-    return {
-      kind: "set",
-      note: fields["note"] as string,
-      field: fields["field"] as string,
-      value: fields["value"] as string,
+  if (isFieldOnlyKind(kind)) {
+    // Fail-closed on a repeated single-valued required field: a repeated
+    // `set` note / field / value would mutate the wrong note, and a
+    // repeated `fact` topic would file the conclusion under the wrong rule.
+    if (
+      !requiredFieldsPresent({ kind, fields, originLine: fenceStartLine, shape: "block", onIssue })
+    ) {
+      return null;
+    }
+    return buildFieldMarker({
+      kind,
+      fields,
       originLine: fenceStartLine,
       originText: body,
       shape: "block",
-    };
+    });
   }
 
   // Feedback.
   const signal = typeof fields["signal"] === "string" ? fields["signal"] : null;
   if (signal === null || !KNOWN_SIGNALS.includes(signal)) return null;
-  if (!requiredFieldsPresent("feedback", fields)) return null;
+  if (
+    !requiredFieldsPresent({
+      kind: "feedback",
+      fields,
+      originLine: fenceStartLine,
+      shape: "block",
+      onIssue,
+    })
+  ) {
+    return null;
+  }
 
-  return {
-    kind: "feedback",
-    signal: signal as MarkerSignal,
-    topic: fields["topic"] as string,
-    principle: fields["principle"] as string,
-    ...(typeof fields["scope"] === "string" ? { scope: fields["scope"] } : {}),
-    ...(typeof fields["agent"] === "string" ? { agent: fields["agent"] } : {}),
-    ...(typeof fields["note"] === "string" ? { note: fields["note"] } : {}),
-    ...(fields["source"] !== undefined
-      ? {
-          source: Array.isArray(fields["source"])
-            ? [...(fields["source"] as string[])]
-            : [fields["source"] as string],
-        }
-      : {}),
+  return buildFeedbackMarker({
+    signal,
+    fields,
     originLine: fenceStartLine,
     originText: body,
     shape: "block",
-  };
-}
-
-/** True when any of `keys` occurred more than once in the block body. */
-function hasDuplicateKey(counts: Record<string, number>, keys: ReadonlyArray<string>): boolean {
-  for (const key of keys) {
-    if ((counts[key] ?? 0) > 1) return true;
-  }
-  return false;
+  });
 }
 
 function stripQuotes(s: string): string {
@@ -557,6 +820,10 @@ const FENCE_RE = /^```([A-Za-z0-9_-]*)\s*$/;
 export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult {
   const lines = content.split("\n");
   const out: ParsedMarker[] = [];
+  const issues: MarkerParseIssue[] = [];
+  const onIssue: MarkerIssueSink = (issue) => {
+    issues.push(issue);
+  };
   let malformed = 0;
   let i = 0;
   while (i < lines.length) {
@@ -586,7 +853,7 @@ export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult 
           malformed++;
           continue;
         }
-        const parsed = parseBlockMarker(bodyLines.join("\n"), fenceStartLineNumber);
+        const parsed = parseBlockMarker(bodyLines.join("\n"), fenceStartLineNumber, onIssue);
         if (parsed) out.push(parsed);
         else malformed++;
       }
@@ -601,7 +868,7 @@ export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult 
       continue;
     }
     if (trimmed.startsWith("@osb")) {
-      const parsed = parseInlineMarker(line, i + 1);
+      const parsed = parseInlineMarker(line, i + 1, onIssue);
       if (parsed) out.push(parsed);
       else if (looksLikeInlineMarkerAttempt(trimmed)) malformed++;
     }
@@ -610,6 +877,7 @@ export function discoverMarkersDetailed(content: string): MarkerDiscoveryResult 
   return Object.freeze({
     markers: Object.freeze(out),
     malformed,
+    issues: Object.freeze(issues),
   });
 }
 
