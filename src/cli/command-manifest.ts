@@ -357,7 +357,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command("recall-telemetry", "List, summarize, or cost opt-in recall telemetry records"),
         command("knowledge-gaps", "Rank recurring queries the vault answers poorly"),
-        command("skill-proposals", "Learn, list, and review deterministic skill proposals"),
+        command(
+          "skill-proposals",
+          "Learn, list, review, and recover deterministic skill proposals",
+        ),
         command("procedural-memory", "Reconcile or list the procedural memory index and its usage"),
         command("procedural-graph", "Rebuild or show the procedural graph and hint projections"),
         command("recurrence", "Inspect and update recurrence and support diagnostics"),

@@ -9,8 +9,10 @@
 import { join } from "node:path";
 import {
   acceptSkillProposal,
+  discardUnreadableSkillAcceptJournals,
   learnSkillProposals,
   listPendingSkillProposals,
+  recoverSkillProposalAccepts,
   rejectSkillProposal,
   resolveSkillProposalEvidence,
   type SkillContractInput,
@@ -77,6 +79,18 @@ async function toolBrainSkillProposals(
     const reviewed = rejectSkillProposal(ctx.vault, slug, { note });
     return { ...reviewed };
   }
+  if (operation === "recover") {
+    // The accept sequence's write-ahead journal was recoverable in the
+    // library and reachable from no tool, so an agent whose accept
+    // crashed had nothing to call. Both refusals it can raise carry the
+    // file and the exit in their message; they surface as errors here
+    // rather than as a result field, because neither is a state this
+    // operation completed.
+    const discarded =
+      args["discard_unreadable"] === true ? discardUnreadableSkillAcceptJournals(ctx.vault) : [];
+    const recovered = recoverSkillProposalAccepts(ctx.vault);
+    return { discarded, recovered, total: recovered.length };
+  }
   if (operation === "usage") {
     // Per-skill invocation telemetry (t_56a12bde): deterministic counts
     // derived from skill_invoked continuity records, distinct from proposing
@@ -86,7 +100,7 @@ async function toolBrainSkillProposals(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_skill_proposals: operation must be one of learn|list|accept|reject|usage|evidence",
+    "brain_skill_proposals: operation must be one of learn|list|accept|reject|recover|usage|evidence",
   );
 }
 
@@ -250,14 +264,19 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
     description:
-      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), read per-skill invocation usage counts (usage), and resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
+      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), resolve abandoned accept sequences (recover), read per-skill invocation counts (usage), and resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["learn", "list", "accept", "reject", "usage", "evidence"],
+          enum: ["learn", "list", "accept", "reject", "recover", "usage", "evidence"],
           description: "Tool operation.",
+        },
+        discard_unreadable: {
+          type: "boolean",
+          description:
+            "recover only: delete accept-journal markers that cannot be parsed. Off by default: removing one unblocks accepting without resolving the sequence it marked.",
         },
         min_support: {
           type: "integer",

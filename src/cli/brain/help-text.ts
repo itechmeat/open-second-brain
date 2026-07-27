@@ -726,12 +726,15 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain generation-reports show <report-id> [--vault <path>] [--json]\n" +
     "Inbound, opt-in LLM generation tracing. record is gated (default off) by --enable or generation_trace_enabled; only prompt_hash + counts are stored, never the prompt.\n",
   "skill-proposals":
-    "usage: o2b brain skill-proposals <learn|list|accept|reject> [args]\n" +
+    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage> [args]\n" +
     "Deterministic proposal queue lifecycle.\n" +
     "  learn [--min-support <n>] [--vault <path>] [--json]\n" +
     "  list [--vault <path>] [--json]\n" +
     "  accept <slug> [--note <text>] [--vault <path>] [--json]\n" +
-    "  reject <slug> --note <text> [--vault <path>] [--json]\n",
+    "  reject <slug> --note <text> [--vault <path>] [--json]\n" +
+    "  recover [--discard-unreadable] [--vault <path>] [--json]\n" +
+    "  usage [--vault <path>] [--json]\n" +
+    "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n",
   "procedural-memory":
     "usage: o2b brain procedural-memory <reconcile|list|mark-used> [args]\n" +
     "Procedural index reconciliation and usage tracking sidecar.\n" +

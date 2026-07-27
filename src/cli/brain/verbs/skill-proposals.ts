@@ -1,11 +1,13 @@
 import {
   acceptSkillProposal,
+  discardUnreadableSkillAcceptJournals,
   learnSkillProposals,
   listPendingSkillProposals,
+  recoverSkillProposalAccepts,
   rejectSkillProposal,
 } from "../../../core/brain/skill-proposals.ts";
 import { deriveSkillUsage } from "../../../core/brain/skill-usage.ts";
-import { CliError, brainVerbContext, parse } from "../helpers.ts";
+import { CliError, brainVerbContext, failWith, parse } from "../helpers.ts";
 
 export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   const sub = argv[0];
@@ -14,8 +16,59 @@ export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   if (sub === "list") return list(rest);
   if (sub === "accept") return accept(rest);
   if (sub === "reject") return reject(rest);
+  if (sub === "recover") return recover(rest);
   if (sub === "usage") return usage(rest);
-  throw new CliError("brain skill-proposals: expected learn, list, accept, reject, or usage");
+  throw new CliError(
+    "brain skill-proposals: expected learn, list, accept, reject, recover, or usage",
+  );
+}
+
+/**
+ * Resolve the accept sequences a crash abandoned.
+ *
+ * The accept transaction's write-ahead journal was recoverable in the
+ * library and reachable from nowhere: an operator whose accept broke had
+ * no command to run. This is that command.
+ *
+ * Both hazards it can meet refuse rather than guess, and the refusal
+ * carries the message the core error composed - naming the exact file and
+ * the exit - so the two surfaces cannot word it differently. `--discard-
+ * unreadable` is the only destructive part and it is opt-in for the reason
+ * stated on `discardUnreadableSkillAcceptJournals`: an unparseable marker
+ * names no phase, so removing it unblocks accepting without claiming the
+ * sequence it marked was resolved.
+ */
+function recover(argv: string[]): number {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    "discard-unreadable": { type: "boolean" },
+  });
+  const vault = brainVerbContext(flags).vault;
+
+  let discarded: ReadonlyArray<string>;
+  let recovered: ReadonlyArray<{ slug: string; action: string }>;
+  try {
+    discarded = flags["discard-unreadable"] ? discardUnreadableSkillAcceptJournals(vault) : [];
+    recovered = recoverSkillProposalAccepts(vault);
+  } catch (exc) {
+    return failWith("recover skill-proposal accepts", exc);
+  }
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify({ discarded, recovered, total: recovered.length }, null, 2) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(
+    `skill-proposals recover: ${recovered.length} sequence(s) resolved, ` +
+      `${discarded.length} unreadable marker(s) discarded\n`,
+  );
+  for (const path of discarded) process.stdout.write(`  discarded ${path}\n`);
+  for (const item of recovered) process.stdout.write(`  ${item.action} ${item.slug}\n`);
+  return 0;
 }
 
 function usage(argv: string[]): number {

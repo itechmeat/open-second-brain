@@ -43,6 +43,34 @@ export function resolveNextStep(code: string): NextStep | null {
   });
 }
 
+/** A code whose next step a caller requires, but which is unregistered. */
+export class UnregisteredNextStepError extends Error {
+  readonly code: string;
+  constructor(code: string) {
+    super(
+      `no diagnostic signal is registered for code ${JSON.stringify(code)}; ` +
+        "add an entry to DIAGNOSTIC_SIGNALS naming the command that resolves it",
+    );
+    this.name = "UnregisteredNextStepError";
+    this.code = code;
+  }
+}
+
+/**
+ * The registered next step for `code`, or {@link UnregisteredNextStepError}.
+ *
+ * For the callers that must NAME a command - a refusal whose whole value is
+ * telling the operator what to run - absence is not a case to handle, it is
+ * a registry that has drifted. Those callers resolve at module scope, so the
+ * drift fails at import rather than inside the failure path it was meant to
+ * explain. Mirrors `requireRepairCapability` in `applier-capability.ts`.
+ */
+export function requireNextStep(code: string): NextStep {
+  const step = resolveNextStep(code);
+  if (step === null) throw new UnregisteredNextStepError(code);
+  return step;
+}
+
 /**
  * The additive JSON key every machine-readable surface carries a next
  * step in. Named once here because the CLI `--json` renderers and their

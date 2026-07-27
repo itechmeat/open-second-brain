@@ -22,13 +22,16 @@ import {
   proceduralSuccessRate,
   reconcileProceduralMemory,
 } from "./procedural-memory.ts";
+import { requireNextStep } from "./next-step.ts";
 import {
   clearSkillAcceptJournal,
   listSkillAcceptJournals,
+  readSkillAcceptJournals,
+  removeSkillAcceptJournalFile,
   writeSkillAcceptJournal,
   type SkillAcceptJournalEntry,
 } from "./skill-accept-journal.ts";
-import { acquireLockSync } from "./sync-lockfile.ts";
+import { acquireLockSync, type LockHandle } from "./sync-lockfile.ts";
 import {
   BRAIN_SKILL_PROPOSALS_REL,
   procedurePath,
@@ -378,7 +381,7 @@ export function acceptSkillProposal(
   const contract = contractFrontmatter(opts.contract);
   const now = (opts.now ?? new Date()).toISOString();
 
-  const lock = acquireLockSync(acceptLockTarget(vault));
+  const lock = acquireAcceptLock(vault);
   try {
     resolveOutstandingAccepts(vault);
 
@@ -476,15 +479,102 @@ export function acceptSkillProposal(
 /**
  * Resolve every accept sequence a previous run abandoned. Returns what was
  * done per slug; an empty array means there was nothing outstanding.
+ *
+ * This is the operator surface for a journal a crash left behind, reached
+ * through `o2b brain skill-proposals recover`. It refuses, by name, on the
+ * two states it must not paper over: a held lock
+ * ({@link SkillAcceptLockedError}) and an unreadable marker
+ * (`SkillAcceptJournalUnreadableError`).
  */
 export function recoverSkillProposalAccepts(vault: string): ReadonlyArray<SkillAcceptRecovery> {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const lock = acquireLockSync(acceptLockTarget(vault));
+  const lock = acquireAcceptLock(vault);
   try {
     return Object.freeze(resolveOutstandingAccepts(vault));
   } finally {
     lock.release();
+  }
+}
+
+/**
+ * Delete every accept-journal marker that cannot be parsed, returning the
+ * paths removed in the order they were found.
+ *
+ * This is the ONE mechanical exit in this pair, and it is deliberately not
+ * automatic: it runs when an operator asks for it, never inside an accept.
+ * What it gives up is stated rather than hidden - an unreadable marker
+ * names no phase, so the sequence it marked cannot be rolled back or
+ * forward, and removing it unblocks accepting without claiming that
+ * sequence was resolved. The marker's own contents are the only thing lost;
+ * every artifact the sequence may have written is still on disk, where
+ * `o2b brain doctor` reports duplicates and orphans.
+ */
+export function discardUnreadableSkillAcceptJournals(vault: string): ReadonlyArray<string> {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const lock = acquireAcceptLock(vault);
+  try {
+    const discarded = readSkillAcceptJournals(vault).unreadable.map((entry) => entry.path);
+    for (const path of discarded) removeSkillAcceptJournalFile(vault, path);
+    return Object.freeze(discarded);
+  } finally {
+    lock.release();
+  }
+}
+
+/** Registry code for the refusal a held accept lock produces. */
+export const SKILL_ACCEPT_LOCKED_CODE = "skill-accept-locked";
+
+/**
+ * Resolved at module scope so a registry that lost the entry fails at
+ * import rather than inside the refusal it is meant to explain.
+ */
+const LOCKED_EXIT = requireNextStep(SKILL_ACCEPT_LOCKED_CODE).nextCommand;
+
+/**
+ * The accept lock was already held.
+ *
+ * Deliberately NOT a breaker. The lock primitive is a single-attempt
+ * exclusive create, so no timeout distinguishes a crashed writer from a
+ * live one, and removing a live writer's lock corrupts what it protects -
+ * the same reason `applier-capability.ts` refuses `stale-lock`. What
+ * changes here is that the refusal names the exact file to judge and the
+ * command that lists every lock under the Brain tree, instead of leaving
+ * an `ELOCKED` errno for the operator to trace back to a path.
+ */
+export class SkillAcceptLockedError extends Error {
+  readonly path: string;
+  constructor(path: string, options?: { readonly cause?: unknown }) {
+    super(
+      `skill-proposal accept is locked by ${path}; every accept is refused while it is held. ` +
+        "Nothing breaks it automatically - a live writer cannot be told from a crashed one - " +
+        `so confirm no process owns it, then remove that file by hand: ${LOCKED_EXIT}`,
+      options,
+    );
+    this.name = "SkillAcceptLockedError";
+    this.path = path;
+  }
+}
+
+/** Path of the lock guarding the accept sequence and the journal sweep. */
+export function skillAcceptLockPath(vault: string): string {
+  return `${acceptLockTarget(vault)}.lock`;
+}
+
+/**
+ * Take the accept lock, mapping the primitive's `ELOCKED` errno onto the
+ * named refusal. One wrapper for all three entry points, so an operator
+ * meets the same message whichever one they reached.
+ */
+function acquireAcceptLock(vault: string): LockHandle {
+  try {
+    return acquireLockSync(acceptLockTarget(vault));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOCKED") {
+      throw new SkillAcceptLockedError(skillAcceptLockPath(vault), { cause: error });
+    }
+    throw error;
   }
 }
 

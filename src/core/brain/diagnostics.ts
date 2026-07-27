@@ -344,6 +344,29 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain tiers accept <path>",
         autoRepairable: false,
       },
+      // --- Skill-accept transaction refusals (no-dead-ends, phase 3) ---
+      // Both are states the accept transaction itself can leave an
+      // operator in, and both used to refuse without naming a way out.
+      // They are registered here rather than spelled inside the two
+      // error messages so the messages resolve one structural command
+      // from the same registry every other surface reads.
+      {
+        code: "skill-accept-journal-unreadable",
+        issueClass: "unreadable skill-accept journal marker",
+        nextCommand: "o2b brain skill-proposals recover --discard-unreadable",
+        autoRepairable: false,
+      },
+      {
+        // The exit is the INSPECTION, not a repair: nothing breaks a
+        // lock automatically, so what the operator needs first is the
+        // full list of locks under the Brain tree with their paths.
+        // Removing the file stays a human judgement - see the
+        // `stale-lock` refusal in `applier-capability.ts`.
+        code: "skill-accept-locked",
+        issueClass: "skill-accept lock held",
+        nextCommand: "o2b brain doctor",
+        autoRepairable: false,
+      },
       // --- Runtime-notice conditions (no-dead-ends, task 3) ---
       // The notice channel pushes a transient condition at the agent
       // (SessionStart injection, `vault_health`, the onboarding

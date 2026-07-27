@@ -105,7 +105,19 @@ o2b brain context-pack        Bounded-token vault slice for priming an agent's c
 o2b brain synthesise          Concept-scoped JSON envelope: target node + linkers + optional unlinked mentions
 o2b brain moc-audit           Per-MOC coverage audit: classify cluster members into well-covered / fragile / candidate-missing
 o2b brain unlinked            Raw-text mentions outside `[[...]]` (Unicode-aware boundaries)
+o2b brain skill-proposals recover [--discard-unreadable]
+                              Resolve accept sequences a crash abandoned, rolling each back to its pending draft or forward to rebuilt projections. Refuses by name, naming the exact file, on a held `Brain/skill-proposals/accept.lock` (nothing breaks a lock - a live writer cannot be told from a crashed one) and on an accept-journal marker that cannot be parsed; `--discard-unreadable` removes those markers, which unblocks accepting without claiming the sequence each marked was resolved
 ```
+
+Recovery is a vault-wide sweep, not a per-slug one: `recover` - and every
+`accept`, which runs the same sweep first - resolves EVERY outstanding
+journal it finds, so accepting one proposal can roll another slug's
+abandoned sequence back. That is deliberate. The sweep and the accept
+share one vault-wide lock, which is what makes it safe, and leaving a
+crashed sequence unresolved would let the next accept build on a
+duplicate. It writes only under `Brain/skill-proposals/` and
+`Brain/procedures/`, and only files the abandoned sequence itself
+created - the journal records whether each target pre-existed.
 
 ### Context continuity and receipts (since v0.29.0)
 
