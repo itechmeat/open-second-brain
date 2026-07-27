@@ -105,7 +105,7 @@ export class Store {
   private db: Database;
   private readonly config: ResolvedSearchConfig;
   private readonly loadedVecVersion: string | null;
-  private readonly _vecLoaded: boolean;
+  private readonly vecExtensionLoaded: boolean;
   private readonly release: (() => Promise<void>) | null;
   private closed = false;
   /** Empty unless a gated read-mode open found ABI drift; see {@link embeddingAbiMismatches}. */
@@ -122,7 +122,7 @@ export class Store {
     this.loadedVecVersion = vecVersion;
     // One source of truth: the version is present exactly when the
     // extension loaded, so "loaded" is derived rather than tracked twice.
-    this._vecLoaded = vecVersion !== null;
+    this.vecExtensionLoaded = vecVersion !== null;
     this.release = release;
   }
 
@@ -170,7 +170,7 @@ export class Store {
   }
 
   vecLoaded(): boolean {
-    return this._vecLoaded;
+    return this.vecExtensionLoaded;
   }
 
   /** sqlite-vec version this connection loaded, or null when unavailable. */
@@ -317,7 +317,7 @@ export class Store {
    * `chunk_vec` virtual table.
    */
   deleteDocument(path: string): void {
-    documents.deleteDocument(this.db, this._vecLoaded, path);
+    documents.deleteDocument(this.db, this.vecExtensionLoaded, path);
   }
 
   /**
@@ -352,14 +352,14 @@ export class Store {
    * Returns the new chunk ids in `chunkIndex` order.
    */
   replaceChunks(documentId: number, input: ReadonlyArray<chunks.ChunkInput>): number[] {
-    return chunks.replaceChunks(this.db, this._vecLoaded, documentId, input);
+    return chunks.replaceChunks(this.db, this.vecExtensionLoaded, documentId, input);
   }
 
   /**
    * Delete a set of chunks by id. Vec rows removed first.
    */
   deleteChunks(chunkIds: ReadonlyArray<number>): void {
-    chunks.deleteChunks(this.db, this._vecLoaded, chunkIds);
+    chunks.deleteChunks(this.db, this.vecExtensionLoaded, chunkIds);
   }
 
   /** Ordered chunk ids for one document (surprisal, t_fddfe64a). */
@@ -412,7 +412,15 @@ export class Store {
     dimension: number,
     embeddingHash: string,
   ): void {
-    vectors.vecUpsert(this.db, this._vecLoaded, chunkId, vector, model, dimension, embeddingHash);
+    vectors.vecUpsert(
+      this.db,
+      this.vecExtensionLoaded,
+      chunkId,
+      vector,
+      model,
+      dimension,
+      embeddingHash,
+    );
   }
 
   /**
@@ -421,7 +429,7 @@ export class Store {
    * t_fddfe64a).
    */
   embeddingForChunk(chunkId: number): Float32Array | null {
-    return vectors.embeddingForChunk(this.db, this._vecLoaded, chunkId);
+    return vectors.embeddingForChunk(this.db, this.vecExtensionLoaded, chunkId);
   }
 
   getEmbeddingHash(chunkId: number): string | null {
@@ -438,7 +446,7 @@ export class Store {
    * or dimension changes. `chunks` and `chunk_fts` are preserved.
    */
   clearEmbeddings(): void {
-    vectors.clearEmbeddings(this.db, this._vecLoaded);
+    vectors.clearEmbeddings(this.db, this.vecExtensionLoaded);
   }
 
   /**
@@ -454,7 +462,7 @@ export class Store {
   ): vectors.ModelChangeOutcome {
     return vectors.ensureEmbeddingModel(
       this.db,
-      { loaded: this._vecLoaded, version: this.loadedVecVersion },
+      { loaded: this.vecExtensionLoaded, version: this.loadedVecVersion },
       model,
       dimension,
       prefixes,
@@ -465,7 +473,7 @@ export class Store {
     queryVector: ReadonlyArray<number> | Float32Array,
     opts: { readonly limit: number; readonly pathPrefix?: string | null },
   ): vectors.SemanticHit[] {
-    return vectors.semanticTopK(this.db, this._vecLoaded, queryVector, opts);
+    return vectors.semanticTopK(this.db, this.vecExtensionLoaded, queryVector, opts);
   }
 
   // ── links ──────────────────────────────────────────────────────────────────

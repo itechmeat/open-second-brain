@@ -40,7 +40,7 @@ const FROM_RE = /^[ \t]*(?:import|export)\b[^;]*?\bfrom\s*"(\.[^"]+)"/gm;
 const BARE_RE = /^[ \t]*import\s*"(\.[^"]+)"/gm;
 
 function moduleFiles(): ReadonlyArray<string> {
-  return [...new Bun.Glob("**/*.ts").scanSync({ cwd: SRC, absolute: true })].sort();
+  return [...new Bun.Glob("**/*.ts").scanSync({ cwd: SRC, absolute: true })].toSorted();
 }
 
 function importedFiles(file: string, known: ReadonlySet<string>): ReadonlyArray<string> {
@@ -106,7 +106,7 @@ function importCycles(): ReadonlyArray<ReadonlyArray<string>> {
       }
 
       frames.pop();
-      if (lowlink.get(frame.node)! === index.get(frame.node)!) {
+      if (lowlink.get(frame.node) === index.get(frame.node)) {
         const component: string[] = [];
         for (;;) {
           const member = stack.pop()!;
@@ -114,7 +114,7 @@ function importCycles(): ReadonlyArray<ReadonlyArray<string>> {
           component.push(relative(ROOT, member));
           if (member === frame.node) break;
         }
-        if (component.length > 1) components.push(component.sort());
+        if (component.length > 1) components.push(component.toSorted());
       }
       const parent = frames[frames.length - 1];
       if (parent !== undefined) {

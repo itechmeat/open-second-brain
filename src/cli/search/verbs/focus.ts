@@ -20,14 +20,14 @@ import {
   VAULT_FLAGS,
 } from "../helpers.ts";
 
-const ACTIONS = ["set", "status", "clear"];
+const ACTIONS = new Set(["set", "status", "clear"]);
 
 /** Focus lifetime when `--ttl-minutes` is omitted. */
 const DEFAULT_TTL_MINUTES = "120";
 
 export async function cmdSearchFocus(argv: ReadonlyArray<string>): Promise<number> {
   const action = argv[0];
-  if (!action || !ACTIONS.includes(action)) {
+  if (!action || !ACTIONS.has(action)) {
     throw new CliError(
       "usage: o2b search focus <set|status|clear> [--query Q] [--path P] [--session S]",
     );

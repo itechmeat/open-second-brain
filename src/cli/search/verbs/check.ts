@@ -45,9 +45,13 @@ function jsonForCheck(r: IndexCheckReport): unknown {
   };
 }
 
+/** Render one pre-flight probe's verdict, in the wording the check has always used. */
+function ok(passed: boolean): string {
+  return passed ? "OK" : "MISSING";
+}
+
 function renderCheckHuman(r: IndexCheckReport): string {
   const lines: string[] = [];
-  const ok = (b: boolean) => (b ? "OK" : "MISSING");
   lines.push(`vault_readable:        ${ok(r.vaultReadable)}`);
   lines.push(`index_dir_writable:    ${ok(r.indexDirWritable)}`);
   lines.push(`sqlite_ok:             ${ok(r.sqliteOk)}`);
