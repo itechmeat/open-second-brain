@@ -14,6 +14,8 @@ import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import { scoreSessionFocusTarget } from "./session-focus.ts";
 import { rrfFuse, DEFAULT_RRF_K, type FusionMode } from "./fusion.ts";
+import { temporalProximity, DEFAULT_WINDOW_PAD_DAYS } from "./temporal-bridge.ts";
+import type { TemporalIntent } from "./temporal-intent.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "./store.ts";
 import type {
   BrainSearchResult,
@@ -85,7 +87,46 @@ export interface RankerInputs {
    * leaves ranking byte-identical.
    */
   readonly relationalRankedChunkIds?: ReadonlyArray<number>;
+  /**
+   * Optional DECLARED event time per chunk in unix ms (t_58fc4720): the
+   * validity-window start the document states in its frontmatter. Read
+   * only by the query-side temporal layer, and only for chunks that
+   * actually declare one - a missing entry (and the absent map) falls
+   * back to the chunk's storage mtime, the same "validity start, else
+   * mtime" rule `temporal-bridge.ts` applies.
+   */
+  readonly eventTimeMsByChunk?: ReadonlyMap<number, number>;
 }
+
+/**
+ * Bounded additive-boost caps. Every one of these layers is a re-ranker
+ * over an already-relevant candidate set: large enough to reorder it,
+ * never large enough to float an irrelevant chunk. They are named here,
+ * together, because their PROPORTION to each other is the calibration -
+ * a cap is only meaningful relative to its siblings.
+ */
+/** Inbound links plus shared tags, combined. */
+export const LINK_BOOST_CAP = 0.05;
+/** The inbound-link half of {@link LINK_BOOST_CAP}. */
+const LINK_ONLY_BOOST_CAP = 0.03;
+/** The shared-tag half of {@link LINK_BOOST_CAP}. */
+const TAG_ONLY_BOOST_CAP = 0.02;
+/** Query entities the chunk also carries. */
+export const ENTITY_BOOST_CAP = 0.04;
+/** Access-reinforced, type-decayed activation. */
+export const ACTIVATION_BOOST_CAP = 0.04;
+/** Habitual co-retrieval companions inside the candidate pool. */
+export const CO_ACCESS_BOOST_CAP = 0.03;
+/** Folded USED-vs-CONTRADICTED outcome rate: the strongest evidence layer. */
+export const REUSE_BOOST_CAP = 0.06;
+/**
+ * Query-declared temporal window (t_58fc4720). Set level with the reuse
+ * cap - the top of the band - because it corrects a prior that is itself
+ * worth up to the full recency amplitude (0.05) in the WRONG direction:
+ * a smaller cap could not overcome the freshness prior it exists to
+ * offset, and the layer would be decorative.
+ */
+export const TEMPORAL_INTENT_BOOST_CAP = 0.06;
 
 /** Freshness-trend multipliers on the relevance portion. */
 const TREND_MULTIPLIERS: ReadonlyMap<string, number> = new Map([
@@ -135,6 +176,16 @@ export interface RankerOptions {
   readonly fusionMode?: FusionMode;
   /** RRF damping constant; defaults to {@link DEFAULT_RRF_K}. */
   readonly rrfK?: number;
+  /**
+   * The time window the query declares (t_58fc4720), resolved by
+   * `temporal-intent.ts` at the query-plan seam. When present it adds a
+   * capped proximity boost for candidates whose event time falls in (or
+   * near) the window, and damps the query-independent freshness prior
+   * when that window is historical. Absent or null leaves ranking
+   * byte-identical, including the `temporal` breakdown key, which is
+   * then omitted rather than reported as zero.
+   */
+  readonly temporalIntent?: TemporalIntent | null;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -205,6 +256,8 @@ function buildReasons(parts: {
   trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
+  temporalBoost?: number;
+  temporalDamping?: number;
 }): ReadonlyArray<string> {
   const reasons: string[] = [];
   if (parts.keywordScore > 0) reasons.push(`fts5_bm25: ${fmt(parts.keywordScore)}`);
@@ -227,6 +280,19 @@ function buildReasons(parts: {
   }
   if (parts.linkBoost > 0) reasons.push(`link_boost: ${fmt(parts.linkBoost)}`);
   if (parts.recency > 0) reasons.push(`recency: ${fmt(parts.recency)}`);
+  // Query-side temporal intent, kept SEPARATE from the `recency` entry
+  // above so a ranking change is attributable to one layer or the other.
+  // Reported whenever the layer had an effect - a zero boost still
+  // matters when the window damped the freshness prior, which is exactly
+  // the case for an out-of-window recent document.
+  if (
+    parts.temporalBoost !== undefined &&
+    (parts.temporalBoost > 0 || (parts.temporalDamping ?? 1) !== 1)
+  ) {
+    const damping = parts.temporalDamping ?? 1;
+    const suffix = damping === 1 ? "" : ` recency x${fmt(damping)}`;
+    reasons.push(`temporal_intent: ${fmt(parts.temporalBoost)}${suffix}`);
+  }
   if (parts.tierMul !== 1) reasons.push(`tier: ${fmt(parts.tierMul)}`);
   if (parts.sessionFocus && parts.sessionFocus !== 0) {
     reasons.push(`session_focus: ${parts.sessionFocus >= 0 ? "+" : ""}${fmt(parts.sessionFocus)}`);
@@ -254,6 +320,7 @@ function buildBreakdown(parts: {
   trendMul?: number;
   sessionFocus?: number;
   rrf?: number;
+  temporalBoost?: number;
 }): ScoreBreakdown {
   return Object.freeze({
     keyword: parts.keywordScore,
@@ -268,6 +335,11 @@ function buildBreakdown(parts: {
     tier: parts.tierMul,
     trend: parts.trendMul ?? 1,
     sessionFocus: parts.sessionFocus ?? 0,
+    // The one layer reported by ABSENCE rather than by zero: a query
+    // that declared no window has no temporal component at all, and a
+    // consumer must be able to tell that from a window the candidate
+    // simply fell outside of.
+    ...(parts.temporalBoost !== undefined ? { temporal: parts.temporalBoost } : {}),
   });
 }
 
@@ -281,6 +353,10 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   const semMul = opts.weightProfile?.semanticMul ?? 1;
   const entMul = opts.weightProfile?.entityMul ?? 1;
   const recMul = opts.weightProfile?.recencyMul ?? 1;
+  // Query-side temporal intent (t_58fc4720). Null (the default) keeps
+  // the damping neutral and leaves the layer entirely unreported.
+  const temporalIntent = opts.temporalIntent ?? null;
+  const temporalDamping = temporalIntent?.recencyDamping ?? 1;
 
   const kwNorm = normalizeBm25(inputs.keyword);
 
@@ -386,7 +462,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       if (candidateDocIds.has(s)) count++;
     }
     const raw = count * 0.02;
-    return Math.min(0.03, raw);
+    return Math.min(LINK_ONLY_BOOST_CAP, raw);
   }
 
   function tagBoostFor(c: Candidate): number {
@@ -403,7 +479,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       }
     }
     const raw = count * 0.01;
-    return Math.min(0.02, raw);
+    return Math.min(TAG_ONLY_BOOST_CAP, raw);
   }
 
   const ranked: BrainSearchResult[] = [];
@@ -412,8 +488,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     if (!hyd) continue;
     const link = linkBoostFor(c);
     const tag = tagBoostFor(c);
-    const linkBoost = Math.min(0.05, link + tag);
-    const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul;
+    const linkBoost = Math.min(LINK_BOOST_CAP, link + tag);
+    // Freshness prior, damped when the query named a historical window:
+    // the prior points at "now" and the query points at the past, so
+    // leaving it undamped would fight the layer below. Damped, never
+    // removed - `recencyAmplitude: 0` stays the only off switch.
+    const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul * temporalDamping;
     // Relevance term: reciprocal-rank-fused when in rrf mode, otherwise
     // the weighted sum of the normalised lanes. RRF is weightless, so the
     // per-lane weights and intent multipliers do not apply to it.
@@ -437,13 +517,13 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // Per-match 0.02, capped at 0.04 so it only re-ranks an already
     // relevant set - never enough to float an irrelevant chunk.
     const entityMatches = inputs.entityMatchByChunk?.get(c.chunkId) ?? 0;
-    const entityBoost = Math.min(0.04, entityMatches * 0.02 * entMul);
+    const entityBoost = Math.min(ENTITY_BOOST_CAP, entityMatches * 0.02 * entMul);
     // Activation boost (Time-Aware Recall & Activation Suite): the
     // effective (type-decayed) activation scales into a capped 0.04
     // contribution - a re-ranker for habitually-recalled memories,
     // never enough to float an irrelevant chunk.
     const activation = clamp01(inputs.activationByChunk?.get(c.chunkId) ?? 0);
-    const activationBoost = Math.min(0.04, activation * 0.04);
+    const activationBoost = Math.min(ACTIVATION_BOOST_CAP, activation * ACTIVATION_BOOST_CAP);
     // Co-access companion boost (t_c5ef25a3): per habitual companion
     // that is ALSO in the candidate pool, 0.005 per recorded pair
     // count, capped at 0.03 - surfaces the rest of a recurring working
@@ -456,7 +536,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         if (candidateDocIds.has(docId)) coAccessRaw += count * 0.005;
       }
     }
-    const coAccessBoost = Math.min(0.03, coAccessRaw);
+    const coAccessBoost = Math.min(CO_ACCESS_BOOST_CAP, coAccessRaw);
     // Observed-reuse boost (t_65588d8b): the folded USED-vs-CONTRADICTED
     // rate of the chunk's document. Capped at 0.06 - larger than the
     // activation / co-access caps so a memory the agent demonstrably reused
@@ -464,7 +544,18 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // that never floats an irrelevant chunk. Zero (byte-identical) when no
     // observed-use verdicts exist.
     const reuseRate = clamp01(inputs.reuseRateByChunk?.get(c.chunkId) ?? 0);
-    const reuseBoost = Math.min(0.06, reuseRate * 0.06);
+    const reuseBoost = Math.min(REUSE_BOOST_CAP, reuseRate * REUSE_BOOST_CAP);
+    // Query-side temporal intent (t_58fc4720): proximity of the
+    // candidate's EVENT time (declared validity start, else storage
+    // mtime) to the window the query named, scaled into a capped
+    // contribution. Undefined - not zero - when the query named no
+    // window, so the layer stays absent from `reasons` and `breakdown`.
+    let temporalBoost: number | undefined;
+    if (temporalIntent !== null) {
+      const eventMs = inputs.eventTimeMsByChunk?.get(c.chunkId) ?? c.mtime * 1000;
+      const proximity = temporalProximity(eventMs, temporalIntent.range, DEFAULT_WINDOW_PAD_DAYS);
+      temporalBoost = Math.min(TEMPORAL_INTENT_BOOST_CAP, proximity * TEMPORAL_INTENT_BOOST_CAP);
+    }
     const sessionFocus = scoreSessionFocusTarget(hyd, opts.sessionFocus, nowMs);
     const score = clamp01(
       weighted * tierMul * trendMul +
@@ -474,6 +565,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         activationBoost +
         coAccessBoost +
         reuseBoost +
+        (temporalBoost ?? 0) +
         sessionFocus,
     );
 
@@ -509,6 +601,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           ...(trend !== undefined ? { trend, trendMul } : {}),
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
+          ...(temporalBoost !== undefined ? { temporalBoost, temporalDamping } : {}),
         }),
         breakdown: buildBreakdown({
           reuseBoost,
@@ -523,6 +616,7 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
           trendMul,
           sessionFocus,
           rrf: rrfByChunk !== null ? rrf : 0,
+          ...(temporalBoost !== undefined ? { temporalBoost } : {}),
         }),
       }),
     );
@@ -534,8 +628,22 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   // an `authored_at`. A pair where either side has none falls through to
   // the historical tie-break, so any non-tied pair (and every pair without
   // turn instants) keeps today's order byte-identically.
+  // Query-side temporal intent (t_58fc4720): the two rungs below - the
+  // authoring instant and `mtime` - both order NEWER first, which is the
+  // very bias a declared historical window contradicts. A saturating
+  // `clamp01` can hide a candidate's larger temporal contribution behind
+  // an exact score tie, and the freshness rungs would then hand the tie
+  // to the document the query did not ask for. So under an active window
+  // the temporal layer separates the tie first. Equal contributions
+  // (including both zero) and an absent window fall straight through to
+  // the historical ladder, byte-identically.
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
+    if (temporalIntent !== null) {
+      const aTemporal = a.breakdown?.temporal ?? 0;
+      const bTemporal = b.breakdown?.temporal ?? 0;
+      if (aTemporal !== bTemporal) return bTemporal - aTemporal;
+    }
     const aAuthored = inputs.hydrated.get(a.chunkId)?.authoredAt ?? null;
     const bAuthored = inputs.hydrated.get(b.chunkId)?.authoredAt ?? null;
     if (aAuthored !== null && bAuthored !== null && aAuthored !== bAuthored) {

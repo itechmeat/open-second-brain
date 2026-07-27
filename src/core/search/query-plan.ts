@@ -15,12 +15,17 @@
  * structured field tokens (`source:`, `kind:`/`type:`) and a caller-supplied
  * artifact-kind vocabulary (the schema pack's page types), never a word list.
  *
+ * Query-side temporal intent (t_58fc4720) is resolved here too, against
+ * an INJECTED clock - see `temporal-intent.ts`, which holds the same
+ * language-agnostic invariant.
+ *
  * The module is pure and deterministic: same query string in, same plan
- * out, with no I/O and no clock/random source.
+ * out, with no I/O and no clock/random source of its own.
  */
 
 import { WIKILINK_DETECT_RE } from "../brain/wikilink.ts";
 import { extractEntities } from "./entities.ts";
+import { detectTemporalIntent, stripTemporalDirectives } from "./temporal-intent.ts";
 import type { QueryIntent, QueryPlan, QuerySurface, WeightProfile } from "./types.ts";
 
 /** No-effect profile: every layer keeps its configured weight. */
@@ -136,33 +141,52 @@ function classify(query: string, normalized: string): QueryIntent {
   return "neutral";
 }
 
+/** Hash field for the resolved temporal window; absent leaves the hash intact. */
+const TEMPORAL_HASH_FIELD = "t";
+
 /**
  * Analyse a query into a deterministic plan. `expandedTerms` is empty
  * here; synonym expansion (a later layer) fills it before the hash is
  * meaningful for caching. The hash folds in the normalized query, the
- * intent, and any expanded terms - everything that changes results.
+ * intent, any expanded terms, and the resolved temporal window -
+ * everything that changes results.
+ *
+ * `nowMs` is the clock temporal-intent detection resolves against.
+ * Omitting it disables detection entirely, exactly as omitting
+ * `surfaceVocabulary` pins the surface to `default`, so an existing call
+ * site keeps a byte-identical plan.
  */
 export function buildQueryPlan(
   query: string,
   expandedTerms: ReadonlyArray<string> = [],
   intentOverride?: QueryIntent | null,
   surfaceVocabulary?: ReadonlySet<string>,
+  nowMs?: number,
 ): QueryPlan {
-  const normalized = normalize(query);
-  const intent = intentOverride ?? classify(query, normalized);
+  const temporalIntent = nowMs === undefined ? null : detectTemporalIntent(query, nowMs);
+  // A `since:` / `until:` directive states the window; it is not content.
+  // Everything downstream of detection analyses the residual query, so a
+  // directive never reaches the classifier or the keyword lane as a term.
+  const analysed = temporalIntent === null ? query : stripTemporalDirectives(query);
+  const normalized = normalize(analysed);
+  const intent = intentOverride ?? classify(analysed, normalized);
   const terms = Object.freeze([...expandedTerms]);
   // Surface routing is advisory and does NOT enter the hash: it re-weights
   // nothing, so a query's cache identity and ranking stay byte-identical
   // regardless of surface. Omitting the vocabulary keeps the pure default
   // provably inert (always `default`), so existing call sites are unchanged.
-  const planHash = fnv1a(`${normalized}|${intent}|${terms.join(",")}`);
+  const planHash = fnv1a(
+    `${normalized}|${intent}|${terms.join(",")}` +
+      (temporalIntent === null ? "" : `|${TEMPORAL_HASH_FIELD}:${temporalIntent.signature}`),
+  );
   const surface =
-    surfaceVocabulary === undefined ? "default" : routeSummarySurface(query, surfaceVocabulary);
+    surfaceVocabulary === undefined ? "default" : routeSummarySurface(analysed, surfaceVocabulary);
   return Object.freeze({
     intent,
     weightProfile: PROFILES[intent],
     expandedTerms: terms,
     planHash,
     surface,
+    ...(temporalIntent !== null ? { temporalIntent } : {}),
   });
 }

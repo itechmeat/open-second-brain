@@ -8,6 +8,7 @@ import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
+import type { TemporalIntent } from "./temporal-intent.ts";
 import type {
   MemoryTrustAssessment,
   RetrievalDecisionTrace,
@@ -104,6 +105,13 @@ export interface ScoreBreakdown {
   readonly tier: number;
   readonly trend: number;
   readonly sessionFocus: number;
+  /**
+   * Query-side temporal-intent boost (t_58fc4720). Present ONLY when the
+   * query declared a time window; absent - not zero - for every query
+   * that declared none, so a breakdown without temporal intent stays
+   * byte-identical to pre-suite behaviour.
+   */
+  readonly temporal?: number;
 }
 
 /**
@@ -261,6 +269,14 @@ export interface QueryPlan {
    * summary-shaped. See {@link QuerySurface}.
    */
   readonly surface: QuerySurface;
+  /**
+   * The time window this query declares (t_58fc4720), resolved to
+   * absolute bounds. Present only when the caller supplied a clock AND
+   * the query carries an ISO token or a `since:` / `until:` directive;
+   * absent otherwise, so a query with no temporal window keeps a
+   * byte-identical plan and `planHash`. See {@link TemporalIntent}.
+   */
+  readonly temporalIntent?: TemporalIntent;
 }
 
 export interface IndexStats {
