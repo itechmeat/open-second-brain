@@ -19,6 +19,7 @@ import { appendMetric } from "../../../core/brain/metrics.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { SearchError } from "../../../core/search/types.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
@@ -50,7 +51,11 @@ export async function cmdBrainTune(argv: string[]): Promise<number> {
       const tuned = loadTunedParameters(vault);
       const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
       if (asJson) {
-        okJson({ enabled: searchConfig.recall.selfTuningEnabled, tuned });
+        okJson({
+          enabled: searchConfig.recall.selfTuningEnabled,
+          tuned,
+          ...(tuned === null ? nextCommandField("recall-tuning-absent") : {}),
+        });
       } else if (tuned === null) {
         ok("tune: no valid tuned parameters persisted");
         // no-dead-ends, phase 3: this pointer was hand-written beside

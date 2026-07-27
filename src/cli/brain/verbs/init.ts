@@ -1,6 +1,7 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { bootstrapBrain } from "../../../core/brain/init.ts";
 import { computeBrainStatus } from "../../../core/brain/status.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { parse, fail, ok, info, okJson, resolveBrainVault } from "../helpers.ts";
 
@@ -55,12 +56,18 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
     jsonRequested: Boolean(flags["json"]),
   };
 
+  // Resolved once, ahead of both renderers: the human stream prints it
+  // as a rail line and the machine stream carries it as a field, and a
+  // second evaluation could disagree with the first.
+  const empty = brainHasNothingRecorded(vault);
+
   if (flags["json"]) {
     okJson({
       vault,
       created: result.created,
       overwritten: result.overwritten,
       skipped: result.skipped,
+      ...(empty ? nextCommandField("brain-empty") : {}),
     });
   } else {
     ok(`brain initialized: ${vault}`);
@@ -79,7 +86,7 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
   // asserted `brain-empty`, whose registered class reads "Brain with
   // nothing recorded in it". The claim is about content, not about
   // whether this run created anything, so the condition is the content.
-  if (brainHasNothingRecorded(vault)) emitNextStep("brain-empty", stream);
+  if (empty) emitNextStep("brain-empty", stream);
   return 0;
 }
 

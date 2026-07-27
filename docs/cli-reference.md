@@ -464,6 +464,12 @@ o2b brain digest | daily | weekly
                               with report_snapshots_enabled persist Brain/reports/<surface>/<date>.json and report a deterministic Since-last-run delta
 ```
 
+### Forward pointers (`next:` / `next_command`)
+
+A verb that succeeds and leaves the caller with somewhere to go names that place through one mechanism. On a human stream it prints one `next: <command>` line; under `--json` the same command arrives as an additive `next_command` string field in the payload, and the key is **absent** whenever no exit resolves. The command is always a structural `o2b` invocation resolved from the diagnostics registry - never prose - so a caller can execute it verbatim.
+
+Verbs that carry it today: `o2b status`, `o2b brain init`, `bridges list|discover`, `clusters list|run`, `dream list`, `git status|mine`, `inbox-drain`, `intention list`, `intent-review`, `tune status`, `o2b search index|reindex|status`. `o2b brain tiers check` deliberately carries none under `--json`: that state has two exits (restore or accept), the wire key is singular, and naming one would tell a machine caller the other does not exist.
+
 Long-running operations (dream, `o2b search index | reindex`, bridges discover, clusters run, the maintenance lane) run under a cooperative safeguard deadline: `safeguard_timeout_seconds` (default 600, `0` disables, env `OPEN_SECOND_BRAIN_SAFEGUARD_TIMEOUT`) with per-operation overrides like `safeguard_timeout_dream_seconds`. A tripped deadline aborts at the next checkpoint - between atomic writes - and reports `{ok:false, timed_out:true}` on exit 1; maintenance-lane task results carry `timed_out` per task. The frozen-surface policy lives in `docs/stability.md`; the 0.x to 1.0.0 migration table in `docs/updating.md`.
 
 ## Vault scope

@@ -37,6 +37,7 @@ import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
@@ -89,8 +90,11 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
     if (action === "list") {
       const path = join(vault, "Brain", "proposals", "bridges.md");
       if (!existsSync(path)) {
-        if (asJson) okJson({ exists: false, proposals: 0 });
-        else ok("no proposals artifact yet");
+        // no-dead-ends, phase 3: the rail suppresses its line here and
+        // returns the step so this payload can carry it. Nothing did.
+        if (asJson) {
+          okJson({ exists: false, proposals: 0, ...nextCommandField("bridge-proposals-absent") });
+        } else ok("no proposals artifact yet");
         // no-dead-ends, task 5: the exit is this verb's own producer.
         emitNextStep("bridge-proposals-absent", stream);
         return 0;
@@ -126,8 +130,14 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         exc instanceof SearchError &&
         (exc.code === "INDEX_MISSING" || exc.code === "SCHEMA_MISMATCH")
       ) {
-        if (asJson) okJson({ vec_available: false, proposals: [], reason: "index not built" });
-        else ok("bridges discover: search index not initialised");
+        if (asJson) {
+          okJson({
+            vec_available: false,
+            proposals: [],
+            reason: "index not built",
+            ...nextCommandField("search-index-missing"),
+          });
+        } else ok("bridges discover: search index not initialised");
         // no-dead-ends, task 5: fail-soft, but not silent about the fix.
         emitNextStep("search-index-missing", stream);
         return 0;

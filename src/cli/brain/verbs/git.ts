@@ -11,6 +11,7 @@ import { mineCommitDecisions } from "../../../core/brain/git/decisions.ts";
 import { GitIngestError, ingestGitHistory } from "../../../core/brain/git/ingest.ts";
 import { listGitCommits, listGitRepos, listGitTags } from "../../../core/brain/git/store.ts";
 import type { GitCommitFilter, GitCommitRecord } from "../../../core/brain/git/store.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
@@ -43,7 +44,6 @@ async function cmdMine(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     repo: { type: "string" },
   });
-  const asJson = flags["json"] === true;
   try {
     const vault = brainVerbContext(flags).vault;
     const repoFilter = flags["repo"] as string | undefined;
@@ -65,12 +65,17 @@ async function cmdMine(argv: string[]): Promise<number> {
           skipped_existing: res.skippedExisting,
           notes: res.notes,
         })),
+        // no-dead-ends, phase 3: the rail returns the resolved step when
+        // it suppresses the line; this payload carries it.
+        ...(results.length === 0 ? nextCommandField("git-history-absent") : {}),
       });
       return 0;
     }
     if (results.length === 0) {
       ok("no git history ingested yet");
-      emitNextStep("git-history-absent", gitAdvisoryStream(argv, asJson));
+      // The `--json` branch above returned, so this stream is provably
+      // a human one.
+      emitNextStep("git-history-absent", gitAdvisoryStream(argv, false));
       return 0;
     }
     for (const res of results) {
@@ -136,7 +141,6 @@ async function cmdStatus(argv: string[]): Promise<number> {
     vault: { type: "string" },
     json: { type: "boolean" },
   });
-  const asJson = flags["json"] === true;
   try {
     const vault = brainVerbContext(flags).vault;
     const repos = listGitRepos(vault).map((entry) => ({
@@ -149,12 +153,17 @@ async function cmdStatus(argv: string[]): Promise<number> {
       tags: listGitTags(vault, entry.key).length,
     }));
     if (flags["json"] === true) {
-      okJson({ ok: true, repos });
+      okJson({
+        ok: true,
+        repos,
+        ...(repos.length === 0 ? nextCommandField("git-history-absent") : {}),
+      });
       return 0;
     }
     if (repos.length === 0) {
       ok("no git history ingested yet");
-      emitNextStep("git-history-absent", gitAdvisoryStream(argv, asJson));
+      // The `--json` branch above returned; this stream is human.
+      emitNextStep("git-history-absent", gitAdvisoryStream(argv, false));
       return 0;
     }
     for (const repo of repos) {

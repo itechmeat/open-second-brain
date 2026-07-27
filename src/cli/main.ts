@@ -39,6 +39,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
+import { nextCommandField } from "../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { ownsInternalJson, wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
@@ -92,6 +93,9 @@ async function cmdStatus(argv: string[]): Promise<number> {
       output["config_keys"] = Object.keys(result.data).toSorted();
     }
     if (flags["vault"]) output["vault"] = String(flags["vault"]);
+    // no-dead-ends, phase 3: the human stream prints this exit as a rail
+    // line; the machine stream carried nothing at all until now.
+    if (!result.exists) Object.assign(output, nextCommandField("cli-config-absent"));
     process.stdout.write(JSON.stringify(output, sortedReplacer, 2) + "\n");
   } else {
     process.stdout.write(`config_path: ${result.path}\n`);

@@ -61,6 +61,11 @@ export async function cmdBrainTiers(argv: string[]): Promise<number> {
       try {
         const findings = store.listTierDrift();
         if (asJson) {
+          // Deliberately carries no next command. `nextCommandField` is
+          // singular by construction - one wire key, one string - and
+          // this state has TWO exits, restore and accept. Emitting one
+          // would tell a machine caller that the other does not exist,
+          // which is worse than the human stream's two rail lines.
           okJson({ findings });
         } else {
           ok(`tier drift: ${findings.length} open finding(s)`);

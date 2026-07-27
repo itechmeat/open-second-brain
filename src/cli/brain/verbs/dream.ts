@@ -48,6 +48,7 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
@@ -312,6 +313,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
             proposals: b.proposals,
             sources: b.sources,
           })),
+          ...(bundles.length === 0 ? nextCommandField("dream-bundles-absent") : {}),
         });
       } else if (bundles.length === 0) {
         ok("no dream bundles");

@@ -1,4 +1,5 @@
 import { buildIntentReview } from "../../../core/brain/intent-review.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { CliError, brainVerbContext, parse } from "../helpers.ts";
 
@@ -18,7 +19,13 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
   const report = buildIntentReview(vault, now ? { now } : {});
 
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    // no-dead-ends, phase 3: the exit was computed on the human path and
+    // discarded here. Additive - absent when a review resolved.
+    const payload =
+      report.reviews.length === 0
+        ? { ...report, ...nextCommandField("signal-clusters-absent") }
+        : report;
+    process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
     return 0;
   }
 
@@ -32,14 +39,10 @@ export async function cmdBrainIntentReview(argv: string[]): Promise<number> {
     process.stdout.write("  no active signal clusters\n");
     // no-dead-ends, task 5: clusters are built from the signals in
     // `Brain/inbox/`, so an empty review means there is nothing to
-    // review yet - the exit is recording one. The flag is read here
-    // rather than assumed false, so the rail, not this branch, stays
-    // the thing that decides what stdout can carry.
-    const stream: AdvisoryStream = {
-      command: "brain",
-      argv,
-      jsonRequested: Boolean(flags["json"]),
-    };
+    // review yet - the exit is recording one. The `--json` branch above
+    // returned, so this stream is provably a human one; the payload
+    // carries the same exit as a field.
+    const stream: AdvisoryStream = { command: "brain", argv, jsonRequested: false };
     emitNextStep("signal-clusters-absent", stream);
   }
   return 0;

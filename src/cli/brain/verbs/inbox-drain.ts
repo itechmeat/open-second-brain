@@ -14,6 +14,7 @@ import {
   type DrainItem,
   type DrainReport,
 } from "../../../core/brain/capture/inbox-drain.ts";
+import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
@@ -46,13 +47,19 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
     apply: { type: "boolean" },
     json: { type: "boolean" },
   });
-  const asJson = flags["json"] === true;
   const { config, vault } = brainVerbContext(flags);
   const agent = resolveBrainAgent(flags, config);
   const report = drainInbox(vault, { apply: flags["apply"] === true, agent, now: new Date() });
 
+  const pending = flags["apply"] !== true && report.items.length > 0;
+
   if (flags["json"] === true) {
-    okJson(reportJson(report));
+    // no-dead-ends, phase 3: the exit was computed on the human path and
+    // discarded here.
+    okJson({
+      ...reportJson(report),
+      ...(pending ? nextCommandField("staged-captures-pending") : {}),
+    });
     return 0;
   }
 
@@ -64,15 +71,12 @@ export async function cmdBrainInboxDrain(argv: string[]): Promise<number> {
   ok(
     `  routed ${report.routed}, unroutable ${report.unroutable}, archive-failed ${report.archiveFailed}`,
   );
-  if (!flags["apply"] && report.items.length > 0) {
+  if (pending) {
     // no-dead-ends, task 7: the terminal-state census found this
     // hand-written pointer, which the rail-detection could not see. One
-    // mechanism, one line format.
-    emitNextStep("staged-captures-pending", {
-      command: "brain",
-      argv,
-      jsonRequested: asJson,
-    });
+    // mechanism, one line format. The `--json` branch above returned, so
+    // this stream is provably a human one.
+    emitNextStep("staged-captures-pending", { command: "brain", argv, jsonRequested: false });
   }
   return 0;
 }

@@ -227,9 +227,18 @@ describe("the audit of every other registered emission", () => {
     const missing: string[] = [];
     for (const [file, code, guard] of GUARDED) {
       const text = readFileSync(join(root, file), "utf8");
-      const at = text.indexOf(`"${code}"`);
-      if (at === -1 || !text.slice(0, at).includes(guard)) {
-        missing.push(`${file}: ${code} is not preceded by \`${guard}\``);
+      // EVERY occurrence, not the first: a code is now named twice per
+      // site - once for the rail line and once for the JSON field - and
+      // checking only the first would let the second lose its guard.
+      const occurrences = [...text.matchAll(new RegExp(`"${code}"`, "g"))];
+      if (occurrences.length === 0) {
+        missing.push(`${file}: ${code} is not named at all`);
+        continue;
+      }
+      for (const occurrence of occurrences) {
+        if (!text.slice(0, occurrence.index!).includes(guard)) {
+          missing.push(`${file}: ${code} is not preceded by \`${guard}\``);
+        }
       }
     }
     expect(missing.join("\n")).toBe("");

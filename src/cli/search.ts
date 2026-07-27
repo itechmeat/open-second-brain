@@ -81,6 +81,7 @@ import { IndexWatchRunner } from "../core/search/watch-runner.ts";
 import { SafeguardAbortError } from "../core/brain/safeguard.ts";
 import { canonicalNotePath } from "../core/path-safety.ts";
 import { watch, type FSWatcher } from "node:fs";
+import { nextCommandField } from "../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { CronTemplateError, renderCronTemplate } from "./search-cron-template.ts";
@@ -1087,12 +1088,21 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
     },
   });
 
+  const complete = indexIsComplete(stats);
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(jsonForStats(stats, cfg)) + "\n");
+    // no-dead-ends, phase 3: the rail suppresses its line on this stream
+    // and returns the resolved step precisely so the payload can carry
+    // it. Absent whenever the run left the index incomplete.
+    process.stdout.write(
+      JSON.stringify({
+        ...(jsonForStats(stats, cfg) as Record<string, unknown>),
+        ...(complete ? nextCommandField("search-index-built") : {}),
+      }) + "\n",
+    );
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  if (indexIsComplete(stats)) {
+  if (complete) {
     emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
   }
   return 0;
@@ -1295,12 +1305,21 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
     forceCost: flags["force-cost"] === true,
     onFile: flags["verbose"] ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`) : undefined,
   });
+  const complete = indexIsComplete(stats);
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(jsonForStats(stats, cfg)) + "\n");
+    // no-dead-ends, phase 3: the rail suppresses its line on this stream
+    // and returns the resolved step precisely so the payload can carry
+    // it. Absent whenever the run left the index incomplete.
+    process.stdout.write(
+      JSON.stringify({
+        ...(jsonForStats(stats, cfg) as Record<string, unknown>),
+        ...(complete ? nextCommandField("search-index-built") : {}),
+      }) + "\n",
+    );
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  if (indexIsComplete(stats)) {
+  if (complete) {
     emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
   }
   return 0;
@@ -1318,7 +1337,14 @@ async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<number> {
   const cfg = resolveConfig(flags);
   const status = await indexStatus(cfg);
   if (flags["json"]) {
-    process.stdout.write(JSON.stringify(serializeIndexStatus(status)) + "\n");
+    process.stdout.write(
+      JSON.stringify({
+        ...(serializeIndexStatus(status) as Record<string, unknown>),
+        // Same polarity as the human twin below, so the two conditions
+        // read as one rule rather than as each other's negation.
+        ...(!status.exists ? nextCommandField("search-index-missing") : {}),
+      }) + "\n",
+    );
     return 0;
   }
   process.stdout.write(renderStatusHuman(status));
