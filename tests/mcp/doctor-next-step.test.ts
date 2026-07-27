@@ -21,6 +21,7 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
+import { DOCTOR_EXIT_EXCLUSIONS } from "../../src/core/brain/doctor-exits.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { resetVaultIdentityPins } from "../../src/core/brain/vault-identity.ts";
 
@@ -120,6 +121,30 @@ describe("brain_doctor - the next command reaches an MCP caller", () => {
     const hit = issues(payload, "warnings").find((w) => w.code === "status-folder-mismatch");
     expect(hit).toBeDefined();
     expect(Object.hasOwn(hit!, "next_command")).toBe(false);
+  });
+
+  test("an unregistered warning arrives with the published reason it has none", async () => {
+    writePreference(vault, {
+      slug: "mismatch",
+      topic: "mismatch",
+      principle: "a rule filed under the wrong folder",
+      created_at: "2026-05-14T10:00:00Z",
+      unconfirmed_until: "2026-05-28T10:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    const path = join(vault, "Brain", "preferences", "pref-mismatch.md");
+    writeFileSync(
+      path,
+      readFileSync(path, "utf8").replace("_status: unconfirmed", "_status: retired"),
+      "utf8",
+    );
+    const payload = await callDoctor();
+    // Beside the streams, once per code - the same shape and the same key
+    // the CLI's `--json` renderer uses.
+    expect((payload["no_exit"] as Record<string, string>)["status-folder-mismatch"]).toBe(
+      DOCTOR_EXIT_EXCLUSIONS.get("status-folder-mismatch")!,
+    );
   });
 
   test("a clean vault reports no issues and invents no commands", async () => {

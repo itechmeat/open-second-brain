@@ -23,6 +23,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
+import { DOCTOR_EXIT_EXCLUSIONS } from "../../src/core/brain/doctor-exits.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -166,6 +167,45 @@ describe("brain doctor --json - the field, never the line", () => {
     const mismatch = payload.warnings.find((w) => w["code"] === "status-folder-mismatch");
     expect(mismatch).toBeDefined();
     expect(Object.hasOwn(mismatch!, "next_command")).toBe(false);
+  });
+});
+
+describe("brain doctor - silence is explained, not merely silent", () => {
+  test("a code with no exit says so, with the published reason", async () => {
+    seedUnregisteredIssue();
+    const r = await runCli(["brain", "doctor", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain(
+      `no exit: status-folder-mismatch - ${DOCTOR_EXIT_EXCLUSIONS.get("status-folder-mismatch")!}`,
+    );
+  });
+
+  test("a registered code contributes no explanation - it has a command instead", async () => {
+    seedRegisteredIssues();
+    const r = await runCli(["brain", "doctor", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.stdout).not.toContain("no exit: broken-wikilink");
+  });
+
+  test("--json carries the reasons once per code, off the issue records", async () => {
+    seedUnregisteredIssue();
+    const r = await runCli(["brain", "doctor", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.stdout).not.toContain("no exit: ");
+    const payload = JSON.parse(r.stdout) as {
+      no_exit?: Record<string, string>;
+      warnings: ReadonlyArray<Record<string, unknown>>;
+    };
+    expect(payload.no_exit?.["status-folder-mismatch"]).toBe(
+      DOCTOR_EXIT_EXCLUSIONS.get("status-folder-mismatch")!,
+    );
+    // The reason rides once, beside the streams - never repeated per issue.
+    const mismatch = payload.warnings.find((w) => w["code"] === "status-folder-mismatch");
+    expect(Object.hasOwn(mismatch!, "no_exit")).toBe(false);
   });
 });
 

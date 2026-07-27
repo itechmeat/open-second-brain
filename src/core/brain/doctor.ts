@@ -1087,6 +1087,44 @@ function forEachBrainFile(
   }
 }
 
+/** Record kinds whose parse failures this module classifies. */
+type ParsedRecordKind = "preference" | "retired";
+
+const PREFERENCE_MISSING_FIELD_CODE = "preference-missing-field";
+const PREFERENCE_INVALID_CODE = "preference-invalid";
+const RETIRED_MISSING_FIELD_CODE = "retired-missing-field";
+const RETIRED_INVALID_CODE = "retired-invalid";
+const ISO_INVALID_CODE = "iso-invalid";
+
+/**
+ * The parse-failure codes, per record kind, written out.
+ *
+ * These four used to be built by concatenating the kind onto a suffix,
+ * which meant they appeared nowhere in this module as readable strings -
+ * so the doctor's own code population could not be enumerated from its
+ * source, and the exit census (`tests/core/brain/doctor-exit-census.test.ts`)
+ * could not see them to demand a classification.
+ */
+const PARSE_ERROR_CODES: Readonly<
+  Record<ParsedRecordKind, { readonly missingField: string; readonly invalid: string }>
+> = Object.freeze({
+  preference: Object.freeze({
+    missingField: PREFERENCE_MISSING_FIELD_CODE,
+    invalid: PREFERENCE_INVALID_CODE,
+  }),
+  retired: Object.freeze({
+    missingField: RETIRED_MISSING_FIELD_CODE,
+    invalid: RETIRED_INVALID_CODE,
+  }),
+});
+
+/** Which of the three parse-failure codes `msg` from `kind` reports. */
+function parseErrorCode(kind: ParsedRecordKind, msg: string): string {
+  if (/missing field/.test(msg)) return PARSE_ERROR_CODES[kind].missingField;
+  if (/ISO-8601/i.test(msg)) return ISO_INVALID_CODE;
+  return PARSE_ERROR_CODES[kind].invalid;
+}
+
 /**
  * Classify a parse-time error into a `DoctorIssue` and push it. Shared by
  * `checkPreferences` and `checkRetired`, which previously carried
@@ -1097,7 +1135,7 @@ function forEachBrainFile(
 function classifyParseError(
   err: unknown,
   path: string,
-  kindPrefix: string,
+  kindPrefix: ParsedRecordKind,
   issues: DoctorIssue[],
 ): void {
   if (err instanceof BrainStatusFolderMismatchError) {
@@ -1110,15 +1148,9 @@ function classifyParseError(
     return;
   }
   const msg = (err as Error).message ?? String(err);
-  const isMissingField = /missing field/.test(msg);
-  const isInvalidIso = /ISO-8601/i.test(msg);
   issues.push({
     severity: "error",
-    code: isMissingField
-      ? `${kindPrefix}-missing-field`
-      : isInvalidIso
-        ? "iso-invalid"
-        : `${kindPrefix}-invalid`,
+    code: parseErrorCode(kindPrefix, msg),
     path,
     message: msg,
   });
@@ -1133,7 +1165,7 @@ function checkIso(path: string, field: string, value: string, issues: DoctorIssu
   if (!ISO_RE.test(value)) {
     issues.push({
       severity: "error",
-      code: "iso-invalid",
+      code: ISO_INVALID_CODE,
       path,
       message: `field '${field}' is not a valid ISO-8601 timestamp: ${JSON.stringify(value)}`,
     });

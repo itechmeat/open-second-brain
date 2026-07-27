@@ -11,6 +11,7 @@ import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.
 import { runDoctor } from "../../core/brain/doctor.ts";
 import { applyRepair } from "../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
+import { NO_EXIT_KEY, noExitReasons } from "../../core/brain/doctor-exits.ts";
 import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
 import type { DoctorIssue } from "../../core/brain/types.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -82,6 +83,14 @@ async function toolBrainDoctor(
   // to false. Errors always do.
   const ok = result.errors.length === 0 && (!strict || result.warnings.length === 0);
 
+  // Why a reported code carries no `next_command`. Without it the field's
+  // absence has two readings - a class no single command resolves, and a
+  // class nobody has registered - and an agent cannot tell them apart.
+  // Resolved through the same table the CLI renderer reads.
+  const noExit = noExitReasons(
+    [...result.errors, ...result.warnings, ...(result.uncertain ?? [])].map((i) => i.code),
+  );
+
   return {
     format,
     ok,
@@ -138,6 +147,11 @@ async function toolBrainDoctor(
           })),
         }
       : {}),
+    // Once per code, beside the streams rather than on every issue: a
+    // reason is about a CLASS, unlike a next command, and two hundred
+    // malformed timestamps share one. Absent when every reported code has
+    // an exit, so a clean payload is byte-identical to the pre-task shape.
+    ...(noExit.size > 0 ? { [NO_EXIT_KEY]: Object.fromEntries(noExit) } : {}),
   };
 }
 

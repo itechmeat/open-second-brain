@@ -344,6 +344,32 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain tiers accept <path>",
         autoRepairable: false,
       },
+      // --- Doctor classes the exit census found unregistered ---
+      // The census (`tests/core/brain/doctor-exit-census.test.ts`) forced
+      // every doctor code into one of two buckets. These three turned out
+      // to have a genuine single command; the other twenty-four are
+      // recorded as having none, with the reason, in `doctor-exits.ts`.
+      {
+        code: "brain-root-absent",
+        issueClass: "resolved root carries no Brain layer",
+        nextCommand: "o2b brain init",
+        autoRepairable: false,
+      },
+      {
+        // The exit is the REVIEW, not the repair: what follows it is
+        // `tier-drift-restore` or `tier-drift-accept`, registered above,
+        // and which of the two applies is per drifted note.
+        code: "tier-drift",
+        issueClass: "identity-field hand-edits staged",
+        nextCommand: "o2b brain tiers check",
+        autoRepairable: false,
+      },
+      {
+        code: "entity-label-malformed",
+        issueClass: "entity label fails the quality gate",
+        nextCommand: "o2b brain entity prune",
+        autoRepairable: false,
+      },
       // --- Skill-accept transaction refusals (no-dead-ends, phase 3) ---
       // Both are states the accept transaction itself can leave an
       // operator in, and both used to refuse without naming a way out.
