@@ -1031,6 +1031,29 @@ function indexAdvisoryStream(argv: ReadonlyArray<string>, jsonRequested: boolean
   return { command: "search", argv, jsonRequested };
 }
 
+/**
+ * True when the run this `stats` describes left the index covering every
+ * document, which is what the `search-index-built` class ("search index
+ * up to date") asserts.
+ *
+ * `stats.errors` means, per its own declaration, "this file did not
+ * index". Emitting the class with entries in it would tell the operator
+ * the index is current while the tool knows documents are missing from
+ * it, and would point at `o2b search query` as though a query over it
+ * were complete. Re-labelling the class instead was considered and
+ * rejected: a truthful label for the failed case would have to be
+ * vacuous, and it would leave the misleading COMMAND in place.
+ *
+ * A run with errors is left deliberately without a rail line. The errors
+ * block already names every affected path and message, and what repairs
+ * an unreadable or malformed note is a judgement over that file's
+ * content - there is no `o2b` command that performs it, and naming the
+ * indexer again would advise repeating the run that just failed.
+ */
+function indexIsComplete(stats: IndexStats): boolean {
+  return stats.errors.length === 0;
+}
+
 async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
@@ -1069,7 +1092,9 @@ async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
+  if (indexIsComplete(stats)) {
+    emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
+  }
   return 0;
 }
 
@@ -1275,7 +1300,9 @@ async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
+  if (indexIsComplete(stats)) {
+    emitNextStep("search-index-built", indexAdvisoryStream(argv, flags["json"] === true));
+  }
   return 0;
 }
 

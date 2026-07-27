@@ -52,7 +52,11 @@ import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
 import { cmdInitInteractive } from "./install/init-interactive.ts";
-import { buildOnboardingChecklist, renderOnboardingChecklist } from "./onboarding.ts";
+import {
+  buildOnboardingChecklist,
+  renderOnboardingChecklist,
+  searchIndexExists,
+} from "./onboarding.ts";
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
@@ -174,7 +178,7 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`timezone registered: ${timezone}\n`);
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
-  writeSearchInitBlock(configPath, {
+  writeSearchInitBlock(resolvedVault, configPath, {
     command: "init",
     argv,
     jsonRequested: flags["json"] === true,
@@ -212,19 +216,24 @@ async function cmdOnboarding(argv: string[]): Promise<number> {
 /**
  * Print the post-init search-onboarding block (design §10).
  *
- * Always advertises `o2b search index`. When the user has already
- * flipped `search_semantic_enabled` to true but no embedding key is
- * resolvable, the detailed configuration template is appended. The
- * block prints once, only during `o2b init` — no nagging on other
- * CLI invocations (the dedicated diagnostic is `o2b search check`).
+ * Advertises `o2b search index` when the vault has no index. When the
+ * user has already flipped `search_semantic_enabled` to true but no
+ * embedding key is resolvable, the detailed configuration template is
+ * appended. The block prints once, only during `o2b init` — no nagging
+ * on other CLI invocations (the dedicated diagnostic is
+ * `o2b search check`).
  */
-function writeSearchInitBlock(configPath: string, stream: AdvisoryStream): void {
+function writeSearchInitBlock(vault: string, configPath: string, stream: AdvisoryStream): void {
   process.stdout.write("\nSearch:\n");
-  // no-dead-ends, phase 3: this line was hand-written in the rail's own
-  // `next: <command>` format, which is the second mechanism the rail
-  // exists to prevent. A vault that `init` just created has no index, so
-  // the claim holds unconditionally here.
-  emitNextStep("search-index-missing", stream);
+  // no-dead-ends, phase 3. Two defects at one line. It hand-wrote the
+  // rail's own `next: <command>` format, which is the second mechanism
+  // the rail exists to prevent; and it advertised the indexer
+  // unconditionally, so on a vault that already had an index this block
+  // asserted `search-index-missing` two lines above the onboarding
+  // checklist reporting that same step as done. One command, two
+  // contradictory answers. The predicate is shared with the checklist so
+  // they cannot disagree again.
+  if (!searchIndexExists(vault, configPath)) emitNextStep("search-index-missing", stream);
 
   const data = discoverConfig(configPath).data;
   // v0.10.10 — share the truthy / key-present logic with `o2b status`

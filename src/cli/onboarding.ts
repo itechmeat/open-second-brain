@@ -58,6 +58,19 @@ function countMarkdown(dir: string): number {
 }
 
 /**
+ * True when this vault's search index has been built.
+ *
+ * Exported because `o2b init` prints its search block immediately above
+ * this checklist and must reach the same answer: the block used to
+ * advertise the indexer unconditionally, so one command's output said
+ * "build the index" and "[x] Build the search index" two lines apart.
+ * One predicate, one answer.
+ */
+export function searchIndexExists(vault: string, configPath?: string): boolean {
+  return existsSync(resolveSearchConfig({ vault, configPath }).dbPath);
+}
+
+/**
  * Compute the onboarding checklist from the vault's real on-disk + config
  * state. Pure read: never writes, never calls the network or an LLM.
  */
@@ -70,7 +83,7 @@ export function buildOnboardingChecklist(
 
   const vaultConfigured = typeof config["vault"] === "string" && config["vault"].length > 0;
   const brainScaffolded = existsSync(join(vault, "Brain"));
-  const indexBuilt = existsSync(search.dbPath);
+  const indexBuilt = searchIndexExists(vault, opts.configPath);
   const agentNamed =
     (typeof config["agent_name"] === "string" && config["agent_name"].length > 0) ||
     (typeof config["agentName"] === "string" && config["agentName"].length > 0);

@@ -1,5 +1,6 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { bootstrapBrain } from "../../../core/brain/init.ts";
+import { computeBrainStatus } from "../../../core/brain/status.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { parse, fail, ok, info, okJson, resolveBrainVault } from "../helpers.ts";
 
@@ -72,6 +73,27 @@ export async function cmdBrainInit(argv: string[]): Promise<number> {
   // nothing about what goes in it, which is the archetypal dead end:
   // the whole point of a Brain is the first recorded signal. The rail
   // keeps the line off the `--json` payload.
-  emitNextStep("brain-empty", stream);
+  //
+  // phase 3: fired UNCONDITIONALLY until now, so a re-run over a Brain
+  // full of preferences - every path in `result.skipped` - still
+  // asserted `brain-empty`, whose registered class reads "Brain with
+  // nothing recorded in it". The claim is about content, not about
+  // whether this run created anything, so the condition is the content.
+  if (brainHasNothingRecorded(vault)) emitNextStep("brain-empty", stream);
   return 0;
+}
+
+/**
+ * True when the Brain holds no signal, preference or retired record.
+ *
+ * Counted through the shared status snapshot rather than a private
+ * walk: `computeBrainStatus` is already this codebase's answer to "what
+ * is in this Brain", and a second counter here would be a second thing
+ * to keep in step with the directory layout. Processed signals count as
+ * recorded - a Brain whose inbox has been drained into `processed/` has
+ * a history, and telling its operator it is empty would be false.
+ */
+function brainHasNothingRecorded(vault: string): boolean {
+  const { counts } = computeBrainStatus(vault);
+  return counts.inbox + counts.inbox_processed + counts.preferences + counts.retired === 0;
 }
