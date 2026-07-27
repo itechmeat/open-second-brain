@@ -63,6 +63,13 @@ export type AdvisoryOutcome = (typeof ADVISORY_OUTCOME)[keyof typeof ADVISORY_OU
 
 /** What one rail call did, in full. */
 export interface AdvisoryEmission {
+  /**
+   * The code this call was made for, echoed back. Load-bearing for the
+   * unregistered outcome: without it a caller learns that one of its
+   * codes has no exit but not WHICH, and the batch form's contract of
+   * reporting such codes "by name" would be unmeetable.
+   */
+  readonly code: string;
   readonly outcome: AdvisoryOutcome;
   /** The resolved step, or `null` iff the code is unregistered. */
   readonly nextStep: NextStep | null;
@@ -97,6 +104,7 @@ export function emitNextStep(code: string, stream: AdvisoryStream): AdvisoryEmis
   const nextStep = resolveNextStep(code);
   if (nextStep === null) {
     return Object.freeze({
+      code,
       outcome: ADVISORY_OUTCOME.unregisteredCode,
       nextStep: null,
       line: null,
@@ -104,6 +112,7 @@ export function emitNextStep(code: string, stream: AdvisoryStream): AdvisoryEmis
   }
   if (!advisoryIsLegal(stream)) {
     return Object.freeze({
+      code,
       outcome: ADVISORY_OUTCOME.suppressedMachineStream,
       nextStep,
       line: null,
@@ -111,7 +120,7 @@ export function emitNextStep(code: string, stream: AdvisoryStream): AdvisoryEmis
   }
   const line = renderNextStepLine(nextStep);
   info(line);
-  return Object.freeze({ outcome: ADVISORY_OUTCOME.emitted, nextStep, line });
+  return Object.freeze({ code, outcome: ADVISORY_OUTCOME.emitted, nextStep, line });
 }
 
 /**

@@ -72,6 +72,7 @@ describe("advisory rail - what to say", () => {
     });
     expect(out).toBe(`next: ${REGISTERED_COMMAND}\n`);
     expect(result).toEqual({
+      code: REGISTERED_CODE,
       outcome: ADVISORY_OUTCOME.emitted,
       nextStep: {
         code: REGISTERED_CODE,
@@ -105,6 +106,7 @@ describe("advisory rail - what to say", () => {
     });
     expect(out).toBe("");
     expect(result).toEqual({
+      code: "no-such-diagnostic-code",
       outcome: ADVISORY_OUTCOME.unregisteredCode,
       nextStep: null,
       line: null,
@@ -229,6 +231,11 @@ describe("advisory rail - the batch form (no-dead-ends, task 4)", () => {
       ADVISORY_OUTCOME.unregisteredCode,
       ADVISORY_OUTCOME.emitted,
     ]);
+    // "by name" is the whole point of returning an unregistered code at
+    // all: a caller batching codes must be able to say WHICH of its
+    // issues has no exit. Asserting only the outcome would let the
+    // record stop carrying the name without any test noticing.
+    expect(emissions.map((e) => e.code)).toEqual(["no-such-diagnostic-code", REGISTERED_CODE]);
   });
 
   test("no codes means no lines and no emissions", async () => {
