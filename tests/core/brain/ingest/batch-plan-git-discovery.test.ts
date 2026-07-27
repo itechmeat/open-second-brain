@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -94,6 +94,126 @@ describe("repository-declared ignore layers", () => {
     write("mono/.gitignore", "drop.md\n");
     const plan = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "pkg/a" });
     expect(plannedPaths(plan)).toEqual(["mono/pkg/a/keep.md"]);
+  });
+});
+
+describe("a subpath cannot silently re-enter an ignored subtree", () => {
+  test("a subpath under an ignored directory plans nothing and says so", () => {
+    write("mono/pkg/a/keep.md");
+    write("mono/.gitignore", "pkg/\n");
+    // Whole-tree planning already treats the subtree as ignored...
+    expect(plannedPaths(planBatches(vault, SOURCE, CAPS))).toEqual([]);
+    // ...and naming a directory inside it does not change the answer.
+    const scoped = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "pkg/a" });
+    expect(plannedPaths(scoped)).toEqual([]);
+    expect(scoped.ignoreWarnings).toHaveLength(1);
+    const warning = scoped.ignoreWarnings[0]!;
+    expect(warning.source).toBe("--src-subpath");
+    expect(warning.pattern).toBe("pkg/a");
+    expect(warning.reason).toContain("mono/pkg");
+  });
+
+  test("the slashless ignore form prunes the subpath walk too", () => {
+    write("mono/pkg/a/keep.md");
+    write("mono/.gitignore", "pkg\n");
+    const scoped = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "pkg/a" });
+    expect(plannedPaths(scoped)).toEqual([]);
+    expect(scoped.ignoreWarnings).toHaveLength(1);
+  });
+
+  test("the walk root itself being the ignored directory is pruned", () => {
+    write("mono/pkg/keep.md");
+    write("mono/.gitignore", "pkg/\n");
+    const scoped = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "pkg" });
+    expect(plannedPaths(scoped)).toEqual([]);
+    expect(scoped.ignoreWarnings).toHaveLength(1);
+  });
+
+  test("an --exclude re-include is the explicit way to walk it anyway", () => {
+    write("mono/pkg/a/keep.md");
+    write("mono/.gitignore", "pkg/\n");
+    const scoped = planBatches(vault, SOURCE, {
+      ...CAPS,
+      srcSubpath: "pkg/a",
+      exclude: ["!pkg/"],
+    });
+    expect(plannedPaths(scoped)).toEqual(["mono/pkg/a/keep.md"]);
+    expect(scoped.ignoreWarnings).toEqual([]);
+  });
+
+  test("a subpath under a directory the repository never ignored is unaffected", () => {
+    write("mono/pkg/a/keep.md");
+    write("mono/.gitignore", "other/\n");
+    const scoped = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "pkg/a" });
+    expect(plannedPaths(scoped)).toEqual(["mono/pkg/a/keep.md"]);
+    expect(scoped.ignoreWarnings).toEqual([]);
+  });
+});
+
+describe("a subpath cannot cross a nested repository boundary", () => {
+  test("a subpath inside a submodule is refused", () => {
+    write("mono/sub/inner/x.md");
+    write("mono/sub/.git", "gitdir: ../.git/modules/sub\n");
+    // The unscoped walk already refuses to attribute those files to this tree.
+    expect(plannedPaths(planBatches(vault, SOURCE, CAPS))).toEqual([]);
+    expect(() => planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "sub/inner" })).toThrow(
+      /nested repository boundary/,
+    );
+  });
+
+  test("a subpath equal to the submodule root is refused", () => {
+    write("mono/sub/inner.md");
+    write("mono/sub/.git", "gitdir: ../.git/modules/sub\n");
+    expect(() => planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "sub" })).toThrow(
+      /nested repository boundary/,
+    );
+  });
+
+  test("a subpath inside a nested independent checkout is refused", () => {
+    write("mono/vendor/inner/x.md");
+    mkdirSync(join(vault, "mono", "vendor", ".git"), { recursive: true });
+    expect(() => planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "vendor/inner" })).toThrow(
+      /nested repository boundary/,
+    );
+  });
+
+  test("an --exclude re-include cannot open a repository boundary", () => {
+    write("mono/sub/inner/x.md");
+    write("mono/sub/.git", "gitdir: ../.git/modules/sub\n");
+    expect(() =>
+      planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "sub/inner", exclude: ["!sub/"] }),
+    ).toThrow(/nested repository boundary/);
+  });
+
+  test("an ordinary intermediate directory is still descended into", () => {
+    write("mono/plain/inner/x.md");
+    const plan = planBatches(vault, SOURCE, { ...CAPS, srcSubpath: "plain/inner" });
+    expect(plannedPaths(plan)).toEqual(["mono/plain/inner/x.md"]);
+  });
+});
+
+describe("an ignore file that cannot be honoured reaches the plan", () => {
+  test("an unreadable .gitignore is a structured plan warning, not a silent pass", () => {
+    write("mono/secret.md");
+    write("mono/.gitignore", "secret.md\n");
+    chmodSync(join(vault, "mono", ".gitignore"), 0o000);
+    const plan = planBatches(vault, SOURCE, CAPS);
+    // The file the repository declared excluded is still queued - but never
+    // without a signal saying why the declaration was not applied.
+    expect(plannedPaths(plan)).toEqual(["mono/secret.md"]);
+    expect(plan.ignoreWarnings).toHaveLength(1);
+    expect(plan.ignoreWarnings[0]!.source).toBe("mono/.gitignore");
+    expect(plan.ignoreWarnings[0]!.reason).toContain("EACCES");
+  });
+
+  test("a symlinked .gitignore is refused with a warning", () => {
+    write("mono/secret.md");
+    write("elsewhere/rules", "secret.md\n");
+    symlinkSync(join(vault, "elsewhere", "rules"), join(vault, "mono", ".gitignore"));
+    const plan = planBatches(vault, SOURCE, CAPS);
+    expect(plannedPaths(plan)).toEqual(["mono/secret.md"]);
+    expect(plan.ignoreWarnings).toHaveLength(1);
+    expect(plan.ignoreWarnings[0]!.reason).toContain("symbolic link");
   });
 });
 

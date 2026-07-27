@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -103,26 +103,65 @@ describe("root scan files", () => {
   });
 });
 
+/** Run `fn` with stderr captured, returning everything it wrote. */
+function captureStderr(fn: () => void): string {
+  const chunks: string[] = [];
+  const real = process.stderr.write.bind(process.stderr);
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(typeof chunk === "string" ? chunk : String(chunk));
+    return true;
+  }) as typeof process.stderr.write;
+  try {
+    fn();
+  } finally {
+    process.stderr.write = real;
+  }
+  return chunks.join("");
+}
+
 describe("malformed patterns", () => {
   test("a malformed pattern warns on stderr and never silently skips", () => {
     put("src/a.ts");
     put("src/[weird.ts");
     put(".gitignore", "[unterminated\n");
-    const lines: string[] = [];
-    const real = process.stderr.write.bind(process.stderr);
-    process.stderr.write = ((chunk: unknown) => {
-      lines.push(typeof chunk === "string" ? chunk : String(chunk));
-      return true;
-    }) as typeof process.stderr.write;
-    let targets: string[];
-    try {
+    let targets: string[] = [];
+    const printed = captureStderr(() => {
       targets = listScanTargets(root);
-    } finally {
-      process.stderr.write = real;
-    }
+    });
     // Malformed rule produced no matcher, so nothing was silently dropped.
     expect(targets).toContain("src/a.ts");
     expect(targets).toContain("src/[weird.ts");
-    expect(lines.join("")).toContain("malformed ignore pattern");
+    expect(printed).toContain("malformed ignore pattern");
+  });
+});
+
+describe("unusable ignore files", () => {
+  test("an unreadable .gitignore warns on stderr instead of passing silently", () => {
+    put("src/a.ts");
+    put("src/secret.ts");
+    put(".gitignore", "secret.ts\n");
+    chmodSync(join(root, ".gitignore"), 0o000);
+    let targets: string[] = [];
+    const printed = captureStderr(() => {
+      targets = listScanTargets(root);
+    });
+    // The declaration could not be applied, so the file is still scanned - and
+    // the operator is told why rather than being left to guess.
+    expect(targets).toContain("src/secret.ts");
+    expect(printed).toContain(".gitignore");
+    expect(printed).toContain("EACCES");
+  });
+
+  test("a symlinked .gitignore is refused with a stderr warning", () => {
+    put("src/a.ts");
+    put("src/secret.ts");
+    put("outside/rules", "secret.ts\n");
+    symlinkSync(join(root, "outside", "rules"), join(root, ".gitignore"));
+    let targets: string[] = [];
+    const printed = captureStderr(() => {
+      targets = listScanTargets(root);
+    });
+    expect(targets).toContain("src/secret.ts");
+    expect(printed).toContain("symbolic link");
   });
 });

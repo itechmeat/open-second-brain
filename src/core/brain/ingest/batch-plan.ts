@@ -26,7 +26,11 @@
  * {@link ../../fs/git-discovery.ts} module the hygiene repo scan also composes:
  * a source directory's own `.gitignore`, its nested `.gitignore` files and its
  * `.git/info/exclude` all narrow the walk, and a submodule or nested checkout
- * is not descended into. Layer precedence, lowest first: `.git/info/exclude`,
+ * is not descended into - not as a `readdir` child, and not as a directory a
+ * `--src-subpath` starts below either (that is refused outright, since those
+ * files belong to another repository). An ignore file that exists but cannot be
+ * honoured never passes silently: it comes back on
+ * {@link BatchPlan.ignoreWarnings}. Layer precedence, lowest first: `.git/info/exclude`,
  * the source dir's `.gitignore`, each nested `.gitignore` by depth, then the
  * operator's `--exclude` - so an operator pattern always has the last word.
  * Discovery stays in-process: shelling out to `git ls-files` would make the
@@ -45,6 +49,7 @@ import { join, posix, relative } from "node:path";
 import {
   buildRepositoryBaseScope,
   extendWithDirectoryIgnore,
+  IGNORE_WARNING_NO_LINE,
   isNestedRepositoryBoundary,
 } from "../../fs/git-discovery.ts";
 import {
@@ -97,6 +102,10 @@ export interface BatchPlanOptions {
   /**
    * Scope discovery to a subtree of `sourceDir` (t_e82101a5), e.g. `pkg/a` in a
    * monorepo. Resolved relative to the source dir; a value escaping it throws.
+   * Narrows the walk, never widens it: a subpath under a directory the
+   * repository ignores plans nothing and reports why on
+   * {@link BatchPlan.ignoreWarnings} (override it with an `exclude`
+   * re-include), and a subpath under a submodule or nested checkout throws.
    * Absent → the whole source dir is walked (byte-identical to before).
    */
   readonly srcSubpath?: string;
@@ -160,11 +169,15 @@ export interface BatchPlan {
    */
   readonly resumedCompleted: number;
   /**
-   * Malformed patterns found in the repository's OWN ignore files (t_4b2bd8f7),
-   * sorted by source then line. Such a pattern produces no rule, so nothing is
-   * silently dropped, and it never fails the plan - the repository is an input,
-   * not operator intent. A malformed operator `--exclude` still throws. Empty on
-   * a tree whose ignore files all compile, and on a tree that declares none.
+   * Everything the walk could not apply as declared (t_4b2bd8f7), sorted by
+   * source then line: a malformed pattern in the repository's OWN ignore files,
+   * an ignore file that exists but could not be read (unreadable, a symlink,
+   * oversized - `line` 0), and a `--src-subpath` that pointed inside a subtree
+   * the repository ignores (`source` `--src-subpath`, `line` 0). None of these
+   * fails the plan - the repository is an input, not operator intent - but none
+   * of them passes silently either. A malformed operator `--exclude` still
+   * throws, and so does a subpath crossing a repository boundary. Empty on a
+   * tree whose ignore files all compile, and on a tree that declares none.
    */
   readonly ignoreWarnings: readonly IgnoreWarning[];
 }
@@ -200,11 +213,13 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
 
   // Optional subtree scoping (t_e82101a5): resolve `srcSubpath` under the
   // source dir. ensureInsideVault throws a typed error if it escapes.
+  const srcSubpath =
+    opts.srcSubpath !== undefined && opts.srcSubpath.length > 0 ? opts.srcSubpath : null;
   let walkRoot = dirAbs;
-  if (opts.srcSubpath !== undefined && opts.srcSubpath.length > 0) {
-    walkRoot = ensureInsideVault(join(dirAbs, opts.srcSubpath), dirAbs);
+  if (srcSubpath !== null) {
+    walkRoot = ensureInsideVault(join(dirAbs, srcSubpath), dirAbs);
     if (!existsSync(walkRoot) || !statSync(walkRoot).isDirectory()) {
-      throw new Error(`planBatches: src subpath is not an existing directory: ${opts.srcSubpath}`);
+      throw new Error(`planBatches: src subpath is not an existing directory: ${srcSubpath}`);
     }
   }
 
@@ -215,22 +230,42 @@ export function planBatches(vault: string, sourceDir: string, opts: BatchPlanOpt
   const excludeLayer = buildExcludeLayer(opts.exclude ?? [], dirRel);
 
   // What the repository declares about itself (t_4b2bd8f7), beneath the
-  // operator's layer. The source dir is the repository root for this purpose;
-  // a subpath-scoped walk still starts from the declarations above it.
+  // operator's layer. The source dir is the repository root for this purpose; a
+  // subpath-scoped walk starts from the declarations above it AND obeys them, so
+  // naming a subpath can neither re-enter an ignored subtree nor cross into
+  // another repository (both would make the same tree answer two ways).
   const ignoreWarnings: IgnoreWarning[] = [];
   const base = buildRepositoryBaseScope(dirAbs, dirRel);
   ignoreWarnings.push(...base.warnings);
-  const walkScope = extendDownToWalkRoot(base.scope, dirAbs, dirRel, walkRoot, ignoreWarnings);
+  let walkScope = base.scope;
+  let prunedWarning: IgnoreWarning | null = null;
+  if (srcSubpath !== null) {
+    const descent = descendToSubpathRoot({
+      scope: base.scope,
+      excludeLayer,
+      sourceDirAbs: dirAbs,
+      sourceDirRel: dirRel,
+      subpath: srcSubpath,
+      walkRoot,
+      warnings: ignoreWarnings,
+    });
+    walkScope = descent.scope;
+    prunedWarning = descent.prunedWarning;
+    if (prunedWarning !== null) ignoreWarnings.push(prunedWarning);
+  }
 
-  // Discover ingestible files as canonical vault-relative paths, sorted.
+  // Discover ingestible files as canonical vault-relative paths, sorted. A walk
+  // root inside an ignored subtree discovers nothing and says why on the plan.
   const discovered: string[] = [];
-  collectIngestible(walkRoot, walkScope, {
-    vault,
-    extensions,
-    excludeLayer,
-    out: discovered,
-    warnings: ignoreWarnings,
-  });
+  if (prunedWarning === null) {
+    collectIngestible(walkRoot, walkScope, {
+      vault,
+      extensions,
+      excludeLayer,
+      out: discovered,
+      warnings: ignoreWarnings,
+    });
+  }
   const discoveredRel = discovered
     .map((abs) => canonicalNotePath(toPosixRel(vault, abs)))
     .toSorted();
@@ -351,31 +386,94 @@ function buildExcludeLayer(patterns: readonly string[], baseDir: string): Ignore
   return layer;
 }
 
+/** Everything {@link descendToSubpathRoot} needs to reach a subpath walk root. */
+interface SubpathDescentInput {
+  /** Scope governing the source dir, before any intermediate directory is added. */
+  readonly scope: IgnoreScope;
+  /** Operator `--exclude`, stacked above every repository layer. Null when absent. */
+  readonly excludeLayer: IgnoreLayer | null;
+  readonly sourceDirAbs: string;
+  readonly sourceDirRel: string;
+  /** The operator's `--src-subpath` value, recorded on a prune warning. */
+  readonly subpath: string;
+  readonly walkRoot: string;
+  /** Accumulates malformed patterns found on the way down. */
+  readonly warnings: IgnoreWarning[];
+}
+
+/** The scope governing the walk root, or the reason it must not be walked. */
+interface SubpathDescent {
+  readonly scope: IgnoreScope;
+  /**
+   * Null when every directory on the way down is walkable. Non-null when one of
+   * them is ignored: the requested subtree sits inside an ignored one, is NOT
+   * walked, and this warning carries the explanation onto the plan.
+   */
+  readonly prunedWarning: IgnoreWarning | null;
+}
+
+/** Provenance recorded on a warning caused by the `--src-subpath` flag itself. */
+const SRC_SUBPATH_WARNING_SOURCE = "--src-subpath";
+
 /**
- * Layer the `.gitignore` of every directory from the source dir (exclusive) down
- * to the walk root (inclusive), so a `--src-subpath` walk still obeys what the
- * directories it skipped over declared about their subtrees. A walk root equal
- * to the source dir traverses nothing and returns `scope` unchanged.
+ * Walk from the source dir (exclusive) down to the subpath walk root
+ * (inclusive), applying to every directory on the way the same two rules
+ * {@link collectIngestible} applies to a directory it meets as a `readdir`
+ * entry - a nested repository is a boundary, an ignored directory prunes its
+ * subtree - and layering each directory's own `.gitignore` for what lies below
+ * it. Without this a `--src-subpath` would re-enter a subtree the repository
+ * declared off-limits, or a foreign repository, purely because the walk never
+ * passed through the parent that would have stopped it.
+ *
+ * Throws when a directory on the way down is a submodule or nested checkout.
  */
-function extendDownToWalkRoot(
-  scope: IgnoreScope,
-  sourceDirAbs: string,
-  sourceDirRel: string,
-  walkRoot: string,
-  warnings: IgnoreWarning[],
-): IgnoreScope {
-  let current = scope;
-  let abs = sourceDirAbs;
-  let rel = sourceDirRel;
-  for (const segment of toPosixRel(sourceDirAbs, walkRoot).split(posix.sep)) {
+function descendToSubpathRoot(input: SubpathDescentInput): SubpathDescent {
+  let current = input.scope;
+  let abs = input.sourceDirAbs;
+  let rel = input.sourceDirRel;
+  for (const segment of toPosixRel(input.sourceDirAbs, input.walkRoot).split(posix.sep)) {
     if (segment.length === 0) continue;
     abs = join(abs, segment);
     rel = posix.join(rel, segment);
+    // A boundary, not an ignore rule: those files are another repository's, so
+    // no operator flag can re-include them and the plan refuses outright rather
+    // than attributing a foreign repository's files to this tree.
+    if (isNestedRepositoryBoundary(abs)) {
+      throw new Error(
+        `planBatches: src subpath "${input.subpath}" crosses a nested repository ` +
+          `boundary at "${rel}": those files belong to that repository - plan against ` +
+          "it directly",
+      );
+    }
+    // Ignored-ness is decided by the layers governing the PARENT plus the
+    // operator's `--exclude`, exactly as it is for a readdir child, so an
+    // `--exclude` re-include remains the one way to override the repository.
+    const effective = input.excludeLayer === null ? current : current.extend(input.excludeLayer);
+    if (effective.isIgnored(rel, true)) {
+      return { scope: current, prunedWarning: subpathIgnoredWarning(input.subpath, rel) };
+    }
     const extended = extendWithDirectoryIgnore(current, abs, rel);
-    warnings.push(...extended.warnings);
+    input.warnings.push(...extended.warnings);
     current = extended.scope;
   }
-  return current;
+  return { scope: current, prunedWarning: null };
+}
+
+/**
+ * The structured warning a subpath pointing into an ignored subtree produces.
+ * The plan comes back empty on purpose - the same tree must answer the same way
+ * however it is addressed - and this says so instead of leaving the operator
+ * with a silent empty plan.
+ */
+function subpathIgnoredWarning(subpath: string, ignoredDir: string): IgnoreWarning {
+  return {
+    source: SRC_SUBPATH_WARNING_SOURCE,
+    line: IGNORE_WARNING_NO_LINE,
+    pattern: subpath,
+    reason:
+      `"${ignoredDir}" is ignored by the repository, so nothing under the requested ` +
+      'subpath was planned; override it with an --exclude "!" re-include',
+  };
 }
 
 /** Everything the recursive walk needs beyond the current directory and scope. */

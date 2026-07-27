@@ -177,7 +177,13 @@ async function toolBrainDeleteBySource(
   return serializePlan(plan);
 }
 
-function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
+/**
+ * The wire shape of a batch plan, shared by every surface that emits one: this
+ * tool and `o2b brain batch-plan --json` (which spreads its own `reconcile` on
+ * top). One serializer means a field added here cannot reach one surface and
+ * miss the other.
+ */
+export function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
   return {
     source_dir: plan.sourceDir,
     max_batch_bytes: plan.maxBatchBytes,
@@ -435,7 +441,7 @@ export const INGEST_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         src_subpath: {
           type: "string",
           description:
-            "Scope discovery to a subtree of source_dir (e.g. pkg/a). A value escaping source_dir is a typed error. Absent walks the whole dir.",
+            "Scope discovery to a subtree of source_dir (e.g. pkg/a). Narrows only: escaping source_dir or entering a submodule errors; an ignored subtree plans nothing.",
         },
         exclude: {
           type: "array",

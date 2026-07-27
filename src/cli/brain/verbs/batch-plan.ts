@@ -12,6 +12,8 @@
 
 import { planBatches } from "../../../core/brain/ingest/batch-plan.ts";
 import { reconcilePlan } from "../../../core/brain/ingest/reconcile.ts";
+import { formatIgnoreWarning } from "../../../core/fs/git-discovery.ts";
+import { serializeBatchPlan } from "../../../mcp/brain/ingest-tools.ts";
 import { brainVerbContext, fail, info, ok, okJson, parse, usageError } from "../helpers.ts";
 
 /** Default caps, mirroring the MCP surface (1 MiB / 25 files per batch). */
@@ -67,42 +69,9 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
 
     if (flags["json"]) {
       okJson({
-        source_dir: plan.sourceDir,
-        max_batch_bytes: plan.maxBatchBytes,
-        max_batch_files: plan.maxBatchFiles,
-        total_files: plan.totalFiles,
-        total_bytes: plan.totalBytes,
-        skipped: [...plan.skipped],
-        // Only present when the extractable gate skipped something, so the
-        // no-declaration output is byte-identical to before.
-        ...(plan.skippedNonExtractable.length > 0
-          ? {
-              skipped_non_extractable: plan.skippedNonExtractable.map((s) => ({
-                path: s.path,
-                reason: s.reason,
-              })),
-            }
-          : {}),
-        // Only present when the repository's own ignore files carried a
-        // malformed pattern, so a tree with none (or only well-formed ones)
-        // is byte-identical to before.
-        ...(plan.ignoreWarnings.length > 0
-          ? {
-              ignore_warnings: plan.ignoreWarnings.map((w) => ({
-                source: w.source,
-                line: w.line,
-                pattern: w.pattern,
-                reason: w.reason,
-              })),
-            }
-          : {}),
-        plan_id: plan.planId,
-        resumed_completed: plan.resumedCompleted,
-        batches: plan.batches.map((b) => ({
-          index: b.index,
-          total_bytes: b.totalBytes,
-          files: b.files.map((f) => ({ path: f.path, bytes: f.bytes, status: f.status })),
-        })),
+        // One serializer feeds both machine surfaces (the MCP tool owns it), so
+        // a field added to the plan can never reach one and miss the other.
+        ...serializeBatchPlan(plan),
         // Only present with --reconcile, so the default output is unchanged.
         ...(report !== undefined
           ? {
@@ -137,10 +106,9 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
       for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
     }
     if (plan.ignoreWarnings.length > 0) {
-      info(`  ${plan.ignoreWarnings.length} malformed ignore pattern(s) found:`);
-      for (const w of plan.ignoreWarnings) {
-        info(`    - ${w.source}:${w.line}: "${w.pattern}" (${w.reason})`);
-      }
+      info(`  ${plan.ignoreWarnings.length} ignore warning(s):`);
+      // Same wording as the hygiene scan's stderr sink: one formatter.
+      for (const w of plan.ignoreWarnings) info(`    - ${formatIgnoreWarning(w)}`);
     }
     if (report !== undefined) {
       if (report.complete) {

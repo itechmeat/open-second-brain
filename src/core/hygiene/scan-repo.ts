@@ -15,7 +15,11 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-import { buildRepositoryBaseScope, extendWithDirectoryIgnore } from "../fs/git-discovery.ts";
+import {
+  buildRepositoryBaseScope,
+  extendWithDirectoryIgnore,
+  formatIgnoreWarning,
+} from "../fs/git-discovery.ts";
 import type { IgnoreScope, IgnoreWarning } from "../fs/ignore.ts";
 import { scanFiles, type HardcodedPathFinding } from "./hardcoded-paths.ts";
 
@@ -139,17 +143,19 @@ function collectFiles(
   }
 }
 
-/** Emit one stderr line per malformed ignore pattern, deduplicated. */
+/**
+ * Emit one stderr line per ignore-file warning, deduplicated. Covers both a
+ * malformed pattern and an ignore file that could not be honoured at all - the
+ * shared formatter words each kind, so this sink and the ingest planner's plan
+ * output never drift apart.
+ */
 function reportIgnoreWarnings(warnings: ReadonlyArray<IgnoreWarning>): void {
   const seen = new Set<string>();
   for (const w of warnings) {
     const key = `${w.source}:${w.line}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    process.stderr.write(
-      `hygiene: ignoring malformed ignore pattern at ${w.source}:${w.line} ` +
-        `(${w.pattern}): ${w.reason}\n`,
-    );
+    process.stderr.write(`hygiene: ignoring ${formatIgnoreWarning(w)}\n`);
   }
 }
 

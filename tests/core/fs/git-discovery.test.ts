@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +17,7 @@ import {
   buildRepositoryBaseScope,
   extendWithDirectoryIgnore,
   isNestedRepositoryBoundary,
+  MAX_IGNORE_FILE_BYTES,
 } from "../../../src/core/fs/git-discovery.ts";
 import { IgnoreScope } from "../../../src/core/fs/ignore.ts";
 
@@ -110,10 +111,67 @@ describe("extendWithDirectoryIgnore", () => {
     expect(scope.isIgnored("keep/important.md", false)).toBe(false);
   });
 
-  test("an absent .gitignore returns the scope unchanged and warns nothing", () => {
-    const base = IgnoreScope.empty();
+  test("an absent .gitignore leaves the scope's behaviour untouched and warns nothing", () => {
+    put(".gitignore", "drop.md\n");
+    const base = buildRepositoryBaseScope(root, "").scope;
     const { scope, warnings } = extendWithDirectoryIgnore(base, join(root, "pkg"), "pkg");
-    expect(scope).toBe(base);
+    // The directory declares nothing, so the composed scope decides every path
+    // exactly as the scope it was built from does.
+    expect(scope.isIgnored("pkg/drop.md", false)).toBe(base.isIgnored("pkg/drop.md", false));
+    expect(scope.isIgnored("pkg/keep.md", false)).toBe(base.isIgnored("pkg/keep.md", false));
+    expect(scope.isEmpty).toBe(base.isEmpty);
+    expect(warnings).toEqual([]);
+  });
+});
+
+describe("an ignore file that cannot be honoured is reported, never swallowed", () => {
+  test("an unreadable .gitignore comes back as a structured file-level warning", () => {
+    put(".gitignore", "secret.md\n");
+    chmodSync(join(root, ".gitignore"), 0o000);
+    const { scope, warnings } = buildRepositoryBaseScope(root, "");
+    // Nothing was filtered - and the operator is told why.
+    expect(scope.isIgnored("secret.md", false)).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.source).toBe(".gitignore");
+    expect(warnings[0]!.line).toBe(0);
+    expect(warnings[0]!.reason).toContain("EACCES");
+  });
+
+  test("an unreadable nested .gitignore names that directory's file", () => {
+    put("pkg/.gitignore", "drop.md\n");
+    chmodSync(join(root, "pkg", ".gitignore"), 0o000);
+    const { warnings } = extendWithDirectoryIgnore(IgnoreScope.empty(), join(root, "pkg"), "pkg");
+    expect(warnings.map((w) => w.source)).toEqual(["pkg/.gitignore"]);
+  });
+
+  test("a symlinked .gitignore is refused with a warning, never followed", () => {
+    put("outside/target.gitignore", "secret.md\n");
+    symlinkSync(join(root, "outside", "target.gitignore"), join(root, ".gitignore"));
+    const { scope, warnings } = buildRepositoryBaseScope(root, "");
+    expect(scope.isIgnored("secret.md", false)).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.source).toBe(".gitignore");
+    expect(warnings[0]!.line).toBe(0);
+    expect(warnings[0]!.reason).toContain("symbolic link");
+  });
+
+  test("an oversized .gitignore is refused with a warning rather than read", () => {
+    put(".gitignore", `${"#".repeat(MAX_IGNORE_FILE_BYTES)}\nsecret.md\n`);
+    const { scope, warnings } = buildRepositoryBaseScope(root, "");
+    expect(scope.isIgnored("secret.md", false)).toBe(false);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.reason).toContain(String(MAX_IGNORE_FILE_BYTES));
+  });
+
+  test("a .gitignore that is a directory is refused with a warning", () => {
+    mkdirSync(join(root, ".gitignore"), { recursive: true });
+    const { warnings } = buildRepositoryBaseScope(root, "");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.reason).toContain("regular file");
+  });
+
+  test("an absent ignore file is the ordinary case and warns nothing", () => {
+    const { warnings } = buildRepositoryBaseScope(root, "");
     expect(warnings).toEqual([]);
   });
 });
