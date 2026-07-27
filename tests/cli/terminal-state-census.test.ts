@@ -28,7 +28,13 @@
  * the refusal it makes was extracted, and the only repair available then
  * is a hand entry, which is an exclusion. So the walk follows a call into
  * the sibling modules of the handler's OWN command that it actually
- * imports, up to {@link MAX_MODULE_HOPS} of them.
+ * imports, {@link MAX_MODULE_HOPS} hop deep.
+ *
+ * That widening is itself an escape hatch - it is the mechanism by which
+ * a verb that refuses nothing could be credited with a refusal - so every
+ * state that reaches its class only through the hop is named in
+ * {@link CLASSIFIED_BY_MODULE_WALK} with a written reason, under the same
+ * gates and the same cap as a hand-classified entry.
  *
  * Modelled on `tests/core/brain/vault-guard-census.test.ts`: detect the
  * property syntactically, keep one explicit inventory of exceptions, one
@@ -76,7 +82,12 @@ const STATE_CLASS = Object.freeze({
 
 type StateClass = (typeof STATE_CLASS)[keyof typeof STATE_CLASS];
 
-interface HandClassification {
+/**
+ * A class this file states by name rather than leaving to the detector,
+ * with the argument for it. Both inventories below hold these, and both
+ * are held to the same gates.
+ */
+interface StateNote {
   readonly cls: StateClass;
   readonly reason: string;
 }
@@ -97,9 +108,12 @@ interface HandClassification {
  * no forward exit and should not - a property about one path through a
  * verb, which is not the property these three classes measure. Re-adding
  * them here would be an exclusion covering a question this census does not
- * ask; that argument belongs beside the code that renders the empty case.
+ * ask, so each argument travels instead with the state it describes, in
+ * that verb's {@link CLASSIFIED_BY_MODULE_WALK} entry. Its best home is
+ * the code that renders the empty case; a test cannot put it there, and
+ * deleting it was not the alternative.
  */
-const CLASSIFIED_BY_HAND: Readonly<Record<string, HandClassification>> = Object.freeze({
+const CLASSIFIED_BY_HAND: Readonly<Record<string, StateNote>> = Object.freeze({
   "o2b onboarding": {
     cls: STATE_CLASS.exit,
     reason:
@@ -125,6 +139,80 @@ const CLASSIFIED_BY_HAND: Readonly<Record<string, HandClassification>> = Object.
       "not less.",
   },
 });
+
+/**
+ * States whose class the detector can only see because the walk left the
+ * verb's own file for a sibling module of its command - the escape hatch
+ * the widened walk opened.
+ *
+ * Every one of them is a refusal the split moved out of the verb and into
+ * `<command>/helpers.ts`. The verb still makes it, so crediting it is the
+ * right answer; but "the walk reached a shared module" is also exactly
+ * how a verb that refuses nothing would come to look classified, which is
+ * why an entry here owes a written reason, passes the gates a
+ * hand-classified entry passes, and counts against the same cap.
+ *
+ * Three of these five carry a second argument, about the EMPTY RESULT
+ * each verb can return. That is a different question from the one the
+ * three classes ask - it is a property of one path through a verb, not of
+ * the verb's terminal states - and it is recorded here because the state
+ * it is about is named here.
+ */
+const CLASSIFIED_BY_MODULE_WALK: Readonly<Record<string, StateNote>> = Object.freeze({
+  "o2b brain mcp-landscape": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through `brainVerbContext` in `brain/helpers.ts`, which throws " +
+      "`CliError(NO_VAULT_ERROR)` when no vault resolves. Its EMPTY result is the other " +
+      "question, and names no exit by design: it lists the MCP servers declared in runtime " +
+      "configuration files this tool never writes, so an empty landscape changes by editing " +
+      "another runtime's config and no `o2b` command is its exit.",
+  },
+  "o2b brain semantics-backfill": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through `brainVerbContext` in `brain/helpers.ts` on an unresolvable vault. " +
+      "Its EMPTY result names no exit by design: the verb is dry-run only and has no apply " +
+      "path, so there is no command to name, and an empty proposal list means the " +
+      "inverse-edge invariant it previews already holds - an answer, not a degraded state.",
+  },
+  "o2b brain stale": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through `brainVerbContext` in `brain/helpers.ts` on an unresolvable vault. " +
+      "Its EMPTY result names no exit by design: this verb is itself the exit other " +
+      "surfaces name - the `stale-notes` registry entry resolves to `o2b brain stale` - and " +
+      "what to do with a stale entry (pin it, retire it, refresh its evidence) is a " +
+      "judgement over content that naming any one of would be a guess dressed as an " +
+      "instruction.",
+  },
+  "o2b search check": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through `resolveConfig` in `search/helpers.ts`, which throws a `CliError` " +
+      "naming `--vault` and `o2b init` when no vault resolves. Splitting `search.ts` by " +
+      "verb moved that refusal out of this verb's own file and changed nothing about which " +
+      "verb makes it.",
+  },
+  "o2b search weights": {
+    cls: STATE_CLASS.refusal,
+    reason:
+      "refuses through the same `resolveConfig` in `search/helpers.ts` as `search check`, " +
+      "called by `cmdSearchWeights` in `search/verbs/learned-weights.ts` before it reads " +
+      "any weights. The refusal is one module away for the same reason: the verb split, " +
+      "not a verb that stopped refusing.",
+  },
+});
+
+/**
+ * Every state this census classifies by name instead of by detection.
+ * One inventory for the gates and the cap, so neither escape hatch can be
+ * widened without the other noticing.
+ */
+const DECLARED_STATES: ReadonlyArray<readonly [string, StateNote]> = Object.freeze([
+  ...Object.entries(CLASSIFIED_BY_HAND),
+  ...Object.entries(CLASSIFIED_BY_MODULE_WALK),
+]);
 
 /** A reason has to say something; a placeholder cannot reach this. */
 const MIN_REASON_LENGTH = 60;
@@ -165,13 +253,20 @@ const BODIES_BY_MODULE: ReadonlyMap<string, ReadonlyMap<string, string>> = new M
 
 /**
  * How many local-import hops a refusal may sit behind and still count as
- * one the verb makes. Two covers the shape the CLI actually has - a verb
- * reaching `<command>/helpers.ts`, and that helper reaching one more
- * shared module (`argparse.ts`, `output.ts`) - and stops there rather
- * than being unlimited, so the walk cannot drift into "some function
- * somewhere in the CLI can throw".
+ * one the verb makes. One is the shape the CLI has - a verb in
+ * `<command>/verbs/<name>.ts` reaching `<command>/helpers.ts` - and it is
+ * also the whole of what more would buy: detection over the dispatched
+ * states is 166 at zero hops and 171 at one, and stays 171 at two, three
+ * and five. No verb states its refusal two modules from its own file, and
+ * the test below pins that so the number stops being a matter of belief.
+ *
+ * A larger bound could not reach the shared CLI-root modules either way:
+ * `commandSubtree` returns null for `argparse.ts` and `output.ts`, so
+ * {@link localImports} drops them at every hop count, which is what keeps
+ * the walk from drifting into "some function somewhere in the CLI can
+ * throw".
  */
-const MAX_MODULE_HOPS = 2;
+const MAX_MODULE_HOPS = 1;
 
 /**
  * The command a module belongs to: `src/cli/<command>` for anything under
@@ -199,8 +294,8 @@ function commandSubtree(path: string): string | null {
  * That second filter is what stops the walk from becoming vacuous.
  * Following into `argparse.ts` would credit EVERY verb with a refusal,
  * because every verb parses flags and `parseFlags` throws - 174 of 174
- * states detected, measured. A refusal that belongs to the shared
- * entry-plumbing is not a refusal the verb makes.
+ * states detected at a single hop, measured. A refusal that belongs to
+ * the shared entry-plumbing is not a refusal the verb makes.
  */
 function localImports(path: string, text: string): ReadonlyMap<string, string> {
   const imports = new Map<string, string>();
@@ -344,6 +439,10 @@ describe("terminal-state census", () => {
   });
 
   test("every state holds exactly one class", () => {
+    // Only the hand inventory can add a class. A
+    // `CLASSIFIED_BY_MODULE_WALK` entry restates the class the detector
+    // found - it explains a detection, it does not stand in for one - and
+    // the walk test below is where that agreement is checked.
     const rows = census();
     const byState = new Map(rows.map((row) => [row.state, row]));
     for (const row of rows) {
@@ -355,16 +454,18 @@ describe("terminal-state census", () => {
     expect(byState.size).toBe(rows.length);
   });
 
-  test("no hand classification outlives the state it explains", () => {
+  test("no declared classification outlives the state it explains", () => {
     const states = new Set(census().map((row) => row.state));
-    for (const state of Object.keys(CLASSIFIED_BY_HAND)) {
+    for (const [state] of DECLARED_STATES) {
       expect(`${state} is dispatched: ${states.has(state)}`).toBe(`${state} is dispatched: true`);
     }
+    // One state, one entry: nothing is declared by both inventories.
+    expect(new Set(DECLARED_STATES.map(([state]) => state)).size).toBe(DECLARED_STATES.length);
   });
 
-  test("every hand-written reason is specific, and every class is a real class", () => {
+  test("every declared reason is specific, and every class is a real class", () => {
     const known = new Set<string>(Object.values(STATE_CLASS));
-    for (const [state, entry] of Object.entries(CLASSIFIED_BY_HAND)) {
+    for (const [state, entry] of DECLARED_STATES) {
       expect(`${state} class is known: ${known.has(entry.cls)}`).toBe(
         `${state} class is known: true`,
       );
@@ -385,8 +486,9 @@ describe("terminal-state census", () => {
     expect(rows.length).toBeGreaterThan(160);
     expect(rows.filter((row) => row.detected === STATE_CLASS.exit).length).toBeGreaterThan(8);
     expect(rows.filter((row) => row.detected === STATE_CLASS.refusal).length).toBeGreaterThan(120);
-    // And the exception table must stay an exception.
-    expect(Object.keys(CLASSIFIED_BY_HAND).length).toBeLessThan(rows.length / 10);
+    // And the states named by hand - by either inventory - must stay the
+    // exception rather than becoming the way states get classified.
+    expect(DECLARED_STATES.length).toBeLessThan(rows.length / 10);
   });
 
   test("the module walk is what classifies the verbs whose refusal was extracted", () => {
@@ -399,30 +501,44 @@ describe("terminal-state census", () => {
     const moduleLocal = new Map(census(0).map((row) => [row.state, row.detected]));
     const rescued = census()
       .filter((row) => row.detected !== null && moduleLocal.get(row.state) === null)
-      .map((row) => row.state)
+      .map((row) => `${row.state}: ${row.detected}`)
       .toSorted();
     // Named, not counted: the failure message is the work to be done.
+    // The inventory is the expectation, so a state cannot be rescued by
+    // the walk without an entry stating why - and an entry cannot claim a
+    // class the detector did not actually find.
     expect(rescued.join("\n")).toBe(
-      [
-        "o2b brain mcp-landscape",
-        "o2b brain semantics-backfill",
-        "o2b brain stale",
-        "o2b search check",
-        "o2b search weights",
-      ].join("\n"),
+      Object.entries(CLASSIFIED_BY_MODULE_WALK)
+        .map(([state, entry]) => `${state}: ${entry.cls}`)
+        .toSorted()
+        .join("\n"),
     );
   });
 
-  test("the deliberately-silent class is the smallest of the three", () => {
-    // If silence ever became the common answer, this release's thesis
-    // would have been abandoned rather than enforced.
-    const silent = Object.values(CLASSIFIED_BY_HAND).filter(
-      (entry) => entry.cls === STATE_CLASS.silent,
+  test("one hop is the whole of what the module walk reaches", () => {
+    // The measurement `MAX_MODULE_HOPS` is justified by. A second
+    // hop detects nothing a first does not; if that ever changes, the
+    // constant is wrong and its docblock is a story.
+    const detected = (hops: number): number =>
+      census(hops).filter((row) => row.detected !== null).length;
+    const reached = detected(MAX_MODULE_HOPS);
+    expect(`detected at ${MAX_MODULE_HOPS + 1} hops: ${detected(MAX_MODULE_HOPS + 1)}`).toBe(
+      `detected at ${MAX_MODULE_HOPS + 1} hops: ${reached}`,
     );
-    const rows = census();
-    expect(silent.length).toBeLessThan(
-      rows.filter((row) => row.detected === STATE_CLASS.exit).length,
+    // And the hop the constant does buy has to be buying something.
+    expect(reached).toBeGreaterThan(detected(0));
+  });
+
+  test("no state is classified deliberately-silent", () => {
+    // The class stays in the vocabulary; nothing holds it. While it is
+    // empty, "silence is the smallest of the three classes" compares zero
+    // against a positive number and cannot fail, so the membership list
+    // is the assertion instead. A state that genuinely earns silence
+    // fails here and is added with its reason, deliberately.
+    const silent = DECLARED_STATES.filter(([, entry]) => entry.cls === STATE_CLASS.silent).map(
+      ([state]) => state,
     );
+    expect(silent.toSorted().join("\n")).toBe("");
   });
 });
 
