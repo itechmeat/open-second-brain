@@ -316,8 +316,26 @@ function readActiveBody(vault: string, activePath: string, meter: InjectionMeter
   if (trimmed.length === 0) return "";
 
   // Injection budget (token-diet): a large preference set must not
-  // flood the session preamble. Config errors fall back to the
-  // default budget - the hook is fail-soft by contract.
+  // flood the session preamble.
+  //
+  // Both `_brain.yaml` failures - ABSENT and PRESENT BUT UNREADABLE -
+  // resolve to the default budget here, and the unreadable one is not
+  // silent for it: `assembleActiveContext` runs the runtime-notice
+  // channel BEFORE this read, so a config the operator broke puts
+  // `brain_config_unreadable` at the head of the very payload this
+  // budget is applied to, naming the file and the parse failure. The
+  // split the `load*ConfigSafe` readers make is already made on this
+  // surface; making it a second time here would be a second channel
+  // saying the same thing.
+  //
+  // Raising instead would report less, not more. This function is the
+  // `assemble` callback of the fail-open loader, so a throw degrades the
+  // whole injection to the last-good cache - a body captured while the
+  // config still read, and therefore carrying no word of the breakage.
+  // The condition would go from stated to invisible.
+  //
+  // The one quiet path left is `OPEN_SECOND_BRAIN_RUNTIME_NOTICES=false`,
+  // which is the operator switching the channel off by name.
   let budget = INJECT_BUDGET_CHARS_DEFAULT;
   try {
     const cfg = loadBrainConfig(vault);
@@ -325,7 +343,7 @@ function readActiveBody(vault: string, activePath: string, meter: InjectionMeter
       budget = cfg.active.inject_budget_chars;
     }
   } catch {
-    // intentional fallback - a corrupted _brain.yaml is doctor's job
+    // absorbed deliberately - see the budget note above
   }
   meter.budgetChars = budget;
 

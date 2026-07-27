@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -283,5 +283,119 @@ describe("active-inject hook", () => {
     const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     expect(injected).toContain("Runtime notices:");
     expect(injected).toContain("Search index is not built");
+  });
+});
+
+/**
+ * A `_brain.yaml` the operator wrote and then broke.
+ *
+ * The injection-budget read inside the hook resolves to the default budget
+ * on a config failure and MUST keep doing so. This is a SessionStart hook,
+ * and the assembly the read sits in is the fail-open loader's `assemble`
+ * callback: a raise there does not surface anything, it swaps the whole
+ * injection for the last-good cache - a body captured while the config
+ * still read, which therefore carries no word of the breakage. So the
+ * property under test is not "it throws" but "it does not throw AND the
+ * condition is named on the same surface": the runtime-notice block the
+ * same assembly emits before it ever reads the budget.
+ *
+ * Three cases, the same split `load*ConfigSafe` makes - absent (the common
+ * case for every vault in the wild, and silent by design), malformed, and
+ * present-but-unopenable.
+ */
+describe("active-inject hook: _brain.yaml absent vs. unreadable", () => {
+  const ACTIVE_DOC =
+    "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+    "# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n";
+
+  /** Does not parse at all: an indented first line has no parent key. */
+  const MALFORMED_CONFIG = "  schema_version: 1\n";
+
+  /** The prose the `brain_config_unreadable` notice renders. */
+  const CONFIG_NOTICE = "Brain/_brain.yaml could not be read";
+
+  function configPath(): string {
+    return join(vault, "Brain", "_brain.yaml");
+  }
+
+  /** Notices are opt-out in the shared harness; this channel is the point. */
+  const NOTICES_ON = { OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "true" };
+
+  async function inject(env: Record<string, string> = {}): Promise<string> {
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault, ...env });
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toBe("");
+    return JSON.parse(r.stdout).hookSpecificOutput.additionalContext as string;
+  }
+
+  test("absent: no config notice, and the documented default budget applies", async () => {
+    writeActive(ACTIVE_DOC);
+    const injected = await inject(NOTICES_ON);
+    // A vault that never ran `brain init` is healthy. It has settings to
+    // report only about the index, never about a file it does not have.
+    expect(injected).not.toContain(CONFIG_NOTICE);
+    expect(injected).toContain("pref-foo");
+  });
+
+  test("malformed: the hook still injects, and the breakage rides the same payload", async () => {
+    writeActive(ACTIVE_DOC);
+    writeFileSync(configPath(), MALFORMED_CONFIG, "utf8");
+
+    const injected = await inject(NOTICES_ON);
+    // Not fatal: the session gets its preferences either way.
+    expect(injected).toContain("pref-foo");
+    // And not silent: the operator's settings are named as not in force.
+    expect(injected).toContain(CONFIG_NOTICE);
+    // The notice carries THIS vault's parse failure, path and all, so the
+    // assertion cannot be satisfied by a constant sentence.
+    expect(injected).toContain(configPath());
+    expect(injected.indexOf(CONFIG_NOTICE)).toBeLessThan(injected.indexOf("pref-foo"));
+  });
+
+  test("unopenable: a config the process cannot read is reported, not read as absent", async () => {
+    writeActive(ACTIVE_DOC);
+    writeFileSync(configPath(), "schema_version: 1\n", "utf8");
+    chmodSync(configPath(), 0o000);
+    try {
+      const injected = await inject(NOTICES_ON);
+      expect(injected).toContain("pref-foo");
+      expect(injected).toContain(CONFIG_NOTICE);
+      expect(injected).toContain(configPath());
+    } finally {
+      chmodSync(configPath(), 0o600);
+    }
+  });
+
+  test("malformed: the budget falls back to the default rather than going unbounded", async () => {
+    // The operator's `inject_budget_chars` is unreachable, so the read
+    // lands on INJECT_BUDGET_CHARS_DEFAULT (8,000). Pinned because an
+    // unbounded body is the failure this read exists to prevent, and it
+    // would be invisible in a small fixture.
+    const hugeRules = Array.from(
+      { length: 400 },
+      (_, i) => `- \`pref-rule-${i}\` (confidence: low (0.10)) — Rule number ${i} body text`,
+    ).join("\n");
+    writeActive(
+      `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (400)\n\n${hugeRules}\n`,
+    );
+    writeFileSync(configPath(), MALFORMED_CONFIG, "utf8");
+
+    const injected = await inject(NOTICES_ON);
+    const noticeBlock = injected.slice(0, injected.indexOf("# Active Brain Preferences"));
+    expect(injected.length - noticeBlock.length).toBeLessThanOrEqual(8300);
+  });
+
+  test("opting out of the notice channel is the one path that hides the breakage", async () => {
+    // `OPEN_SECOND_BRAIN_RUNTIME_NOTICES=false` suppresses the whole
+    // channel by the operator's own instruction. Pinned so the budget
+    // read's silence is understood as delegated to that channel rather
+    // than as its own decision - if this ever stops being the only quiet
+    // path, the delegation has broken.
+    writeActive(ACTIVE_DOC);
+    writeFileSync(configPath(), MALFORMED_CONFIG, "utf8");
+
+    const injected = await inject({ OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false" });
+    expect(injected).toContain("pref-foo");
+    expect(injected).not.toContain(CONFIG_NOTICE);
   });
 });
