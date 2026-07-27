@@ -32,18 +32,12 @@ import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
 import { sanitiseTextField } from "../redactor.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import { resolveWriteApprovalEnabled } from "./pending.ts";
-import { resolveRouteDiscriminationEnabled } from "../config.ts";
-import {
-  anchorsWithin,
-  discriminate,
-  emitRouteDiscrimination,
-  scoreRouteCandidates,
-} from "./routing/route-discriminator.ts";
 import { brainDirsForWrite } from "./paths.ts";
 import type { DedupIndexEntry } from "./dedup-hash.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import {
   entityMatchForms,
+  normalizeEntityName,
   sanitizeEntityLabel,
   validateEntityLabel,
 } from "./entities/canonical.ts";
@@ -93,11 +87,7 @@ const CURRENCY_SYMBOLS: Readonly<Record<string, string>> = Object.freeze({
 // recognises a language-neutral structural signal only - no human-language
 // trigger words. Quantity must carry an explicit unit symbol (currency
 // glyph, ISO-4217 code, or percent) so arbitrary numbers never match.
-//
-// This table is also the write router's ROUTE table: `routeExtractedFacts`
-// threads it into the discriminator (signals-that-survive, unit 3), whose
-// terminal rule is this table's order. One table, no second copy to drift.
-export const FAMILY_PATTERNS: ReadonlyArray<readonly [FactFamily, RegExp]> = Object.freeze([
+const FAMILY_PATTERNS: ReadonlyArray<readonly [FactFamily, RegExp]> = Object.freeze([
   ["url", /\bhttps?:\/\/[^\s)>\]]+/giu],
   ["email", /\b[\w.+-]+@[\w.-]+\.\w{2,}\b/giu],
   ["quantity", QUANTITY_SPAN_RE],
@@ -223,14 +213,6 @@ export interface RouteFactsInput {
    * exactly as before (byte-for-byte).
    */
   readonly writeApprovalEnabled?: boolean;
-  /**
-   * Route-discrimination record gate (signals-that-survive, unit 3). When
-   * omitted the router resolves `route_discrimination_enabled` from the
-   * plugin config on a non-dry write; tests inject the boolean directly.
-   * The gate governs the RECORD only - the routing decision it describes is
-   * taken either way, so behaviour is byte-identical when the key is absent.
-   */
-  readonly routeDiscriminationEnabled?: boolean;
 }
 
 export interface RouteFactsResult {
@@ -300,17 +282,19 @@ function buildAnchorables(
 }
 
 /**
- * Routes whose dedup hash for `text` is already in the caller's index - the
- * discriminator's dedup-history feature. One membership test per route, so
- * "this span was already captured HERE" is a per-route signal rather than a
- * property of the single hash the writer happens to use.
+ * Resolve canonical-entity anchors for a fact: every anchorable registry
+ * entity whose normalised label form appears in the fact text. The
+ * canonicalization kernel is the comparison boundary, so facts and the
+ * registry compare like with like.
  */
-function dedupedRoutes(text: string, dedup: Map<string, DedupIndexEntry>): Set<FactFamily> {
-  const routes = new Set<FactFamily>();
-  for (const [family] of FAMILY_PATTERNS) {
-    if (dedup.has(factDedupHash({ family, text }))) routes.add(family);
+function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: string): string[] {
+  if (anchorables.length === 0) return [];
+  const haystack = normalizeEntityName(factText);
+  const ids: string[] = [];
+  for (const entity of anchorables) {
+    if (entity.forms.some((f) => haystack.includes(f))) ids.push(entity.id);
   }
-  return routes;
+  return ids;
 }
 
 /**
@@ -364,39 +348,8 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
   }
   const targetDir = writeApprovalEnabled ? brainDirsForWrite(vault).pending : undefined;
 
-  // Route-discrimination record gate (unit 3), resolved on the same terms as
-  // the two gates above. It governs the RECORD only: the decision below is
-  // taken either way, so an absent key leaves routing byte-identical.
-  let routeDiscriminationEnabled = input.routeDiscriminationEnabled ?? false;
-  if (input.routeDiscriminationEnabled === undefined && !input.dryRun) {
-    try {
-      routeDiscriminationEnabled = resolveRouteDiscriminationEnabled();
-    } catch {
-      routeDiscriminationEnabled = false;
-    }
-  }
-
   for (const fact of input.facts) {
-    // Route discrimination (unit 3) runs FIRST: the destination decides the
-    // dedup hash, so a decision taken after the dedup probe would hash one
-    // route and write another. With no near-equal rival the extractor's own
-    // family stands, which is the single-shot behaviour this replaced.
-    const candidates = scoreRouteCandidates(fact, {
-      routes: FAMILY_PATTERNS,
-      anchors: anchorables,
-      durabilityDenylist,
-      dedupedRoutes: dedupedRoutes(fact.text, input.dedup),
-    });
-    const decision = discriminate(candidates);
-    const route = decision?.route ?? fact.family;
-    if (decision !== null && !input.dryRun) {
-      emitRouteDiscrimination(
-        vault,
-        { createdAt: isoSecond(input.now), origin: fact.family, decision },
-        routeDiscriminationEnabled,
-      );
-    }
-    const hash = factDedupHash({ family: route, text: fact.text });
+    const hash = factDedupHash(fact);
     // Chain order: dedup -> durability -> staging -> write. A deduped item
     // never reaches the durability gate.
     if (input.dedup.has(hash)) {
@@ -434,8 +387,8 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       continue;
     }
     if (input.dryRun) continue;
-    const anchors = anchorsWithin(anchorables, fact.text);
-    const topic = `fact-${route}`;
+    const anchors = entityAnchors(anchorables, fact.text);
+    const topic = `fact-${fact.family}`;
     try {
       const result = writeSignal(
         vault,
