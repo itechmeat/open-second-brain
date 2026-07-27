@@ -7,7 +7,6 @@
  * failure into a doctor code all follow from it.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { extractWikilinks } from "../../vault.ts";
@@ -19,15 +18,18 @@ import { principleNeedsRepair } from "../text/sanitize-principle.ts";
 import type { DoctorIssue } from "../types.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import type { DoctorCheck } from "./check.ts";
+import type { DoctorUncertainEntry } from "./report.ts";
+import { readSweptDir, SWEEP_ORIGIN, type SweptPath } from "./unreadable-path.ts";
 
 // ----- Signal check ---------------------------------------------------------
 
 export const signalCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault, idIndex }, { issues }) {
+  run({ vault, idIndex }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
+    const swept = recordSweep("signal", uncertain);
     for (const dir of [dirs.inbox, dirs.processed]) {
-      forEachBrainFile(dir, "sig-", (path, filename) => {
+      forEachBrainFile(dir, "sig-", swept, (path, filename) => {
         try {
           const sig = parseSignal(path);
           registerId(idIndex, sig.id, path);
@@ -58,9 +60,9 @@ export const signalCheck: DoctorCheck = {
 
 export const preferenceCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault, idIndex, knownBasenames }, { issues }) {
+  run({ vault, idIndex, knownBasenames }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
-    forEachBrainFile(dirs.preferences, "pref-", (path) => {
+    forEachBrainFile(dirs.preferences, "pref-", recordSweep("preference", uncertain), (path) => {
       try {
         const pref = parsePreference(path);
         registerId(idIndex, pref.id, path);
@@ -104,9 +106,9 @@ export const preferenceCheck: DoctorCheck = {
 
 export const retiredCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault, idIndex, knownBasenames }, { issues }) {
+  run({ vault, idIndex, knownBasenames }, { issues, uncertain }) {
     const dirs = brainDirs(vault);
-    forEachBrainFile(dirs.retired, "ret-", (path) => {
+    forEachBrainFile(dirs.retired, "ret-", recordSweep("retired", uncertain), (path) => {
       try {
         const ret = parseRetired(path);
         registerId(idIndex, ret.id, path);
@@ -156,19 +158,40 @@ function registerId(idIndex: Map<string, string[]>, id: string, path: string): v
   else idIndex.set(id, [path]);
 }
 
+/** Subsystem name a record sweep reports an unreadable directory under. */
+const RECORD_SITE = "brain.doctor.records";
+
+/** What a record kind's checks can no longer claim, as one clause. */
+function recordSweep(kind: string, uncertain: DoctorUncertainEntry[]): SweptPath {
+  return {
+    site: RECORD_SITE,
+    consequence:
+      `no ${kind} record in it was validated, so a malformed one - or an id it duplicates - ` +
+      "is missing from this report",
+    uncertain,
+  };
+}
+
 /**
  * Iterate the `<prefix>*.md` files directly inside `dir` (non-recursive),
  * invoking `cb(path, filename)` for each. Absent `dir` is a no-op - the
  * per-kind checks all treat a missing Brain subdirectory as "nothing to
  * check", not an error.
+ *
+ * A directory that exists and cannot be listed is neither: these checks
+ * are the pass's structural core and do not fail soft, so an unreadable
+ * `Brain/preferences` used to end the run with no findings whatsoever.
+ * It is now the same uncertainty every other sweep reports.
  */
 function forEachBrainFile(
   dir: string,
   prefix: string,
+  swept: SweptPath,
   cb: (path: string, filename: string) => void,
 ): void {
-  if (!existsSync(dir)) return;
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+  const entries = readSweptDir(dir, swept, SWEEP_ORIGIN.root);
+  if (entries === null) return;
+  for (const entry of entries) {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     if (!entry.name.startsWith(prefix)) continue;
     cb(join(dir, entry.name), entry.name);

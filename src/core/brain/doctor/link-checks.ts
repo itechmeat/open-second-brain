@@ -7,8 +7,11 @@
  */
 
 import { buildBacklinkIndex } from "../backlinks.ts";
+import { brainDirs } from "../paths.ts";
 import { isBrainArtifactId } from "../wikilink.ts";
 import type { DoctorCheck } from "./check.ts";
+import type { DoctorUncertainEntry } from "./report.ts";
+import { reportSweptFailure, sweptFailurePath, SWEEP_ORIGIN } from "./unreadable-path.ts";
 
 /**
  * 8. Broken-backlinks lint — any preference / retired / log entry
@@ -20,12 +23,13 @@ import type { DoctorCheck } from "./check.ts";
  */
 export const brokenBacklinkCheck: DoctorCheck = {
   failSoft: false,
-  run({ vault, knownBasenames }, { issues }) {
+  run({ vault, knownBasenames }, { issues, uncertain }) {
     // Only attempt the check when there's something to scan — an empty
     // Brain layer naturally has no backlinks, and `buildBacklinkIndex`
     // would already return an empty map, but we save the parse pass.
     if (knownBasenames.size === 0) return;
-    const index = buildBacklinkIndex(vault);
+    const index = buildIndex(vault, uncertain);
+    if (index === null) return;
     for (const [target, refs] of index) {
       // We only flag references whose target *should* live in this
       // Brain (i.e. an artifact id we manage). Wikilinks pointing
@@ -50,3 +54,41 @@ export const brokenBacklinkCheck: DoctorCheck = {
     }
   },
 };
+
+/** Subsystem name the backlink index reports an unreadable path under. */
+const BACKLINK_SITE = "brain.doctor.brokenBacklinks";
+
+/**
+ * The backlink index, or `null` plus the reason there is none.
+ *
+ * The index walks the record directories and the log through a shared
+ * builder, so a directory it cannot read arrives here as a throw. This
+ * check does not fail soft - a backlink index the doctor mis-reads
+ * leaves the report wrong rather than incomplete - so before this the
+ * throw ended the pass, with every finding already collected lost with
+ * it. A directory that was not read is a different statement from a
+ * store whose links are all resolvable, and it is the one this makes.
+ */
+function buildIndex(
+  vault: string,
+  uncertain: DoctorUncertainEntry[],
+): ReturnType<typeof buildBacklinkIndex> | null {
+  try {
+    return buildBacklinkIndex(vault);
+  } catch (err) {
+    reportSweptFailure(
+      sweptFailurePath(err, brainDirs(vault).brain),
+      "backlink index build failed",
+      err,
+      {
+        site: BACKLINK_SITE,
+        consequence:
+          "no backlink in the store was resolved, so a reference to a deleted artifact is " +
+          "missing from this report",
+        uncertain,
+      },
+      SWEEP_ORIGIN.root,
+    );
+    return null;
+  }
+}

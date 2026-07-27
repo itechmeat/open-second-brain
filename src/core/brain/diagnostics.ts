@@ -370,6 +370,24 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain entity prune",
         autoRepairable: false,
       },
+      {
+        // A subtree the doctor could not enter, reported into the
+        // `uncertain` stream by every sweep that walks the store by
+        // hand. The CLI folds that stream into the codes it resolves
+        // exits for, so an unregistered code printed the finding and
+        // nothing after it - the dead end this release removes.
+        //
+        // The exit is the RE-READ, as with `skill-accept-locked`: no
+        // command changes a mode or a mount, and the one thing an
+        // operator needs after restoring access is the pass over the
+        // subtree that was skipped. Registering it here rather than
+        // spelling a sentence beside the notice is what keeps the
+        // structural command in one place.
+        code: "vault-walk-entry-skipped",
+        issueClass: "subtree the doctor could not read",
+        nextCommand: "o2b brain doctor",
+        autoRepairable: false,
+      },
       // --- Skill-accept transaction refusals (no-dead-ends, phase 3) ---
       // Both are states the accept transaction itself can leave an
       // operator in, and both used to refuse without naming a way out.

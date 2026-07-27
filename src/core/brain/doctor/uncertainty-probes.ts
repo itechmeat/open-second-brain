@@ -19,6 +19,7 @@ import { brainDirs } from "../paths.ts";
 import { scanStaleLocks } from "../sync-lockfile.ts";
 import { vaultMarkerAbsentNotice } from "../vault-identity.ts";
 import type { DoctorCheck } from "./check.ts";
+import { pushUncertain } from "./uncertain-stream.ts";
 
 /** Site recorded on the notices the doctor's Brain-tree sweep collects. */
 const DOCTOR_FRONTMATTER_SITE = "brain.doctor";
@@ -51,7 +52,10 @@ export const frontmatterUncertaintyProbe: DoctorCheck = {
     const notices: DegradationNotice[] = [];
     listVaultPages(dirs.brain, { notices, site: DOCTOR_FRONTMATTER_SITE });
     for (const notice of notices) {
-      uncertain.push({
+      // Through the shared stream, not straight onto the array: this
+      // walk covers the same Brain/ subtrees the hand-written sweeps do,
+      // so an unreadable directory is observed here AND by each of them.
+      pushUncertain(uncertain, {
         code: notice.code,
         ...(notice.path !== undefined ? { path: notice.path } : {}),
         message: notice.detail,
@@ -76,7 +80,7 @@ export const lineageLedgerProbe: DoctorCheck = {
   run({ vault }, { uncertain }) {
     const report = verifyLineageLedger(vault);
     for (const notice of report.notices) {
-      uncertain.push({
+      pushUncertain(uncertain, {
         code: notice.code,
         path: notice.path ?? report.path,
         message: notice.detail,
@@ -103,7 +107,7 @@ export const vaultMarkerProbe: DoctorCheck = {
   run({ vault }, { uncertain }) {
     const notice = vaultMarkerAbsentNotice(vault);
     if (notice === null) return;
-    uncertain.push({
+    pushUncertain(uncertain, {
       code: notice.code,
       ...(notice.path !== undefined ? { path: notice.path } : {}),
       message: notice.detail,
@@ -132,7 +136,7 @@ export const staleLockProbe: DoctorCheck = {
     const dirs = brainDirs(vault);
     if (!existsSync(dirs.brain)) return;
     for (const lockPath of scanStaleLocks(dirs.brain)) {
-      uncertain.push({
+      pushUncertain(uncertain, {
         code: STALE_LOCK_CODE,
         path: lockPath,
         message:

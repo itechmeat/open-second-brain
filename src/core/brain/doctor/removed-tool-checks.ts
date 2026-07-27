@@ -6,13 +6,21 @@
  * output rather than from a tombstone error at call time.
  */
 
-import { existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { REMOVED_TOOLS } from "../../removed-surfaces.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorCheck } from "./check.ts";
-import { readSweptDir, readSweptFile, type SweptPath } from "./unreadable-path.ts";
+import {
+  readSweptDir,
+  readSweptFile,
+  reportSweptFailure,
+  reportSweptSkip,
+  SWEEP_ORIGIN,
+  type SweepOrigin,
+  type SweptPath,
+} from "./unreadable-path.ts";
 
 /** Word-boundary regex per removed tool name, compiled once. */
 const REMOVED_TOOL_PATTERNS: ReadonlyArray<{ name: string; pattern: RegExp }> = Object.freeze(
@@ -62,21 +70,25 @@ export const removedToolReferenceCheck: DoctorCheck = {
         "still needs is missing from this report",
       uncertain,
     };
-    collectMarkdownFiles(dirs.brain, candidates, swept);
+    collectMarkdownFiles(dirs.brain, candidates, swept, SWEEP_ORIGIN.root);
     for (const name of ROOT_INSTRUCTION_FILES) {
       const p = join(vault, name);
       try {
-        if (existsSync(p) && statSync(p).isFile()) candidates.push(p);
-      } catch {
-        // One unreadable root file must not disable the whole scan.
+        if (statSync(p).isFile()) candidates.push(p);
+      } catch (err) {
+        // One unreadable root file must not disable the whole scan - but
+        // it is not the same answer as a vault that has no CLAUDE.md.
+        reportSweptFailure(p, "instruction file stat failed", err, swept, SWEEP_ORIGIN.root);
       }
     }
-    collectMarkdownFiles(join(vault, ".claude", "skills"), candidates, swept);
+    collectMarkdownFiles(join(vault, ".claude", "skills"), candidates, swept, SWEEP_ORIGIN.root);
 
     let emitted = 0;
     for (const path of candidates) {
       if (emitted >= REMOVED_TOOL_MAX_WARNINGS) return;
-      const body = readSweptFile(path, swept);
+      // Every candidate was listed by the walk a moment ago, so an
+      // ENOENT here is a file that vanished under it.
+      const body = readSweptFile(path, swept, SWEEP_ORIGIN.discovered);
       if (body === null) continue;
       const hits: string[] = [];
       for (const { name, pattern } of REMOVED_TOOL_PATTERNS) {
@@ -101,14 +113,44 @@ export const removedToolReferenceCheck: DoctorCheck = {
   },
 };
 
-/** Recursive `.md` collection; an unreadable directory is reported, not dropped. */
-function collectMarkdownFiles(dir: string, out: string[], swept: SweptPath): void {
-  if (!existsSync(dir)) return;
-  const entries = readSweptDir(dir, swept);
+/**
+ * Recursive `.md` collection; an unreadable directory is reported, not
+ * dropped. No `existsSync` gate stands in front of the listing: that
+ * call returns false for a permission denial on a PARENT component
+ * exactly as it does for an absent directory, so it answered the
+ * absent-or-unreadable question the sweep is here to ask - and answered
+ * it wrong for the vault whose `.claude/` an operator locked down.
+ *
+ * An entry that is neither a regular file nor a directory - a symlink,
+ * which `Dirent` reports as neither - is named rather than skipped. The
+ * link is deliberately not followed (the store's rule: a reader that
+ * follows a link has already left it), so its Markdown is content this
+ * scan did not read, which is what the uncertainty stream is for.
+ */
+function collectMarkdownFiles(
+  dir: string,
+  out: string[],
+  swept: SweptPath,
+  origin: SweepOrigin,
+): void {
+  const entries = readSweptDir(dir, swept, origin);
   if (entries === null) return;
   for (const entry of entries) {
     const p = join(dir, entry.name);
-    if (entry.isDirectory()) collectMarkdownFiles(p, out, swept);
-    else if (entry.isFile() && entry.name.endsWith(".md")) out.push(p);
+    if (entry.isDirectory()) {
+      collectMarkdownFiles(p, out, swept, SWEEP_ORIGIN.discovered);
+      continue;
+    }
+    if (entry.isFile()) {
+      if (entry.name.endsWith(".md")) out.push(p);
+      continue;
+    }
+    reportSweptSkip(
+      p,
+      entry.isSymbolicLink()
+        ? "entry is a symbolic link, which no sweep follows out of the store"
+        : "entry is neither a regular file nor a directory",
+      swept,
+    );
   }
 }

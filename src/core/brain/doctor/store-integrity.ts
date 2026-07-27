@@ -8,7 +8,6 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
-import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { realpathInsideVault, vaultRelative } from "../../path-safety.ts";
@@ -17,7 +16,13 @@ import { readTierDriftCount } from "../frontmatter-tiers.ts";
 import { listLogSyncConflicts } from "../log-jsonl.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorCheck } from "./check.ts";
-import { readSweptDir } from "./unreadable-path.ts";
+import type { DoctorUncertainEntry } from "./report.ts";
+import {
+  readSweptDir,
+  reportSweptFailure,
+  SWEEP_ORIGIN,
+  type SweepOrigin,
+} from "./unreadable-path.ts";
 
 /**
  * Tier guard (write-time-integrity-governance): staged identity
@@ -74,8 +79,9 @@ export const danglingWorkrunCheck: DoctorCheck = {
  */
 export const syncConflictLogCheck: DoctorCheck = {
   failSoft: true,
-  run({ vault }, { issues }) {
-    for (const path of listLogSyncConflicts(vault)) {
+  run({ vault }, { issues, uncertain }) {
+    const conflicts = listSyncConflicts(vault, uncertain);
+    for (const path of conflicts) {
       issues.push({
         severity: "warning",
         code: "sync-conflict-log",
@@ -87,6 +93,38 @@ export const syncConflictLogCheck: DoctorCheck = {
     }
   },
 };
+
+/** Subsystem name the sync-conflict listing reports an unreadable path under. */
+const SYNC_CONFLICT_SITE = "brain.doctor.syncConflictLog";
+
+/**
+ * The conflict copies under `Brain/log/`, or none plus a named reason.
+ *
+ * The listing is behind a shared helper, so the failure arrives here as
+ * a throw. Swallowed by the pass's fail-soft arm it produced no finding
+ * at all, which reads as "no conflict copies" - the answer this check
+ * exists to distinguish from "the directory was not read".
+ */
+function listSyncConflicts(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
+  try {
+    return listLogSyncConflicts(vault);
+  } catch (err) {
+    reportSweptFailure(
+      brainDirs(vault).log,
+      "sync-conflict listing failed",
+      err,
+      {
+        site: SYNC_CONFLICT_SITE,
+        consequence:
+          "it was not listed for Syncthing conflict copies, so a leftover copy waiting to be " +
+          "merged is missing from this report",
+        uncertain,
+      },
+      SWEEP_ORIGIN.root,
+    );
+    return [];
+  }
+}
 
 /** Subsystem name the symlink walk reports an unreadable path under. */
 const SYMLINK_ESCAPE_SITE = "brain.doctor.symlinkEscape";
@@ -111,7 +149,6 @@ export const symlinkEscapeCheck: DoctorCheck = {
   failSoft: true,
   run({ vault }, { issues, uncertain }) {
     const root = brainDirs(vault).brain;
-    if (!existsSync(root)) return;
     const swept = {
       site: SYMLINK_ESCAPE_SITE,
       consequence:
@@ -119,8 +156,8 @@ export const symlinkEscapeCheck: DoctorCheck = {
         "resolving outside the vault root",
       uncertain,
     };
-    const visit = (dir: string): void => {
-      const entries = readSweptDir(dir, swept);
+    const visit = (dir: string, origin: SweepOrigin): void => {
+      const entries = readSweptDir(dir, swept, origin);
       if (entries === null) return;
       for (const entry of entries) {
         const full = join(dir, entry.name);
@@ -137,9 +174,9 @@ export const symlinkEscapeCheck: DoctorCheck = {
           }
           continue; // never descend through a symlink
         }
-        if (entry.isDirectory()) visit(full);
+        if (entry.isDirectory()) visit(full, SWEEP_ORIGIN.discovered);
       }
     };
-    visit(root);
+    visit(root, SWEEP_ORIGIN.root);
   },
 };

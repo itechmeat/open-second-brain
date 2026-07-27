@@ -43,7 +43,7 @@
  * the existing `doctor` legacy command on an empty vault.
  */
 
-import { existsSync } from "node:fs";
+import { statSync } from "node:fs";
 
 import { activeBudgetPressureCheck } from "./doctor/active-budget-check.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./doctor/check.ts";
@@ -82,7 +82,8 @@ import {
   staleLockProbe,
   vaultMarkerProbe,
 } from "./doctor/uncertainty-probes.ts";
-import type { RunDoctorOptions, RunDoctorResult } from "./doctor/report.ts";
+import type { DoctorUncertainEntry, RunDoctorOptions, RunDoctorResult } from "./doctor/report.ts";
+import { reportSweptSkip, sweptFailureReason, sweptPathWarning } from "./doctor/unreadable-path.ts";
 import type { SemanticHealthReport } from "./health/reconcile.ts";
 import { brainDirs } from "./paths.ts";
 import {
@@ -158,9 +159,58 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
 /** Issue code for a resolved root that carries no Brain layer. */
 const BRAIN_ROOT_ABSENT_CODE = "brain-root-absent";
 
+/** Subsystem name the pass reports a Brain layer it could not reach under. */
+const BRAIN_ROOT_SITE = "brain.doctor.root";
+
+/**
+ * Whether the Brain layer is there, is not, or could not be reached.
+ *
+ * `existsSync` used to stand here, and it answers false for a permission
+ * denial on any parent component exactly as it does for a root nobody
+ * has initialized. The two then produced the same report - and that
+ * report advises `o2b brain init`, which on a populated vault whose root
+ * an operator locked down is advice to write into a store this pass
+ * never managed to look at.
+ */
+function brainRootProbe(brain: string): BrainRootProbe {
+  try {
+    statSync(brain);
+    return { kind: "present" };
+  } catch (err) {
+    const reason = sweptFailureReason(err);
+    return reason === null ? { kind: "absent" } : { kind: "unreadable", reason };
+  }
+}
+
+/** The three answers, kept apart because two of them used to be one. */
+type BrainRootProbe =
+  | { readonly kind: "present" }
+  | { readonly kind: "absent" }
+  | { readonly kind: "unreadable"; readonly reason: string };
+
 export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctorResult {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.brain)) {
+  const root = brainRootProbe(dirs.brain);
+  if (root.kind === "unreadable") {
+    // The layer is there and was not read. Every check below would have
+    // reported the same denial for its own subtree, so the pass stops
+    // here and says so once - under the code the sweeps already use for
+    // a subtree they could not enter.
+    const uncertain: DoctorUncertainEntry[] = [];
+    const message = reportSweptSkip(dirs.brain, `Brain layer could not be read: ${root.reason}`, {
+      site: BRAIN_ROOT_SITE,
+      consequence: "every Brain check was skipped, so nothing about this root has been verified",
+      uncertain,
+    });
+    return Object.freeze({
+      warnings: Object.freeze([sweptPathWarning(dirs.brain, message)]),
+      errors: Object.freeze([]),
+      trust_verdict: "watch" as TrustVerdict,
+      instruction_file_warnings: Object.freeze([]),
+      uncertain: Object.freeze(uncertain),
+    });
+  }
+  if (root.kind === "absent") {
     // A root with no Brain layer is NOT clean (context-integrity-gates,
     // Unit J). It is exactly the shape a mis-resolved vault takes, and
     // reporting it as clean is what let a wrong root pass the one
@@ -194,8 +244,12 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
     });
   }
 
-  const ctx = resolveContext(vault, opts);
+  // The findings first, because the context is itself read from disk and
+  // its three directory reads have to be able to report. Resolved before
+  // any check runs, an unreadable `Brain/preferences` or a `Brain/log`
+  // that is a regular file ended the pass with no findings at all.
   const findings: DoctorFindings = { issues: [], uncertain: [] };
+  const ctx = resolveContext(vault, opts, findings.uncertain);
   for (const check of DOCTOR_CHECKS) {
     if (!check.failSoft) {
       check.run(ctx, findings);
@@ -284,8 +338,17 @@ export function runDoctor(vault: string, opts: RunDoctorOptions = {}): RunDoctor
  * The config load is the only step that may legitimately fail here: an
  * unreadable `_brain.yaml` is itself a finding {@link configCheck}
  * reports, and the config-dependent lints simply do not run without one.
+ *
+ * The three directory reads run outside the pass's fail-soft loop, so
+ * each is handed the uncertainty stream: a directory they cannot read
+ * shrinks what every check downstream sees, and that has to be a finding
+ * rather than a throw before the first check or a silently smaller set.
  */
-function resolveContext(vault: string, opts: RunDoctorOptions): DoctorCheckContext {
+function resolveContext(
+  vault: string,
+  opts: RunDoctorOptions,
+  uncertain: DoctorUncertainEntry[],
+): DoctorCheckContext {
   let config;
   try {
     config = loadBrainConfigDetailed(vault).config;
@@ -297,11 +360,32 @@ function resolveContext(vault: string, opts: RunDoctorOptions): DoctorCheckConte
     now: opts.now ?? new Date(),
     config,
     dbPath: opts.dbPath,
-    knownBasenames: collectAllBasenames(vault),
+    knownBasenames: collectAllBasenames(vault, {
+      site: CONTEXT_SITE,
+      consequence:
+        "its files are absent from the basename universe every link check resolves against, so " +
+        "a wikilink that resolves under it reads as broken here",
+      uncertain,
+    }),
     idIndex: new Map<string, string[]>(),
     // Built once and fed to every lint that needs them, rather than
     // re-parsing the same files five times.
-    preferences: readAllPreferenceRecords(vault),
-    logs: readAllLogRecords(vault),
+    preferences: readAllPreferenceRecords(vault, {
+      site: CONTEXT_SITE,
+      consequence:
+        "no preference in it was loaded, so every preference-hygiene lint below reports on a " +
+        "subset of the store",
+      uncertain,
+    }),
+    logs: readAllLogRecords(vault, {
+      site: CONTEXT_SITE,
+      consequence:
+        "no log day in it was loaded, so the evidence and orphan lints below report on a subset " +
+        "of the store",
+      uncertain,
+    }),
   };
 }
+
+/** Subsystem name the shared context reports an unreadable path under. */
+const CONTEXT_SITE = "brain.doctor.context";

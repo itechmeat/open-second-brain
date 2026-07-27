@@ -15,9 +15,12 @@
  * `DoctorIssue.code` is a free string, so the population is read out of
  * the doctor's own source and the tables are asked to account for it.
  * That source is `doctor.ts` - the registry - plus every check module
- * under `doctor/`, and the directory is ENUMERATED rather than listed:
- * a check module added tomorrow is swept by this census the moment it
- * exists, which is the property a hand-maintained list could not have.
+ * under `doctor/`, and the directory is ENUMERATED RECURSIVELY rather
+ * than listed: a check module added tomorrow is swept by this census the
+ * moment it exists, wherever under that directory it is put, which is
+ * the property a hand-maintained list could not have. The enumeration
+ * was flat before, so a check family moved into a subdirectory would
+ * have dropped out of the population without failing anything.
  * Two shapes carry a code in those modules and the census reads both:
  *
  *   - `code: "<literal>"` at a push site;
@@ -31,11 +34,21 @@
  *
  * ## The boundary, stated rather than discovered
  *
- * The population is what `doctor.ts` SPELLS. Three sites forward
- * `notice.code` from the closed `DEGRADATION_CODE` vocabulary owned by
- * other modules; those codes are classified in `applier-capability.ts`,
- * which is the table that owns that vocabulary's repair question, and
- * re-declaring them here would give one code two homes.
+ * The population is what the doctor SPELLS. Five sites forward
+ * `notice.code` from the closed `DEGRADATION_CODE` vocabulary, whose
+ * members are enumerated in `src/core/integrity/degradation.ts` and
+ * minted nowhere else. Two of them are classified in
+ * `applier-capability.ts` - a table that answers the REPAIR question,
+ * not this one - and the rest reach the `uncertain` stream with no exit
+ * of either kind. That gap is stated in {@link NON_LITERAL_CODE_SITES}
+ * rather than hidden: closing it needs one entry per code in
+ * `doctor-exits.ts`, which is a decision per condition rather than a
+ * mechanical sweep.
+ *
+ * A code this module CONSTRUCTS is not in that boundary, however closed
+ * the vocabulary it comes from: `doctor/unreadable-path.ts` raises
+ * `vault-walk-entry-skipped` itself, so it is spelled there, read by the
+ * scan below, and classified like every other doctor code.
  *
  * Modelled on `tests/core/brain/vault-guard-census.test.ts` and the
  * terminal-state census: detect the property syntactically, keep one
@@ -58,13 +71,23 @@ import {
 const BRAIN_DIR = join(import.meta.dir, "..", "..", "..", "src", "core", "brain");
 const CHECKS_DIR = join(BRAIN_DIR, "doctor");
 
+/** Every `.ts` file under `dir`, at any depth, in a stable order. */
+function checkModules(dir: string): string[] {
+  const out: string[] = [];
+  for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
+    a.name.localeCompare(b.name),
+  )) {
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...checkModules(path));
+    else if (entry.name.endsWith(".ts")) out.push(path);
+  }
+  return out;
+}
+
 /** The registry plus every check module it runs, enumerated from disk. */
 const DOCTOR_SOURCE_PATHS: ReadonlyArray<string> = [
   join(BRAIN_DIR, "doctor.ts"),
-  ...readdirSync(CHECKS_DIR)
-    .filter((name) => name.endsWith(".ts"))
-    .toSorted()
-    .map((name) => join(CHECKS_DIR, name)),
+  ...checkModules(CHECKS_DIR),
 ];
 
 const DOCTOR_SOURCE = DOCTOR_SOURCE_PATHS.map((path) => readFileSync(path, "utf8")).join("\n");
@@ -89,24 +112,57 @@ const CODE_IDENTIFIER_RE = /^[A-Z0-9_]*CODE[A-Z0-9_]*$/;
  * inconvenient.
  */
 const NON_LITERAL_CODE_SITES: Readonly<Record<string, string>> = Object.freeze({
-  "DEGRADATION_CODE.vaultWalkEntrySkipped":
-    "names one member of that same closed vocabulary directly, because `doctor/unreadable-path.ts` " +
-    "CONSTRUCTS the notice the other three sites merely forward. It is the condition the member " +
-    "was declared for - a walk that could not descend into an entry, so a subtree is missing from " +
-    "the result - and the doctor's hand-written sweeps hit it exactly as the shared walker does. " +
-    "Spelling a doctor-local literal here instead would give one condition two spellings that can " +
-    "disagree, which is what the closed vocabulary exists to prevent.",
   "notice.code":
     "forwards a code from the closed DEGRADATION_CODE vocabulary owned by vault.ts, " +
-    "vault-identity.ts and the lineage verifier into the uncertain stream. Those codes are " +
-    "classified in applier-capability.ts, the table that owns that vocabulary; declaring them " +
-    "here too would give one code two homes that can disagree.",
+    "vault-identity.ts and the lineage verifier. Its members are enumerated in " +
+    "src/core/integrity/degradation.ts and minted nowhere else, so the values this expression can " +
+    "hold are readable there. Their EXITS are not all accounted for: vault-marker-absent and " +
+    "frontmatter-line-dropped sit in applier-capability.ts (a table answering the repair " +
+    "question), vault-walk-entry-skipped is registered in DIAGNOSTIC_SIGNALS because this pass " +
+    "constructs it, and the lineage and frontmatter-unreadable members reach the uncertain stream " +
+    "with neither a command nor a written reason. Closing that needs an entry per code in " +
+    "doctor-exits.ts and a judgement per condition, which this census names rather than performs.",
   "parseErrorCode(kindPrefix, msg)":
     "returns one of the four parse-error constants declared beside it, every one of which the " +
     "*_CODE scan above already reads. The function exists so the choice between them is made in " +
     "one named place rather than by concatenating a prefix onto a suffix, which is what made " +
     "those four codes unreadable from this module's source at all.",
 });
+
+/**
+ * Every doctor code whose exit is a REGISTERED command, pinned.
+ *
+ * The exclusion table is already guarded in both directions - a code
+ * with no reason fails, and a reason outliving its code fails. The
+ * registry could not be: it holds far more than the doctor's codes
+ * (terminal states, runtime notices, the O3 snapshot classes), so
+ * nothing derivable from it says which entries the doctor still spells.
+ * Deleting a whole check module therefore satisfied every floor below
+ * while the doctor silently stopped checking backlinks.
+ *
+ * Adding a doctor code with a command, or retiring one, edits this list
+ * in the same commit - which is the review this census exists to force.
+ */
+const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
+  "brain-root-absent",
+  "broken-backlinks",
+  "broken-wikilink",
+  "config-invalid",
+  "config-missing",
+  "content-hash-drift",
+  "contradictory-preferences",
+  "dangling-workrun",
+  "duplicate-preferences",
+  "entity-label-malformed",
+  "low-evidence-confirmed",
+  "orphan-evidence",
+  "principle-corrupted",
+  "schema-version-unknown",
+  "stale-claim",
+  "sync-conflict-log",
+  "tier-drift",
+  "vault-walk-entry-skipped",
+];
 
 /** A reason has to say something; a placeholder cannot reach this. */
 const MIN_REASON_LENGTH = 80;
@@ -154,6 +210,16 @@ describe("every doctor code is classified", () => {
       (code) => DIAGNOSTIC_SIGNALS.has(code) && DOCTOR_EXIT_EXCLUSIONS.has(code),
     );
     expect(both.join("\n")).toBe("");
+  });
+
+  test("no registration outlives the check module that spelled its code", () => {
+    // Named, not counted, in both directions: a code that vanished from
+    // the doctor and a code that appeared in it are different work.
+    expect(
+      doctorCodes()
+        .filter((code) => DIAGNOSTIC_SIGNALS.has(code))
+        .join("\n"),
+    ).toBe([...DOCTOR_REGISTERED_CODES].toSorted().join("\n"));
   });
 
   test("no exclusion outlives the code it explains", () => {

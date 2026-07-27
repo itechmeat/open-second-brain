@@ -9,7 +9,7 @@
  * which is the single condition this module reports.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { resolveVaultScope } from "../../vault-scope/index.ts";
@@ -21,18 +21,23 @@ import {
   loadBrainConfigDetailed,
 } from "../policy.ts";
 import type { DoctorCheck } from "./check.ts";
+import { sweptFailureReason } from "./unreadable-path.ts";
+import type { DoctorIssue } from "../types.ts";
 
 export const configCheck: DoctorCheck = {
   failSoft: false,
   run({ vault }, { issues }) {
     const cfgPath = brainConfigPath(vault);
-    if (!existsSync(cfgPath)) {
-      issues.push({
-        severity: "error",
-        code: "config-missing",
-        path: cfgPath,
-        message: "_brain.yaml is missing; run `o2b brain init` to bootstrap the Brain layer",
-      });
+    // Not `existsSync`: it answers false for a permission denial on the
+    // file or on any parent component exactly as it does for a config
+    // nobody has written, and this branch advises `o2b brain init` -
+    // which on a populated store the doctor merely could not read is
+    // advice to bootstrap over it. A read failure is the same finding
+    // the catch arm below reports for a file that opens and does not
+    // parse: the declaration could not be honoured, for a stated reason.
+    const absence = configAbsence(cfgPath);
+    if (absence !== null) {
+      issues.push(absence);
       return;
     }
     try {
@@ -74,6 +79,35 @@ export const configCheck: DoctorCheck = {
     }
   },
 };
+
+/**
+ * The finding for a `_brain.yaml` that could not be opened at all, or
+ * `null` when it is there to be loaded. Absence keeps its own code and
+ * its own message, byte for byte; every other failure reports the same
+ * `config-invalid` the load path already reports, naming the errno.
+ */
+function configAbsence(cfgPath: string): DoctorIssue | null {
+  try {
+    statSync(cfgPath);
+    return null;
+  } catch (err) {
+    const reason = sweptFailureReason(err);
+    if (reason === null) {
+      return {
+        severity: "error",
+        code: "config-missing",
+        path: cfgPath,
+        message: "_brain.yaml is missing; run `o2b brain init` to bootstrap the Brain layer",
+      };
+    }
+    return {
+      severity: "error",
+      code: "config-invalid",
+      path: cfgPath,
+      message: `_brain.yaml could not be read: ${reason}`,
+    };
+  }
+}
 
 /**
  * v0.10.9 hygiene lint: surface path-style entries in
