@@ -8,7 +8,7 @@
  * all of them are conditions only a walk of the tree can see.
  */
 
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 
 import { realpathInsideVault, vaultRelative } from "../../path-safety.ts";
@@ -17,6 +17,7 @@ import { readTierDriftCount } from "../frontmatter-tiers.ts";
 import { listLogSyncConflicts } from "../log-jsonl.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorCheck } from "./check.ts";
+import { readSweptDir } from "./unreadable-path.ts";
 
 /**
  * Tier guard (write-time-integrity-governance): staged identity
@@ -87,6 +88,9 @@ export const syncConflictLogCheck: DoctorCheck = {
   },
 };
 
+/** Subsystem name the symlink walk reports an unreadable path under. */
+const SYMLINK_ESCAPE_SITE = "brain.doctor.symlinkEscape";
+
 /**
  * Store hardening (D2): a symlink inside Brain/ whose realpath resolves
  * OUTSIDE the vault root is an exfiltration/clobber hazard. Lint only -
@@ -97,19 +101,27 @@ export const syncConflictLogCheck: DoctorCheck = {
  * `ensureInsideVault` performs) so a symlink pointing at an in-vault
  * target never flags. Directory symlinks are reported but NOT descended
  * into - following them would leave the vault.
+ *
+ * A subtree the walk cannot list is reported as uncertainty rather than
+ * skipped in silence: "no escaping symlink found" and "no symlink
+ * examined" are the same empty result, and only one of them means the
+ * store is safe to read.
  */
 export const symlinkEscapeCheck: DoctorCheck = {
   failSoft: true,
-  run({ vault }, { issues }) {
+  run({ vault }, { issues, uncertain }) {
     const root = brainDirs(vault).brain;
     if (!existsSync(root)) return;
+    const swept = {
+      site: SYMLINK_ESCAPE_SITE,
+      consequence:
+        "no symlink under it was examined, so this subtree is not certified free of links " +
+        "resolving outside the vault root",
+      uncertain,
+    };
     const visit = (dir: string): void => {
-      let entries;
-      try {
-        entries = readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
+      const entries = readSweptDir(dir, swept);
+      if (entries === null) return;
       for (const entry of entries) {
         const full = join(dir, entry.name);
         if (entry.isSymbolicLink()) {

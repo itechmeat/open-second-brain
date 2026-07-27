@@ -119,6 +119,27 @@ function stripBasenameDecoration(body: string): string {
 }
 
 /**
+ * The id prefixes this Brain owns: preferences, retired records, and
+ * signals. Anything else a wikilink resolves to is user prose or a
+ * cross-layer note, and is nobody here's to flag or to prune.
+ */
+const BRAIN_ID_RE = /^(pref|ret|sig)-/;
+
+/**
+ * Whether `target` — a bare id, normally straight out of
+ * {@link normaliseWikilinkTarget} — names an artifact this Brain
+ * manages.
+ *
+ * A predicate rather than an exported pattern: the two callers that
+ * asked this question each carried their own copy of the regex, which is
+ * one grammar in two places waiting to disagree about a fourth prefix.
+ * Exposing the answer instead of the pattern is what keeps it single.
+ */
+export function isBrainArtifactId(target: string): boolean {
+  return BRAIN_ID_RE.test(target);
+}
+
+/**
  * Return the bare target id if `value` is exactly a wikilink form
  * (`^\[\[…\]\]$` modulo surrounding whitespace), otherwise `null`.
  *

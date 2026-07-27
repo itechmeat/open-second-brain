@@ -531,6 +531,11 @@ interface WalkNoticeSink {
  * Used where callers only need existence-by-basename (Obsidian
  * wikilink resolution semantics) and the YAML parse cost of
  * {@link listVaultPages} is unwarranted.
+ *
+ * Honours `opts.notices` exactly as {@link listVaultPages} does. The
+ * option has always been on this signature — it is the same options type
+ * — and until now it was accepted and dropped, so a caller that asked
+ * where the walk went blind was answered with silence.
  */
 export function listVaultBasenames(
   vaultDir: string,
@@ -539,9 +544,14 @@ export function listVaultBasenames(
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
   const out = new Set<string>();
-  walkBasenames(vaultDir, vaultDir, skipDirs, skipFiles, out);
+  walkBasenames(vaultDir, vaultDir, skipDirs, skipFiles, out, {
+    sink: opts.notices,
+    site: opts.site ?? LIST_VAULT_BASENAMES_SITE,
+  });
   return out;
 }
+
+const LIST_VAULT_BASENAMES_SITE = "vault.listVaultBasenames";
 
 function walkBasenames(
   root: string,
@@ -549,18 +559,31 @@ function walkBasenames(
   skipDirs: Set<string>,
   skipFiles: Set<string>,
   out: Set<string>,
+  notices: WalkNoticeSink,
 ): void {
   let entries;
   try {
     entries = readdirSync(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    // Same branch, and the same fail-soft return, as {@link walk}: an
+    // unreadable directory removes a whole subtree from the basename
+    // universe, and a caller resolving links against that universe
+    // cannot tell the missing pages from pages that never existed.
+    if (notices.sink !== undefined) {
+      emitDegradationNotice(notices.sink, {
+        code: DEGRADATION_CODE.vaultWalkEntrySkipped,
+        site: notices.site,
+        path: dir,
+        detail: `directory listing failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
     return;
   }
   for (const entry of entries) {
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name)) continue;
-      walkBasenames(root, full, skipDirs, skipFiles, out);
+      walkBasenames(root, full, skipDirs, skipFiles, out, notices);
       continue;
     }
     if (!entry.isFile()) continue;

@@ -7,12 +7,14 @@
  * a defect in what an event points at.
  */
 
+import type { DegradationNotice } from "../../integrity/degradation.ts";
 import { listVaultBasenames } from "../../vault.ts";
 import { listLogMarkdownFiles } from "../log-jsonl.ts";
 import { parseLogDayFile } from "../log.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 import { parseArtifactRef } from "../wikilink.ts";
 import type { DoctorCheck } from "./check.ts";
+import { forwardSweepNotices } from "./unreadable-path.ts";
 
 /**
  * 7. Log header parsing — surface warnings from every markdown shard.
@@ -67,6 +69,9 @@ export const evidenceRangeCheck: DoctorCheck = {
   },
 };
 
+/** Subsystem name the basename sweep reports an unreadable path under. */
+const ORPHAN_EVIDENCE_SITE = "brain.doctor.orphanEvidence";
+
 /**
  * `orphan-evidence`: walks every `apply-evidence` event and verifies
  * the artifact wikilink resolves to some file in the vault. Obsidian
@@ -75,16 +80,28 @@ export const evidenceRangeCheck: DoctorCheck = {
  *
  * This is the only doctor lint that walks the entire vault (not just
  * `Brain/`). It's an on-demand check; doctor isn't called per-turn.
+ *
+ * The walker is fail-soft over a directory it cannot list, so an
+ * unreadable subtree silently shrank the universe every reference here
+ * is resolved against - and a reference into that subtree then reads as
+ * orphaned. Those directories now arrive on the walker's notice sink and
+ * are reported as uncertainty; the findings below are unchanged.
  */
 export const orphanEvidenceCheck: DoctorCheck = {
   failSoft: true,
-  run({ vault, logs }, { issues }) {
-    let basenames: ReadonlySet<string>;
-    try {
-      basenames = listVaultBasenames(vault);
-    } catch {
-      return;
-    }
+  run({ vault, logs }, { issues, uncertain }) {
+    const notices: DegradationNotice[] = [];
+    const basenames: ReadonlySet<string> = listVaultBasenames(vault, {
+      notices,
+      site: ORPHAN_EVIDENCE_SITE,
+    });
+    forwardSweepNotices(notices, {
+      site: ORPHAN_EVIDENCE_SITE,
+      consequence:
+        "its pages are absent from the basename universe this lint resolves artifact " +
+        "references against, so a reference that resolves under it reads as orphaned here",
+      uncertain,
+    });
     for (const { entries } of logs) {
       for (const e of entries) {
         if (e.eventType !== BRAIN_LOG_EVENT_KIND.applyEvidence) continue;

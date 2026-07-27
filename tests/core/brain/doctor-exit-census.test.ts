@@ -89,6 +89,13 @@ const CODE_IDENTIFIER_RE = /^[A-Z0-9_]*CODE[A-Z0-9_]*$/;
  * inconvenient.
  */
 const NON_LITERAL_CODE_SITES: Readonly<Record<string, string>> = Object.freeze({
+  "DEGRADATION_CODE.vaultWalkEntrySkipped":
+    "names one member of that same closed vocabulary directly, because `doctor/unreadable-path.ts` " +
+    "CONSTRUCTS the notice the other three sites merely forward. It is the condition the member " +
+    "was declared for - a walk that could not descend into an entry, so a subtree is missing from " +
+    "the result - and the doctor's hand-written sweeps hit it exactly as the shared walker does. " +
+    "Spelling a doctor-local literal here instead would give one condition two spellings that can " +
+    "disagree, which is what the closed vocabulary exists to prevent.",
   "notice.code":
     "forwards a code from the closed DEGRADATION_CODE vocabulary owned by vault.ts, " +
     "vault-identity.ts and the lineage verifier into the uncertain stream. Those codes are " +

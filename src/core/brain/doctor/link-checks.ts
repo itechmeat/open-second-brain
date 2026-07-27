@@ -7,10 +7,8 @@
  */
 
 import { buildBacklinkIndex } from "../backlinks.ts";
+import { isBrainArtifactId } from "../wikilink.ts";
 import type { DoctorCheck } from "./check.ts";
-
-/** Artifact-id prefixes this Brain owns; anything else is user prose. */
-const BRAIN_ID_RE = /^(pref|ret|sig)-/;
 
 /**
  * 8. Broken-backlinks lint — any preference / retired / log entry
@@ -32,7 +30,7 @@ export const brokenBacklinkCheck: DoctorCheck = {
       // We only flag references whose target *should* live in this
       // Brain (i.e. an artifact id we manage). Wikilinks pointing
       // outside the Brain layer are user prose and not our concern.
-      if (!BRAIN_ID_RE.test(target)) continue;
+      if (!isBrainArtifactId(target)) continue;
       if (knownBasenames.has(target)) continue;
       const sources = Array.from(new Set(refs.map((r) => r.source))).toSorted();
       issues.push({
