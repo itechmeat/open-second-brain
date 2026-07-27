@@ -13,8 +13,12 @@
  * ## Enumerated from the detector, never from the tables
  *
  * `DoctorIssue.code` is a free string, so the population is read out of
- * `doctor.ts` itself and the tables are asked to account for it. Two
- * shapes carry a code in that module and the census reads both:
+ * the doctor's own source and the tables are asked to account for it.
+ * That source is `doctor.ts` - the registry - plus every check module
+ * under `doctor/`, and the directory is ENUMERATED rather than listed:
+ * a check module added tomorrow is swept by this census the moment it
+ * exists, which is the property a hand-maintained list could not have.
+ * Two shapes carry a code in those modules and the census reads both:
  *
  *   - `code: "<literal>"` at a push site;
  *   - `const <NAME>_CODE = "<literal>"` hoisted to a module constant.
@@ -41,7 +45,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { DIAGNOSTIC_SIGNALS } from "../../../src/core/brain/diagnostics.ts";
@@ -51,10 +55,19 @@ import {
   noExitReasons,
 } from "../../../src/core/brain/doctor-exits.ts";
 
-const DOCTOR_SOURCE = readFileSync(
-  join(import.meta.dir, "..", "..", "..", "src", "core", "brain", "doctor.ts"),
-  "utf8",
-);
+const BRAIN_DIR = join(import.meta.dir, "..", "..", "..", "src", "core", "brain");
+const CHECKS_DIR = join(BRAIN_DIR, "doctor");
+
+/** The registry plus every check module it runs, enumerated from disk. */
+const DOCTOR_SOURCE_PATHS: ReadonlyArray<string> = [
+  join(BRAIN_DIR, "doctor.ts"),
+  ...readdirSync(CHECKS_DIR)
+    .filter((name) => name.endsWith(".ts"))
+    .toSorted()
+    .map((name) => join(CHECKS_DIR, name)),
+];
+
+const DOCTOR_SOURCE = DOCTOR_SOURCE_PATHS.map((path) => readFileSync(path, "utf8")).join("\n");
 
 /** `code: "<literal>"` - the shape most of the doctor's codes take. */
 const LITERAL_CODE_RE = /\bcode: "([^"]+)"/g;
@@ -159,6 +172,10 @@ describe("every doctor code is classified", () => {
 
   test("the census is not vacuous", () => {
     const codes = doctorCodes();
+    // A sweep that lost the check modules - a renamed directory, a check
+    // family moved out of it - would shrink the population without
+    // failing any assertion below.
+    expect(DOCTOR_SOURCE_PATHS.length).toBeGreaterThan(10);
     // A regex that stopped matching would sweep an empty set clean.
     expect(codes.length).toBeGreaterThan(35);
     expect(constantCodes().size).toBeGreaterThan(3);
