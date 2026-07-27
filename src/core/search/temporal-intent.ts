@@ -59,7 +59,7 @@ import {
   isLanguageNeutralTimePoint,
   type ResolvedTimeRange,
 } from "./time-range.ts";
-import { SearchError } from "./types.ts";
+import { SearchError } from "./search-error.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 

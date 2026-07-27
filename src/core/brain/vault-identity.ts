@@ -88,7 +88,7 @@ import {
   type DegradationNotice,
 } from "../integrity/degradation.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
-import { BRAIN_ROOT_REL } from "./paths.ts";
+import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 /** Marker schema version. Bumped only on an incompatible field change. */
 export const VAULT_IDENTITY_SCHEMA_VERSION = 1;

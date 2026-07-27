@@ -2,6 +2,15 @@
  * Public types for `src/core/search/*`. Plain data — no behaviour, no I/O.
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §12, §14.
+ *
+ * This module AGGREGATES: it names the leaf types its own dependents own
+ * (`DegreePredicate`, `TemporalIntent`, the trust receipts) inside the
+ * option / outcome shapes. The two things those dependents need back -
+ * the {@link SearchError} carrier and the ranked-hit row - therefore live
+ * in leaf modules of their own (`search-error.ts`, `search-result.ts`)
+ * and are re-exported here, so no dependent has to point at the
+ * aggregate. Import surface unchanged: every symbol this module exported
+ * before is still exported from this path.
  */
 
 import type { DegradationNotice } from "../integrity/degradation.ts";
@@ -9,196 +18,22 @@ import type { StampMismatch } from "../integrity/stamp.ts";
 import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
+import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./search-result.ts";
 import type {
   MemoryTrustAssessment,
   RetrievalDecisionTrace,
 } from "../brain/trust/retrieval-receipts.ts";
 
 export type { VaultIgnoreRule };
-
-export const SEARCH_ERROR_CODES = [
-  "INDEX_MISSING",
-  "INDEX_UNREADABLE",
-  "SCHEMA_MISMATCH",
-  "VEC_EXTENSION_UNAVAILABLE",
-  "EMBEDDING_DISABLED",
-  "EMBEDDING_KEY_MISSING",
-  "EMBEDDING_PROVIDER_HTTP",
-  "EMBEDDING_PROVIDER_TIMEOUT",
-  "EMBEDDING_DIMENSION_MISMATCH",
-  "EMBEDDING_INVALID_VECTOR",
-  "EMBEDDING_COST_GATE",
-  "EMBEDDING_QUOTA_EXHAUSTED",
-  "RERANK_PROVIDER_HTTP",
-  "INDEX_LOCKED",
-  "INVALID_INPUT",
-] as const;
-export type SearchErrorCode = (typeof SEARCH_ERROR_CODES)[number];
-
-/**
- * Actionable operator-facing message for an exhausted embedding quota /
- * billing limit (Task C1/C2). Shared by the provider (thrown message), the
- * semantic-phase degrade warning, and the MCP error mapping so the single
- * remediation instruction stays consistent across every surface.
- */
-export const EMBEDDING_QUOTA_MESSAGE =
-  "embedding quota/billing exhausted: semantic search is degraded to keyword-only. " +
-  "Check your embedding provider billing and quota, raise the limit or top up, then reindex.";
-
-/**
- * Coarse outcome category for an embedding-provider error (Task C1). Drives
- * both the retry policy (`retriable`) and the degrade-warning wording.
- * `quota` and `auth` fail fast; `rate_limit` and `transient` retry.
- */
-export type EmbeddingErrorCategory = "quota" | "rate_limit" | "auth" | "transient" | "fatal";
-
-/**
- * Additive structured context for a {@link SearchError} originating from a
- * provider HTTP response. Both fields are optional so every existing
- * two-argument call site stays valid.
- */
-export interface SearchErrorOptions {
-  /** Upstream HTTP status code. */
-  readonly status?: number;
-  /** Parsed `Retry-After` delay in milliseconds. */
-  readonly retryAfterMs?: number;
-}
-
-export class SearchError extends Error {
-  readonly code: SearchErrorCode;
-  /** Upstream HTTP status when this error originated from a provider response. */
-  readonly status?: number;
-  /** Parsed `Retry-After` delay in milliseconds when the provider supplied one. */
-  readonly retryAfterMs?: number;
-  constructor(code: SearchErrorCode, message: string, opts?: SearchErrorOptions) {
-    super(message);
-    this.name = "SearchError";
-    this.code = code;
-    if (opts?.status !== undefined) this.status = opts.status;
-    if (opts?.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
-  }
-}
-
-/**
- * Structured per-layer score components (Search & Recall Quality Suite).
- * The numeric sibling of `reasons[]`: where `reasons` formats only the
- * layers that fired as strings, `breakdown` carries every component of
- * the final score as a number, zero for a layer that did not fire and 1
- * for a neutral multiplier. Additive layers (keyword, semantic, rrf,
- * entity, activation, coAccess, link, recency, sessionFocus) are the raw
- * contributions; `tier` and `trend` are the relevance-portion multipliers
- * (1.0 = neutral). The ranker emits it for every primary result; the MCP
- * `explain` projection and `feedback.ts` read it directly instead of
- * re-parsing reason strings.
- */
-export interface ScoreBreakdown {
-  readonly keyword: number;
-  readonly semantic: number;
-  readonly rrf: number;
-  readonly entity: number;
-  readonly activation: number;
-  readonly coAccess: number;
-  /** Observed-reuse boost (t_65588d8b); 0 when no verdicts apply. */
-  readonly reuse: number;
-  readonly link: number;
-  readonly recency: number;
-  readonly tier: number;
-  readonly trend: number;
-  readonly sessionFocus: number;
-  /**
-   * Query-side temporal-intent boost (t_58fc4720). Present ONLY when the
-   * query declared a time window; absent - not zero - for every query
-   * that declared none, so a breakdown without temporal intent stays
-   * byte-identical to pre-suite behaviour.
-   */
-  readonly temporal?: number;
-}
-
-/**
- * Inline per-hit trust metadata (Search & Recall Quality Suite). Computed
- * at read time, never stored. `age_days` is the whole-day distance from
- * the document mtime; `superseded` / `conflict` are derived from the
- * typed relation edges the recall pipeline surfaces (`superseded_by` /
- * `contradicts`). Present on a result only when the caller set `trust`.
- */
-export interface TrustMetadata {
-  readonly age_days: number;
-  readonly superseded: boolean;
-  readonly conflict: boolean;
-  /**
-   * Belief lifecycle suite (A4, t_d9365884): when the hit is superseded,
-   * the `superseded_by` successor target so recall carries a pointer to
-   * the replacement. `null` when the hit is not superseded or declares no
-   * successor target.
-   */
-  readonly replacement: string | null;
-}
-
-export interface BrainSearchResult {
-  readonly documentId: number;
-  readonly chunkId: number;
-  readonly path: string;
-  readonly title: string | null;
-  readonly content: string;
-  readonly startLine: number;
-  readonly endLine: number;
-  readonly score: number;
-  readonly keywordScore: number;
-  readonly semanticScore: number;
-  readonly linkBoost: number;
-  readonly recencyBoost: number;
-  /**
-   * Transcript turn instant (unix seconds) this result was authored at
-   * (conversation chronology, S1 / t_347e8224). Present only for a note
-   * carrying an `authored_at` frontmatter instant; absent for every note
-   * with no turn instant, so the result shape stays byte-identical for a
-   * vault without transcript-authored notes. Exact hybrid-score ties are
-   * ordered newer-first by this value.
-   */
-  readonly authoredAt?: number;
-  readonly searchType: "keyword" | "semantic" | "hybrid" | "link";
-  /**
-   * Explainable recall: one entry per scoring layer that contributed
-   * to `score`, formatted `"<layer>: <fixed-precision value>"`. Layers
-   * that did not fire (zero contribution) are omitted. Always present;
-   * never empty for a result that surfaced.
-   */
-  readonly reasons: ReadonlyArray<string>;
-  /**
-   * Typed semantic relations this result's page declares in its
-   * frontmatter (v3 / typed graph semantics): `related` / `extends` /
-   * `contradicts` / `superseded_by` and any other vocabulary relation.
-   * Computed at query time from the links table, never stored on the
-   * result row. Absent when the page declares no typed relations.
-   */
-  readonly relations?: ReadonlyArray<{
-    readonly relation: string;
-    readonly target: string;
-  }>;
-  /**
-   * Structured per-layer score components (Search & Recall Quality
-   * Suite). Always present on a primary ranked result; absent on
-   * synthetic results (link-traversal expansions, relation-polarity
-   * successor pull-ins) whose score is not a per-layer sum - the
-   * `explain` projection derives a faithful breakdown from the
-   * first-class lane/boost fields for those. Never serialized to the MCP
-   * output unless the caller sets `explain`.
-   */
-  readonly breakdown?: ScoreBreakdown;
-  /**
-   * Inline trust metadata (Search & Recall Quality Suite). Present only
-   * when the caller set `trust`; computed at read time from the document
-   * mtime and the surfaced typed relations, never stored.
-   */
-  readonly trust?: TrustMetadata;
-  /**
-   * Kind-namespaced origin label (Workspace Insight Suite, cross-vault
-   * search): "local", "profile/<name>", or "source/<alias>". Only set
-   * by `searchAcrossVaults`; plain single-vault search leaves it
-   * absent, keeping the legacy result shape byte-identical.
-   */
-  readonly origin?: string;
-}
+export type { BrainSearchResult, ScoreBreakdown, TrustMetadata };
+export {
+  EMBEDDING_QUOTA_MESSAGE,
+  SEARCH_ERROR_CODES,
+  SearchError,
+  type EmbeddingErrorCategory,
+  type SearchErrorCode,
+  type SearchErrorOptions,
+} from "./search-error.ts";
 
 /**
  * Structural query intent (v0.20.0). Derived purely from query shape -

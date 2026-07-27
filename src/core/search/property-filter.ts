@@ -17,7 +17,7 @@
  * reader, tests can pass an in-memory map.
  */
 
-import { SearchError } from "./types.ts";
+import { SearchError } from "./search-error.ts";
 
 export type PropertyFilterMap = ReadonlyMap<string, ReadonlyArray<string>>;
 export type PropertyFrontmatterReader = (path: string) => Record<string, unknown> | null;

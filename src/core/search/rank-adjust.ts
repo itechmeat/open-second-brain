@@ -26,7 +26,7 @@
  */
 
 import { clamp01 } from "../math.ts";
-import type { BrainSearchResult } from "./types.ts";
+import type { BrainSearchResult } from "./search-result.ts";
 
 /** A per-candidate verdict returned by a {@link RankAdjuster}. */
 export type RankAdjustVerdict =

@@ -24,108 +24,62 @@
  */
 
 import { existsSync } from "node:fs";
-import { join, posix } from "node:path";
+import { join } from "node:path";
 
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
+import {
+  BRAIN_ARTIFACTS_REL,
+  BRAIN_ACTIVE_FILE,
+  BRAIN_ATTENTION_REL,
+  BRAIN_BASES_REL,
+  BRAIN_CAPTURES_PROCESSED_REL,
+  BRAIN_CAPTURES_REL,
+  BRAIN_CLAIM_GRAPH_FILE,
+  BRAIN_CONFIG_FILE,
+  BRAIN_DECISIONS_REL,
+  BRAIN_DISTILLATIONS_REL,
+  BRAIN_ENTITIES_REL,
+  BRAIN_GAP_TASKS_REL,
+  BRAIN_INBOX_REL,
+  BRAIN_LESSONS_FILE,
+  BRAIN_LOG_REL,
+  BRAIN_MANUAL_FILE,
+  BRAIN_OBLIGATIONS_REL,
+  BRAIN_PENDING_REL,
+  BRAIN_PINNED_FILE,
+  BRAIN_PREFERENCES_REL,
+  BRAIN_PROCEDURAL_MEMORY_REL,
+  BRAIN_PROCEDURES_REL,
+  BRAIN_PROCESSED_REL,
+  BRAIN_REPORTS_REL,
+  BRAIN_RETIRED_REL,
+  BRAIN_ROLLUP_LEDGER_FILE,
+  BRAIN_ROOT_REL,
+  BRAIN_SKILL_ACCEPT_JOURNAL_REL,
+  BRAIN_SKILL_PROPOSALS_ACCEPTED_REL,
+  BRAIN_SKILL_PROPOSALS_PENDING_REL,
+  BRAIN_SKILL_PROPOSALS_REJECTED_REL,
+  BRAIN_SNAPSHOTS_REL,
+  BRAIN_SOURCES_REL,
+  BRAIN_STATE_REL,
+  BRAIN_TENSIONS_REL,
+  BRAIN_THESES_REL,
+} from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 
-// ----- Canonical vault-relative path constants ------------------------------
-//
-// Single source of truth. Every module that builds a path inside the
-// Brain layer imports these instead of repeating the literal. A
-// future rename ("Brain" → something else) is a one-line change here.
-
-/** Vault-relative root of the Brain layer. */
-export const BRAIN_ROOT_REL = "Brain";
-
-/** Vault-relative Brain subdirectory names. */
-export const BRAIN_INBOX_REL = posix.join(BRAIN_ROOT_REL, "inbox");
-export const BRAIN_PROCESSED_REL = posix.join(BRAIN_INBOX_REL, "processed");
-/** Write-approval staging area: `Brain/pending/sig-*.md` (A3, t_e540b093). */
-export const BRAIN_PENDING_REL = posix.join(BRAIN_ROOT_REL, "pending");
-export const BRAIN_PREFERENCES_REL = posix.join(BRAIN_ROOT_REL, "preferences");
-export const BRAIN_RETIRED_REL = posix.join(BRAIN_ROOT_REL, "retired");
-export const BRAIN_SKILL_PROPOSALS_REL = posix.join(BRAIN_ROOT_REL, "skill-proposals");
-export const BRAIN_SKILL_PROPOSALS_PENDING_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "pending");
-export const BRAIN_SKILL_PROPOSALS_ACCEPTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "accepted");
-export const BRAIN_SKILL_PROPOSALS_REJECTED_REL = posix.join(BRAIN_SKILL_PROPOSALS_REL, "rejected");
-/** Write-ahead journal of in-flight skill-proposal accepts (no-dead-ends, Unit I). */
-export const BRAIN_SKILL_ACCEPT_JOURNAL_REL = posix.join(
-  BRAIN_SKILL_PROPOSALS_REL,
-  "accept-journal",
-);
-export const BRAIN_PROCEDURES_REL = posix.join(BRAIN_ROOT_REL, "procedures");
-export const BRAIN_PROCEDURAL_MEMORY_REL = posix.join(BRAIN_ROOT_REL, "procedural-memory");
-export const BRAIN_ATTENTION_REL = posix.join(BRAIN_ROOT_REL, "attention");
-export const BRAIN_OBLIGATIONS_REL = posix.join(BRAIN_ROOT_REL, "obligations");
-/** Declared-thesis register pages: `Brain/theses/thesis-<slug>.md` (D3). */
-export const BRAIN_THESES_REL = posix.join(BRAIN_ROOT_REL, "theses");
-export const BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
-/**
- * Knowledge-gap task notes: `Brain/gap-tasks/gap-<hash>.md` (A3 /
- * t_67d38036). Plain durable note files - never on the Hermes kanban board.
- */
-export const BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
-/** Persisted contradiction (tension) notes: `Brain/tensions/tension-<slug>.md` (S2). */
-export const BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
-export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
-/**
- * Inbound-capture staging + archive (Knowledge intake suite, seam 1,
- * t_f8f5ef6a). Mirrors the inbox-versus-processed distinction: a capture
- * lands in `Brain/captures/` (staging) and moves to
- * `Brain/captures/processed/` (archive) once drained. Kept in its own
- * subtree so the signal inbox and the dream pass stay untouched.
- */
-export const BRAIN_CAPTURES_REL = posix.join(BRAIN_ROOT_REL, "captures");
-export const BRAIN_CAPTURES_PROCESSED_REL = posix.join(BRAIN_CAPTURES_REL, "processed");
-export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
-/**
- * Overwrite-only exact-state lane: `Brain/state/<aspect>.md` (t_b0c9d0a3).
- * A structured operational-state store keyed by aspect; each write replaces
- * the aspect's canonical value with no history. The lane is excluded from
- * the search index by the index-admission predicate so a stale "current"
- * value can never resurface through semantic recall.
- */
-export const BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
-/** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
-export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
-/** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
-export const BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
-/** Cited research report pages: `Brain/reports/<date>-<slug>.md` (v1.7.0). */
-export const BRAIN_REPORTS_REL = posix.join(BRAIN_ROOT_REL, "reports");
-/** Source-distillation pages: `Brain/distillations/dist-<slug>.md` (t_2e2e959f). */
-export const BRAIN_DISTILLATIONS_REL = posix.join(BRAIN_ROOT_REL, "distillations");
-export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
-/**
- * Ephemeral MCP tool-result artifacts (v0.18.0). Dot-directory so the
- * vault walker excludes it from search/indexing exactly like
- * `.snapshots`; never backed up, pruned by TTL on server startup.
- */
-export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, ".artifacts");
-
-/** Brain-internal artefact filenames at the root of `Brain/`. */
-export const BRAIN_CONFIG_FILE = "_brain.yaml";
-export const BRAIN_MANUAL_FILE = "_BRAIN.md";
-export const BRAIN_ACTIVE_FILE = "active.md";
-export const BRAIN_LESSONS_FILE = "lessons.md";
-export const BRAIN_PINNED_FILE = "pinned.md";
-export const BRAIN_INDEX_FILE = "_INDEX.md";
-/** Persisted claim-graph projection artifact (Belief lifecycle suite, A3). */
-export const BRAIN_CLAIM_GRAPH_FILE = "claim-graph.json";
-
-/** Vault-relative path of the `o2b index` output file. */
-export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+// The canonical vault-relative names live in their own leaf module so
+// `vault-identity.ts` can locate the marker without importing the
+// builders that guard on it. Re-exported wholesale: every constant this
+// module used to declare is still reachable from this path.
+export * from "./path-constants.ts";
 
 /** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
 export function claimGraphPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_CLAIM_GRAPH_FILE), vault);
 }
-
-/** Persisted rollup-ladder counter ledger (knowledge-intake-and-consolidation, S3). */
-export const BRAIN_ROLLUP_LEDGER_FILE = "rollup-ladder.json";
 
 /** Path of the rollup-ladder ledger: `Brain/rollup-ladder.json`. */
 export function rollupLedgerPath(vault: string): string {
