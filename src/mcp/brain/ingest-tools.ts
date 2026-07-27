@@ -195,6 +195,19 @@ function serializeBatchPlan(plan: BatchPlan): Record<string, unknown> {
           })),
         }
       : {}),
+    // Only emitted when the repository's own ignore files carried a malformed
+    // pattern (t_4b2bd8f7), so a tree that declares none - or declares only
+    // well-formed patterns - serializes byte-identically to before.
+    ...(plan.ignoreWarnings.length > 0
+      ? {
+          ignore_warnings: plan.ignoreWarnings.map((w) => ({
+            source: w.source,
+            line: w.line,
+            pattern: w.pattern,
+            reason: w.reason,
+          })),
+        }
+      : {}),
     plan_id: plan.planId,
     resumed_completed: plan.resumedCompleted,
     batches: plan.batches.map((b) => ({

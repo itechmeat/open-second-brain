@@ -83,6 +83,19 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
               })),
             }
           : {}),
+        // Only present when the repository's own ignore files carried a
+        // malformed pattern, so a tree with none (or only well-formed ones)
+        // is byte-identical to before.
+        ...(plan.ignoreWarnings.length > 0
+          ? {
+              ignore_warnings: plan.ignoreWarnings.map((w) => ({
+                source: w.source,
+                line: w.line,
+                pattern: w.pattern,
+                reason: w.reason,
+              })),
+            }
+          : {}),
         plan_id: plan.planId,
         resumed_completed: plan.resumedCompleted,
         batches: plan.batches.map((b) => ({
@@ -122,6 +135,12 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
     if (plan.skippedNonExtractable.length > 0) {
       info(`  ${plan.skippedNonExtractable.length} non-extractable page(s) skipped:`);
       for (const s of plan.skippedNonExtractable) info(`    - ${s.path} (${s.reason})`);
+    }
+    if (plan.ignoreWarnings.length > 0) {
+      info(`  ${plan.ignoreWarnings.length} malformed ignore pattern(s) found:`);
+      for (const w of plan.ignoreWarnings) {
+        info(`    - ${w.source}:${w.line}: "${w.pattern}" (${w.reason})`);
+      }
     }
     if (report !== undefined) {
       if (report.complete) {
