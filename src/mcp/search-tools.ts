@@ -53,7 +53,7 @@ import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/
 import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
-import { recordQueryDemand } from "../core/brain/query-demand.ts";
+import { recordQueryDemand, recordRecallAdequacyDemand } from "../core/brain/query-demand.ts";
 
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
@@ -768,6 +768,14 @@ async function toolBrainRecallGate(
   if (scores === undefined) return { ...decision };
   const thresholds = resolveRecallAdequacyThresholds(ctx.configPath ?? undefined);
   const verdict = assessRecallAdequacy(scores, thresholds);
+  // signals-that-survive, unit 6: an unmet verdict is stamped onto the
+  // cross-query demand log under the bucket key normalizeQueryTerms already
+  // computes, so the knowledge-gap loop can aggregate recurrence without a
+  // second identity concept. Gated behind the same telemetry opt-in as the
+  // gate record above and fail-open — a log write never breaks the gate.
+  emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () =>
+    recordRecallAdequacyDemand(ctx.vault, { query: prompt, verdict }),
+  );
   return {
     ...decision,
     adequacy: {

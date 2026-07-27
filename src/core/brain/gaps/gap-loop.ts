@@ -7,10 +7,18 @@
  * confidence - mirroring the dream freshness auto-resolve precedent (a
  * recorded status flip in frontmatter, never a silent mutation).
  *
- * Language-agnostic by construction: gap topics are telemetry keys taken
- * verbatim from the recall-telemetry `gap_counts` aggregate, never words
- * classified from prose. Task notes are PLAIN durable files under the Brain
- * area (`Brain/gap-tasks/`); they never touch the Hermes kanban board.
+ * Two independent recurrence sources feed it (signals-that-survive, unit
+ * 6): the structural recall-telemetry `gap_counts` aggregate, whose topic
+ * is a coarse telemetry code, and the recall-adequacy verdict stamped onto
+ * the cross-query demand log, whose topic is a fine term bucket. They are
+ * counted and keyed separately and NEVER summed - `occurrences` would
+ * otherwise mean a different thing per row.
+ *
+ * Language-agnostic by construction: a structural topic is a telemetry key
+ * taken verbatim, and a verdict topic is the IDF-derived bucket key
+ * `normalizeQueryTerms` computes - never words classified from prose. Task
+ * notes are PLAIN durable files under the Brain area (`Brain/gap-tasks/`);
+ * they never touch the Hermes kanban board.
  *
  * Deliberately I/O-scoped to the vault and free of any hook/config
  * concern, so recurrence, promotion, agenda, and auto-close are each
@@ -24,6 +32,7 @@ import { join } from "node:path";
 
 import { brainGapTasksDir, BRAIN_GAP_TASKS_REL } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
 import type { RecallRetriever } from "../recall-inject.ts";
@@ -36,6 +45,31 @@ export const GAP_LOOP_RECURRENCE_THRESHOLD = 3;
 /** Default normalized-score floor a recall must clear to auto-close a task. */
 export const GAP_LOOP_AUTO_CLOSE_FLOOR = 0.5;
 
+/**
+ * Most gap tasks one promotion run may mint. The cap is load-bearing, not
+ * polish: without it a single bad afternoon of empty recalls fills the
+ * vault with notes. Rows above the cap are not dropped - detection is
+ * ordered most-frequent first, so the remainder is minted by the next run.
+ */
+export const GAP_LOOP_MAX_PROMOTIONS_PER_RUN = 5;
+
+/** Recurrence source: the structural recall-telemetry `gap_counts` aggregate. */
+export const GAP_SOURCE_TELEMETRY = "recall_telemetry";
+/** Recurrence source: unmet recall-adequacy verdicts on the demand log. */
+export const GAP_SOURCE_ADEQUACY = "recall_adequacy";
+
+export const GAP_SOURCES = [GAP_SOURCE_TELEMETRY, GAP_SOURCE_ADEQUACY] as const;
+export type GapSource = (typeof GAP_SOURCES)[number];
+
+/**
+ * Agenda and body wording per source, so a coarse telemetry code bucket
+ * never reads as the same kind of row as a fine term bucket.
+ */
+const GAP_LABEL_BY_SOURCE: Readonly<Record<GapSource, string>> = Object.freeze({
+  [GAP_SOURCE_TELEMETRY]: "recall gap",
+  [GAP_SOURCE_ADEQUACY]: "weak recall",
+});
+
 export const GAP_TASK_KIND = "brain-gap-task";
 export const GAP_TASK_STATUS_OPEN = "open";
 export const GAP_TASK_STATUS_CLOSED = "closed";
@@ -44,39 +78,76 @@ export const GAP_TASK_STATUS_CLOSED = "closed";
 export interface RecurringGap {
   readonly topic: string;
   readonly occurrences: number;
+  /** Which recurrence source counted it; rows are never merged across sources. */
+  readonly source: GapSource;
 }
 
 /**
- * Recurring gaps from the recall-telemetry `gap_counts` aggregate, filtered
- * to those recurring at least `threshold` times and ordered most-frequent
- * first (topic as a stable tie-break). The gap topic is the telemetry key
- * verbatim - no natural-language classification.
+ * Recurring gaps from BOTH recurrence sources, filtered to those recurring
+ * at least `threshold` times and ordered most-frequent first (source then
+ * topic as stable tie-breaks).
+ *
+ * A topic that appears in both sources yields two rows, each carrying its
+ * own count. Summing them would produce a number that means neither "this
+ * telemetry code fired N times" nor "this question was asked N times".
  */
 export function detectRecurringGaps(
   vault: string,
   opts: { threshold?: number } = {},
 ): ReadonlyArray<RecurringGap> {
   const threshold = opts.threshold ?? GAP_LOOP_RECURRENCE_THRESHOLD;
-  const { gap_counts } = summarizeRecallTelemetry(vault);
-  return Object.freeze(
-    Object.entries(gap_counts)
-      .filter(([, count]) => count >= threshold)
-      .map(([topic, count]) => Object.freeze({ topic, occurrences: count }))
-      .toSorted(
-        (a, b) =>
-          b.occurrences - a.occurrences || (a.topic < b.topic ? -1 : a.topic > b.topic ? 1 : 0),
-      ),
+  const rows = [...structuralGaps(vault), ...adequacyGaps(vault)].filter(
+    (gap) => gap.occurrences >= threshold,
   );
+  return Object.freeze(rows.toSorted(compareGaps));
+}
+
+/** The structural source: telemetry codes taken verbatim as topics. */
+function structuralGaps(vault: string): ReadonlyArray<RecurringGap> {
+  const { gap_counts } = summarizeRecallTelemetry(vault);
+  return Object.entries(gap_counts).map(([topic, count]) =>
+    Object.freeze({ topic, occurrences: count, source: GAP_SOURCE_TELEMETRY }),
+  );
+}
+
+/** The verdict source: unmet-recall term buckets from the demand log. */
+function adequacyGaps(vault: string): ReadonlyArray<RecurringGap> {
+  return aggregateUnmetRecall(vault).map((bucket) =>
+    Object.freeze({
+      topic: bucket.key,
+      occurrences: bucket.occurrences,
+      source: GAP_SOURCE_ADEQUACY,
+    }),
+  );
+}
+
+function compareGaps(a: RecurringGap, b: RecurringGap): number {
+  return (
+    b.occurrences - a.occurrences ||
+    compareStrings(a.source, b.source) ||
+    compareStrings(a.topic, b.topic)
+  );
+}
+
+function compareStrings(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /**
  * Stable, filesystem-safe, collision-free dedupe key for a gap topic: a
- * short hash of the trimmed topic. Re-promotion of the same topic resolves
- * to the same key (and thus the same note), so a gap can never fork into
- * two competing task files.
+ * short hash of the trimmed topic, namespaced by its recurrence source.
+ * Re-promotion of the same topic from the same source resolves to the same
+ * key (and thus the same note), so a gap can never fork into two competing
+ * task files - while a topic that happens to be textually identical across
+ * the two sources still gets one note each.
+ *
+ * The structural source hashes the bare topic, so keys minted before the
+ * verdict source existed keep resolving to their notes.
  */
-export function gapTaskKey(topic: string): string {
-  return `gap-${createHash("sha256").update(topic.trim()).digest("hex").slice(0, 16)}`;
+export function gapTaskKey(topic: string, source: GapSource = GAP_SOURCE_TELEMETRY): string {
+  const trimmed = topic.trim();
+  const material = source === GAP_SOURCE_TELEMETRY ? trimmed : `${source}:${trimmed}`;
+  return `gap-${createHash("sha256").update(material).digest("hex").slice(0, 16)}`;
 }
 
 export interface GapPromotionResult {
@@ -90,6 +161,10 @@ export interface GapPromotionResult {
  * Promote every recurring gap to exactly one durable gap-task note, deduped
  * on the stable gap key via an exclusive create - a topic already carrying
  * a task (open or closed) is skipped, never overwritten or forked.
+ *
+ * At most {@link GAP_LOOP_MAX_PROMOTIONS_PER_RUN} NEW notes are minted per
+ * run. A skip costs no budget, so an established backlog never starves a
+ * genuinely new gap.
  */
 export function promoteGapsToTasks(
   vault: string,
@@ -101,18 +176,20 @@ export function promoteGapsToTasks(
   const created: string[] = [];
   const skipped: string[] = [];
   for (const gap of detectRecurringGaps(vault, { threshold: opts.threshold })) {
-    const key = gapTaskKey(gap.topic);
+    if (created.length >= GAP_LOOP_MAX_PROMOTIONS_PER_RUN) break;
+    const key = gapTaskKey(gap.topic, gap.source);
     const path = join(dir, `${key}.md`);
     const metadata: FrontmatterMap = {
       kind: GAP_TASK_KIND,
       gap_key: key,
       gap_topic: gap.topic,
+      gap_source: gap.source,
       status: GAP_TASK_STATUS_OPEN,
       occurrences: String(gap.occurrences),
       created_at: opts.now.toISOString(),
     };
     const body =
-      `Recurring recall gap detected ${gap.occurrences} times. ` +
+      `Recurring ${GAP_LABEL_BY_SOURCE[gap.source]} detected ${gap.occurrences} times. ` +
       `Add vault coverage for this topic; the task auto-closes once the ` +
       `topic is recalled with sufficient confidence.`;
     try {
@@ -137,6 +214,8 @@ export interface GapTask {
   readonly topic: string;
   readonly status: string;
   readonly occurrences: number;
+  /** Which recurrence source minted it (see {@link GAP_SOURCES}). */
+  readonly source: GapSource;
   readonly createdAt: string;
   readonly path: string;
 }
@@ -166,6 +245,7 @@ export function listGapTasks(
         topic: stringField(fm["gap_topic"]),
         status,
         occurrences: Number.parseInt(stringField(fm["occurrences"]) || "0", 10) || 0,
+        source: coerceGapSource(fm["gap_source"]),
         createdAt: stringField(fm["created_at"]),
         path,
       }),
@@ -173,11 +253,18 @@ export function listGapTasks(
   }
   return Object.freeze(
     tasks.toSorted(
-      (a, b) =>
-        b.createdAt.localeCompare(a.createdAt) ||
-        (a.topic < b.topic ? -1 : a.topic > b.topic ? 1 : 0),
+      (a, b) => b.createdAt.localeCompare(a.createdAt) || compareStrings(a.topic, b.topic),
     ),
   );
+}
+
+/**
+ * A note minted before the verdict source existed carries no `gap_source`;
+ * it is structural by construction, so that is the only safe default
+ * (signals-that-survive, unit 6).
+ */
+function coerceGapSource(value: unknown): GapSource {
+  return GAP_SOURCES.includes(value as GapSource) ? (value as GapSource) : GAP_SOURCE_TELEMETRY;
 }
 
 /**
@@ -185,13 +272,17 @@ export function listGapTasks(
  * shared activity helper (each task is an `openQuestion` item, so it carries
  * the fixed structural `open` marker and a relative-age label). Returns the
  * empty string when there is nothing open.
+ *
+ * Each row is labelled by its recurrence source, so a reader can tell a
+ * coarse telemetry code bucket from a fine term bucket and never reads the
+ * two counts as one number.
  */
 export function renderGapAgenda(vault: string, now: Date): string {
   const open = listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN });
   if (open.length === 0) return "";
   const items: ReadonlyArray<ActivityItem> = open.map((task) => ({
     kind: "openQuestion",
-    text: `${task.topic} (recall gap x${task.occurrences})`,
+    text: `${task.topic} (${GAP_LABEL_BY_SOURCE[task.source]} x${task.occurrences})`,
     timestamp: task.createdAt,
   }));
   return `# Open recall-gap tasks\n${renderActivityTimeline(items, now)}`;

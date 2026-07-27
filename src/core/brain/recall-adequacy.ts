@@ -21,6 +21,15 @@
 export const RECALL_ADEQUACY_LEVELS = ["sufficient", "weak", "insufficient"] as const;
 export type RecallAdequacyLevel = (typeof RECALL_ADEQUACY_LEVELS)[number];
 
+/**
+ * Whether a value is one of the declared adequacy levels — the guard a
+ * persisted verdict must clear before it is trusted, mirroring the sibling
+ * `isRecallTelemetryMode`.
+ */
+export function isRecallAdequacyLevel(value: unknown): value is RecallAdequacyLevel {
+  return RECALL_ADEQUACY_LEVELS.includes(value as RecallAdequacyLevel);
+}
+
 export const RECALL_ADEQUACY_ACTIONS = ["proceed", "re_recall", "abstain"] as const;
 export type RecallAdequacyAction = (typeof RECALL_ADEQUACY_ACTIONS)[number];
 

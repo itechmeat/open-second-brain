@@ -17,6 +17,8 @@ import { resolveSearchConfig } from "../../core/search/index.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
 import { packContext } from "../../core/brain/context-pack.ts";
 import { assessRecallAdequacy } from "../../core/brain/recall-adequacy.ts";
+import { recordRecallAdequacyDemand } from "../../core/brain/query-demand.ts";
+import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
 import {
   readAnticipatoryContext,
   refreshAnticipatoryCache,
@@ -101,6 +103,16 @@ async function toolBrainContextPack(
           resolveRecallAdequacyThresholds(ctx.configPath ?? undefined),
         )
       : undefined;
+  // signals-that-survive, unit 6: an unmet verdict is stamped onto the
+  // cross-query demand log under the bucket key normalizeQueryTerms already
+  // computes, so the knowledge-gap loop can aggregate recurrence without a
+  // second identity concept. Same telemetry opt-in and fail-open contract
+  // as every other emit on this path — a log write never breaks the pack.
+  if (adequacy !== undefined && query !== undefined) {
+    emitGatedTelemetry(telemetry, () =>
+      recordRecallAdequacyDemand(ctx.vault, { query, verdict: adequacy }),
+    );
+  }
   // Focus wiring (Agent Surface Suite, t_5b478e47): gated on the
   // search_focus_context_pack config key (default off) so the default
   // pack stays byte-identical. Fail-soft - a broken search config

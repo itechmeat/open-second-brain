@@ -2,9 +2,11 @@
  * Cross-query demand log (t_97091fff).
  *
  * A persisted, deterministic record of every recall query against the
- * vault, together with two satisfaction signals already computed
- * elsewhere: the result count and the IDF-weighted coverage score from
- * {@link ../search/coverage.ts}. Aggregated over time, the log surfaces
+ * vault, together with three satisfaction signals already computed
+ * elsewhere: the result count, the IDF-weighted coverage score from
+ * {@link ../search/coverage.ts}, and — when the caller graded the attempt
+ * — the unmet recall-adequacy verdict (signals-that-survive, unit 6).
+ * Aggregated over time, the log surfaces
  * the *demand* gap — queries operators keep asking that the vault
  * answers poorly (weak or empty) — as a prioritized backlog of what to
  * write into `Brain/` next.
@@ -39,6 +41,8 @@ import {
   significantTerms,
 } from "../search/coverage.ts";
 import type { CompletenessVerdict } from "../search/types.ts";
+import { isRecallAdequacyLevel } from "./recall-adequacy.ts";
+import type { RecallAdequacyLevel, RecallAdequacyVerdict } from "./recall-adequacy.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Longest single normalized term kept; longer tokens are dropped as a
@@ -65,16 +69,33 @@ export const DEMAND_LOG_COMPACT_BYTES = 750_000;
 export const DEMAND_DEFAULT_MIN_OCCURRENCES = 2;
 
 /**
+ * Adequacy levels that count as unmet recall (signals-that-survive, unit
+ * 6). A `sufficient` attempt is not demand, so it is never stamped.
+ */
+export const DEMAND_UNMET_ADEQUACY_LEVELS: ReadonlyArray<RecallAdequacyLevel> = Object.freeze([
+  "weak",
+  "insufficient",
+]);
+
+/** Whether an adequacy level is unmet recall, i.e. actionable demand. */
+export function isUnmetAdequacyLevel(level: RecallAdequacyLevel): boolean {
+  return DEMAND_UNMET_ADEQUACY_LEVELS.includes(level);
+}
+
+/**
  * One persisted recall observation. `coverage` is absent when the caller
  * did not compute the evidence-pack coverage (the common non-verified
  * search path); the aggregator falls back to the result-presence signal
- * for those buckets.
+ * for those buckets. `adequacy` is absent unless the caller graded the
+ * attempt through {@link ../brain/recall-adequacy.ts} and the grade came
+ * back unmet (signals-that-survive, unit 6).
  */
 export interface QueryDemandRecord {
   readonly ts: string;
   readonly terms: ReadonlyArray<string>;
   readonly results: number;
   readonly coverage?: number;
+  readonly adequacy?: RecallAdequacyLevel;
 }
 
 export interface RecordQueryDemandInput {
@@ -85,8 +106,18 @@ export interface RecordQueryDemandInput {
   readonly resultCount: number;
   /** IDF-weighted coverage (0..1) from coverage.ts, when available. */
   readonly coverage?: number | null;
+  /** Graded recall adequacy, when the caller ran the verdict layer. */
+  readonly adequacy?: RecallAdequacyLevel;
   /** ISO timestamp; defaults to now. */
   readonly at?: string;
+}
+
+/** One recurring question the vault keeps answering with unmet grounding. */
+export interface UnmetRecallBucket {
+  /** The shared bucket key: sorted normalized terms joined by a space. */
+  readonly key: string;
+  readonly terms: ReadonlyArray<string>;
+  readonly occurrences: number;
 }
 
 export interface QueryDemandFilter {
@@ -205,6 +236,7 @@ export function recordQueryDemand(
     ...(typeof input.coverage === "number" && Number.isFinite(input.coverage)
       ? { coverage: clamp01(input.coverage) }
       : {}),
+    ...(input.adequacy !== undefined ? { adequacy: input.adequacy } : {}),
   };
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
@@ -218,6 +250,69 @@ export function recordQueryDemand(
     handle.release();
   }
   return record;
+}
+
+/**
+ * Stamp one graded recall attempt onto the demand log
+ * (signals-that-survive, unit 6). The bucket key is whatever
+ * {@link normalizeQueryTerms} derives from the query — the identity concept
+ * this module already owns — so recurrence aggregates without a second one.
+ *
+ * Returns null, rather than writing, when the attempt is not demand: a
+ * `sufficient` verdict is met recall, and a query with no significant terms
+ * has no bucket to key on. Both are documented non-cases, not swallowed
+ * failures; a genuine write fault still propagates from
+ * {@link recordQueryDemand}.
+ */
+export function recordRecallAdequacyDemand(
+  vault: string,
+  input: {
+    readonly query: string;
+    readonly verdict: RecallAdequacyVerdict;
+    readonly at?: string;
+  },
+): QueryDemandRecord | null {
+  if (!isUnmetAdequacyLevel(input.verdict.level)) return null;
+  return recordQueryDemand(vault, {
+    query: input.query,
+    resultCount: input.verdict.resultCount,
+    adequacy: input.verdict.level,
+    ...(input.at !== undefined ? { at: input.at } : {}),
+  });
+}
+
+/**
+ * Count how often each bucket came back with unmet grounding. This is the
+ * verdict-side recurrence source the knowledge-gap loop aggregates
+ * alongside its structural `gap_counts` source (signals-that-survive, unit
+ * 6); the two are deliberately counted separately, never summed, because a
+ * telemetry code bucket and a term bucket do not measure the same thing.
+ */
+export function aggregateUnmetRecall(
+  vault: string,
+  filter: QueryDemandFilter = {},
+): ReadonlyArray<UnmetRecallBucket> {
+  const buckets = new Map<string, { terms: ReadonlyArray<string>; occurrences: number }>();
+  for (const record of readQueryDemand(vault, filter)) {
+    if (record.adequacy === undefined || !isUnmetAdequacyLevel(record.adequacy)) continue;
+    const key = demandBucketKey(record.terms);
+    const bucket = buckets.get(key);
+    if (bucket === undefined) {
+      buckets.set(key, { terms: record.terms, occurrences: 1 });
+    } else {
+      bucket.occurrences += 1;
+    }
+  }
+  return Object.freeze(
+    [...buckets].map(([key, bucket]) =>
+      Object.freeze({ key, terms: bucket.terms, occurrences: bucket.occurrences }),
+    ),
+  );
+}
+
+/** The bucket key both aggregators group by: sorted terms, space-joined. */
+function demandBucketKey(terms: ReadonlyArray<string>): string {
+  return terms.join(" ");
 }
 
 /** Read all demand records, filtered by [since, until] and sorted by ts. */
@@ -279,7 +374,7 @@ export function aggregateQueryDemand(
   }
   const buckets = new Map<string, Bucket>();
   for (const record of records) {
-    const key = record.terms.join(" ");
+    const key = demandBucketKey(record.terms);
     let bucket = buckets.get(key);
     if (!bucket) {
       bucket = {
@@ -398,6 +493,7 @@ function coerceRecord(line: string): QueryDemandRecord | null {
   if (!Array.isArray(terms) || !terms.every((t) => typeof t === "string")) return null;
   if (typeof results !== "number" || !Number.isFinite(results)) return null;
   const coverage = obj["coverage"];
+  const adequacy = obj["adequacy"];
   return {
     ts,
     terms: Object.freeze(terms as string[]),
@@ -405,6 +501,9 @@ function coerceRecord(line: string): QueryDemandRecord | null {
     ...(typeof coverage === "number" && Number.isFinite(coverage)
       ? { coverage: clamp01(coverage) }
       : {}),
+    // An unrecognised level is dropped rather than trusted: the record
+    // predates the field, or was hand-edited.
+    ...(isRecallAdequacyLevel(adequacy) ? { adequacy } : {}),
   };
 }
 

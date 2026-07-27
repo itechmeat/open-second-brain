@@ -6,6 +6,8 @@ import { join } from "node:path";
 import { queryDemandLogPath } from "../../../src/core/brain/paths.ts";
 import {
   DEMAND_LOG_MAX_BYTES,
+  DEMAND_MAX_TERMS_PER_RECORD,
+  DEMAND_TERM_MAX_LEN,
   aggregateQueryDemand,
   normalizeQueryTerms,
   readQueryDemand,
@@ -239,9 +241,26 @@ describe("aggregateQueryDemand", () => {
 describe("rolling cap", () => {
   test("compacts the log once it exceeds the byte budget", () => {
     const path = queryDemandLogPath(vault);
-    // Each record ~ small; write enough to blow past the 1MB cap.
-    const terms = ["compaction", "stress", "budget"];
-    for (let i = 0; i < 20_000; i++) {
+    // Reach the 1MB cap with FAT records rather than many small ones: the
+    // branch under test is byte-budget-driven, so a record built out to the
+    // documented per-record maximum (DEMAND_MAX_TERMS_PER_RECORD terms of
+    // DEMAND_TERM_MAX_LEN chars) crosses the same threshold in ~1k appends
+    // instead of ~20k. Each append takes a lockfile, so append count — not
+    // byte count — was the runtime, and 20k of them ran ~4.7s against the
+    // 5s limit and flaked under parallel load.
+    const terms = Array.from({ length: DEMAND_MAX_TERMS_PER_RECORD }, (_, i) =>
+      // Pure-alpha so sanitizeTerms keeps it: a long letters+digits token is
+      // dropped as secret-shaped.
+      `compaction${String.fromCharCode(97 + i)}`.padEnd(DEMAND_TERM_MAX_LEN, "x"),
+    );
+    const bucketKey = [...terms].toSorted().join(" ");
+    const recordBytes = Buffer.byteLength(
+      JSON.stringify({ ts: "2026-07-01T00:00:00.000Z", terms, results: 0, coverage: 0.1 }) + "\n",
+      "utf8",
+    );
+    // Overshoot the cap so compaction is provably triggered, not borderline.
+    const appends = Math.ceil((DEMAND_LOG_MAX_BYTES / recordBytes) * 1.2);
+    for (let i = 0; i < appends; i++) {
       recordQueryDemand(vault, {
         terms,
         resultCount: 0,
@@ -251,9 +270,11 @@ describe("rolling cap", () => {
     }
     const size = statSync(path).size;
     expect(size).toBeLessThanOrEqual(DEMAND_LOG_MAX_BYTES);
-    // Compaction keeps recent lines readable and parseable.
+    // Compaction actually ran: fewer lines survive than were appended.
     const records = readQueryDemand(vault);
     expect(records.length).toBeGreaterThan(0);
-    expect(records.every((r) => r.terms.join(" ") === "budget compaction stress")).toBe(true);
+    expect(records.length).toBeLessThan(appends);
+    // Compaction keeps recent lines readable and parseable.
+    expect(records.every((r) => r.terms.join(" ") === bucketKey)).toBe(true);
   });
 });
