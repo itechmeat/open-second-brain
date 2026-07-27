@@ -34,7 +34,7 @@ import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
-import { isDir } from "../core/fs-utils.ts";
+import { statOrAbsent } from "../core/fs-utils.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
@@ -88,8 +88,54 @@ function vaultRelpath(target: string, vault: string): string {
  */
 type UnresolvedField = { readonly error: string };
 
-function unresolved(err: ConfigReadError): UnresolvedField {
+function unresolved(err: Error): UnresolvedField {
   return { error: err.message };
+}
+
+/**
+ * The reason a vault directory could not be examined, as a degraded field.
+ *
+ * The remedy rides in the message rather than in each reporting surface,
+ * the same call {@link ConfigReadError} makes and for the same reason:
+ * this condition reaches the operator through a payload field, three
+ * degraded blocks and a tool-level refusal, and a remedy rendered per
+ * surface would drift between them or be dropped.
+ */
+function vaultUnexaminable(vault: string, err: unknown): UnresolvedField {
+  const reason = (err as Error)?.message ?? String(err);
+  return {
+    error:
+      `cannot determine whether the vault directory ${vault} exists: ${reason}. ` +
+      "It is NOT reported as absent - a path that cannot be examined is not a " +
+      "path that is not there; make it and every parent directory traversable " +
+      "(chmod u+rx), or set VAULT_DIR to a vault this process can read.",
+  };
+}
+
+interface VaultPresence {
+  /** True only when the path was examined and is a directory. */
+  readonly present: boolean;
+  /** Non-null when the answer is UNKNOWN rather than known-false. */
+  readonly unexaminable: UnresolvedField | null;
+}
+
+/**
+ * Whether the vault directory is there, with "not there" kept apart from
+ * "cannot look".
+ *
+ * `isDir` answers `false` for both, and this payload is the one place that
+ * difference IS the product: `vault_exists: false` reads as "this install
+ * was never set up", and the three blocks it gates then read as "no Brain
+ * layer, search off, no exclusion policy" - four confident negatives for
+ * what is usually one missing execute bit on a parent directory, under a
+ * remedy that tells the operator to create a vault they already have.
+ */
+function probeVaultDirectory(vault: string): VaultPresence {
+  try {
+    return { present: statOrAbsent(vault)?.isDirectory() === true, unexaminable: null };
+  } catch (err) {
+    return { present: false, unexaminable: vaultUnexaminable(vault, err) };
+  }
 }
 
 /**
@@ -151,18 +197,27 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     broken === null
       ? (discovered as ConfigDiscovery)
       : { path: broken.path, exists: true, data: {} };
-  const vaultExists = isDir(ctx.vault);
+  // Three blocks below are gated on this answer, and on the UNEXAMINABLE
+  // branch each is built carrying the reason rather than skipped: an
+  // omitted block reads as the same confident negative the bare `false`
+  // did, which is precisely what the probe could not determine. The absent
+  // branch keeps omitting them, because there the omission IS the answer.
+  const { present: vaultExists, unexaminable } = probeVaultDirectory(ctx.vault);
   const configKeys = broken === null ? Object.keys(discovery.data).toSorted() : unresolved(broken);
   // Safe to call on a vault that has no Brain layer yet — returns
   // `present: false` with zero counts.
-  const brain = vaultExists ? computeBrainStatus(ctx.vault) : null;
+  const brain = vaultExists ? computeBrainStatus(ctx.vault) : unexaminable;
   // On the broken branch this gate is unresolvable, so the block is built
   // rather than skipped: `buildSearchStatusBlock` resolves its own config
   // and degrades to `{ exists: false, error }` naming the same file. A skip
   // would have been the silent omission - a missing block reads as "search
   // is off", which is exactly the answer the gate could not give.
   const searchDisabled = discovery.data["search_enabled"] === "false";
-  const search = vaultExists && !searchDisabled ? await buildSearchStatusBlock(ctx) : null;
+  const search = searchDisabled
+    ? null
+    : vaultExists
+      ? await buildSearchStatusBlock(ctx)
+      : unexaminable;
   // v0.10.9 — `vault` block exposes the shared exclusion policy plus
   // aggregate include/exclude counts. Per-path detail lives in the CLI
   // (`o2b vault status`); MCP payloads stay small.
@@ -174,7 +229,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   // config blocks visible even when the vault scope cannot be
   // resolved. Catch and degrade to `{ error: "..." }` instead of
   // taking the whole `second_brain_status` payload down with it.
-  let vault: Record<string, unknown> | null = null;
+  let vault: Record<string, unknown> | UnresolvedField | null = unexaminable;
   if (vaultExists) {
     try {
       const scope = resolveVaultScope(ctx.vault);
@@ -198,7 +253,11 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config_keys: configKeys,
     config: broken === null ? redactMapping(discovery.data) : unresolved(broken),
     vault_path: vaultPathField(ctx),
-    vault_exists: vaultExists,
+    // `boolean | { error }`. Both answerable cases keep their exact literal
+    // - `true` when the directory is there, `false` when it is genuinely
+    // not - and the third value exists only for the case that previously
+    // impersonated the second.
+    vault_exists: unexaminable ?? vaultExists,
     ...(vault ? { vault } : {}),
     ...(brain ? { brain } : {}),
     ...(search ? { search } : {}),
@@ -209,7 +268,14 @@ async function toolQuery(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  if (!isDir(ctx.vault)) {
+  // Refusing either way, but not with the same reason: an operator told
+  // their vault is missing goes and creates one, which is the wrong move
+  // when the directory is there behind a parent it cannot traverse.
+  const presence = probeVaultDirectory(ctx.vault);
+  if (presence.unexaminable !== null) {
+    throw new MCPError(INVALID_PARAMS, presence.unexaminable.error);
+  }
+  if (!presence.present) {
     throw new MCPError(INVALID_PARAMS, `vault directory missing: ${ctx.vault}`);
   }
   const pattern = coerceStr(args, "pattern", false);
