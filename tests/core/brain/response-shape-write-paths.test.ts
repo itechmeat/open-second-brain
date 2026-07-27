@@ -214,6 +214,102 @@ describe("research-report ingress", () => {
     expect(res.finding_count).toBe(1);
     expect(listing(BRAIN_REPORTS_REL)).toHaveLength(1);
   });
+
+  const BLANK_CITATION = {
+    title: "Empty citation",
+    sources: ["", "  "],
+    findings: [{ statement: "claim with a blank citation", sources: [""] }],
+  };
+
+  test("a blank source is refused: nothing can satisfy the citation contract", () => {
+    // A blank source is a member of the consulted set, so a finding citing it
+    // passes the "no uncited claims" check against nothing at all.
+    let caught: unknown;
+    try {
+      parseResearchReportInput(BLANK_CITATION);
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(ResponseShapeError);
+    const err = caught as ResponseShapeError;
+    expect(err.code).toBe(SHAPE_VIOLATION_CODES.blankString);
+    expect(err.path).toBe("$.sources[0]");
+    expect(err.message).toContain("must be a non-empty string");
+  });
+
+  test("the blank-citation report is never written", async () => {
+    await expect(researchHandler(ctx, BLANK_CITATION)).rejects.toThrow(MCPError);
+    expect(listing(BRAIN_REPORTS_REL)).toEqual([]);
+  });
+
+  test("a blank title or finding statement is refused by path", () => {
+    const blankTitle = (() => {
+      try {
+        parseResearchReportInput({ ...INPUT, title: "  " });
+      } catch (err) {
+        return err as ResponseShapeError;
+      }
+      return null;
+    })();
+    expect(blankTitle?.path).toBe("$.title");
+
+    const blankStatement = (() => {
+      try {
+        parseResearchReportInput({
+          ...INPUT,
+          findings: [{ statement: "", sources: ["Articles/src.md"] }],
+        });
+      } catch (err) {
+        return err as ResponseShapeError;
+      }
+      return null;
+    })();
+    expect(blankStatement?.path).toBe("$.findings[0].statement");
+    expect(blankStatement?.code).toBe(SHAPE_VIOLATION_CODES.blankString);
+  });
+});
+
+/**
+ * The audit the research-report fix demanded of the other two descriptors:
+ * neither one expresses non-blankness, and neither one needs to, because the
+ * write path itself refuses blank content by name before writing anything.
+ * These cases hold that conclusion to the behaviour rather than to prose.
+ */
+describe("blank content never reaches a page", () => {
+  test("a blank claim text aborts the distillation", async () => {
+    await expect(
+      distillHandler(ctx, { source_path: SOURCE_PATH, claims: [{ text: "one" }, { text: "  " }] }),
+    ).rejects.toThrow(MCPError);
+    expect(listing(BRAIN_DISTILLATIONS_REL)).toEqual([]);
+  });
+
+  test("an empty claim list aborts the distillation", async () => {
+    await expect(distillHandler(ctx, { source_path: SOURCE_PATH, claims: [] })).rejects.toThrow(
+      MCPError,
+    );
+    expect(listing(BRAIN_DISTILLATIONS_REL)).toEqual([]);
+  });
+
+  test("a blank slug, principle or premise aborts the derivation", async () => {
+    seedPremise("a");
+    enableDerivation();
+    const base = {
+      slug: "derived-1",
+      topic: "derived",
+      principle: "Therefore C",
+      premises: ["pref-a"],
+      level: "deduced",
+    };
+    const blanks = [{ slug: " " }, { principle: "" }, { premises: ["  "] }, { level: "" }];
+    const outcomes = await Promise.allSettled(
+      blanks.map((blank) => deriveHandler(ctx, { ...base, ...blank })),
+    );
+    outcomes.forEach((outcome, i) => {
+      expect(outcome.status, JSON.stringify(blanks[i])).toBe("rejected");
+      expect((outcome as PromiseRejectedResult).reason).toBeInstanceOf(MCPError);
+    });
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-derived-1.md"))).toBe(false);
+  });
 });
 
 describe("validation is unconditional", () => {

@@ -48,6 +48,7 @@ export const SHAPE_DESCRIPTOR_KEYS = Object.freeze([
   "items",
   "enum",
   "additionalProperties",
+  "nonBlank",
 ] as const);
 
 /**
@@ -63,6 +64,14 @@ export interface ShapeDescriptor {
   readonly items?: ShapeDescriptor;
   readonly enum?: ReadonlyArray<unknown>;
   readonly additionalProperties?: boolean | ShapeDescriptor;
+  /**
+   * String values only: an empty or whitespace-only string is a violation.
+   * A key can be present and still carry no content, and on these write paths
+   * a blank string is not a value - it is a missing one wearing the right
+   * type. Declaring that here keeps `required` about presence and lets the
+   * descriptor say what the parsers it replaced said.
+   */
+  readonly nonBlank?: boolean;
 }
 
 /** Stable codes a violation is classified under; never assembled from prose. */
@@ -71,7 +80,11 @@ export const SHAPE_VIOLATION_CODES = Object.freeze({
   missingProperty: "shape_missing_property",
   unexpectedProperty: "shape_unexpected_property",
   disallowedValue: "shape_disallowed_value",
+  blankString: "shape_blank_string",
 } as const);
+
+/** Wording of a blank-string violation, kept as the parsers it replaced read. */
+const BLANK_STRING_MESSAGE = "must be a non-empty string";
 
 export type ShapeViolationCode = (typeof SHAPE_VIOLATION_CODES)[keyof typeof SHAPE_VIOLATION_CODES];
 
@@ -117,6 +130,11 @@ export function checkResponseShape(
 
   if (descriptor.type && !matchesType(value, descriptor.type)) {
     violations.push(typeViolation(path, descriptor.type));
+    return violations;
+  }
+
+  if (descriptor.nonBlank === true && typeof value === "string" && value.trim().length === 0) {
+    violations.push(makeViolation(SHAPE_VIOLATION_CODES.blankString, path, BLANK_STRING_MESSAGE));
     return violations;
   }
 
@@ -238,6 +256,12 @@ export const RESEARCH_REPORT_SURFACE = "research_report";
 
 const STRING_SHAPE: ShapeDescriptor = { type: "string" };
 const STRING_LIST_SHAPE: ShapeDescriptor = { type: "array", items: STRING_SHAPE };
+/** A string that must carry content - the previous parsers' `requiredString`. */
+const FILLED_STRING_SHAPE: ShapeDescriptor = { type: "string", nonBlank: true };
+const FILLED_STRING_LIST_SHAPE: ShapeDescriptor = {
+  type: "array",
+  items: FILLED_STRING_SHAPE,
+};
 
 /**
  * Atomic claims distilled from one source. Deliberately open to extra keys:
@@ -270,19 +294,27 @@ export const DERIVED_FACT_SHAPE: ShapeDescriptor = freezeDescriptor({
   },
 });
 
-/** A synthesized report: consulted sources plus findings that cite them. */
+/**
+ * A synthesized report: consulted sources plus findings that cite them.
+ *
+ * Every string here is required to carry content. The citation contract is
+ * checked by SET MEMBERSHIP - a finding's source must be one of the consulted
+ * sources - so a blank source satisfies a blank citation and an uncited claim
+ * passes as a cited one. That contract can only be as strong as the strings it
+ * compares, which is why the constraint belongs here rather than downstream.
+ */
 export const RESEARCH_REPORT_SHAPE: ShapeDescriptor = freezeDescriptor({
   type: "object",
   required: ["title", "sources", "findings"],
   properties: {
-    title: STRING_SHAPE,
-    sources: STRING_LIST_SHAPE,
+    title: FILLED_STRING_SHAPE,
+    sources: FILLED_STRING_LIST_SHAPE,
     findings: {
       type: "array",
       items: {
         type: "object",
         required: ["statement", "sources"],
-        properties: { statement: STRING_SHAPE, sources: STRING_LIST_SHAPE },
+        properties: { statement: FILLED_STRING_SHAPE, sources: FILLED_STRING_LIST_SHAPE },
       },
     },
   },

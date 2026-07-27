@@ -55,6 +55,40 @@ test("an empty claim list is rejected (validation error, exit 1)", async () => {
   expect(res.returncode).toBe(1);
 });
 
+const CLAIMS_SHAPE_HINT = "claims must be a JSON array of { text, block? } objects";
+
+/** One `--claims` run; `runCli` swaps process env, so runs stay sequential. */
+async function distillWithClaims(claims: string) {
+  return runCli(["brain", "distill", "Articles/src.md", "--claims", claims, "--vault", vault], {
+    env,
+  });
+}
+
+test("a claims payload that is not a list names the shape the CLI accepts", async () => {
+  // The operator's mistake is the WRAPPER, not an item, so the error has to
+  // name the accepted payload rather than report a path inside one.
+  const wrapperHoldsNoList = await distillWithClaims('{"claims": 3}');
+  expect(wrapperHoldsNoList.returncode).toBe(1);
+  expect(wrapperHoldsNoList.stderr).toContain(CLAIMS_SHAPE_HINT);
+
+  const wrapperNamesAnotherKey = await distillWithClaims('{"notes": []}');
+  expect(wrapperNamesAnotherKey.returncode).toBe(1);
+  expect(wrapperNamesAnotherKey.stderr).toContain(CLAIMS_SHAPE_HINT);
+
+  const notAWrapperAtAll = await distillWithClaims('"a claim"');
+  expect(notAWrapperAtAll.returncode).toBe(1);
+  expect(notAWrapperAtAll.stderr).toContain(CLAIMS_SHAPE_HINT);
+});
+
+test("a malformed claim item still reports its path", async () => {
+  const res = await runCli(
+    ["brain", "distill", "Articles/src.md", "--claims", '[{"text": 3}]', "--vault", vault],
+    { env },
+  );
+  expect(res.returncode).toBe(1);
+  expect(res.stderr).toContain("$[0].text");
+});
+
 test("missing <source> or --claims is a usage error (exit 2)", async () => {
   const noSource = await runCli(["brain", "distill", "--claims", "[]", "--vault", vault], { env });
   expect(noSource.returncode).toBe(2);

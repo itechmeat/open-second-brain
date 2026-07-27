@@ -24,10 +24,18 @@ import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "..
 const USAGE =
   "usage: o2b brain distill <source> (--claims <json> | --claims-file <path>) [--vault <path>] [--json]";
 
+/** What `--claims` accepts, named in the operator's own terms. */
+const CLAIMS_SHAPE_HINT = "claims must be a JSON array of { text, block? } objects";
+
 /**
  * Unwrap the operator's JSON (a bare array, or an object with a `claims`
  * array) and hand it to the shared shape-checked ingress, so the CLI and the
  * MCP tool accept exactly the same payload under exactly the same rules.
+ *
+ * The unwrap failure is reported HERE rather than by the ingress: at this
+ * point the operator's mistake is the wrapper they typed, and a path inside a
+ * payload the CLI never found does not tell them what to type instead. Once a
+ * list is in hand, the ingress owns every complaint about its items.
  */
 function parseClaims(raw: string): DistillClaim[] {
   let parsed: unknown;
@@ -40,6 +48,7 @@ function parseClaims(raw: string): DistillClaim[] {
     !Array.isArray(parsed) && parsed !== null && typeof parsed === "object"
       ? (parsed as { claims?: unknown }).claims
       : parsed;
+  if (!Array.isArray(payload)) throw new Error(CLAIMS_SHAPE_HINT);
   return parseDistillClaims(payload);
 }
 

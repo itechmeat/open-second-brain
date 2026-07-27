@@ -8,10 +8,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as responseShapeModule from "../../../src/core/brain/response-shape.ts";
+import { parseDistillClaims } from "../../../src/core/brain/distill/distill-source.ts";
+import { parseDeriveFactInput } from "../../../src/core/brain/derived-fact.ts";
+import { parseResearchReportInput } from "../../../src/core/brain/research/research.ts";
 import {
   DERIVED_FACT_SHAPE,
   DISTILL_CLAIMS_SHAPE,
@@ -27,8 +31,6 @@ import {
   formatShapeViolation,
   type ShapeDescriptor,
 } from "../../../src/core/brain/response-shape.ts";
-
-const MODULE_PATH = join(import.meta.dir, "../../../src/core/brain/response-shape.ts");
 
 /** Object nesting an object descriptor reaches, counting through array items. */
 function objectNestingDepth(descriptor: ShapeDescriptor): number {
@@ -175,17 +177,76 @@ describe("model-authored descriptors", () => {
 });
 
 describe("layer discipline", () => {
-  test("the knowledge vocabulary's noun never appears in this layer", () => {
-    expect(readFileSync(MODULE_PATH, "utf8")).not.toMatch(/schema/i);
+  test("the knowledge vocabulary's noun is absent from everything this layer emits", () => {
+    // Asserted over the surface a caller can observe - exported names, the
+    // descriptor vocabulary, the violation codes and a thrown message - rather
+    // than over the module text, where a comment could fail the suite and a
+    // borrowed noun in a caller could not.
     for (const name of Object.keys(responseShapeModule)) {
       expect(name).not.toMatch(/schema/i);
     }
+    for (const key of SHAPE_DESCRIPTOR_KEYS) expect(key).not.toMatch(/schema/i);
+    for (const code of Object.values(SHAPE_VIOLATION_CODES)) {
+      expect(code).not.toMatch(/schema/i);
+    }
+    const thrown = (() => {
+      try {
+        assertResponseShape("demo", DERIVED_FACT_SHAPE, {});
+      } catch (err) {
+        return err as ResponseShapeError;
+      }
+      return null;
+    })();
+    expect(thrown!.name).not.toMatch(/schema/i);
+    expect(thrown!.message).not.toMatch(/schema/i);
   });
 
-  test("validation reads no configuration, so no key can disable it", () => {
-    const source = readFileSync(MODULE_PATH, "utf8");
-    for (const token of ["config", "guardrail", "policy", "process.env", "loadBrain"]) {
-      expect(source, `response-shape must not consult ${token}`).not.toContain(token);
+  test("no configuration or environment can change a verdict", () => {
+    const payload = { title: "T", sources: [""], findings: [{ statement: "s", sources: [""] }] };
+    const baseline = checkResponseShape(RESEARCH_REPORT_SHAPE, payload);
+    expect(baseline.length).toBeGreaterThan(0);
+
+    const configHome = mkdtempSync(join(tmpdir(), "o2b-response-shape-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    // A config declaring every plausible opt-out spelling, at the path the
+    // whole codebase resolves settings from, plus the same spellings as env.
+    writeFileSync(
+      configPath,
+      [
+        "vault: /nonexistent",
+        "response_shape: false",
+        "response_shape_enabled: false",
+        "response_shape_strict: false",
+        "validation: off",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    const hostile: Record<string, string> = {
+      OPEN_SECOND_BRAIN_CONFIG: configPath,
+      OPEN_SECOND_BRAIN_RESPONSE_SHAPE_ENABLED: "false",
+      OPEN_SECOND_BRAIN_RESPONSE_SHAPE: "off",
+      NODE_ENV: "production",
+    };
+    const saved = new Map(Object.keys(hostile).map((key) => [key, process.env[key]]));
+    try {
+      for (const [key, value] of Object.entries(hostile)) process.env[key] = value;
+      // The validator, and the three ingress functions that own the callers'
+      // half of the contract, all still refuse the same payload by the same
+      // path - a gate introduced in a caller would break exactly here.
+      expect(checkResponseShape(RESEARCH_REPORT_SHAPE, payload)).toEqual(baseline);
+      expect(() => assertResponseShape("demo", RESEARCH_REPORT_SHAPE, payload)).toThrow(
+        ResponseShapeError,
+      );
+      expect(() => parseResearchReportInput(payload)).toThrow(ResponseShapeError);
+      expect(() => parseDistillClaims([{ text: 1 }])).toThrow(ResponseShapeError);
+      expect(() => parseDeriveFactInput({ topic: "t" })).toThrow(ResponseShapeError);
+    } finally {
+      for (const [key, value] of saved) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+      rmSync(configHome, { recursive: true, force: true });
     }
   });
 });
