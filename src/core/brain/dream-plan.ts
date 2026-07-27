@@ -9,6 +9,24 @@
 
 import type { BrainPreference, BrainRetiredReason, BrainSignal, BrainSignalSign } from "./types.ts";
 
+/** Id prefix the preference writer stamps on every live rule. */
+export const PREF_ID_PREFIX = "pref-";
+
+/** Id prefix a preference carries once it has moved into `retired/`. */
+export const RETIRED_ID_PREFIX = "ret-";
+
+/**
+ * The filename slug behind a preference id.
+ *
+ * Every writer emits `pref-<slug>`, but the on-disk artifacts are
+ * user-editable and a hand-authored file may carry a bare id. The dream
+ * pass has always read such an id as being its own slug, so the strip is
+ * tolerant rather than strict.
+ */
+export function preferenceSlug(id: string): string {
+  return id.startsWith(PREF_ID_PREFIX) ? id.slice(PREF_ID_PREFIX.length) : id;
+}
+
 export interface SignalRecord {
   readonly path: string;
   readonly signal: BrainSignal;
