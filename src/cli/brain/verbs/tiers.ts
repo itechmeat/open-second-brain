@@ -17,6 +17,7 @@ import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../../core/vault.ts";
 import type { FrontmatterMap } from "../../../core/types.ts";
+import { emitNextSteps } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
@@ -69,7 +70,17 @@ export async function cmdBrainTiers(argv: string[]): Promise<number> {
             );
           }
           if (findings.length > 0) {
-            ok("resolve with: o2b brain tiers restore <path> --apply  (or accept <path>)");
+            // no-dead-ends, phase 3. One finding, two readings: the
+            // indexed value is authoritative (restore) or the note's is
+            // (accept). The rail's batch form prints one line per
+            // distinct command, so both exits survive the migration -
+            // collapsing them into a single code would have dropped the
+            // half the operator did not happen to want.
+            emitNextSteps(["tier-drift-restore", "tier-drift-accept"], {
+              command: "brain",
+              argv,
+              jsonRequested: asJson,
+            });
           }
         }
         return 0;

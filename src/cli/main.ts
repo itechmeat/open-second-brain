@@ -39,7 +39,7 @@ import {
   resolveSemanticConfigState,
   sortedReplacer,
 } from "./helpers.ts";
-import { emitNextStep } from "./advisory-rail.ts";
+import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
 import { ownsInternalJson, wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
   installCli,
@@ -174,7 +174,11 @@ async function cmdInit(argv: string[]): Promise<number> {
     process.stdout.write(`timezone registered: ${timezone}\n`);
     process.stdout.write(`timezone persisted to: ${configPath}\n`);
   }
-  writeSearchInitBlock(configPath);
+  writeSearchInitBlock(configPath, {
+    command: "init",
+    argv,
+    jsonRequested: flags["json"] === true,
+  });
   // Guided first-run onboarding: turn the bare init into a walked-through
   // checklist of state-aware next steps (t_84500f39). Additive - the search
   // block above is unchanged. Best-effort: a checklist failure must never fail
@@ -214,9 +218,13 @@ async function cmdOnboarding(argv: string[]): Promise<number> {
  * block prints once, only during `o2b init` — no nagging on other
  * CLI invocations (the dedicated diagnostic is `o2b search check`).
  */
-function writeSearchInitBlock(configPath: string): void {
+function writeSearchInitBlock(configPath: string, stream: AdvisoryStream): void {
   process.stdout.write("\nSearch:\n");
-  process.stdout.write("  next: o2b search index   # build the vault search index\n");
+  // no-dead-ends, phase 3: this line was hand-written in the rail's own
+  // `next: <command>` format, which is the second mechanism the rail
+  // exists to prevent. A vault that `init` just created has no index, so
+  // the claim holds unconditionally here.
+  emitNextStep("search-index-missing", stream);
 
   const data = discoverConfig(configPath).data;
   // v0.10.10 — share the truthy / key-present logic with `o2b status`

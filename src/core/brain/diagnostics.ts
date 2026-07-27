@@ -308,6 +308,42 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain inbox-drain --apply",
         autoRepairable: false,
       },
+      // The five states whose exits used to be retyped inside an `ok()`
+      // string beside the rail rather than resolved through it.
+      {
+        code: "dream-bundles-absent",
+        issueClass: "no staged dream bundles",
+        nextCommand: "o2b brain dream stage",
+        autoRepairable: false,
+      },
+      {
+        code: "cluster-notes-absent",
+        issueClass: "no materialized cluster notes",
+        nextCommand: "o2b brain clusters run",
+        autoRepairable: false,
+      },
+      {
+        code: "recall-tuning-absent",
+        issueClass: "no persisted recall tuning",
+        nextCommand: "o2b brain tune run --dataset <path>",
+        autoRepairable: false,
+      },
+      // One finding, two readings, so two codes rather than one code
+      // carrying two commands: which value is authoritative - the
+      // indexed one or the note's - is the operator's call, and the
+      // rail's batch form prints both exits for the one state.
+      {
+        code: "tier-drift-restore",
+        issueClass: "tier drift, indexed value authoritative",
+        nextCommand: "o2b brain tiers restore <path> --apply",
+        autoRepairable: false,
+      },
+      {
+        code: "tier-drift-accept",
+        issueClass: "tier drift, note value authoritative",
+        nextCommand: "o2b brain tiers accept <path>",
+        autoRepairable: false,
+      },
       // --- Runtime-notice conditions (no-dead-ends, task 3) ---
       // The notice channel pushes a transient condition at the agent
       // (SessionStart injection, `vault_health`, the onboarding

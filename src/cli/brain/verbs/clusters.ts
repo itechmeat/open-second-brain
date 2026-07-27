@@ -84,7 +84,11 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
       const dir = join(vault, "Brain", "clusters");
       if (!existsSync(dir)) {
         if (asJson) okJson({ clusters: [] });
-        else ok("no cluster notes yet - run: o2b brain clusters run");
+        else ok("no cluster notes yet");
+        // no-dead-ends, phase 3: this pointer was hand-written in the
+        // same file as a migrated one, so `list` printed `- run: ...`
+        // while `run` printed `next: ...`.
+        emitNextStep("cluster-notes-absent", stream);
         return 0;
       }
       const clusters = readdirSync(dir)
@@ -104,8 +108,13 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         })
         .filter((c) => c !== null);
       if (asJson) okJson({ clusters });
-      else if (clusters.length === 0) ok("no generated cluster notes");
-      else {
+      else if (clusters.length === 0) {
+        // The directory exists but holds nothing this verb generated -
+        // the SAME state as the missing-directory branch above, which
+        // previously said nothing forward at all.
+        ok("no generated cluster notes");
+        emitNextStep("cluster-notes-absent", stream);
+      } else {
         for (const c of clusters) {
           ok(`${c.cluster}: ${c.size} notes, density ${c.density} (${c.path})`);
         }

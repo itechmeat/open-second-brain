@@ -1295,12 +1295,21 @@ async function cmdSearchStatus(argv: ReadonlyArray<string>): Promise<number> {
     return 0;
   }
   process.stdout.write(renderStatusHuman(status));
+  // no-dead-ends, phase 3: the pointer used to be spliced into the
+  // renderer's first line, which is a second emission mechanism AND
+  // beyond the reach of a scan over writer call sites. The rail decides
+  // the format; the condition is the one the claim rests on.
+  if (!status.exists) {
+    // The `--json` branch above returned, so this stream is provably a
+    // human one; the JSON payload carries the same exit as a field.
+    emitNextStep("search-index-missing", indexAdvisoryStream(argv, false));
+  }
   return 0;
 }
 
 function renderStatusHuman(s: IndexStatusSnapshot): string {
   if (!s.exists) {
-    return `index: not initialised. Run: o2b search index\n  path: ${s.indexPath}\n`;
+    return `index: not initialised\n  path: ${s.indexPath}\n`;
   }
   const lines: string[] = [];
   lines.push(`index: ${s.indexPath}`);

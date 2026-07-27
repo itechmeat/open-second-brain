@@ -48,6 +48,7 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
+import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
 // The runnable set is read from the step registry, never retyped: a
@@ -313,7 +314,10 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
           })),
         });
       } else if (bundles.length === 0) {
-        ok("no dream bundles - run: o2b brain dream stage");
+        ok("no dream bundles");
+        // no-dead-ends, phase 3: this pointer was hand-written beside
+        // the rail. One mechanism, one line format.
+        emitNextStep("dream-bundles-absent", { command: "brain", argv, jsonRequested: asJson });
       } else {
         for (const b of bundles) {
           ok(`${b.runId}  ${b.status}  staged ${b.stagedAt}  ${b.proposals} proposal(s)`);

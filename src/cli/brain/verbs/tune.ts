@@ -19,6 +19,7 @@ import { appendMetric } from "../../../core/brain/metrics.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { SearchError } from "../../../core/search/types.ts";
+import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
@@ -51,7 +52,10 @@ export async function cmdBrainTune(argv: string[]): Promise<number> {
       if (asJson) {
         okJson({ enabled: searchConfig.recall.selfTuningEnabled, tuned });
       } else if (tuned === null) {
-        ok("tune: no valid tuned parameters persisted - run: o2b brain tune run --dataset <path>");
+        ok("tune: no valid tuned parameters persisted");
+        // no-dead-ends, phase 3: this pointer was hand-written beside
+        // the rail. One mechanism, one line format.
+        emitNextStep("recall-tuning-absent", { command: "brain", argv, jsonRequested: asJson });
       } else {
         ok(
           `tune: pool x${tuned.poolMultiplier}, depth ${tuned.traversalDepth}, ` +
