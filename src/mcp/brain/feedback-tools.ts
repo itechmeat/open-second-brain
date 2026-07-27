@@ -13,7 +13,17 @@ import {
   BrainPreferenceNotFoundError,
   type AppendApplyEvidenceInput,
 } from "../../core/brain/apply-evidence.ts";
-import { dream } from "../../core/brain/dream.ts";
+import { dream, type DreamGateOverrides } from "../../core/brain/dream.ts";
+import {
+  DREAM_GATE_NAMES,
+  DreamGateOverrideError,
+  validateDreamGateOverrides,
+} from "../../core/brain/dream-gates.ts";
+import {
+  DREAM_STEP_RUNNABLE,
+  DreamStepNotRunnableError,
+  runDreamStep,
+} from "../../core/brain/dream-step.ts";
 import {
   applyDreamBundle,
   discardDreamBundle,
@@ -284,6 +294,32 @@ function dreamChangeList(summary: {
   ];
 }
 
+/**
+ * Read the optional `gates` argument (no-dead-ends, Unit E - operator
+ * surface). JSON-RPC carries real objects and booleans, so the MCP form
+ * is the override record itself rather than the CLI's `name=value`
+ * strings; both go through the same validator in `dream-gates.ts`, so
+ * the accepted gate names cannot diverge between the two surfaces.
+ */
+function readDreamGates(args: Record<string, unknown>): DreamGateOverrides | undefined {
+  const raw = args["gates"];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_dream: gates must be an object of <gate>: <boolean>; known gates: ${DREAM_GATE_NAMES.join(", ")}`,
+    );
+  }
+  try {
+    return validateDreamGateOverrides(raw as Record<string, unknown>);
+  } catch (exc) {
+    if (exc instanceof DreamGateOverrideError) {
+      throw new MCPError(INVALID_PARAMS, `brain_dream: ${exc.message}`);
+    }
+    throw exc;
+  }
+}
+
 async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -306,8 +342,50 @@ async function toolBrainDream(
   const nowDate = coerceIsoDate(args, "now");
   const agentArg = coerceStr(args, "agent", false);
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
+  const gates = readDreamGates(args);
+  const stepArg = coerceStr(args, "step", false);
+
+  // Single-step requests (no-dead-ends, Unit E - operator surface).
+  // Deliberately checked before any environment work: a step the pass
+  // cannot honour is refused by name, carrying the specific reason and
+  // the runnable set, and nothing is read or written on that path.
+  if (stepArg) {
+    if (action !== "run") {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_dream: step applies to action=run; action=${action} drives the staged lifecycle, which has no single step`,
+      );
+    }
+    const conflicting = dryRun
+      ? "dry_run"
+      : gates !== undefined
+        ? "gates"
+        : "expect" in args || "strict" in args
+          ? "expect/strict"
+          : null;
+    if (conflicting !== null) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_dream: step cannot be combined with ${conflicting} - a single step has no preview path, reads no gate, and produces none of the preference counters the guard asserts over`,
+      );
+    }
+    try {
+      return { ...runDreamStep(ctx.vault, stepArg) };
+    } catch (exc) {
+      if (exc instanceof DreamStepNotRunnableError) {
+        throw new MCPError(INVALID_PARAMS, exc.message);
+      }
+      throw exc;
+    }
+  }
 
   if (action !== "run") {
+    if (gates !== undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_dream: gates apply to action=run; action=${action} drives the staged lifecycle, whose bundle records the gates its own run resolved`,
+      );
+    }
     // Staged lifecycle (t_ae8a8ec0): stage -> validate -> apply over a
     // persisted bundle; dream() stays the only promotion engine.
     const runIdArg = coerceStr(args, "run_id", false);
@@ -374,6 +452,8 @@ async function toolBrainDream(
       dryRun: true,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
+      // Preview the run being guarded, overrides and all.
+      ...(gates !== undefined ? { gates } : {}),
     });
     const previewList = dreamChangeList(preview);
     enforceCountGuard({
@@ -389,6 +469,7 @@ async function toolBrainDream(
     dryRun,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
+    ...(gates !== undefined ? { gates } : {}),
   });
   const changeList = dreamChangeList(summary);
 
@@ -699,6 +780,30 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         strict: {
           type: "boolean",
           description: "action=run: refuse a guardless run (no `expect`). Default false.",
+        },
+        step: {
+          // Deliberately NOT an enum. A closed schema would reject a
+          // non-runnable step with a generic validation error, losing the
+          // specific reason `DreamStepNotRunnableError` carries - which
+          // is the whole deliverable for the steps that are refused.
+          type: "string",
+          description:
+            `action=run: run ONE step (${DREAM_STEP_RUNNABLE.join(", ")}) and return a partial ` +
+            `result, not a run summary. Any other token is refused with the reason it cannot run alone.`,
+        },
+        gates: {
+          type: "object",
+          description:
+            `action=run: override a phase gate for THIS RUN ONLY, never written back to ` +
+            `Brain/_brain.yaml. Known gates: ${DREAM_GATE_NAMES.join(", ")}.`,
+          properties: {
+            heal_enrich: {
+              type: "boolean",
+              description:
+                "Overrides dream.heal_enrich_enabled for this run. Omitted: the configured value decides.",
+            },
+          },
+          additionalProperties: false,
         },
       },
       additionalProperties: false,

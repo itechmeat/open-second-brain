@@ -71,6 +71,33 @@ export {
   vaultRelative,
 } from "./paths.ts";
 
+// ----- Dream: single-step requests and per-run gate overrides ---------------
+// The two capabilities Unit E shipped. They are on the barrel because the
+// CLI verb and the MCP tool are both adapters over them, and an adapter
+// that has to reach past this surface is how a capability ends up with no
+// operator reach at all.
+export {
+  DREAM_STEP,
+  DREAM_STEP_RUNNABLE,
+  DreamStepNotRunnableError,
+  runDreamStep,
+} from "./dream-step.ts";
+export type {
+  DreamStep,
+  DreamStepResult,
+  DreamScanStepResult,
+  DreamHealEnrichStepResult,
+} from "./dream-step.ts";
+export {
+  DREAM_GATE,
+  DREAM_GATE_NAMES,
+  DreamGateOverrideError,
+  parseDreamGateOverrides,
+  validateDreamGateOverrides,
+} from "./dream-gates.ts";
+export type { DreamGateName } from "./dream-gates.ts";
+export type { DreamGateOverrides, DreamOptions } from "./dream.ts";
+
 // ----- Active-preferences digest --------------------------------------------
 export { regenerateActive, regenerateActiveQuiet } from "./active.ts";
 export type { RegenerateActiveOptions, RegenerateActiveResult } from "./active.ts";

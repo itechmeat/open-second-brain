@@ -120,7 +120,9 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("feedback", "Record a taste signal"),
         command(
           "dream",
-          "Run deterministic consolidation; staged lifecycle via stage/validate/apply",
+          "Run deterministic consolidation; staged lifecycle via stage/validate/apply; " +
+            "--step runs one independently-runnable step, --gate overrides a phase gate for one run",
+          [flag("step", "string"), flag("gate", "string-array")],
         ),
         command("apply-evidence", "Record preference evidence"),
         command("note", "Append a narrative milestone"),

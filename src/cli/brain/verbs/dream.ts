@@ -1,19 +1,41 @@
 /**
- * `o2b brain dream [run] [--dry-run] | stage | validate <run-id> |
- * apply <run-id> | discard <run-id> | list` - the learning pass plus
- * the staged lifecycle (t_ae8a8ec0). `run` (the default, kept
- * positional-free for back-compat) promotes inline; `stage` persists
- * a reviewable proposal bundle; `validate` proves the vault has not
- * drifted; `apply` re-validates and runs the same engine live;
- * `discard` drops the bundle.
+ * `o2b brain dream [run] [--dry-run] [--step S] [--gate N=V] | stage |
+ * validate <run-id> | apply <run-id> | discard <run-id> | list` - the
+ * learning pass plus the staged lifecycle (t_ae8a8ec0). `run` (the
+ * default, kept positional-free for back-compat) promotes inline;
+ * `stage` persists a reviewable proposal bundle; `validate` proves the
+ * vault has not drifted; `apply` re-validates and runs the same engine
+ * live; `discard` drops the bundle.
+ *
+ * `--step` and `--gate` (no-dead-ends, Unit E - operator surface) are
+ * the shell reach for the two capabilities that previously existed only
+ * as TypeScript arguments: `runDreamStep` and `DreamOptions.gates`.
+ * Both belong to the default `run` action and both refuse by name -
+ * `--step` through `DreamStepNotRunnableError`, which carries the
+ * specific reason and the runnable set, and `--gate` through
+ * `DreamGateOverrideError`. Neither writes anything back to
+ * `Brain/_brain.yaml`; with both absent the verb is byte-identical.
  *
  * Exit codes: 0 on success, 1 on operational failure (including a
- * failed validation - scripts gate on it), 2 on usage errors.
+ * failed validation - scripts gate on it), 2 on usage errors, which is
+ * where a refused step or gate lands: the request was understood and
+ * declined, not attempted and broken.
  */
 
 import { resolveAgentName } from "../../../core/config.ts";
-import { dream } from "../../../core/brain/dream.ts";
+import { dream, type DreamGateOverrides } from "../../../core/brain/dream.ts";
 import { CountGuardError, assertExpectedCount } from "../../../core/brain/count-guard.ts";
+import {
+  DREAM_GATE_NAMES,
+  DreamGateOverrideError,
+  parseDreamGateOverrides,
+} from "../../../core/brain/dream-gates.ts";
+import {
+  DREAM_STEP_RUNNABLE,
+  DreamStepNotRunnableError,
+  runDreamStep,
+  type DreamStepResult,
+} from "../../../core/brain/dream-step.ts";
 import {
   applyDreamBundle,
   discardDreamBundle,
@@ -28,11 +50,45 @@ import {
 } from "../../../core/brain/safeguard.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
+// The runnable set is read from the step registry, never retyped: a
+// usage line that advertises a step the pass refuses is its own dead end.
 const USAGE =
-  "usage: o2b brain dream [run] [--dry-run] | stage | validate <run-id> | " +
-  "apply <run-id> | discard <run-id> | list  [--now ISO] [--agent A] [--vault <path>] [--json]";
+  `usage: o2b brain dream [run] [--dry-run] [--step <${DREAM_STEP_RUNNABLE.join("|")}>] ` +
+  `[--gate <${DREAM_GATE_NAMES.join("|")}>=<true|false>] | ` +
+  "stage | validate <run-id> | apply <run-id> | discard <run-id> | list  " +
+  "[--now ISO] [--agent A] [--vault <path>] [--json]";
 
 const ACTIONS = new Set(["run", "stage", "validate", "apply", "discard", "list"]);
+
+/**
+ * Refuse a request this verb understood and declined. Exit 2, with the
+ * reason on stderr for a human and as a payload for a machine - never a
+ * stray line on a stream a caller parses.
+ */
+function refuse(message: string, asJson: boolean, payload: Record<string, unknown> = {}): number {
+  if (asJson) {
+    okJson({ ok: false, ...payload, message });
+    return 2;
+  }
+  process.stderr.write(`error: ${message}\n`);
+  return 2;
+}
+
+/** Render one partial step result as the verb's human line format. */
+function printStepResult(result: DreamStepResult): void {
+  ok(`step: ${result.step}`);
+  if (result.step === "scan") {
+    ok(`active_signals: ${result.active_signals}`);
+    ok(`processed_signals: ${result.processed_signals}`);
+    ok(`preferences: ${result.preferences}`);
+    ok(`retired: ${result.retired}`);
+    if (result.corrupted.length > 0) ok(`corrupted: ${result.corrupted.join(", ")}`);
+    return;
+  }
+  ok(`scanned: ${result.scanned}`);
+  ok(`enriched: ${result.enriched}`);
+  if (result.pages.length > 0) ok(`pages: ${result.pages.join(", ")}`);
+}
 
 export async function cmdBrainDream(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -42,6 +98,8 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     agent: { type: "string" },
     expect: { type: "string" },
     strict: { type: "boolean" },
+    step: { type: "string" },
+    gate: { type: "string-array" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -55,6 +113,74 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
+
+  // --- Operator-surface argument checks (no-dead-ends, Unit E) --------
+  // Both live on the default `run` action and each is refused by name
+  // where it would otherwise be accepted and quietly ignored.
+  const stepRequest = flags["step"];
+  const gateEntries = (flags["gate"] as string[] | undefined) ?? [];
+  const wantsStep = typeof stepRequest === "string";
+  if ((wantsStep || gateEntries.length > 0) && action !== "run") {
+    return refuse(
+      `brain dream: --step and --gate steer the default 'run' action; ` +
+        `'${action}' drives the staged lifecycle, which has neither a single step nor a gate to override`,
+      asJson,
+      { action },
+    );
+  }
+  if (wantsStep) {
+    // Every flag below configures work a single step does not do, so
+    // accepting one alongside --step would silently drop it.
+    const conflict =
+      gateEntries.length > 0
+        ? {
+            flag: "--gate",
+            reason:
+              "a gate steers a full pass; the 'heal-enrich' step IS the opt-in and the 'scan' step reads no gate, so an override would have nothing to apply to",
+          }
+        : flags["dry-run"] === true
+          ? {
+              flag: "--dry-run",
+              reason:
+                "runDreamStep has no preview path - 'scan' already writes nothing and 'heal-enrich' has no plan-only mode, so a dry run would be either a no-op dressed as a preview or a write",
+            }
+          : flags["expect"] !== undefined
+            ? {
+                flag: "--expect",
+                reason:
+                  "the count guard asserts over the preferences a full pass creates, confirms, retires or moves, and a single step produces none of those counters",
+              }
+            : flags["strict"] === true
+              ? {
+                  flag: "--strict",
+                  reason:
+                    "it demands a count guard over the preferences a full pass changes, and a single step changes none of them",
+                }
+              : null;
+    if (conflict !== null) {
+      return refuse(
+        `brain dream: --step cannot be combined with ${conflict.flag}: ${conflict.reason}`,
+        asJson,
+        { step: stepRequest, conflicting_flag: conflict.flag },
+      );
+    }
+  }
+
+  let gates: DreamGateOverrides | null = null;
+  if (gateEntries.length > 0) {
+    try {
+      gates = parseDreamGateOverrides(gateEntries);
+    } catch (exc) {
+      if (exc instanceof DreamGateOverrideError) {
+        return refuse(`brain dream: ${exc.message}`, asJson, {
+          entry: exc.entry,
+          known_gates: [...exc.known],
+        });
+      }
+      throw exc;
+    }
+  }
+
   const { config, vault } = brainVerbContext(flags);
 
   const agentFlag = flags["agent"];
@@ -77,6 +203,33 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       operation: "dream",
       timeoutMs: resolveSafeguardTimeoutMs("dream", config ?? undefined),
     });
+
+  if (wantsStep) {
+    let result: DreamStepResult;
+    try {
+      result = runDreamStep(vault, stepRequest);
+    } catch (exc) {
+      if (exc instanceof DreamStepNotRunnableError) {
+        return refuse(exc.message, asJson, {
+          step: exc.requested,
+          runnable: [...exc.runnable],
+          reason: exc.reason,
+        });
+      }
+      const message = `dream step ${stepRequest} failed: ${(exc as Error).message ?? exc}`;
+      if (asJson) {
+        okJson({ ok: false, step: stepRequest, message });
+        return 1;
+      }
+      return fail(message);
+    }
+    if (asJson) {
+      process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+      return 0;
+    }
+    printStepResult(result);
+    return 0;
+  }
 
   try {
     if (action === "stage") {
@@ -197,6 +350,9 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
         ...(now !== null ? { now } : {}),
         dryRun: true,
         ...(agent ? { agentName: agent } : {}),
+        // The guard must preview the run it is guarding, overrides and
+        // all, or it asserts a count for a pass that will not happen.
+        ...(gates !== null ? { gates } : {}),
       });
       const matchList = [
         ...preview.new_unconfirmed,
@@ -224,6 +380,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       dryRun: Boolean(flags["dry-run"]),
       ...(agent ? { agentName: agent } : {}),
       safeguard: guard(),
+      ...(gates !== null ? { gates } : {}),
     });
   } catch (exc) {
     if (exc instanceof SafeguardTimeoutError && asJson) {
