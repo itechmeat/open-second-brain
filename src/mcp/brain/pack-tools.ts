@@ -582,6 +582,10 @@ async function toolBrainPreCompressPack(
     active_head_included: pack.activeHeadIncluded,
     ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
     total_chars: pack.totalChars,
+    // The pack's one degradation channel. This is the only surface the
+    // builder has, so a warning dropped here is a broken `_brain.yaml`
+    // nothing tells the caller about.
+    ...(pack.warnings ? { warnings: pack.warnings } : {}),
     ...(pack.receiptId ? { receipt_id: pack.receiptId } : {}),
     ...(pack.telemetryId ? { telemetry_id: pack.telemetryId } : {}),
     items: pack.items.map((i) => ({

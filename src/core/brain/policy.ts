@@ -45,6 +45,7 @@ export {
 } from "./policy/validate.ts";
 export {
   brainConfigReadFailure,
+  brainConfigUnreadableReport,
   loadActiveMostAppliedSafe,
   loadBrainConfig,
   loadBrainConfigDetailed,

@@ -34,7 +34,7 @@ import { resolveSearchConfig } from "../search/index.ts";
 import { checkVaultWriteable } from "../doctor.ts";
 import { NEXT_COMMAND_KEY, nextCommandField, type NextCommandField } from "./next-step.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
-import { brainConfigReadFailure } from "./policy.ts";
+import { brainConfigUnreadableReport } from "./policy.ts";
 import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 
 export type RuntimeNoticeSeverity = "info" | "warning";
@@ -137,20 +137,18 @@ export function collectRuntimeNotices(
   // not the ones in force, so the condition has to be visible instead of
   // inferable from a gate that suddenly refuses.
   //
+  // The sentence is `brainConfigUnreadableReport`'s, not this channel's:
+  // a delivery surface that degraded because of the same condition
+  // carries the same words, so an operator meets one fault and not two.
+  //
   // No registered command: the repair is an edit to the YAML the parser
-  // just rejected, and no `o2b` verb performs it. The failure detail below
-  // is what the operator acts on; `o2b brain doctor` would only re-report
-  // the same line, which is a round-trip, not an exit.
+  // just rejected, and no `o2b` verb performs it. The failure detail the
+  // report quotes is what the operator acts on; `o2b brain doctor` would
+  // only re-report the same line, which is a round-trip, not an exit.
   try {
-    const failure = brainConfigReadFailure(vault);
-    if (failure !== null) {
-      notices.push(
-        notice(
-          "brain_config_unreadable",
-          "warning",
-          `Brain/_brain.yaml could not be read, so configured settings are not in force and the integrity gates fall back to their strictest mode (${failure}). Fix the file, then re-run.`,
-        ),
-      );
+    const report = brainConfigUnreadableReport(vault);
+    if (report !== null) {
+      notices.push(notice("brain_config_unreadable", "warning", report));
     }
   } catch {
     // best-effort

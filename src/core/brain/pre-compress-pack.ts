@@ -19,7 +19,12 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { renderActive } from "./active.ts";
 import { brainActivePath, brainDirs } from "./paths.ts";
-import { collectPreferences, resolveOwnerScopeDelivery } from "./preferences-collect.ts";
+import { brainConfigUnreadableReport } from "./policy.ts";
+import {
+  collectPreferences,
+  resolveOwnerScopeDelivery,
+  type OwnerScopeDelivery,
+} from "./preferences-collect.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
@@ -53,6 +58,14 @@ export interface PreCompressPack {
   readonly receiptId?: string;
   readonly telemetryId?: string;
   readonly totalChars: number;
+  /**
+   * Delivery reports that are not pack content: currently only the
+   * unreadable-config degradation below. Same key and same
+   * absent-when-empty rule as `ContextPackReport.warnings`, so the two
+   * pack builders answer "what should the caller know about this
+   * result" in one shape. A healthy vault carries no key at all.
+   */
+  readonly warnings?: ReadonlyArray<string>;
 }
 
 export interface PreCompressOptions {
@@ -88,15 +101,13 @@ interface ConfirmedPref {
   readonly createdAt: string;
 }
 
-function collectConfirmed(vault: string, agentScope: string | undefined): ConfirmedPref[] {
+function collectConfirmed(vault: string, ownerScope: OwnerScopeDelivery): ConfirmedPref[] {
   const dir = brainDirs(vault).preferences;
   const out: ConfirmedPref[] = [];
   // Listing and parse come from the shared delivery-path walk
   // (context-integrity-gates, Unit A); the confirmed-status filter is
   // this surface's own and stays here.
-  for (const { pref } of collectPreferences(dir, {
-    ownerScope: resolveOwnerScopeDelivery(vault, agentScope),
-  }).entries) {
+  for (const { pref } of collectPreferences(dir, { ownerScope }).entries) {
     if (pref.status !== BRAIN_PREFERENCE_STATUS.confirmed) continue;
     out.push({
       id: pref.id,
@@ -106,6 +117,22 @@ function collectConfirmed(vault: string, agentScope: string | undefined): Confir
     });
   }
   return out;
+}
+
+/** The active head this caller may see, and why it may be missing. */
+interface ActiveHead {
+  /** Head text, or `null` when there is none to deliver. */
+  readonly text: string | null;
+  /** Operator-facing reason the head was withheld, or `null`. */
+  readonly warning: string | null;
+}
+
+/** Nothing to deliver, nothing to report. */
+const NO_ACTIVE_HEAD: ActiveHead = Object.freeze({ text: null, warning: null });
+
+/** An active head that is present, with nothing to report about it. */
+function deliveredHead(text: string): ActiveHead {
+  return text.length > 0 ? Object.freeze({ text, warning: null }) : NO_ACTIVE_HEAD;
 }
 
 /**
@@ -121,19 +148,40 @@ function collectConfirmed(vault: string, agentScope: string | undefined): Confir
  *
  * With no enforced scope - the shipped `off` default - the file is read
  * verbatim exactly as before, stamp and all.
+ *
+ * ## Why an unreadable config is checked here rather than caught
+ *
+ * The two halves of the gate compose into a failure neither designed
+ * for. `loadIntegrityConfigSafe` deliberately RESOLVES on an unreadable
+ * `_brain.yaml`, to its strict fallback, so the gate closes rather than
+ * opens - which hands this caller an `enforcedScope`. {@link
+ * renderActive} then reads the guardrail block through a loader that
+ * RAISES on the same file. One bad line therefore cost a scoped agent
+ * its entire pre-compaction pack while an unscoped one still got a pack.
+ *
+ * So the condition is a precondition of the scoped render, tested by the
+ * same predicate the loader splits on, and the head is withheld with the
+ * reason named. It is not a `catch`: any other failure inside
+ * `renderActive` still propagates, and a `catch` here would re-absorb
+ * exactly the silence the split removed.
+ *
+ * Withheld, never substituted. The file's bytes are not a fallback for a
+ * scoped render - serving them under an enforcing gate is the leak A3
+ * exists to prevent - and the strict fallback is what makes withholding
+ * safe: an unreadable config can only close this gate, never open it.
  */
-function readActiveHead(vault: string, enforcedScope: string | null): string | null {
+function readActiveHead(vault: string, enforcedScope: string | null): ActiveHead {
   if (enforcedScope !== null) {
-    const text = renderActive(vault, { agentScope: enforcedScope }).document.trim();
-    return text.length > 0 ? text : null;
+    const unreadableConfig = brainConfigUnreadableReport(vault);
+    if (unreadableConfig !== null) return Object.freeze({ text: null, warning: unreadableConfig });
+    return deliveredHead(renderActive(vault, { agentScope: enforcedScope }).document.trim());
   }
   const path = brainActivePath(vault);
-  if (!existsSync(path)) return null;
+  if (!existsSync(path)) return NO_ACTIVE_HEAD;
   try {
-    const text = readFileSync(path, "utf8").trim();
-    return text.length > 0 ? text : null;
+    return deliveredHead(readFileSync(path, "utf8").trim());
   } catch {
-    return null;
+    return NO_ACTIVE_HEAD;
   }
 }
 
@@ -144,21 +192,22 @@ function readActiveHead(vault: string, enforcedScope: string | null): string | n
  */
 export function buildPreCompressPack(vault: string, opts: PreCompressOptions): PreCompressPack {
   const startedAtMs = Date.now();
-  const ranked = collectConfirmed(vault, opts.agentScope).toSorted((a, b) => {
+  // One gate verdict for the whole build. The preference walk and the
+  // active head must agree on it, and resolving it twice also read
+  // `_brain.yaml` twice per pack.
+  const ownerScope = resolveOwnerScopeDelivery(vault, opts.agentScope);
+  const ranked = collectConfirmed(vault, ownerScope).toSorted((a, b) => {
     if (b.confidence !== a.confidence) return b.confidence - a.confidence;
     if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
     return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
   });
   const top = ranked.slice(0, Math.max(0, opts.topK));
 
-  const activeHead = readActiveHead(
-    vault,
-    resolveOwnerScopeDelivery(vault, opts.agentScope).enforcedScope,
-  );
+  const activeHead = readActiveHead(vault, ownerScope.enforcedScope);
   const safetyById = new Map<string, ContextSafetyReport>();
   const entries: Array<{ item: string; text: string }> = [];
-  if (activeHead !== null) {
-    const guarded = guardBrainContextSnippet(activeHead, {
+  if (activeHead.text !== null) {
+    const guarded = guardBrainContextSnippet(activeHead.text, {
       source: { id: ACTIVE_ID, path: brainActivePath(vault) },
     });
     const safety = contextSafetyReport(guarded);
@@ -275,5 +324,6 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
     ...(receipt ? { receiptId: receipt.id } : {}),
     ...(telemetry ? { telemetryId: telemetry.id } : {}),
     totalChars: budgeted.totalChars,
+    ...(activeHead.warning !== null ? { warnings: Object.freeze([activeHead.warning]) } : {}),
   });
 }

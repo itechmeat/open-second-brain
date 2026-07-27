@@ -245,6 +245,33 @@ export function brainConfigReadFailure(vault: string): string | null {
 }
 
 /**
+ * The one-line operator-facing statement of {@link brainConfigReadFailure},
+ * or `null` when the config is absent or reads fine.
+ *
+ * One formulation, because the condition now reaches an operator on more
+ * than one surface: the runtime-notice channel pushes it at SessionStart
+ * and `vault_health`, and a delivery surface that DEGRADED because of it
+ * carries it on its own result. Two hand-written copies of the same
+ * sentence would drift, and an operator who saw one would not recognise
+ * the other as the same fault.
+ *
+ * It names no command on purpose. The repair is an edit to the YAML the
+ * parser just rejected and no `o2b` verb performs it, which is why
+ * `brain_config_unreadable` is deliberately absent from
+ * `DIAGNOSTIC_SIGNALS` - see the notice that raises it. The cause the
+ * parser gave IS the actionable part, so it is quoted verbatim.
+ */
+export function brainConfigUnreadableReport(vault: string): string | null {
+  const failure = brainConfigReadFailure(vault);
+  if (failure === null) return null;
+  return (
+    `Brain/_brain.yaml could not be read, so configured settings are not in force ` +
+    `and the integrity gates fall back to their strictest mode (${failure}). ` +
+    `Fix the file, then re-run.`
+  );
+}
+
+/**
  * Load + resolve the `integrity:` block.
  *
  * Two failure modes, deliberately NOT collapsed into one:

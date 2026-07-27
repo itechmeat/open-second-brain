@@ -357,7 +357,16 @@ export function refreshAnticipatoryCache(
 
 /**
  * Read the warm cache for the session's lineage root, falling back to
- * a live bundle on miss or staleness. Never throws.
+ * a live bundle on miss or staleness.
+ *
+ * A corrupt cache file reads as a miss, so nothing about the CACHE can
+ * fail this call. The live fallback can: it builds a context pack, and
+ * an unreadable `_brain.yaml` raises out of that deliberately rather
+ * than serving a pack under guardrails the operator did not choose. Both
+ * callers report it - the CLI verb as `anticipate failed: …`, the MCP
+ * tool as its error envelope. This said "Never throws" until the
+ * absent-versus-broken config split gave the pack a raise; the promise
+ * was the stale half.
  */
 export function readAnticipatoryContext(
   vault: string,

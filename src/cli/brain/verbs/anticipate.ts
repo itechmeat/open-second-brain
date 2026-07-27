@@ -50,12 +50,22 @@ export async function cmdBrainAnticipate(argv: string[]): Promise<number> {
       ...(maxTokens !== undefined ? { maxTokens } : {}),
     });
   }
-  const result = readAnticipatoryContext(vault, {
-    sessionId,
-    now,
-    ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
-    ...(maxTokens !== undefined ? { maxTokens } : {}),
-  });
+  // The live-bundle fallback builds a context pack, which reads the
+  // guardrail block and raises on a `_brain.yaml` the operator wrote and
+  // broke. Without this boundary that raise left the verb as a stack
+  // trace naming this repo's files instead of theirs; every sibling verb
+  // on the same path already reports `<verb> failed: <cause>`.
+  let result;
+  try {
+    result = readAnticipatoryContext(vault, {
+      sessionId,
+      now,
+      ...(ttlSeconds !== undefined ? { ttlSeconds } : {}),
+      ...(maxTokens !== undefined ? { maxTokens } : {}),
+    });
+  } catch (exc) {
+    return fail(`anticipate failed: ${(exc as Error).message ?? exc}`);
+  }
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");

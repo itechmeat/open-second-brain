@@ -38,46 +38,56 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
     return fail(`brain context-pack: --max-tokens must be a positive integer; got ${maxTokensRaw}`);
   }
 
-  const report = packContext(vault, {
-    maxTokens,
-    ...(flags["query"] ? { query: flags["query"] as string } : {}),
-    ...(flags["lanes"] === true ? { includeLanes: true } : {}),
-    ...(flags["receipt"] === true
-      ? {
-          receipt: {
-            host: trimOrDefault(flags["receipt-host"], "cli"),
-            trigger: "context_pack" as const,
-            ...(trimOrUndefined(flags["session-id"]) !== undefined
-              ? { sessionId: trimOrUndefined(flags["session-id"]) }
-              : {}),
-            ...(trimOrUndefined(flags["turn-id"]) !== undefined
-              ? { turnId: trimOrUndefined(flags["turn-id"]) }
-              : {}),
-          },
-        }
-      : {}),
-    ...(flags["cache-stable"] === true || flags["dedup-repeated"] === true
-      ? {
-          transforms: {
-            ...(flags["cache-stable"] === true ? { cacheStableOrdering: true } : {}),
-            ...(flags["dedup-repeated"] === true ? { deduplicateRepeatedContext: true } : {}),
-          },
-        }
-      : {}),
-    ...(flags["telemetry"] === true
-      ? {
-          telemetry: {
-            host: trimOrDefault(flags["telemetry-host"], "cli"),
-            ...(trimOrUndefined(flags["session-id"]) !== undefined
-              ? { sessionId: trimOrUndefined(flags["session-id"]) }
-              : {}),
-            ...(trimOrUndefined(flags["turn-id"]) !== undefined
-              ? { turnId: trimOrUndefined(flags["turn-id"]) }
-              : {}),
-          },
-        }
-      : {}),
-  });
+  // `packContext` reads the guardrail block and raises on a `_brain.yaml`
+  // the operator wrote and broke. Without this boundary that raise left
+  // the verb as a stack trace naming this repo's files instead of theirs;
+  // every sibling verb on the same path already reports
+  // `<verb> failed: <cause>`.
+  let report;
+  try {
+    report = packContext(vault, {
+      maxTokens,
+      ...(flags["query"] ? { query: flags["query"] as string } : {}),
+      ...(flags["lanes"] === true ? { includeLanes: true } : {}),
+      ...(flags["receipt"] === true
+        ? {
+            receipt: {
+              host: trimOrDefault(flags["receipt-host"], "cli"),
+              trigger: "context_pack" as const,
+              ...(trimOrUndefined(flags["session-id"]) !== undefined
+                ? { sessionId: trimOrUndefined(flags["session-id"]) }
+                : {}),
+              ...(trimOrUndefined(flags["turn-id"]) !== undefined
+                ? { turnId: trimOrUndefined(flags["turn-id"]) }
+                : {}),
+            },
+          }
+        : {}),
+      ...(flags["cache-stable"] === true || flags["dedup-repeated"] === true
+        ? {
+            transforms: {
+              ...(flags["cache-stable"] === true ? { cacheStableOrdering: true } : {}),
+              ...(flags["dedup-repeated"] === true ? { deduplicateRepeatedContext: true } : {}),
+            },
+          }
+        : {}),
+      ...(flags["telemetry"] === true
+        ? {
+            telemetry: {
+              host: trimOrDefault(flags["telemetry-host"], "cli"),
+              ...(trimOrUndefined(flags["session-id"]) !== undefined
+                ? { sessionId: trimOrUndefined(flags["session-id"]) }
+                : {}),
+              ...(trimOrUndefined(flags["turn-id"]) !== undefined
+                ? { turnId: trimOrUndefined(flags["turn-id"]) }
+                : {}),
+            },
+          }
+        : {}),
+    });
+  } catch (exc) {
+    return fail(`context-pack failed: ${(exc as Error).message ?? exc}`);
+  }
 
   if (flags["json"]) {
     okJson({
