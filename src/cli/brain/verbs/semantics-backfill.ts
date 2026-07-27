@@ -18,6 +18,10 @@ export async function cmdBrainSemanticsBackfill(argv: string[]): Promise<number>
     return 0;
   }
 
+  // An empty proposal list names no forward exit, deliberately. This verb is
+  // dry-run only and has no apply path, so there is no command to name; and
+  // no proposals means the inverse-edge invariant it previews already holds,
+  // which is an answer rather than a degraded state.
   info(`Semantics backfill dry-run proposals: ${plan.proposals.length}`);
   for (const proposal of plan.proposals) {
     info(

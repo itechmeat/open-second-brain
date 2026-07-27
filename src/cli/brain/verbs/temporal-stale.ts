@@ -26,6 +26,11 @@ export async function cmdBrainStale(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // An empty report names no forward exit, deliberately. This verb IS the
+  // exit other surfaces name - the `stale-notes` registry entry resolves to
+  // it - and what to do with a stale entry (pin it, retire it, refresh its
+  // evidence) is a judgement over content, so naming any one of them would
+  // be a guess dressed as an instruction.
   process.stdout.write(
     `Stale entries (pref >= ${cfg.stale_pref_days}d, signal >= ${cfg.stale_signal_days}d, log >= ${cfg.stale_log_days}d):\n`,
   );

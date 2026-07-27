@@ -15,6 +15,10 @@ export async function cmdBrainMcpLandscape(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // An empty landscape names no forward exit, deliberately. This lists the
+  // MCP servers declared in runtime configuration files this tool never
+  // writes, so the way out of "none" is editing another runtime's config -
+  // there is no `o2b` command to point at.
   process.stdout.write(`MCP servers configured in vault: ${landscape.servers.length}\n`);
   for (const s of landscape.servers) {
     process.stdout.write(`  ${s.name}  (${s.source})\n`);
