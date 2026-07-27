@@ -622,21 +622,37 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     );
   }
 
-  // Tie-break per design §7: final_score desc, keywordScore desc, mtime desc, chunkId asc.
+  // Tie-break ladder, top to bottom: final_score desc, then (under an
+  // active window only) temporal desc, then authoring instant desc, then
+  // keywordScore desc, mtime desc, chunkId asc. The last four are design
+  // §7 plus the conversation-chronology rung; the temporal rung sits
+  // above all of them - see below for why that is one step higher than a
+  // purely freshness-facing correction would place it.
   // Conversation chronology (S1): on an EXACT hybrid-score tie, order by
   // more recent authoring instant FIRST - but only when BOTH results carry
   // an `authored_at`. A pair where either side has none falls through to
   // the historical tie-break, so any non-tied pair (and every pair without
   // turn instants) keeps today's order byte-identically.
-  // Query-side temporal intent (t_58fc4720): the two rungs below - the
-  // authoring instant and `mtime` - both order NEWER first, which is the
-  // very bias a declared historical window contradicts. A saturating
-  // `clamp01` can hide a candidate's larger temporal contribution behind
-  // an exact score tie, and the freshness rungs would then hand the tie
-  // to the document the query did not ask for. So under an active window
-  // the temporal layer separates the tie first. Equal contributions
-  // (including both zero) and an absent window fall straight through to
-  // the historical ladder, byte-identically.
+  // Query-side temporal intent (t_58fc4720): under an active window the
+  // temporal layer separates the tie FIRST - above the whole ladder
+  // below, `keywordScore` included, not only above the two freshness
+  // rungs.
+  //
+  // Two reasons, and the second is why the rung sits one step higher than
+  // a freshness-only correction would need:
+  //
+  //   - the authoring instant and `mtime` both order NEWER first, which
+  //     is the very bias a declared historical window contradicts, and a
+  //     saturating `clamp01` can hide a candidate's larger temporal
+  //     contribution behind an exact score tie;
+  //   - `keywordScore` is already a COMPONENT of `score`. On an exact
+  //     tie it re-applies a signal the composite has already counted,
+  //     which cannot separate what that composite could not. The window
+  //     is an axis the query stated and the score may have saturated
+  //     away, so it is the one that still carries information here.
+  //
+  // Equal contributions (including both zero) and an absent window fall
+  // straight through to the historical ladder, byte-identically.
   ranked.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
     if (temporalIntent !== null) {

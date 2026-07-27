@@ -169,6 +169,11 @@ export async function captureSessionLifecycleEvent(
         ...(normalized.workId !== undefined ? { payloadWorkId: normalized.workId } : {}),
         ...(normalized.laneId !== undefined ? { payloadLaneId: normalized.laneId } : {}),
         ...(normalized.cwd !== undefined ? { worktree: normalized.cwd } : {}),
+        // The same clock the resolver below runs on: the marker rung is
+        // the one rung with a freshness bound, and it must age against
+        // this event's instant, not against a second reading of the wall
+        // clock.
+        nowMs: now.getTime(),
       });
       const resolution = resolveSessionLineageDetailed(
         {
@@ -220,7 +225,7 @@ export async function captureSessionLifecycleEvent(
           ...(identity?.laneId !== undefined ? { laneId: identity.laneId } : {}),
         });
         if (recorded.notice !== undefined) lineageDrops.push(recorded.notice);
-        recordWorktreeIdentityMarker(vault, normalized.cwd, identity);
+        recordWorktreeIdentityMarker(vault, normalized.cwd, identity, now.getTime());
       }
     } catch {
       lineage = undefined; // lineage is an enhancement, never a blocker
@@ -452,16 +457,22 @@ export async function captureSessionLifecycleEvent(
  * Fail-soft in its own right, like the anticipatory cache below it - the
  * marker is a convenience for a LATER session, and a state directory
  * that cannot be written must not cost this one its capture.
+ *
+ * Skipping the marker-sourced case is also what gives the marker rung's
+ * freshness bound its meaning: the recorded instant is the last time
+ * something ACTUALLY declared this identity, so an inherited one cannot
+ * keep refreshing itself and stay live forever.
  */
 function recordWorktreeIdentityMarker(
   vault: string,
   worktree: string | undefined,
   identity: ReturnType<typeof resolveWorkIdentity>,
+  nowMs: number,
 ): void {
   if (worktree === undefined || identity === null) return;
   if (identity.source === WORK_IDENTITY_SOURCE.marker) return;
   try {
-    recordWorkIdentityMarker(vault, worktree, identity);
+    recordWorkIdentityMarker(vault, worktree, identity, { nowMs });
   } catch {
     // The marker is an enhancement, never a capture blocker.
   }

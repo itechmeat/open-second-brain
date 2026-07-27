@@ -773,6 +773,11 @@ async function toolBrainRecallGate(
   // computes, so the knowledge-gap loop can aggregate recurrence without a
   // second identity concept. Gated behind the same telemetry opt-in as the
   // gate record above and fail-open — a log write never breaks the gate.
+  //
+  // `recall_gate_telemetry` is the SINGLE opt-in for this log wherever it
+  // is written: `brain_context_pack` writes the same records under the
+  // same key (see `brain/pack-tools.ts`), so one config decision governs
+  // the whole feature rather than one per surface.
   emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () =>
     recordRecallAdequacyDemand(ctx.vault, { query: prompt, verdict }),
   );

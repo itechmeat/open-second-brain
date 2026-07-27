@@ -26,6 +26,34 @@ export type RangeEdge = "since" | "until";
 
 const ISO_DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
 const SHORTHAND_RE = /^(\d{1,4})([hdw])$/;
+/**
+ * ISO datetime SHAPE. `parseTimePoint` resolves a datetime through
+ * `Date.parse` (which accepts more than this), so this is deliberately
+ * not a second parser: it is the admission test
+ * {@link isLanguageNeutralTimePoint} needs, and nothing here changes what
+ * the `since` / `until` parameters accept.
+ */
+const ISO_DATETIME_RE =
+  /^\d{4}-\d{2}-\d{2}t\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:z|[+-]\d{2}:?\d{2})?$/;
+
+/**
+ * True when a time point is stated in a LANGUAGE-NEUTRAL form: an ISO
+ * date, an ISO datetime, or a `<n>h` / `<n>d` / `<n>w` duration. False for
+ * every word form (`today`, `yesterday`, `last week`, `last month`) this
+ * parser also accepts.
+ *
+ * The word forms belong to the explicit `since` / `until` PARAMETERS,
+ * where an operator typed them deliberately. A surface that classifies
+ * free query text may not recognise them: a fixed list of English words
+ * would behave differently for a query written in any other language,
+ * which is the one property `temporal-intent.ts` guarantees. That surface
+ * calls this to decide ADMISSION; resolution stays with
+ * {@link parseTimePoint}, so there is still exactly one parser.
+ */
+export function isLanguageNeutralTimePoint(raw: string): boolean {
+  const text = raw.trim().toLowerCase();
+  return ISO_DATE_RE.test(text) || ISO_DATETIME_RE.test(text) || SHORTHAND_RE.test(text);
+}
 
 function utcDayStart(ms: number): number {
   const d = new Date(ms);

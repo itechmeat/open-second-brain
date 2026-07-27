@@ -24,17 +24,42 @@
  * that must behave identically across every script, so it is not
  * attempted.
  *
- * Field values are resolved by `parseTimePoint` - the SAME parser the
- * `since` / `until` search parameters use, never a second one - so an
- * unresolvable directive raises `SearchError("INVALID_INPUT")` exactly
- * as the parameter form does. A date-shaped bare token is treated the
- * same way: it is a temporal signal or it is a malformed one, never
- * silently ignored.
+ * ## Exactly what a field value may say
+ *
+ * A `since:` / `until:` value in QUERY TEXT is admitted only in a
+ * language-neutral form - an ISO date, an ISO datetime, or a `<n>h` /
+ * `<n>d` / `<n>w` duration (`isLanguageNeutralTimePoint`). The word forms
+ * `parseTimePoint` also accepts (`today`, `yesterday`, `last week`,
+ * `last month`) belong to the explicit `since` / `until` PARAMETERS,
+ * where an operator typed them deliberately; recognising them here would
+ * make `since:yesterday` resolve while its translation into any other
+ * language raised, which is precisely the asymmetry this module exists to
+ * avoid. An inadmissible or unresolvable field value raises
+ * `SearchError("INVALID_INPUT")`: the operator DECLARED a window, so a
+ * value that cannot become one is an error, never a silent skip.
+ *
+ * Resolution itself is always `parseTimePoint`, the SAME parser the
+ * parameters use - never a second one. The admission test above only
+ * narrows what reaches it.
+ *
+ * ## A bare token is a shape, not a declaration
+ *
+ * A date-SHAPED run in free text (`invoice 2024-06-31`, a ticket number,
+ * a version string) was not typed as an instruction. When such a token
+ * does not resolve it declares NOTHING: it is skipped, it stays in the
+ * query text as the content it is, and a previously-working search is not
+ * aborted by it. Only the explicit field grammar above can fail loudly.
  *
  * Pure against an injected clock: same query and `nowMs`, same intent.
  */
 
-import { resolveTimeRange, parseTimePoint, type ResolvedTimeRange } from "./time-range.ts";
+import {
+  resolveTimeRange,
+  parseTimePoint,
+  isLanguageNeutralTimePoint,
+  type ResolvedTimeRange,
+} from "./time-range.ts";
+import { SearchError } from "./types.ts";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -101,6 +126,22 @@ export function stripTemporalDirectives(query: string): string {
   return query.replace(new RegExp(FIELD_TOKEN_RE), " ").replace(/\s+/gu, " ").trim();
 }
 
+/**
+ * Return a field value that query text is allowed to declare, or raise.
+ * The gate is the language-neutral shape test; everything that passes is
+ * handed to `parseTimePoint` unchanged, so this narrows the grammar
+ * without becoming a second parser.
+ */
+function admitFieldValue(value: string): string {
+  if (isLanguageNeutralTimePoint(value)) return value;
+  throw new SearchError(
+    "INVALID_INPUT",
+    `unusable time point in query text: ${JSON.stringify(value)} ` +
+      "(a query directive accepts an ISO date, an ISO datetime, or <n>h/<n>d/<n>w; " +
+      "word forms are accepted only by the since / until parameters)",
+  );
+}
+
 /** Collect the first occurrence of each directive. */
 function readFieldTokens(query: string): {
   readonly since: string | undefined;
@@ -117,19 +158,41 @@ function readFieldTokens(query: string): {
   return { since, until };
 }
 
-/** Widest window spanned by the bare ISO tokens, or null when there are none. */
+/**
+ * Widest window spanned by the bare ISO tokens, or null when there are
+ * none that RESOLVE. A token that matches the shape but names no instant
+ * (`2024-06-31`, `2023-02-29`) is skipped rather than raised: see the
+ * header - a shape found in free text is not a declaration, so it may not
+ * abort a search that was working before the token was typed.
+ */
 function readIsoTokenRange(query: string, nowMs: number): ResolvedTimeRange | null {
   let sinceMs: number | null = null;
   let untilMs: number | null = null;
   for (const match of query.matchAll(new RegExp(ISO_TOKEN_RE))) {
-    const token = match[0];
-    const start = parseTimePoint(token, nowMs, "since");
-    const end = parseTimePoint(token, nowMs, "until");
-    sinceMs = sinceMs === null ? start : Math.min(sinceMs, start);
-    untilMs = untilMs === null ? end : Math.max(untilMs, end);
+    const resolved = resolveBareToken(match[0], nowMs);
+    if (resolved === null) continue;
+    sinceMs = sinceMs === null ? resolved.start : Math.min(sinceMs, resolved.start);
+    untilMs = untilMs === null ? resolved.end : Math.max(untilMs, resolved.end);
   }
   if (sinceMs === null || untilMs === null) return null;
   return Object.freeze({ sinceMs, untilMs });
+}
+
+/**
+ * Both edges of one bare token, or `null` when it names no instant. The
+ * only place a `parseTimePoint` refusal is absorbed, and it is absorbed
+ * as a NAMED outcome of this unit's grammar ("this token declares
+ * nothing"), not as a swallowed failure.
+ */
+function resolveBareToken(token: string, nowMs: number): { start: number; end: number } | null {
+  try {
+    return {
+      start: parseTimePoint(token, nowMs, "since"),
+      end: parseTimePoint(token, nowMs, "until"),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -144,8 +207,8 @@ export function detectTemporalIntent(query: string, nowMs: number): TemporalInte
     fields.since !== undefined || fields.until !== undefined
       ? resolveTimeRange(
           {
-            ...(fields.since !== undefined ? { since: fields.since } : {}),
-            ...(fields.until !== undefined ? { until: fields.until } : {}),
+            ...(fields.since !== undefined ? { since: admitFieldValue(fields.since) } : {}),
+            ...(fields.until !== undefined ? { until: admitFieldValue(fields.until) } : {}),
           },
           nowMs,
         )

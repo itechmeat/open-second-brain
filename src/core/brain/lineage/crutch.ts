@@ -344,6 +344,13 @@ function linkTo(predecessor: LineageLedgerEntry, source: SessionLineage["source"
  * them. What it does NOT relax: the lane separator, the spoken-for rule,
  * and the refusal to guess between several candidates.
  *
+ * "Declared" is load-bearing and is enforced UPSTREAM, in `identity.ts`:
+ * a payload or environment declaration reaches here unbounded, while an
+ * identity merely INHERITED from a worktree marker stops being supplied
+ * once the marker passes its staleness bound. Without that, this rung's
+ * deliberate absence of a freshness predicate would let one directory's
+ * first declaration chain every later conversation there onto it.
+ *
  * Returns `null` when this rung has nothing to decide - the session
  * declared no work id, or no predecessor declared the same one - which
  * is the only path down to the window rung. Every other outcome is
@@ -365,11 +372,17 @@ function resolveDeclaredIdentity(
     if (entry.sessionId === input.sessionId) continue;
     if (entry.workId !== workId) continue;
     considered++;
+    // Spoken for BEFORE lane, and the order is load-bearing: a
+    // predecessor another session already continued from is not
+    // available to anyone, so counting it as a lane refusal would raise
+    // a TERMINAL `lane-conflict` abstention over a candidate that was
+    // never a candidate - and that abstention hides the legitimate
+    // window-rung link below it.
+    if (claimed.has(entry.sessionId)) continue;
     if (lanesConflict(entry.laneId, input.laneId)) {
       laneRejected++;
       continue;
     }
-    if (claimed.has(entry.sessionId)) continue;
     survivors.push(entry);
   }
 
@@ -424,11 +437,18 @@ function nearestMiss(rejected: Record<RejectionKind, number>): CrutchAbstentionR
   return CRUTCH_ABSTENTION.noCandidate;
 }
 
+/**
+ * One English line stating the counts behind a refusal. The lane clause
+ * appears only when a lane actually refused something: lanes are opt-in,
+ * and reporting "0 in another lane" to a vault where nobody declares one
+ * changes the operator-visible line for a feature that is not in use.
+ */
 function summarize(considered: number, rejected: Record<RejectionKind, number>): string {
   if (considered === 0) return "no predecessor was recorded in this working directory";
   return (
     `no predecessor survived: ${considered} examined ` +
-    `(${rejected.claimed} already continued, ${rejected.lane} in another lane, ` +
+    `(${rejected.claimed} already continued, ` +
+    (rejected.lane > 0 ? `${rejected.lane} in another lane, ` : "") +
     `${rejected.workspace} in another working state, ` +
     `${rejected.stale} outside the freshness window, ` +
     `${rejected.evidence} without usable evidence)`

@@ -27,7 +27,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 import { brainGapTasksDir, BRAIN_GAP_TASKS_REL } from "../paths.ts";
@@ -52,6 +52,33 @@ export const GAP_LOOP_AUTO_CLOSE_FLOOR = 0.5;
  * ordered most-frequent first, so the remainder is minted by the next run.
  */
 export const GAP_LOOP_MAX_PROMOTIONS_PER_RUN = 5;
+
+/**
+ * Most gap-task notes the directory may hold at once.
+ *
+ * The per-run mint cap bounds a BURST; this bounds the TOTAL. Both are
+ * needed now that the adequacy source exists: the structural source drew
+ * topics from a fixed set of telemetry codes, so the reachable file count
+ * was small by construction, while a verdict topic is arbitrary
+ * normalised query text and the reachable count became "however many
+ * distinct questions the demand log still remembers". A backlog this size
+ * is already past the point an operator can work through, so refusing to
+ * mint past it costs nothing that was going to be read.
+ */
+export const GAP_TASKS_MAX_NOTES = 200;
+
+/**
+ * How long a CLOSED gap task is kept before the loop removes it.
+ *
+ * A closed task is a finished record, not a backlog item: it stops being
+ * rendered, stops being auto-closed, and exists only so a re-promotion of
+ * the same topic is deduped against it. One month is long enough for that
+ * dedupe to be useful and short enough that closed work does not
+ * accumulate for the life of the vault. An OPEN task is never removed by
+ * age - deleting an operator's outstanding work would be the silent loss
+ * this loop exists to prevent.
+ */
+export const GAP_TASK_CLOSED_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Recurrence source: the structural recall-telemetry `gap_counts` aggregate. */
 export const GAP_SOURCE_TELEMETRY = "recall_telemetry";
@@ -141,12 +168,21 @@ function compareStrings(a: string, b: string): number {
  * task files - while a topic that happens to be textually identical across
  * the two sources still gets one note each.
  *
- * The structural source hashes the bare topic, so keys minted before the
- * verdict source existed keep resolving to their notes.
+ * BOTH sources are namespaced, and the source is LENGTH-PREFIXED so the
+ * hashed material is an injective encoding of the (source, topic) pair.
+ * Namespacing only one of them left the other's topic space able to spell
+ * the namespace: a telemetry gap is caller-supplied text, so a code
+ * literally spelled `recall_adequacy:<x>` hashed to the same key as the
+ * adequacy topic `<x>` and the two rows fought over one note.
+ *
+ * A key minted before this encoding therefore differs from the one this
+ * function now returns for the same telemetry topic. The consequence is
+ * bounded and self-clearing: the old note is still listed, still
+ * auto-closes, and is removed by the closed-task retention above, while a
+ * topic that is still recurring mints one note under the new key.
  */
 export function gapTaskKey(topic: string, source: GapSource = GAP_SOURCE_TELEMETRY): string {
-  const trimmed = topic.trim();
-  const material = source === GAP_SOURCE_TELEMETRY ? trimmed : `${source}:${trimmed}`;
+  const material = `${source.length}:${source}:${topic.trim()}`;
   return `gap-${createHash("sha256").update(material).digest("hex").slice(0, 16)}`;
 }
 
@@ -155,6 +191,14 @@ export interface GapPromotionResult {
   readonly created: ReadonlyArray<string>;
   /** Keys skipped because a task with that key already existed. */
   readonly skipped: ReadonlyArray<string>;
+  /** Keys of closed tasks this run removed under the retention window. */
+  readonly pruned: ReadonlyArray<string>;
+  /**
+   * Recurring gaps this run did NOT mint because the directory is at
+   * {@link GAP_TASKS_MAX_NOTES}. Reported rather than silently dropped:
+   * a full backlog is an operator condition, not a no-op.
+   */
+  readonly capped: number;
 }
 
 /**
@@ -165,6 +209,11 @@ export interface GapPromotionResult {
  * At most {@link GAP_LOOP_MAX_PROMOTIONS_PER_RUN} NEW notes are minted per
  * run. A skip costs no budget, so an established backlog never starves a
  * genuinely new gap.
+ *
+ * The run also enforces the directory's two bounds, in this order: closed
+ * tasks past {@link GAP_TASK_CLOSED_RETENTION_MS} are removed first (so
+ * the room they free is usable immediately), then minting stops at
+ * {@link GAP_TASKS_MAX_NOTES} and the refusal is COUNTED on the result.
  */
 export function promoteGapsToTasks(
   vault: string,
@@ -175,10 +224,22 @@ export function promoteGapsToTasks(
   const dir = brainGapTasksDir(vault);
   const created: string[] = [];
   const skipped: string[] = [];
+  const pruned = pruneExpiredGapTasks(vault, opts.now);
+  let noteCount = listGapTasks(vault).length;
+  let capped = 0;
   for (const gap of detectRecurringGaps(vault, { threshold: opts.threshold })) {
     if (created.length >= GAP_LOOP_MAX_PROMOTIONS_PER_RUN) break;
     const key = gapTaskKey(gap.topic, gap.source);
     const path = join(dir, `${key}.md`);
+    if (noteCount >= GAP_TASKS_MAX_NOTES) {
+      // A topic that already carries a note needs no new file, so the cap
+      // did not refuse it - counting it as refused would report a backlog
+      // pressure that is not there. The exclusive create below stays the
+      // authority on skipping; this pre-check only keeps the count honest.
+      if (existsSync(path)) skipped.push(key);
+      else capped++;
+      continue;
+    }
     const metadata: FrontmatterMap = {
       kind: GAP_TASK_KIND,
       gap_key: key,
@@ -198,6 +259,7 @@ export function promoteGapsToTasks(
         vaultForRelativePath: vault,
       });
       created.push(key);
+      noteCount++;
     } catch (exc) {
       if (isAlreadyExists(exc)) {
         skipped.push(key);
@@ -206,7 +268,32 @@ export function promoteGapsToTasks(
       throw exc;
     }
   }
-  return Object.freeze({ created: Object.freeze(created), skipped: Object.freeze(skipped) });
+  return Object.freeze({
+    created: Object.freeze(created),
+    skipped: Object.freeze(skipped),
+    pruned,
+    capped,
+  });
+}
+
+/**
+ * Remove every CLOSED gap task whose `closed_at` is older than the
+ * retention window, returning the keys removed. A task with no readable
+ * `closed_at` is left alone: age that cannot be shown is not assumed, and
+ * an unremoved note still counts against the cap, so the bound holds
+ * either way.
+ */
+function pruneExpiredGapTasks(vault: string, now: Date): ReadonlyArray<string> {
+  const cutoffMs = now.getTime() - GAP_TASK_CLOSED_RETENTION_MS;
+  const removed: string[] = [];
+  for (const task of listGapTasks(vault, { status: GAP_TASK_STATUS_CLOSED })) {
+    const [fm] = parseFrontmatterText(readFileSync(task.path, "utf8"));
+    const closedAtMs = Date.parse(stringField(fm["closed_at"]));
+    if (!Number.isFinite(closedAtMs) || closedAtMs >= cutoffMs) continue;
+    rmSync(task.path, { force: true });
+    removed.push(task.key);
+  }
+  return Object.freeze(removed);
 }
 
 export interface GapTask {

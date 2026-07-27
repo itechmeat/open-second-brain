@@ -11,6 +11,7 @@
 import {
   resolveDensityRankingContextPack,
   resolveRecallAdequacyThresholds,
+  resolveRecallGateTelemetry,
   resolveSearchFocusContextPack,
 } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
@@ -106,10 +107,20 @@ async function toolBrainContextPack(
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
   // cross-query demand log under the bucket key normalizeQueryTerms already
   // computes, so the knowledge-gap loop can aggregate recurrence without a
-  // second identity concept. Same telemetry opt-in and fail-open contract
-  // as every other emit on this path — a log write never breaks the pack.
+  // second identity concept.
+  //
+  // ONE opt-in for that log, on every surface that writes it: the
+  // `recall_gate_telemetry` config key, exactly as `brain_recall_gate`
+  // uses. It is a vault-level durable log feeding a vault-level loop, so
+  // whether it is written is an operator decision, not a per-call one -
+  // gating it here on this tool's `telemetry` ARGUMENT instead made one
+  // feature answer to two different opt-ins and left the log's contents
+  // depending on which surface a caller happened to use. That argument
+  // keeps its own meaning: it selects whether THIS call emits its own
+  // continuity records. Fail-open as ever - a log write never breaks the
+  // pack.
   if (adequacy !== undefined && query !== undefined) {
-    emitGatedTelemetry(telemetry, () =>
+    emitGatedTelemetry(resolveRecallGateTelemetry(ctx.configPath ?? undefined), () =>
       recordRecallAdequacyDemand(ctx.vault, { query, verdict: adequacy }),
     );
   }

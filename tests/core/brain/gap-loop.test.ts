@@ -8,15 +8,21 @@ import {
   autoCloseRecalledGaps,
   detectRecurringGaps,
   gapTaskKey,
+  GAP_SOURCE_ADEQUACY,
+  GAP_SOURCE_TELEMETRY,
+  GAP_SOURCES,
+  GAP_TASK_CLOSED_RETENTION_MS,
   GAP_TASK_KIND,
   GAP_TASK_STATUS_CLOSED,
   GAP_TASK_STATUS_OPEN,
+  GAP_TASKS_MAX_NOTES,
   listGapTasks,
   promoteGapsToTasks,
   renderGapAgenda,
 } from "../../../src/core/brain/gaps/gap-loop.ts";
+import { brainGapTasksDir } from "../../../src/core/brain/paths.ts";
 import type { RecallRetriever, RecallResultSet } from "../../../src/core/brain/recall-inject.ts";
-import { parseFrontmatterText } from "../../../src/core/vault.ts";
+import { parseFrontmatterText, writeFrontmatterAtomic } from "../../../src/core/vault.ts";
 
 let vault: string;
 
@@ -154,5 +160,107 @@ describe("gap loop (A3 / t_67d38036)", () => {
     });
     expect(result.closed).toHaveLength(0);
     expect(listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })).toHaveLength(1);
+  });
+});
+
+// ----- the directory the loop writes into is bounded ------------------------
+
+describe("gap-task retention", () => {
+  /** Write one gap-task note directly, bypassing the mint budget. */
+  function writeTask(key: string, status: string, closedAt?: string): void {
+    writeFrontmatterAtomic(
+      join(brainGapTasksDir(vault), `${key}.md`),
+      {
+        kind: GAP_TASK_KIND,
+        gap_key: key,
+        gap_topic: key,
+        gap_source: GAP_SOURCE_TELEMETRY,
+        status,
+        occurrences: "3",
+        created_at: "2026-01-01T00:00:00.000Z",
+        ...(closedAt !== undefined ? { closed_at: closedAt, closed_reason: "recalled" } : {}),
+      },
+      "body",
+      { vaultForRelativePath: vault, overwrite: true },
+    );
+  }
+
+  test("a closed task past the retention window is removed, and the removal is reported", () => {
+    const stale = new Date(NOW.getTime() - GAP_TASK_CLOSED_RETENTION_MS - 1).toISOString();
+    writeTask("gap-stale", GAP_TASK_STATUS_CLOSED, stale);
+    writeTask("gap-recent", GAP_TASK_STATUS_CLOSED, NOW.toISOString());
+    writeTask("gap-open", GAP_TASK_STATUS_OPEN);
+
+    const result = promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    expect(result.pruned).toEqual(["gap-stale"]);
+    expect(
+      listGapTasks(vault)
+        .map((t) => t.key)
+        .toSorted(),
+    ).toEqual(["gap-open", "gap-recent"]);
+  });
+
+  test("an open task is never pruned, however old it is", () => {
+    writeTask("gap-open", GAP_TASK_STATUS_OPEN);
+    const result = promoteGapsToTasks(vault, {
+      threshold: 2,
+      now: new Date(NOW.getTime() + GAP_TASK_CLOSED_RETENTION_MS * 10),
+    });
+    expect(result.pruned).toEqual([]);
+    expect(listGapTasks(vault)).toHaveLength(1);
+  });
+
+  test("at the cap, minting is REFUSED and named - never silently skipped", () => {
+    for (let i = 0; i < GAP_TASKS_MAX_NOTES; i++)
+      writeTask(`gap-filler-${i}`, GAP_TASK_STATUS_OPEN);
+    seedGap("alpha topic", 3);
+    const result = promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    expect(result.created).toEqual([]);
+    expect(result.capped).toBe(1);
+    expect(listGapTasks(vault)).toHaveLength(GAP_TASKS_MAX_NOTES);
+  });
+
+  test("at the cap, a topic that already has a note is skipped, not counted as refused", () => {
+    writeTask(gapTaskKey("alpha topic"), GAP_TASK_STATUS_OPEN);
+    for (let i = 0; i < GAP_TASKS_MAX_NOTES - 1; i++) {
+      writeTask(`gap-filler-${i}`, GAP_TASK_STATUS_OPEN);
+    }
+    seedGap("alpha topic", 3);
+    const result = promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    expect(result.capped).toBe(0);
+    expect(result.skipped).toEqual([gapTaskKey("alpha topic")]);
+  });
+
+  test("room freed by pruning is usable in the same run", () => {
+    const stale = new Date(NOW.getTime() - GAP_TASK_CLOSED_RETENTION_MS - 1).toISOString();
+    for (let i = 0; i < GAP_TASKS_MAX_NOTES - 1; i++) {
+      writeTask(`gap-filler-${i}`, GAP_TASK_STATUS_OPEN);
+    }
+    writeTask("gap-stale", GAP_TASK_STATUS_CLOSED, stale);
+    seedGap("alpha topic", 3);
+    const result = promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    expect(result.pruned).toEqual(["gap-stale"]);
+    expect(result.created).toEqual([gapTaskKey("alpha topic")]);
+    expect(result.capped).toBe(0);
+  });
+});
+
+// ----- keys are collision-free across the two recurrence sources ------------
+
+describe("gapTaskKey", () => {
+  test("a telemetry topic spelled like the adequacy namespace does not collide", () => {
+    expect(gapTaskKey(`${GAP_SOURCE_ADEQUACY}:alpha`, GAP_SOURCE_TELEMETRY)).not.toBe(
+      gapTaskKey("alpha", GAP_SOURCE_ADEQUACY),
+    );
+  });
+
+  test("both sources are namespaced, so no pair of (source, topic) can share a key", () => {
+    const seen = new Set<string>();
+    for (const source of GAP_SOURCES) {
+      for (const topic of ["alpha", "recall_adequacy:alpha", "recall_telemetry:alpha", "2:alpha"]) {
+        seen.add(gapTaskKey(topic, source));
+      }
+    }
+    expect(seen.size).toBe(8);
   });
 });

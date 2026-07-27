@@ -10,6 +10,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { aggregateUnmetRecall } from "../../src/core/brain/query-demand.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -122,4 +123,41 @@ test("context_pack omits adequacy when recall_scores is absent", async () => {
     receipt: true,
   })) as { adequacy?: unknown };
   expect(packed.adequacy).toBeUndefined();
+});
+
+// ----- one feature, one opt-in ---------------------------------------------
+//
+// The unmet-verdict stamp on the cross-query demand log is ONE durable
+// write reachable from two surfaces. It is gated by the
+// `recall_gate_telemetry` config key on both - never by the pack's own
+// per-call `telemetry` argument, which selects whether that call emits its
+// OWN continuity records and says nothing about this log.
+
+function unmetTopics(): ReadonlyArray<string> {
+  return aggregateUnmetRecall(vault).map((bucket) => bucket.key);
+}
+
+test("with the flag off neither surface writes the demand log", async () => {
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  await tool("brain_context_pack").handler(ctx(), {
+    max_tokens: 1000,
+    query: "reactor coolant",
+    recall_scores: [],
+    telemetry: true,
+  });
+  expect(unmetTopics()).toEqual([]);
+});
+
+test("with the flag on both surfaces write it, pack telemetry argument or not", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  expect(unmetTopics().length).toBeGreaterThan(0);
+
+  const before = unmetTopics().length;
+  await tool("brain_context_pack").handler(ctx(), {
+    max_tokens: 1000,
+    query: "turbine bearing vibration",
+    recall_scores: [],
+  });
+  expect(unmetTopics().length).toBeGreaterThan(before);
 });

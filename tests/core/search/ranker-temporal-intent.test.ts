@@ -16,6 +16,7 @@ import {
   REUSE_BOOST_CAP,
   TEMPORAL_INTENT_BOOST_CAP,
 } from "../../../src/core/search/ranker.ts";
+import { DEFAULT_RECENCY } from "../../../src/core/search/recency.ts";
 import { detectTemporalIntent } from "../../../src/core/search/temporal-intent.ts";
 import type { KeywordHit, SemanticHit, HydratedChunk } from "../../../src/core/search/store.ts";
 
@@ -176,11 +177,16 @@ describe("the temporal cap", () => {
       CO_ACCESS_BOOST_CAP,
       REUSE_BOOST_CAP,
     ];
-    expect(TEMPORAL_INTENT_BOOST_CAP).toBeGreaterThanOrEqual(Math.min(...siblings));
-    expect(TEMPORAL_INTENT_BOOST_CAP).toBeLessThanOrEqual(Math.max(...siblings));
+    // The constant's own justification: level with the TOP of the band,
+    // never above it. Asserting mere membership of [min, max] could not
+    // fail - the cap IS the max - so it pinned nothing.
+    expect(TEMPORAL_INTENT_BOOST_CAP).toBe(Math.max(...siblings));
+    expect(TEMPORAL_INTENT_BOOST_CAP).toBeGreaterThan(Math.min(...siblings));
     // Strong enough to overcome the full undamped freshness prior it
-    // corrects, so a declared window can actually re-order the set.
-    expect(TEMPORAL_INTENT_BOOST_CAP).toBeGreaterThan(0.05);
+    // corrects, so a declared window can actually re-order the set. That
+    // prior's maximum is the configured recency amplitude, which is the
+    // number this cap is calibrated against - referenced, not restated.
+    expect(TEMPORAL_INTENT_BOOST_CAP).toBeGreaterThan(DEFAULT_RECENCY.amplitude);
   });
 
   test("bounds the layer: no candidate ever exceeds it", () => {
@@ -232,6 +238,58 @@ describe("the tie-break hazard", () => {
 
   test("with no intent the historical mtime-desc tie-break is untouched", () => {
     const ranked = rankResults(EQUAL_RELEVANCE, SATURATING_OPTS);
+    expect(ranked[0]!.score).toBe(ranked[1]!.score);
+    expect(ranked[0]!.chunkId).toBe(1);
+  });
+
+  /**
+   * Two saturating candidates whose keyword scores DIFFER: chunk 1 has the
+   * better keyword score and the fresher mtime, chunk 2 sits inside the
+   * declared window. Pins where the temporal rung sits - above the whole
+   * historical ladder (`keywordScore` included), not only above the two
+   * freshness rungs.
+   */
+  const SPLIT_KEYWORD = {
+    ...EQUAL_RELEVANCE,
+    keyword: [
+      { chunkId: 1, documentId: 10, bm25: -6 },
+      { chunkId: 2, documentId: 20, bm25: -5.9 },
+      // Anchors the min-max floor so the two above stay near-equal.
+      { chunkId: 3, documentId: 30, bm25: -1 },
+    ] as KeywordHit[],
+    semantic: [
+      { chunkId: 1, documentId: 10, distance: 0 },
+      { chunkId: 2, documentId: 20, distance: 0 },
+    ] as SemanticHit[],
+    hydrated: new Map([
+      [1, hyd(1, 10, NOW)],
+      [2, hyd(2, 20, IN_WINDOW_MS)],
+      [3, hyd(3, 30, NOW)],
+    ]),
+    // Chunk 2 trails on keyword score; this link boost lifts it back onto
+    // an exact tie so the LADDER decides, with or without a window.
+    inboundLinkSources: new Map([[2, new Set([10, 30])]]),
+  };
+  const SPLIT_OPTS = {
+    ...BASE_OPTS,
+    keywordWeight: 0.5,
+    semanticWeight: 0.5,
+    semanticEnabled: true,
+  };
+
+  test("the temporal rung outranks keywordScore, not only the two freshness rungs", () => {
+    const ranked = rankResults(SPLIT_KEYWORD, {
+      ...SPLIT_OPTS,
+      temporalIntent: HISTORICAL_INTENT,
+    });
+    const [first, second] = [ranked[0]!, ranked[1]!];
+    expect(first.score).toBe(second.score);
+    expect(first.keywordScore).toBeLessThan(second.keywordScore);
+    expect(first.chunkId).toBe(2);
+  });
+
+  test("with no window declared the same pair falls back to keywordScore desc", () => {
+    const ranked = rankResults(SPLIT_KEYWORD, SPLIT_OPTS);
     expect(ranked[0]!.score).toBe(ranked[1]!.score);
     expect(ranked[0]!.chunkId).toBe(1);
   });

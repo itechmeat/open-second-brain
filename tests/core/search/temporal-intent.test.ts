@@ -127,6 +127,46 @@ describe("detectTemporalIntent (pure)", () => {
     );
   });
 
+  // ----- a bare token is a shape, not a declaration -----------------------
+
+  test("an ISO-SHAPED but impossible bare token declares nothing and is left alone", () => {
+    for (const query of [
+      "reactor invoice 2024-06-31",
+      "leap day 2023-02-29",
+      "ticket 2026-13-45",
+      "deploy 2024-06-15T99:99:99Z rollback",
+    ]) {
+      expect(detectTemporalIntent(query, NOW)).toBeNull();
+      expect(stripTemporalDirectives(query)).toBe(query);
+    }
+  });
+
+  test("a valid bare token beside an impossible one still declares its own window", () => {
+    const intent = detectTemporalIntent("invoice 2024-06-31 filed 2024-06-15", NOW)!;
+    expect(intent.range.sinceMs).toBe(Date.UTC(2024, 5, 15));
+  });
+
+  test("an impossible date in an explicit FIELD token still raises: the operator declared it", () => {
+    expect(() => detectTemporalIntent("coolant since:2024-06-31", NOW)).toThrow(SearchError);
+    expect(() => detectTemporalIntent("coolant until:2023-02-29", NOW)).toThrow(SearchError);
+  });
+
+  // ----- no phrase, in any language, is recognised ------------------------
+
+  test("a natural-language field value is refused in every language alike", () => {
+    for (const value of ["yesterday", "today", "ayer", "hoy", "gestern", "昨天"]) {
+      expect(() => detectTemporalIntent(`coolant since:${value}`, NOW)).toThrow(SearchError);
+    }
+  });
+
+  test("the language-neutral field forms are accepted", () => {
+    expect(detectTemporalIntent("coolant since:2024-06-01", NOW)).not.toBeNull();
+    expect(detectTemporalIntent("coolant since:2024-06-01T10:30:00Z", NOW)).not.toBeNull();
+    expect(detectTemporalIntent("coolant since:12h", NOW)).not.toBeNull();
+    expect(detectTemporalIntent("coolant since:7d", NOW)).not.toBeNull();
+    expect(detectTemporalIntent("coolant until:2w", NOW)).not.toBeNull();
+  });
+
   test("detection is deterministic against a fixed clock", () => {
     expect(detectTemporalIntent("since:2024-06-01 coolant", NOW)).toEqual(
       detectTemporalIntent("since:2024-06-01 coolant", NOW),

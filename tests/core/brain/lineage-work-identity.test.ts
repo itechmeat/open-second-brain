@@ -24,7 +24,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -39,9 +47,13 @@ import {
   sessionLineageLedgerPath,
 } from "../../../src/core/brain/lineage/ledger.ts";
 import {
+  clearWorkIdentityMarker,
   readWorkIdentityMarker,
   recordWorkIdentityMarker,
   resolveWorkIdentity,
+  WORK_IDENTITY_MARKER_MAX_AGE_MS,
+  WORK_IDENTITY_MARKER_MAX_FILES,
+  WORK_IDENTITY_MARKER_STATUS,
   WORK_IDENTITY_SOURCE,
   workIdentityMarkerPath,
 } from "../../../src/core/brain/lineage/identity.ts";
@@ -228,6 +240,145 @@ describe("resolveWorkIdentity - declared, in strict precedence", () => {
   test("the marker lives under the Brain state directory, not in the note tree", () => {
     recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID });
     expect(workIdentityMarkerPath(tmp, WORKTREE_A).startsWith(brainStateDirPath(tmp))).toBe(true);
+  });
+
+  test("the environment rung is taken WHOLE: a config lane never joins a shell work id", () => {
+    const identity = resolveWorkIdentity({
+      vault: tmp,
+      worktree: WORKTREE_A,
+      env: { [WORK_ID_ENV_KEY]: WORK_ID },
+      configPath: writeConfig({ lane_id: LANE_B }),
+    });
+    // A composite nobody declared - shell work id + file lane - is exactly
+    // what the rung boundary exists to prevent, and a lane is a hard
+    // separator, so composing one could refuse a link both sides agreed on.
+    expect(identity).toEqual({ workId: WORK_ID, source: WORK_IDENTITY_SOURCE.environment });
+  });
+
+  test("the config rung is taken whole too, when the environment declares nothing", () => {
+    const identity = resolveWorkIdentity({
+      vault: tmp,
+      worktree: WORKTREE_A,
+      env: {},
+      configPath: writeConfig({ work_id: WORK_ID, lane_id: LANE_A }),
+    });
+    expect(identity).toEqual({
+      workId: WORK_ID,
+      laneId: LANE_A,
+      source: WORK_IDENTITY_SOURCE.environment,
+    });
+  });
+});
+
+// ----- the marker rung is bounded in time and in count ----------------------
+
+describe("the marker rung expires; a declaration does not", () => {
+  test("a marker read after the staleness bound declares nothing", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    expect(readWorkIdentityMarker(tmp, WORKTREE_A, { nowMs: T0 + 1_000 })).toEqual({
+      workId: WORK_ID,
+      source: WORK_IDENTITY_SOURCE.marker,
+    });
+    expect(
+      readWorkIdentityMarker(tmp, WORKTREE_A, {
+        nowMs: T0 + WORK_IDENTITY_MARKER_MAX_AGE_MS + 1,
+      }),
+    ).toBeNull();
+  });
+
+  test("a payload or environment declaration still links across the same gap", () => {
+    const nowMs = T0 + WORK_IDENTITY_MARKER_MAX_AGE_MS * 10;
+    expect(
+      resolveWorkIdentity({
+        vault: tmp,
+        payloadWorkId: WORK_ID,
+        worktree: WORKTREE_A,
+        env: {},
+        configPath: writeConfig({}),
+        nowMs,
+      }),
+    ).toEqual({ workId: WORK_ID, source: WORK_IDENTITY_SOURCE.payload });
+    expect(
+      resolveWorkIdentity({
+        vault: tmp,
+        worktree: WORKTREE_A,
+        env: { [WORK_ID_ENV_KEY]: WORK_ID },
+        configPath: writeConfig({}),
+        nowMs,
+      }),
+    ).toEqual({ workId: WORK_ID, source: WORK_IDENTITY_SOURCE.environment });
+  });
+
+  test("an undatable marker declares nothing: freshness that cannot be shown is not assumed", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    const path = workIdentityMarkerPath(tmp, WORKTREE_A);
+    const stored = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
+    delete stored["at"];
+    writeFileSync(path, `${JSON.stringify(stored)}\n`, "utf8");
+    expect(readWorkIdentityMarker(tmp, WORKTREE_A, { nowMs: T0 + 1_000 })).toBeNull();
+  });
+
+  test("a live declaration refreshes the marker, so continuous work keeps inheriting", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    const later = T0 + WORK_IDENTITY_MARKER_MAX_AGE_MS - 1;
+    expect(recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: later })).toBe(
+      WORK_IDENTITY_MARKER_STATUS.written,
+    );
+    expect(
+      readWorkIdentityMarker(tmp, WORKTREE_A, {
+        nowMs: later + WORK_IDENTITY_MARKER_MAX_AGE_MS - 1,
+      }),
+    ).not.toBeNull();
+  });
+
+  test("an unchanged declaration inside the refresh interval does not rewrite the file", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    const before = readFileSync(workIdentityMarkerPath(tmp, WORKTREE_A), "utf8");
+    expect(
+      recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 + 1_000 }),
+    ).toBe(WORK_IDENTITY_MARKER_STATUS.unchanged);
+    expect(readFileSync(workIdentityMarkerPath(tmp, WORKTREE_A), "utf8")).toBe(before);
+  });
+
+  test("a changed declaration always rewrites, refresh interval or not", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    expect(
+      recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: OTHER_WORK_ID }, { nowMs: T0 + 1_000 }),
+    ).toBe(WORK_IDENTITY_MARKER_STATUS.written);
+    expect(readWorkIdentityMarker(tmp, WORKTREE_A, { nowMs: T0 + 2_000 })?.workId).toBe(
+      OTHER_WORK_ID,
+    );
+  });
+
+  test("clearing a marker is one documented call, and the rung goes quiet", () => {
+    recordWorkIdentityMarker(tmp, WORKTREE_A, { workId: WORK_ID }, { nowMs: T0 });
+    expect(clearWorkIdentityMarker(tmp, WORKTREE_A)).toBe(true);
+    expect(readWorkIdentityMarker(tmp, WORKTREE_A, { nowMs: T0 + 1_000 })).toBeNull();
+    // Idempotent: clearing what is not there is not an error.
+    expect(clearWorkIdentityMarker(tmp, WORKTREE_A)).toBe(false);
+  });
+
+  test("the marker directory is bounded: a fresh worktree per job cannot grow it forever", () => {
+    const total = WORK_IDENTITY_MARKER_MAX_FILES + 20;
+    for (let i = 0; i < total; i++) {
+      recordWorkIdentityMarker(tmp, `/ci/job-${i}`, { workId: `w-${i}` }, { nowMs: T0 + i });
+    }
+    const dir = join(brainStateDirPath(tmp), "work-identity");
+    const files = readdirSync(dir);
+    expect(files.length).toBeLessThanOrEqual(WORK_IDENTITY_MARKER_MAX_FILES);
+    // The newest declaration is always among the survivors.
+    expect(
+      readWorkIdentityMarker(tmp, `/ci/job-${total - 1}`, { nowMs: T0 + total }),
+    ).not.toBeNull();
+  });
+
+  test("the sweep drops expired markers before it drops live ones", () => {
+    recordWorkIdentityMarker(tmp, "/ci/ancient", { workId: "w-ancient" }, { nowMs: T0 });
+    const fresh = T0 + WORK_IDENTITY_MARKER_MAX_AGE_MS * 2;
+    for (let i = 0; i < WORK_IDENTITY_MARKER_MAX_FILES + 1; i++) {
+      recordWorkIdentityMarker(tmp, `/ci/job-${i}`, { workId: `w-${i}` }, { nowMs: fresh + i });
+    }
+    expect(existsSync(workIdentityMarkerPath(tmp, "/ci/ancient"))).toBe(false);
   });
 });
 
@@ -441,6 +592,56 @@ describe("resolveCrutchLineage - the identity rung above the window", () => {
     expect(outcome).toMatchObject({ kind: "abstained", reason: CRUTCH_ABSTENTION.selfKnown });
   });
 
+  test("a spoken-for predecessor is checked BEFORE its lane, so it cannot veto rung 2", () => {
+    // s-a declares the work id under lane A and has already been continued
+    // from; s-b is the live predecessor and declares no lane at all.
+    seed({ sessionId: "s-a", atMs: T0, cwd: WORKTREE_A, workId: WORK_ID, laneId: LANE_A });
+    seed({
+      sessionId: "s-b",
+      atMs: T0 + 1_000,
+      cwd: WORKTREE_A,
+      compressionEvidence: true,
+      lineage: { rootId: "s-a", parentId: "s-a", depth: 1, source: "identity" },
+    });
+    const outcome = resolveCrutchLineage({
+      sessionId: "s-c",
+      cwd: WORKTREE_A,
+      workId: WORK_ID,
+      laneId: LANE_B,
+      ledger: readLineageLedger(tmp),
+      nowMs: T0 + 2_000,
+    });
+    // A predecessor already spoken for is not a lane conflict: counting it
+    // as one produced a TERMINAL lane-conflict abstention that hid the
+    // legitimate window-rung link below.
+    expect(outcome).toMatchObject({
+      kind: "linked",
+      lineage: { parentId: "s-b", source: "crutch" },
+    });
+  });
+
+  test("the abstention detail names the lane only when a lane actually refused one", () => {
+    seed({ sessionId: "s-parent", atMs: T0, cwd: WORKTREE_A });
+    const quiet = resolveCrutchLineage({
+      sessionId: "s-child",
+      cwd: WORKTREE_A,
+      ledger: readLineageLedger(tmp),
+      nowMs: T0 + 1_000,
+    });
+    expect(quiet).toMatchObject({ kind: "abstained" });
+    expect((quiet as { detail: string }).detail).not.toContain("another lane");
+
+    seed({ sessionId: "s-laned", atMs: T0 + 2_000, cwd: WORKTREE_B, laneId: LANE_A });
+    const refused = resolveCrutchLineage({
+      sessionId: "s-other",
+      cwd: WORKTREE_B,
+      laneId: LANE_B,
+      ledger: readLineageLedger(tmp),
+      nowMs: T0 + 3_000,
+    });
+    expect((refused as { detail: string }).detail).toContain("1 in another lane");
+  });
+
   test("a declared work id does not rescue a session the gap sidecar recorded", () => {
     seed({ sessionId: "s-parent", atMs: T0, workId: WORK_ID });
     const outcome = resolveCrutchLineage({
@@ -562,7 +763,7 @@ describe("captureSessionLifecycleEvent - sourcing the declaration", () => {
       },
       { agent: "tester", now: new Date(T0) },
     );
-    expect(readWorkIdentityMarker(vault, WORKTREE_A)).toEqual({
+    expect(readWorkIdentityMarker(vault, WORKTREE_A, { nowMs: T0 })).toEqual({
       workId: WORK_ID,
       laneId: LANE_A,
       source: WORK_IDENTITY_SOURCE.marker,
@@ -592,6 +793,29 @@ describe("captureSessionLifecycleEvent - sourcing the declaration", () => {
       depth: 1,
       source: "identity",
     });
+  });
+
+  test("an unrelated session a month later does NOT chain onto the inherited marker", async () => {
+    await captureSessionLifecycleEvent(
+      vault,
+      {
+        hook_event_name: "UserPromptSubmit",
+        session_id: "c-1",
+        cwd: WORKTREE_A,
+        work_id: WORK_ID,
+        prompt: "hi",
+      },
+      { agent: "tester", now: new Date(T0) },
+    );
+    const result = await captureSessionLifecycleEvent(
+      vault,
+      { hook_event_name: "UserPromptSubmit", session_id: "c-2", cwd: WORKTREE_A, prompt: "again" },
+      { agent: "tester", now: new Date(T0 + WORK_IDENTITY_MARKER_MAX_AGE_MS + 1) },
+    );
+    // A missed stitch is strictly better than a false one: nothing here
+    // declared this work, the marker is only what the directory last saw,
+    // and it is now older than the rung's bound.
+    expect(result.lineage).toBeUndefined();
   });
 
   test("a payload declaring nothing writes no marker and no identity fields", async () => {

@@ -25,7 +25,11 @@
 
 import { WIKILINK_DETECT_RE } from "../brain/wikilink.ts";
 import { extractEntities } from "./entities.ts";
-import { detectTemporalIntent, stripTemporalDirectives } from "./temporal-intent.ts";
+import {
+  detectTemporalIntent,
+  stripTemporalDirectives,
+  type TemporalIntent,
+} from "./temporal-intent.ts";
 import type { QueryIntent, QueryPlan, QuerySurface, WeightProfile } from "./types.ts";
 
 /** No-effect profile: every layer keeps its configured weight. */
@@ -155,6 +159,15 @@ const TEMPORAL_HASH_FIELD = "t";
  * Omitting it disables detection entirely, exactly as omitting
  * `surfaceVocabulary` pins the surface to `default`, so an existing call
  * site keeps a byte-identical plan.
+ *
+ * `temporalIntentOverride` is the window a caller ALREADY resolved from
+ * the ORIGINAL query text. It exists because `search()` restructures the
+ * keyword text before it plans - expansion rewrites the query into bare
+ * lexical include terms, which destroys the `field:value` grammar - so
+ * detection there must read the untouched query and hand the result in.
+ * Detection and stripping then operate on the same text, which is the
+ * invariant a plan built from restructured text silently broke. Omitted
+ * (every other call site) means detect from `query` against `nowMs`.
  */
 export function buildQueryPlan(
   query: string,
@@ -162,8 +175,14 @@ export function buildQueryPlan(
   intentOverride?: QueryIntent | null,
   surfaceVocabulary?: ReadonlySet<string>,
   nowMs?: number,
+  temporalIntentOverride?: TemporalIntent | null,
 ): QueryPlan {
-  const temporalIntent = nowMs === undefined ? null : detectTemporalIntent(query, nowMs);
+  const temporalIntent =
+    temporalIntentOverride !== undefined
+      ? temporalIntentOverride
+      : nowMs === undefined
+        ? null
+        : detectTemporalIntent(query, nowMs);
   // A `since:` / `until:` directive states the window; it is not content.
   // Everything downstream of detection analyses the residual query, so a
   // directive never reaches the classifier or the keyword lane as a term.
