@@ -9,7 +9,8 @@
  *   - {@link listPending}    enumerate staged signals;
  *   - {@link applyPending}   move a staged file into `Brain/inbox/` UNCHANGED
  *                            (entity anchors and dedup hash preserved verbatim -
- *                            they were resolved at extraction time);
+ *                            they were resolved at extraction time), or, with
+ *                            `dryRun`, report the move and write nothing;
  *   - {@link rejectPending}  move a staged file into `Brain/retired/` with
  *                            retire-shaped frontmatter (`_status`, `retired_at`,
  *                            `retired_reason`), following the retire conventions.
@@ -73,6 +74,27 @@ export class InvalidPendingIdError extends Error {
   }
 }
 
+/**
+ * The inbox slot this id would move into is already occupied.
+ *
+ * The exclusive create in {@link applyPending} has always refused this,
+ * as a raw filesystem error. It is a named error now because the dry run
+ * added in no-dead-ends task 11 has to refuse it too: a preview that
+ * reported a move the apply would then reject would be a preview that
+ * lied, which is the defect class this release exists to remove. The
+ * exclusive create stays as the actual race gate.
+ */
+export class PendingApplyConflictError extends Error {
+  readonly id: string;
+  readonly path: string;
+  constructor(id: string, path: string) {
+    super(`inbox already holds a signal named ${JSON.stringify(id)}: ${path}`);
+    this.name = "PendingApplyConflictError";
+    this.id = id;
+    this.path = path;
+  }
+}
+
 /** One staged signal: its id, absolute path, and parsed frontmatter. */
 export interface PendingEntry {
   readonly id: string;
@@ -95,10 +117,21 @@ export function stagePendingSignal(vault: string, input: WriteSignalInput): Stag
   return { id: res.id, path: res.path };
 }
 
-/** Validate a pending id and resolve its absolute path inside `Brain/pending/`. */
-function pendingFilePath(vault: string, id: string): string {
+/**
+ * Validate a pending id and resolve its absolute path inside
+ * `Brain/pending/`.
+ *
+ * `forWrite` selects the guarded directory resolver, following the one
+ * rule the appliers share: the vault-identity assertion runs only when
+ * the call will write (see the write-guard section of
+ * `applier-capability.ts`). A dry run resolves the same paths ungated,
+ * because gating a preview refuses the surface an operator reaches for
+ * to find out what is wrong.
+ */
+function pendingFilePath(vault: string, id: string, forWrite: boolean): string {
   if (!SIGNAL_ID_RE.test(id)) throw new InvalidPendingIdError(id);
-  return ensureInsideVault(join(brainDirsForWrite(vault).pending, `${id}.md`), vault);
+  const dirs = forWrite ? brainDirsForWrite(vault) : brainDirs(vault);
+  return ensureInsideVault(join(dirs.pending, `${id}.md`), vault);
 }
 
 /** List the staged signals in `Brain/pending/`, sorted by id. */
@@ -118,20 +151,49 @@ export function listPending(vault: string): PendingEntry[] {
   return out;
 }
 
+export interface PendingApplyOptions {
+  /** True previews the move and writes nothing; false performs it. */
+  readonly dryRun?: boolean;
+}
+
+export interface PendingApplyResult extends StageResult {
+  /** True when this was a preview and nothing moved. */
+  readonly dryRun: boolean;
+}
+
 /**
  * Apply a staged signal: move it into `Brain/inbox/` UNCHANGED. The bytes are
  * copied verbatim (anchors + dedup hash preserved) and the pending copy is
  * removed only after the inbox copy lands. A missing id is a typed error.
+ *
+ * `dryRun` reports the move and writes nothing (no-dead-ends, task 11).
+ * This was the only applier in the codebase without a preview, so an
+ * operator working the approval queue could apply a staged signal but
+ * could not be told what applying would do first. The preview runs every
+ * check the apply runs - id shape, staged file present, destination free
+ * - and stops before the two calls that touch disk, so the report it
+ * gives is the move the apply would make rather than a guess at it.
  */
-export function applyPending(vault: string, id: string): StageResult {
-  const src = pendingFilePath(vault, id);
+export function applyPending(
+  vault: string,
+  id: string,
+  opts: PendingApplyOptions = {},
+): PendingApplyResult {
+  const dryRun = opts.dryRun === true;
+  const src = pendingFilePath(vault, id, !dryRun);
   if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
+  const dirs = dryRun ? brainDirs(vault) : brainDirsForWrite(vault);
+  const dest = ensureInsideVault(join(dirs.inbox, `${id}.md`), vault);
+  if (existsSync(dest)) throw new PendingApplyConflictError(id, dest);
+  if (dryRun) return { id, path: dest, dryRun: true };
+
   const contents = readFileSync(src, "utf8");
-  const dest = ensureInsideVault(join(brainDirsForWrite(vault).inbox, `${id}.md`), vault);
-  // Exclusive create: never clobber an existing inbox file with the same id.
+  // Exclusive create: never clobber an existing inbox file with the same
+  // id. This is the real gate - the check above makes the preview honest,
+  // it does not replace the atomic one.
   atomicCreateFileSyncExclusive(dest, contents);
   unlinkSync(src);
-  return { id, path: dest };
+  return { id, path: dest, dryRun: false };
 }
 
 export interface RejectPendingOptions {
@@ -152,7 +214,7 @@ export function rejectPending(
   reason: string,
   opts: RejectPendingOptions = {},
 ): StageResult {
-  const src = pendingFilePath(vault, id);
+  const src = pendingFilePath(vault, id, true);
   if (!existsSync(src)) throw new PendingSignalNotFoundError(id);
   const now = opts.now ?? new Date();
 

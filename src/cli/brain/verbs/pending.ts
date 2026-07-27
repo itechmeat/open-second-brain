@@ -4,7 +4,8 @@
  *
  * When `write_approval.enabled` is on, extracted signals are staged into
  * `Brain/pending/`; these verbs let an operator review the queue: `list` shows
- * the staged signals, `apply <id>` moves one into `Brain/inbox/` unchanged, and
+ * the staged signals, `apply <id>` moves one into `Brain/inbox/` unchanged
+ * (`--dry-run` reports the move and writes nothing), and
  * `reject <id> --reason <text>` moves it to `Brain/retired/`. A missing id is a
  * typed error surfaced as exit 2 (not a silent no-op).
  */
@@ -80,16 +81,20 @@ function pendingList(argv: string[]): number {
 function pendingApply(argv: string[]): number {
   const { flags, positional } = parse(argv, {
     vault: { type: "string" },
+    "dry-run": { type: "boolean" },
     json: { type: "boolean" },
   });
   if (positional.length < 1) return usageError("brain pending apply requires an <id> argument");
   const { vault } = brainVerbContext(flags);
+  const dryRun = flags["dry-run"] === true;
   try {
-    const res = applyPending(vault, positional[0]!);
+    const res = applyPending(vault, positional[0]!, { dryRun });
+    // `status` is the one field that distinguishes the preview from the
+    // move, so a caller reading JSON cannot mistake one for the other.
     if (flags["json"]) {
-      okJson({ id: res.id, path: res.path, status: "applied" });
+      okJson({ id: res.id, path: res.path, status: dryRun ? "would-apply" : "applied" });
     } else {
-      ok(`applied: ${res.id}`);
+      ok(`${dryRun ? "would apply" : "applied"}: ${res.id}`);
     }
     return 0;
   } catch (exc) {

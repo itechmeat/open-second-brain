@@ -77,6 +77,22 @@ describe("o2b brain pending", () => {
     expect(existsSync(join(brainDirs(vault).retired, `${id}.md`))).toBe(true);
   });
 
+  test("apply --dry-run reports the move and leaves the queue alone", async () => {
+    const id = stage("fact-url");
+    const out = await runCli(["brain", "pending", "apply", id, "--dry-run", "--json"], {
+      env: env(),
+    });
+    expect(out.returncode).toBe(0);
+    const payload = JSON.parse(out.stdout) as { id: string; status: string; path: string };
+    expect(payload.id).toBe(id);
+    // A distinct status, so a JSON caller cannot read a preview as a move.
+    expect(payload.status).toBe("would-apply");
+    expect(payload.path.endsWith(`${id}.md`)).toBe(true);
+    // Nothing moved: the staged copy is still queued and the inbox is untouched.
+    expect(existsSync(join(brainDirs(vault).pending, `${id}.md`))).toBe(true);
+    expect(inboxNames()).not.toContain(`${id}.md`);
+  });
+
   test("apply of a missing id exits 2 (typed error, not a no-op)", async () => {
     const out = await runCli(["brain", "pending", "apply", "sig-2026-07-18-nope"], {
       env: env(),
