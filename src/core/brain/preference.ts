@@ -38,6 +38,7 @@ import { basename, dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { formatFrontmatter, parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { BrainParseError } from "./parse-error.ts";
 import { FrontmatterTierConflictError, mergeFrontmatterTiered } from "./frontmatter-tiers.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
 import { DEFAULT_RELATION_TYPES, type DefaultRelationType } from "../graph/relation-vocab.ts";
@@ -87,16 +88,19 @@ import { PREF_AUDIT_OP } from "./types.ts";
  * Raised when a preference / retired file disagrees with the folder
  * it lives in. Surfaces both pieces of information so the caller (and
  * `o2b brain doctor`) can render an actionable message.
+ *
+ * A {@link BrainParseError}, so the path travels as a field and the
+ * doctor's `status-folder-mismatch` branch reports it the same way as
+ * every other parse failure. `status` and `folder` stay in the prose:
+ * unlike the path, a `DoctorIssue` has no field for them.
  */
-export class BrainStatusFolderMismatchError extends Error {
-  readonly path: string;
+export class BrainStatusFolderMismatchError extends BrainParseError {
   readonly status: string;
   readonly folder: "preferences" | "retired";
 
   constructor(message: string, path: string, status: string, folder: "preferences" | "retired") {
-    super(`${message} (path=${path}, status=${status}, folder=${folder})`);
+    super(`${message} (status=${status}, folder=${folder})`, path);
     this.name = "BrainStatusFolderMismatchError";
-    this.path = path;
     this.status = status;
     this.folder = folder;
   }
@@ -744,8 +748,9 @@ export function parsePreference(
 
   requireField(meta, "kind", path);
   if (meta["kind"] !== "brain-preference") {
-    throw new Error(
-      `preference kind must be 'brain-preference'; got ${JSON.stringify(meta["kind"])} (${path})`,
+    throw new BrainParseError(
+      `preference kind must be 'brain-preference'; got ${JSON.stringify(meta["kind"])}`,
+      path,
     );
   }
 
@@ -763,8 +768,9 @@ export function parsePreference(
   // doctor see a coherent tombstoned entry rather than a corrupt file;
   // recall / inject / active.md / dream exclude it via `isTombstoned`.
   if (!statusValues.includes(status) && status !== "retired" && status !== BRAIN_TOMBSTONE_STATUS) {
-    throw new Error(
-      `preference status must be one of ${statusValues.join(", ")}; got ${JSON.stringify(status)} (${path})`,
+    throw new BrainParseError(
+      `preference status must be one of ${statusValues.join(", ")}; got ${JSON.stringify(status)}`,
+      path,
     );
   }
   enforceStatusFolderInvariant(path, status, "preferences");
@@ -776,9 +782,9 @@ export function parsePreference(
   const topic = requireString(meta, "topic", path);
   const principle = requireString(meta, "principle", path);
 
-  const evidenced_by = optionalStringArray(meta, "evidenced_by");
-  const confirmed_at = optionalNullableString(meta, "confirmed_at");
-  const last_evidence_at = optionalNullableString(meta, "last_evidence_at");
+  const evidenced_by = optionalStringArray(meta, "evidenced_by", path);
+  const confirmed_at = optionalNullableString(meta, "confirmed_at", path);
+  const last_evidence_at = optionalNullableString(meta, "last_evidence_at", path);
   // Provenance level: validated through the shared narrowing guard, never cast.
   const provenance = asProvenanceLevel(meta["provenance"]);
 
@@ -793,13 +799,13 @@ export function parsePreference(
     status: status as BrainPreferenceStatus,
     principle,
     evidenced_by,
-    applied_count: optionalNumber(meta, "applied_count", 0),
-    violated_count: optionalNumber(meta, "violated_count", 0),
+    applied_count: optionalNumber(meta, "applied_count", 0, path),
+    violated_count: optionalNumber(meta, "violated_count", 0, path),
     last_evidence_at,
     confidence: parseConfidence(meta, path),
     confidence_value: parseConfidenceValue(meta, path),
     pinned: parsePinned(meta),
-    revision: optionalNumber(meta, "revision", 0),
+    revision: optionalNumber(meta, "revision", 0, path),
     ...(optionalScalarString(meta, "content_hash") !== undefined
       ? { content_hash: optionalScalarString(meta, "content_hash") }
       : {}),
@@ -858,7 +864,7 @@ function spreadMemorySemantics(
     out["memory_branch"] = validateMemoryBranch(memoryBranch, path);
   }
   for (const field of PREFERENCE_RELATION_FIELDS) {
-    const values = optionalStringList(meta, field);
+    const values = optionalStringList(meta, field, path);
     if (values !== undefined) out[field] = values;
   }
   return out;
@@ -875,8 +881,9 @@ function spreadSchemaMetadata(
   const schemaType = validateSchemaToken(raw, "schema_type");
   const vocab = options.schemaVocabulary;
   if (vocab !== undefined && !isKnownSchemaToken(vocab, category, schemaType)) {
-    throw new Error(
-      `schema_type ${JSON.stringify(schemaType)} is not declared in ${category} (${path})`,
+    throw new BrainParseError(
+      `schema_type ${JSON.stringify(schemaType)} is not declared in ${category}`,
+      path,
     );
   }
   return { schema_type: schemaType };
@@ -885,8 +892,9 @@ function spreadSchemaMetadata(
 function validateMemoryLayer(value: string, path: string): BrainMemoryLayer {
   if (isBrainMemoryLayer(value)) return value;
   const allowed = Object.values(BRAIN_MEMORY_LAYER).join(", ");
-  throw new Error(
-    `preference field 'memory_layer' must be one of ${allowed}; got ${JSON.stringify(value)} (${path})`,
+  throw new BrainParseError(
+    `preference field 'memory_layer' must be one of ${allowed}; got ${JSON.stringify(value)}`,
+    path,
   );
 }
 
@@ -895,7 +903,7 @@ function validateMemoryBranch(value: string, path: string): string {
     return validateSlug(value);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(`preference field 'memory_branch' is invalid: ${reason} (${path})`, {
+    throw new BrainParseError(`preference field 'memory_branch' is invalid: ${reason}`, path, {
       cause: err,
     });
   }
@@ -938,8 +946,9 @@ export function parseRetired(path: string, options: ParsePreferenceOptions = {})
 
   requireField(meta, "kind", path);
   if (meta["kind"] !== "brain-retired") {
-    throw new Error(
-      `retired kind must be 'brain-retired'; got ${JSON.stringify(meta["kind"])} (${path})`,
+    throw new BrainParseError(
+      `retired kind must be 'brain-retired'; got ${JSON.stringify(meta["kind"])}`,
+      path,
     );
   }
 
@@ -959,8 +968,9 @@ export function parseRetired(path: string, options: ParsePreferenceOptions = {})
   const reasonStr = requireString(meta, "retired_reason", path);
   const reasonValues = Object.values(BRAIN_RETIRED_REASON) as ReadonlyArray<string>;
   if (!reasonValues.includes(reasonStr)) {
-    throw new Error(
-      `retired_reason must be one of ${reasonValues.join(", ")}; got ${JSON.stringify(reasonStr)} (${path})`,
+    throw new BrainParseError(
+      `retired_reason must be one of ${reasonValues.join(", ")}; got ${JSON.stringify(reasonStr)}`,
+      path,
     );
   }
   const retired_by = requireString(meta, "retired_by", path);
@@ -980,10 +990,10 @@ export function parseRetired(path: string, options: ParsePreferenceOptions = {})
     tags,
     topic,
     principle,
-    evidenced_by: optionalStringArray(meta, "evidenced_by"),
-    applied_count: optionalNumber(meta, "applied_count", 0),
-    violated_count: optionalNumber(meta, "violated_count", 0),
-    last_evidence_at: optionalNullableString(meta, "last_evidence_at"),
+    evidenced_by: optionalStringArray(meta, "evidenced_by", path),
+    applied_count: optionalNumber(meta, "applied_count", 0, path),
+    violated_count: optionalNumber(meta, "violated_count", 0, path),
+    last_evidence_at: optionalNullableString(meta, "last_evidence_at", path),
     confidence: parseConfidence(meta, path),
     confidence_value: parseConfidenceValue(meta, path),
     pinned: parsePinned(meta),
@@ -1133,7 +1143,7 @@ export function moveToRetired(
     created_at: requireString(meta, "created_at", prefPath),
     unconfirmed_until: requireString(meta, "unconfirmed_until", prefPath),
     status: BRAIN_PREFERENCE_STATUS.confirmed, // body render is status-agnostic
-    evidenced_by: optionalStringArray(meta, "evidenced_by"),
+    evidenced_by: optionalStringArray(meta, "evidenced_by", prefPath),
     ...(opts.evidenceApplied !== undefined ? { recentApplied: opts.evidenceApplied } : {}),
     ...(opts.evidenceViolated !== undefined ? { recentViolated: opts.evidenceViolated } : {}),
   };
@@ -1273,10 +1283,10 @@ function enforceStatusFolderInvariant(
 
 function requireField(meta: Record<string, unknown>, field: string, path: string): void {
   if (!(field in meta) || meta[field] === undefined || meta[field] === null) {
-    throw new Error(`preference missing field: ${field} (${path})`);
+    throw new BrainParseError(`preference missing field: ${field}`, path);
   }
   if (typeof meta[field] === "string" && (meta[field] as string).trim() === "") {
-    throw new Error(`preference missing field: ${field} (${path})`);
+    throw new BrainParseError(`preference missing field: ${field}`, path);
   }
 }
 
@@ -1284,7 +1294,7 @@ function requireString(meta: Record<string, unknown>, field: string, path: strin
   requireField(meta, field, path);
   const v = meta[field];
   if (typeof v !== "string") {
-    throw new Error(`preference field '${field}' must be a string (${path})`);
+    throw new BrainParseError(`preference field '${field}' must be a string`, path);
   }
   return v;
 }
@@ -1297,25 +1307,29 @@ function requireStringArray(
   requireField(meta, field, path);
   const v = meta[field];
   if (!Array.isArray(v)) {
-    throw new Error(`preference field '${field}' must be an array (${path})`);
+    throw new BrainParseError(`preference field '${field}' must be an array`, path);
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(`preference field '${field}' must be an array of strings (${path})`);
+      throw new BrainParseError(`preference field '${field}' must be an array of strings`, path);
     }
   }
   return [...(v as ReadonlyArray<string>)];
 }
 
-function optionalStringArray(meta: Record<string, unknown>, field: string): ReadonlyArray<string> {
+function optionalStringArray(
+  meta: Record<string, unknown>,
+  field: string,
+  path: string,
+): ReadonlyArray<string> {
   const v = meta[field];
   if (v === undefined || v === null) return [];
   if (!Array.isArray(v)) {
-    throw new Error(`preference field '${field}' must be an array`);
+    throw new BrainParseError(`preference field '${field}' must be an array`, path);
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(`preference field '${field}' must be an array of strings`);
+      throw new BrainParseError(`preference field '${field}' must be an array of strings`, path);
     }
   }
   return [...(v as ReadonlyArray<string>)];
@@ -1324,16 +1338,23 @@ function optionalStringArray(meta: Record<string, unknown>, field: string): Read
 function optionalStringList(
   meta: Record<string, unknown>,
   field: PreferenceRelationField,
+  path: string,
 ): ReadonlyArray<string> | undefined {
   const v = meta[field];
   if (v === undefined || v === null) return undefined;
   if (typeof v === "string") return v.trim() ? [v] : [];
   if (!Array.isArray(v)) {
-    throw new Error(`preference field '${field}' must be a string or array of strings`);
+    throw new BrainParseError(
+      `preference field '${field}' must be a string or array of strings`,
+      path,
+    );
   }
   for (const item of v) {
     if (typeof item !== "string") {
-      throw new Error(`preference field '${field}' must be a string or array of strings`);
+      throw new BrainParseError(
+        `preference field '${field}' must be a string or array of strings`,
+        path,
+      );
     }
   }
   return [...(v as ReadonlyArray<string>)];
@@ -1345,18 +1366,27 @@ function optionalStringList(
  * the on-disk roundtrip survives the simple YAML emitter (which has no
  * native null token).
  */
-function optionalNullableString(meta: Record<string, unknown>, field: string): string | null {
+function optionalNullableString(
+  meta: Record<string, unknown>,
+  field: string,
+  path: string,
+): string | null {
   const v = meta[field];
   if (v === undefined || v === null) return null;
   if (typeof v !== "string") {
-    throw new Error(`preference field '${field}' must be a string or null`);
+    throw new BrainParseError(`preference field '${field}' must be a string or null`, path);
   }
   const trimmed = v.trim();
   if (trimmed === "" || trimmed === "null") return null;
   return v;
 }
 
-function optionalNumber(meta: Record<string, unknown>, field: string, fallback: number): number {
+function optionalNumber(
+  meta: Record<string, unknown>,
+  field: string,
+  fallback: number,
+  path: string,
+): number {
   const v = meta[field];
   if (v === undefined || v === null || v === "") return fallback;
   // The simple parser surfaces all values as strings; numerics included.
@@ -1364,13 +1394,14 @@ function optionalNumber(meta: Record<string, unknown>, field: string, fallback: 
   if (typeof v === "string") {
     const n = Number(v);
     if (!Number.isFinite(n)) {
-      throw new Error(
+      throw new BrainParseError(
         `preference field '${field}' must be a finite number; got ${JSON.stringify(v)}`,
+        path,
       );
     }
     return n;
   }
-  throw new Error(`preference field '${field}' must be a number`);
+  throw new BrainParseError(`preference field '${field}' must be a number`, path);
 }
 
 /**
@@ -1405,12 +1436,13 @@ function parseConfidence(meta: Record<string, unknown>, path: string): BrainConf
   const v = meta["confidence"];
   if (v === undefined || v === null || v === "") return BRAIN_CONFIDENCE.low;
   if (typeof v !== "string") {
-    throw new Error(`preference field 'confidence' must be a string (${path})`);
+    throw new BrainParseError("preference field 'confidence' must be a string", path);
   }
   const values = Object.values(BRAIN_CONFIDENCE) as ReadonlyArray<string>;
   if (!values.includes(v)) {
-    throw new Error(
-      `preference field 'confidence' must be one of ${values.join(", ")}; got ${JSON.stringify(v)} (${path})`,
+    throw new BrainParseError(
+      `preference field 'confidence' must be one of ${values.join(", ")}; got ${JSON.stringify(v)}`,
+      path,
     );
   }
   return v as BrainConfidence;
@@ -1443,8 +1475,9 @@ function parseConfidenceValue(meta: Record<string, unknown>, path: string): numb
     if (Number.isFinite(candidate)) n = candidate;
   }
   if (n === null || !Number.isFinite(n) || n < 0 || n > 1) {
-    throw new Error(
-      `preference field 'confidence_value' must be a number in [0, 1]; got ${JSON.stringify(v)} (${path})`,
+    throw new BrainParseError(
+      `preference field 'confidence_value' must be a number in [0, 1]; got ${JSON.stringify(v)}`,
+      path,
     );
   }
   return n;

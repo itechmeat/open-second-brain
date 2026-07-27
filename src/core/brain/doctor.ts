@@ -84,6 +84,7 @@ import {
   type VerificationDeltaSummaryCounts,
 } from "./trust/compute-verification-delta.ts";
 import { checkInstructionFileCeiling } from "./trust/instruction-file-ceiling.ts";
+import { BrainParseError } from "./parse-error.ts";
 import { brainActivePath, brainConfigPath, brainDirs } from "./paths.ts";
 import { BrainStatusFolderMismatchError, parsePreference, parseRetired } from "./preference.ts";
 import {
@@ -1131,6 +1132,16 @@ function parseErrorCode(kind: ParsedRecordKind, msg: string): string {
  * byte-identical copies of this regex-based classification - a change to
  * a parser's error wording would otherwise reclassify issues in one path
  * without the other noticing.
+ *
+ * A {@link BrainParseError} - which both parsers now raise, and which
+ * `BrainStatusFolderMismatchError` extends - reports its location from
+ * the `path` field and its prose from `detail`, which carries none. The
+ * human renderer appends ` (<path>)` from the issue's own field, so a
+ * message that embedded the path as well named the file twice on every
+ * parse-error line: prose carrying data the record already holds. An
+ * untyped throw (a frontmatter read, a vocabulary guard owned by another
+ * module) keeps its message verbatim against the walked path - that
+ * message is not ours to shorten.
  */
 function classifyParseError(
   err: unknown,
@@ -1142,16 +1153,17 @@ function classifyParseError(
     issues.push({
       severity: "warning",
       code: "status-folder-mismatch",
-      path,
-      message: err.message,
+      path: err.path,
+      message: err.detail,
     });
     return;
   }
-  const msg = (err as Error).message ?? String(err);
+  const typed = err instanceof BrainParseError ? err : null;
+  const msg = typed ? typed.detail : ((err as Error).message ?? String(err));
   issues.push({
     severity: "error",
     code: parseErrorCode(kindPrefix, msg),
-    path,
+    path: typed ? typed.path : path,
     message: msg,
   });
 }
