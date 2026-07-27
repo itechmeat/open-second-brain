@@ -10,9 +10,9 @@
  */
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync } from "node:fs";
 
 import { discoverConfig, redactMapping, resolveAgentName } from "../core/config.ts";
+import { probeVaultDirectory } from "../core/vault-presence.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
 import { listVaultPages } from "../core/vault.ts";
@@ -68,13 +68,17 @@ export default definePluginEntry({
       async execute(): Promise<unknown> {
         const vault = resolveVaultPath(api);
         const discovery = discoverConfig();
+        // Shared with the primary runtime's status tool: a vault that
+        // cannot be examined is not a vault that is not there, and this
+        // payload is the one place that difference is the product.
+        const presence = probeVaultDirectory(vault);
         const result = {
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync(vault),
+          vault_exists: presence.unexaminable ?? presence.present,
         };
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
@@ -103,7 +107,12 @@ export default definePluginEntry({
       },
       async execute(_id, params): Promise<unknown> {
         const vault = resolveVaultPath(api);
-        if (!existsSync(vault)) throw new Error(`vault directory missing: ${vault}`);
+        // Refuses either way, but the REASON has to be right: telling an
+        // operator their vault is missing sends them to create one they
+        // already have.
+        const presence = probeVaultDirectory(vault);
+        if (presence.unexaminable) throw new Error(presence.unexaminable.error);
+        if (!presence.present) throw new Error(`vault directory missing: ${vault}`);
         const pattern = (params["pattern"] as string | undefined) ?? null;
         const limit = typeof params["limit"] === "number" ? (params["limit"] as number) : 50;
         if (limit < 1 || limit > 500) throw new Error("argument 'limit' must be between 1 and 500");

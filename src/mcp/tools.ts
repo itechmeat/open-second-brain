@@ -34,7 +34,7 @@ import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
-import { statOrAbsent } from "../core/fs-utils.ts";
+import { probeVaultDirectory, type UnresolvedField } from "../core/vault-presence.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
@@ -86,56 +86,9 @@ function vaultRelpath(target: string, vault: string): string {
  * failure is a value the consumer reads, never a key it has to notice is
  * missing.
  */
-type UnresolvedField = { readonly error: string };
 
 function unresolved(err: Error): UnresolvedField {
   return { error: err.message };
-}
-
-/**
- * The reason a vault directory could not be examined, as a degraded field.
- *
- * The remedy rides in the message rather than in each reporting surface,
- * the same call {@link ConfigReadError} makes and for the same reason:
- * this condition reaches the operator through a payload field, three
- * degraded blocks and a tool-level refusal, and a remedy rendered per
- * surface would drift between them or be dropped.
- */
-function vaultUnexaminable(vault: string, err: unknown): UnresolvedField {
-  const reason = (err as Error)?.message ?? String(err);
-  return {
-    error:
-      `cannot determine whether the vault directory ${vault} exists: ${reason}. ` +
-      "It is NOT reported as absent - a path that cannot be examined is not a " +
-      "path that is not there; make it and every parent directory traversable " +
-      "(chmod u+rx), or set VAULT_DIR to a vault this process can read.",
-  };
-}
-
-interface VaultPresence {
-  /** True only when the path was examined and is a directory. */
-  readonly present: boolean;
-  /** Non-null when the answer is UNKNOWN rather than known-false. */
-  readonly unexaminable: UnresolvedField | null;
-}
-
-/**
- * Whether the vault directory is there, with "not there" kept apart from
- * "cannot look".
- *
- * `isDir` answers `false` for both, and this payload is the one place that
- * difference IS the product: `vault_exists: false` reads as "this install
- * was never set up", and the three blocks it gates then read as "no Brain
- * layer, search off, no exclusion policy" - four confident negatives for
- * what is usually one missing execute bit on a parent directory, under a
- * remedy that tells the operator to create a vault they already have.
- */
-function probeVaultDirectory(vault: string): VaultPresence {
-  try {
-    return { present: statOrAbsent(vault)?.isDirectory() === true, unexaminable: null };
-  } catch (err) {
-    return { present: false, unexaminable: vaultUnexaminable(vault, err) };
-  }
 }
 
 /**
