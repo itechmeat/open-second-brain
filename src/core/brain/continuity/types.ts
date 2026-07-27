@@ -40,6 +40,7 @@ export type ContinuityRecordKind =
   | "generation_report"
   | "ingest_dedup"
   | "mcp_route_latency"
+  | "route_discrimination"
   | "token_impact"
   | "token_impact_outcome"
   | "context_pack_outcome"

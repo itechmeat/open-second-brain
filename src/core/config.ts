@@ -780,6 +780,24 @@ export function resolveMcpRouteMetricsEnabled(configPath?: string): boolean {
 }
 
 /**
+ * Write-route discrimination record gate (signals-that-survive, unit 3).
+ * Default OFF: the `route_discrimination` continuity path stays dormant
+ * unless `route_discrimination_enabled: "true"`, when the extracted-fact
+ * router records one payload-safe record per near-equal routing decision
+ * (candidate routes, their scores, the margin, the winning route and the id
+ * of the rule that decided - never the fact text). The gate governs the
+ * RECORD only: the routing decision itself is byte-identical either way.
+ * Fail-open: a failed record never fails the capture.
+ */
+export function resolveRouteDiscriminationEnabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    "OPEN_SECOND_BRAIN_ROUTE_DISCRIMINATION_ENABLED",
+    "route_discrimination_enabled",
+    configPath,
+  );
+}
+
+/**
  * Token-impact + context-pack-quality ledger gate (context-pack-economics-
  * observability suite). Default OFF: the `token_impact` / `token_impact_outcome`
  * continuity paths stay dormant unless `token_impact_ledger_enabled: "true"`,
