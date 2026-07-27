@@ -27,6 +27,11 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
 import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
 import { distillationPagePath } from "../paths.ts";
+import {
+  DISTILL_CLAIMS_SHAPE,
+  DISTILL_CLAIMS_SURFACE,
+  assertResponseShape,
+} from "../response-shape.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   renderProvenanceSection,
@@ -62,6 +67,19 @@ export function normalizeClaim(rec: Record<string, unknown>): DistillClaim {
   const text = typeof rec["text"] === "string" ? rec["text"] : "";
   const block = typeof rec["block"] === "string" ? rec["block"].replace(/^\^/, "") : undefined;
   return { text, ...(block !== undefined && block.length > 0 ? { block } : {}) };
+}
+
+/**
+ * Ingress of the agent-authored claims payload, shared by the CLI and MCP
+ * surfaces. The payload is checked against the frozen distill shape BEFORE
+ * {@link normalizeClaim} runs, so a non-string `text` is refused by name
+ * instead of being normalized into an empty claim and rejected later for the
+ * wrong reason. A violation throws `ResponseShapeError` and nothing is
+ * written - the whole batch, not just the offending item.
+ */
+export function parseDistillClaims(payload: unknown): DistillClaim[] {
+  assertResponseShape(DISTILL_CLAIMS_SURFACE, DISTILL_CLAIMS_SHAPE, payload);
+  return (payload as ReadonlyArray<Record<string, unknown>>).map(normalizeClaim);
 }
 
 export interface DistillSourceInput {

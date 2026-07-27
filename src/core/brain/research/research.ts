@@ -25,6 +25,11 @@ import { canonicalNotePath } from "../../path-safety.ts";
 import { slugify, writeFrontmatterAtomic } from "../../vault.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { reportPagePath } from "../paths.ts";
+import {
+  RESEARCH_REPORT_SHAPE,
+  RESEARCH_REPORT_SURFACE,
+  assertResponseShape,
+} from "../response-shape.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import {
@@ -81,6 +86,32 @@ export class ResearchValidationError extends Error {
     super(message);
     this.name = "ResearchValidationError";
   }
+}
+
+/**
+ * Ingress of the agent-authored report payload. The payload is checked
+ * against the frozen research-report shape BEFORE the citation contract is
+ * evaluated, so a finding whose `sources` is not a list of strings is refused
+ * by path instead of being read as one. A violation throws
+ * `ResponseShapeError` and no report page is written - not even the findings
+ * that preceded the malformed one.
+ */
+export function parseResearchReportInput(payload: unknown): ResearchReportInput {
+  assertResponseShape(RESEARCH_REPORT_SURFACE, RESEARCH_REPORT_SHAPE, payload);
+  const rec = payload as Record<string, unknown>;
+  const findings = rec["findings"] as ReadonlyArray<Record<string, unknown>>;
+  return {
+    title: rec["title"] as string,
+    sources: Object.freeze([...(rec["sources"] as ReadonlyArray<string>)]),
+    findings: Object.freeze(
+      findings.map((finding) =>
+        Object.freeze({
+          statement: finding["statement"] as string,
+          sources: Object.freeze([...(finding["sources"] as ReadonlyArray<string>)]),
+        }),
+      ),
+    ),
+  };
 }
 
 /** Wrap a bare source identifier in a wikilink; leave an existing one as-is. */

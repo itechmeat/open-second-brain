@@ -11,44 +11,31 @@
 import {
   distillSource,
   DistillValidationError,
-  normalizeClaim,
-  type DistillClaim,
+  parseDistillClaims,
 } from "../../core/brain/distill/distill-source.ts";
+import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_distill_source";
-
-/** Coerce the `claims` arg into DistillClaim[], rejecting a malformed shape. */
-function parseClaims(args: Record<string, unknown>): DistillClaim[] {
-  const raw = args["claims"];
-  if (!Array.isArray(raw) || raw.length === 0) {
-    throw new MCPError(INVALID_PARAMS, `${TOOL}: 'claims' must be a non-empty array`);
-  }
-  return raw.map((item, i) => {
-    if (item === null || typeof item !== "object" || Array.isArray(item)) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: claim ${i} must be an object`);
-    }
-    return normalizeClaim(item as Record<string, unknown>);
-  });
-}
 
 async function toolBrainDistillSource(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const sourcePath = coerceStr(args, "source_path", true)!;
-  const claims = parseClaims(args);
   const agentArg = coerceStr(args, "agent", false);
   const agent =
     agentArg && agentArg.trim().length > 0
       ? agentArg
       : resolveAgentName(ctx.configPath ?? undefined);
 
-  return wrapToolErrors(TOOL, [DistillValidationError], async () => {
+  return wrapToolErrors(TOOL, [DistillValidationError, ResponseShapeError], async () => {
+    // Shape first: the payload is validated before a single claim is
+    // normalized, so a malformed item aborts the whole batch unwritten.
+    const claims = parseDistillClaims(args["claims"]);
     const res = distillSource(ctx.vault, { sourcePath, claims }, { agent, now: new Date() });
     return {
       distillation_path: res.distillationPath,

@@ -19,6 +19,7 @@ import { existsSync } from "node:fs";
 import { loadBrainConfig, DEFAULT_BRAIN_CONFIG } from "./policy.ts";
 import { preferencePath } from "./paths.ts";
 import { writePreference } from "./preference.ts";
+import { DERIVED_FACT_SHAPE, DERIVED_FACT_SURFACE, assertResponseShape } from "./response-shape.ts";
 import { isoSecond } from "./time.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 
@@ -46,6 +47,39 @@ export class DeriveFactError extends Error {
     super(message);
     this.name = "DeriveFactError";
   }
+}
+
+/**
+ * Narrow an agent-supplied level to a derivation level. Shared by the payload
+ * ingress and {@link deriveFact} so the rejection reads identically wherever
+ * an unusable level arrives.
+ */
+function requireDerivationLevel(raw: unknown): ProvenanceLevel {
+  const level = asProvenanceLevel(raw);
+  if (level === null || level === "stated") {
+    throw new DeriveFactError(
+      `a derived fact must be 'deduced' or 'inferred', not ${JSON.stringify(raw)}`,
+    );
+  }
+  return level;
+}
+
+/**
+ * Ingress of the agent-authored derived-fact payload. The payload is checked
+ * against the frozen derived-fact shape BEFORE any field is read, so a
+ * structurally wrong premise list is refused by path rather than silently
+ * stringified. A violation throws `ResponseShapeError` and nothing is written.
+ */
+export function parseDeriveFactInput(payload: unknown): DeriveFactInput {
+  assertResponseShape(DERIVED_FACT_SURFACE, DERIVED_FACT_SHAPE, payload);
+  const rec = payload as Record<string, unknown>;
+  return {
+    slug: rec["slug"] as string,
+    topic: rec["topic"] as string,
+    principle: rec["principle"] as string,
+    premises: Object.freeze([...(rec["premises"] as ReadonlyArray<string>)]),
+    level: requireDerivationLevel(rec["level"]),
+  };
 }
 
 /** Strip a leading `pref-` so a premise can be given as an id or a bare slug. */
@@ -79,12 +113,7 @@ export function deriveFact(
   input: DeriveFactInput,
   opts: DeriveFactOptions,
 ): DeriveFactResult {
-  const level = asProvenanceLevel(input.level);
-  if (level === null || level === "stated") {
-    throw new DeriveFactError(
-      `a derived fact must be 'deduced' or 'inferred', not ${JSON.stringify(input.level)}`,
-    );
-  }
+  const level = requireDerivationLevel(input.level);
   if (!input.slug.trim()) throw new DeriveFactError("derived fact missing slug");
   if (!input.topic.trim()) throw new DeriveFactError("derived fact missing topic");
   if (!input.principle.trim()) throw new DeriveFactError("derived fact missing principle");

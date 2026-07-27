@@ -11,62 +11,31 @@
 import {
   writeResearchReport,
   ResearchValidationError,
-  type ResearchFinding,
+  parseResearchReportInput,
 } from "../../core/brain/research/research.ts";
+import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName } from "../../core/config.ts";
-import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStr } from "../coerce.ts";
-import { isRecord, requiredString } from "./intake-args.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_research_report";
-
-function reqStringList(value: unknown, field: string): string[] {
-  if (!Array.isArray(value) || value.length === 0) {
-    throw new MCPError(INVALID_PARAMS, `${TOOL}: '${field}' must be a non-empty array of strings`);
-  }
-  return value.map((item, i) => requiredString(item, TOOL, `${field}[${i}]`));
-}
-
-function parseFinding(value: unknown, i: number): ResearchFinding {
-  if (!isRecord(value)) {
-    throw new MCPError(INVALID_PARAMS, `${TOOL}: findings[${i}] must be an object`);
-  }
-  const statement = value["statement"];
-  if (typeof statement !== "string" || statement.trim().length === 0) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      `${TOOL}: findings[${i}].statement must be a non-empty string`,
-    );
-  }
-  const sources = reqStringList(value["sources"], `findings[${i}].sources`);
-  return { statement, sources };
-}
 
 async function toolBrainResearchReport(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  const title = coerceStr(args, "title", true)!;
-  const sources = reqStringList(args["sources"], "sources");
-  const rawFindings = args["findings"];
-  if (!Array.isArray(rawFindings) || rawFindings.length === 0) {
-    throw new MCPError(INVALID_PARAMS, `${TOOL}: 'findings' must be a non-empty array`);
-  }
-  const findings = rawFindings.map((item, i) => parseFinding(item, i));
   const agentArg = coerceStr(args, "agent", false);
   const agent =
     agentArg && agentArg.trim().length > 0
       ? agentArg
       : resolveAgentName(ctx.configPath ?? undefined);
 
-  return wrapToolErrors(TOOL, [ResearchValidationError], async () => {
-    const res = writeResearchReport(
-      ctx.vault,
-      { title, sources, findings },
-      { agent, now: new Date() },
-    );
+  return wrapToolErrors(TOOL, [ResearchValidationError, ResponseShapeError], async () => {
+    // Shape first: the payload is validated before the citation contract is
+    // evaluated, so a malformed finding aborts the report unwritten.
+    const input = parseResearchReportInput(args);
+    const res = writeResearchReport(ctx.vault, input, { agent, now: new Date() });
     return {
       report_path: res.reportPath,
       created: res.created,

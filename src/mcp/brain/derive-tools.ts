@@ -11,12 +11,15 @@
  * produced and the brain is unchanged.
  */
 
-import { deriveFact, DeriveFactError } from "../../core/brain/derived-fact.ts";
+import {
+  deriveFact,
+  DeriveFactError,
+  parseDeriveFactInput,
+} from "../../core/brain/derived-fact.ts";
 import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
-import { asProvenanceLevel } from "../../core/brain/provenance/provenance.ts";
+import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceStr, coerceStrList } from "../coerce.ts";
 import { wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_derive_fact";
@@ -25,7 +28,7 @@ async function toolBrainDeriveFact(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
-  return wrapToolErrors(TOOL, [DeriveFactError], async () => {
+  return wrapToolErrors(TOOL, [DeriveFactError, ResponseShapeError], async () => {
     if (!loadGuardrailsConfigSafe(ctx.vault).derived_fact_synthesis) {
       throw new MCPError(
         INVALID_PARAMS,
@@ -33,25 +36,11 @@ async function toolBrainDeriveFact(
       );
     }
 
-    const slug = coerceStr(args, "slug", true)!;
-    const topic = coerceStr(args, "topic", true)!;
-    const principle = coerceStr(args, "principle", true)!;
-    const levelRaw = coerceStr(args, "level", true)!;
-    const level = asProvenanceLevel(levelRaw);
-    if (level === null || level === "stated") {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: 'level' must be 'deduced' or 'inferred'`);
-    }
-    const premises = coerceStrList(args, "premises");
-    if (premises.length === 0) {
-      throw new MCPError(INVALID_PARAMS, `${TOOL}: 'premises' must list at least one premise id`);
-    }
-
-    const res = deriveFact(
-      ctx.vault,
-      { slug, topic, principle, premises, level },
-      { now: new Date() },
-    );
-    return { id: res.id, level, premises };
+    // Shape first: the payload is validated before any field is read, so a
+    // structurally wrong request never reaches the premise lookup or a write.
+    const input = parseDeriveFactInput(args);
+    const res = deriveFact(ctx.vault, input, { now: new Date() });
+    return { id: res.id, level: input.level, premises: input.premises };
   });
 }
 
