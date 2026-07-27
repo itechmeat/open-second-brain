@@ -10,13 +10,14 @@
  *   - the embedding-model fingerprint check runs in one place at open
  *     time.
  *
+ * The statements themselves live one module per table or lane under
+ * `store/`; this file is the connection's lifetime, the vec/lock state
+ * those statements need, and the typed surface callers hold.
+ *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §5, §15.
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
-import { dirname } from "node:path";
-import lockfile from "proper-lockfile";
 
 import { registerWriterDb, unregisterWriterDb } from "./store-exit.ts";
 
@@ -24,626 +25,76 @@ import { loadIntegrityConfigSafe } from "../brain/policy.ts";
 import {
   checkStamp,
   compareStamps,
-  formatStampMismatch,
   STAMP_VERDICT,
   type StampMismatch,
-  type StampTokens,
 } from "../integrity/stamp.ts";
 
-import { computeCorpusGeneration } from "./corpus-generation.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
-import { assertValidVector } from "./vector-guard.ts";
-import {
-  applyMigrations,
-  documentBasename,
-  dropVecTable,
-  ensureVecTable,
-  LATEST_SCHEMA_VERSION,
-  readSchemaVersion,
-} from "./schema.ts";
+import { readSchemaVersion } from "./schema.ts";
+
+import * as aliases from "./store/aliases.ts";
+import * as chunkEntities from "./store/chunk-entities.ts";
+import * as chunks from "./store/chunks.ts";
+import * as census from "./store/counts.ts";
+import * as documents from "./store/documents.ts";
+import * as abi from "./store/embedding-abi.ts";
+import * as keyword from "./store/keyword.ts";
+import * as lifecycle from "./store/lifecycle.ts";
+import * as links from "./store/links.ts";
+import * as queryCache from "./store/query-cache-table.ts";
+import * as relations from "./store/relations.ts";
+import * as state from "./store/state.ts";
+import * as tiers from "./store/tiers.ts";
+import * as trigram from "./store/trigram.ts";
+import * as vectors from "./store/vectors.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Types
+// Public surface re-exported from the per-concern modules
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * `index_state` keys for the active embedding instruction prefixes
- * (memory-write-path-integrity B2). Recorded per index run so a later
- * stored-vs-configured mismatch can surface the reindex-required warning:
- * vectors embedded under one prefix pair are not comparable to queries
- * embedded under another.
- */
-export const EMBEDDING_PREFIX_QUERY_STATE_KEY = "embedding_prefix_query";
-export const EMBEDDING_PREFIX_PASSAGE_STATE_KEY = "embedding_prefix_passage";
+export {
+  EMBEDDING_DIMENSION_STATE_KEY,
+  EMBEDDING_MODEL_STATE_KEY,
+  EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
+  EMBEDDING_PREFIX_QUERY_STATE_KEY,
+  EMBEDDING_VEC_VERSION_STATE_KEY,
+  INDEX_REVISION_STATE_KEY,
+  LAST_FULL_INDEX_AT_STATE_KEY,
+  LAST_INDEXED_AT_STATE_KEY,
+  peekCorpusGenerationSync,
+  readCorpusGenerationSync,
+} from "./store/state.ts";
+export type { IndexPeek } from "./store/state.ts";
 
-/**
- * `index_state` keys behind the corpus-generation fingerprint. Named so
- * the class accessors and {@link readCorpusGenerationSync} cannot drift
- * into two spellings of the same key.
- */
-export const EMBEDDING_MODEL_STATE_KEY = "embedding_model";
-export const EMBEDDING_DIMENSION_STATE_KEY = "embedding_dimension";
-export const INDEX_REVISION_STATE_KEY = "index_revision";
+export {
+  contradictedAbiFields,
+  EMBEDDING_ABI_FIX_COMMAND,
+  formatEmbeddingAbiDrift,
+  readEmbeddingAbiSync,
+  runtimeEmbeddingAbi,
+} from "./store/embedding-abi.ts";
 
-/**
- * sqlite-vec version the stored vectors were written against
- * (context-integrity-gates, Unit E). `SELECT vec_version()` was already
- * executed on every extension load and the row discarded every time;
- * this key is where it now lands, so the ABI the vectors were produced
- * under can be compared later instead of assumed.
- */
-export const EMBEDDING_VEC_VERSION_STATE_KEY = "embedding_vec_version";
+export {
+  acquireWriterLock,
+  WRITER_LOCK_HEARTBEAT_MS,
+  WRITER_LOCK_STALE_MS,
+} from "./store/writer-lock.ts";
 
-/**
- * The single remediation for embedding-ABI drift, named once so the
- * store's refusal, the status warning and the `search check`
- * recommendation cannot grow three spellings of the same instruction.
- */
-export const EMBEDDING_ABI_FIX_COMMAND = "o2b search reindex --embeddings";
+export { normalizeAlias } from "./store/aliases.ts";
 
-/**
- * `index_state` keys stamped by every index run (`last_indexed_at`) and
- * by a FORCED one only (`last_full_index_at`). Both carry the same ISO
- * instant when the run was forced, which is what makes their equality a
- * usable "the last run resolved the whole vault" predicate - the
- * precondition the broken-link ratchet verifies before it trusts a
- * dangling count (context-integrity-gates, unit G).
- */
-export const LAST_INDEXED_AT_STATE_KEY = "last_indexed_at";
-export const LAST_FULL_INDEX_AT_STATE_KEY = "last_full_index_at";
-
-/** Vault-wide link-resolution census (see {@link Store.linkResolutionCounts}). */
-export interface LinkResolutionCounts {
-  /**
-   * Link rows carrying a target path. Tag rows have `target_path IS
-   * NULL` and are excluded - a tag has nothing to resolve to.
-   */
-  readonly total: number;
-  /**
-   * Rows the read-time resolution ladder cannot resolve to any
-   * document - broken links as a reader experiences them.
-   */
-  readonly unresolved: number;
-}
-
-/**
- * The READ-TIME link-resolution ladder, as one SQL expression over a
- * `links` row aliased `l`, yielding the resolved document id or NULL.
- *
- * Three rungs, in order: the materialized `target_document_id` that
- * `resolveLinkTargets` / `resolveAliasTargets` wrote, then a
- * `<target>.md` exact path match, then an UNAMBIGUOUS nested-basename
- * match (`basename = target` with exactly one such nested document -
- * a top-level `target.md` has no leading slash and belongs to the exact
- * rung above).
- *
- * Defined once and shared by {@link Store.resolvedDocLinkPairs} (which
- * follows it) and {@link Store.linkResolutionCounts} (which counts what
- * it leaves over), so "resolvable" and "broken" can never drift apart
- * into two different opinions of the same vault.
- */
-const RESOLVED_LINK_TARGET_SQL =
-  "COALESCE(" +
-  "  l.target_document_id, " +
-  "  (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-  "  (SELECT d.id FROM documents d " +
-  "     WHERE d.basename = l.target_path AND instr(d.path, '/') > 0 " +
-  "     AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-  "              WHERE d2.basename = l.target_path AND instr(d2.path, '/') > 0))" +
-  ")";
-
-/** The query/passage instruction prefixes active for an index run. */
-export interface EmbeddingPrefixPair {
-  readonly query: string;
-  readonly passage: string;
-}
+export type { DocumentInput, DocumentSummary } from "./store/documents.ts";
+export type { ChunkInput, ChunkRow, HydratedChunk } from "./store/chunks.ts";
+export type { KeywordHit } from "./store/keyword.ts";
+export type { LinkInput, LinkResolutionCounts } from "./store/links.ts";
+export type { EmbeddingPrefixPair, ModelChangeOutcome, SemanticHit } from "./store/vectors.ts";
+export type { StoreCounts } from "./store/counts.ts";
 
 export interface StoreOpenOptions {
   /** "read" never locks; "write" acquires an exclusive proper-lockfile. */
   readonly mode: "read" | "write";
   /** When false, the vec extension is not auto-loaded (used by tests). */
   readonly loadVec?: boolean;
-}
-
-export interface DocumentInput {
-  readonly path: string; // vault-relative POSIX
-  readonly title: string | null;
-  readonly contentHash: string;
-  readonly mtime: number; // unix seconds
-  readonly size: number;
-  /**
-   * The page's declared frontmatter `type` (normalized token), or null
-   * when undeclared. Persisted so link-constraint enforcement can join
-   * endpoint types without re-reading files (v6).
-   */
-  readonly pageType?: string | null;
-  /**
-   * Transcript turn instant this note was authored at, in unix seconds
-   * (conversation chronology, S1 / t_347e8224). Derived from the
-   * `authored_at` frontmatter field. Absent / null for a note with no
-   * turn instant, which then ranks byte-identically to pre-feature.
-   */
-  readonly authoredAt?: number | null;
-}
-
-export interface DocumentSummary {
-  readonly id: number;
-  readonly contentHash: string;
-  readonly mtime: number;
-  readonly size: number;
-}
-
-export interface ChunkInput {
-  readonly chunkIndex: number;
-  readonly content: string;
-  readonly ftsContent?: string;
-  readonly contentHash: string;
-  readonly startLine: number;
-  readonly endLine: number;
-  readonly tokenCount: number;
-  /**
-   * Heading breadcrumb in effect at the chunk (v0.13.0). Indexed in the
-   * dedicated FTS column; defaults to "" so callers that do not supply
-   * it (and pre-v0.13.0 fixtures) index an empty heading column.
-   */
-  readonly headingPath?: string;
-}
-
-export interface ChunkRow {
-  readonly id: number;
-  readonly documentId: number;
-  readonly chunkIndex: number;
-  readonly content: string;
-  readonly contentHash: string;
-  readonly startLine: number;
-  readonly endLine: number;
-  readonly tokenCount: number;
-}
-
-export interface LinkInput {
-  readonly sourceChunkId: number | null;
-  readonly targetPath: string | null;
-  readonly linkText: string | null;
-  readonly linkType: "wikilink" | "markdown_link" | "tag";
-  /**
-   * Semantic relation type for this edge (v3 / typed graph semantics),
-   * orthogonal to `linkType`. `null`/absent for plain syntactic links;
-   * set for frontmatter-relation and MCP-config edges. Validated
-   * against the open vocabulary in src/core/graph/relation-vocab.ts.
-   */
-  readonly relation?: string | null;
-}
-
-export interface KeywordHit {
-  readonly chunkId: number;
-  readonly documentId: number;
-  /** Lower is better (FTS5 returns negative bm25). */
-  readonly bm25: number;
-}
-
-export interface SemanticHit {
-  readonly chunkId: number;
-  readonly documentId: number;
-  /** L2 distance on unit-normalised vectors. */
-  readonly distance: number;
-}
-
-export interface HydratedChunk {
-  readonly chunkId: number;
-  readonly documentId: number;
-  readonly path: string;
-  readonly title: string | null;
-  readonly content: string;
-  readonly startLine: number;
-  readonly endLine: number;
-  readonly mtime: number;
-  /**
-   * Transcript turn instant (unix seconds) or null (conversation
-   * chronology, S1). Feeds the exact-tie recency tie-break in the ranker
-   * and is surfaced on the search result. Null for notes with no turn
-   * instant, keeping their ordering byte-identical.
-   */
-  readonly authoredAt?: number | null;
-}
-
-export interface StoreCounts {
-  readonly documents: number;
-  readonly chunks: number;
-  readonly embeddings: number;
-  /** Embeddings whose `model`/`dimension` no longer match the current config. */
-  readonly staleEmbeddings: number;
-}
-
-export interface ModelChangeOutcome {
-  readonly wasChanged: boolean;
-  readonly previousModel: string | null;
-  readonly previousDimension: number | null;
-  readonly currentModel: string | null;
-  readonly currentDimension: number | null;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-function applyPragmas(db: Database): void {
-  db.exec("PRAGMA journal_mode = WAL");
-  db.exec("PRAGMA foreign_keys = ON");
-  db.exec("PRAGMA synchronous = NORMAL");
-  // Wait briefly for a concurrent writer (e.g. an indexer holding the WAL
-  // write lock) instead of failing immediately with SQLITE_BUSY. Matters
-  // for the opportunistic query-cache writes a read-mode connection makes
-  // during search (v0.20.0); search itself also degrades gracefully.
-  db.exec("PRAGMA busy_timeout = 5000");
-}
-
-function ensureFts5(db: Database): void {
-  // Probe FTS5 by attempting a benign expression. bun:sqlite ships with
-  // FTS5 enabled in the embedded amalgamation; failing here means a
-  // custom build without FTS5 and the index is unusable.
-  try {
-    db.query("SELECT fts5_source('chunk_fts')").get();
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    // Older SQLite returns "no such function" or "no such table" depending
-    // on whether FTS5 is even compiled in. We treat any failure here as
-    // FTS5-unavailable rather than guessing the build flag.
-    if (!/fts5|chunk_fts/i.test(msg)) {
-      throw new SearchError("INDEX_UNREADABLE", `FTS5 probe failed: ${msg}`);
-    }
-  }
-}
-
-/**
- * Load sqlite-vec and return the version it reports, or `null` when the
- * extension is unavailable.
- *
- * The `vec_version()` probe was always executed and its row always
- * discarded; returning it costs nothing and is what lets the ABI the
- * vectors were written against be stamped rather than assumed
- * (context-integrity-gates, Unit E). `null` doubles as the
- * "not loaded" signal, so there is exactly one source of truth for both
- * facts.
- */
-function tryLoadVecExtension(db: Database): string | null {
-  try {
-    // sqlite-vec is an optional dependency. Wrap the import + load so
-    // a missing platform package degrades to "extension unavailable"
-    // instead of crashing the process.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const vec = require("sqlite-vec") as { getLoadablePath(): string };
-    db.loadExtension(vec.getLoadablePath());
-    // Confirm by calling vec_version() — guards against partial loads.
-    const row = db.query<{ v: string }, []>("SELECT vec_version() AS v").get();
-    return typeof row?.v === "string" ? row.v : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Corpus-generation fingerprint read WITHOUT opening a {@link Store}.
- *
- * `Store.open` is async (the write path acquires a lock) and a read open
- * refuses a schema mismatch, so neither form is usable from a
- * synchronous caller that only wants to observe the index's identity and
- * must keep working when there is no index at all. The context pack's
- * provenance stamp (context-integrity-gates, Unit B) is exactly that
- * caller. It lives here rather than beside the caller because this
- * module is the single SQL boundary for the index.
- *
- * Returns `null` - "unrecorded", per `integrity/stamp.ts` - when the
- * index file is absent or cannot be read. That is DISTINCT from a
- * recorded generation string: a vault that gains or loses its index
- * drifts from `null` to a value (or back) and the stamp comparison names
- * it, rather than treating "nothing to compare" as agreement.
- *
- * The schema version comes from the file itself, not from
- * {@link LATEST_SCHEMA_VERSION}: an index still at an older schema is a
- * different corpus state, and folding it onto the current constant would
- * hide precisely that.
- */
-export function readCorpusGenerationSync(dbPath: string): string | null {
-  const peek = peekCorpusGenerationSync(dbPath);
-  return peek.kind === "read" ? peek.value : null;
-}
-
-/**
- * {@link readCorpusGenerationSync} with the three outcomes kept apart, so
- * a caller that must not treat a corrupt index as "no index" can tell.
- */
-export function peekCorpusGenerationSync(dbPath: string): IndexPeek<string | null> {
-  return peekReadonlyIndex(dbPath, (read, db) => {
-    const dimRaw = read(EMBEDDING_DIMENSION_STATE_KEY);
-    const dim = dimRaw === null ? null : Number(dimRaw);
-    const revRaw = read(INDEX_REVISION_STATE_KEY);
-    const rev = revRaw === null ? 0 : Number(revRaw);
-    return computeCorpusGeneration({
-      embeddingModel: read(EMBEDDING_MODEL_STATE_KEY),
-      embeddingDimension: dim !== null && Number.isFinite(dim) ? dim : null,
-      schemaVersion: readSchemaVersion(db),
-      indexRevision: Number.isFinite(rev) && rev >= 0 ? Math.floor(rev) : 0,
-    });
-  });
-}
-
-/**
- * Embedding-ABI tokens recorded in an index, without opening a
- * {@link Store}.
- *
- * `indexCheck` needs these and cannot get them from its own probe: it
- * deliberately runs against an IN-MEMORY database and never touches the
- * real index, so a stored-versus-runtime comparison there has no stored
- * side unless one is read explicitly.
- *
- * `null` means the index is absent or unreadable - not that its ABI
- * matches.
- */
-export function readEmbeddingAbiSync(dbPath: string): StampTokens | null {
-  return withReadonlyIndex(dbPath, (read) => recordedEmbeddingAbi(read));
-}
-
-/**
- * Outcome of a synchronous peek at the index.
- *
- * ABSENT and UNREADABLE used to collapse to one `null`, which is wrong
- * for a stamp: "no index here" and "an index that exists and is corrupt"
- * are different states of the world, and a caller that records both as
- * unrecorded makes two such sides compare EQUAL - "two unrecorded sides
- * are not a finding" - so a corrupt index silently agrees with a missing
- * one. They are now separate arms and the caller chooses.
- */
-export type IndexPeek<T> =
-  | { readonly kind: "read"; readonly value: T }
-  | { readonly kind: "absent" }
-  | { readonly kind: "unreadable"; readonly detail: string };
-
-/**
- * Run `read` against a read-only handle on the index, naming which of
- * the three outcomes occurred. Shared by the synchronous peeks so the
- * classification lives in one place rather than once per caller.
- */
-function peekReadonlyIndex<T>(
-  dbPath: string,
-  read: (state: (key: string) => string | null, db: Database) => T,
-): IndexPeek<T> {
-  if (!existsSync(dbPath)) return { kind: "absent" };
-  let db: Database;
-  try {
-    db = new Database(dbPath, { readonly: true });
-  } catch (e) {
-    return { kind: "unreadable", detail: e instanceof Error ? e.message : String(e) };
-  }
-  try {
-    return {
-      kind: "read",
-      value: read(
-        (key: string): string | null =>
-          db
-            .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
-            .get(key)?.value ?? null,
-        db,
-      ),
-    };
-  } catch (e) {
-    return { kind: "unreadable", detail: e instanceof Error ? e.message : String(e) };
-  } finally {
-    try {
-      db.close();
-    } catch {
-      /* a close failure cannot change what was already read */
-    }
-  }
-}
-
-/**
- * {@link peekReadonlyIndex} collapsed to `T | null` for the callers that
- * genuinely cannot act on the distinction.
- */
-function withReadonlyIndex<T>(
-  dbPath: string,
-  read: (state: (key: string) => string | null, db: Database) => T,
-): T | null {
-  const peek = peekReadonlyIndex(dbPath, read);
-  return peek.kind === "read" ? peek.value : null;
-}
-
-/** The ABI tokens an index recorded, read through any state accessor. */
-function recordedEmbeddingAbi(state: (key: string) => string | null): StampTokens {
-  return {
-    [EMBEDDING_MODEL_STATE_KEY]: state(EMBEDDING_MODEL_STATE_KEY),
-    [EMBEDDING_DIMENSION_STATE_KEY]: state(EMBEDDING_DIMENSION_STATE_KEY),
-    [EMBEDDING_VEC_VERSION_STATE_KEY]: state(EMBEDDING_VEC_VERSION_STATE_KEY),
-  };
-}
-
-/**
- * The ABI tokens the CURRENT build and configuration would produce. The
- * counterpart of {@link recordedEmbeddingAbi}, kept beside it so the two
- * sides of the comparison can never cover different fields.
- */
-export function runtimeEmbeddingAbi(
-  config: ResolvedSearchConfig,
-  vecVersion: string | null,
-): StampTokens {
-  return {
-    [EMBEDDING_MODEL_STATE_KEY]: config.semantic.model,
-    [EMBEDDING_DIMENSION_STATE_KEY]:
-      config.semantic.dimension === null ? null : String(config.semantic.dimension),
-    [EMBEDDING_VEC_VERSION_STATE_KEY]: vecVersion,
-  };
-}
-
-/**
- * The subset of an ABI comparison the index actually CONTRADICTS: it
- * recorded a token and that token disagrees with this build.
- *
- * A mismatch whose recorded side is `null` is an UNRECORDED field - a
- * store written before that token was stamped. An absent marker cannot
- * tell an old store from a wrong one, so it is reported on the
- * diagnostic surfaces and never drives a refusal or a per-read warning.
- * Both consumers of that distinction (the `fail` verdict's refusal and
- * the query path's warning) route through here rather than restating
- * the predicate, so they cannot drift on what counts as contradicted.
- */
-export function contradictedAbiFields(
-  mismatches: ReadonlyArray<StampMismatch>,
-): ReadonlyArray<StampMismatch> {
-  return mismatches.filter((m) => m.expected !== null);
-}
-
-/**
- * One operator-facing line for embedding-ABI drift. Shared by the read
- * open's refusal, the status warning and the `search check`
- * recommendation, so the three cannot describe the same condition
- * differently or name different fixes.
- */
-export function formatEmbeddingAbiDrift(mismatches: ReadonlyArray<StampMismatch>): string {
-  return (
-    `embedding ABI drift between the stored index and this build ` +
-    `(${mismatches.map(formatStampMismatch).join("; ")}); stored vectors are not ` +
-    `comparable to queries embedded now. Run: ${EMBEDDING_ABI_FIX_COMMAND}`
-  );
-}
-
-/** Parse a JSON-encoded drift value; a corrupt cell surfaces as-is. */
-function parseJsonValue(raw: string): unknown {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return raw;
-  }
-}
-
-function nowIso(): string {
-  return new Date().toISOString();
-}
-
-/** `?,?,...` placeholder list for a SQL `IN (...)` clause of `items.length` params. */
-function sqlPlaceholders(items: ReadonlyArray<unknown>): string {
-  return items.map(() => "?").join(",");
-}
-
-/**
- * Stale window for the writer lock (ms). A lock whose mtime is older
- * than this is treated as abandoned (crashed holder) and taken over by
- * the next writer, so a SIGKILL never wedges the index for longer than
- * this window.
- */
-export const WRITER_LOCK_STALE_MS = 60_000;
-
-/**
- * Heartbeat interval (ms): the async writer lock refreshes its mtime
- * this often so a legitimate long-running index is never mistaken for
- * a stale lock. Must stay below {@link WRITER_LOCK_STALE_MS}. NOTE: the
- * per-file document walk is synchronous, so this timer only fires
- * across the await points (embed batches); a multi-minute fully
- * synchronous walk still relies on the stale window, which 60s amply
- * covers for real vaults.
- */
-export const WRITER_LOCK_HEARTBEAT_MS = 30_000;
-
-function acquireWriterLockSync(path: string): () => void {
-  const maxAttempts = 10;
-  const sleepMs = 50;
-  let lastError: unknown;
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    try {
-      return lockfile.lockSync(path, { stale: WRITER_LOCK_STALE_MS, realpath: false });
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "ELOCKED") throw err;
-      lastError = err;
-      if (attempt < maxAttempts - 1) Bun.sleepSync(sleepMs);
-    }
-  }
-  const msg = lastError instanceof Error ? lastError.message : String(lastError);
-  throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
-}
-
-/**
- * Acquire the exclusive writer lock on the LIVE index path. Shared by
- * `Store.open({ mode: "write" })` and `reindexVault`'s rebuild+swap so both
- * serialise on the SAME lock (keyed on `dbPath`, not on the `.new` staging
- * path). Fast-fails to `INDEX_LOCKED` after a few retries rather than
- * blocking indefinitely, matching the module's fail-fast contention
- * contract. `realpath: false` lets the lock be taken before `dbPath` exists
- * (a fresh reindex has no live index yet); only the parent directory must
- * already exist.
- */
-export async function acquireWriterLock(dbPath: string): Promise<() => Promise<void>> {
-  try {
-    return await lockfile.lock(dbPath, {
-      retries: { retries: 3, factor: 1, minTimeout: 1000, maxTimeout: 1000 },
-      stale: WRITER_LOCK_STALE_MS,
-      // Explicit heartbeat: refresh the lock mtime mid-run so a long index
-      // is never mistaken for a stale lock and taken over.
-      update: WRITER_LOCK_HEARTBEAT_MS,
-      realpath: false,
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new SearchError("INDEX_LOCKED", `another writer holds the search index lock: ${msg}`);
-  }
-}
-
-/**
- * Crash-recovery preamble shared by every {@link Store.open}: if the live
- * index file is absent but a `.bak` from a `reindex` rename swap is present,
- * restore it. Guarded by the SAME writer lock `reindexVault` holds across
- * its swap, so a read that opens during the swap's brief db-absent window
- * cannot mistake it for a crashed reindex and clobber the freshly built
- * index with the stale `.bak` (the silent-data-loss race, A.2).
- *
- * Lock semantics distinguish the two cases without a heuristic:
- *   - a live reindex mid-swap holds a heartbeated (non-stale) lock, so we
- *     block briefly, then find `dbPath` present and skip the restore;
- *   - a genuine crash leaves a stale lock (no heartbeat) that is taken over
- *     within the stale window, after which we restore.
- * If the lock cannot be taken at all we skip the restore rather than risk a
- * clobber; the caller's open path then re-evaluates existence and reports
- * honestly (INDEX_MISSING). The `.bak` restore of a genuine crash is
- * unaffected: with no live holder the lock is acquired immediately.
- */
-function restoreFromBakIfMissing(dbPath: string): void {
-  const bak = dbPath + ".bak";
-  if (existsSync(dbPath) || !existsSync(bak)) return;
-  let release: (() => void) | null = null;
-  try {
-    release = acquireWriterLockSync(dbPath);
-  } catch {
-    // A live writer holds the lock (mid-swap). Do not restore — the swap
-    // will place the fresh index; the open path re-checks existence.
-    return;
-  }
-  try {
-    // Re-check under the lock: the swap may have completed while we waited,
-    // or another opener may have already restored.
-    if (existsSync(dbPath) || !existsSync(bak)) return;
-    renameSync(bak, dbPath);
-    // eslint-disable-next-line no-console
-    console.error(`restored search index from ${bak} (previous reindex crash)`);
-  } catch {
-    /* fall through — open path below will report INDEX_MISSING */
-  } finally {
-    release();
-  }
-}
-
-/**
- * Canonical alias/lookup-key normalisation for `doc_aliases` (v7):
- * trim, NFC-normalise, lower-case - the exact rule
- * `link-graph/alias-index.ts` applies on the Brain-artifact side, so
- * the two alias surfaces never disagree on a key.
- */
-export function normalizeAlias(value: string): string {
-  return value.trim().normalize("NFC").toLowerCase();
-}
-
-function vecToBuffer(values: ReadonlyArray<number> | Float32Array): Buffer {
-  const arr = values instanceof Float32Array ? values : Float32Array.from(values);
-  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -683,48 +134,12 @@ export class Store {
     // read opening during a live reindex's swap window cannot clobber the
     // freshly built index with the stale `.bak`. Stderr notice (not a thrown
     // error) so existing tooling keeps working.
-    restoreFromBakIfMissing(config.dbPath);
+    lifecycle.restoreFromBakIfMissing(config.dbPath);
 
     if (opts.mode === "read") {
-      if (!existsSync(config.dbPath)) {
-        throw new SearchError(
-          "INDEX_MISSING",
-          `search index not initialised at ${config.dbPath}. Run: o2b search index`,
-        );
-      }
-      let db: Database;
+      const opened = lifecycle.openReadDatabase(config, loadVec);
       try {
-        db = new Database(config.dbPath);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        throw new SearchError("INDEX_UNREADABLE", `cannot open ${config.dbPath}: ${msg}`);
-      }
-      try {
-        applyPragmas(db);
-        ensureFts5(db);
-        let version: number;
-        try {
-          version = readSchemaVersion(db);
-        } catch (e) {
-          // A corrupt or non-OSB sqlite file at the index path can make
-          // readSchemaVersion throw raw SQLITE errors (e.g. "no such
-          // table: index_state"). Surface those as a typed
-          // INDEX_UNREADABLE so callers see a code, not a stray Error.
-          if (e instanceof SearchError) throw e;
-          const msg = e instanceof Error ? e.message : String(e);
-          throw new SearchError(
-            "INDEX_UNREADABLE",
-            `cannot read schema_version from ${config.dbPath}: ${msg}`,
-          );
-        }
-        if (version !== LATEST_SCHEMA_VERSION) {
-          throw new SearchError(
-            "SCHEMA_MISMATCH",
-            `index schema version ${version} != ${LATEST_SCHEMA_VERSION}. Run: o2b search reindex`,
-          );
-        }
-        const vecVersion = loadVec ? tryLoadVecExtension(db) : null;
-        const store = new Store(db, config, vecVersion, null);
+        const store = new Store(opened.db, config, opened.vecVersion, null);
         // The read path is where the silent-garbage window actually is:
         // `ensureEmbeddingModel` runs only on a write open, so every MCP
         // query reached `semanticTopK` - and a `chunk_vec` of unknown
@@ -732,50 +147,24 @@ export class Store {
         store.resolveEmbeddingAbi();
         return store;
       } catch (e) {
-        db.close();
+        opened.db.close();
         throw e;
       }
     }
 
-    // mode === "write"
-    mkdirSync(dirname(config.dbPath), { recursive: true });
-    if (!existsSync(config.dbPath)) {
-      const seed = new Database(config.dbPath);
-      seed.close();
-    }
-
-    const release = await acquireWriterLock(config.dbPath);
-
-    let db: Database;
+    const opened = await lifecycle.openWriteDatabase(config, loadVec);
     try {
-      db = new Database(config.dbPath);
-    } catch (e) {
-      await release();
-      const msg = e instanceof Error ? e.message : String(e);
-      throw new SearchError("INDEX_UNREADABLE", `cannot open ${config.dbPath}: ${msg}`);
-    }
-
-    try {
-      applyPragmas(db);
-      applyMigrations(db, { ftsTokenize: config.ftsTokenize });
-      ensureFts5(db);
-      const vecVersion = loadVec ? tryLoadVecExtension(db) : null;
-      const store = new Store(db, config, vecVersion, release);
+      const store = new Store(opened.db, config, opened.vecVersion, opened.release);
       store.ensureEmbeddingModel(config.semantic.model, config.semantic.dimension, {
         query: config.semantic.queryPrefix ?? "",
         passage: config.semantic.passagePrefix ?? "",
       });
       // Belt-and-suspenders: consolidate this writer's WAL on a
       // bypassed close (process.exit / signal-driven exit).
-      registerWriterDb(db);
+      registerWriterDb(opened.db);
       return store;
     } catch (e) {
-      try {
-        db.close();
-      } catch {
-        /* ignore close errors */
-      }
-      await release();
+      await lifecycle.abandonWriteDatabase(opened.db, opened.release);
       throw e;
     }
   }
@@ -829,16 +218,16 @@ export class Store {
    */
   private resolveEmbeddingAbi(): void {
     if (!this.config.semantic.enabled) return;
-    const recorded = recordedEmbeddingAbi((key) => this.getState(key));
-    const runtime = runtimeEmbeddingAbi(this.config, this.loadedVecVersion);
+    const recorded = abi.recordedEmbeddingAbi((key) => this.getState(key));
+    const runtime = abi.runtimeEmbeddingAbi(this.config, this.loadedVecVersion);
     if (compareStamps(recorded, runtime).length === 0) return;
     const mode = loadIntegrityConfigSafe(this.config.vault).embedding_abi;
     const check = checkStamp(recorded, runtime, mode);
     this.abiDrift = check.mismatches;
     if (check.verdict !== STAMP_VERDICT.fail) return;
-    const drifted = contradictedAbiFields(check.mismatches);
+    const drifted = abi.contradictedAbiFields(check.mismatches);
     if (drifted.length === 0) return;
-    throw new SearchError("EMBEDDING_DIMENSION_MISMATCH", formatEmbeddingAbiDrift(drifted));
+    throw new SearchError("EMBEDDING_DIMENSION_MISMATCH", abi.formatEmbeddingAbiDrift(drifted));
   }
 
   schemaVersion(): number {
@@ -851,24 +240,7 @@ export class Store {
     // Orderly close owns consolidation below; drop the exit-hook entry.
     unregisterWriterDb(this.db);
     try {
-      // Writer mode: consolidate WAL into the main file and switch back to
-      // DELETE journal mode so the `-wal`/`-shm` siblings are removed. This
-      // matters for `reindexVault`: after the temp-file rename swap, any
-      // orphan `*-wal` next to the new main would trigger
-      // SQLITE_IOERR_SHORT_READ on the next open.
-      if (this.release) {
-        try {
-          this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
-          this.db.exec("PRAGMA journal_mode = DELETE");
-        } catch (e) {
-          // Don't fail the close, but make the failure visible — an
-          // unconsolidated WAL is the exact thing that triggers
-          // SQLITE_IOERR_SHORT_READ after a `reindexVault` rename swap.
-          const msg = e instanceof Error ? e.message : String(e);
-          // eslint-disable-next-line no-console
-          console.error(`search store: WAL consolidation failed on close: ${msg}`);
-        }
-      }
+      if (this.release) lifecycle.consolidateWal(this.db);
       this.db.close();
     } finally {
       if (this.release) await this.release();
@@ -878,36 +250,27 @@ export class Store {
   // ── index_state KV ─────────────────────────────────────────────────────────
 
   getState(key: string): string | null {
-    const row = this.db
-      .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?")
-      .get(key);
-    return row?.value ?? null;
+    return state.getState(this.db, key);
   }
 
   setState(key: string, value: string): void {
-    this.db.run(
-      "INSERT INTO index_state(key, value, updated_at) VALUES (?, ?, ?) " +
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-      [key, value, nowIso()],
-    );
+    state.setState(this.db, key, value);
   }
 
   deleteState(key: string): void {
-    this.db.run("DELETE FROM index_state WHERE key = ?", [key]);
+    state.deleteState(this.db, key);
   }
 
   // ── index revision + corpus generation (v0.20.0) ─────────────────────────────
 
   /** Monotonic counter bumped on every index mutation; 0 if never set. */
   indexRevision(): number {
-    const raw = this.getState(INDEX_REVISION_STATE_KEY);
-    const n = raw === null ? 0 : Number(raw);
-    return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+    return state.indexRevision(this.db);
   }
 
   /** Increment the index revision. Called after a mutating index run. */
   bumpIndexRevision(): void {
-    this.setState(INDEX_REVISION_STATE_KEY, String(this.indexRevision() + 1));
+    state.bumpIndexRevision(this.db);
   }
 
   /**
@@ -916,134 +279,36 @@ export class Store {
    * embedding change or content reindex invalidates cached results.
    */
   corpusGeneration(): string {
-    const dimRaw = this.getState(EMBEDDING_DIMENSION_STATE_KEY);
-    const dim = dimRaw === null ? null : Number(dimRaw);
-    return computeCorpusGeneration({
-      embeddingModel: this.getState(EMBEDDING_MODEL_STATE_KEY),
-      embeddingDimension: dim !== null && Number.isFinite(dim) ? dim : null,
-      schemaVersion: LATEST_SCHEMA_VERSION,
-      indexRevision: this.indexRevision(),
-    });
+    return state.corpusGeneration(this.db);
   }
 
   // ── query cache (v0.20.0) ────────────────────────────────────────────────────
 
   queryCacheGet(key: string): { generation: string; payload: string; createdAt: number } | null {
-    const row = this.db
-      .query<{ generation: string; payload: string; created_at: number }, [string]>(
-        "SELECT generation, payload, created_at FROM query_cache WHERE cache_key = ?",
-      )
-      .get(key);
-    if (!row) return null;
-    return {
-      generation: row.generation,
-      payload: row.payload,
-      createdAt: row.created_at,
-    };
+    return queryCache.queryCacheGet(this.db, key);
   }
 
   queryCachePut(key: string, generation: string, payload: string, createdAtMs: number): void {
-    this.db.run(
-      "INSERT INTO query_cache(cache_key, generation, payload, created_at) VALUES (?, ?, ?, ?) " +
-        "ON CONFLICT(cache_key) DO UPDATE SET generation = excluded.generation, " +
-        "payload = excluded.payload, created_at = excluded.created_at",
-      [key, generation, payload, createdAtMs],
-    );
+    queryCache.queryCachePut(this.db, key, generation, payload, createdAtMs);
   }
 
   /** Delete rows from a stale generation or created before the cutoff. */
   queryCacheSweep(currentGeneration: string, expiredBeforeMs: number): void {
-    this.db.run("DELETE FROM query_cache WHERE generation <> ? OR created_at < ?", [
-      currentGeneration,
-      expiredBeforeMs,
-    ]);
+    queryCache.queryCacheSweep(this.db, currentGeneration, expiredBeforeMs);
   }
 
   // ── documents ──────────────────────────────────────────────────────────────
 
-  listDocuments(): Map<string, DocumentSummary> {
-    const rows = this.db
-      .query<
-        {
-          id: number;
-          path: string;
-          content_hash: string;
-          mtime: number;
-          size: number;
-        },
-        []
-      >("SELECT id, path, content_hash, mtime, size FROM documents")
-      .all();
-    const map = new Map<string, DocumentSummary>();
-    for (const r of rows) {
-      map.set(r.path, {
-        id: r.id,
-        contentHash: r.content_hash,
-        mtime: r.mtime,
-        size: r.size,
-      });
-    }
-    return map;
+  listDocuments(): Map<string, documents.DocumentSummary> {
+    return documents.listDocuments(this.db);
   }
 
   getDocumentIdByPath(path: string): number | null {
-    const row = this.db
-      .query<{ id: number }, [string]>("SELECT id FROM documents WHERE path = ?")
-      .get(path);
-    return row?.id ?? null;
+    return documents.getDocumentIdByPath(this.db, path);
   }
 
-  upsertDocument(doc: DocumentInput): number {
-    const now = nowIso();
-    // SQLite RETURNING on INSERT...ON CONFLICT works in 3.35+; bun:sqlite ships modern SQLite.
-    const row = this.db
-      .query<
-        { id: number },
-        [
-          string,
-          string,
-          string | null,
-          string,
-          number,
-          number,
-          string | null,
-          number | null,
-          string,
-          string,
-          string,
-        ]
-      >(
-        "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, created_at, updated_at, indexed_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
-          "ON CONFLICT(path) DO UPDATE SET " +
-          "  basename = excluded.basename, " +
-          "  title = excluded.title, " +
-          "  content_hash = excluded.content_hash, " +
-          "  mtime = excluded.mtime, " +
-          "  size = excluded.size, " +
-          "  page_type = excluded.page_type, " +
-          "  authored_at = excluded.authored_at, " +
-          "  updated_at = excluded.updated_at, " +
-          "  indexed_at = excluded.indexed_at " +
-          "RETURNING id",
-      )
-      .get(
-        doc.path,
-        documentBasename(doc.path),
-        doc.title,
-        doc.contentHash,
-        doc.mtime,
-        doc.size,
-        doc.pageType ?? null,
-        doc.authoredAt ?? null,
-        now,
-        now,
-        now,
-      );
-    if (!row) {
-      throw new SearchError("INDEX_UNREADABLE", `upsertDocument returned no id for '${doc.path}'`);
-    }
-    return row.id;
+  upsertDocument(doc: documents.DocumentInput): number {
+    return documents.upsertDocument(this.db, doc);
   }
 
   /**
@@ -1052,10 +317,7 @@ export class Store {
    * `chunk_vec` virtual table.
    */
   deleteDocument(path: string): void {
-    const id = this.getDocumentIdByPath(path);
-    if (id === null) return;
-    this.purgeVecRowsForDocument(id);
-    this.db.run("DELETE FROM documents WHERE id = ?", [id]);
+    documents.deleteDocument(this.db, this._vecLoaded, path);
   }
 
   /**
@@ -1065,44 +327,23 @@ export class Store {
    * same-content touch.
    */
   touchDocument(path: string, mtime: number, size: number): void {
-    const now = nowIso();
-    this.db.run(
-      "UPDATE documents SET mtime = ?, size = ?, updated_at = ?, indexed_at = ? WHERE path = ?",
-      [mtime, size, now, now, path],
-    );
+    documents.touchDocument(this.db, path, mtime, size);
+  }
+
+  /**
+   * Document id -> { path, title } for every indexed document, reading
+   * ONLY the `documents` table (never chunk bodies). The graph query
+   * pre-pass uses this for its index-only short-circuit so it can rank and
+   * answer from index metadata with zero note bodies hydrated.
+   */
+  documentTitles(): Map<number, { readonly path: string; readonly title: string | null }> {
+    return documents.documentTitles(this.db);
   }
 
   // ── chunks ─────────────────────────────────────────────────────────────────
 
-  getChunksByDocument(documentId: number): ChunkRow[] {
-    const rows = this.db
-      .query<
-        {
-          id: number;
-          document_id: number;
-          chunk_index: number;
-          content: string;
-          content_hash: string;
-          start_line: number;
-          end_line: number;
-          token_count: number;
-        },
-        [number]
-      >(
-        "SELECT id, document_id, chunk_index, content, content_hash, start_line, end_line, token_count " +
-          "FROM chunks WHERE document_id = ? ORDER BY chunk_index",
-      )
-      .all(documentId);
-    return rows.map((r) => ({
-      id: r.id,
-      documentId: r.document_id,
-      chunkIndex: r.chunk_index,
-      content: r.content,
-      contentHash: r.content_hash,
-      startLine: r.start_line,
-      endLine: r.end_line,
-      tokenCount: r.token_count,
-    }));
+  getChunksByDocument(documentId: number): chunks.ChunkRow[] {
+    return chunks.getChunksByDocument(this.db, documentId);
   }
 
   /**
@@ -1110,89 +351,47 @@ export class Store {
    * removed first; FTS5 stays in sync via the chunks_ai/ad/au triggers.
    * Returns the new chunk ids in `chunkIndex` order.
    */
-  replaceChunks(documentId: number, chunks: ReadonlyArray<ChunkInput>): number[] {
-    const ids: number[] = [];
-    this.db.exec("BEGIN");
-    try {
-      this.purgeVecRowsForDocument(documentId);
-      this.db.run("DELETE FROM chunks WHERE document_id = ?", [documentId]);
-      const insert = this.db.prepare<
-        { id: number },
-        [number, number, string, string, string, number, number, number, string, string, string]
-      >(
-        "INSERT INTO chunks(document_id, chunk_index, content, fts_content, content_hash, start_line, end_line, token_count, heading_path, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-      );
-      const now = nowIso();
-      for (const c of chunks) {
-        const row = insert.get(
-          documentId,
-          c.chunkIndex,
-          c.content,
-          c.ftsContent ?? c.content,
-          c.contentHash,
-          c.startLine,
-          c.endLine,
-          c.tokenCount,
-          c.headingPath ?? "",
-          now,
-          now,
-        );
-        if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk insert returned no id");
-        ids.push(row.id);
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
-    return ids;
+  replaceChunks(documentId: number, input: ReadonlyArray<chunks.ChunkInput>): number[] {
+    return chunks.replaceChunks(this.db, this._vecLoaded, documentId, input);
   }
 
   /**
    * Delete a set of chunks by id. Vec rows removed first.
    */
   deleteChunks(chunkIds: ReadonlyArray<number>): void {
-    if (chunkIds.length === 0) return;
-    this.db.exec("BEGIN");
-    try {
-      this.purgeVecRowsByChunkIds(chunkIds);
-      const placeholders = sqlPlaceholders(chunkIds);
-      this.db.run(`DELETE FROM chunks WHERE id IN (${placeholders})`, chunkIds as number[]);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    chunks.deleteChunks(this.db, this._vecLoaded, chunkIds);
   }
 
-  private purgeVecRowsForDocument(documentId: number): void {
-    if (!this._vecLoaded) return;
-    const vecRows = this.db
-      .query<{ vec_rowid: number }, [number]>(
-        "SELECT vec_rowid FROM chunk_vec_map WHERE chunk_id IN (SELECT id FROM chunks WHERE document_id = ?)",
-      )
-      .all(documentId);
-    if (vecRows.length === 0) return;
-    this.purgeVecRowidsRaw(vecRows.map((r) => r.vec_rowid));
+  /** Ordered chunk ids for one document (surprisal, t_fddfe64a). */
+  chunksForDocument(documentId: number): ReadonlyArray<{ id: number; chunkIndex: number }> {
+    return chunks.chunksForDocument(this.db, documentId);
   }
 
-  private purgeVecRowsByChunkIds(chunkIds: ReadonlyArray<number>): void {
-    if (!this._vecLoaded || chunkIds.length === 0) return;
-    const placeholders = sqlPlaceholders(chunkIds);
-    const vecRows = this.db
-      .query<{ vec_rowid: number }, number[]>(
-        `SELECT vec_rowid FROM chunk_vec_map WHERE chunk_id IN (${placeholders})`,
-      )
-      .all(...(chunkIds as number[]));
-    if (vecRows.length === 0) return;
-    this.purgeVecRowidsRaw(vecRows.map((r) => r.vec_rowid));
+  /** Total indexed chunk count - used to judge trigram-prefilter selectivity. */
+  chunkCount(): number {
+    return chunks.countChunks(this.db);
   }
 
-  private purgeVecRowidsRaw(vecRowids: number[]): void {
-    if (!this._vecLoaded || vecRowids.length === 0) return;
-    const placeholders = sqlPlaceholders(vecRowids);
-    this.db.run(`DELETE FROM chunk_vec WHERE rowid IN (${placeholders})`, vecRowids);
+  hydrateChunks(chunkIds: ReadonlyArray<number>): Map<number, chunks.HydratedChunk> {
+    return chunks.hydrateChunks(this.db, chunkIds);
+  }
+
+  /**
+   * One representative chunk per document - the lowest `chunk_index`,
+   * which for markdown is the document head (title / opening section).
+   * The traversal layer surfaces this when a linked document is not
+   * already a relevance hit.
+   */
+  representativeChunks(documentIds: ReadonlyArray<number>): Map<number, chunks.HydratedChunk> {
+    return chunks.representativeChunks(this.db, documentIds);
+  }
+
+  /**
+   * Chunks that have no row in `embeddings`. Used by the indexer to
+   * populate vectors after a fresh index or after the model-change drop.
+   */
+  findChunksWithoutEmbeddings(): Array<{ chunkId: number; content: string }> {
+    return chunks.findChunksWithoutEmbeddings(this.db);
   }
 
   // ── embeddings ─────────────────────────────────────────────────────────────
@@ -1213,69 +412,7 @@ export class Store {
     dimension: number,
     embeddingHash: string,
   ): void {
-    if (!this._vecLoaded) {
-      throw new SearchError(
-        "VEC_EXTENSION_UNAVAILABLE",
-        "sqlite-vec extension not loaded; cannot store embeddings",
-      );
-    }
-    const len = vector instanceof Float32Array ? vector.length : vector.length;
-    if (len !== dimension) {
-      throw new SearchError(
-        "EMBEDDING_DIMENSION_MISMATCH",
-        `vector dimension ${len} != configured dimension ${dimension}`,
-      );
-    }
-    assertValidVector(vector, "vecUpsert");
-    this.db.exec("BEGIN");
-    try {
-      const existing = this.db
-        .query<{ vec_rowid: number }, [number]>(
-          "SELECT vec_rowid FROM chunk_vec_map WHERE chunk_id = ?",
-        )
-        .get(chunkId);
-      const buf = vecToBuffer(vector);
-      let vecRowid: number;
-      if (existing) {
-        this.db.run("UPDATE chunk_vec SET embedding = ? WHERE rowid = ?", [
-          buf,
-          existing.vec_rowid,
-        ]);
-        vecRowid = existing.vec_rowid;
-      } else {
-        this.db.run("INSERT INTO chunk_vec(embedding) VALUES (?)", [buf]);
-        const row = this.db.query<{ id: number }, []>("SELECT last_insert_rowid() AS id").get();
-        if (!row) throw new SearchError("INDEX_UNREADABLE", "chunk_vec insert returned no rowid");
-        vecRowid = row.id;
-        this.db.run("INSERT INTO chunk_vec_map(chunk_id, vec_rowid) VALUES (?, ?)", [
-          chunkId,
-          vecRowid,
-        ]);
-      }
-      const now = nowIso();
-      this.db.run(
-        "INSERT INTO embeddings(chunk_id, model, dimension, embedding_hash, created_at, updated_at) " +
-          "VALUES (?, ?, ?, ?, ?, ?) " +
-          "ON CONFLICT(chunk_id) DO UPDATE SET " +
-          "  model = excluded.model, dimension = excluded.dimension, " +
-          "  embedding_hash = excluded.embedding_hash, updated_at = excluded.updated_at",
-        [chunkId, model, dimension, embeddingHash, now, now],
-      );
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
-  }
-
-  /** Ordered chunk ids for one document (surprisal, t_fddfe64a). */
-  chunksForDocument(documentId: number): ReadonlyArray<{ id: number; chunkIndex: number }> {
-    return this.db
-      .query<{ id: number; chunk_index: number }, [number]>(
-        "SELECT id, chunk_index FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
-      )
-      .all(documentId)
-      .map((r) => ({ id: r.id, chunkIndex: r.chunk_index }));
+    vectors.vecUpsert(this.db, this._vecLoaded, chunkId, vector, model, dimension, embeddingHash);
   }
 
   /**
@@ -1284,29 +421,16 @@ export class Store {
    * t_fddfe64a).
    */
   embeddingForChunk(chunkId: number): Float32Array | null {
-    if (!this.vecLoaded()) return null;
-    const row = this.db
-      .query<{ embedding: Uint8Array }, [number]>(
-        "SELECT v.embedding AS embedding FROM chunk_vec v " +
-          "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid WHERE m.chunk_id = ?",
-      )
-      .get(chunkId);
-    if (!row) return null;
-    const bytes = row.embedding;
-    // Copy instead of viewing: a pooled buffer with a non-4-byte-aligned
-    // byteOffset would make the Float32Array constructor throw.
-    return new Float32Array(
-      bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
-    );
+    return vectors.embeddingForChunk(this.db, this._vecLoaded, chunkId);
   }
 
   getEmbeddingHash(chunkId: number): string | null {
-    const row = this.db
-      .query<{ embedding_hash: string }, [number]>(
-        "SELECT embedding_hash FROM embeddings WHERE chunk_id = ?",
-      )
-      .get(chunkId);
-    return row?.embedding_hash ?? null;
+    return vectors.getEmbeddingHash(this.db, chunkId);
+  }
+
+  /** Number of chunks with a stored embedding row. */
+  countEmbeddings(): number {
+    return vectors.countEmbeddings(this.db);
   }
 
   /**
@@ -1314,16 +438,7 @@ export class Store {
    * or dimension changes. `chunks` and `chunk_fts` are preserved.
    */
   clearEmbeddings(): void {
-    this.db.exec("BEGIN");
-    try {
-      this.db.run("DELETE FROM embeddings");
-      this.db.run("DELETE FROM chunk_vec_map");
-      if (this._vecLoaded) dropVecTable(this.db);
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    vectors.clearEmbeddings(this.db, this._vecLoaded);
   }
 
   /**
@@ -1335,155 +450,78 @@ export class Store {
   ensureEmbeddingModel(
     model: string | null,
     dimension: number | null,
-    prefixes?: EmbeddingPrefixPair,
-  ): ModelChangeOutcome {
-    const prevModel = this.getState(EMBEDDING_MODEL_STATE_KEY);
-    const prevDimRaw = this.getState(EMBEDDING_DIMENSION_STATE_KEY);
-    const prevDim = prevDimRaw === null ? null : Number(prevDimRaw);
+    prefixes?: vectors.EmbeddingPrefixPair,
+  ): vectors.ModelChangeOutcome {
+    return vectors.ensureEmbeddingModel(
+      this.db,
+      { loaded: this._vecLoaded, version: this.loadedVecVersion },
+      model,
+      dimension,
+      prefixes,
+    );
+  }
 
-    const modelChanged = prevModel !== null && model !== null && prevModel !== model;
-    const dimChanged =
-      prevDim !== null && dimension !== null && Number.isFinite(prevDim) && prevDim !== dimension;
-
-    // A prefix change invalidates stored vectors exactly as a model/dimension
-    // change does: vectors embedded under the old prefix are not comparable to
-    // queries embedded under the new one. Reuse the same clear-and-log path.
-    const prevQueryPrefix = this.getState(EMBEDDING_PREFIX_QUERY_STATE_KEY);
-    const prevPassagePrefix = this.getState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY);
-    // Legacy stores predate prefix metadata: absent state (null) means the
-    // existing vectors were embedded with EMPTY prefixes. Treat missing state
-    // as the empty pair so a switch to non-empty prefixes (e.g. E5's
-    // `query:`/`passage:`) is detected as a change and the now-incompatible
-    // unprefixed vectors are cleared, rather than silently marked compatible.
-    const effectivePrevQueryPrefix = prevQueryPrefix ?? "";
-    const effectivePrevPassagePrefix = prevPassagePrefix ?? "";
-    const prefixChanged =
-      prefixes !== undefined &&
-      this.countEmbeddings() > 0 &&
-      (effectivePrevQueryPrefix !== prefixes.query ||
-        effectivePrevPassagePrefix !== prefixes.passage);
-
-    if (modelChanged || dimChanged) {
-      this.clearEmbeddings();
-      // eslint-disable-next-line no-console
-      console.error(
-        `embedding model changed from ${prevModel}/${prevDim} to ${model}/${dimension}, embeddings cleared`,
-      );
-      this.deleteState(EMBEDDING_MODEL_STATE_KEY);
-      this.deleteState(EMBEDDING_DIMENSION_STATE_KEY);
-      // The recorded sqlite-vec version described the vectors that were
-      // just cleared, so it must not outlive them: leaving it would
-      // claim an ABI for storage that no longer holds any.
-      this.deleteState(EMBEDDING_VEC_VERSION_STATE_KEY);
-    } else if (prefixChanged) {
-      // Model/dimension unchanged: the prefix change alone triggers the clear.
-      this.clearEmbeddings();
-      // eslint-disable-next-line no-console
-      console.error(
-        `embedding prefixes changed from [${effectivePrevQueryPrefix}|${effectivePrevPassagePrefix}] ` +
-          `to [${prefixes.query}|${prefixes.passage}], embeddings cleared`,
-      );
-    }
-
-    if (model !== null) this.setState(EMBEDDING_MODEL_STATE_KEY, model);
-    if (dimension !== null) this.setState(EMBEDDING_DIMENSION_STATE_KEY, String(dimension));
-    // Same shape as the model and dimension above: recorded only when
-    // this build actually has a value. With the extension unavailable
-    // there is nothing to record, and writing a placeholder would be a
-    // claim about storage this process never touched.
-    if (this.loadedVecVersion !== null) {
-      this.setState(EMBEDDING_VEC_VERSION_STATE_KEY, this.loadedVecVersion);
-    }
-    if (prefixes !== undefined) {
-      this.setState(EMBEDDING_PREFIX_QUERY_STATE_KEY, prefixes.query);
-      this.setState(EMBEDDING_PREFIX_PASSAGE_STATE_KEY, prefixes.passage);
-    }
-
-    // (Re)create vec table when we know the dimension and vec is loaded.
-    if (this._vecLoaded && dimension !== null) {
-      ensureVecTable(this.db, dimension);
-    }
-
-    return Object.freeze({
-      wasChanged: modelChanged || dimChanged,
-      previousModel: prevModel,
-      previousDimension: prevDim,
-      currentModel: model,
-      currentDimension: dimension,
-    });
+  semanticTopK(
+    queryVector: ReadonlyArray<number> | Float32Array,
+    opts: { readonly limit: number; readonly pathPrefix?: string | null },
+  ): vectors.SemanticHit[] {
+    return vectors.semanticTopK(this.db, this._vecLoaded, queryVector, opts);
   }
 
   // ── links ──────────────────────────────────────────────────────────────────
 
-  replaceLinks(sourceDocumentId: number, links: ReadonlyArray<LinkInput>): void {
-    this.db.exec("BEGIN");
-    try {
-      this.db.run("DELETE FROM links WHERE source_document_id = ?", [sourceDocumentId]);
-      if (links.length > 0) {
-        const insert = this.db.prepare<
-          undefined,
-          [number, number | null, string | null, string | null, string, string | null, string]
-        >(
-          "INSERT INTO links(source_document_id, source_chunk_id, target_path, link_text, link_type, relation, created_at) " +
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        );
-        const now = nowIso();
-        for (const l of links) {
-          insert.run(
-            sourceDocumentId,
-            l.sourceChunkId,
-            l.targetPath,
-            l.linkText,
-            l.linkType,
-            l.relation ?? null,
-            now,
-          );
-        }
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+  replaceLinks(sourceDocumentId: number, input: ReadonlyArray<links.LinkInput>): void {
+    links.replaceLinks(this.db, sourceDocumentId, input);
   }
 
   resolveLinkTargets(): void {
-    this.db.run(
-      "UPDATE links SET target_document_id = (SELECT id FROM documents WHERE documents.path = links.target_path) " +
-        "WHERE target_path IS NOT NULL",
-    );
+    links.resolveLinkTargets(this.db);
   }
 
   /**
    * Vault-wide link-resolution census (context-integrity-gates, unit G).
-   *
    * `unresolved` counts the link rows that carry a target path and that
-   * {@link RESOLVED_LINK_TARGET_SQL} - the SAME ladder
-   * {@link resolvedDocLinkPairs} follows - cannot resolve to any
-   * document. That is what "broken" means to a reader: a materialized
-   * id, a `<target>.md` exact match, and an unambiguous basename all
-   * count as resolved, and only what survives all three rungs is
-   * reported.
-   *
-   * The narrower `target_document_id IS NULL` predicate is NOT used
-   * here. It also fires on every basename-style `[[note]]`, which the
-   * ladder resolves perfectly well and which an Obsidian-shaped vault
-   * is written in - a count that rises on a healthy edit is a gate that
-   * gets bumped rather than obeyed.
-   *
-   * Index-backed on every rung: `idx_links_target_path` bounds the
-   * scan, `documents.path` is UNIQUE, and the basename rungs
-   * equality-join `idx_documents_basename`.
+   * the read-time resolution ladder cannot resolve to any document -
+   * broken links as a reader experiences them.
    */
-  linkResolutionCounts(): LinkResolutionCounts {
-    const row = this.db
-      .query<{ total: number; unresolved: number | null }, []>(
-        "SELECT count(*) AS total, " +
-          `sum(CASE WHEN ${RESOLVED_LINK_TARGET_SQL} IS NULL THEN 1 ELSE 0 END) AS unresolved ` +
-          "FROM links l WHERE l.target_path IS NOT NULL",
-      )
-      .get();
-    return Object.freeze({ total: row?.total ?? 0, unresolved: row?.unresolved ?? 0 });
+  linkResolutionCounts(): links.LinkResolutionCounts {
+    return links.linkResolutionCounts(this.db);
+  }
+
+  /**
+   * Every link edge resolved to a (source, target) document-id pair,
+   * deduplicated. Unresolvable edges are absent. Read-only; feeds bridge
+   * discovery and community detection (link-recall-intelligence).
+   */
+  resolvedDocLinkPairs(): Array<{ readonly source: number; readonly target: number }> {
+    return links.resolvedDocLinkPairs(this.db);
+  }
+
+  /**
+   * For each chunk id, return the document ids that link TO that
+   * chunk's document via wikilink or markdown_link. Pure data; the
+   * ranker decides how to convert this into a boost.
+   */
+  inboundLinkSources(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<number>> {
+    return links.inboundLinkSources(this.db, candidateChunkIds);
+  }
+
+  /**
+   * For each source document id, the list of resolved outbound link
+   * target document ids (wikilink / markdown_link only; tags and
+   * unresolved targets excluded; self-links dropped). Used by the
+   * recall traversal layer to walk one or more hops out from a hit.
+   */
+  outboundLinkTargets(sourceDocumentIds: ReadonlyArray<number>): Map<number, number[]> {
+    return links.outboundLinkTargets(this.db, sourceDocumentIds);
+  }
+
+  /**
+   * For each chunk id, the set of tag link_text values associated with
+   * its document. Two chunks "share a tag" iff their tag sets intersect.
+   */
+  tagsByChunkDocument(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<string>> {
+    return links.tagsByChunkDocument(this.db, candidateChunkIds);
   }
 
   // ── doc aliases (v7, link-recall-intelligence) ─────────────────────────────
@@ -1492,32 +530,13 @@ export class Store {
    * Replace one document's frontmatter aliases. Values are normalised
    * via {@link normalizeAlias}; empties and duplicates are dropped.
    */
-  replaceDocAliases(documentId: number, aliases: ReadonlyArray<string>): void {
-    const normalised = [...new Set(aliases.map(normalizeAlias).filter((a) => a.length > 0))];
-    this.db.exec("BEGIN");
-    try {
-      this.db.run("DELETE FROM doc_aliases WHERE document_id = ?", [documentId]);
-      if (normalised.length > 0) {
-        const insert = this.db.prepare<undefined, [number, string]>(
-          "INSERT OR IGNORE INTO doc_aliases(document_id, alias) VALUES (?, ?)",
-        );
-        for (const alias of normalised) insert.run(documentId, alias);
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+  replaceDocAliases(documentId: number, values: ReadonlyArray<string>): void {
+    aliases.replaceDocAliases(this.db, documentId, values);
   }
 
   /** Normalised aliases of one document, sorted. */
   aliasesForDocument(documentId: number): ReadonlyArray<string> {
-    return this.db
-      .query<{ alias: string }, [number]>(
-        "SELECT alias FROM doc_aliases WHERE document_id = ? ORDER BY alias ASC",
-      )
-      .all(documentId)
-      .map((r) => r.alias);
+    return aliases.aliasesForDocument(this.db, documentId);
   }
 
   /**
@@ -1525,94 +544,13 @@ export class Store {
    * targets that match a declared alias. Runs AFTER
    * {@link resolveLinkTargets} so exact path matches always win.
    *
-   * Shadowing rule (mirrors `alias-index.ts`): a target that equals a
-   * real document basename is never alias-resolved - the read-time
-   * basename fallback owns it. Collisions (two documents claim one
-   * alias) resolve first-wins by sorted document path. Normalisation
-   * happens in JS because SQLite `lower()` is ASCII-only.
-   *
    * Returns the number of link rows resolved.
    */
   resolveAliasTargets(): number {
-    const unresolved = this.db
-      .query<{ target_path: string }, []>(
-        "SELECT DISTINCT target_path FROM links " +
-          "WHERE target_document_id IS NULL AND target_path IS NOT NULL " +
-          "AND link_type = 'wikilink' AND instr(target_path, '/') = 0",
-      )
-      .all();
-    if (unresolved.length === 0) return 0;
-
-    const aliasOwner = this.db.prepare<{ document_id: number }, [string]>(
-      "SELECT a.document_id AS document_id FROM doc_aliases a " +
-        "JOIN documents d ON d.id = a.document_id " +
-        "WHERE a.alias = ? ORDER BY d.path ASC LIMIT 1",
-    );
-    // A real document basename owns the target (top-level `target.md` or
-    // any nested `.../target.md`): both collapse to `basename = target`,
-    // an index lookup instead of the old `path = target.md OR SUBSTR(...)`
-    // full scan.
-    const basenameExists = this.db.prepare<{ id: number }, [string]>(
-      "SELECT id FROM documents WHERE basename = ? LIMIT 1",
-    );
-    const update = this.db.prepare<undefined, [number, string]>(
-      "UPDATE links SET target_document_id = ? " +
-        "WHERE target_document_id IS NULL AND target_path = ? AND link_type = 'wikilink'",
-    );
-
-    let resolved = 0;
-    this.db.exec("BEGIN");
-    try {
-      for (const row of unresolved) {
-        const key = normalizeAlias(row.target_path);
-        if (key.length === 0) continue;
-        // Skip targets a real document basename owns.
-        if (basenameExists.get(row.target_path)) {
-          continue;
-        }
-        const owner = aliasOwner.get(key);
-        if (!owner) continue;
-        update.run(owner.document_id, row.target_path);
-        resolved += this.db.query<{ n: number }, []>("SELECT changes() AS n").get()?.n ?? 0;
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
-    return resolved;
+    return aliases.resolveAliasTargets(this.db);
   }
 
-  /**
-   * Every link edge resolved to a (source, target) document-id pair,
-   * deduplicated, using the same conservative resolution ladder as
-   * {@link typedRelationEdgesForDocuments}: materialized id first,
-   * then `<target>.md` exact, then an UNAMBIGUOUS basename suffix.
-   * Unresolvable edges are absent. Read-only; feeds bridge discovery
-   * and community detection (link-recall-intelligence).
-   */
-  resolvedDocLinkPairs(): Array<{ readonly source: number; readonly target: number }> {
-    const rows = this.db
-      .query<{ source: number; target: number | null }, []>(
-        // The ladder itself lives in RESOLVED_LINK_TARGET_SQL, shared
-        // with `linkResolutionCounts` so the edges this yields and the
-        // rows that gate counts as broken are two views of one rule.
-        "SELECT DISTINCT l.source_document_id AS source, " +
-          `  ${RESOLVED_LINK_TARGET_SQL} AS target ` +
-          "FROM links l WHERE l.target_path IS NOT NULL",
-      )
-      .all();
-    const out: Array<{ source: number; target: number }> = [];
-    for (const r of rows) {
-      if (r.target !== null) out.push({ source: r.source, target: r.target });
-    }
-    return out;
-  }
-
-  /** Number of chunks with a stored embedding row. */
-  countEmbeddings(): number {
-    return this.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM embeddings").get()?.n ?? 0;
-  }
+  // ── typed relations ────────────────────────────────────────────────────────
 
   /**
    * For each document id, the typed relation edges it declares
@@ -1623,44 +561,13 @@ export class Store {
   typedRelationsForDocuments(
     documentIds: ReadonlyArray<number>,
   ): Map<number, Array<{ relation: string; target: string }>> {
-    const out = new Map<number, Array<{ relation: string; target: string }>>();
-    if (documentIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(documentIds);
-    const rows = this.db
-      .query<
-        {
-          source_document_id: number;
-          relation: string;
-          target_path: string | null;
-        },
-        number[]
-      >(
-        "SELECT source_document_id, relation, target_path FROM links " +
-          `WHERE source_document_id IN (${placeholders}) AND relation IS NOT NULL ` +
-          "AND relation_blocked = 0 " +
-          "ORDER BY id",
-      )
-      .all(...(documentIds as number[]));
-    for (const r of rows) {
-      const target = r.target_path ?? "";
-      if (target === "") continue;
-      const arr = out.get(r.source_document_id);
-      const edge = { relation: r.relation, target };
-      if (arr) arr.push(edge);
-      else out.set(r.source_document_id, [edge]);
-    }
-    return out;
+    return relations.typedRelationsForDocuments(this.db, documentIds);
   }
 
   /**
    * Typed relation edges declared by the given documents, with the
    * target resolved to a document id when possible (recall-trust-suite,
-   * relation polarity). Wikilink-style relation targets are usually bare
-   * ids (`[[note]]` → `note`) that the generic `resolveLinkTargets`
-   * exact-path pass cannot match against `note.md`, so this query also
-   * tries `<target>.md` and — when unambiguous — a basename match.
-   * Ambiguous basenames stay unresolved (deterministic inertness beats
-   * guessing the wrong page).
+   * relation polarity).
    */
   typedRelationEdgesForDocuments(documentIds: ReadonlyArray<number>): Array<{
     readonly sourceDocumentId: number;
@@ -1668,50 +575,7 @@ export class Store {
     readonly target: string;
     readonly targetDocumentId: number | null;
   }> {
-    if (documentIds.length === 0) return [];
-    const placeholders = sqlPlaceholders(documentIds);
-    const rows = this.db
-      .query<
-        {
-          source_document_id: number;
-          relation: string;
-          target_path: string | null;
-          resolved_target_id: number | null;
-        },
-        number[]
-      >(
-        "SELECT l.source_document_id, l.relation, l.target_path, " +
-          "  COALESCE(" +
-          "    l.target_document_id, " +
-          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-          "    (SELECT d.id FROM documents d " +
-          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
-          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
-          "  ) AS resolved_target_id " +
-          "FROM links l " +
-          `WHERE l.source_document_id IN (${placeholders}) AND l.relation IS NOT NULL ` +
-          "AND l.relation_blocked = 0 " +
-          "ORDER BY l.id",
-      )
-      .all(...(documentIds as number[]));
-    const out: Array<{
-      sourceDocumentId: number;
-      relation: string;
-      target: string;
-      targetDocumentId: number | null;
-    }> = [];
-    for (const r of rows) {
-      const target = r.target_path ?? "";
-      if (target === "") continue;
-      out.push({
-        sourceDocumentId: r.source_document_id,
-        relation: r.relation,
-        target,
-        targetDocumentId: r.resolved_target_id,
-      });
-    }
-    return out;
+    return relations.typedRelationEdgesForDocuments(this.db, documentIds);
   }
 
   /**
@@ -1719,10 +583,8 @@ export class Store {
    * current schema-pack constraints (write-time-integrity-governance).
    * Runs after `resolveLinkTargets` on every index pass, so removing a
    * constraint restores blocked edges on the next run without touching
-   * files. Endpoint resolution mirrors `typedRelationEdgesForDocuments`
-   * (exact id, `<target>.md`, unambiguous basename). Returns the rows
-   * that ended up blocked. With an empty constraint map the pass only
-   * resets stale flags.
+   * files. Returns the rows that ended up blocked. With an empty
+   * constraint map the pass only resets stale flags.
    */
   recomputeRelationConstraintFlags(
     constraints: Readonly<Record<string, ReadonlyArray<string>>>,
@@ -1734,68 +596,7 @@ export class Store {
     readonly targetType: string;
     readonly declared: ReadonlyArray<string>;
   }> {
-    const rows = this.db
-      .query<
-        {
-          id: number;
-          relation: string;
-          blocked: number;
-          source_path: string;
-          source_type: string | null;
-          target_path: string | null;
-          target_type: string | null;
-        },
-        []
-      >(
-        "SELECT l.id, l.relation, l.relation_blocked AS blocked, " +
-          "  sd.path AS source_path, sd.page_type AS source_type, " +
-          "  l.target_path, td.page_type AS target_type " +
-          "FROM links l " +
-          "JOIN documents sd ON sd.id = l.source_document_id " +
-          "LEFT JOIN documents td ON td.id = COALESCE(" +
-          "    l.target_document_id, " +
-          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-          "    (SELECT d.id FROM documents d " +
-          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
-          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
-          "  ) " +
-          "WHERE l.relation IS NOT NULL",
-      )
-      .all();
-    const block = this.db.query("UPDATE links SET relation_blocked = 1 WHERE id = ?");
-    const unblock = this.db.query("UPDATE links SET relation_blocked = 0 WHERE id = ?");
-    const violations: Array<{
-      relation: string;
-      sourcePath: string;
-      targetPath: string;
-      sourceType: string;
-      targetType: string;
-      declared: ReadonlyArray<string>;
-    }> = [];
-    for (const row of rows) {
-      const declared = constraints[row.relation];
-      const allowed =
-        declared === undefined ||
-        declared.length === 0 ||
-        row.source_type === null ||
-        row.target_type === null ||
-        declared.includes(`${row.source_type}->${row.target_type}`);
-      if (allowed) {
-        if (row.blocked !== 0) unblock.run(row.id);
-        continue;
-      }
-      if (row.blocked === 0) block.run(row.id);
-      violations.push({
-        relation: row.relation,
-        sourcePath: row.source_path,
-        targetPath: row.target_path ?? "",
-        sourceType: row.source_type!,
-        targetType: row.target_type!,
-        declared: declared!,
-      });
-    }
-    return violations;
+    return relations.recomputeRelationConstraintFlags(this.db, constraints);
   }
 
   /**
@@ -1809,69 +610,21 @@ export class Store {
     readonly sourceType: string | null;
     readonly targetType: string | null;
   }> {
-    return this.db
-      .query<
-        {
-          relation: string;
-          source_path: string;
-          target_path: string | null;
-          source_type: string | null;
-          target_type: string | null;
-        },
-        []
-      >(
-        "SELECT l.relation, sd.path AS source_path, l.target_path, " +
-          "  sd.page_type AS source_type, td.page_type AS target_type " +
-          "FROM links l " +
-          "JOIN documents sd ON sd.id = l.source_document_id " +
-          "LEFT JOIN documents td ON td.id = COALESCE(" +
-          "    l.target_document_id, " +
-          "    (SELECT d.id FROM documents d WHERE d.path = l.target_path || '.md'), " +
-          "    (SELECT d.id FROM documents d " +
-          "       WHERE SUBSTR(d.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md' " +
-          "       AND 1 = (SELECT COUNT(*) FROM documents d2 " +
-          "                WHERE SUBSTR(d2.path, -(LENGTH(l.target_path) + 4)) = '/' || l.target_path || '.md'))" +
-          "  ) " +
-          "WHERE l.relation IS NOT NULL AND l.relation_blocked = 1 " +
-          "ORDER BY sd.path, l.id",
-      )
-      .all()
-      .map((r) => ({
-        relation: r.relation,
-        sourcePath: r.source_path,
-        targetPath: r.target_path ?? "",
-        sourceType: r.source_type,
-        targetType: r.target_type,
-      }));
+    return relations.blockedRelationRows(this.db);
   }
+
+  // ── tiered frontmatter (write-time-integrity-governance) ───────────────────
 
   /**
    * The tiered-frontmatter snapshot the last index pass recorded for a
-   * document, or null when none exists (write-time-integrity-governance).
+   * document, or null when none exists.
    */
   getTierSnapshot(documentId: number): Record<string, unknown> | null {
-    const row = this.db
-      .query<{ tier_snapshot: string | null }, [number]>(
-        "SELECT tier_snapshot FROM documents WHERE id = ?",
-      )
-      .get(documentId);
-    if (!row || row.tier_snapshot === null) return null;
-    try {
-      const parsed: unknown = JSON.parse(row.tier_snapshot);
-      if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
-      }
-      return null;
-    } catch {
-      return null;
-    }
+    return tiers.getTierSnapshot(this.db, documentId);
   }
 
   setTierSnapshot(documentId: number, snapshot: Readonly<Record<string, unknown>>): void {
-    this.db.run("UPDATE documents SET tier_snapshot = ? WHERE id = ?", [
-      JSON.stringify(snapshot),
-      documentId,
-    ]);
+    tiers.setTierSnapshot(this.db, documentId, snapshot);
   }
 
   /** Stage one identity-field hand-edit; (document, field) upserts. */
@@ -1882,29 +635,11 @@ export class Store {
     readonly actual: unknown;
     readonly detectedAt: string;
   }): void {
-    this.db.run(
-      "INSERT INTO tier_drift(document_id, field, expected, actual, detected_at) " +
-        "VALUES (?, ?, ?, ?, ?) " +
-        "ON CONFLICT(document_id, field) DO UPDATE SET actual = excluded.actual",
-      [
-        input.documentId,
-        input.field,
-        JSON.stringify(input.expected),
-        JSON.stringify(input.actual),
-        input.detectedAt,
-      ],
-    );
+    tiers.upsertTierDrift(this.db, input);
   }
 
   clearTierDrift(documentId: number, field?: string): void {
-    if (field === undefined) {
-      this.db.run("DELETE FROM tier_drift WHERE document_id = ?", [documentId]);
-    } else {
-      this.db.run("DELETE FROM tier_drift WHERE document_id = ? AND field = ?", [
-        documentId,
-        field,
-      ]);
-    }
+    tiers.clearTierDrift(this.db, documentId, field);
   }
 
   /** Open identity-drift findings, oldest first, with document paths. */
@@ -1916,83 +651,33 @@ export class Store {
     readonly actual: unknown;
     readonly detectedAt: string;
   }> {
-    return this.db
-      .query<
-        {
-          document_id: number;
-          path: string;
-          field: string;
-          expected: string;
-          actual: string;
-          detected_at: string;
-        },
-        []
-      >(
-        "SELECT t.document_id, d.path, t.field, t.expected, t.actual, t.detected_at " +
-          "FROM tier_drift t JOIN documents d ON d.id = t.document_id " +
-          "ORDER BY t.detected_at, t.id",
-      )
-      .all()
-      .map((r) => ({
-        documentId: r.document_id,
-        path: r.path,
-        field: r.field,
-        expected: parseJsonValue(r.expected),
-        actual: parseJsonValue(r.actual),
-        detectedAt: r.detected_at,
-      }));
-  }
-
-  /**
-   * Corpus document frequency per term (recall-trust-suite, coverage
-   * engine): how many distinct documents match each term in FTS. Each
-   * term is quoted so FTS5 metacharacters stay literal. A term that
-   * fails to query (e.g. tokenizer edge case) counts as 0 rather than
-   * failing the search.
-   */
-  documentFrequencies(terms: ReadonlyArray<string>): Map<string, number> {
-    const out = new Map<string, number>();
-    if (terms.length === 0) return out;
-    const q = this.db.query<{ n: number }, [string]>(
-      "SELECT COUNT(DISTINCT c.document_id) AS n " +
-        "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
-        "WHERE chunk_fts MATCH ?",
-    );
-    for (const term of terms) {
-      try {
-        out.set(term, q.get(`"${term.replace(/"/g, '""')}"`)?.n ?? 0);
-      } catch {
-        out.set(term, 0);
-      }
-    }
-    return out;
+    return tiers.listTierDrift(this.db);
   }
 
   // ── search ─────────────────────────────────────────────────────────────────
 
+  /**
+   * Corpus document frequency per term (recall-trust-suite, coverage
+   * engine): how many distinct documents match each term in FTS.
+   */
+  documentFrequencies(terms: ReadonlyArray<string>): Map<string, number> {
+    return keyword.documentFrequencies(this.db, terms);
+  }
+
   ftsIntegrityCounts(): { readonly chunks: number; readonly ftsRows: number } {
-    const chunks =
-      this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunks").get()?.c ?? 0;
-    const ftsRows =
-      this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunk_fts_docsize").get()?.c ?? 0;
-    return Object.freeze({ chunks, ftsRows });
+    return keyword.ftsIntegrityCounts(this.db);
   }
 
   rebuildFtsIndex(): void {
-    this.db.run("INSERT INTO chunk_fts(chunk_fts) VALUES('rebuild')");
+    keyword.rebuildFtsIndex(this.db);
   }
 
   rebuildFtsIndexWithWriterLock(): void {
     if (this.release) {
-      this.rebuildFtsIndex();
+      keyword.rebuildFtsIndex(this.db);
       return;
     }
-    const release = acquireWriterLockSync(this.config.dbPath);
-    try {
-      this.rebuildFtsIndex();
-    } finally {
-      release();
-    }
+    keyword.rebuildFtsIndexWithWriterLock(this.db, this.config.dbPath);
   }
 
   /**
@@ -2002,318 +687,20 @@ export class Store {
   keywordTopK(
     fts5Query: string,
     opts: { readonly limit: number; readonly pathPrefix?: string | null },
-  ): KeywordHit[] {
-    const limit = Math.max(1, opts.limit | 0);
-    const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
-
-    if (prefix) {
-      const rows = this.db
-        .query<
-          { chunk_id: number; document_id: number; bm25: number },
-          [string, string, string, number]
-        >(
-          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
-            "FROM chunk_fts " +
-            "JOIN chunks c ON c.id = chunk_fts.rowid " +
-            "JOIN documents d ON d.id = c.document_id " +
-            "WHERE chunk_fts MATCH ? AND substr(d.path, 1, length(?)) = ? " +
-            "ORDER BY bm25 ASC LIMIT ?",
-        )
-        .all(fts5Query, prefix, prefix, limit);
-      return rows.map((r) => ({
-        chunkId: r.chunk_id,
-        documentId: r.document_id,
-        bm25: r.bm25,
-      }));
-    }
-
-    const rows = this.db
-      .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
-        "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_fts, 1.0, 0.3) AS bm25 " +
-          "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
-          "WHERE chunk_fts MATCH ? ORDER BY bm25 ASC LIMIT ?",
-      )
-      .all(fts5Query, limit);
-    return rows.map((r) => ({
-      chunkId: r.chunk_id,
-      documentId: r.document_id,
-      bm25: r.bm25,
-    }));
+  ): keyword.KeywordHit[] {
+    return keyword.keywordTopK(this.db, fts5Query, opts);
   }
 
   /**
    * Trigram candidate lookup over the `chunk_trigram` FTS5 shadow (v9).
-   * Returns bm25-ordered keyword hits whose content matches the trigram
-   * query - a strict superset of exact substring matches for the query's
-   * terms, used as an opt-in candidate source that broadens large-vault
-   * keyword recall (substring / partial-token matches the word tokenizer
-   * misses). Fails soft to an empty list if the trigram table is absent
-   * (a migrated-but-not-reindexed index always has it via the v9 rebuild).
+   * An opt-in candidate source that broadens large-vault keyword recall
+   * with the substring / partial-token matches the word tokenizer misses.
    */
   trigramCandidates(
     trigramQuery: string,
     opts: { readonly limit: number; readonly pathPrefix?: string | null },
-  ): KeywordHit[] {
-    const limit = Math.max(1, opts.limit | 0);
-    const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
-    try {
-      if (prefix) {
-        const rows = this.db
-          .query<
-            { chunk_id: number; document_id: number; bm25: number },
-            [string, string, string, number]
-          >(
-            "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
-              "FROM chunk_trigram " +
-              "JOIN chunks c ON c.id = chunk_trigram.rowid " +
-              "JOIN documents d ON d.id = c.document_id " +
-              "WHERE chunk_trigram MATCH ? AND substr(d.path, 1, length(?)) = ? " +
-              "ORDER BY bm25 ASC LIMIT ?",
-          )
-          .all(trigramQuery, prefix, prefix, limit);
-        return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
-      }
-      const rows = this.db
-        .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
-          "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
-            "FROM chunk_trigram JOIN chunks c ON c.id = chunk_trigram.rowid " +
-            "WHERE chunk_trigram MATCH ? ORDER BY bm25 ASC LIMIT ?",
-        )
-        .all(trigramQuery, limit);
-      return rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 }));
-    } catch {
-      return [];
-    }
-  }
-
-  /** Total indexed chunk count - used to judge trigram-prefilter selectivity. */
-  chunkCount(): number {
-    const row = this.db.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM chunks").get();
-    return row?.n ?? 0;
-  }
-
-  semanticTopK(
-    queryVector: ReadonlyArray<number> | Float32Array,
-    opts: { readonly limit: number; readonly pathPrefix?: string | null },
-  ): SemanticHit[] {
-    if (!this._vecLoaded) {
-      throw new SearchError(
-        "VEC_EXTENSION_UNAVAILABLE",
-        "sqlite-vec extension not loaded; semantic search unavailable",
-      );
-    }
-    const limit = Math.max(1, opts.limit | 0);
-    const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
-
-    assertValidVector(queryVector, "semanticTopK");
-    const buf = vecToBuffer(queryVector);
-    if (prefix) {
-      const rows = this.db
-        .query<
-          { chunk_id: number; document_id: number; distance: number },
-          [Buffer, number, string, string]
-        >(
-          "SELECT m.chunk_id AS chunk_id, c.document_id AS document_id, v.distance AS distance " +
-            "FROM chunk_vec v " +
-            "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
-            "JOIN chunks c ON c.id = m.chunk_id " +
-            "JOIN documents d ON d.id = c.document_id " +
-            "WHERE v.embedding MATCH ? AND k = ? AND substr(d.path, 1, length(?)) = ? " +
-            "ORDER BY v.distance ASC",
-        )
-        .all(buf, limit * 4, prefix, prefix);
-      return rows.slice(0, limit).map((r) => ({
-        chunkId: r.chunk_id,
-        documentId: r.document_id,
-        distance: r.distance,
-      }));
-    }
-
-    const rows = this.db
-      .query<{ chunk_id: number; document_id: number; distance: number }, [Buffer, number]>(
-        "SELECT m.chunk_id AS chunk_id, c.document_id AS document_id, v.distance AS distance " +
-          "FROM chunk_vec v " +
-          "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
-          "JOIN chunks c ON c.id = m.chunk_id " +
-          "WHERE v.embedding MATCH ? AND k = ? " +
-          "ORDER BY v.distance ASC",
-      )
-      .all(buf, limit);
-    return rows.map((r) => ({
-      chunkId: r.chunk_id,
-      documentId: r.document_id,
-      distance: r.distance,
-    }));
-  }
-
-  hydrateChunks(chunkIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
-    const out = new Map<number, HydratedChunk>();
-    if (chunkIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(chunkIds);
-    const rows = this.db
-      .query<
-        {
-          chunk_id: number;
-          document_id: number;
-          path: string;
-          title: string | null;
-          content: string;
-          start_line: number;
-          end_line: number;
-          mtime: number;
-          authored_at: number | null;
-        },
-        number[]
-      >(
-        "SELECT c.id AS chunk_id, c.document_id, d.path AS path, d.title AS title, " +
-          "       c.content AS content, c.start_line AS start_line, c.end_line AS end_line, d.mtime AS mtime, " +
-          "       d.authored_at AS authored_at " +
-          "FROM chunks c JOIN documents d ON d.id = c.document_id " +
-          `WHERE c.id IN (${placeholders})`,
-      )
-      .all(...(chunkIds as number[]));
-    for (const r of rows) {
-      out.set(r.chunk_id, {
-        chunkId: r.chunk_id,
-        documentId: r.document_id,
-        path: r.path,
-        title: r.title,
-        content: r.content,
-        startLine: r.start_line,
-        endLine: r.end_line,
-        mtime: r.mtime,
-        authoredAt: r.authored_at,
-      });
-    }
-    return out;
-  }
-
-  /**
-   * For each chunk id, return the document ids that link TO that
-   * chunk's document via wikilink or markdown_link. Pure data; the
-   * ranker decides how to convert this into a boost.
-   */
-  inboundLinkSources(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<number>> {
-    const out = new Map<number, Set<number>>();
-    if (candidateChunkIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(candidateChunkIds);
-    const rows = this.db
-      .query<{ chunk_id: number; source_document_id: number }, number[]>(
-        "SELECT c.id AS chunk_id, l.source_document_id " +
-          `FROM chunks c JOIN links l ON l.target_document_id = c.document_id ` +
-          `WHERE c.id IN (${placeholders}) AND l.link_type IN ('wikilink','markdown_link') ` +
-          `  AND l.source_document_id != c.document_id`,
-      )
-      .all(...(candidateChunkIds as number[]));
-    for (const r of rows) {
-      let set = out.get(r.chunk_id);
-      if (!set) {
-        set = new Set();
-        out.set(r.chunk_id, set);
-      }
-      set.add(r.source_document_id);
-    }
-    return out;
-  }
-
-  /**
-   * For each source document id, the list of resolved outbound link
-   * target document ids (wikilink / markdown_link only; tags and
-   * unresolved targets excluded; self-links dropped). Used by the
-   * recall traversal layer to walk one or more hops out from a hit.
-   */
-  outboundLinkTargets(sourceDocumentIds: ReadonlyArray<number>): Map<number, number[]> {
-    const out = new Map<number, number[]>();
-    if (sourceDocumentIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(sourceDocumentIds);
-    const rows = this.db
-      .query<{ source_document_id: number; target_document_id: number }, number[]>(
-        "SELECT DISTINCT l.source_document_id, l.target_document_id " +
-          `FROM links l ` +
-          `WHERE l.source_document_id IN (${placeholders}) ` +
-          `  AND l.target_document_id IS NOT NULL ` +
-          `  AND l.target_document_id != l.source_document_id ` +
-          `  AND l.link_type IN ('wikilink','markdown_link') ` +
-          `ORDER BY l.source_document_id, l.target_document_id`,
-      )
-      .all(...(sourceDocumentIds as number[]));
-    for (const r of rows) {
-      let list = out.get(r.source_document_id);
-      if (!list) {
-        list = [];
-        out.set(r.source_document_id, list);
-      }
-      list.push(r.target_document_id);
-    }
-    return out;
-  }
-
-  /**
-   * One representative chunk per document - the lowest `chunk_index`,
-   * which for markdown is the document head (title / opening section).
-   * The traversal layer surfaces this when a linked document is not
-   * already a relevance hit.
-   */
-  /**
-   * Document id -> { path, title } for every indexed document, reading
-   * ONLY the `documents` table (never chunk bodies). The graph query
-   * pre-pass uses this for its index-only short-circuit so it can rank and
-   * answer from index metadata with zero note bodies hydrated.
-   */
-  documentTitles(): Map<number, { readonly path: string; readonly title: string | null }> {
-    const out = new Map<number, { path: string; title: string | null }>();
-    const rows = this.db
-      .query<{ id: number; path: string; title: string | null }, []>(
-        "SELECT id, path, title FROM documents",
-      )
-      .all();
-    for (const r of rows) out.set(r.id, { path: r.path, title: r.title });
-    return out;
-  }
-
-  representativeChunks(documentIds: ReadonlyArray<number>): Map<number, HydratedChunk> {
-    const out = new Map<number, HydratedChunk>();
-    if (documentIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(documentIds);
-    const rows = this.db
-      .query<
-        {
-          chunk_id: number;
-          document_id: number;
-          path: string;
-          title: string | null;
-          content: string;
-          start_line: number;
-          end_line: number;
-          mtime: number;
-        },
-        number[]
-      >(
-        "SELECT c.id AS chunk_id, c.document_id AS document_id, d.path AS path, " +
-          "d.title AS title, c.content AS content, c.start_line AS start_line, " +
-          "c.end_line AS end_line, d.mtime AS mtime " +
-          "FROM chunks c JOIN documents d ON d.id = c.document_id " +
-          `WHERE c.document_id IN (${placeholders}) ` +
-          "ORDER BY c.document_id, c.chunk_index ASC",
-      )
-      .all(...(documentIds as number[]));
-    for (const r of rows) {
-      if (out.has(r.document_id)) continue; // first row per doc = lowest chunk_index
-      out.set(
-        r.document_id,
-        Object.freeze({
-          chunkId: r.chunk_id,
-          documentId: r.document_id,
-          path: r.path,
-          title: r.title,
-          content: r.content,
-          startLine: r.start_line,
-          endLine: r.end_line,
-          mtime: r.mtime,
-        }),
-      );
-    }
-    return out;
+  ): keyword.KeywordHit[] {
+    return trigram.trigramCandidates(this.db, trigramQuery, opts);
   }
 
   // ── entities ─────────────────────────────────────────────────────────────
@@ -2324,20 +711,7 @@ export class Store {
    * pre-normalised (lowercased) by the extractor.
    */
   replaceEntities(chunkId: number, entities: ReadonlyArray<string>): void {
-    this.db.exec("BEGIN");
-    try {
-      this.db.run("DELETE FROM chunk_entities WHERE chunk_id = ?", [chunkId]);
-      if (entities.length > 0) {
-        const insert = this.db.prepare<undefined, [number, string]>(
-          "INSERT OR IGNORE INTO chunk_entities(chunk_id, entity) VALUES (?, ?)",
-        );
-        for (const e of entities) insert.run(chunkId, e);
-      }
-      this.db.exec("COMMIT");
-    } catch (e) {
-      this.db.exec("ROLLBACK");
-      throw e;
-    }
+    chunkEntities.replaceEntities(this.db, chunkId, entities);
   }
 
   /**
@@ -2345,13 +719,7 @@ export class Store {
    * (link-recall-intelligence: shared-entity digest in cluster notes).
    */
   entitiesForDocument(documentId: number): ReadonlyArray<string> {
-    return this.db
-      .query<{ entity: string }, [number]>(
-        "SELECT DISTINCT e.entity AS entity FROM chunk_entities e " +
-          "JOIN chunks c ON c.id = e.chunk_id WHERE c.document_id = ? ORDER BY e.entity ASC",
-      )
-      .all(documentId)
-      .map((r) => r.entity);
+    return chunkEntities.entitiesForDocument(this.db, documentId);
   }
 
   /**
@@ -2363,93 +731,16 @@ export class Store {
     candidateChunkIds: ReadonlyArray<number>,
     queryEntities: ReadonlyArray<string>,
   ): Map<number, number> {
-    const out = new Map<number, number>();
-    if (candidateChunkIds.length === 0 || queryEntities.length === 0) return out;
-    const chunkPlaceholders = sqlPlaceholders(candidateChunkIds);
-    const entityPlaceholders = sqlPlaceholders(queryEntities);
-    const rows = this.db
-      .query<{ chunk_id: number; c: number }, (number | string)[]>(
-        "SELECT chunk_id, COUNT(DISTINCT entity) AS c FROM chunk_entities " +
-          `WHERE chunk_id IN (${chunkPlaceholders}) AND entity IN (${entityPlaceholders}) ` +
-          "GROUP BY chunk_id",
-      )
-      .all(...(candidateChunkIds as number[]), ...(queryEntities as string[]));
-    for (const r of rows) out.set(r.chunk_id, r.c);
-    return out;
-  }
-
-  /**
-   * For each chunk id, the set of tag link_text values associated with
-   * its document. Two chunks "share a tag" iff their tag sets intersect.
-   */
-  tagsByChunkDocument(candidateChunkIds: ReadonlyArray<number>): Map<number, Set<string>> {
-    const out = new Map<number, Set<string>>();
-    if (candidateChunkIds.length === 0) return out;
-    const placeholders = sqlPlaceholders(candidateChunkIds);
-    const rows = this.db
-      .query<{ chunk_id: number; tag: string }, number[]>(
-        "SELECT c.id AS chunk_id, l.link_text AS tag " +
-          `FROM chunks c JOIN links l ON l.source_document_id = c.document_id ` +
-          `WHERE c.id IN (${placeholders}) AND l.link_type = 'tag' AND l.link_text IS NOT NULL`,
-      )
-      .all(...(candidateChunkIds as number[]));
-    for (const r of rows) {
-      let set = out.get(r.chunk_id);
-      if (!set) {
-        set = new Set();
-        out.set(r.chunk_id, set);
-      }
-      set.add(r.tag);
-    }
-    return out;
+    return chunkEntities.chunkEntityMatches(this.db, candidateChunkIds, queryEntities);
   }
 
   // ── counts ─────────────────────────────────────────────────────────────────
 
-  counts(): StoreCounts {
-    const docs = this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM documents").get();
-    const chunks = this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM chunks").get();
-    const emb = this.db.query<{ c: number }, []>("SELECT count(*) AS c FROM embeddings").get();
-    const stale = this.staleEmbeddings();
-    return Object.freeze({
-      documents: docs?.c ?? 0,
-      chunks: chunks?.c ?? 0,
-      embeddings: emb?.c ?? 0,
-      staleEmbeddings: stale,
-    });
-  }
-
-  private staleEmbeddings(): number {
-    const model = this.config.semantic.model;
-    const dimension = this.config.semantic.dimension;
-    if (!model || !dimension) {
-      // No baseline to compare against: 0 stale by convention.
-      return 0;
-    }
-    const row = this.db
-      .query<{ c: number }, [string, number]>(
-        "SELECT count(*) AS c FROM embeddings WHERE model != ? OR dimension != ?",
-      )
-      .get(model, dimension);
-    return row?.c ?? 0;
+  counts(): census.StoreCounts {
+    return census.counts(this.db, this.config.semantic.model, this.config.semantic.dimension);
   }
 
   // ── direct accessors used by indexer/CLI/status ────────────────────────────
-
-  /**
-   * Chunks that have no row in `embeddings`. Used by the indexer to
-   * populate vectors after a fresh index or after the model-change drop.
-   */
-  findChunksWithoutEmbeddings(): Array<{ chunkId: number; content: string }> {
-    const rows = this.db
-      .query<{ id: number; content: string }, []>(
-        "SELECT c.id AS id, c.content AS content FROM chunks c " +
-          "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
-          "WHERE e.chunk_id IS NULL ORDER BY c.id",
-      )
-      .all();
-    return rows.map((r) => ({ chunkId: r.id, content: r.content }));
-  }
 
   /** Escape hatch for status queries that don't fit the typed API. */
   rawQuery<T>(sql: string, params: ReadonlyArray<string | number | null> = []): T[] {
