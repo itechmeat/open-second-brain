@@ -29,10 +29,27 @@ Nine atomic units, in dependency-free order:
 2. **Typed parse errors** (`t_ceee3b4d`) - preference and retired-preference parse
    failures carry their path as a field instead of embedding it in the message,
    which removes the duplicated path from every `o2b brain doctor` parse-error line.
-3. **Route discrimination** (`t_07ad3c42`) - the extracted-fact write router scores
-   its candidate routes, and when the top two are within a margin, a registered
-   ladder of structural rules separates them and the decision is emitted as a
-   gated continuity record.
+3. **Route discrimination** (`t_07ad3c42`) - **BUILT, REVIEWED, AND REVERTED. Not
+   shipped.** The unit scored candidate routes and separated near-equal ones with a
+   registered ladder, emitting a gated record. Independent review found the routed
+   destination was not byte-identical with the gate absent, because the premise "a
+   route captured for its own span always attains full coverage" is falsified by the
+   extractor's 200-character cap. Fixing that produced a correctness proof, and the
+   proof settled the unit: once the captured family is scored over the span it
+   actually matched, a sub-reading always pays the containment penalty and falls at
+   least 14 below it, outside the margin of 10. Only a rival claiming the span IN FULL
+   can enter the band - and the three families this router chooses between cannot,
+   because a complete `url` match carries `://`, a complete `email` match carries `@`,
+   and `quantity` is a number bound to a unit sigil. The one overlap that does occur
+   is already resolved by the extractor before routing. The ladder therefore never
+   fires and the record is never written.
+
+   The task premise is what was wrong. The ambiguity it describes - a taste signal
+   that is also an obligation, a note that is really a decision - is real, but
+   `routeExtractedFacts` chooses among structurally disjoint pattern families and has
+   nothing to disambiguate. Anchoring the work there came from the task body and no
+   reconnaissance caught it; the correctness proof did. Any future attempt must first
+   name a write surface whose destinations can genuinely claim the same span.
 4. **Unroutable-capture hint** (`t_75597bb9`) - a scope-less feedback write returns a
    non-blocking structured hint naming the missing routing signal and the scope
    slugs the vault actually contains, resolved through the advisory rail.
@@ -135,11 +152,19 @@ hard separator, not a tiebreak.
     rather than permanent litter. Building a second promotion-agenda-autoclose pipeline
     against `obligations.ts` would duplicate a working one.
 
-- **The dormant module is the finding, not the feature.** `src/core/brain/gaps/gap-loop.ts`
-  is 274 lines implementing detection, promotion, listing, a session agenda and
-  auto-close. Its only reference outside itself is a comment in `src/core/config.ts`.
-  Unit 6 is therefore mostly wiring, and the release note should say so rather than
-  present it as new machinery.
+- **A finding recorded here during scoping was wrong, and is corrected rather than
+  deleted.** This document originally claimed `src/core/brain/gaps/gap-loop.ts` was 274
+  lines of fully implemented machinery with no callers, and framed unit 6 as mostly
+  hook wiring. That was based on a grep scoped to `src/`, which does not contain the
+  hooks. `hooks/gap-promote.ts` and `hooks/gap-agenda.ts` exist, are registered in
+  `hooks/hooks.json` and in the install manifest, shipped in v1.35.0, and are covered by
+  tests for both the flag-on and flag-off paths. The two configuration keys are genuinely
+  resolved, not merely documented. The loop was already wired end to end.
+
+  What unit 6 actually adds is therefore narrower and more honest: a second signal
+  source. The structural telemetry source was the only thing that could ever promote a
+  gap; a graded recall verdict could not, because nothing carried it past the call that
+  produced it. The release note must not claim dead machinery was revived.
 
 - **Recurrence identity is never natural language.** Unit 6 reuses `normalizeQueryTerms`,
   which derives its bucket from document frequency and drops secret-shaped tokens. Unit 5

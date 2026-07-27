@@ -4,9 +4,13 @@ Nine atomic units. Each lands as its own conventional commit on
 `feat/signals-that-survive`, written test-first: the test is written and run and
 must fail with the expected error before the implementation exists.
 
-Units 1 through 9 have no dependency edges between them on the kanban board.
-The order below is chosen so that units sharing a file do not interleave:
-units 3, 4 and 7 all touch capture-path modules and run consecutively.
+Unit numbers are the ones in `design.md`'s Scope list and are authoritative -
+code comments referencing this wave use them. The nine units have no dependency
+edges between them on the kanban board, so the sections below are laid out in
+EXECUTION order rather than in unit order: units sharing a file must not run
+concurrently, and the sequence here is what keeps them apart.
+
+Execution order: 1, 2, 4, 7, 8, 9, then 3, then 5, then 6.
 
 ## Tasks
 
