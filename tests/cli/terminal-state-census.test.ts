@@ -15,27 +15,41 @@
  *                      why that is right.
  *
  * The direction matters. A verb cannot vouch for itself, so the census
- * reads each handler's transitive call graph WITHIN its own module and
- * classifies from what is actually reachable. Adding a verb that can
- * only exit zero in silence fails here, by name, until someone either
- * gives it an exit or writes down why it has none.
+ * reads each handler's transitive call graph and classifies from what is
+ * actually reachable. Adding a verb that can only exit zero in silence
+ * fails here, by name, until someone either gives it an exit or writes
+ * down why it has none.
+ *
+ * That walk used to stop at the handler's own module, which was the right
+ * boundary while a CLI verb WAS one file. It is not any more: a verb now
+ * lives in `<command>/verbs/<name>.ts` and states its shared refusal - "no
+ * vault configured" - through `<command>/helpers.ts` beside it. Stopping
+ * at the file would have credited a verb with no refusal purely because
+ * the refusal it makes was extracted, and the only repair available then
+ * is a hand entry, which is an exclusion. So the walk follows a call into
+ * the sibling modules of the handler's OWN command that it actually
+ * imports, up to {@link MAX_MODULE_HOPS} of them.
  *
  * Modelled on `tests/core/brain/vault-guard-census.test.ts`: detect the
  * property syntactically, keep one explicit inventory of exceptions, one
  * entry one reason, and pin the measurement so a regex that stopped
  * matching cannot report a clean sweep over an empty set.
  *
- * Two limits, stated rather than discovered. Sub-verbs (`brain git
+ * Three limits, stated rather than discovered. Sub-verbs (`brain git
  * ingest`, `search focus clear`) are parsed by each handler from its own
  * positionals and are covered through their parent's call graph, not
- * individually. And a delegating case (`o2b brain`, `o2b search`) takes
- * the classification of everything it can reach, which is the right
- * answer to "can this invocation leave me with nothing".
+ * individually. A delegating case (`o2b brain`, `o2b search`) takes the
+ * classification of everything it can reach, which is the right answer to
+ * "can this invocation leave me with nothing". And the walk stops at the
+ * handler's own command: neither `src/core` nor the CLI-wide plumbing
+ * every command shares is followed, because a refusal raised there is a
+ * fact about the domain or about argument parsing in general, not one this
+ * verb states.
  */
 
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -74,6 +88,16 @@ interface HandClassification {
  * covering the state was inconvenient - the two states this census
  * found and COVERED (`o2b status`, `o2b brain inbox-drain`) are absent
  * from this table for exactly that reason.
+ *
+ * `deliberately-silent` currently has no members, and that is a result,
+ * not an oversight. `brain semantics-backfill`, `brain mcp-landscape` and
+ * `brain stale` sat here until the walk reached the helpers module beside
+ * them and found the refusal each one makes on an unresolvable vault. What
+ * their entries actually argued was that an EMPTY RESULT from them names
+ * no forward exit and should not - a property about one path through a
+ * verb, which is not the property these three classes measure. Re-adding
+ * them here would be an exclusion covering a question this census does not
+ * ask; that argument belongs beside the code that renders the empty case.
  */
 const CLASSIFIED_BY_HAND: Readonly<Record<string, HandClassification>> = Object.freeze({
   "o2b onboarding": {
@@ -99,28 +123,6 @@ const CLASSIFIED_BY_HAND: Readonly<Record<string, HandClassification>> = Object.
       "returns a non-zero code when any error is present. The refusal does not travel " +
       "through the shared `fail()` helper this census matches on, which is more specific, " +
       "not less.",
-  },
-  "o2b brain semantics-backfill": {
-    cls: STATE_CLASS.silent,
-    reason:
-      "dry-run only by design - this verb has no apply path, so there is no command to " +
-      "name. An empty proposal list means the inverse-edge invariant it previews already " +
-      "holds, which is an answer, not a degraded state.",
-  },
-  "o2b brain mcp-landscape": {
-    cls: STATE_CLASS.silent,
-    reason:
-      "lists the MCP servers declared in runtime configuration files this tool never " +
-      "writes. An empty landscape changes by editing another runtime's config, so no " +
-      "`o2b` command is its exit and naming one would be an invention.",
-  },
-  "o2b brain stale": {
-    cls: STATE_CLASS.silent,
-    reason:
-      "is itself the exit other surfaces name: the `stale-notes` registry entry resolves " +
-      "to `o2b brain stale`. What to do with a stale entry - pin it, retire it, refresh " +
-      "its evidence - is a judgement over content, and naming any one of the three would " +
-      "be a guess dressed as an instruction.",
   },
 });
 
@@ -159,31 +161,118 @@ const MODULE_BODIES: ReadonlyArray<readonly [string, ReadonlyMap<string, string>
   (path) => [path, topLevelBodies(readSource(path))] as const,
 );
 
+const BODIES_BY_MODULE: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map(MODULE_BODIES);
+
+/**
+ * How many local-import hops a refusal may sit behind and still count as
+ * one the verb makes. Two covers the shape the CLI actually has - a verb
+ * reaching `<command>/helpers.ts`, and that helper reaching one more
+ * shared module (`argparse.ts`, `output.ts`) - and stops there rather
+ * than being unlimited, so the walk cannot drift into "some function
+ * somewhere in the CLI can throw".
+ */
+const MAX_MODULE_HOPS = 2;
+
+/**
+ * The command a module belongs to: `src/cli/<command>` for anything under
+ * one, null for the shared modules sitting at the `src/cli` root
+ * (`argparse.ts`, `helpers.ts`, `output.ts`, `main.ts`).
+ */
+function commandSubtree(path: string): string | null {
+  const head = relative(CLI_ROOT, path).split(sep)[0];
+  if (head === undefined || head === "" || head.endsWith(".ts")) return null;
+  return join(CLI_ROOT, head);
+}
+
+/**
+ * The names `text` imports from sibling modules of its OWN command, each
+ * mapped to the absolute path of the module it came from.
+ *
+ * Two filters, and the second is the load-bearing one. Only relative
+ * specifiers are resolved, and only when they land on a file the census
+ * already parsed - so a package or a `../../core/...` path resolves to
+ * nothing. And the target must sit in the same `src/cli/<command>` subtree
+ * as the importer, which is the code that was extracted OUT OF this verb's
+ * own file: `search/verbs/check.ts` reaches `search/helpers.ts`, and
+ * nothing reaches the CLI-wide plumbing every command shares.
+ *
+ * That second filter is what stops the walk from becoming vacuous.
+ * Following into `argparse.ts` would credit EVERY verb with a refusal,
+ * because every verb parses flags and `parseFlags` throws - 174 of 174
+ * states detected, measured. A refusal that belongs to the shared
+ * entry-plumbing is not a refusal the verb makes.
+ */
+function localImports(path: string, text: string): ReadonlyMap<string, string> {
+  const imports = new Map<string, string>();
+  const command = commandSubtree(path);
+  if (command === null) return imports;
+  for (const match of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from\s+"(\.[^"]*)"/g)) {
+    const target = resolve(dirname(path), match[2]!);
+    if (!BODIES_BY_MODULE.has(target)) continue;
+    if (commandSubtree(target) !== command) continue;
+    for (const specifier of match[1]!.split(",")) {
+      // `x`, `type x`, and `x as y` all bind the LAST identifier locally.
+      const local = specifier
+        .trim()
+        .split(/\s+as\s+/)
+        .pop()
+        ?.trim()
+        .replace(/^type\s+/, "");
+      if (local !== undefined && local !== "") imports.set(local, target);
+    }
+  }
+  return imports;
+}
+
+const IMPORTS_BY_MODULE: ReadonlyMap<string, ReadonlyMap<string, string>> = new Map(
+  MODULE_BODIES.map(([path]) => [path, localImports(path, readSource(path))] as const),
+);
+
 /** The module that declares `fn`, or null when nothing does. */
 function moduleDeclaring(fn: string): readonly [string, ReadonlyMap<string, string>] | null {
   return MODULE_BODIES.find(([, bodies]) => bodies.has(fn)) ?? null;
 }
 
 /**
- * The source a call to `fn` can actually reach without leaving its own
- * module: its body plus the bodies of every same-module function it
- * calls, transitively. Handlers that fan out to private sub-verbs
- * (`cmdBrainGit` -> `cmdStatus`) are classified by what those sub-verbs
- * do, which is the only reading that matches what a caller experiences.
+ * The source a call to `fn` in `module` can actually reach: its body, the
+ * bodies of every same-module function it calls, and - up to `maxHops`
+ * local-import hops away - the bodies of the sibling CLI modules it calls
+ * into. Handlers that fan out to private sub-verbs (`cmdBrainGit` ->
+ * `cmdStatus`) are classified by what those sub-verbs do, and a verb
+ * whose only refusal is stated in the helpers module beside it is still
+ * credited with making it - which is the only reading that matches what a
+ * caller experiences.
+ *
+ * A name that resolves to neither a same-module function nor an imported
+ * CLI module contributes nothing and ends that branch, so the `default:`
+ * arm of a dispatcher - `process.stderr.write` and a literal - terminates
+ * here the same way it always did.
  */
-function reachableSource(bodies: ReadonlyMap<string, string>, fn: string): string {
+function reachableSource(module: string, fn: string, maxHops: number = MAX_MODULE_HOPS): string {
   const seen = new Set<string>();
-  const pending = [fn];
+  const pending: Array<{ readonly module: string; readonly name: string; readonly hops: number }> =
+    [{ module, name: fn, hops: 0 }];
   let source = "";
   while (pending.length > 0) {
-    const name = pending.pop()!;
-    if (seen.has(name)) continue;
-    seen.add(name);
+    const { module: current, name, hops } = pending.pop()!;
+    const key = `${current}::${name}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const bodies = BODIES_BY_MODULE.get(current);
+    if (bodies === undefined) continue;
     const body = bodies.get(name);
     if (body === undefined) continue;
     source += body;
+    const imports = IMPORTS_BY_MODULE.get(current);
     for (const call of body.matchAll(/\b([A-Za-z0-9_]+)\s*\(/g)) {
-      if (bodies.has(call[1]!) && !seen.has(call[1]!)) pending.push(call[1]!);
+      const callee = call[1]!;
+      if (bodies.has(callee)) {
+        pending.push({ module: current, name: callee, hops });
+        continue;
+      }
+      if (hops >= maxHops) continue;
+      const target = imports?.get(callee);
+      if (target !== undefined) pending.push({ module: target, name: callee, hops: hops + 1 });
     }
   }
   return source;
@@ -218,7 +307,7 @@ const DISPATCHERS: ReadonlyArray<readonly [string, string, string]> = [
   ["o2b search", "search.ts", "export async function handleSearchSubcommand"],
 ];
 
-function census(): ReadonlyArray<CensusRow> {
+function census(maxHops: number = MAX_MODULE_HOPS): ReadonlyArray<CensusRow> {
   const rows: CensusRow[] = [];
   for (const [level, file, marker] of DISPATCHERS) {
     for (const [verb, handler] of dispatcherCases(file, marker)) {
@@ -228,8 +317,8 @@ function census(): ReadonlyArray<CensusRow> {
       expect(`${level} ${verb} handler ${handler} resolves: ${declaring !== null}`).toBe(
         `${level} ${verb} handler ${handler} resolves: true`,
       );
-      const [modulePath, bodies] = declaring!;
-      const source = reachableSource(bodies, handler);
+      const [modulePath] = declaring!;
+      const source = reachableSource(modulePath, handler, maxHops);
       rows.push({
         state: `${level} ${verb}`,
         handler,
@@ -298,6 +387,30 @@ describe("terminal-state census", () => {
     expect(rows.filter((row) => row.detected === STATE_CLASS.refusal).length).toBeGreaterThan(120);
     // And the exception table must stay an exception.
     expect(Object.keys(CLASSIFIED_BY_HAND).length).toBeLessThan(rows.length / 10);
+  });
+
+  test("the module walk is what classifies the verbs whose refusal was extracted", () => {
+    // The measurement that keeps the widened walk honest. Each of these
+    // states makes its only refusal in the helpers module beside it, so a
+    // walk confined to the handler's own file cannot see it - and the only
+    // repair available then is a hand entry, which is an exclusion. If the
+    // import walk ever silently stops following, this names the states
+    // that would have been excused rather than classified.
+    const moduleLocal = new Map(census(0).map((row) => [row.state, row.detected]));
+    const rescued = census()
+      .filter((row) => row.detected !== null && moduleLocal.get(row.state) === null)
+      .map((row) => row.state)
+      .toSorted();
+    // Named, not counted: the failure message is the work to be done.
+    expect(rescued.join("\n")).toBe(
+      [
+        "o2b brain mcp-landscape",
+        "o2b brain semantics-backfill",
+        "o2b brain stale",
+        "o2b search check",
+        "o2b search weights",
+      ].join("\n"),
+    );
   });
 
   test("the deliberately-silent class is the smallest of the three", () => {

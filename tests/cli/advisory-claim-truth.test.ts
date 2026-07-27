@@ -219,7 +219,7 @@ describe("the audit of every other registered emission", () => {
     ["src/cli/brain/verbs/tiers.ts", "tier-drift-restore", "findings.length > 0"],
     ["src/cli/brain/verbs/tune.ts", "recall-tuning-absent", "tuned === null"],
     ["src/cli/main.ts", "cli-config-absent", "!result.exists"],
-    ["src/cli/search.ts", "search-index-missing", "!status.exists"],
+    ["src/cli/search/verbs/status.ts", "search-index-missing", "!status.exists"],
   ];
 
   test("every other emission sits under a guard naming its condition", () => {
