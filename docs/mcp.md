@@ -615,3 +615,39 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   reason when a cached pack is refused because the vault state it was
   built from has moved or its validity window has expired, instead of
   silently serving or silently rebuilding.
+- Since v1.40.0 `brain_doctor` additively carries `next_command` on each
+  reported issue whose code has a registered exit, and a `no_exit` object
+  giving, once per code, the reason a class has no single command. The
+  two are complementary: a caller can tell a class it can act on from one
+  that needs a human judgement over content, and neither is silent. Both
+  keys are absent when every reported code has an exit, so the payload is
+  byte-identical for a vault whose findings all resolve.
+- Since v1.40.0 `vault_health` notices carry the same `next_command`
+  field, resolved from the same registry, so the notice channel no longer
+  requires a consumer to match the command out of an English sentence.
+- Since v1.40.0 `brain_dream` accepts `step` and `gates`. `step` runs one
+  independently-runnable step; any other value, including the five phase
+  labels, is refused with the coupling named rather than silently running
+  more than was asked. `gates` overrides a dream gate for that run only
+  and never writes to `_brain.yaml`. `step` is deliberately not a schema
+  enum, because an enum would swallow the per-step refusal reason, which
+  is the deliverable for the steps that cannot run alone.
+- Since v1.40.0 `brain_skill_proposals` accepts a `recover` operation and
+  four contract arguments on `accept` (`prerequisites`, `rollback`,
+  `side_effects`, `verification`), plus an `evidence` operation that
+  reports a proposal's self-declared support beside the independently
+  recorded procedural outcomes. Three states stay distinct: recorded
+  successes, recorded failures, and no recorded outcome at all - the last
+  is never reported as a zero success rate. `recover` is the operator
+  surface for an accept sequence a crash left outstanding.
+- Since v1.40.0 `brain_procedural_memory` entries carry the four contract
+  fields back on `list`, so a contract written at acceptance is readable
+  rather than write-only.
+- Since v1.40.0 `brain_session_summary` accepts an optional
+  `project_scope`, normalized by the same slug rule as the session axis.
+  A digest written without one keeps its existing dedupe key byte for
+  byte, so deduplication of pre-existing digests is unaffected.
+- Since v1.40.0 `brain_analytics` accepts `view: dedup`, folding the new
+  `ingest_dedup` continuity records into a trend. The counts are exact-hash
+  drops only; the semantic layers nominate candidates and never drop, so
+  nothing in this view may be read as a semantic discard.
