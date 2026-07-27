@@ -14,6 +14,15 @@
  * none and the injected context stays byte-identical. Scope is OSB's own
  * subsystems (embeddings/index availability, read-only mode); it is not a
  * third-party plugin notice bus and does not classify quota errors.
+ *
+ * The command a notice points at is a FIELD, not a sentence (no-dead-ends,
+ * task 3). It is resolved strictly through `next-step.ts`, so a condition
+ * whose code has no registered exit carries no key at all rather than a
+ * plausible command invented to make the shape uniform; four of the six
+ * conditions below are in exactly that position and say why at their own
+ * site. {@link renderRuntimeNotices} is the single place the command is
+ * rendered back into prose, for the two human surfaces (the SessionStart
+ * injection and the onboarding checklist) that share it.
  */
 
 import { existsSync } from "node:fs";
@@ -23,16 +32,33 @@ import lockfile from "proper-lockfile";
 
 import { resolveSearchConfig } from "../search/index.ts";
 import { checkVaultWriteable } from "../doctor.ts";
+import { NEXT_COMMAND_KEY, nextCommandField, type NextCommandField } from "./next-step.ts";
 import { BRAIN_ROOT_REL } from "./paths.ts";
 import { brainConfigReadFailure } from "./policy.ts";
 import { vaultMarkerAbsentNotice } from "./vault-identity.ts";
 
 export type RuntimeNoticeSeverity = "info" | "warning";
 
-export interface RuntimeNotice {
+/**
+ * One transient condition. The optional next command is spelled with the
+ * shared machine-readable key rather than a camel-cased twin because this
+ * record IS the wire shape on two surfaces - `o2b onboarding --json`
+ * serializes it whole, and `vault_health` projects it field for field - so
+ * a second spelling would be a second contract.
+ */
+export interface RuntimeNotice extends NextCommandField {
   readonly code: string;
   readonly severity: RuntimeNoticeSeverity;
   readonly message: string;
+}
+
+/**
+ * Build one notice, resolving its next command from the diagnostics
+ * registry. Strict resolution: an unregistered code contributes no key,
+ * so the absence is visible instead of guessed at.
+ */
+function notice(code: string, severity: RuntimeNoticeSeverity, message: string): RuntimeNotice {
+  return { code, severity, message, ...nextCommandField(code) };
 }
 
 export interface RuntimeNoticeOptions {
@@ -57,14 +83,22 @@ export function collectRuntimeNotices(
   const notices: RuntimeNotice[] = [];
 
   // Vault writability: a read-only vault means every memory write will fail.
+  //
+  // No registered command: the two exits are an OS permission change on
+  // this root and a different `VAULT_DIR`, neither of them an `o2b` verb,
+  // and which one is right depends on which vault the operator meant. The
+  // message names both branches; the field stays absent rather than
+  // picking one.
   try {
     const writeable = checkVaultWriteable(vault);
     if (!writeable.ok) {
-      notices.push({
-        code: "vault_read_only",
-        severity: "warning",
-        message: `Vault is not writable, so memory writes will fail (${writeable.message}). Fix permissions on ${vault} or point VAULT_DIR at a writable vault.`,
-      });
+      notices.push(
+        notice(
+          "vault_read_only",
+          "warning",
+          `Vault is not writable, so memory writes will fail (${writeable.message}). Fix permissions on ${vault} or point VAULT_DIR at a writable vault.`,
+        ),
+      );
     }
   } catch {
     // best-effort
@@ -76,15 +110,21 @@ export function collectRuntimeNotices(
   // existing, because a root nothing has written to yet is not a wrong
   // store - it is a vault waiting for `o2b brain init`, and nagging before
   // that command runs would make the notice noise instead of signal.
+  //
+  // No registered command, and this one is the reason the field is
+  // optional rather than uniform. An absent marker is ambiguous BY
+  // CONSTRUCTION: `vault-identity.ts` documents that a cold-start
+  // mis-resolution - a typo in `VAULT_DIR` - is indistinguishable from
+  // the intended vault, because nothing durable records which vault the
+  // process meant. `o2b brain init` is the exit for one reading and
+  // materializes the wrong store under the other, so the conditional
+  // sentence the guard already writes ("...if it is the intended vault")
+  // is the honest form and a structural command would not be.
   try {
     if (existsSync(join(vault, BRAIN_ROOT_REL))) {
       const absent = vaultMarkerAbsentNotice(vault);
       if (absent !== null) {
-        notices.push({
-          code: "vault_marker_absent",
-          severity: "warning",
-          message: `${absent.detail} (${absent.path})`,
-        });
+        notices.push(notice("vault_marker_absent", "warning", `${absent.detail} (${absent.path})`));
       }
     }
   } catch {
@@ -96,14 +136,21 @@ export function collectRuntimeNotices(
   // one rather than the defaults. Either way the operator's settings are
   // not the ones in force, so the condition has to be visible instead of
   // inferable from a gate that suddenly refuses.
+  //
+  // No registered command: the repair is an edit to the YAML the parser
+  // just rejected, and no `o2b` verb performs it. The failure detail below
+  // is what the operator acts on; `o2b brain doctor` would only re-report
+  // the same line, which is a round-trip, not an exit.
   try {
     const failure = brainConfigReadFailure(vault);
     if (failure !== null) {
-      notices.push({
-        code: "brain_config_unreadable",
-        severity: "warning",
-        message: `Brain/_brain.yaml could not be read, so configured settings are not in force and the integrity gates fall back to their strictest mode (${failure}). Fix the file, then re-run.`,
-      });
+      notices.push(
+        notice(
+          "brain_config_unreadable",
+          "warning",
+          `Brain/_brain.yaml could not be read, so configured settings are not in force and the integrity gates fall back to their strictest mode (${failure}). Fix the file, then re-run.`,
+        ),
+      );
     }
   } catch {
     // best-effort
@@ -116,28 +163,43 @@ export function collectRuntimeNotices(
     const indexExists = existsSync(dbPath);
 
     if (!indexExists) {
-      notices.push({
-        code: "search_index_missing",
-        severity: "info",
-        message: "Search index is not built yet, so recall returns nothing. Run: o2b search index",
-      });
+      // The read path self-heals: `openReadOrSelfHeal` catches
+      // INDEX_MISSING, builds the index and retries, so recall does not
+      // come back empty - it comes back late. The notice said the
+      // opposite until no-dead-ends (task 3) corrected it; what the
+      // command buys is paying that build now rather than on the first
+      // query.
+      notices.push(
+        notice(
+          "search_index_missing",
+          "info",
+          "Search index is not built yet, so the first recall builds it before returning " +
+            "(that call pays the full index build).",
+        ),
+      );
     } else if (reindexInProgress(dbPath)) {
-      notices.push({
-        code: "reindex_in_progress",
-        severity: "info",
-        message: "Search index is rebuilding; recent recall results may lag until it completes.",
-      });
+      // No registered command: the condition clears itself when the
+      // running rebuild finishes, and nothing an operator can type makes
+      // it clear sooner.
+      notices.push(
+        notice(
+          "reindex_in_progress",
+          "info",
+          "Search index is rebuilding; recent recall results may lag until it completes.",
+        ),
+      );
     }
 
     const semantic = config.semantic;
     const networked = semantic.provider !== "local" && semantic.provider !== "disabled";
     if (semantic.enabled && networked && !semantic.apiKey) {
-      notices.push({
-        code: "semantic_degraded",
-        severity: "warning",
-        message:
-          "Semantic search is enabled but no embedding key resolved, so search has fallen back to lexical. Run: o2b search check",
-      });
+      notices.push(
+        notice(
+          "semantic_degraded",
+          "warning",
+          "Semantic search is enabled but no embedding key resolved, so search has fallen back to lexical.",
+        ),
+      );
     }
   } catch {
     // best-effort
@@ -159,9 +221,32 @@ function reindexInProgress(dbPath: string): boolean {
   }
 }
 
-/** Render notices as a compact injectable block; empty string when clean. */
+/**
+ * Label the command is rendered behind on the human surfaces. The
+ * spelling is the one the prose used to carry, so a notice whose text did
+ * not change renders byte-for-byte what it rendered when the command was
+ * part of the sentence - which matters because this block lands in an
+ * agent's SessionStart context, not only in a terminal.
+ */
+const COMMAND_LABEL = "Run:";
+
+/** The ` Run: <command>` tail, or nothing when the code has no exit. */
+function commandTail(entry: RuntimeNotice): string {
+  const command = entry[NEXT_COMMAND_KEY];
+  return command === undefined ? "" : ` ${COMMAND_LABEL} ${command}`;
+}
+
+/**
+ * Render notices as a compact injectable block; empty string when clean.
+ *
+ * This is the ONE place a structured command becomes prose again. Both
+ * human surfaces - the SessionStart injection and the onboarding
+ * checklist - render through here, so the machine-readable field and the
+ * sentence a person reads cannot drift apart the way two hand-written
+ * copies did.
+ */
 export function renderRuntimeNotices(notices: ReadonlyArray<RuntimeNotice>): string {
   if (notices.length === 0) return "";
-  const lines = notices.map((n) => `- [${n.severity}] ${n.message}`);
+  const lines = notices.map((n) => `- [${n.severity}] ${n.message}${commandTail(n)}`);
   return `Runtime notices:\n${lines.join("\n")}`;
 }

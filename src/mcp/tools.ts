@@ -30,6 +30,7 @@ import {
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
 import { doctor } from "../core/doctor.ts";
+import { nextCommandField } from "../core/brain/next-step.ts";
 import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
 import { isDir } from "../core/fs-utils.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
@@ -221,9 +222,18 @@ async function toolVaultHealth(
   }));
   // Runtime-state notices (transient operational conditions) surfaced for
   // pull consumers, mirroring the proactive SessionStart injection push.
+  // The projection carries the notice's structured next command when it has
+  // one, so a machine consumer reads the exit as a field instead of parsing
+  // it back out of `message`; a condition with no registered exit
+  // contributes no key at all.
   const notices = collectRuntimeNotices(ctx.vault, {
     configPath: ctx.configPath ?? undefined,
-  }).map((n) => ({ code: n.code, severity: n.severity, message: n.message }));
+  }).map((n) => ({
+    code: n.code,
+    severity: n.severity,
+    message: n.message,
+    ...nextCommandField(n.code),
+  }));
 
   return {
     vault_path: vaultPathField(ctx),

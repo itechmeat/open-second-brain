@@ -519,6 +519,31 @@ describe("tool calls", () => {
     expect(Array.isArray(s.notices)).toBe(true);
   });
 
+  test("vault_health notices carry the next command as a field, additively", async () => {
+    // The sandbox vault has a Brain tree with no identity marker and no
+    // search index, so one notice with a registered exit and one without
+    // are both present (no-dead-ends, task 3).
+    const vault = createSandboxVault(tmp);
+    const server = new MCPServer({ vault });
+    await initialize(server);
+    const r = (await callTool(server, "vault_health", {})) as any;
+    const notices = r.result.structuredContent.notices as Array<Record<string, unknown>>;
+
+    const missing = notices.find((n) => n["code"] === "search_index_missing");
+    expect(missing).toBeDefined();
+    // The three fields this surface has always carried are untouched...
+    expect(missing!["severity"]).toBe("info");
+    expect(String(missing!["message"])).not.toContain("Run:");
+    // ...and the command is a field rather than a sentence to regex.
+    expect(missing!["next_command"]).toBe("o2b search index");
+
+    // A code with no registered exit contributes no key at all: absent,
+    // never present-and-null.
+    const marker = notices.find((n) => n["code"] === "vault_marker_absent");
+    expect(marker).toBeDefined();
+    expect(Object.keys(marker!).toSorted()).toEqual(["code", "message", "severity"]);
+  });
+
   test("unknown tool returns method-not-found", async () => {
     const server = new MCPServer({ vault: tmp });
     await initialize(server);

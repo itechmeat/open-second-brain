@@ -308,6 +308,34 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b brain inbox-drain --apply",
         autoRepairable: false,
       },
+      // --- Runtime-notice conditions (no-dead-ends, task 3) ---
+      // The notice channel pushes a transient condition at the agent
+      // (SessionStart injection, `vault_health`, the onboarding
+      // checklist) rather than waiting to be polled, and it spells its
+      // codes in the snake case its wire records use. Registering them
+      // here is what lets a notice carry a structural command instead of
+      // an English "Run: ..." tail a consumer has to regex.
+      //
+      // `search_index_missing` is the same condition the kebab-cased
+      // `search-index-missing` terminal state reports from `o2b search
+      // check`, and deliberately resolves to the same command: two
+      // emitters, two code vocabularies, one exit. Only the codes with a
+      // genuine single exit are listed - `vault_read_only`,
+      // `vault_marker_absent`, `brain_config_unreadable` and
+      // `reindex_in_progress` have none, each for a reason written down
+      // beside the notice that raises it.
+      {
+        code: "search_index_missing",
+        issueClass: "search index not built",
+        nextCommand: "o2b search index",
+        autoRepairable: false,
+      },
+      {
+        code: "semantic_degraded",
+        issueClass: "semantic search fell back to lexical",
+        nextCommand: "o2b search check",
+        autoRepairable: false,
+      },
     ] satisfies ReadonlyArray<DiagnosticSignal>
   ).map((s) => [s.code, Object.freeze(s)]),
 );

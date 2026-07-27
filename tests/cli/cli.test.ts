@@ -315,6 +315,18 @@ describe("onboarding", () => {
     const parsed = JSON.parse(json.stdout);
     expect(Array.isArray(parsed.steps)).toBe(true);
     expect(parsed.steps.find((s: { id: string }) => s.id === "vault_configured").done).toBe(true);
+
+    // The notice records keep their three original keys and gain the
+    // structured command additively (no-dead-ends, task 3).
+    const missing = parsed.notices.find((n: { code: string }) => n.code === "search_index_missing");
+    expect(missing).toBeDefined();
+    expect(Object.keys(missing).toSorted()).toEqual([
+      "code",
+      "message",
+      "next_command",
+      "severity",
+    ]);
+    expect(missing.next_command).toBe("o2b search index");
   });
 });
 

@@ -264,6 +264,10 @@ describe("active-inject hook", () => {
     const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
     expect(injected).toContain("Runtime notices:");
     expect(injected).toContain("Search index is not built");
+    // The command the notice used to spell out in prose still reaches the
+    // agent's context, now rendered from the structured field
+    // (no-dead-ends, task 3).
+    expect(injected).toContain("Run: o2b search index");
     // The active body still follows the notice block.
     expect(injected).toContain("pref-foo");
     expect(injected.indexOf("Runtime notices:")).toBeLessThan(injected.indexOf("pref-foo"));
