@@ -366,7 +366,22 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("agenda", "Synthesize agenda conflicts and focus blocks from provided events"),
         command("today", "Today dashboard: due obligations, open loops, recent activity, totals"),
         command("apply-markers", "Apply @osb set frontmatter write-backs (report by default)"),
-        command("pending", "Review the write-approval queue: list, apply, reject"),
+        command(
+          "pending",
+          "Review the write-approval queue: list, apply, reject",
+          [],
+          [
+            command("list", "List the staged signals awaiting approval", [flag("vault", "string")]),
+            command("apply", "Move one staged signal into the inbox unchanged", [
+              flag("vault", "string"),
+              flag("dry-run", "boolean"),
+            ]),
+            command("reject", "Retire one staged signal with a recorded reason", [
+              flag("vault", "string"),
+              flag("reason", "string"),
+            ]),
+          ],
+        ),
         command("signal", "Fact signal lifecycle: retire a signal with a reason"),
         command("telegram-capture", "Inbound Telegram capture bot: long-poll run or catchup"),
         command("inbox-drain", "Classify and route staged captures (dry-run by default)"),
@@ -374,7 +389,12 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("session-grep", "Search imported session recall turns and summaries"),
         command("session-describe", "Describe an imported session recall DAG"),
         command("session-expand", "Expand a session recall node to its source turns"),
-        command("lint", "Self-healing structural checks; --consolidate --apply writes the fixes"),
+        command("lint", "Self-healing structural checks; --consolidate --apply writes the fixes", [
+          flag("vault", "string"),
+          flag("consolidate", "boolean"),
+          flag("apply", "boolean"),
+          flag("yes", "boolean"),
+        ]),
         command(
           "actions",
           "Ranked maintenance action list over dedup, lint, and footprint findings",

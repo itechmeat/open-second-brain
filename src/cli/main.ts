@@ -41,6 +41,7 @@ import {
 } from "./helpers.ts";
 import { nextCommandField } from "../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "./advisory-rail.ts";
+import { renderHelp, renderUsage } from "./help-render.ts";
 import { ownsInternalJson, wantsJsonFlag, withJsonFallback } from "./json-helpers.ts";
 import {
   installCli,
@@ -797,7 +798,7 @@ function cmdHelp(argv: ReadonlyArray<string>): number {
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(manifestForJson(), null, 2) + "\n");
   } else {
-    process.stdout.write(HELP);
+    process.stdout.write(renderHelp());
   }
   return 0;
 }
@@ -819,63 +820,17 @@ function cmdCompletions(argv: ReadonlyArray<string>): number {
   return 0;
 }
 
-const HELP = `usage: o2b <command> [args...]
-
-Commands:
-  status                    Show Open Second Brain configuration status
-  init                      Initialize a vault profile with required files
-  doctor                    Run health checks on vault, config, and plugins
-  export-config             Write a redacted config snapshot
-  index                     Regenerate the vault index from discovered pages
-  mcp                       Run the optional MCP tool server (stdio or HTTP JSON-RPC)
-  install-cli               Create symlinks for o2b and vault-log in ~/.local/bin
-  install                   Multi-runtime install orchestrator (v0.10.11) — detect / plan / apply / --check (see install/)
-  update                    Update OSB installation across all detected runtimes
-  uninstall                 Print an uninstall plan; --target X removes a per-runtime install
-  tool-call                 Invoke an MCP tool handler from the CLI and print JSON to stdout
-  secrets                   Inspect $secret:NAME references without printing values
-  help                      Print this help text; --json prints command metadata
-  completions               Print shell completions for bash, zsh, fish, elvish, nushell, powershell
-
-Aider (session-bracketing memory wrapper):
-  aider wrap                Run Aider bracketed with live memory load + write-back
-
-Brain (observing memory):
-  brain init                Bootstrap <vault>/Brain/ skeleton (idempotent)
-  brain feedback            Record a taste signal into Brain/inbox/
-  brain dream               Run the deterministic dreaming pass (idempotent)
-  brain apply-evidence      Log a real-work application of a preference
-  brain note                Append a one-line narrative milestone to Brain/log/today
-  brain digest              Render the recent-changes digest (markdown or --json)
-  brain query               Read by --preference, --topic, or --since
-  brain reject              Move a preference to retired/ (user-rejected)
-  brain pin                 Mark a preference exempt from automatic retire
-  brain unpin               Clear the pinned flag
-  brain rollback            Restore Brain/ from a snapshot (--list / <run_id>)
-  brain doctor              Validate Brain invariants (--strict promotes warnings)
-
-Discipline:
-  discipline report         Render the daily discipline report block (Telegram-safe)
-
-Search:
-  search "<query>"          Search the vault index (default verb is 'query')
-  search index              Incrementally update the index from the vault
-  search reindex            Rebuild the index atomically (.new -> rename -> .bak)
-  search status             Print index summary (counts, model, vec extension)
-  search check              Pre-flight diagnostics (SQLite, FTS5, vec, provider)
-
-Vault scope:
-  vault status              Show how many files/dirs the active policy includes and which rules excluded
-  vault inspect <relpath>   Point-check one vault-relative path against the policy
-
-Partner (read-only):
-  partner codegraph report  Report codegraph index status + structural Cargo workspace members (--json)
-`;
-
 export async function main(argv: ReadonlyArray<string>): Promise<number> {
-  if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
-    process.stdout.write(HELP);
-    return argv.length === 0 ? 2 : 0;
+  if (argv.length === 0) {
+    // No command named: the terse banner, not the complete index. The
+    // index is two hundred lines and would bury the fact that nothing
+    // was asked for; the banner names where the index is.
+    process.stdout.write(renderUsage());
+    return 2;
+  }
+  if (argv[0] === "-h" || argv[0] === "--help") {
+    process.stdout.write(renderHelp());
+    return 0;
   }
   const command = argv[0]!;
   const rest = argv.slice(1);
@@ -958,7 +913,7 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handlePartnerSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
-        process.stderr.write(HELP);
+        process.stderr.write(renderUsage());
         return 2;
     }
   } catch (exc) {
