@@ -93,17 +93,31 @@ import { PREF_AUDIT_OP } from "./types.ts";
  * doctor's `status-folder-mismatch` branch reports it the same way as
  * every other parse failure. `status` and `folder` stay in the prose:
  * unlike the path, a `DoctorIssue` has no field for them.
+ *
+ * The sentence a bare caller reads is unchanged: `o2b brain reject`
+ * prints `(exc as Error).message` with nowhere else to put a location,
+ * and this message has always named the path INSIDE the data group,
+ * before `status` and `folder`. Moving it to the end would gain nothing
+ * and would break an operator matching on the text, so the composition
+ * is supplied rather than left to the default appender.
  */
 export class BrainStatusFolderMismatchError extends BrainParseError {
   readonly status: string;
   readonly folder: "preferences" | "retired";
 
   constructor(message: string, path: string, status: string, folder: "preferences" | "retired") {
-    super(`${message} (status=${status}, folder=${folder})`, path);
+    super(`${message} (${statusFolderFacts(status, folder)})`, path, {
+      composedMessage: `${message} (path=${path}, ${statusFolderFacts(status, folder)})`,
+    });
     this.name = "BrainStatusFolderMismatchError";
     this.status = status;
     this.folder = folder;
   }
+}
+
+/** The two facts a `DoctorIssue` has no field for, in their stored order. */
+function statusFolderFacts(status: string, folder: "preferences" | "retired"): string {
+  return `status=${status}, folder=${folder}`;
 }
 
 // ----- Writer inputs --------------------------------------------------------

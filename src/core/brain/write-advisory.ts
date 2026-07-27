@@ -39,7 +39,7 @@ import { join } from "node:path";
 
 import { adviseOnIncoming, type PreferenceForContradiction } from "./health/contradiction.ts";
 import { appendLogEvent } from "./log.ts";
-import { requireNextStep } from "./next-step.ts";
+import { nextCommandField, requireNextStep, type NextCommandField } from "./next-step.ts";
 import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { parseSignal } from "./signal.ts";
@@ -219,6 +219,36 @@ export interface CaptureRoutingHint {
   readonly candidates: ReadonlyArray<ScopeCandidate>;
 }
 
+/**
+ * The additive JSON key both machine-readable surfaces carry the hint
+ * in, plus its forward pointer already resolved.
+ *
+ * Named and composed once for the same reason `NEXT_COMMAND_KEY` is: the
+ * CLI `--json` renderer and its MCP twin must not drift on a spelling or
+ * on which fields ride along. A consumer that learns the shape from one
+ * surface reads it on the other.
+ */
+export const CAPTURE_ROUTING_HINT_KEY = "routing_hint";
+
+export type CaptureRoutingHintField = {
+  readonly [CAPTURE_ROUTING_HINT_KEY]?: CaptureRoutingHint & NextCommandField;
+};
+
+/** Absent case: no hint contributes no key whatsoever. */
+const NO_CAPTURE_ROUTING_HINT: CaptureRoutingHintField = Object.freeze({});
+
+/**
+ * Resolve a hint into the object to spread onto a machine-readable
+ * response. `null` yields the empty object, so the key is ABSENT rather
+ * than present-and-null.
+ */
+export function captureRoutingHintField(hint: CaptureRoutingHint | null): CaptureRoutingHintField {
+  if (hint === null) return NO_CAPTURE_ROUTING_HINT;
+  return Object.freeze({
+    [CAPTURE_ROUTING_HINT_KEY]: Object.freeze({ ...hint, ...nextCommandField(hint.code) }),
+  });
+}
+
 export interface AdviseUnroutableCaptureParams {
   /**
    * The capture's effective scope (already resolved against
@@ -238,8 +268,12 @@ export interface AdviseUnroutableCaptureParams {
  * recall actually reaches) and the OPEN signal inbox. The inbox is what
  * "recent" means structurally here - `inbox/processed/` is the archive
  * the dream pass has already consumed - so recency needs no window
- * constant and no clock. A corrupt document is skipped, exactly as the
- * conflict advisory skips a corrupt preference.
+ * constant and no clock.
+ *
+ * A corrupt signal is skipped, exactly as the conflict advisory skips a
+ * corrupt preference - but the skip is REPORTED. Its scope is precisely
+ * what could not be read, so it cannot be counted; leaving it silent
+ * would change a ranking the operator reads with nothing to explain why.
  */
 function countScopeDocuments(vault: string): ReadonlyMap<string, number> {
   const counts = new Map<string, number>();
@@ -251,10 +285,15 @@ function countScopeDocuments(vault: string): ReadonlyMap<string, number> {
   for (const pref of loadConfirmedPrefs(vault)) tally(pref.scope);
   const inbox = brainDirs(vault).inbox;
   for (const name of markdownNames(inbox)) {
+    const path = join(inbox, name);
     try {
-      tally(parseSignal(join(inbox, name)).scope);
-    } catch {
-      continue;
+      tally(parseSignal(path).scope);
+    } catch (err) {
+      process.stderr.write(
+        `warning: capture routing hint skipped unreadable signal ${path}: ${
+          (err as Error).message
+        }\n`,
+      );
     }
   }
   return counts;

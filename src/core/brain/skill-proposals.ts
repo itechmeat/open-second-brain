@@ -406,13 +406,37 @@ export interface DeclaredSkillProposalInput {
   readonly now?: Date;
 }
 
-export interface DeclaredSkillProposalResult {
+/**
+ * What a declaration did, by name.
+ *
+ *   - `created`   - a new pending draft was written.
+ *   - `deduped`   - an equivalent draft is already PENDING review, so the
+ *                   declaration resolved to it and nothing was written.
+ *   - `suppressed`- the queue declined: the name is already reviewed
+ *                   (accepted or rejected), or a file already occupies the
+ *                   slug. Nothing was written and the declared body was
+ *                   NOT stored anywhere.
+ *
+ * The three are distinct because the caller's next move differs: a
+ * `deduped` declaration is safely consumed - the same skill is already
+ * queued for a human - while a `suppressed` one has nowhere its content
+ * survives, so consuming its marker would destroy the only copy.
+ */
+export type DeclaredSkillProposalOutcome = "created" | "deduped" | "suppressed";
+
+interface DeclaredSkillProposalResultBase {
   readonly id: string;
   readonly slug: string;
+  /** The proposal file this declaration created or resolved to. */
   readonly path: string;
-  /** False when a proposal for this name already exists in some phase. */
-  readonly created: boolean;
 }
+
+export type DeclaredSkillProposalResult = DeclaredSkillProposalResultBase &
+  (
+    | { readonly outcome: "created" | "deduped" }
+    /** `reason` is required here: a decline the caller cannot explain is a silent drop. */
+    | { readonly outcome: "suppressed"; readonly reason: string }
+  );
 
 /**
  * Draft a PENDING proposal from an author's `@osb skill` declaration.
@@ -424,10 +448,8 @@ export interface DeclaredSkillProposalResult {
  * makes no statistical claim, and `resolveSkillProposalEvidence` already
  * reads an absent claim as zero self-reported support.
  *
- * One name, one proposal. A name already sitting in any phase is
- * reported back with `created: false` rather than forked, so a rescan
- * of an unconsumed marker cannot pile up duplicate drafts and a human
- * rejection of that name is not resurfaced.
+ * One name, one proposal: see {@link DeclaredSkillProposalOutcome} for
+ * what happens when the name is taken.
  */
 export function draftDeclaredSkillProposal(
   vault: string,
@@ -435,6 +457,92 @@ export function draftDeclaredSkillProposal(
 ): DeclaredSkillProposalResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  const planned = planDeclaredSkillProposal(vault, input);
+  if ("declined" in planned) return planned.declined;
+  const plan = planned.plan;
+
+  const now = (input.now ?? new Date()).toISOString();
+  const sourceRefs = [...input.sourceRefs];
+
+  writeFrontmatterAtomic(
+    plan.path,
+    {
+      schema_version: 1,
+      kind: "brain-skill-proposal",
+      id: plan.id,
+      slug: plan.slug,
+      status: "pending",
+      pattern_kind: DECLARED_MARKER_PATTERN_KIND,
+      name_key: plan.nameKey,
+      version: SKILL_PROPOSAL_INITIAL_VERSION,
+      payload_hash: plan.payloadHash,
+      created_at: now,
+      updated_at: now,
+      evidence_count: String(sourceRefs.length),
+      source_refs: sourceRefs,
+    },
+    renderProposalDocument({
+      title: plan.name,
+      patternKind: DECLARED_MARKER_PATTERN_KIND,
+      key: plan.key,
+      suggestedBody: plan.body.split("\n"),
+      evidence: sourceRefs.map((ref) => `- declared in ${ref}`),
+    }),
+    {
+      overwrite: false,
+      existsErrorKind: "skill proposal",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
+}
+
+/**
+ * What {@link draftDeclaredSkillProposal} would do, without writing.
+ *
+ * Same validation, same identity derivation, same decline reasons - the
+ * two share {@link planDeclaredSkillProposal}, so a preview cannot report
+ * an outcome the writer would not reach. Used by `scan-inline --dry-run`,
+ * which must count and report what a real run would do while touching
+ * nothing.
+ */
+export function previewDeclaredSkillProposal(
+  vault: string,
+  input: DeclaredSkillProposalInput,
+): DeclaredSkillProposalResult {
+  const planned = planDeclaredSkillProposal(vault, input);
+  if ("declined" in planned) return planned.declined;
+  const plan = planned.plan;
+  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
+}
+
+/** Everything a declared draft needs, once the queue has agreed to take it. */
+interface DeclaredSkillProposalPlan {
+  readonly id: string;
+  readonly slug: string;
+  readonly path: string;
+  readonly name: string;
+  readonly body: string;
+  readonly key: string;
+  readonly nameKey: string;
+  readonly payloadHash: string;
+}
+
+/**
+ * Decide what a declaration does before anything is written: a plan to
+ * draft, or the outcome the queue declined with.
+ *
+ * Both guards below refuse by name rather than letting the exclusive
+ * write throw an untyped `EEXIST` later - the same two guards the mined
+ * path carries in `learnSkillProposals`, in the same order.
+ */
+function planDeclaredSkillProposal(
+  vault: string,
+  input: DeclaredSkillProposalInput,
+):
+  | { readonly plan: DeclaredSkillProposalPlan }
+  | { readonly declined: DeclaredSkillProposalResult } {
   const name = input.name.trim();
   if (!name) throw new DeclaredSkillProposalError("declared skill proposal requires a name");
   const body = input.body.trim();
@@ -445,7 +553,17 @@ export function draftDeclaredSkillProposal(
   for (const phase of PROPOSAL_PHASES) {
     const existing = findProposalByNameKey(vault, phase, nameKey);
     if (existing === null) continue;
-    return { id: existing.id, slug: existing.slug, path: existing.path, created: false };
+    const found = { id: existing.id, slug: existing.slug, path: existing.path };
+    if (phase === "pending") return { declined: { ...found, outcome: "deduped" } };
+    return {
+      declined: {
+        ...found,
+        outcome: "suppressed",
+        reason:
+          `a skill proposal named '${name}' is already ${phase} (${existing.id}); ` +
+          "this declaration was not drafted and its body was not stored",
+      },
+    };
   }
 
   const payloadHash = createHash("sha256")
@@ -453,42 +571,35 @@ export function draftDeclaredSkillProposal(
     .digest("hex");
   const slug = composeProposalSlug(DECLARED_MARKER_PATTERN_KIND, key, payloadHash);
   const id = `prop-${slug}`;
-  const now = (input.now ?? new Date()).toISOString();
-  const sourceRefs = [...input.sourceRefs];
-  const path = skillProposalPendingPath(vault, slug);
 
-  writeFrontmatterAtomic(
-    path,
-    {
-      schema_version: 1,
-      kind: "brain-skill-proposal",
+  for (const phase of PROPOSAL_PHASES) {
+    const occupied = proposalPhasePath(vault, phase, slug);
+    if (!existsSync(occupied)) continue;
+    return {
+      declined: {
+        id,
+        slug,
+        path: occupied,
+        outcome: "suppressed",
+        reason:
+          `a skill proposal file already occupies slug '${slug}' under ${phase}/; ` +
+          "this declaration was not drafted and its body was not stored",
+      },
+    };
+  }
+
+  return {
+    plan: {
       id,
       slug,
-      status: "pending",
-      pattern_kind: DECLARED_MARKER_PATTERN_KIND,
-      name_key: nameKey,
-      version: SKILL_PROPOSAL_INITIAL_VERSION,
-      payload_hash: payloadHash,
-      created_at: now,
-      updated_at: now,
-      evidence_count: String(sourceRefs.length),
-      source_refs: sourceRefs,
-    },
-    renderProposalDocument({
-      title: name,
-      patternKind: DECLARED_MARKER_PATTERN_KIND,
+      path: skillProposalPendingPath(vault, slug),
+      name,
+      body,
       key,
-      suggestedBody: body.split("\n"),
-      evidence: sourceRefs.map((ref) => `- declared in ${ref}`),
-    }),
-    {
-      overwrite: false,
-      existsErrorKind: "skill proposal",
-      vaultForRelativePath: vault,
+      nameKey,
+      payloadHash,
     },
-  );
-
-  return { id, slug, path, created: true };
+  };
 }
 
 /**

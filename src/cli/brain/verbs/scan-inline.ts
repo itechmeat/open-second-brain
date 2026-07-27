@@ -43,6 +43,7 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
           malformed: String(result.malformed),
           facts: String(result.facts),
           skills: String(result.skills),
+          suppressed: String(result.suppressed),
           errors: String(result.errors.length),
         },
       });
@@ -60,6 +61,7 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
       malformed: result.malformed,
       facts: result.facts,
       skills: result.skills,
+      suppressed: result.suppressed,
       errors: result.errors.map((e) => ({ path: e.path, message: e.message })),
       files_with_markers: result.filesWithMarkers.map((f) => ({
         path: f.path,
@@ -76,8 +78,13 @@ export async function cmdBrainScanInline(argv: string[]): Promise<number> {
     // with no fact / skill markers prints exactly what it printed before.
     if (result.facts > 0) ok(`facts: ${result.facts}`);
     if (result.skills > 0) ok(`skills: ${result.skills}`);
+    if (result.suppressed > 0) ok(`suppressed: ${result.suppressed}`);
     for (const e of result.errors) info(`  error: ${e.path}: ${e.message}`);
   }
-  if (flags["strict"] && result.malformed > 0) return 2;
+  // `--strict` means "a scan that could not process everything it found
+  // is a failure". A marker its destination refused printed an error and
+  // still exited 0 while `malformed` was the only gate: the refusal is
+  // unprocessed work exactly as a malformed marker is.
+  if (flags["strict"] && (result.malformed > 0 || result.errors.length > 0)) return 2;
   return 0;
 }

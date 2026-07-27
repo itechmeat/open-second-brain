@@ -73,6 +73,26 @@ const REQUIRED_FIELDS: Record<RequiredFieldKind, Readonly<Record<string, Require
   skill: { name: "single", body: "single" },
 };
 
+/**
+ * Optional `key=value` fields per marker kind, with the arity each one
+ * accepts. Checked in the same pass as {@link REQUIRED_FIELDS} because a
+ * field given twice where a single value is the only unambiguous reading
+ * is ambiguous whether the field is required or not: `scope: coding`
+ * followed by `scope: writing` names two destinations for one signal.
+ * Refusing that on a required field while dropping it on an optional one
+ * would write the signal unscoped and unroutable, which is the one
+ * outcome the author cannot have meant.
+ *
+ * A key in neither row is collected and ignored, exactly as before - the
+ * grammar has never rejected an unknown field.
+ */
+const OPTIONAL_FIELDS: Record<RequiredFieldKind, Readonly<Record<string, RequiredFieldArity>>> = {
+  feedback: { scope: "single", agent: "single", note: "single", source: "repeatable" },
+  set: {},
+  fact: {},
+  skill: {},
+};
+
 const KNOWN_KINDS: ReadonlySet<string> = new Set<string>([
   ...Object.keys(REQUIRED_FIELDS),
   LOOP_KIND,
@@ -213,7 +233,11 @@ export interface MarkerParseIssue {
   readonly originLine: number;
   /** Required fields that were absent or empty. */
   readonly missingFields: ReadonlyArray<string>;
-  /** Single-valued required fields given more than once, which is ambiguous. */
+  /**
+   * Single-valued fields given more than once, which is ambiguous.
+   * Required and optional alike: an optional field repeated is no more
+   * readable than a required one repeated.
+   */
   readonly duplicateFields: ReadonlyArray<string>;
   /** Operator-facing message naming every field in the two lists above. */
   readonly message: string;
@@ -223,17 +247,18 @@ export interface MarkerParseIssue {
 export type MarkerIssueSink = (issue: MarkerParseIssue) => void;
 
 /**
- * Check a collected field set against the kind's required-field row.
- * Returns true when the marker may be built; otherwise reports one
- * issue naming every offending field and returns false.
+ * Check a collected field set against the kind's required and optional
+ * field rows. Returns true when the marker may be built; otherwise
+ * reports one issue naming every offending field and returns false.
  *
  * A `single` field must be exactly one non-empty value: an array means
  * the key was given twice and there is no unambiguous reading of that,
  * which is why a repeated `set` note / field / value has always been
  * rejected. A `repeatable` field must carry at least one non-empty
- * value.
+ * value. Only a required field can be missing; the ambiguity check runs
+ * over both rows (see {@link OPTIONAL_FIELDS}).
  */
-function requiredFieldsPresent(input: {
+function fieldsUsable(input: {
   readonly kind: RequiredFieldKind;
   readonly fields: Record<string, string | string[]>;
   readonly originLine: number;
@@ -256,6 +281,13 @@ function requiredFieldsPresent(input: {
       continue;
     }
     if (typeof value !== "string" || value.length === 0) missingFields.push(key);
+  }
+  // An optional field is never missing. A repeat of a single-valued one
+  // is exactly as unreadable as it is on a required field, so it lands in
+  // the same list and produces the same named refusal.
+  for (const [key, arity] of Object.entries(OPTIONAL_FIELDS[kind])) {
+    if (arity === "repeatable") continue;
+    if (Array.isArray(fields[key])) duplicateFields.push(key);
   }
   if (missingFields.length === 0 && duplicateFields.length === 0) return true;
   onIssue?.({
@@ -485,7 +517,7 @@ export function parseInlineMarker(
   const fields = collectFields();
   if (fields === null) return null;
   if (
-    !requiredFieldsPresent({
+    !fieldsUsable({
       kind: "feedback",
       fields,
       originLine: lineNo,
@@ -509,7 +541,7 @@ export function parseInlineMarker(
     const bodyFields = collectFields();
     if (bodyFields === null) return null;
     if (
-      !requiredFieldsPresent({
+      !fieldsUsable({
         kind,
         fields: bodyFields,
         originLine: lineNo,
@@ -642,7 +674,7 @@ export function parseInlineMarker(
  * Record one occurrence of `key`, promoting a repeat to an array. Both
  * shapes funnel through this, so `premise=a premise=b` and two
  * `premise:` lines collect identically, and a repeated single-valued
- * field is visible to {@link requiredFieldsPresent} as ambiguity rather
+ * field is visible to {@link fieldsUsable} as ambiguity rather
  * than silently last-winning.
  */
 function collectField(
@@ -752,9 +784,7 @@ export function parseBlockMarker(
     // Fail-closed on a repeated single-valued required field: a repeated
     // `set` note / field / value would mutate the wrong note, and a
     // repeated `fact` topic would file the conclusion under the wrong rule.
-    if (
-      !requiredFieldsPresent({ kind, fields, originLine: fenceStartLine, shape: "block", onIssue })
-    ) {
+    if (!fieldsUsable({ kind, fields, originLine: fenceStartLine, shape: "block", onIssue })) {
       return null;
     }
     return buildFieldMarker({
@@ -770,7 +800,7 @@ export function parseBlockMarker(
   const signal = typeof fields["signal"] === "string" ? fields["signal"] : null;
   if (signal === null || !KNOWN_SIGNALS.includes(signal)) return null;
   if (
-    !requiredFieldsPresent({
+    !fieldsUsable({
       kind: "feedback",
       fields,
       originLine: fenceStartLine,

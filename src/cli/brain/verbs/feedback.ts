@@ -4,8 +4,8 @@ import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.t
 import {
   adviseIncomingFeedback,
   adviseUnroutableCapture,
+  captureRoutingHintField,
 } from "../../../core/brain/write-advisory.ts";
-import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../../core/brain/policy.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
@@ -187,10 +187,9 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
       ...(mirror !== undefined ? { mirror } : {}),
       ...(advisory !== null ? { advisory } : {}),
       // The machine stream carries the exit as a field, which is where a
-      // forward pointer belongs on a payload the caller parses.
-      ...(routingHint !== null
-        ? { routing_hint: { ...routingHint, ...nextCommandField(routingHint.code) } }
-        : {}),
+      // forward pointer belongs on a payload the caller parses. The key
+      // and the resolution come from the one composer both surfaces use.
+      ...captureRoutingHintField(routingHint),
       ...(prefResult ? { preference_path: prefResult.path, preference_id: prefResult.id } : {}),
     });
     return 0;

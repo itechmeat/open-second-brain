@@ -1142,6 +1142,14 @@ function parseErrorCode(kind: ParsedRecordKind, msg: string): string {
  * untyped throw (a frontmatter read, a vocabulary guard owned by another
  * module) keeps its message verbatim against the walked path - that
  * message is not ours to shorten.
+ *
+ * What changed for a caller that prints `(exc as Error).message` bare,
+ * stated exactly: a throw site whose message already carried the path
+ * composes the same sentence as before, the status-folder mismatch
+ * included (it supplies its own composition, keeping the location inside
+ * the `(path=…, status=…, folder=…)` group). The four optional-field
+ * helpers in `preference.ts` carried no location at all and now do -
+ * a gain, and the only wording change in the set.
  */
 function classifyParseError(
   err: unknown,

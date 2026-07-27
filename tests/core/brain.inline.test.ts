@@ -468,3 +468,61 @@ describe("discoverMarkers widened kinds", () => {
     expect(feedback[0]!.topic).toBe("t");
   });
 });
+
+// ── Repeated single-valued fields, required and optional ────────────────────
+
+describe("a repeated single-valued field is ambiguous whether or not it is required", () => {
+  test("block form: a repeated optional `scope` refuses the marker and names it", () => {
+    const body = [
+      "kind: feedback",
+      "signal: positive",
+      "topic: t",
+      "principle: p",
+      "scope: coding",
+      "scope: writing",
+    ].join("\n");
+    expect(parseBlockMarker(body, 1)).toBeNull();
+
+    const result = discoverMarkersDetailed(["```osb", body, "```"].join("\n"));
+    expect(result.markers.length).toBe(0);
+    expect(result.malformed).toBe(1);
+    expect(result.issues.length).toBe(1);
+    expect(result.issues[0]!.duplicateFields).toEqual(["scope"]);
+    expect(result.issues[0]!.message).toContain("scope");
+  });
+
+  test("inline form: a repeated optional `scope` refuses the marker and names it", () => {
+    expect(
+      parseInlineMarker(`@osb feedback positive topic=t principle=p scope=coding scope=writing`, 3),
+    ).toBeNull();
+
+    const result = discoverMarkersDetailed(
+      `@osb feedback positive topic=t principle=p scope=coding scope=writing\n`,
+    );
+    expect(result.markers.length).toBe(0);
+    expect(result.malformed).toBe(1);
+    expect(result.issues.length).toBe(1);
+    expect(result.issues[0]!.duplicateFields).toEqual(["scope"]);
+  });
+
+  test("a repeatable optional field is still collected, not refused", () => {
+    const m = parseInlineMarker(
+      `@osb feedback positive topic=t principle=p source=[[A]] source=[[B]]`,
+      1,
+    );
+    expect(m).not.toBeNull();
+    expect(m!.source).toEqual(["[[A]]", "[[B]]"]);
+  });
+
+  test("a single optional value is unaffected in both shapes", () => {
+    const inline = parseInlineMarker(`@osb feedback positive topic=t principle=p scope=coding`, 1);
+    expect(inline!.scope).toBe("coding");
+    const block = parseBlockMarker(
+      ["kind: feedback", "signal: positive", "topic: t", "principle: p", "scope: coding"].join(
+        "\n",
+      ),
+      1,
+    );
+    expect(block!.scope).toBe("coding");
+  });
+});

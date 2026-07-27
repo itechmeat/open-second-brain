@@ -16,7 +16,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { readAllLogEntries } from "../../../src/core/brain/query.ts";
-import { resolveNextStep } from "../../../src/core/brain/next-step.ts";
+import { NEXT_COMMAND_KEY, resolveNextStep } from "../../../src/core/brain/next-step.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { writePreference } from "../../../src/core/brain/preference.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
@@ -28,6 +28,8 @@ import {
 import {
   adviseUnroutableCapture,
   CAPTURE_ROUTING_HINT_CODE,
+  CAPTURE_ROUTING_HINT_KEY,
+  captureRoutingHintField,
   ROUTING_SIGNAL_FIELD,
 } from "../../../src/core/brain/write-advisory.ts";
 
@@ -205,5 +207,54 @@ describe("the extracted-fact path is untouched", () => {
     );
     expect(source).not.toContain("adviseUnroutableCapture");
     expect(source).not.toContain("write-advisory");
+  });
+});
+
+describe("a signal the ranking could not read is reported, not dropped", () => {
+  test("a corrupt inbox signal warns on stderr and the ranking still returns", () => {
+    pref("tabs", "coding");
+    signal("scoped-thought", "research");
+    const corrupt = join(brainDirs(vault).inbox, "sig-2026-07-27-corrupt.md");
+    writeFileSync(corrupt, "this file has no frontmatter at all\n");
+
+    const originalStderrWrite = process.stderr.write.bind(process.stderr);
+    let captured = "";
+    process.stderr.write = ((chunk: string | Uint8Array): boolean => {
+      captured += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+      return true;
+    }) as typeof process.stderr.write;
+    let hint;
+    try {
+      hint = adviseUnroutableCapture(vault, ADVICE);
+    } finally {
+      process.stderr.write = originalStderrWrite;
+    }
+
+    // The skip is named, with the file that caused it.
+    expect(captured).toContain("capture routing hint skipped unreadable signal");
+    expect(captured).toContain(corrupt);
+    // The remaining corpus still ranks: a corrupt document is one missing
+    // count, never a refusal of the whole hint.
+    expect(hint).not.toBeNull();
+    expect(hint!.candidates.map((c) => c.scope).toSorted()).toEqual(["coding", "research"]);
+  });
+});
+
+describe("both machine surfaces spell the hint the same way", () => {
+  test("the composer names the key and resolves the exit once", () => {
+    pref("tabs", "coding");
+    const hint = adviseUnroutableCapture(vault, ADVICE);
+    expect(hint).not.toBeNull();
+
+    const field = captureRoutingHintField(hint) as Record<string, Record<string, unknown>>;
+    expect(Object.keys(field)).toEqual([CAPTURE_ROUTING_HINT_KEY]);
+    expect(field[CAPTURE_ROUTING_HINT_KEY]![NEXT_COMMAND_KEY]).toBe(
+      resolveNextStep(CAPTURE_ROUTING_HINT_CODE)!.nextCommand,
+    );
+    expect(field[CAPTURE_ROUTING_HINT_KEY]!["missing_signal"]).toBe(ROUTING_SIGNAL_FIELD);
+  });
+
+  test("no hint contributes no key at all", () => {
+    expect(captureRoutingHintField(null)).toEqual({});
   });
 });

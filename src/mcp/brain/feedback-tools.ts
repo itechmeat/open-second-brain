@@ -36,10 +36,10 @@ import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
 import {
   adviseIncomingFeedback,
   adviseUnroutableCapture,
+  captureRoutingHintField,
   type CaptureRoutingHint,
   type WriteConflictAdvisory,
 } from "../../core/brain/write-advisory.ts";
-import { nextCommandField } from "../../core/brain/next-step.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
@@ -265,11 +265,10 @@ async function toolBrainFeedback(
     kind: prefResult ? "preference" : "signal",
     ...(mirror !== undefined ? { mirror } : {}),
     ...(advisory !== null ? { advisory } : {}),
-    // Same key and same resolution as the CLI's `--json` renderer: an
-    // agent that learns the exit on one surface reads it on the other.
-    ...(routingHint !== null
-      ? { routing_hint: { ...routingHint, ...nextCommandField(routingHint.code) } }
-      : {}),
+    // Same key and same resolution as the CLI's `--json` renderer, from
+    // the one composer: an agent that learns the exit on one surface
+    // reads it on the other.
+    ...captureRoutingHintField(routingHint),
     signal_path: vaultRelativeSafe(ctx.vault, sigResult.path),
     signal_absolute_path: resolve(sigResult.path),
     signal_id: sigResult.id,

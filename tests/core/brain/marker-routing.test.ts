@@ -20,7 +20,12 @@ import { DEFAULT_BRAIN_CONFIG_YAML } from "../../../src/core/brain/config-templa
 import { scanInline } from "../../../src/core/brain/inline-scan.ts";
 import { brainDirs, preferencePath } from "../../../src/core/brain/paths.ts";
 import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
-import { listPendingSkillProposals } from "../../../src/core/brain/skill-proposals.ts";
+import { deriveFact } from "../../../src/core/brain/derived-fact.ts";
+import {
+  acceptSkillProposal,
+  listPendingSkillProposals,
+  rejectSkillProposal,
+} from "../../../src/core/brain/skill-proposals.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -299,5 +304,195 @@ describe("a file with no markers of the new kinds is untouched by the new routin
     );
     expect(listPendingSkillProposals(vault).length).toBe(0);
     expect(acceptedProposalCount()).toBe(0);
+  });
+});
+
+describe("a dry run previews the routed kinds instead of hiding them", () => {
+  test("routed markers are counted and reported, and nothing is written", async () => {
+    seedPremise("gate-green");
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      [
+        `@osb fact topic="deploy gate" principle="ship only when green" premise=gate-green level=deduced`,
+        `@osb skill name="release check" body="run the suite"`,
+        "",
+      ].join("\n"),
+    );
+    const before = readFileSync(note, "utf8");
+
+    const dry = await scanInline(vault, { agent: "tester", now: NOW, dryRun: true });
+
+    expect(dry.facts).toBe(1);
+    expect(dry.skills).toBe(1);
+    expect(dry.found).toBe(2);
+    expect(dry.filesWithMarkers).toEqual([{ path: note, markers: 2 }]);
+    expect(dry.errors).toEqual([]);
+
+    // Nothing on disk moved: no preference, no proposal, no rewrite.
+    expect(existsSync(preferencePath(vault, "deploy-gate"))).toBe(false);
+    expect(listPendingSkillProposals(vault).length).toBe(0);
+    expect(readFileSync(note, "utf8")).toBe(before);
+  });
+
+  test("a dry run refuses exactly the markers a real run refuses", async () => {
+    seedPremise("gate-green");
+    seedPremise("taken-topic");
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      [
+        // Unresolvable premise.
+        `@osb fact topic=t1 principle=p premise=nope level=deduced`,
+        // Derivation level outside the destination's vocabulary.
+        `@osb fact topic=t2 principle=p premise=gate-green level=stated`,
+        // The conclusion's slug is already taken by an existing preference.
+        `@osb fact topic="taken topic" principle=p premise=gate-green level=deduced`,
+        "",
+      ].join("\n"),
+    );
+    const before = readFileSync(note, "utf8");
+
+    const dry = await scanInline(vault, { agent: "tester", now: NOW, dryRun: true });
+    const real = await scanInline(vault, { agent: "tester", now: NOW });
+
+    expect(dry.facts).toBe(0);
+    expect(real.facts).toBe(0);
+    expect(dry.errors.length).toBe(3);
+    expect(real.errors.length).toBe(dry.errors.length);
+    // Same markers, named the same way: the preview's preconditions have
+    // not drifted from the ones the writer enforces.
+    expect(dry.errors.map((e) => e.message.split(":")[0])).toEqual(
+      real.errors.map((e) => e.message.split(":")[0]),
+    );
+    expect(dry.errors.map((e) => e.path)).toEqual(real.errors.map((e) => e.path));
+    expect(dry.errors[0]!.message).toContain("nope");
+    expect(dry.errors[1]!.message).toContain("stated");
+    expect(readFileSync(note, "utf8")).toBe(before);
+  });
+
+  test("a dry run reports a declaration the queue would decline", async () => {
+    writeNote("Daily/2026-07-26.md", `@osb skill name="release check" body="run the suite"\n`);
+    expect((await scanInline(vault, { agent: "tester", now: NOW })).skills).toBe(1);
+    rejectSkillProposal(vault, listPendingSkillProposals(vault)[0]!.slug, {
+      note: "not a skill",
+      now: NOW,
+    });
+
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      `@osb skill name="release check" body="a completely different, newer body"\n`,
+    );
+    const before = readFileSync(note, "utf8");
+
+    const dry = await scanInline(vault, { agent: "tester", now: NOW, dryRun: true });
+
+    expect(dry.skills).toBe(0);
+    expect(dry.suppressed).toBe(1);
+    expect(dry.errors.length).toBe(1);
+    expect(readFileSync(note, "utf8")).toBe(before);
+  });
+});
+
+describe("a re-declared skill on a reviewed name is a named outcome, never a silent drop", () => {
+  test("a rejected name is reported, counted, and leaves the marker live", async () => {
+    writeNote("Daily/2026-07-26.md", `@osb skill name="release check" body="run the suite"\n`);
+    await scanInline(vault, { agent: "tester", now: NOW });
+    rejectSkillProposal(vault, listPendingSkillProposals(vault)[0]!.slug, {
+      note: "not a skill",
+      now: NOW,
+    });
+
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      `@osb skill name="release check" body="a completely different, newer body"\n`,
+    );
+
+    const result = await scanInline(vault, { agent: "tester", now: NOW });
+
+    expect(result.skills).toBe(0);
+    expect(result.suppressed).toBe(1);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]!.message).toContain("skill marker at line 1 was not consumed");
+    expect(result.errors[0]!.message).toContain("rejected");
+    // The marker is the only copy of the declared body: it stays live and
+    // never points at the rejected file.
+    expect(readFileSync(note, "utf8")).not.toContain("@osb✓");
+    expect(readFileSync(note, "utf8")).toContain("a completely different, newer body");
+    expect(listPendingSkillProposals(vault).length).toBe(0);
+  });
+
+  test("an accepted name is reported the same way", async () => {
+    writeNote("Daily/2026-07-26.md", `@osb skill name="release check" body="run the suite"\n`);
+    await scanInline(vault, { agent: "tester", now: NOW });
+    acceptSkillProposal(vault, listPendingSkillProposals(vault)[0]!.slug, { now: NOW });
+
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      `@osb skill name="release check" body="a completely different, newer body"\n`,
+    );
+
+    const result = await scanInline(vault, { agent: "tester", now: NOW });
+
+    expect(result.suppressed).toBe(1);
+    expect(result.errors.length).toBe(1);
+    expect(result.errors[0]!.message).toContain("accepted");
+    expect(readFileSync(note, "utf8")).not.toContain("@osb✓");
+  });
+
+  test("a second declaration of a still-pending name stays benign dedup", async () => {
+    writeNote("Daily/2026-07-26.md", `@osb skill name="release check" body="run the suite"\n`);
+    await scanInline(vault, { agent: "tester", now: NOW });
+
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      `@osb skill name="release check" body="run the suite"\n`,
+    );
+
+    const result = await scanInline(vault, { agent: "tester", now: NOW });
+
+    expect(result.suppressed).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(result.skills).toBe(0);
+    expect(listPendingSkillProposals(vault).length).toBe(1);
+    expect(readFileSync(note, "utf8")).toContain("@osb✓");
+  });
+});
+
+describe("a file whose only markers are routed still appears in the report", () => {
+  test("filesWithMarkers names it and `found` counts its markers", async () => {
+    seedPremise("gate-green");
+    const note = writeNote(
+      "Daily/2026-07-27.md",
+      [
+        `@osb fact topic="deploy gate" principle="ship only when green" premise=gate-green level=deduced`,
+        `@osb skill name="release check" body="run the suite"`,
+        "",
+      ].join("\n"),
+    );
+
+    const result = await scanInline(vault, { agent: "tester", now: NOW });
+
+    expect(result.found).toBe(2);
+    expect(result.filesWithMarkers).toEqual([{ path: note, markers: 2 }]);
+  });
+});
+
+describe("the fact route reads its outcome off the destination's contract", () => {
+  test("DeriveFactResult carries only the id", () => {
+    seedPremise("gate-green");
+    const result = deriveFact(
+      vault,
+      {
+        slug: "census-fact",
+        topic: "census fact",
+        principle: "p",
+        premises: ["gate-green"],
+        level: "deduced",
+      },
+      { now: NOW },
+    );
+    // `routeFactMarker` concludes "created" from the fact that deriveFact
+    // has no branch resolving to an artifact it did not write. The day it
+    // reports what it did, this census fails and that field must be read.
+    expect(Object.keys(result).toSorted()).toEqual(["id"]);
   });
 });

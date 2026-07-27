@@ -136,6 +136,25 @@ function seedRetiredInvalid(): string {
   ]);
 }
 
+/** A preference file whose optional `_applied_count` is not a number. */
+function seedPreferenceBadAppliedCount(): string {
+  return seed(join(brainDirs(tmp).preferences, "pref-bad-applied-count.md"), [
+    "---",
+    "kind: brain-preference",
+    "id: pref-bad-applied-count",
+    "created_at: 2026-05-14T10:42:00Z",
+    "_confirmed_at: null",
+    "unconfirmed_until: 2026-05-28T10:42:00Z",
+    "tags: [brain, brain/preference]",
+    "topic: broken",
+    "_status: unconfirmed",
+    "principle: A rule with an uncountable apply count",
+    "_evidenced_by: []",
+    "_applied_count: abc",
+    "---",
+  ]);
+}
+
 /** A preference file filed under `preferences/` with `_status: retired`. */
 function seedStatusFolderMismatch(): string {
   return seed(join(brainDirs(tmp).preferences, "pref-mismatch.md"), [
@@ -220,6 +239,39 @@ describe("the typed parse error carries the path as a field", () => {
       expect(e.folder).toBe("preferences");
       expect(e.detail).not.toContain(path);
       expect(e.message).toContain(path);
+    }
+  });
+});
+
+describe("what the composed sentence promises, precisely", () => {
+  test("the status-folder mismatch sentence keeps its historical byte layout", () => {
+    const path = seedStatusFolderMismatch();
+    let surfaced = "";
+    try {
+      parsePreference(path);
+    } catch (exc) {
+      // `o2b brain reject` prints this string bare; an operator may match on it.
+      surfaced = (exc as Error).message;
+    }
+    expect(surfaced).toBe(
+      "preference file frontmatter status does not match preferences/ folder " +
+        `(path=${path}, status=retired, folder=preferences)`,
+    );
+  });
+
+  test("an optional-field failure that carried no location now carries one", () => {
+    const path = seedPreferenceBadAppliedCount();
+    try {
+      parsePreference(path);
+      throw new Error("parsePreference did not throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BrainParseError);
+      const e = err as BrainParseError;
+      expect(e.detail).toBe(
+        "preference field 'applied_count' must be a finite number; got \"abc\"",
+      );
+      expect(e.path).toBe(path);
+      expect(e.message).toBe(withLocation(e.detail, path));
     }
   });
 });

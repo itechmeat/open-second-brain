@@ -29,10 +29,16 @@
  * into the unconfirmed preferences, and `skill` into the pending
  * proposal queue (see `marker-routing.ts`). Every routed marker is
  * consumed through the same `@osb✓` sentinel, so a rescan is a no-op;
- * a marker whose destination REFUSED it is left live and its refusal
- * is reported, so the operator can fix the marker and rescan. `loop`
- * and `set` markers are not routed here - loops are live-derived and
- * set markers belong to the guarded write-back verb.
+ * a marker whose destination REFUSED it, or declined it without storing
+ * its content, is left live and reported, so the operator can fix the
+ * marker and rescan. `loop` and `set` markers are not routed here -
+ * loops are live-derived and set markers belong to the guarded
+ * write-back verb.
+ *
+ * A dry run walks every one of those steps in preview and writes
+ * nothing: the counters and the errors are what a real run would
+ * produce, because a preview that reports nothing while work is queued
+ * is not a preview.
  */
 
 import { readFileSync } from "node:fs";
@@ -42,7 +48,7 @@ import { emitIngestDedupReport, type IngestDedupSourceCount } from "./dedup-tele
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
-import { routeCaptureMarker, ROUTED_MARKER_KINDS } from "./marker-routing.ts";
+import { previewCaptureMarker, routeCaptureMarker, ROUTED_MARKER_KINDS } from "./marker-routing.ts";
 import { buildNoteWalkRules, resolveNoteRoots, walkMarkdownFiles } from "./notes/note-walk.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
@@ -75,6 +81,11 @@ export interface ScanInlineFileSummary {
 
 export interface ScanInlineResult {
   readonly scanned: number;
+  /**
+   * Markers this scan is responsible for: feedback plus the routed
+   * kinds. A file whose only markers are `fact` / `skill` is work this
+   * run does, so it counts here and in {@link filesWithMarkers}.
+   */
   readonly found: number;
   readonly created: number;
   readonly deduped: number;
@@ -83,6 +94,12 @@ export interface ScanInlineResult {
   readonly facts: number;
   /** Skill markers drafted into the pending proposal queue by this run. */
   readonly skills: number;
+  /**
+   * Routed markers whose destination declined and stored nothing. Each
+   * one also appears in {@link errors}, and each is left live in its
+   * source file - see the routed-marker loop for why.
+   */
+  readonly suppressed: number;
   readonly errors: ReadonlyArray<ScanInlineErrorEntry>;
   readonly filesWithMarkers: ReadonlyArray<ScanInlineFileSummary>;
 }
@@ -104,6 +121,7 @@ export async function scanInline(
   let malformed = 0; // reserved — not surfaced separately yet
   let facts = 0;
   let skills = 0;
+  let suppressed = 0;
 
   // v0.11.0: explicit `opts.paths` always wins. When absent or empty,
   // fall back to `notes.read_paths` from `_brain.yaml`. An empty
@@ -121,6 +139,7 @@ export async function scanInline(
       malformed: 0,
       facts: 0,
       skills: 0,
+      suppressed: 0,
       errors: Object.freeze([]) as ReadonlyArray<ScanInlineErrorEntry>,
       filesWithMarkers: Object.freeze([]) as ReadonlyArray<ScanInlineFileSummary>,
     });
@@ -177,9 +196,16 @@ export async function scanInline(
     // and never consumed; set markers belong to the guarded write-back
     // verb. Neither may be turned into a signal or rewritten here.
     const markers = discovery.markers.filter(isFeedbackMarker);
-    if (markers.length > 0) {
-      found += markers.length;
-      filesWithMarkers.push({ path: filePath, markers: markers.length });
+    const routedMarkers = discovery.markers.filter((marker) =>
+      ROUTED_MARKER_KINDS.has(marker.kind),
+    );
+    // Every marker this run is responsible for, whichever store it lands
+    // in: a file holding only fact / skill markers is work, and a report
+    // that omitted it would name no file for the counters below.
+    const handledMarkers = markers.length + routedMarkers.length;
+    if (handledMarkers > 0) {
+      found += handledMarkers;
+      filesWithMarkers.push({ path: filePath, markers: handledMarkers });
     }
     let fileDeduped = 0;
     for (const marker of markers) {
@@ -230,36 +256,47 @@ export async function scanInline(
     }
 
     if (fileDeduped > 0) {
-      dedupBySource.push({
-        ref: relative(vault, filePath).split(sep).join("/"),
-        exactDeduped: fileDeduped,
-      });
+      dedupBySource.push({ ref: vaultRelSource, exactDeduped: fileDeduped });
     }
 
     // Fact and skill markers reach their own gated stores. Per-marker
     // isolation: a destination that refuses one marker leaves it live and
     // reports why, and the remaining markers in the file still run.
-    if (!opts.dryRun) {
-      for (const marker of discovery.markers) {
-        if (!ROUTED_MARKER_KINDS.has(marker.kind)) continue;
-        try {
-          const routed = routeCaptureMarker(vault, marker, {
-            sourceRef: `[[${vaultRelSource}]]`,
-            now,
-          });
-          if (routed.created) {
-            if (marker.kind === "fact") facts++;
-            else skills++;
-          }
-          rewriteOps.push({ marker, signalId: routed.id });
-        } catch (err) {
+    //
+    // A dry run walks the same markers through the same destinations in
+    // preview: it counts what would be written and reports what would be
+    // refused, and writes nothing. Reporting neither, while queueing the
+    // writes for the next real run, would be a preview of nothing.
+    const routeCtx = { sourceRef: `[[${vaultRelSource}]]`, now };
+    for (const marker of routedMarkers) {
+      try {
+        const routed = opts.dryRun
+          ? previewCaptureMarker(vault, marker, routeCtx)
+          : routeCaptureMarker(vault, marker, routeCtx);
+        if (routed.outcome === "suppressed") {
+          // The destination stored nothing, so the marker is the only copy
+          // of what the author declared: consuming it would destroy that
+          // copy and point the sentinel at an artifact carrying different
+          // content. It stays live, and the refusal is named.
+          suppressed++;
           errors.push({
             path: filePath,
-            message: `${marker.kind} marker at line ${marker.originLine} was refused: ${
-              (err as Error).message ?? String(err)
-            }`,
+            message: `${marker.kind} marker at line ${marker.originLine} was not consumed: ${routed.reason}`,
           });
+          continue;
         }
+        if (routed.outcome === "created") {
+          if (marker.kind === "fact") facts++;
+          else skills++;
+        }
+        rewriteOps.push({ marker, signalId: routed.id });
+      } catch (err) {
+        errors.push({
+          path: filePath,
+          message: `${marker.kind} marker at line ${marker.originLine} was refused: ${
+            (err as Error).message ?? String(err)
+          }`,
+        });
       }
     }
 
@@ -294,6 +331,7 @@ export async function scanInline(
     malformed,
     facts,
     skills,
+    suppressed,
     errors: Object.freeze(errors),
     filesWithMarkers: Object.freeze(filesWithMarkers),
   });

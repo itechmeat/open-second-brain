@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,8 +12,10 @@ import {
 } from "../../../src/core/brain/paths.ts";
 import {
   acceptSkillProposal,
+  draftDeclaredSkillProposal,
   learnSkillProposals,
   listPendingSkillProposals,
+  previewDeclaredSkillProposal,
   rejectSkillProposal,
 } from "../../../src/core/brain/skill-proposals.ts";
 
@@ -298,3 +300,46 @@ function seedCorePatterns(vaultPath: string): void {
     });
   }
 }
+
+describe("a declared proposal refuses a taken slug by name", () => {
+  const declaration = {
+    name: "release check",
+    body: "run the suite, then the linter",
+    sourceRefs: ["[[Daily/2026-07-27]]"],
+    now: new Date("2026-07-27T09:00:00Z"),
+  };
+
+  test("a file already occupying the slug is a named outcome, not an uncaught write error", () => {
+    const first = draftDeclaredSkillProposal(vault, declaration);
+    expect(first.outcome).toBe("created");
+
+    // Simulate what a change to the slug derivation would produce: the same
+    // slug reached from a name key the lookup no longer matches. The mined
+    // path guards this with an existsSync over the three phases; the
+    // declared path must not fall through to the exclusive write instead.
+    const stored = readFileSync(first.path, "utf8");
+    writeFileSync(
+      first.path,
+      stored.replace(/^name_key: .*$/m, "name_key: declared_marker:some-other-key"),
+      "utf8",
+    );
+
+    const second = draftDeclaredSkillProposal(vault, declaration);
+    expect(second.outcome).toBe("suppressed");
+    if (second.outcome !== "suppressed") throw new Error("unreachable");
+    expect(second.reason).toContain(first.slug);
+    expect(second.reason).toContain("pending/");
+  });
+
+  test("the preview reaches the same outcomes without writing", () => {
+    const preview = previewDeclaredSkillProposal(vault, declaration);
+    expect(preview.outcome).toBe("created");
+    expect(existsSync(preview.path)).toBe(false);
+
+    draftDeclaredSkillProposal(vault, declaration);
+    expect(previewDeclaredSkillProposal(vault, declaration).outcome).toBe("deduped");
+
+    rejectSkillProposal(vault, listPendingSkillProposals(vault)[0]!.slug, { note: "no" });
+    expect(previewDeclaredSkillProposal(vault, declaration).outcome).toBe("suppressed");
+  });
+});

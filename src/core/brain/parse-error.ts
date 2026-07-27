@@ -18,6 +18,19 @@
  * place a filesystem location is appended to a message, rather than by a
  * template repeated at every throw site.
  *
+ * What that composition does and does not preserve, precisely:
+ *
+ *   - Every throw site whose message ALREADY carried the path composes
+ *     the same sentence as before. Where the historical sentence put the
+ *     location somewhere other than the end — `BrainStatusFolderMismatchError`
+ *     names it inside a `(path=…, status=…, folder=…)` group — the site
+ *     supplies that sentence through {@link BrainParseErrorOptions.composedMessage},
+ *     so an operator matching on the text sees no change.
+ *   - Four optional-field helpers in `preference.ts` (`optionalStringList`,
+ *     `optionalNullableString`, `optionalNumber`, `optionalStringArray`)
+ *     threw with NO location at all. They now carry one. That is a gain,
+ *     not a preserved shape, and it is the only wording change in the set.
+ *
  * The class is deliberately not vocabulary-aware: it knows a file and a
  * failure, and nothing about preferences, retirement, or doctor codes.
  * Classification stays in `doctor.ts`, which maps the bare detail onto
@@ -36,13 +49,25 @@ export function withLocation(detail: string, path: string): string {
   return `${detail} (${path})`;
 }
 
+export interface BrainParseErrorOptions extends ErrorOptions {
+  /**
+   * The full sentence for `message`, replacing {@link withLocation}'s
+   * composition. For a throw site whose historical sentence named the
+   * location somewhere other than the end, so that keeping the location
+   * costs no wording change. `detail` still carries none, so the doctor
+   * reads the same field it reads everywhere else.
+   */
+  readonly composedMessage?: string;
+}
+
 /**
  * A Brain artifact that could not be parsed, plus the file it came from.
  *
  * `detail` is the failure with no location in it; `path` is the location;
- * `message` is the two joined by {@link withLocation}. A consumer that
- * renders its own path field reads `detail`; a consumer that prints one
- * string reads `message`.
+ * `message` is the two joined by {@link withLocation}, unless the site
+ * supplied its own composition. A consumer that renders its own path
+ * field reads `detail`; a consumer that prints one string reads
+ * `message`.
  */
 export class BrainParseError extends Error {
   /** Absolute path of the file whose parse failed. */
@@ -50,8 +75,8 @@ export class BrainParseError extends Error {
   /** The failure, with no location in it. */
   readonly detail: string;
 
-  constructor(detail: string, path: string, options?: ErrorOptions) {
-    super(withLocation(detail, path), options);
+  constructor(detail: string, path: string, options?: BrainParseErrorOptions) {
+    super(options?.composedMessage ?? withLocation(detail, path), options);
     this.name = "BrainParseError";
     this.detail = detail;
     this.path = path;
