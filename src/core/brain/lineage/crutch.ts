@@ -7,16 +7,35 @@
  * native field but has not merged. Until it ships, this module infers
  * the parent of a brand-new session id from the lineage ledger.
  *
- * The inference is deliberately conservative - a false stitch (two
- * unrelated conversations merged) is strictly worse than a missed
- * stitch (status quo). A link happens only when ALL hold:
+ * ## Two rungs (signals-that-survive, Unit 9)
+ *
+ * Resolution here runs two rungs in strict order. The first is DURABLE
+ * WORK IDENTITY: when this session and exactly one predecessor declared
+ * the same work id, they are the same work item and the link is made on
+ * that alone - no freshness bound, no `cwd`, branch or commit predicate,
+ * which is precisely what lets resumed work re-attach after a model,
+ * account, branch or worktree switch. The identity is DECLARED (see
+ * `identity.ts`); nothing is inferred from structure. The second rung is
+ * the timing crutch below, unchanged, and it still decides every session
+ * that declares nothing.
+ *
+ * A LANE is a hard separator across both rungs: two entries carrying
+ * different declared lane ids never link, whatever else they share, and
+ * the refusal is the named `lane-conflict` outcome rather than a silent
+ * non-link. It is never a tiebreak - a lane cannot make an otherwise
+ * refused link happen, only prevent one.
+ *
+ * The crutch's own inference is deliberately conservative - a false
+ * stitch (two unrelated conversations merged) is strictly worse than a
+ * missed stitch (status quo). A link happens only when ALL hold:
  *
  *   1. the new session has NO history of its own - neither a ledger
  *      line NOR a recorded gap (a session seen before without a link is
  *      a parallel session, and a dropped observation is still a session
  *      that spoke);
- *   2. a predecessor exists in the SAME cwd, and no other session has
- *      already continued from it;
+ *   2. a predecessor exists in the SAME cwd, no other session has
+ *      already continued from it, and it declares no lane that
+ *      contradicts this session's;
  *   3. that predecessor's git working state - repo, branch, commit -
  *      matches this session's, and both sides attested one;
  *   4. the predecessor's LATEST event evidences a compression
@@ -51,10 +70,9 @@
  * abstention is a returned value, never a throw: this path is fail-soft
  * by contract and must not raise into a lifecycle hook.
  *
- * The 900-second window stays as the freshness bound. Replacing the
- * timing crutch with durable work identity is a separate architectural
- * unit (kanban t_e6be4f6b); this makes its failures visible and abstains
- * where it cannot tell, which is that replacement's prerequisite.
+ * The 900-second window stays as the freshness bound for the second
+ * rung, and is the ONLY resolution path available when nothing declares
+ * an identity - which is why Unit 9 demoted it rather than deleting it.
  *
  * Removal plan (kanban t_1459706f): once the upstream PR merges and the
  * deployed Hermes emits `parent_session_id`, delete this file and every
@@ -89,6 +107,20 @@ export const CRUTCH_ABSTENTION = Object.freeze({
   stale: "stale",
   /** Candidates were fresh but showed no compression boundary, or their git state was unattested. */
   evidenceMissing: "evidence-missing",
+  /**
+   * A predecessor was available and carried a DIFFERENT declared lane.
+   * The hard separator fired: this is a refusal, never a near miss, and
+   * it is named so a lane typo is distinguishable from an absence of
+   * history (Unit 9).
+   */
+  laneConflict: "lane-conflict",
+  /**
+   * Several predecessors declare THIS session's work id under the same
+   * lane. The identity rung refuses for the same reason `ambiguous`
+   * does - a shared id that names more than one predecessor cannot pick
+   * one without guessing (Unit 9).
+   */
+  workAmbiguous: "work-ambiguous",
 } as const);
 
 export type CrutchAbstentionReason = (typeof CRUTCH_ABSTENTION)[keyof typeof CRUTCH_ABSTENTION];
@@ -128,6 +160,14 @@ export interface CrutchResolveInput {
    * behaviour and the only reason the field is optional.
    */
   readonly gapSessionIds?: ReadonlySet<string>;
+  /**
+   * DECLARED work id of THIS session (Unit 9), resolved at the capture
+   * boundary. Absent means the identity rung has nothing to match on and
+   * the window rung decides alone - which is the pre-Unit-9 behaviour.
+   */
+  readonly workId?: string;
+  /** DECLARED lane of THIS session. The hard separator, at both rungs. */
+  readonly laneId?: string;
 }
 
 /**
@@ -140,11 +180,12 @@ export interface CrutchResolveInput {
 type AttestationMatch = "match" | "mismatch" | "unattested";
 
 /** Which predicate turned a candidate away. Ordered by how far it got. */
-type RejectionKind = "claimed" | "workspace" | "stale" | "evidence";
+type RejectionKind = "claimed" | "lane" | "workspace" | "stale" | "evidence";
 
 /**
- * Infer lineage for a session from the ledger, or abstain with a named
- * reason. CRUTCH(t_1459706f). Never throws.
+ * Resolve lineage for a session from the ledger, or abstain with a named
+ * reason. Runs the declared-identity rung first and the timing crutch
+ * second. CRUTCH(t_1459706f). Never throws.
  */
 export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
   const { sessionId, ledger, nowMs } = input;
@@ -178,6 +219,17 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
       0,
     );
   }
+  // A compaction boundary has exactly one successor, so a predecessor
+  // another session already continued from is spoken for. Computed once
+  // and shared by both rungs - the property is the same at each.
+  const claimed = claimedPredecessors(ledger, sessionId);
+
+  // RUNG 1 (Unit 9): durable declared identity. It returns null when it
+  // has nothing to decide on, which is when the window rung below runs.
+  const byIdentity = resolveDeclaredIdentity(input, claimed);
+  if (byIdentity !== null) return byIdentity;
+
+  // RUNG 2: the timing crutch. Unchanged apart from the lane separator.
   const cwd = input.cwd;
   if (cwd === undefined || cwd.length === 0) {
     return abstain(CRUTCH_ABSTENTION.noWorkspace, "the host reported no working directory", 0);
@@ -186,12 +238,12 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
   const survivors: LineageLedgerEntry[] = [];
   const rejected: Record<RejectionKind, number> = {
     claimed: 0,
+    lane: 0,
     workspace: 0,
     stale: 0,
     evidence: 0,
   };
   let considered = 0;
-  const claimed = claimedPredecessors(ledger, sessionId);
 
   for (const entry of ledger.values()) {
     if (entry.sessionId === sessionId) continue;
@@ -200,13 +252,20 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
     if (entry.cwd !== cwd) continue;
     considered++;
 
-    // A compaction boundary has exactly one successor, so a
-    // predecessor another session already continued from is spoken for.
     // Without this, an A -> B -> C chain looks ambiguous from C: both A
     // and B are fresh, evidenced and in the same directory, and only B
     // is actually available.
     if (claimed.has(entry.sessionId)) {
       rejected.claimed++;
+      continue;
+    }
+
+    // The lane separator (Unit 9) applies to this rung too. Without it a
+    // predecessor the identity rung just refused could be re-linked here
+    // on nothing but a shared directory and a fresh timestamp, which
+    // would make "never link across lanes" true of one rung only.
+    if (lanesConflict(entry.laneId, input.laneId)) {
+      rejected.lane++;
       continue;
     }
 
@@ -249,7 +308,20 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
   if (predecessor === undefined) {
     return abstain(nearestMiss(rejected), summarize(considered, rejected), considered);
   }
+  return linkTo(predecessor, CRUTCH_SOURCE);
+}
 
+/** Lineage source recorded by each of the two rungs. */
+const IDENTITY_SOURCE = "identity" as const;
+const CRUTCH_SOURCE = "crutch" as const;
+
+/**
+ * Continue a predecessor's conversation. Shared by both rungs so the
+ * root/depth inheritance is written once: a predecessor that is itself
+ * a continuation passes on its ROOT, not its own id, and its depth
+ * count continues rather than restarting.
+ */
+function linkTo(predecessor: LineageLedgerEntry, source: SessionLineage["source"]): CrutchLinked {
   const parentLineage = predecessor.lineage;
   return Object.freeze({
     kind: "linked" as const,
@@ -257,9 +329,74 @@ export function resolveCrutchLineage(input: CrutchResolveInput): CrutchOutcome {
       rootId: parentLineage !== undefined ? parentLineage.rootId : predecessor.sessionId,
       parentId: predecessor.sessionId,
       depth: (parentLineage !== undefined ? parentLineage.depth : 0) + 1,
-      source: "crutch" as const,
+      source,
     }),
   });
+}
+
+/**
+ * RUNG 1: link on a DECLARED work id alone (Unit 9).
+ *
+ * Deliberately applies none of the crutch's predicates. Freshness, cwd,
+ * repo, branch, commit and compression evidence are all proxies for "is
+ * this the same work" that the declaration answers directly - so a
+ * resumed item re-attaches after a switch that would fail every one of
+ * them. What it does NOT relax: the lane separator, the spoken-for rule,
+ * and the refusal to guess between several candidates.
+ *
+ * Returns `null` when this rung has nothing to decide - the session
+ * declared no work id, or no predecessor declared the same one - which
+ * is the only path down to the window rung. Every other outcome is
+ * terminal, including the two refusals: falling through after naming a
+ * lane conflict would let the window rung silently re-link what the
+ * separator just refused.
+ */
+function resolveDeclaredIdentity(
+  input: CrutchResolveInput,
+  claimed: ReadonlySet<string>,
+): CrutchOutcome | null {
+  const workId = input.workId;
+  if (workId === undefined || workId.length === 0) return null;
+
+  const survivors: LineageLedgerEntry[] = [];
+  let considered = 0;
+  let laneRejected = 0;
+  for (const entry of input.ledger.values()) {
+    if (entry.sessionId === input.sessionId) continue;
+    if (entry.workId !== workId) continue;
+    considered++;
+    if (lanesConflict(entry.laneId, input.laneId)) {
+      laneRejected++;
+      continue;
+    }
+    if (claimed.has(entry.sessionId)) continue;
+    survivors.push(entry);
+  }
+
+  // Ambiguity abstains here for the same reason it does at the window
+  // rung: a shared id naming two predecessors cannot pick one without
+  // guessing, and a wrong-but-plausible resume is worse than none.
+  if (survivors.length > 1) {
+    return abstain(
+      CRUTCH_ABSTENTION.workAmbiguous,
+      `${survivors.length} predecessors declare work id ${workId} in this lane; ` +
+        "refused rather than resolved by recency",
+      considered,
+    );
+  }
+  const predecessor = survivors[0];
+  if (predecessor !== undefined) return linkTo(predecessor, IDENTITY_SOURCE);
+  if (laneRejected > 0) {
+    return abstain(
+      CRUTCH_ABSTENTION.laneConflict,
+      `${laneRejected} of ${considered} predecessors declaring work id ${workId} ` +
+        "carry a different lane; lanes never link",
+      considered,
+    );
+  }
+  // Either nothing declared this work id, or every match was already
+  // continued from. Both leave the window rung to decide and report.
+  return null;
 }
 
 function abstain(
@@ -277,6 +414,11 @@ function abstain(
  * furthest tells the operator what actually stood between two sessions.
  */
 function nearestMiss(rejected: Record<RejectionKind, number>): CrutchAbstentionReason {
+  // The lane separator outranks the near-miss ordering: it is a
+  // DECLARED refusal rather than a predicate a candidate fell short of,
+  // and reporting it as "no candidate" would hide the one cause an
+  // operator can act on directly.
+  if (rejected.lane > 0) return CRUTCH_ABSTENTION.laneConflict;
   if (rejected.evidence > 0) return CRUTCH_ABSTENTION.evidenceMissing;
   if (rejected.stale > 0) return CRUTCH_ABSTENTION.stale;
   return CRUTCH_ABSTENTION.noCandidate;
@@ -286,10 +428,20 @@ function summarize(considered: number, rejected: Record<RejectionKind, number>):
   if (considered === 0) return "no predecessor was recorded in this working directory";
   return (
     `no predecessor survived: ${considered} examined ` +
-    `(${rejected.claimed} already continued, ${rejected.workspace} in another working state, ` +
+    `(${rejected.claimed} already continued, ${rejected.lane} in another lane, ` +
+    `${rejected.workspace} in another working state, ` +
     `${rejected.stale} outside the freshness window, ` +
     `${rejected.evidence} without usable evidence)`
   );
+}
+
+/**
+ * True when two DECLARED lanes disagree. One side silent is not a
+ * conflict: a lane is a separator a caller opts into, so an undeclared
+ * lane must leave resolution exactly as it was before lanes existed.
+ */
+function lanesConflict(candidate: string | undefined, session: string | undefined): boolean {
+  return candidate !== undefined && session !== undefined && candidate !== session;
 }
 
 /**

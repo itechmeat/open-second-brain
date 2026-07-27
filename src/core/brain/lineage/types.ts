@@ -6,10 +6,16 @@
  * the host compresses context and rotates the id. The kernel resolves
  * every session id to a lineage: the root id of the conversation, the
  * immediate parent segment, and how many compression boundaries deep
- * the segment sits. Three sources, in strict precedence order:
+ * the segment sits. Four sources, in strict precedence order:
  *
  *   - `payload`: the hook payload carried native lineage fields
  *     (`parent_session_id` et al. - upstream Hermes PR #42940).
+ *   - `identity`: this session and exactly one predecessor DECLARED the
+ *     same work id (signals-that-survive, Unit 9). Durable where the
+ *     crutch is not - it applies no freshness bound and no working-state
+ *     predicate, so resumed work re-attaches across a model, account,
+ *     branch or worktree switch. See `identity.ts` for where the
+ *     declaration is read from and `crutch.ts` for the rung itself.
  *   - `crutch`: the interim ledger-based inference for hosts that do
  *     not emit lineage yet. See `crutch.ts`, CRUTCH(t_1459706f).
  *   - `flat`: no lineage known; the session is its own root. This is
@@ -19,7 +25,7 @@
 
 import type { GitWorkspaceIdentity } from "../git/reader.ts";
 
-export type SessionLineageSource = "payload" | "crutch" | "flat";
+export type SessionLineageSource = "payload" | "identity" | "crutch" | "flat";
 
 export interface SessionLineage {
   /** Root session id of the whole conversation (self when flat). */
@@ -51,6 +57,18 @@ export interface LineageHints {
    * the shell-out lives at the capture boundary, once per hook.
    */
   readonly workspace?: GitWorkspaceIdentity;
+  /**
+   * DECLARED work id for this session (signals-that-survive, Unit 9).
+   * Resolved at the capture boundary by `resolveWorkIdentity` and passed
+   * IN for the same reason `workspace` is: resolution stays a pure
+   * function of its inputs. Absent when nothing declared one.
+   */
+  readonly workId?: string;
+  /**
+   * DECLARED lane for this session. A hard separator: two sessions under
+   * different lanes never link, at any rung, whatever else they share.
+   */
+  readonly laneId?: string;
 }
 
 /**

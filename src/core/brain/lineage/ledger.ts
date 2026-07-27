@@ -51,6 +51,17 @@
  * coded its field list - silently dropped any field a later writer
  * added. Verbatim retention removes all four at once, including the
  * last as a class of bug rather than an instance.
+ *
+ * ## Declared work identity (signals-that-survive, Unit 9)
+ *
+ * A line may also carry a DECLARED work id and lane id (`wid` / `lane`),
+ * sourced at the capture boundary by `identity.ts` and never derived
+ * here. They are the durable half of continuation: the crutch's freshness
+ * window expires, a work id does not. Both are optional and are omitted
+ * when blank, so a ledger written by a host that declares nothing is
+ * byte-identical to the one this module wrote before they existed - and
+ * because the hash covers the line body by REMOVAL of the chain fields,
+ * they ride the integrity chain without any change to it.
  */
 
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
@@ -186,6 +197,15 @@ export interface LineageObservation {
    * record.
    */
   readonly workspace?: GitWorkspaceIdentity;
+  /**
+   * DECLARED work identity for this observation (signals-that-survive,
+   * Unit 9). Never derived - see `identity.ts` for the three rungs it is
+   * sourced from. Absent when nothing declared one, which is why every
+   * pre-existing line is byte-identical.
+   */
+  readonly workId?: string;
+  /** DECLARED lane. A hard separator between work items, never a tiebreak. */
+  readonly laneId?: string;
 }
 
 export interface LineageLedgerEntry {
@@ -205,9 +225,28 @@ export interface LineageLedgerEntry {
    * what the session already attested.
    */
   readonly workspace?: GitWorkspaceIdentity;
+  /**
+   * Last declared work identity for the session, carried forward from
+   * the newest observation that declared one - for the same reason
+   * `cwd` and `workspace` are: an event that arrived without the
+   * declaration does not retract it.
+   */
+  readonly workId?: string;
+  /** Last declared lane for the session. See {@link LineageObservation.laneId}. */
+  readonly laneId?: string;
 }
 
 export type LineageLedgerState = ReadonlyMap<string, LineageLedgerEntry>;
+
+/**
+ * The Brain state directory: the dot-directory this module's ledger, its
+ * gap sidecar and the work-identity markers all live under. Exported so
+ * a sibling state file resolves through one definition rather than
+ * re-deriving the relative path.
+ */
+export function brainStateDirPath(vault: string): string {
+  return ensureInsideVault(join(vault, STATE_DIR_REL), vault);
+}
 
 export function sessionLineageLedgerPath(vault: string): string {
   return ensureInsideVault(join(vault, STATE_DIR_REL, LEDGER_FILE), vault);
@@ -236,6 +275,10 @@ export interface LedgerLine {
   readonly repo?: string;
   readonly branch?: string;
   readonly commit?: string;
+  /** Declared work id (Unit 9). Absent unless a rung declared one. */
+  readonly wid?: string;
+  /** Declared lane id (Unit 9). Absent unless a rung declared one. */
+  readonly lane?: string;
   /** Monotonic sequence number (Unit D). Absent on pre-chain lines. */
   readonly seq?: number;
   /** Chain hash of the preceding line; `null` at a chain anchor. */
@@ -305,6 +348,31 @@ function workspaceFields(
   };
 }
 
+/**
+ * Project a declared work identity onto its line fields (Unit 9). A
+ * blank declaration is not a declaration: it is omitted, so a host that
+ * sends an empty string leaves the line byte-identical to one that sent
+ * nothing at all.
+ */
+function identityFields(
+  workId: string | undefined,
+  laneId: string | undefined,
+): Pick<LedgerLine, "wid" | "lane"> {
+  const wid = declared(workId);
+  const lane = declared(laneId);
+  return {
+    ...(wid !== undefined ? { wid } : {}),
+    ...(lane !== undefined ? { lane } : {}),
+  };
+}
+
+/** A trimmed non-empty declaration, or `undefined`. */
+function declared(value: string | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 /** Inverse of {@link workspaceFields}; `undefined` when nothing was attested. */
 function readWorkspace(line: LedgerLine): GitWorkspaceIdentity | undefined {
   const repo = typeof line.repo === "string" ? line.repo : null;
@@ -330,6 +398,7 @@ function toLine(obs: LineageObservation): LedgerLine {
         }
       : {}),
     ...workspaceFields(obs.workspace),
+    ...identityFields(obs.workId, obs.laneId),
   };
 }
 
@@ -620,6 +689,8 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
           })
         : prev?.lineage;
     const workspace = readWorkspace(line) ?? prev?.workspace;
+    const workId = declared(line.wid) ?? prev?.workId;
+    const laneId = declared(line.lane) ?? prev?.laneId;
     state.set(line.sid, {
       sessionId: line.sid,
       firstSeenMs: prev === undefined ? atMs : Math.min(prev.firstSeenMs, atMs),
@@ -633,6 +704,8 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
       compressionEvidence: line.ce === true,
       ...(lineage !== undefined ? { lineage } : {}),
       ...(workspace !== undefined ? { workspace } : {}),
+      ...(workId !== undefined ? { workId } : {}),
+      ...(laneId !== undefined ? { laneId } : {}),
     });
   }
   return state;

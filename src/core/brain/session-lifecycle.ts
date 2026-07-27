@@ -25,6 +25,11 @@ import {
   recordLineageObservation,
 } from "./lineage/ledger.ts";
 import { resolveSessionLineageDetailed } from "./lineage/resolve.ts";
+import {
+  recordWorkIdentityMarker,
+  resolveWorkIdentity,
+  WORK_IDENTITY_SOURCE,
+} from "./lineage/identity.ts";
 import { readGitWorkspaceIdentity } from "./git/reader.ts";
 import { type DegradationNotice, formatDegradationNotice } from "../integrity/degradation.ts";
 import { isCompressionEvidenceEvent, type SessionLineage } from "./lineage/types.ts";
@@ -88,6 +93,10 @@ interface NormalizedPayload {
   readonly compressionDepth?: number;
   /** SessionStart discriminator (`startup|resume|clear|compact`). */
   readonly sessionStartSource?: string;
+  /** Declared work id the host named (`work_id`), if any. Unit 9. */
+  readonly workId?: string;
+  /** Declared lane the host named (`lane_id`), if any. Unit 9. */
+  readonly laneId?: string;
   /**
    * Host flag: this SessionEnd was an interrupted close
    * (SIGHUP/SIGTERM/force-quit/restart-drain). Absent by default; only
@@ -151,6 +160,16 @@ export async function captureSessionLifecycleEvent(
       // failed spawn.
       const workspace =
         normalized.cwd !== undefined ? readGitWorkspaceIdentity(normalized.cwd) : null;
+      // Unit 9: source the DECLARED work identity here for the same
+      // reason the git probe lives here - resolution stays a pure
+      // function of its inputs. Absent when nothing declares one, which
+      // leaves every rung below exactly as it was.
+      const identity = resolveWorkIdentity({
+        vault,
+        ...(normalized.workId !== undefined ? { payloadWorkId: normalized.workId } : {}),
+        ...(normalized.laneId !== undefined ? { payloadLaneId: normalized.laneId } : {}),
+        ...(normalized.cwd !== undefined ? { worktree: normalized.cwd } : {}),
+      });
       const resolution = resolveSessionLineageDetailed(
         {
           sessionId: normalized.sessionId,
@@ -165,6 +184,8 @@ export async function captureSessionLifecycleEvent(
             : {}),
           ...(normalized.cwd !== undefined ? { cwd: normalized.cwd } : {}),
           ...(workspace !== null ? { workspace } : {}),
+          ...(identity?.workId !== undefined ? { workId: identity.workId } : {}),
+          ...(identity?.laneId !== undefined ? { laneId: identity.laneId } : {}),
         },
         {
           ledger: readLineageLedger(vault),
@@ -195,8 +216,11 @@ export async function captureSessionLifecycleEvent(
             : {}),
           ...(lineage.source !== "flat" ? { lineage } : {}),
           ...(workspace !== null ? { workspace } : {}),
+          ...(identity?.workId !== undefined ? { workId: identity.workId } : {}),
+          ...(identity?.laneId !== undefined ? { laneId: identity.laneId } : {}),
         });
         if (recorded.notice !== undefined) lineageDrops.push(recorded.notice);
+        recordWorktreeIdentityMarker(vault, normalized.cwd, identity);
       }
     } catch {
       lineage = undefined; // lineage is an enhancement, never a blocker
@@ -419,6 +443,31 @@ export async function captureSessionLifecycleEvent(
 }
 
 /**
+ * Persist a live declaration as this worktree's marker (Unit 9), so the
+ * next session here resolves the same work item even when its host says
+ * nothing. Only a declaration that came from the payload or the
+ * environment is written: re-writing what the marker itself supplied
+ * would be a read echoed back as a write.
+ *
+ * Fail-soft in its own right, like the anticipatory cache below it - the
+ * marker is a convenience for a LATER session, and a state directory
+ * that cannot be written must not cost this one its capture.
+ */
+function recordWorktreeIdentityMarker(
+  vault: string,
+  worktree: string | undefined,
+  identity: ReturnType<typeof resolveWorkIdentity>,
+): void {
+  if (worktree === undefined || identity === null) return;
+  if (identity.source === WORK_IDENTITY_SOURCE.marker) return;
+  try {
+    recordWorkIdentityMarker(vault, worktree, identity);
+  } catch {
+    // The marker is an enhancement, never a capture blocker.
+  }
+}
+
+/**
  * Read the recorded transcript via the session adapters and write a
  * handoff note. Trust model: `transcript_path` is produced by the host
  * runtime itself (Claude Code / Hermes hand their own transcript path
@@ -487,6 +536,8 @@ function normalizePayload(payload: unknown): NormalizedPayload {
       ? compressionDepthRaw
       : undefined;
   const sessionStartSource = readNonEmptyString(record["source"]);
+  const workId = readNonEmptyString(record["work_id"]);
+  const laneId = readNonEmptyString(record["lane_id"]);
   return {
     event,
     ...(sessionId ? { sessionId } : {}),
@@ -496,6 +547,8 @@ function normalizePayload(payload: unknown): NormalizedPayload {
     ...(rootSessionId ? { rootSessionId } : {}),
     ...(compressionDepth !== undefined ? { compressionDepth } : {}),
     ...(sessionStartSource ? { sessionStartSource } : {}),
+    ...(workId ? { workId } : {}),
+    ...(laneId ? { laneId } : {}),
     ...(record["interrupted"] === true ? { interrupted: true } : {}),
     ...(extractPromptText(record) ? { promptText: extractPromptText(record)! } : {}),
     ...(readNonEmptyString(record["tool_name"])

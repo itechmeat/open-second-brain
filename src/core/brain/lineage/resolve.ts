@@ -2,9 +2,13 @@
  * Session-lineage resolution (continuity-hygiene-freshness suite).
  *
  * Single resolution point for "which conversation does this session id
- * belong to". Precedence: native payload fields, then the interim
- * ledger crutch, then flat. See `types.ts` for the contract and
- * `crutch.ts` for the conservative inference rules.
+ * belong to". Precedence: native payload fields, then the DECLARED work
+ * identity (signals-that-survive, Unit 9), then the interim ledger
+ * crutch, then flat. The last two rungs both live in `crutch.ts` and are
+ * reached through one call, so the ledger is walked once and the
+ * fail-closed guards - a session with history of its own, a predecessor
+ * already continued from - are written once and apply to both. See
+ * `types.ts` for the contract.
  *
  * Two entry points, following the sibling pattern this repository uses
  * wherever a diagnostic channel is grafted onto an established
@@ -48,10 +52,10 @@ export interface ResolveLineageOptions {
 export interface SessionLineageResolution {
   readonly lineage: SessionLineage;
   /**
-   * The crutch's named outcome, present only when the crutch actually
-   * ran (a ledger was supplied and the native payload did not already
-   * decide). A `linked` outcome IS the lineage; an `abstained` one is
-   * why continuation was refused.
+   * The named outcome of the ledger rungs - declared identity, then the
+   * crutch - present only when they actually ran (a ledger was supplied
+   * and the native payload did not already decide). A `linked` outcome
+   * IS the lineage; an `abstained` one is why continuation was refused.
    */
   readonly crutch?: CrutchOutcome;
 }
@@ -70,6 +74,11 @@ const REPORTABLE_ABSTENTIONS: ReadonlySet<string> = new Set([
   CRUTCH_ABSTENTION.ambiguous,
   CRUTCH_ABSTENTION.stale,
   CRUTCH_ABSTENTION.evidenceMissing,
+  // Unit 9. Both mean a DECLARED identity named a predecessor and the
+  // link was still refused, which is the loudest form of "available and
+  // refused" this resolver can report.
+  CRUTCH_ABSTENTION.laneConflict,
+  CRUTCH_ABSTENTION.workAmbiguous,
 ]);
 
 function readId(value: string | null | undefined): string | null {
@@ -134,8 +143,8 @@ export function resolveSessionLineageDetailed(
     };
   }
 
-  // Interim inference for hosts without native lineage fields.
-  // CRUTCH(t_1459706f).
+  // Declared work identity (Unit 9), then the interim inference for
+  // hosts without native lineage fields. CRUTCH(t_1459706f).
   if (opts.ledger !== undefined) {
     const outcome = resolveCrutchLineage({
       sessionId,
@@ -144,6 +153,8 @@ export function resolveSessionLineageDetailed(
       nowMs: opts.nowMs ?? 0,
       ...(hints.workspace !== undefined ? { workspace: hints.workspace } : {}),
       ...(opts.gapSessionIds !== undefined ? { gapSessionIds: opts.gapSessionIds } : {}),
+      ...(hints.workId !== undefined ? { workId: hints.workId } : {}),
+      ...(hints.laneId !== undefined ? { laneId: hints.laneId } : {}),
     });
     if (outcome.kind === "linked") {
       return { lineage: outcome.lineage, crutch: outcome };
