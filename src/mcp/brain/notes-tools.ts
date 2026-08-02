@@ -10,7 +10,12 @@
  */
 
 import type { FrontmatterMap, FrontmatterValue } from "../../core/types.ts";
-import { createNote, CreateNoteError } from "../../core/brain/notes/create-note.ts";
+import {
+  createNote,
+  CreateNoteError,
+  CREATE_NOTE_IF_EXISTS,
+  type CreateNoteIfExists,
+} from "../../core/brain/notes/create-note.ts";
 import {
   applyWriteBatch,
   WriteBatchError,
@@ -18,19 +23,32 @@ import {
 } from "../../core/brain/write-batch.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { coerceStr } from "../coerce.ts";
+import { coerceBoolOptional, coerceStr, coerceStringOptional } from "../coerce.ts";
 
 /**
- * Narrow an untrusted `frontmatter` argument to a {@link FrontmatterMap}.
- * Accepts a plain object whose values are strings, numbers, booleans, or
- * string arrays (the frontmatter value domain); rejects anything else
- * with INVALID_PARAMS rather than silently dropping it. `tool` names the
- * calling surface so the rejection message points at the right tool.
+ * Longest accepted body template. A template is a note skeleton, not a
+ * payload; the rendered note is bounded separately by the artifact cap
+ * that `strict` enforces.
  */
-export function parseFrontmatterArg(value: unknown, tool: string): FrontmatterMap | undefined {
+const TEMPLATE_MAX_LEN = 32_768;
+
+/**
+ * Narrow an untrusted argument to a {@link FrontmatterMap}. Accepts a
+ * plain object whose values are strings, numbers, booleans, or string
+ * arrays (the frontmatter value domain); rejects anything else with
+ * INVALID_PARAMS rather than silently dropping it. `tool` names the
+ * calling surface and `field` the argument, so the rejection points at
+ * the exact thing the caller got wrong - template variables share this
+ * value domain deliberately rather than growing a second one.
+ */
+export function parseFrontmatterArg(
+  value: unknown,
+  tool: string,
+  field = "frontmatter",
+): FrontmatterMap | undefined {
   if (value === undefined || value === null) return undefined;
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new MCPError(INVALID_PARAMS, `${tool}: frontmatter must be an object`);
+    throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be an object`);
   }
   // Prototype-free target + explicit rejection of prototype-mutating keys:
   // `frontmatter` is untrusted, and a `__proto__`/`constructor`/`prototype`
@@ -38,7 +56,7 @@ export function parseFrontmatterArg(value: unknown, tool: string): FrontmatterMa
   const out: FrontmatterMap = Object.create(null) as FrontmatterMap;
   for (const [key, raw] of Object.entries(value)) {
     if (key === "__proto__" || key === "constructor" || key === "prototype") {
-      throw new MCPError(INVALID_PARAMS, `${tool}: invalid frontmatter key "${key}"`);
+      throw new MCPError(INVALID_PARAMS, `${tool}: invalid ${field} key "${key}"`);
     }
     let coerced: FrontmatterValue;
     if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
@@ -48,7 +66,7 @@ export function parseFrontmatterArg(value: unknown, tool: string): FrontmatterMa
     } else {
       throw new MCPError(
         INVALID_PARAMS,
-        `${tool}: frontmatter.${key} must be a string, number, boolean, or string array`,
+        `${tool}: ${field}.${key} must be a string, number, boolean, or string array`,
       );
     }
     out[key] = coerced;
@@ -75,6 +93,25 @@ export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
   return new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
 }
 
+/**
+ * Read the occupied-target policy. An unrecognised value is refused
+ * rather than falling back to the default: a caller that asked for a
+ * disposition this tool does not have must not be told its write
+ * succeeded under a different one.
+ */
+function coerceIfExists(args: Record<string, unknown>): CreateNoteIfExists | undefined {
+  const raw = coerceStringOptional(args, "if_exists", 16);
+  if (raw === undefined) return undefined;
+  const match = CREATE_NOTE_IF_EXISTS.find((policy) => policy === raw);
+  if (match === undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_create_note: if_exists must be one of ${CREATE_NOTE_IF_EXISTS.join(", ")}`,
+    );
+  }
+  return match;
+}
+
 async function toolBrainCreateNote(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -82,20 +119,40 @@ async function toolBrainCreateNote(
   const path = coerceStr(args, "path", true)!;
   const content = coerceStr(args, "content", false);
   const frontmatter = parseFrontmatterArg(args["frontmatter"], "brain_create_note");
+  const ifExists = coerceIfExists(args);
+  const strict = coerceBoolOptional(args, "strict");
+  const template = coerceStringOptional(args, "template", TEMPLATE_MAX_LEN);
+  const templateVariables = parseFrontmatterArg(
+    args["template_variables"],
+    "brain_create_note",
+    "template_variables",
+  );
 
   try {
     const res = createNote(ctx.vault, {
       path,
       ...(frontmatter !== undefined ? { frontmatter } : {}),
       ...(content !== null && content !== undefined ? { content } : {}),
+      ...(ifExists !== undefined ? { ifExists } : {}),
+      ...(strict !== undefined ? { strict } : {}),
+      ...(template !== undefined ? { template } : {}),
+      ...(templateVariables !== undefined ? { templateVariables } : {}),
     });
-    return { created: res.created, path: res.path };
+    // `outcome` is the discriminant; `created` is the boolean this tool
+    // has always returned and stays in lockstep with it, so a skip can
+    // never be read as a create by either field.
+    return { created: res.created, outcome: res.outcome, path: res.path };
   } catch (err) {
     // Every CreateNoteError is a client-input fault (bad path, excluded
-    // location, or an existing target); report it as INVALID_PARAMS with
-    // the typed message. Anything else is a genuine I/O fault.
+    // location, an existing target, an invalid document, or a malformed
+    // template); report it as INVALID_PARAMS with the typed code, and
+    // attach the validator's fix list when there is one. Anything else
+    // is a genuine I/O fault.
     if (err instanceof CreateNoteError) {
-      throw new MCPError(INVALID_PARAMS, `brain_create_note: ${err.message}`);
+      throw new MCPError(INVALID_PARAMS, `brain_create_note: ${err.message}`, {
+        code: err.code,
+        ...(err.violations.length > 0 ? { violations: err.violations } : {}),
+      });
     }
     throw new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
   }
@@ -168,7 +225,7 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_create_note",
     description:
-      "Create an actual vault note file (path + frontmatter + content), written atomically inside the vault. Distinct from brain_note, which only appends a log line. Refuses path traversal, the Brain machinery root, vault-scope-excluded paths, and overwriting an existing note.",
+      "Create an actual vault note file (path + frontmatter + content), written atomically inside the vault. Distinct from brain_note, which only appends a log line. Refuses path traversal, the Brain machinery root, vault-scope-excluded paths, and by default overwriting an existing note.",
     inputSchema: {
       type: "object",
       properties: {
@@ -184,7 +241,30 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         content: {
           type: "string",
-          description: "Optional Markdown body written below the frontmatter.",
+          description:
+            "Optional Markdown body written below the frontmatter. Mutually exclusive with template.",
+        },
+        if_exists: {
+          type: "string",
+          enum: [...CREATE_NOTE_IF_EXISTS],
+          description:
+            "Occupied-target policy. Default refuse. skip leaves the note untouched and returns outcome=skipped, never created.",
+        },
+        strict: {
+          type: "boolean",
+          description:
+            "Validate the document before writing (frontmatter present, size, control chars, declared type in page_types) and refuse with coded violations.",
+        },
+        template: {
+          type: "string",
+          description:
+            "Body template instead of content. Two constructs: {{name}} substitution, and {{#name}}..{{/name}} presence sections / list iteration where {{.}} is the item.",
+        },
+        template_variables: {
+          type: "object",
+          description:
+            "Values the template references; same domain as frontmatter. Unknown placeholders are left intact so a typo surfaces.",
+          additionalProperties: { type: ["string", "number", "boolean", "array"] },
         },
       },
       required: ["path"],

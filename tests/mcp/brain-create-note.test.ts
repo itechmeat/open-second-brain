@@ -90,3 +90,84 @@ describe("brain_create_note", () => {
     expect(readFileSync(join(vault, "Notes/Once.md"), "utf8")).toContain("first");
   });
 });
+
+/**
+ * Authoring modes added by provenance-at-the-boundary, Unit C:
+ * `if_exists`, `strict`, and template-mode bodies. The pre-existing
+ * cases above stay untouched and green - a refusal is still the
+ * default, and the three new arguments are inert when absent.
+ */
+describe("brain_create_note - authoring modes", () => {
+  test("advertises the new arguments without changing the required set", () => {
+    const props = tool.inputSchema.properties as Record<string, { type?: unknown }>;
+    expect(Object.keys(props)).toEqual(
+      expect.arrayContaining(["if_exists", "strict", "template", "template_variables"]),
+    );
+    expect(tool.inputSchema.required).toEqual(["path"]);
+    expect(tool.inputSchema.additionalProperties).toBe(false);
+  });
+
+  test("with the new arguments absent, a note with no frontmatter is still written", async () => {
+    const res = await handler(ctx, { path: "Notes/Absent.md", content: "body only" });
+    expect(res).toMatchObject({ created: true, outcome: "created", path: "Notes/Absent.md" });
+  });
+
+  test('if_exists "skip" returns a skipped outcome a caller cannot read as a create', async () => {
+    await handler(ctx, { path: "Notes/Idem.md", content: "first" });
+    const res = await handler(ctx, {
+      path: "Notes/Idem.md",
+      content: "second",
+      if_exists: "skip",
+    });
+    expect(res).toMatchObject({ created: false, outcome: "skipped", path: "Notes/Idem.md" });
+    expect(readFileSync(join(vault, "Notes/Idem.md"), "utf8")).toContain("first");
+  });
+
+  test("an unknown if_exists value is rejected rather than defaulted", async () => {
+    await expect(handler(ctx, { path: "Notes/Bad.md", if_exists: "overwrite" })).rejects.toThrow(
+      MCPError,
+    );
+    expect(existsSync(join(vault, "Notes/Bad.md"))).toBe(false);
+  });
+
+  test("strict reports the validator's coded violations and writes nothing", async () => {
+    try {
+      await handler(ctx, { path: "Notes/Strict.md", content: "body only", strict: true });
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(MCPError);
+      const data = (err as MCPError).data as { violations?: ReadonlyArray<{ code: string }> };
+      expect(data.violations?.map((v) => v.code)).toContain("frontmatter-missing");
+    }
+    expect(existsSync(join(vault, "Notes/Strict.md"))).toBe(false);
+  });
+
+  test("template mode renders variables, a section, an iteration, and keeps a typo intact", async () => {
+    const res = await handler(ctx, {
+      path: "Notes/Tpl.md",
+      frontmatter: { title: "T" },
+      template: "# {{title}}\n{{#draft}}(draft){{/draft}}\n{{#tags}}- {{.}}\n{{/tags}}{{ typo }}",
+      template_variables: { title: "T", draft: true, tags: ["a", "b"] },
+    });
+    expect(res).toMatchObject({ created: true, outcome: "created" });
+    const md = readFileSync(join(vault, "Notes/Tpl.md"), "utf8");
+    expect(md).toContain("# T");
+    expect(md).toContain("(draft)");
+    expect(md).toContain("- a\n- b\n");
+    expect(md).toContain("{{ typo }}");
+  });
+
+  test("a malformed template is an INVALID_PARAMS refusal, not a half-written note", async () => {
+    await expect(handler(ctx, { path: "Notes/Broken.md", template: "{{#a}}x" })).rejects.toThrow(
+      MCPError,
+    );
+    expect(existsSync(join(vault, "Notes/Broken.md"))).toBe(false);
+  });
+
+  test("template_variables values are held to the frontmatter value domain", async () => {
+    await expect(
+      handler(ctx, { path: "Notes/BadVars.md", template: "{{a}}", template_variables: { a: {} } }),
+    ).rejects.toThrow(MCPError);
+    expect(existsSync(join(vault, "Notes/BadVars.md"))).toBe(false);
+  });
+});
