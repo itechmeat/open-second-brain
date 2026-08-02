@@ -42,11 +42,15 @@ import {
   type TokenImpactOutcome,
 } from "../../core/brain/token-impact.ts";
 import {
-  emitContextPackOutcome,
   listContextPackOutcomes,
+  postContextPackOutcome,
   summarizeContextPackOutcomes,
   type ContextPackOutcomeFilter,
 } from "../../core/brain/context-pack-outcome.ts";
+import {
+  CONTEXT_PACK_EVIDENCE_FIELD,
+  type ContextPackEvidenceClaim,
+} from "../../core/brain/context-pack-evidence.ts";
 import {
   resolveContextPackOutcomeEnabled,
   resolveTokenImpactLedgerEnabled,
@@ -646,8 +650,9 @@ async function toolBrainContextPackOutcome(
       "observed_provider_tokens",
       args["observed_provider_tokens"],
     );
+    const evidenceClaim = contextPackEvidenceClaim(args["evidence_claim"]);
     const enabled = resolveContextPackOutcomeEnabled(ctx.configPath ?? undefined);
-    const record = emitContextPackOutcome(
+    const post = postContextPackOutcome(
       ctx.vault,
       {
         sampleId,
@@ -660,19 +665,25 @@ async function toolBrainContextPackOutcome(
         ...(exact !== undefined ? { exactPromptTokenSavings: exact } : {}),
         ...(modeled !== undefined ? { modeledInferenceAvoidance: modeled } : {}),
         ...(observed !== undefined ? { observedProviderTokens: observed } : {}),
+        ...(evidenceClaim !== undefined ? { evidenceClaim } : {}),
       },
       enabled || undefined,
     );
-    if (record === null) {
+    if (post === null) {
       return { vault_path: ctx.vault, recorded: false, enabled };
     }
     return {
       vault_path: ctx.vault,
       recorded: true,
       enabled,
-      id: record.id,
+      id: post.outcome.id,
       sample_id: sampleId,
       first_pass_success: firstPassSuccess,
+      // The kernel's reading of this sample, surfaced so a contradicted
+      // claim is visible to the poster and not only to a later reader.
+      // Absent when the evidence half fail-opened - reporting a verdict
+      // that was never written would be the fallback this project bans.
+      ...(post.evidence !== null ? { evidence: post.evidence.payload } : {}),
     };
   }
 
@@ -702,6 +713,47 @@ function contextPackOutcomeCorrelation(args: Record<string, unknown>): {
     ...(host !== undefined ? { host } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(turnId !== undefined ? { turnId } : {}),
+  };
+}
+
+/**
+ * The acting agent's assertion about the sample, coerced at the tool
+ * boundary. A malformed member is REFUSED here rather than dropped: a
+ * claim silently discarded would land an evidence record reading
+ * `unclaimed`, which asserts the agent said nothing when in fact it said
+ * something unusable.
+ */
+function contextPackEvidenceClaim(raw: unknown): ContextPackEvidenceClaim | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_context_pack_outcome: evidence_claim must be an object",
+    );
+  }
+  const claim = raw as Record<string, unknown>;
+  const finalTextHash = optionalStringArg(
+    "brain_context_pack_outcome",
+    claim,
+    CONTEXT_PACK_EVIDENCE_FIELD.finalTextHash,
+  );
+  const itemCount = coerceNonNegativeInteger(
+    "brain_context_pack_outcome",
+    CONTEXT_PACK_EVIDENCE_FIELD.itemCount,
+    claim[CONTEXT_PACK_EVIDENCE_FIELD.itemCount],
+  );
+  const finalTextChars = coerceNonNegativeInteger(
+    "brain_context_pack_outcome",
+    CONTEXT_PACK_EVIDENCE_FIELD.finalTextChars,
+    claim[CONTEXT_PACK_EVIDENCE_FIELD.finalTextChars],
+  );
+  if (finalTextHash === undefined && itemCount === undefined && finalTextChars === undefined) {
+    return undefined;
+  }
+  return {
+    ...(finalTextHash !== undefined ? { finalTextHash } : {}),
+    ...(itemCount !== undefined ? { itemCount } : {}),
+    ...(finalTextChars !== undefined ? { finalTextChars } : {}),
   };
 }
 
@@ -1121,7 +1173,7 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_context_pack_outcome",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Agent-operable context-pack outcome loop. `post` records a compact outcome row for a carried sample id — first-pass/repair/retry counters plus three SEPARATE token signals (exact, modeled, observed) — and calibrates the token-impact ledger. `list`/`summary` read rows. Gated, payload-safe.",
+      "Context-pack outcome loop. `post` records an outcome row for a carried sample id — first-pass/repair/retry counters plus three SEPARATE token signals (exact, modeled, observed) — calibrates the token-impact ledger, and records the kernel's on-disk evidence. `list`/`summary` read rows. Gated.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1170,6 +1222,28 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           minimum: 0,
           description:
             "post (optional): OBSERVED provider-reported token usage. Kept separate from the exact and modeled signals; also calibrates the token-impact ledger.",
+        },
+        evidence_claim: {
+          type: "object",
+          description:
+            "post (optional): what you assert about this sample; the kernel reads its receipt off disk and records match|mismatch|unclaimed as a second row. Never rejects.",
+          properties: {
+            final_text_hash: {
+              type: "string",
+              description: "Claimed SHA-256 of the assembled pack text.",
+            },
+            item_count: {
+              type: "integer",
+              minimum: 0,
+              description: "Claimed number of artifacts the pack injected.",
+            },
+            final_text_chars: {
+              type: "integer",
+              minimum: 0,
+              description: "Claimed codepoint length of the assembled pack text.",
+            },
+          },
+          additionalProperties: false,
         },
         host: { type: "string", description: "Optional host/runtime label; also a filter." },
         session_id: { type: "string", description: "Optional session id recorded on the row." },

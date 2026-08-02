@@ -34,14 +34,25 @@
  * {@link recordTokenImpactOutcome}), correlated by the same sample id, so the
  * modeled figure there is calibrated by measured recall outcomes.
  *
+ * Composes the evidence half (provenance-at-the-boundary, unit I): every
+ * outcome row also posts a `context_pack_evidence` record on the same sample
+ * id, carrying the evidence the kernel read back off disk and the verdict of
+ * the acting agent's claim against it (via {@link recordContextPackEvidence}).
+ * The outcome row itself is never altered by that verdict - a contradicted
+ * claim is recorded as a mismatch, not rejected and not silently corrected.
+ *
  * Gated + fail-open: emits route through {@link emitGatedTelemetry}, so with
  * the gate off no payload is built and no write happens, and a throwing write
  * never fails the operation being measured.
  */
 
+import {
+  recordContextPackEvidence,
+  type ContextPackEvidenceClaim,
+} from "./context-pack-evidence.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
-import type { ContinuityRecord } from "./continuity/types.ts";
+import { CONTINUITY_AGENT_ID_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import { recordTokenImpactOutcome, type TokenImpactOutcome } from "./token-impact.ts";
 
 export interface ContextPackOutcomeInput {
@@ -55,6 +66,15 @@ export interface ContextPackOutcomeInput {
    * a raw prompt or recalled text.
    */
   readonly sampleId: string;
+  /**
+   * Authoring agent id, clip-protected beside session_id (t_5be0654d).
+   * The sibling `token_impact*` payloads have carried this since that
+   * task; this row carried no actor field at all, and that asymmetry is
+   * what unit I of provenance-at-the-boundary closes. Self-asserted, like
+   * every identity in this system - it names the ACTING agent and is
+   * never presented as a verifier.
+   */
+  readonly agentId?: string;
   /** Whether the packed context led to a first-pass success (no repair/retry). */
   readonly firstPassSuccess: boolean;
   /** Whether the agent had to repair the first completion. */
@@ -69,6 +89,13 @@ export interface ContextPackOutcomeInput {
   readonly modeledInferenceAvoidance?: number;
   /** OBSERVED provider-reported token usage for this inference. */
   readonly observedProviderTokens?: number;
+  /**
+   * What the acting agent asserts about the sample it is reporting on,
+   * checked against the evidence the kernel reads off disk. Omitted when
+   * the agent asserts nothing - the evidence record is still written, and
+   * says so.
+   */
+  readonly evidenceClaim?: ContextPackEvidenceClaim;
 }
 
 export interface ContextPackOutcomeFilter {
@@ -102,21 +129,36 @@ export interface ContextPackOutcomeSummary {
   readonly follow_up: { readonly samples: number; readonly tokens: number };
 }
 
+/** The records one `post` lands, so a caller need not read them back. */
+export interface ContextPackOutcomePost {
+  /** The `context_pack_outcome` row. */
+  readonly outcome: ContinuityRecord;
+  /**
+   * The `context_pack_evidence` row joined to it on the sample id.
+   * `null` only when that half fail-opened - the evidence writer is
+   * gated and fail-open in its own right, so it can never take the
+   * outcome row down with it.
+   */
+  readonly evidence: ContinuityRecord | null;
+}
+
 /**
- * Emit one `context_pack_outcome` row, gated and fail-open, AND post a
- * matching first-pass/repair/retry calibration record to the token-impact
- * ledger (C3). `gate` doubles as the opt-in switch: with
- * `false | null | undefined` no payload is built and no write happens
- * (returns `null`). A throwing build - including a blank sample id - is
- * swallowed and reported as `null` so the loop can never fail the operation
- * it measures. Returns the `context_pack_outcome` record (the calibration
- * record is a durable side effect, listable via `listTokenImpactOutcomes`).
+ * Post one outcome: the `context_pack_outcome` row, the matching
+ * first-pass/repair/retry calibration record on the token-impact ledger
+ * (C3), and the `context_pack_evidence` record carrying the kernel's
+ * reading of the sample against the agent's claim (unit I). All three are
+ * joined by the one sample id.
+ *
+ * `gate` doubles as the opt-in switch: with `false | null | undefined` no
+ * payload is built and no write happens (returns `null`). A throwing build -
+ * including a blank sample id - is swallowed and reported as `null` so the
+ * loop can never fail the operation it measures.
  */
-export function emitContextPackOutcome<G>(
+export function postContextPackOutcome<G>(
   vault: string,
   input: ContextPackOutcomeInput,
   gate: G | false | null | undefined,
-): ContinuityRecord | null {
+): ContextPackOutcomePost | null {
   return emitGatedTelemetry(gate, (openGate) => {
     const sampleId = requireSampleId(input.sampleId);
     if (typeof input.firstPassSuccess !== "boolean") {
@@ -127,6 +169,7 @@ export function emitContextPackOutcome<G>(
       ...(input.host !== undefined ? { host: input.host } : {}),
       ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
       ...(input.turnId !== undefined ? { turn_id: input.turnId } : {}),
+      ...(input.agentId !== undefined ? { [CONTINUITY_AGENT_ID_KEY]: input.agentId } : {}),
       sample_id: sampleId,
       first_pass_success: input.firstPassSuccess,
       // Omit-don't-invent: every optional counter is written only when supplied.
@@ -178,6 +221,7 @@ export function emitContextPackOutcome<G>(
         createdAt,
         ...(input.host !== undefined ? { host: input.host } : {}),
         ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
         packId: sampleId,
         outcome: deriveOutcome(input),
         ...(input.observedProviderTokens !== undefined
@@ -186,8 +230,40 @@ export function emitContextPackOutcome<G>(
       },
       openGate,
     );
-    return record;
+    // Compose the evidence half: what the kernel reads off disk for this
+    // sample, and how the agent's claim compares. Also gated + fail-open,
+    // so it never throws through this thunk either - the outcome row above
+    // is already durable and stays that way regardless of the verdict.
+    const evidence = recordContextPackEvidence(
+      vault,
+      {
+        createdAt,
+        ...(input.host !== undefined ? { host: input.host } : {}),
+        ...(input.sessionId !== undefined ? { sessionId: input.sessionId } : {}),
+        ...(input.turnId !== undefined ? { turnId: input.turnId } : {}),
+        ...(input.agentId !== undefined ? { agentId: input.agentId } : {}),
+        sampleId,
+        ...(input.evidenceClaim !== undefined ? { claim: input.evidenceClaim } : {}),
+      },
+      openGate,
+    );
+    return Object.freeze({ outcome: record, evidence });
   });
+}
+
+/**
+ * Emit one `context_pack_outcome` row and its two joined side effects,
+ * returning the outcome record alone. The thin form of
+ * {@link postContextPackOutcome} for callers that only need the row; the
+ * calibration and evidence records are durable side effects, listable via
+ * `listTokenImpactOutcomes` and `listContextPackEvidence`.
+ */
+export function emitContextPackOutcome<G>(
+  vault: string,
+  input: ContextPackOutcomeInput,
+  gate: G | false | null | undefined,
+): ContinuityRecord | null {
+  return postContextPackOutcome(vault, input, gate)?.outcome ?? null;
 }
 
 /**
