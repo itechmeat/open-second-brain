@@ -11,9 +11,10 @@
  *
  * `results` preserves input order (there is no per-item index field), so
  * vectors map positionally. Network discipline mirrors the OpenAI-compat
- * provider: bounded concurrency, per-request timeout, retry on 429/5xx and
- * network/timeout with jittered backoff, vectors unit-normalised so cosine
- * equals 1 - L2²/2.
+ * provider: bounded concurrency, per-request timeout, batches closing on
+ * whichever of `embedding_batch_size` / `embedding_batch_tokens` fills
+ * first, retry on 429/5xx and network/timeout with jittered backoff,
+ * vectors unit-normalised so cosine equals 1 - L2²/2.
  *
  * The interface is symmetric (one `embed`), so `input_type` is fixed to
  * "document" - consistent with how OSB treats query and passage embeddings
@@ -26,7 +27,7 @@ import type { EmbeddingProvider } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
   Semaphore,
-  chunkArray,
+  chunkArrayByTokenBudget,
   jittered,
   sleep,
   unitNormaliseInPlace,
@@ -97,9 +98,11 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
 
   async embed(texts: ReadonlyArray<string>): Promise<number[][]> {
     if (texts.length === 0) return [];
-    const batches = chunkArray(
+    const batches = chunkArrayByTokenBudget(
       texts.map((t, i) => ({ text: t, originalIndex: i })),
       this.config.batchSize,
+      this.config.batchTokens,
+      (b) => b.text,
     );
     const sem = new Semaphore(this.config.concurrency);
     const out: number[][] = new Array(texts.length);

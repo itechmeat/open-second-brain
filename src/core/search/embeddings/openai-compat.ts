@@ -5,11 +5,13 @@
  *
  * Network rules:
  *   - One concurrent batch per semaphore slot (`embedding_concurrency`).
- *   - Each batch contains up to `embedding_batch_size` texts.
+ *   - Each batch contains up to `embedding_batch_size` texts and, when
+ *     `embedding_batch_tokens` is set, at most that many estimated tokens
+ *     of prefixed text; the batch closes on whichever cap fills first.
  *   - Per-request timeout: `embedding_timeout_ms`.
  *   - Retry on `429`, `5xx`, and network/timeout errors with exponential
- *     backoff `1s/2s` (+ ±25% jitter), three attempts total. Other 4xx
- *     fail fast.
+ *     backoff `1s/2s` (+ ±25% jitter), for `embedding_max_retries` attempts
+ *     in total (default 6). Other 4xx fail fast.
  *   - Vectors are unit-normalised so cosine similarity equals
  *     `1 - L2² / 2` (see ranker).
  *
@@ -26,7 +28,7 @@ import {
   RATE_LIMIT_STATUS,
   RETRYABLE_STATUSES,
   Semaphore,
-  chunkArray,
+  chunkArrayByTokenBudget,
   jittered,
   parseRetryAfterMs,
   sleep,
@@ -266,9 +268,13 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     if (texts.length === 0) return [];
     const prefix = this.prefixFor(kind);
     const prepared = prefix === "" ? texts : texts.map((t) => prefix + t);
-    const batches = chunkArray(
+    // Batch over the PREFIXED text: the prefix is part of every request the
+    // provider will count, so the token budget must see it too.
+    const batches = chunkArrayByTokenBudget(
       prepared.map((t, i) => ({ text: t, originalIndex: i })),
       this.config.batchSize,
+      this.config.batchTokens,
+      (b) => b.text,
     );
     const sem = new Semaphore(this.config.concurrency);
     const out: number[][] = new Array(texts.length);

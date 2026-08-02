@@ -322,6 +322,15 @@ function validateResolvedConfig(config: ResolvedSearchConfig): void {
   validateIntegerRange(config.semantic.batchSize, "embedding_batch_size", {
     min: 1,
   });
+  // Optional: absent means no token budget. Present-but-zero is a
+  // misconfiguration (a batch that can hold nothing), rejected the same way
+  // `embedding_batch_size` is - including when supplied as a programmatic
+  // override that never passed through `parseInteger`.
+  if (config.semantic.batchTokens !== undefined) {
+    validateIntegerRange(config.semantic.batchTokens, "embedding_batch_tokens", {
+      min: 1,
+    });
+  }
   validateIntegerRange(config.semantic.maxRetries, "embedding_max_retries", {
     min: 1,
   });
@@ -489,6 +498,20 @@ export function resolveSearchConfig(opts: {
     "embedding_batch_size",
     { min: 1 },
   );
+  // Per-request token budget. No DEFAULTS entry, because there is no
+  // provider-independent ceiling to default to and an absent key must stay
+  // absent: the providers read `undefined` as "count cap only", which is
+  // byte-identical to the pre-feature fixed stride.
+  const batchTokensRaw = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_EMBEDDING_BATCH_TOKENS",
+    "embedding_batch_tokens",
+  );
+  const batchTokens =
+    batchTokensRaw === null
+      ? null
+      : parseInteger(batchTokensRaw, 0, "embedding_batch_tokens", { min: 1 });
   const maxRetries = parseInteger(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_EMBEDDING_MAX_RETRIES", "embedding_max_retries"),
     DEFAULTS.maxRetries,
@@ -527,6 +550,7 @@ export function resolveSearchConfig(opts: {
     timeoutMs,
     concurrency,
     batchSize,
+    ...(batchTokens === null ? {} : { batchTokens }),
     maxRetries,
     costGateUsd,
     queryPrefix,

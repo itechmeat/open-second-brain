@@ -7,6 +7,7 @@
  */
 
 import { assertValidVector } from "../vector-guard.ts";
+import { estimateTokens } from "./signature.ts";
 
 /** Statuses that warrant a transient retry with backoff. */
 export const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([429, 500, 502, 503, 504]);
@@ -118,5 +119,54 @@ export function chunkArray<T>(arr: ReadonlyArray<T>, size: number): T[][] {
   const step = Math.max(1, size | 0);
   const out: T[][] = [];
   for (let i = 0; i < arr.length; i += step) out.push(arr.slice(i, i + step) as T[]);
+  return out;
+}
+
+/**
+ * Split an array into batches that close on whichever of two caps fills
+ * first: the item count (`size`, i.e. `embedding_batch_size`) or the
+ * accumulated token estimate (`tokenBudget`, i.e. `embedding_batch_tokens`).
+ *
+ * `tokenBudget` of `undefined` - the state of an unset config key - delegates
+ * straight to {@link chunkArray}, so batching is byte-identical to the fixed
+ * stride that preceded the budget.
+ *
+ * The estimate is {@link estimateTokens}, the estimator already resident in
+ * this layer and already governing the indexer's cost gate, so the gate and
+ * the batch budget describe the same texts identically. It deliberately
+ * differs from the chunker's word-count estimator: that one sizes chunks of
+ * a document, this one sizes a request. `textOf` must return the text
+ * exactly as it will be sent, instruction prefix included, because the
+ * provider prepends the prefix before batching and the provider's token
+ * ceiling counts it.
+ *
+ * An item whose own estimate already exceeds the budget cannot be made to fit
+ * by closing the batch around it, so it travels alone. Splitting the text
+ * itself is the chunker's job, not the request packer's; dropping it would be
+ * silent data loss.
+ */
+export function chunkArrayByTokenBudget<T>(
+  arr: ReadonlyArray<T>,
+  size: number,
+  tokenBudget: number | undefined,
+  textOf: (item: T) => string,
+): T[][] {
+  if (tokenBudget === undefined) return chunkArray(arr, size);
+  const step = Math.max(1, size | 0);
+  const budget = Math.max(1, tokenBudget | 0);
+  const out: T[][] = [];
+  let current: T[] = [];
+  let currentTokens = 0;
+  for (const item of arr) {
+    const tokens = estimateTokens([textOf(item)]);
+    if (current.length > 0 && (current.length >= step || currentTokens + tokens > budget)) {
+      out.push(current);
+      current = [];
+      currentTokens = 0;
+    }
+    current.push(item);
+    currentTokens += tokens;
+  }
+  if (current.length > 0) out.push(current);
   return out;
 }
