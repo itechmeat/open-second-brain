@@ -37,7 +37,7 @@ Ten units, one branch, one release.
 | F | t_76b89833 | One named capability-tier resolver shared by the four sites that compute those facts separately, a registered code in place of call-site prose, a capability predicate in place of a stringly-typed sentinel, and a vector-only backfill verb |
 | G | t_77efc212 | A caller-declared scope on the continuity envelope, honoured by the read model, plus a census of which readers honour it |
 | H | t_50033859 | Dry-run preview for schema mutations, so nothing mutates the vault schema sight-unseen |
-| I | t_b654e25d | A second ledger record carrying a kernel-recomputed evidence digest against the acting agent's claim |
+| I | t_b654e25d | A second ledger record carrying the kernel's own on-disk evidence against the acting agent's claim |
 | J | t_ccb05134 | An identified skill offer that an invocation can be joined back to, a discriminating-term ranking floor, and retained provenance where a skill is currently shadowed silently |
 
 ## Out of scope
@@ -71,7 +71,7 @@ Stated here rather than discovered at review, with the reason for each.
   runs, continuity records and all telemetry derive their destination. A prefix
   fence can only refuse those wholesale, which is not a fence but an off switch.
   The census records the boundary instead of pretending it is not there.
-- **Auditing the sixteen continuity readers that bypass the read model (part of
+- **Auditing the twenty continuity readers that bypass the read model (part of
   t_77efc212).** Established as a pre-existing gap, made visible by the census in
   unit G, and left to its own task because closing it is a judgement per reader.
 - **Splitting an oversized embedding batch and retrying it (part of t_39ec3fef).**
@@ -241,19 +241,25 @@ content. A content marker for shared would be a second inference, which is the
 thing the task objects to. An optional declared field is added, absent behaving
 byte-identically to today.
 
-**G2. The bypass becomes an asserted fact.** Five of twenty-one continuity
-readers go through the filtering read model; the rest read the store directly and
-already bypass the private drop, while the documentation states the policy as
-universal. A census records which readers honour the read model, and the
-documentation is corrected. Auditing the sixteen is out of scope and said so.
+**G2. The bypass becomes an asserted fact.** Four of twenty-four continuity
+readers go through the filtering read model; the other twenty read the store
+directly and already bypass the private drop, while the documentation states the
+policy as universal. A census records which readers honour the read model, and
+the documentation is corrected. Auditing the twenty is out of scope and said so.
+The counts here are the measured ones; the reconnaissance pass reported five of
+twenty-one because one direct reader carries a literal NUL byte and was
+invisible to its grep.
 
 **H1. Preview is the deliverable.** The mutation application function is already
 pure and already runs full validation, so a dry run returning the resulting pack
 and its diff touches no disk and reuses everything.
 
-**I1. Kernel-recomputed evidence, not an independent verifier.** The second
-record carries the acting agent's claim, a digest recomputed by the kernel from
-disk which the agent cannot author, and the match verdict. There is no
+**I1. The kernel's own evidence, not an independent verifier.** The second
+record carries the acting agent's claim, the digest the kernel wrote at pack time
+and reads back off disk, and the match verdict. Read back rather than recomputed:
+re-deriving it would mean hashing text the receipt does not retain, which is the
+second hashing path the wave's first amendment forbids. The agent still cannot
+author it, and the record says only what is on disk. There is no
 verifier-identity field, and no surface describes the record as independently
 witnessed.
 

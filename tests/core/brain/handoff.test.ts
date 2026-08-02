@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildHandoffNote, writeHandoffNote } from "../../../src/core/brain/handoff.ts";
+import { parseFrontmatterTextWithNotices } from "../../../src/core/vault.ts";
 import type { SessionTurn } from "../../../src/core/brain/sessions/types.ts";
 
 const NOW = new Date("2026-06-03T12:00:00Z");
@@ -113,8 +114,29 @@ test("writeHandoffNote lands Brain/handoffs/<date>-<scope>.md with frontmatter",
   expect(result.path.endsWith(join("Brain", "handoffs", "2026-06-03-sess-42.md"))).toBe(true);
   expect(existsSync(result.path)).toBe(true);
   const content = readFileSync(result.path, "utf8");
-  // Caller-supplied scalars are JSON-quoted against YAML injection.
-  expect(content).toContain('session_id: "Sess 42"');
-  expect(content).toContain('agent: "test-agent"');
+  // The property is that a caller-supplied scalar survives the round trip
+  // without becoming structure - not that it is always quoted. This writer
+  // used to hand-roll its frontmatter and quote unconditionally; it now
+  // shares the vault's emitter, which quotes on the same structural test
+  // the parser unquotes on, so a value needing no quoting is written plain
+  // and reads back byte-identical. The injection case below is the property
+  // the old assertions were reaching for.
+  expect(content).toContain("session_id: Sess 42");
+  expect(content).toContain("agent: test-agent");
+  const [meta] = parseFrontmatterTextWithNotices(content);
+  expect(meta["session_id"]).toBe("Sess 42");
+  expect(meta["agent"]).toBe("test-agent");
   expect(content).toContain("## Request");
+});
+
+test("a caller-supplied scalar cannot become a frontmatter key", () => {
+  const result = writeHandoffNote(vault, {
+    turns: TURNS,
+    sessionId: "s42",
+    agent: "x\nowner: attacker",
+    now: NOW,
+  });
+  const [meta] = parseFrontmatterTextWithNotices(readFileSync(result.path, "utf8"));
+  expect(meta["owner"]).toBeUndefined();
+  expect(meta["agent"]).toBe("x\nowner: attacker");
 });

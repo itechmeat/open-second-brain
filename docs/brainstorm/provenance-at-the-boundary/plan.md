@@ -53,9 +53,9 @@ network calls, and no existing test may be edited to make a change pass.
 - **Acceptance**: a preview returns the pack that would result and the difference from the current one, and the config file's modification time and bytes are unchanged afterwards; a preview of a mutation the validator rejects returns the same coded rejection an apply would, without writing; an apply with no preview behaves exactly as today
 - **Depends on**: none
 
-### Task I: A kernel-recomputed evidence record beside the agent's claim
+### Task I: The kernel's own evidence recorded beside the agent's claim
 - **Files**: `src/core/brain/context-pack-outcome.ts`, `src/core/brain/token-impact.ts`, `src/core/brain/continuity/types.ts`, `src/mcp/brain/recall-tools.ts`, `tests/core/brain/*`
-- **Acceptance**: posting an outcome also records a second entry, joined by the existing sample id, carrying a digest the kernel recomputed from disk and a match verdict; a claim contradicted by the recomputation records a mismatch rather than being rejected or silently corrected; the record carries no verifier-identity field and no surface calls it independently witnessed; the outcome record now carries the actor field its sibling already had; the emit path stays fail-open and unfsynced
+- **Acceptance**: posting an outcome also records a second entry, joined by the existing sample id, carrying the digest the kernel wrote at pack time and reads back off disk, and a match verdict; a claim contradicted by that evidence records a mismatch rather than being rejected or silently corrected; the record carries no verifier-identity field and no surface calls it independently witnessed; the outcome record now carries the actor field its sibling already had; the emit path stays fail-open and unfsynced
 - **Depends on**: none
 
 ### Task J: An identified skill offer, a ranking floor, retained provenance

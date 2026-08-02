@@ -250,7 +250,7 @@ export function summarizeIngestDedup(
     for (const [ref, count] of readSourceMap(payload["by_source"])) {
       // Axis label folded into the key so the same ref on two surfaces
       // never merges into one misleading rollup.
-      const key = `${surface} ${ref}`;
+      const key = `${surface}\0${ref}`;
       const previous = bySource.get(key)?.rollup;
       bySource.set(key, {
         rollup: Object.freeze({

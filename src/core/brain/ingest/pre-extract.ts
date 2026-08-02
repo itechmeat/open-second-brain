@@ -234,11 +234,11 @@ function extensionOf(path: string): string {
 }
 
 function entityKey(e: CodeEntitySeed): string {
-  return `${e.kind} ${e.name}`;
+  return `${e.kind}\0${e.name}`;
 }
 
 function edgeKey(e: CodeEdgeSeed): string {
-  return `${e.kind} ${e.from} ${e.to}`;
+  return `${e.kind}\0${e.from}\0${e.to}`;
 }
 
 /** Dedupe by a stable key and sort by that key, so output is deterministic. */
