@@ -10,6 +10,7 @@ import {
   parseSchemaMutationPayloads,
   reviewSchemaOrphans,
 } from "../../../core/brain/schema-admin.ts";
+import { previewSchemaMutations } from "../../../core/brain/schema-mutate.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
@@ -89,14 +90,21 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
       case "apply": {
         const mutationPayloads = (flags["mutation"] as string[] | undefined) ?? [];
         if (mutationPayloads.length === 0) throw new Error("schema apply requires --mutation JSON");
-        const result = await applySchemaAdminMutations(
-          vault,
-          parseSchemaMutationPayloads(mutationPayloads),
-          {
-            actor: flags["actor"] as string,
-            reason: flags["reason"] as string | undefined,
-          },
-        );
+        const mutations = parseSchemaMutationPayloads(mutationPayloads);
+        // `--dry-run` is parsed for every schema subcommand. Until the
+        // preview existed, `apply` accepted the flag and wrote anyway - an
+        // operator asking to look first got a mutated vault schema.
+        if (flags["dry-run"]) {
+          return writeResult(
+            previewSchemaMutations(vault, mutations),
+            Boolean(flags["json"]),
+            renderGenericText,
+          );
+        }
+        const result = await applySchemaAdminMutations(vault, mutations, {
+          actor: flags["actor"] as string,
+          reason: flags["reason"] as string | undefined,
+        });
         return writeResult(result, Boolean(flags["json"]), renderGenericText);
       }
       case "sync": {

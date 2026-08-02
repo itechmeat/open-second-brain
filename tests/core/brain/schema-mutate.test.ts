@@ -1,15 +1,56 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   applySchemaMutations,
+  previewSchemaMutations,
   type SchemaMutation,
 } from "../../../src/core/brain/schema-mutate.ts";
 import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 
 let vault: string;
+
+/**
+ * Epoch seconds stamped onto `_brain.yaml` before a preview, far enough in
+ * the past that ANY write during the preview would move the modification
+ * time to now. Without this the assertion would be satisfied by a coarse
+ * filesystem timestamp rather than by the preview keeping its hands off.
+ */
+const PAST_MTIME_SECONDS = Date.UTC(2020, 0, 1) / 1000;
+
+function configPathFor(root: string): string {
+  return join(root, "Brain", "_brain.yaml");
+}
+
+interface ConfigSnapshot {
+  /** Base64 of the raw file, so the comparison is over bytes, not text. */
+  readonly bytes: string;
+  readonly mtimeMs: number;
+}
+
+/** Freeze `_brain.yaml`'s observable state so a later write is detectable. */
+function snapshotConfig(root: string): ConfigSnapshot {
+  const path = configPathFor(root);
+  utimesSync(path, PAST_MTIME_SECONDS, PAST_MTIME_SECONDS);
+  return { bytes: readFileSync(path).toString("base64"), mtimeMs: statSync(path).mtimeMs };
+}
+
+function expectConfigUntouched(root: string, snapshot: ConfigSnapshot): void {
+  const path = configPathFor(root);
+  expect(readFileSync(path).toString("base64")).toBe(snapshot.bytes);
+  expect(statSync(path).mtimeMs).toBe(snapshot.mtimeMs);
+}
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-schema-mutate-"));
@@ -136,4 +177,141 @@ describe("applySchemaMutations", () => {
     expect(audit).toContain("***REDACTED***");
     expect(audit).not.toContain("secret-value");
   });
+});
+
+describe("previewSchemaMutations", () => {
+  test("returns the pack that would result and the diff from the current one", () => {
+    const snapshot = snapshotConfig(vault);
+
+    const preview = previewSchemaMutations(vault, [
+      { op: "add_type", category: "preference_types", token: "decision" },
+      { op: "add_alias", token: "decision", alias: "choice" },
+      { op: "set_expert_routing", token: "decision", expert: "schema-author" },
+    ]);
+
+    expect(preview.dry_run).toBe(true);
+    expect(preview.would_apply).toBe(3);
+    expect(preview.pack.declarations.preference_types).toEqual(["research", "decision"]);
+    expect(preview.diff).toEqual([
+      { path: "aliases.decision", before: null, after: "choice" },
+      { path: "declarations.preference_types", before: null, after: "decision" },
+      { path: "expert_routing.decision", before: null, after: "schema-author" },
+    ]);
+
+    expectConfigUntouched(vault, snapshot);
+    expect(loadSchemaPack(vault).declarations.preference_types).toEqual(["research"]);
+  });
+
+  test("reports a scalar leaf whose value changed as a before/after pair", async () => {
+    await applySchemaMutations(
+      vault,
+      [{ op: "set_expert_routing", token: "research", expert: "first-expert" }],
+      { actor: "tester" },
+    );
+    const snapshot = snapshotConfig(vault);
+
+    const preview = previewSchemaMutations(vault, [
+      { op: "set_expert_routing", token: "research", expert: "second-expert" },
+    ]);
+
+    expect(preview.diff).toEqual([
+      { path: "expert_routing.research", before: "first-expert", after: "second-expert" },
+    ]);
+    expectConfigUntouched(vault, snapshot);
+  });
+
+  test("reports a rename as one removed and one added declaration member", () => {
+    const preview = previewSchemaMutations(vault, [
+      {
+        op: "update_type",
+        category: "preference_types",
+        token: "research",
+        new_token: "research-note",
+      },
+    ]);
+
+    expect(preview.diff).toEqual([
+      { path: "declarations.preference_types", before: "research", after: null },
+      { path: "declarations.preference_types", before: null, after: "research-note" },
+    ]);
+  });
+
+  test("returns an empty diff for a batch that would change nothing", () => {
+    const preview = previewSchemaMutations(vault, [
+      { op: "add_type", category: "preference_types", token: "research" },
+    ]);
+
+    expect(preview.would_apply).toBe(1);
+    expect(preview.diff).toEqual([]);
+  });
+
+  test("previews against a vault with no _brain.yaml without creating one", () => {
+    const configPath = configPathFor(vault);
+    rmSync(configPath);
+
+    const preview = previewSchemaMutations(vault, [
+      { op: "add_type", category: "preference_types", token: "decision" },
+    ]);
+
+    expect(preview.diff).toEqual([
+      { path: "declarations.preference_types", before: null, after: "decision" },
+    ]);
+    // Absent must stay absent: a preview creates nothing, not even the file
+    // the apply path would materialise from its default.
+    expect(existsSync(configPath)).toBe(false);
+  });
+
+  const REJECTED_BATCHES: ReadonlyArray<{
+    readonly name: string;
+    readonly mutations: ReadonlyArray<SchemaMutation>;
+    readonly message: string;
+  }> = [
+    {
+      name: "a malformed token",
+      mutations: [{ op: "add_type", category: "preference_types", token: "123bad" }],
+      message:
+        "schema.preference_types: must start with a letter and contain only letters, numbers, underscores, or hyphens",
+    },
+    {
+      name: "a prefix pointing at an undeclared token",
+      mutations: [{ op: "add_prefix", prefix: "pref", token: "undeclared" }],
+      message: "schema.prefixes.pref: token is not declared",
+    },
+    {
+      name: "a rename of a token that is not declared",
+      mutations: [
+        {
+          op: "update_type",
+          category: "preference_types",
+          token: "missing",
+          new_token: "renamed",
+        },
+      ],
+      message: "schema.preference_types: missing is not declared",
+    },
+  ];
+
+  for (const rejected of REJECTED_BATCHES) {
+    test(`preview of ${rejected.name} raises exactly what an apply raises, without writing`, async () => {
+      const snapshot = snapshotConfig(vault);
+
+      let previewMessage = "";
+      try {
+        previewSchemaMutations(vault, rejected.mutations);
+      } catch (err) {
+        previewMessage = (err as Error).message;
+      }
+      expectConfigUntouched(vault, snapshot);
+
+      let applyMessage = "";
+      try {
+        await applySchemaMutations(vault, rejected.mutations, { actor: "tester" });
+      } catch (err) {
+        applyMessage = (err as Error).message;
+      }
+
+      expect(previewMessage).toBe(rejected.message);
+      expect(applyMessage).toBe(previewMessage);
+    });
+  }
 });

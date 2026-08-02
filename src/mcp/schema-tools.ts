@@ -9,10 +9,10 @@ import {
   listSchemaPacks,
   reviewSchemaOrphans,
 } from "../core/brain/schema-admin.ts";
-import type { SchemaMutation } from "../core/brain/schema-mutate.ts";
+import { previewSchemaMutations, type SchemaMutation } from "../core/brain/schema-mutate.ts";
 import { resolveSearchConfig } from "../core/search/index.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
-import { coerceStr } from "./coerce.ts";
+import { coerceBool, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 
@@ -77,7 +77,7 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "schema_apply_mutations",
     description:
-      "Apply an atomic batch of schema mutations to Brain/_brain.yaml and write an audit record.",
+      "Apply an atomic batch of schema mutations to Brain/_brain.yaml and write an audit record. With dry_run, returns the pack that would result and its diff instead, writing nothing.",
     inputSchema: {
       type: "object",
       properties: {
@@ -94,6 +94,11 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
           type: "string",
           description: "Optional audit reason.",
         },
+        dry_run: {
+          type: "boolean",
+          description:
+            "Preview WITHOUT writing: the pack that would result plus its diff, same validator rejections, no config write, no audit record. Absent by default.",
+        },
       },
       required: ["mutations"],
       additionalProperties: false,
@@ -102,13 +107,18 @@ export const SCHEMA_TOOLS: ReadonlyArray<ToolDefinition> = [
       let mutations: SchemaMutation[];
       let actor: string;
       let reason: string | undefined;
+      let dryRun: boolean;
       try {
         mutations = coerceSchemaMutations(args["mutations"]);
         actor = coerceStr(args, "actor", false, "mcp")!;
         reason = coerceStr(args, "reason", false) ?? undefined;
+        dryRun = coerceBool(args, "dry_run");
       } catch (err) {
         throw new MCPError(INVALID_PARAMS, (err as Error).message);
       }
+      // The preview shape carries no `audit_path` and no `applied` count, so
+      // a dry run can never be read back as a mutation that landed.
+      if (dryRun) return previewSchemaMutations(ctx.vault, mutations);
       return await applySchemaAdminMutations(ctx.vault, mutations, {
         actor,
         reason,

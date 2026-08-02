@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -171,6 +179,48 @@ describe("o2b brain schema", () => {
 
     const report = await runCli(["brain", "schema", "--json"], { env: env() });
     expect(JSON.parse(report.stdout).vocabulary.preference_types).toContain("strategy");
+  });
+
+  test("apply --dry-run previews the resulting pack and writes nothing", async () => {
+    const mutation = JSON.stringify({
+      op: "add_type",
+      category: "preference_types",
+      token: "strategy",
+    });
+    const brainConfig = join(vault, "Brain", "_brain.yaml");
+    // Stamped far in the past so any write during the preview moves the
+    // modification time to now rather than staying within timestamp noise.
+    const pastSeconds = Date.UTC(2020, 0, 1) / 1000;
+    utimesSync(brainConfig, pastSeconds, pastSeconds);
+    // Base64 so the later comparison is over raw bytes, not decoded text.
+    const bytesBefore = readFileSync(brainConfig).toString("base64");
+    const mtimeBefore = statSync(brainConfig).mtimeMs;
+
+    const preview = await runCli(
+      ["brain", "schema", "apply", "--mutation", mutation, "--dry-run", "--json"],
+      { env: env() },
+    );
+
+    expect(preview.returncode).toBe(0);
+    const payload = JSON.parse(preview.stdout) as {
+      dry_run: boolean;
+      would_apply: number;
+      pack: { declarations: { preference_types: string[] } };
+      diff: Array<{ path: string; before: string | null; after: string | null }>;
+      audit_path?: string;
+    };
+    expect(payload.dry_run).toBe(true);
+    expect(payload.would_apply).toBe(1);
+    expect(payload.pack.declarations.preference_types).toContain("strategy");
+    expect(payload.diff).toEqual([
+      { path: "declarations.preference_types", before: null, after: "strategy" },
+    ]);
+    expect(payload.audit_path).toBeUndefined();
+
+    expect(readFileSync(brainConfig).toString("base64")).toBe(bytesBefore);
+    expect(statSync(brainConfig).mtimeMs).toBe(mtimeBefore);
+    const report = await runCli(["brain", "schema", "--json"], { env: env() });
+    expect(JSON.parse(report.stdout).vocabulary.preference_types).not.toContain("strategy");
   });
 
   test("rejects unknown schema subcommands", async () => {

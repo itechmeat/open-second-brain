@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -12,6 +12,14 @@ let tmp: string;
 let vault: string;
 let configPath: string;
 const savedEnv: Record<string, string | undefined> = {};
+
+/**
+ * Epoch seconds stamped onto `Brain/_brain.yaml` before a dry run, far
+ * enough in the past that any write during the preview would move the
+ * modification time to now rather than leaving it within a coarse
+ * filesystem timestamp of where it started.
+ */
+const PAST_MTIME_SECONDS = Date.UTC(2020, 0, 1) / 1000;
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-schema-"));
@@ -124,6 +132,93 @@ describe("schema MCP tools", () => {
 
     expect(nodes.map((node) => node.id)).toContain("decision");
     expect(nodes.map((node) => node.id)).toContain("link:decision");
+  });
+
+  test("dry_run previews the resulting pack and its diff without touching _brain.yaml", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const brainConfig = join(vault, "Brain", "_brain.yaml");
+    utimesSync(brainConfig, PAST_MTIME_SECONDS, PAST_MTIME_SECONDS);
+    // Base64 so the later comparison is over raw bytes, not decoded text.
+    const bytesBefore = readFileSync(brainConfig).toString("base64");
+    const mtimeBefore = statSync(brainConfig).mtimeMs;
+
+    const preview = await call(server, "schema_apply_mutations", {
+      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      dry_run: true,
+    });
+
+    const structured = (preview as any).result.structuredContent;
+    expect(structured.dry_run).toBe(true);
+    expect(structured.would_apply).toBe(1);
+    expect(structured.pack.declarations.preference_types).toContain("decision");
+    expect(structured.diff).toEqual([
+      { path: "declarations.preference_types", before: null, after: "decision" },
+    ]);
+    // A preview must never look like an apply: no audit record was written,
+    // so there is no audit path to report.
+    expect(structured.audit_path).toBeUndefined();
+
+    expect(readFileSync(brainConfig).toString("base64")).toBe(bytesBefore);
+    expect(statSync(brainConfig).mtimeMs).toBe(mtimeBefore);
+    const pack = await call(server, "schema_inspect", { view: "active_pack" });
+    expect(
+      (pack as any).result.structuredContent.pack.declarations.preference_types ?? [],
+    ).not.toContain("decision");
+  });
+
+  test("an apply with no dry_run argument behaves exactly as today", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    const applied = await call(server, "schema_apply_mutations", {
+      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+    });
+
+    const structured = (applied as any).result.structuredContent;
+    expect(structured.applied).toBe(1);
+    expect(typeof structured.audit_path).toBe("string");
+    expect(structured.pack.declarations.preference_types).toContain("decision");
+    // The dry-run key exists only on a preview; an apply carries neither it
+    // nor the diff, exactly as before dry_run was added.
+    expect("dry_run" in structured).toBe(false);
+    expect("diff" in structured).toBe(false);
+
+    const pack = await call(server, "schema_inspect", { view: "active_pack" });
+    expect((pack as any).result.structuredContent.pack.declarations.preference_types).toContain(
+      "decision",
+    );
+  });
+
+  test("a rejected preview returns the same error envelope the apply returns", async () => {
+    const server = makeServer();
+    await initialize(server);
+    const rejected = [{ op: "add_prefix", prefix: "pref", token: "undeclared" }];
+
+    const preview = await call(server, "schema_apply_mutations", {
+      mutations: rejected,
+      dry_run: true,
+    });
+    const apply = await call(server, "schema_apply_mutations", { mutations: rejected });
+
+    expect((preview as any).result.isError).toBe(true);
+    expect((preview as any).result.content[0].text).toBe(
+      "schema.prefixes.pref: token is not declared",
+    );
+    expect((preview as any).result).toEqual((apply as any).result);
+  });
+
+  test("a non-boolean dry_run is an invalid param", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    const response = await call(server, "schema_apply_mutations", {
+      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      dry_run: "yes",
+    });
+
+    expect((response as any).error.code).toBe(INVALID_PARAMS);
+    expect((response as any).error.message).toContain("dry_run");
   });
 
   test("schema apply reports coercion failures as invalid params", async () => {

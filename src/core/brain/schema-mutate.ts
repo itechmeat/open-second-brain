@@ -7,6 +7,7 @@ import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import {
+  loadSchemaPack,
   parseSchemaPack,
   renderSchemaBlock,
   replaceSchemaBlock,
@@ -109,6 +110,51 @@ export interface ApplySchemaMutationsResult {
   readonly pack: SchemaPack;
 }
 
+/**
+ * One leaf-level difference between two schema packs.
+ *
+ * `before === null` means the leaf would appear, `after === null` means it
+ * would disappear, and two non-null values mean a scalar leaf's value would
+ * change. A `path` is the dotted address of the leaf inside the pack
+ * (`declarations.preference_types`, `prefixes.pref`, `attributes.paper.doi`);
+ * list-valued paths report one entry per member, so a rename shows as a
+ * removal and an addition under the same path rather than as a mutation of
+ * an anonymous list.
+ */
+export interface SchemaPackDiffEntry {
+  readonly path: string;
+  readonly before: string | null;
+  readonly after: string | null;
+}
+
+/**
+ * The result of {@link previewSchemaMutations}. Deliberately NOT the shape of
+ * {@link ApplySchemaMutationsResult}: a preview has no `audit_path` because it
+ * wrote no audit record, and it reports `would_apply` rather than `applied`
+ * because nothing was applied. A caller can therefore never mistake a dry run
+ * for a real mutation.
+ */
+export interface PreviewSchemaMutationsResult {
+  readonly dry_run: true;
+  /** How many mutations were submitted; see `diff` for what would change. */
+  readonly would_apply: number;
+  readonly pack: SchemaPack;
+  readonly diff: ReadonlyArray<SchemaPackDiffEntry>;
+}
+
+/**
+ * Separates a leaf's path from its value when keying a list MEMBER, so two
+ * members of the same list do not collide in the flat map the diff walks. A
+ * NUL byte cannot occur in a schema token, an endpoint pair, or a rendered
+ * single-line description, so the key is unambiguous.
+ */
+const LEAF_KEY_SEPARATOR = "\u0000";
+
+interface PackLeaf {
+  readonly path: string;
+  readonly value: string;
+}
+
 interface MutableSchemaPack {
   declarations: Record<SchemaVocabularyCategory, string[]>;
   aliases: Record<string, string[]>;
@@ -175,6 +221,136 @@ export function applyMutationsToPack(
   const next = freezeMutable(mutable);
   validateSchemaPackReferences(next);
   return next;
+}
+
+/**
+ * Build the pack {@link applySchemaMutations} would persist for this batch,
+ * WITHOUT touching disk, together with its difference from the pack currently
+ * on disk.
+ *
+ * The preview runs the same {@link applyMutationsToPack} the write path runs,
+ * so a batch the validator rejects raises here exactly what it would raise
+ * there, and a batch it accepts yields exactly the pack that would land. A
+ * preview that were more permissive than the apply it previews would be worse
+ * than no preview at all.
+ *
+ * Two deliberate asymmetries with the write path, both because nothing is
+ * written: no file lock is taken (a lock is a file, and a preview creates no
+ * files), and the vault-identity WRITE guard is not run - its job is to refuse
+ * a write to a store this process did not open, and running it here would pin
+ * this process's identity as a side effect of a read.
+ */
+export function previewSchemaMutations(
+  vault: string,
+  mutations: ReadonlyArray<SchemaMutation>,
+): PreviewSchemaMutationsResult {
+  const current = loadSchemaPack(vault);
+  const next = applyMutationsToPack(current, mutations);
+  return {
+    dry_run: true,
+    would_apply: mutations.length,
+    pack: next,
+    diff: diffSchemaPacks(current, next),
+  };
+}
+
+/**
+ * Leaf-level difference between two schema packs, ordered by path so the same
+ * two packs always produce the same list.
+ *
+ * `vocabulary` is excluded: it is the closure of `declarations` over the
+ * built-in vocabulary, so every difference in it is already reported under
+ * `declarations` and listing both would double-count one change.
+ */
+export function diffSchemaPacks(
+  before: SchemaPack,
+  after: SchemaPack,
+): ReadonlyArray<SchemaPackDiffEntry> {
+  const left = flattenPack(before);
+  const right = flattenPack(after);
+  const entries: SchemaPackDiffEntry[] = [];
+  for (const [key, leaf] of left) {
+    const next = right.get(key);
+    if (next === undefined) {
+      entries.push({ path: leaf.path, before: leaf.value, after: null });
+    } else if (next.value !== leaf.value) {
+      entries.push({ path: leaf.path, before: leaf.value, after: next.value });
+    }
+  }
+  for (const [key, leaf] of right) {
+    if (!left.has(key)) entries.push({ path: leaf.path, before: null, after: leaf.value });
+  }
+  // Ordered by path, then by the value each entry is about - so a rename
+  // under one path reports the departing member before the arriving one.
+  return entries.toSorted(
+    (a, b) => a.path.localeCompare(b.path) || diffEntryValue(a).localeCompare(diffEntryValue(b)),
+  );
+}
+
+/** The value a diff entry is about: what left, or - for an addition - what arrived. */
+function diffEntryValue(entry: SchemaPackDiffEntry): string {
+  return entry.before ?? entry.after ?? "";
+}
+
+/** Flatten every authored leaf of a pack to `key -> {path, value}`. */
+function flattenPack(pack: SchemaPack): Map<string, PackLeaf> {
+  const leaves = new Map<string, PackLeaf>();
+  for (const category of SCHEMA_VOCAB_CATEGORIES) {
+    addMembers(leaves, `declarations.${category}`, pack.declarations[category] ?? []);
+  }
+  addRecordMembers(leaves, "aliases", pack.aliases);
+  addScalars(leaves, "prefixes", pack.prefixes);
+  addMembers(leaves, "link_types", pack.link_types);
+  addMembers(leaves, "extractable", pack.extractable);
+  addScalars(leaves, "expert_routing", pack.expert_routing);
+  addRecordMembers(leaves, "labels", pack.labels);
+  addRecordMembers(leaves, "link_constraints", pack.link_constraints);
+  addNestedScalars(leaves, "attributes", pack.attributes);
+  addNestedScalars(leaves, "frontmatter_tiers", pack.frontmatter_tiers);
+  return leaves;
+}
+
+/**
+ * List members: the value is part of the key, so membership changes read as
+ * an addition or a removal and never as an in-place edit of a list slot.
+ */
+function addMembers(
+  leaves: Map<string, PackLeaf>,
+  path: string,
+  values: ReadonlyArray<string>,
+): void {
+  for (const value of values) {
+    leaves.set(`${path}${LEAF_KEY_SEPARATOR}${value}`, { path, value });
+  }
+}
+
+/** Scalar map: the key is the leaf path, so a changed value reads as an edit. */
+function addScalars(
+  leaves: Map<string, PackLeaf>,
+  prefix: string,
+  record: Readonly<Record<string, string>>,
+): void {
+  for (const [key, value] of Object.entries(record)) {
+    const path = `${prefix}.${key}`;
+    leaves.set(path, { path, value });
+  }
+}
+
+function addRecordMembers(
+  leaves: Map<string, PackLeaf>,
+  prefix: string,
+  record: Readonly<Record<string, ReadonlyArray<string>>>,
+): void {
+  for (const [key, values] of Object.entries(record))
+    addMembers(leaves, `${prefix}.${key}`, values);
+}
+
+function addNestedScalars(
+  leaves: Map<string, PackLeaf>,
+  prefix: string,
+  record: Readonly<Record<string, Readonly<Record<string, string>>>>,
+): void {
+  for (const [key, inner] of Object.entries(record)) addScalars(leaves, `${prefix}.${key}`, inner);
 }
 
 function applyOne(pack: MutableSchemaPack, mutation: SchemaMutation): void {
