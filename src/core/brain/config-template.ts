@@ -444,6 +444,26 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("daily_window_offset_hours", T.daily_window_offset_hours),
     ],
   },
+  {
+    key: "write_binding",
+    doc: [
+      "Where a CALLER-NAMED write may land: brain_create_note,",
+      "brain_update_note, brain_append_note and brain_write_batch, which",
+      "take a vault-relative path from the caller. Unset by default,",
+      "which leaves those surfaces unbound exactly as before.",
+      "",
+      "This is a write boundary over caller-named paths. It is NOT a",
+      "security boundary and not per-agent: its authority is this file,",
+      "which no tool call can rewrite, and it reads no caller identity.",
+      "Writes whose destination is derived rather than named - daily",
+      "logs, dream runs, continuity records, telemetry - are outside it.",
+      "",
+      "The values below are an illustration, not defaults. An empty list",
+      "is refused: remove the block to run unbound.",
+    ],
+    emit: "commented-example",
+    keys: [example("path_prefixes", Object.freeze(["Projects", "Journal/Weekly"]), [])],
+  },
 ]) as ReadonlyArray<BrainTemplateBlock>;
 
 /**

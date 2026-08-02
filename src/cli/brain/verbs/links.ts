@@ -4,9 +4,10 @@
  * path format. Dry-run by default; `--write` applies.
  */
 
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
 import { defaultConfigPath, resolveWikiLinkFormat } from "../../../core/config.ts";
 import {
   isWikiLinkFormat,
@@ -81,7 +82,14 @@ export async function cmdBrainLinks(argv: string[]): Promise<number> {
       });
       totalChanged += result.changed;
       if (write && result.changed > 0) {
-        writeFileSync(join(vault, file.relPath), result.content);
+        // Through the shared atomic writer, not a raw `writeFileSync`.
+        // This verb rewrites notes the operator is also editing in
+        // Obsidian, in a loop over the whole Brain tree: a plain write
+        // truncates first, so an interrupted run leaves the note it was
+        // in the middle of empty or half-rewritten, with the original
+        // gone. Temp file plus `rename(2)` makes each note either the
+        // old bytes or the new ones, never neither.
+        atomicWriteFileSync(join(vault, file.relPath), result.content);
       }
     }
 

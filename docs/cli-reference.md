@@ -509,7 +509,7 @@ Single exclusion policy for every vault walker.
 
 ```text
 o2b vault status              Walks the vault under the active policy; reports include / exclude counts and which rules fired
-o2b vault inspect <relpath>   Point-check one vault-relative path; reports matched rule, source, and whether the path exists on disk
+o2b vault inspect <relpath>   Point-check one vault-relative path; reports matched rule, source, whether the path exists on disk, and the write-binding verdict (none declared | admits | refuses)
 o2b vault profile <sub>       Manage named multi-vault profiles (since v0.22.0): list | create <name> <vault> | switch <name>; pointer-based activation in profiles.json
 o2b vault map [show]          Print the resolved vault-map role tokens -> folders (since v0.22.0), merging an optional Brain/_vault-map.yaml over defaults; read-only
 ```

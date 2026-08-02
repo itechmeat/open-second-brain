@@ -123,7 +123,26 @@ export type WriteBatchErrorCode =
   | "target_missing"
   | "duplicate_target"
   | "too_many_operations"
-  | "preference_not_found";
+  | "preference_not_found"
+  // provenance-at-the-boundary, unit B. Propagated from the shared
+  // create-note envelope by `envelopeError`, which preserves the
+  // envelope's code rather than flattening every refusal into
+  // `invalid_operation`. The check runs in the projection phase, so an
+  // operation outside the operator's declared binding aborts the whole
+  // batch before any commit - including the operations that WERE
+  // admitted.
+  | "write_binding"
+  // provenance-at-the-boundary, unit C. Declared because
+  // `envelopeError` preserves whatever code the shared create-note
+  // envelope raises, so the two unions have to stay in step. Neither is
+  // reachable from a batch today: `create_note` operations expose
+  // neither the `strict` validator nor template-mode bodies, and they
+  // are not going to. A batch is all-or-nothing, and per-operation
+  // authoring modes - above all `if_exists: "skip"` - would make one
+  // `applied` count mean two different things in one result list. The
+  // batch keeps refusing an occupied target outright.
+  | "invalid_document"
+  | "invalid_template";
 
 /**
  * All-or-nothing failure for {@link applyWriteBatch}. Thrown during the

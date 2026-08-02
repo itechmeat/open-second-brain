@@ -9,10 +9,11 @@
  * the source session file remains the lossless record.
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-import { computeSourceStamp, formatSourceStampFrontmatter } from "./freshness.ts";
+import type { FrontmatterMap } from "../types.ts";
+import { formatFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
+import { computeSourceStamp } from "./freshness.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -143,26 +144,32 @@ export function writeHandoffNote(vault: string, input: WriteHandoffNoteInput): H
   const now = input.now ?? new Date();
   const scope = resolveSessionScope(input.sessionId);
   const dir = join(vault, "Brain", "handoffs");
-  mkdirSync(dir, { recursive: true });
   const path = input.targetPath ?? join(dir, `${isoDate(now)}-${scope}.md`);
   const body = buildHandoffNote(input.turns, input);
-  // JSON.stringify-quote the caller-supplied scalars: YAML-significant
-  // characters or newlines in a session id / agent name must not be
-  // able to break or inject frontmatter fields.
-  const content = [
-    "---",
-    `session_id: ${JSON.stringify(input.sessionId)}`,
-    `scope: ${scope}`,
-    `agent: ${JSON.stringify(input.agent)}`,
-    `created_at: ${isoSecond(now)}`,
-    `turns: ${input.turns.length}`,
+  // The frontmatter is a MAP handed to the shared emitter, not a string
+  // assembled here. The hand-rolled version quoted the caller-supplied
+  // scalars with `JSON.stringify` to stop a YAML-significant character
+  // or a newline in a session id breaking the block; `formatFrontmatter`
+  // already owns that rule, and owns it more completely - it quotes on
+  // the same structural test the PARSER uses and escapes the backslash
+  // and control characters `JSON.stringify` alone left to chance. One
+  // emitter, so a note this module writes and a note the vault reader
+  // parses cannot disagree about quoting.
+  const metadata: FrontmatterMap = {
+    session_id: input.sessionId,
+    scope,
+    agent: input.agent,
+    created_at: isoSecond(now),
+    turns: input.turns.length,
     ...(input.sourcePaths !== undefined && input.sourcePaths.length > 0
-      ? [formatSourceStampFrontmatter(computeSourceStamp(vault, input.sourcePaths))]
-      : []),
-    "---",
-    "",
-    body,
-  ].join("\n");
-  writeFileSync(path, content);
-  return Object.freeze({ path, scope, content });
+      ? computeSourceStamp(vault, input.sourcePaths)
+      : {}),
+  };
+  // `overwrite` because both callers re-derive in place: the SessionEnd
+  // hook rewrites the day's note and the targeted-recompile executor
+  // refreshes an existing one by path. The atomic writer creates the
+  // parent directory, so the note is never observed half-written and no
+  // `mkdirSync` is needed ahead of it.
+  writeFrontmatterAtomic(path, metadata, body, { overwrite: true });
+  return Object.freeze({ path, scope, content: formatFrontmatter(metadata, body) });
 }

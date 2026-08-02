@@ -34,6 +34,7 @@ import { parseTemporalBlock } from "./blocks/temporal.ts";
 import { parseHealthBlock } from "./blocks/health.ts";
 import { parseIntegrityBlock } from "./blocks/integrity.ts";
 import { parseNotesBlock } from "./blocks/notes.ts";
+import { parseWriteBindingBlock } from "./blocks/write-binding.ts";
 import { parseSessionsBlock } from "./blocks/sessions.ts";
 import { parseSchemaBlock } from "./blocks/schema.ts";
 import {
@@ -108,6 +109,7 @@ export function validateBrainConfigDetailed(
   const health = parseHealthBlock(ctx);
   const integrity = parseIntegrityBlock(ctx);
   const notes = parseNotesBlock(ctx);
+  const writeBinding = parseWriteBindingBlock(ctx);
   const sessions = parseSessionsBlock(ctx);
   const schema = parseSchemaBlock(ctx);
   const hygiene = parseHygieneBlock(ctx);
@@ -133,6 +135,7 @@ export function validateBrainConfigDetailed(
     ...(linkGraph !== undefined ? { link_graph: linkGraph } : {}),
     ...(temporal !== undefined ? { temporal } : {}),
     ...(notes !== undefined ? { notes } : {}),
+    ...(writeBinding !== undefined ? { write_binding: writeBinding } : {}),
     ...(sessions !== undefined ? { sessions } : {}),
     ...(health !== undefined ? { health } : {}),
     ...(integrity !== undefined ? { integrity } : {}),

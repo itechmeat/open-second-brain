@@ -424,6 +424,16 @@ export const BRAIN_LOG_EVENT_KIND = {
    * double-counts a fix.
    */
   doctorRepair: "doctor-repair",
+  /**
+   * `vector-backfill` (provenance-at-the-boundary, unit F) - the operator
+   * ran `o2b search vector-backfill --apply` and the vector phase wrote
+   * embeddings for indexed chunks that had none. Payload carries the
+   * number `embedded`, the number `pending` when the run started, the
+   * `chunks_total` in the index, and the `agent`. A dry run and an apply
+   * that finds nothing pending emit nothing, so the merged timeline
+   * records only runs that actually populated vectors.
+   */
+  vectorBackfill: "vector-backfill",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
@@ -1450,6 +1460,13 @@ export interface BrainConfig {
    */
   readonly notes?: BrainNotesConfig;
   /**
+   * Optional `write_binding:` block (provenance-at-the-boundary, unit
+   * B). Bounds where a CALLER-NAMED write may land. Absent: no binding
+   * is in force and every write path is byte-identical to a tree that
+   * has never heard of the key.
+   */
+  readonly write_binding?: BrainWriteBindingConfig;
+  /**
    * Optional `sessions:` block (Memory Integrity Suite). Capture
    * boundaries for session/message ingestion. Absent: every session
    * is captured - bit-identical to pre-boundary behaviour.
@@ -1541,6 +1558,32 @@ export interface BrainNotesConfig {
 
 export interface ResolvedBrainNotesConfig {
   readonly read_paths: ReadonlyArray<string>;
+}
+
+/**
+ * Optional `write_binding:` block (provenance-at-the-boundary, unit B).
+ * The vault-relative prefixes a CALLER-NAMED write may land under.
+ *
+ * The authority is this file, which the operator controls and which no
+ * MCP call can rewrite - never the caller's claimed identity. This
+ * system has no credential: agent identity is an environment variable,
+ * else a config key, else the literal `agent`, and ten tool families
+ * accept a caller-supplied `agent` string that overrides it verbatim, so
+ * a fence keyed to it would be bypassed by passing a different string.
+ *
+ * Absent block, or a block that omits `path_prefixes`, means no binding
+ * is in force and every write path behaves exactly as it did before the
+ * key existed. An empty list is rejected at load: a list that admits no
+ * path is an off switch, and the way to turn the binding off is to
+ * remove the block.
+ */
+export interface BrainWriteBindingConfig {
+  /**
+   * Vault-relative POSIX prefixes, normalised (no leading `./`, no
+   * trailing `/`). A target is admitted when it equals one of these or
+   * lies under it segment-wise.
+   */
+  readonly path_prefixes?: ReadonlyArray<string>;
 }
 
 /**

@@ -136,7 +136,14 @@ with backup/sync. It describes:
 - optional `integrity:` gates (`owner_scope_delivery`, `embedding_abi`,
   `pack_validity_seconds`) that decide where a mismatch is reported and
   where it is refused;
-- `vault.ignore_paths` (exclusion policy for every vault walker).
+- `vault.ignore_paths` (exclusion policy for every vault walker);
+- optional `write_binding.path_prefixes` (where a CALLER-NAMED write may
+  land: `brain_create_note`, `brain_update_note`, `brain_append_note`,
+  `brain_write_batch`). This is a write boundary over caller-named paths,
+  not a security boundary and not per-agent — its authority is this file,
+  which no tool call can rewrite, and it reads no caller identity. Writes
+  whose destination is derived rather than named are outside it; the
+  boundary is recorded in `tests/core/architecture/write-site-census.test.ts`.
 
 It must not contain secrets.
 
