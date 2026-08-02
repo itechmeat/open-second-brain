@@ -16,6 +16,7 @@ import { probeVaultDirectory } from "../core/vault-presence.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
 import { listVaultPages } from "../core/vault.ts";
+import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../core/brain/entities/page-scope.ts";
 import { deriveRuntimeAgentName, normalizeAgentArgument } from "../core/agent-identity.ts";
 import { vaultRelative as vaultRelativePath } from "../core/path-safety.ts";
 
@@ -117,7 +118,14 @@ export default definePluginEntry({
         const limit = typeof params["limit"] === "number" ? (params["limit"] as number) : 50;
         if (limit < 1 || limit > 500) throw new Error("argument 'limit' must be between 1 and 500");
 
-        const pages = listVaultPages(vault);
+        // Entity records under quarantine entered the vault under untrusted
+        // provenance, so their title is attacker-chosen. This listing filters
+        // by title, which is exactly the surface that would hand one back, and
+        // it is a page walker rather than an entity reader so the entity read
+        // census does not cover it. Non-entity pages are unaffected.
+        const pages = listVaultPages(vault).filter((p) =>
+          vaultPageInStatusScope(p.metadata, ENTITY_STATUS_SCOPE.readable),
+        );
         const needle = pattern ? pattern.toLowerCase() : null;
         const matched = (
           needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))

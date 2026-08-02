@@ -6,10 +6,21 @@
  * the SDK `createNote` method. It writes one Markdown note atomically,
  * funnelled through `ensureInsideVault`, and refuses - with a typed
  * {@link CreateNoteError}, never a silent skip - any path that is not a
- * `.md` file, traverses outside the vault, lands in the Brain machinery
- * root, is excluded by the vault scope, or would clobber an existing
- * file. Refusing loudly is deliberate: a connected agent must learn its
- * write was rejected rather than believe a note exists when it does not.
+ * `.md` file, traverses outside the vault, spells its separators in a
+ * way this host would read differently, lands in the Brain machinery
+ * root, is excluded by the vault scope, falls outside the operator's
+ * declared write binding, or would clobber an existing file. A vault
+ * whose own `Brain/_brain.yaml` does not load is refused the same way
+ * rather than raising an untyped fault. Refusing loudly is deliberate: a
+ * connected agent must learn its write was rejected rather than believe
+ * a note exists when it does not.
+ *
+ * The path this primitive REPORTS is the path the bytes are at. That is
+ * a property of the envelope, not a coincidence: the reported string is
+ * the one `inspectPath` normalised and the one every guard judged, and
+ * the two shapes that used to break it - a caller separator rewritten on
+ * the way out, and a symlinked directory redirecting the write past the
+ * binding - are refused rather than reported.
  *
  * Three opt-in authoring modes sit on top of that envelope, each inert
  * when its field is absent:
@@ -33,13 +44,15 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
-import { dirname, join, posix } from "node:path";
+import { dirname, join, posix, sep, win32 } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { formatFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { inspectPath, resolveVaultScope } from "../../vault-scope/index.ts";
-import { BRAIN_ROOT_REL } from "../paths.ts";
+import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "../paths.ts";
+import { requireNextStep } from "../next-step.ts";
+import { BrainConfigError } from "../policy.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { checkWriteBinding } from "../../write-binding/index.ts";
@@ -64,7 +77,13 @@ export type CreateNoteErrorCode =
   // `excluded` on purpose: vault scope says a path is not part of the
   // vault at all, the binding says it is a real vault path that this
   // write surface may not author into.
-  | "write_binding";
+  | "write_binding"
+  // The vault's own `Brain/_brain.yaml` exists and does not validate, so
+  // neither the vault scope nor the write binding can be determined.
+  // Distinct from every other code here because it is NOT about the path
+  // the caller named: no argument the caller could send would succeed,
+  // and the operator - not the caller - holds the fix.
+  | "config_invalid";
 
 export class CreateNoteError extends Error {
   readonly code: CreateNoteErrorCode;
@@ -138,20 +157,128 @@ export type CreateNoteResult = CreatedNoteResult | SkippedNoteResult;
 
 /** A note path resolved through the shared write safety envelope. */
 export interface ResolvedNoteTarget {
-  /** Normalised vault-relative path (native separators). */
+  /**
+   * Normalised vault-relative path, POSIX. `inspectPath` joins its
+   * segments with `/` on every platform, and {@link resolveNoteTarget}
+   * refuses any caller path this host would read differently, so this is
+   * the path the surfaces report AND the path the bytes are at — the two
+   * cannot diverge.
+   */
   readonly relPath: string;
   /** Absolute filesystem path, guaranteed inside the vault. */
   readonly abs: string;
 }
 
 /**
+ * The separator that is structure on Windows and an ordinary filename
+ * character everywhere else. Named once because the reason it matters is
+ * that this host's answer differs from the other host's.
+ */
+const WINDOWS_SEP = win32.sep;
+
+/**
+ * Registry code for a vault whose Brain config does not load, resolved
+ * at module scope so registry drift fails at import rather than inside
+ * the refusal it was meant to explain (same rule as the write binding's
+ * own exit).
+ */
+export const NOTE_CONFIG_INVALID_CODE = "config-invalid";
+const CONFIG_INVALID_EXIT = requireNextStep(NOTE_CONFIG_INVALID_CODE).nextCommand;
+
+/** Vault-relative spelling of the config file every refusal here names. */
+const BRAIN_CONFIG_REL = posix.join(BRAIN_ROOT_REL, BRAIN_CONFIG_FILE);
+
+/**
+ * Refuse a caller-named path whose separators this host does not read
+ * the way the caller wrote them.
+ *
+ * THE DECISION, and why it is a refusal rather than a normalisation.
+ * On POSIX a backslash is an ordinary filename character, and three
+ * layers of this envelope disagreed about that: the write-binding
+ * matcher split on it (so a binding on `Projects` admitted
+ * `Projects\evil.md`), the result renderer rewrote it to `/` (so the
+ * tool reported `Projects/evil.md`), and `inspectPath`, the `..`
+ * traversal guard, the `Brain/` machinery-root check and every
+ * POSIX-written vault-scope ignore rule treated it as literal (so the
+ * bytes landed in ONE file at the vault ROOT, named `Projects\evil.md`).
+ *
+ * Picking a reading is the tempting fix and the wrong one. Normalising
+ * `\` to `/` silently reinterprets the caller's string into a different
+ * path than the one it sent, and treating it as literal leaves a
+ * boundary that a caller can talk past. This repository forbids the
+ * quiet reinterpretation, so the path is refused and the caller is told
+ * which character made it ambiguous. A caller that meant a subdirectory
+ * re-sends it with `/`; a caller that genuinely meant a backslash in a
+ * filename has asked for something no surface here can report
+ * faithfully.
+ *
+ * On Windows this never fires: `\` IS the separator there, and
+ * `inspectPath` converts it to POSIX before anything downstream sees it.
+ */
+function assertHostPathSeparators(path: string): void {
+  if (WINDOWS_SEP === sep) return;
+  if (!path.includes(WINDOWS_SEP)) return;
+  throw new CreateNoteError(
+    "invalid_path",
+    `note path must use '${posix.sep}' to separate segments; on this host ` +
+      `'${WINDOWS_SEP}' is an ordinary filename character, so the path would not ` +
+      `mean what it looks like: ${path}`,
+  );
+}
+
+/**
+ * Translate a Brain config failure into this surface's typed refusal.
+ *
+ * The raw {@link BrainConfigError} names the config by its ABSOLUTE host
+ * path, which is the one thing no other refusal on this surface leaks
+ * and which a connected agent cannot act on. The re-raised error keeps
+ * the validator's own diagnosis, renames the source to its vault-
+ * relative spelling, and appends the registered exit, so a caller that
+ * hits it learns what to run instead of receiving a bare fault.
+ */
+function configFault(err: BrainConfigError): CreateNoteError {
+  const source = err.source;
+  const prefix = source === null ? null : `${source}: `;
+  const detail =
+    prefix !== null && err.message.startsWith(prefix)
+      ? err.message.slice(prefix.length)
+      : err.message;
+  return new CreateNoteError(
+    "config_invalid",
+    `${BRAIN_CONFIG_REL}: ${detail}; ${CONFIG_INVALID_EXIT}`,
+  );
+}
+
+/**
+ * Run `read`, translating a Brain config failure into {@link configFault}.
+ * Shared by the two config-backed checks in the envelope — the vault
+ * scope and the write binding — so a malformed config reads the same on
+ * whichever of them reaches it first.
+ */
+function withConfigFault<T>(read: () => T): T {
+  try {
+    return read();
+  } catch (err) {
+    if (err instanceof BrainConfigError) throw configFault(err);
+    throw err;
+  }
+}
+
+/**
  * Resolve and safety-check a vault-relative note path - the exact
  * envelope enforced by {@link createNote}: `.md` suffix, vault-relative
- * (no absolute path), no `..` traversal, not the Brain machinery root,
- * not a vault-scope-excluded location, and inside the vault. Every
- * refusal is a typed {@link CreateNoteError}. Extracted so the atomic
- * write-batch core (kernel 2) reuses the same envelope for update and
- * append operations rather than re-deriving it.
+ * (no absolute path), separators this host reads the way the caller
+ * wrote them, no `..` traversal, not the Brain machinery root, not a
+ * vault-scope-excluded location, inside the operator's declared write
+ * binding, and inside the vault. Every refusal is a typed
+ * {@link CreateNoteError} - including the one case that is not about the
+ * path at all, a `Brain/_brain.yaml` that does not load. Extracted so the
+ * atomic write-batch core (kernel 2) reuses the same envelope for update
+ * and append operations rather than re-deriving it.
+ *
+ * Order is load-bearing. The separator check runs FIRST, before anything
+ * normalises the string, because every guard after it reads segments and
+ * they must all be reading the same segments the caller meant.
  */
 export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarget {
   if (!path.toLowerCase().endsWith(".md")) {
@@ -159,14 +286,17 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   }
   // The tool addresses notes by a vault-relative path; an absolute path is
   // ambiguous (which root?) and is refused rather than silently re-rooted.
-  if (path.startsWith("/") || path.startsWith("\\")) {
+  if (path.startsWith(posix.sep) || path.startsWith(WINDOWS_SEP)) {
     throw new CreateNoteError("invalid_path", `note path must be vault-relative: ${path}`);
   }
+  // Before any normalisation reads the string: refuse a separator this
+  // host would not read the way the caller wrote it. See the function.
+  assertHostPathSeparators(path);
 
   // inspectPath normalises the relative path and throws on `..` traversal;
   // an absolute path also has no place here. Translate both into a typed
   // CreateNoteError so callers get one error surface.
-  const scope = resolveVaultScope(vault);
+  const scope = withConfigFault(() => resolveVaultScope(vault));
   let inspected;
   try {
     inspected = inspectPath(path, scope, vault);
@@ -181,7 +311,7 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   // The Brain machinery root is owned by the brain's own writers; a
   // free-form note tool must never author into it (default vault-scope
   // rules ignore Brain/.snapshots only, not the whole Brain root).
-  const firstSegment = relPath.split("/")[0];
+  const firstSegment = relPath.split(posix.sep)[0];
   if (firstSegment === BRAIN_ROOT_REL) {
     throw new CreateNoteError(
       "excluded",
@@ -203,7 +333,7 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   // exactly once, before any directory is created or byte written. The
   // refusal is composed in the binding module, never here; absent
   // declaration returns null and this whole branch is inert.
-  const refusal = checkWriteBinding(vault, relPath);
+  const refusal = withConfigFault(() => checkWriteBinding(vault, relPath));
   if (refusal !== null) {
     throw new CreateNoteError("write_binding", refusal.message);
   }
@@ -217,19 +347,22 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   return { relPath, abs };
 }
 
-/** Vault-relative path in POSIX form, the shape both results carry. */
-function reportedPath(relPath: string): string {
-  return relPath.split(/[\\/]/).join(posix.sep);
-}
-
 /**
  * The one no-op result. Built in a single place because it is reached
  * from two arms - the pre-write existence check and the exclusive-link
  * refusal that closes the race behind it - and the two must not be able
  * to drift into reporting a skip differently.
+ *
+ * `relPath` is reported verbatim. It used to be re-split on `[\\/]` and
+ * re-joined with `/`, which was the only place the reported path could
+ * differ from the path that holds the bytes: on POSIX that rewrote a
+ * file literally named `Projects\evil.md` at the vault root into the
+ * report `Projects/evil.md`. Such a path is now refused at the envelope,
+ * and {@link ResolvedNoteTarget.relPath} is already POSIX, so there is
+ * nothing left to convert.
  */
 function skippedResult(relPath: string): SkippedNoteResult {
-  return { path: reportedPath(relPath), outcome: "skipped", created: false };
+  return { path: relPath, outcome: "skipped", created: false };
 }
 
 /**
@@ -336,5 +469,5 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
     throw err;
   }
 
-  return { path: reportedPath(relPath), outcome: "created", created: true };
+  return { path: relPath, outcome: "created", created: true };
 }

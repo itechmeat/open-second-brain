@@ -7,6 +7,12 @@
  * doctor lints catch the ones that arrive by hand-editing or sync.
  * All operations are deterministic - the caller injects the clock.
  *
+ * Writes run in one of two LANES ({@link resolveWriteTarget}): the canonical
+ * one, and the quarantine holding untrusted-provenance records. A name can be
+ * claimed once in each, which is not a duplicate - only one of the two is a
+ * canonical entity, and the quarantined claim is a record OF a claim rather
+ * than a record the vault stands behind.
+ *
  * Files stay plain Obsidian Markdown. Every rewrite preserves unknown
  * frontmatter keys the operator may have added by hand.
  */
@@ -56,22 +62,28 @@ export interface UpsertEntityInput {
   readonly confidence?: string;
   /** Markdown body (current structured state). Replaces on update. */
   readonly body?: string;
+  /**
+   * Markdown body used only if this upsert CREATES the record; an update
+   * keeps the body that is there. The intake path stamps a source citation
+   * this way: whether the write creates or updates is decided here, in the
+   * lane it resolves in, and a caller that answered that question for itself
+   * with a canonical read would get it wrong for the quarantine lane - and
+   * would silently drop the citation of the source that introduced the
+   * record. {@link body} still wins when both are given.
+   */
+  readonly bodyOnCreate?: string;
   /** Config path for denylist resolution; env still wins when set. */
   readonly configPath?: string;
   /**
-   * The entity is being INTRODUCED under untrusted provenance (see
-   * `intake/source-trust.ts`). On create the record lands `quarantine` and
-   * carries the untrusted-source marker the retrieval gate reads, so it is
-   * absent from every ordinary read until an operator releases it with
-   * {@link archiveEntity}'s `restore`.
+   * This write is being made under untrusted provenance (see
+   * `intake/source-trust.ts`), which selects the LANE it resolves and writes
+   * in - see {@link resolveWriteTarget}. A record it introduces lands
+   * `quarantine` and carries the untrusted-source marker the retrieval gate
+   * reads, so it is absent from every ordinary read until an operator
+   * releases it with {@link archiveEntity}'s `restore`.
    *
-   * On update it is deliberately IGNORED: an entity that already exists on
-   * its own authority is not downgraded by a later untrusted mention of its
-   * name, which is the same rule the intake primitive applies to the body's
-   * `## Sources` stamp - and without it an untrusted source could quarantine
-   * the operator's own records by naming them.
-   *
-   * Absent → byte-identical to an upsert that never knew about trust.
+   * Absent → the canonical lane, byte-identical to an upsert that never knew
+   * about trust.
    */
   readonly untrustedOrigin?: boolean;
 }
@@ -91,6 +103,14 @@ export interface RelateEntitiesInput {
   readonly relation: string;
   readonly to: EntityRef;
   readonly now: Date;
+  /**
+   * This edge is being written under untrusted provenance, which selects the
+   * lane both endpoints resolve in ({@link resolveWriteTarget}) - an intake
+   * that just quarantined two entities links THOSE, and never the operator's
+   * records of the same names. Absent → the canonical lane, byte-identical
+   * to a relate that never knew about trust.
+   */
+  readonly untrustedOrigin?: boolean;
 }
 
 export interface ArchiveEntityOptions {
@@ -100,7 +120,9 @@ export interface ArchiveEntityOptions {
    * quarantined - to active lookup. This is the named exit from quarantine:
    * without it a record that entered under untrusted provenance would be
    * invisible with no way back, and a status nothing can leave is a dead end
-   * rather than a lane.
+   * rather than a lane. A release that would collide with a canonical record
+   * already holding the same name is refused with both ids - see the check in
+   * {@link archiveEntity}.
    */
   readonly restore?: boolean;
 }
@@ -148,17 +170,12 @@ function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
 }
 
 /**
- * Resolve a ref to the record that HOLDS the name, whether or not a read may
- * see it. Write paths need this and read paths must not have it: a
- * quarantined record still owns its identity, so an upsert or an edge naming
- * it has to land ON it. Without this a second intake of the same untrusted
- * source would fork a second page under an `-2` id, and a relation between
- * two quarantined entities would fail as not-found after its endpoints had
- * already been written - a partial write this module exists to prevent.
+ * Resolve a ref inside the QUARANTINE lane: the records that hold a name
+ * without being entitled to it, which no read scope admits. Kept separate
+ * from {@link resolveActive} rather than chained after it, because the two
+ * answer for different authorities and a write belongs to exactly one.
  */
-function resolveIdentityHolder(index: EntityIndex, ref: EntityRef): BrainEntity | null {
-  const canonical = resolveActive(index, ref);
-  if (canonical !== null) return canonical;
+function resolveQuarantined(index: EntityIndex, ref: EntityRef): BrainEntity | null {
   const query = normalizeEntityName(ref.query);
   if (!query) return null;
   const category = ref.category !== undefined ? validateEntityCategory(ref.category) : undefined;
@@ -176,6 +193,46 @@ function resolveIdentityHolder(index: EntityIndex, ref: EntityRef): BrainEntity 
     );
   }
   return matches[0] ?? null;
+}
+
+/**
+ * Resolve the record a WRITE lands on, in the lane the write belongs to.
+ *
+ * This is the seam where an untrusted source could otherwise take a name for
+ * good. A single "who holds this name" resolution that answered canonical
+ * first and quarantined second looked like the careful choice - it kept a
+ * re-ingest from forking a second page - but it answered the same for a
+ * write the vault had vouched for. So the first scraped page to mention
+ * `Acme Corp` created the quarantined record, and every later TRUSTED write
+ * of that name landed INSIDE it: the update arm copies the target's status,
+ * so the record stayed quarantined, kept the untrusted-source marker in its
+ * carried-forward frontmatter, and stayed invisible to `getEntity`, to the
+ * default listing, to alias resolution and to the retrieval gate - reported
+ * to the writer as `created: false`, which reads as "already there".
+ *
+ * The lanes are separate identity spaces instead:
+ *
+ *   - a TRUSTED write resolves canonical records only. A quarantined
+ *     namesake does not hold the name against it: the write creates its own
+ *     record, `created: true`, readable, unmarked. It is also not refused,
+ *     which matters - refusing would let any hostile page reserve a name the
+ *     operator then could not use.
+ *   - an UNTRUSTED write resolves quarantined records only. Re-ingesting the
+ *     same untrusted source still updates its own record rather than forking
+ *     one, but an untrusted mention of a name the operator already holds can
+ *     no longer reach that record - not its aliases, not its `source_agent`,
+ *     not its body, not its edges. Nothing it carries can arrive unmarked.
+ *
+ * Neither direction can therefore capture the other, and the two spaces are
+ * joined only where a human is present: {@link archiveEntity}'s `restore`,
+ * which refuses a release that would collide.
+ */
+function resolveWriteTarget(
+  index: EntityIndex,
+  ref: EntityRef,
+  untrustedOrigin: boolean,
+): BrainEntity | null {
+  return untrustedOrigin ? resolveQuarantined(index, ref) : resolveActive(index, ref);
 }
 
 export function getEntity(vault: string, ref: EntityRef): BrainEntity | null {
@@ -304,11 +361,11 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   const index = buildEntityIndex(vault);
   const stamp = isoSecond(input.now);
 
-  // Resolve to the record that holds this identity: name key first, alias
-  // second, and a quarantined holder last - re-ingesting the same untrusted
-  // source is an ordinary operation and must update its record, not fork one.
+  // Resolve inside this write's own lane (see resolveWriteTarget): name key
+  // first, alias second, and never across the trusted/untrusted boundary.
+  const untrusted = input.untrustedOrigin === true;
   const key = entityIdentityKey(category, name);
-  const target = resolveIdentityHolder(index, { category, query: name });
+  const target = resolveWriteTarget(index, { category, query: name }, untrusted);
 
   if (target === null) {
     // The name may be held by an archived entity - refuse with the remedy
@@ -358,7 +415,17 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
       updated_at: stamp,
       tags: ["brain", "brain/entity"],
     };
-    writeEntityFile(target.path, fields, meta, input.body ?? existingBody, { overwrite: true });
+    // The target's status is carried forward, which is now safe by
+    // construction: the lane guarantees a trusted write never sees a
+    // quarantined target and an untrusted one never sees a canonical target.
+    // The marker is re-asserted on the untrusted lane rather than trusted to
+    // the frontmatter that was there, so status and marker cannot drift apart
+    // through a hand edit or a partial sync.
+    const extras: FrontmatterMap = {
+      ...meta,
+      ...(untrusted ? untrustedSourceFrontmatter(INTAKE_TRUST.untrusted) : {}),
+    };
+    writeEntityFile(target.path, fields, extras, input.body ?? existingBody, { overwrite: true });
     const entity = parseEntityFile(target.path);
     if (entity === null) throw new Error(`entity file unreadable after write: ${target.path}`);
     return { entity, created: false };
@@ -366,10 +433,9 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
 
   const id = allocateEntityId(index, category, name);
   const path = entityPath(vault, category, id);
-  // Untrusted provenance decides two things about a NEW record and nothing
-  // about an existing one: the status it lands at, and the marker the
-  // retrieval gate reads. Both come from one flag so they cannot disagree.
-  const untrusted = input.untrustedOrigin === true;
+  // Untrusted provenance decides two things about the new record: the status
+  // it lands at, and the marker the retrieval gate reads. Both come from the
+  // one lane flag, so they cannot disagree.
   const fields: FrontmatterMap = {
     kind: BRAIN_ENTITY_KIND,
     entity_id: id,
@@ -386,10 +452,29 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   const marker = untrustedSourceFrontmatter(
     untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted,
   );
-  writeEntityFile(path, fields, marker, input.body ?? `# ${name}`, { overwrite: false });
+  writeEntityFile(path, fields, marker, input.body ?? input.bodyOnCreate ?? `# ${name}`, {
+    overwrite: false,
+  });
   const entity = parseEntityFile(path);
   if (entity === null) throw new Error(`entity file unreadable after write: ${path}`);
   return { entity, created: true };
+}
+
+/**
+ * Why an endpoint did not resolve, and what to do about it. A canonical
+ * relate that misses a name a quarantined record holds is not a missing
+ * entity - it is a record the caller is not entitled to reach yet, and the
+ * message names the release that changes that rather than leaving a dead end.
+ */
+function missingEndpoint(index: EntityIndex, ref: EntityRef, untrustedOrigin: boolean): string {
+  const base = `entity not found: ${JSON.stringify(ref.query)}`;
+  if (untrustedOrigin) return base;
+  const quarantined = resolveQuarantined(index, ref);
+  if (quarantined === null) return base;
+  return (
+    `${base} - ${quarantined.id} holds that name in quarantine, where an untrusted source ` +
+    "introduced it. Release it (entity archive --restore) to relate it."
+  );
 }
 
 export function relateEntities(vault: string, input: RelateEntitiesInput): BrainEntity {
@@ -402,13 +487,16 @@ export function relateEntities(vault: string, input: RelateEntitiesInput): Brain
     );
   }
   const index = buildEntityIndex(vault);
-  // Identity holders, not canonical lookups: an intake that just created two
-  // quarantined entities must be able to link them, and the edge stays
-  // inside the quarantine because both endpoints are unreadable.
-  const from = resolveIdentityHolder(index, input.from);
-  if (from === null) throw new Error(`entity not found: ${JSON.stringify(input.from)}`);
-  const to = resolveIdentityHolder(index, input.to);
-  if (to === null) throw new Error(`entity not found: ${JSON.stringify(input.to)}`);
+  // Both endpoints resolve in the edge's own lane: an intake that just
+  // quarantined two entities must be able to link them, and the edge stays
+  // inside the quarantine because both endpoints are unreadable - while an
+  // untrusted edge can never attach itself to the operator's record of the
+  // same name.
+  const untrusted = input.untrustedOrigin === true;
+  const from = resolveWriteTarget(index, input.from, untrusted);
+  if (from === null) throw new Error(missingEndpoint(index, input.from, untrusted));
+  const to = resolveWriteTarget(index, input.to, untrusted);
+  if (to === null) throw new Error(missingEndpoint(index, input.to, untrusted));
   if (from.id === to.id) throw new Error("an entity cannot relate to itself");
 
   const [meta, body] = parseFrontmatter(from.path);
@@ -479,6 +567,29 @@ export function archiveEntity(
 
   const nextStatus = opts.restore ? BRAIN_ENTITY_STATUS.active : BRAIN_ENTITY_STATUS.archived;
   if (target.status === nextStatus) return target;
+
+  if (opts.restore) {
+    // Release is where the two write lanes meet again, and a trusted record
+    // may have taken this name while the quarantined one was out of scope
+    // (that is exactly what a trusted write does with a quarantined
+    // namesake). Promoting into that collision would put two active records
+    // on one identity key - a duplicate the index reports and no read can
+    // resolve deterministically. Which of the two survives is a judgement
+    // about the material, so it goes back to the operator with both ids.
+    const key = entityIdentityKey(target.category, target.name);
+    const holder = index.entities.find(
+      (e) =>
+        e.id !== target.id &&
+        entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
+        entityIdentityKey(e.category, e.name) === key,
+    );
+    if (holder) {
+      throw new Error(
+        `cannot restore ${target.id}: ${holder.id} already holds '${target.name}' ` +
+          `(${target.category}). Archive or rename ${holder.id} first, or merge the two.`,
+      );
+    }
+  }
 
   const [meta, body] = parseFrontmatter(target.path);
   const stamp = isoSecond(opts.now);

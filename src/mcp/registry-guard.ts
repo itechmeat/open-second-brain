@@ -84,7 +84,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_apply_evidence: "write; returns a small fixed-shape ack",
   brain_note: "write; returns a small fixed-shape ack",
   brain_observed_use: "write; returns a small fixed-shape ack (records/aggregates count)",
-  brain_create_note: "write; returns the created note path and a created flag",
+  brain_create_note:
+    "write; returns the created note path, a created flag, and the outcome discriminant",
   brain_update_note: "write; returns the updated note path and an updated flag",
   brain_append_note: "write; returns the appended note path and an appended flag",
   brain_write_batch: "write; returns a bounded per-operation result list and an applied count",
@@ -92,7 +93,6 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_recall_feedback: "write; returns one event receipt plus bounded weights",
   brain_switch_vault: "write; returns a small profile ack",
   brain_write_session: "lifecycle ops return one fixed-shape envelope; prompts are kernel-bounded",
-  schema_apply_mutations: "write; returns a bounded mutation receipt",
   brain_intake_entities: "write; returns created/updated id lists and a relation count",
   brain_ingest_source: "write; returns the summary path plus bounded id lists",
   brain_distill_source: "write; returns the distillation path plus a claim count and source hash",
@@ -100,6 +100,12 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_derive_fact: "write; returns one derived preference id, its level and premises",
   brain_memory_bridge:
     "write; returns a small fixed-shape receipt (recorded flag, kind, count, ids)",
+
+  // Bounded by the operator-curated schema block, not by a receipt. Under
+  // `dry_run: true` this tool is not a write at all and returns no receipt:
+  // it returns the entire resulting pack plus a leaf-level diff.
+  schema_apply_mutations:
+    "returns the whole resulting schema pack - plus a leaf diff under dry_run, which writes nothing; bounded by the size of the schema block in Brain/_brain.yaml, which the operator curates",
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",

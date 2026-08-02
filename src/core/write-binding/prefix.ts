@@ -14,12 +14,26 @@
  * make the initialisation order of both undefined.
  */
 
-/** Path separator the binding compares on. Declarations are POSIX. */
+/**
+ * The ONE separator this grammar knows. Declarations are POSIX, and so
+ * is every path the matcher is handed: `inspectPath` returns its
+ * segments joined with `/` on both platforms (on Windows it converts the
+ * native separator first, on POSIX there is nothing to convert).
+ *
+ * A backslash is DELIBERATELY not a separator here. On POSIX it is an
+ * ordinary filename character, so splitting on it made the matcher read
+ * structure into a name: a binding on `Projects` admitted the literal
+ * one-segment filename `Projects\evil.md`, which lands at the vault
+ * ROOT. The caller-named write envelope
+ * (`brain/notes/create-note.ts`, `assertHostPathSeparators`) refuses a
+ * backslash-bearing path outright rather than reinterpreting it, so the
+ * matcher never has to guess which reading the caller meant.
+ */
 const POSIX_SEP = "/";
 
 /**
- * Canonical form of one declared prefix: POSIX separators, no `./`
- * segments, no repeated or trailing slashes.
+ * Canonical form of one declared prefix: no `./` segments, no repeated
+ * or trailing slashes.
  *
  * Returns the empty string for a declaration that carries no segments at
  * all (`.`, `/`, `///`). That is not a usable prefix — it would admit
@@ -28,7 +42,7 @@ const POSIX_SEP = "/";
  */
 export function normaliseWriteBindingPrefix(raw: string): string {
   const segments: string[] = [];
-  for (const segment of raw.split(/[\\/]/)) {
+  for (const segment of raw.split(POSIX_SEP)) {
     if (segment === "" || segment === ".") continue;
     segments.push(segment);
   }

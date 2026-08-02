@@ -51,43 +51,6 @@ export type ContinuityRecordKind =
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 
-/**
- * Visibility scopes a CALLER may declare on a continuity record
- * (provenance-at-the-boundary, unit G / t_77efc212).
- *
- * Distinct in kind from the record's `private` flag, which is INFERRED:
- * `safeContinuityPayload` sets it when it finds a `<private>` region in
- * the payload. A scope is never derived from content - there is no
- * `<shared>` marker and there must not be one, because a second inference
- * is the defect this field exists to avoid. A record either carries a
- * declaration its author made, or it carries none.
- *
- * Absent is the whole of today's behaviour: an append with no scope
- * produces the pre-existing record, field for field, and every filter
- * that does not ask for a scope keeps returning it.
- *
- * The vocabulary is CLOSED on the write side - `assertDeclaredScope`
- * refuses an unknown token at the store boundary - and deliberately OPEN
- * on the read side, where an unrecognised token stays readable and stays
- * excluded from any filter that did not request it. That asymmetry is the
- * read-model's additive-evolution rule: a scope written by a newer version
- * is neither leaked to an older reader nor discarded as malformed.
- */
-export const CONTINUITY_RECORD_SCOPE = {
-  /** Readable by any consumer that asks for shared records by name. */
-  shared: "shared",
-} as const;
-
-export type ContinuityRecordScope =
-  (typeof CONTINUITY_RECORD_SCOPE)[keyof typeof CONTINUITY_RECORD_SCOPE];
-
-const CONTINUITY_RECORD_SCOPE_VALUES: ReadonlyArray<string> =
-  Object.values(CONTINUITY_RECORD_SCOPE);
-
-export function isContinuityRecordScope(value: unknown): value is ContinuityRecordScope {
-  return typeof value === "string" && CONTINUITY_RECORD_SCOPE_VALUES.includes(value);
-}
-
 export interface ContinuitySourceRef {
   readonly id: string;
   readonly path?: string;
@@ -110,12 +73,6 @@ export interface ContinuityRecord {
   readonly payload: ContinuityPayload;
   readonly private: boolean;
   readonly redacted: boolean;
-  /**
-   * Scope the record's author declared, absent when none was declared.
-   * Written LAST in the envelope so the serialized prefix of an unscoped
-   * record is unchanged from before the field existed.
-   */
-  readonly scope?: ContinuityRecordScope;
 }
 
 export interface AppendContinuityRecordInput {
@@ -123,11 +80,6 @@ export interface AppendContinuityRecordInput {
   readonly createdAt: string;
   readonly sourceRefs?: ReadonlyArray<ContinuitySourceRef>;
   readonly payload?: ContinuityPayload;
-  /**
-   * Optional caller declaration - see {@link CONTINUITY_RECORD_SCOPE}.
-   * Omitted (or explicitly `undefined`) is byte-identical to today.
-   */
-  readonly scope?: ContinuityRecordScope;
 }
 
 export interface ContinuityRecordFilter {

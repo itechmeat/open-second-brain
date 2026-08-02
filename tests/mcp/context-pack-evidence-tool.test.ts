@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -9,6 +9,7 @@ import {
   CONTEXT_PACK_EVIDENCE_VERDICT,
   listContextPackEvidence,
 } from "../../src/core/brain/context-pack-evidence.ts";
+import { continuityLogPath } from "../../src/core/brain/continuity/store.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 
 let tmp: string;
@@ -18,6 +19,49 @@ let configPath: string;
 const savedEnv: Record<string, string | undefined> = {};
 
 const PACKED_TEXT = "preference one\npreference two\n";
+
+/** The opaque sample id the claimless byte-identity fixture posts on. */
+const CLAIMLESS_SAMPLE_ID = "opaque_hash";
+
+/** Length of the `YYYY-MM` month key a continuity shard is named for. */
+const MONTH_KEY_LENGTH = 7;
+
+/**
+ * The serialized `payload` of a claimless `post`, exactly as it stood
+ * before `evidence_claim` existed. `JSON.stringify` emits insertion
+ * order, so this literal pins the key ORDER as well as the values -
+ * sorting the keys before comparing, which is what this test used to do,
+ * destroys precisely the property "byte-identical" names.
+ */
+const GOLDEN_CLAIMLESS_PAYLOAD = '{"sample_id":"opaque_hash","first_pass_success":true}';
+
+/** Payload key order of the pre-claim outcome row, in emission order. */
+const GOLDEN_CLAIMLESS_PAYLOAD_KEYS: ReadonlyArray<string> = Object.freeze([
+  "sample_id",
+  "first_pass_success",
+]);
+
+/**
+ * The whole JSONL record line a claimless `post` writes. `id` and
+ * `createdAt` are the only fields a run cannot fix - the id is a content
+ * hash over a wall-clock timestamp - so they are interpolated from the
+ * record under test and everything else, envelope key order included, is
+ * pinned as a literal.
+ */
+function goldenOutcomeLine(id: string, createdAt: string): string {
+  return (
+    `{"schema":"o2b.continuity.v1","id":"${id}","kind":"context_pack_outcome",` +
+    `"createdAt":"${createdAt}","sourceRefs":[],"payload":${GOLDEN_CLAIMLESS_PAYLOAD},` +
+    `"private":false,"redacted":false}`
+  );
+}
+
+/** Raw lines of the month shard a record with this timestamp lands in. */
+function shardLines(createdAt: string): ReadonlyArray<string> {
+  return readFileSync(continuityLogPath(vault, createdAt.slice(0, MONTH_KEY_LENGTH)), "utf8")
+    .split("\n")
+    .filter((line) => line.trim().length > 0);
+}
 
 function writeConfig(enabled: boolean): void {
   atomicWriteFileSync(
@@ -190,12 +234,24 @@ describe("brain_context_pack_outcome evidence half", () => {
     await initialize(server);
     const out = await callTool(server, "brain_context_pack_outcome", {
       operation: "post",
-      sample_id: "opaque_hash",
+      sample_id: CLAIMLESS_SAMPLE_ID,
       first_pass_success: true,
     });
     const list = await callTool(server, "brain_context_pack_outcome", { operation: "list" });
-    const rows = list["records"] as ReadonlyArray<{ payload: Record<string, unknown> }>;
-    expect(Object.keys(rows[0]!.payload).toSorted()).toEqual(["first_pass_success", "sample_id"]);
+    const rows = list["records"] as ReadonlyArray<{ id: string; createdAt: string }>;
+    const row = rows[0]!;
+    expect(row.id).toBe(out["id"] as string);
+
+    // The record as it actually sits on disk. Key order has to be read
+    // off the shard rather than off the MCP envelope, which re-serializes
+    // with sorted keys - and sorting before comparing, which this test
+    // used to do, destroys exactly the property "byte-identical" names.
+    const line = shardLines(row.createdAt).find((entry) => entry.includes(`"id":"${row.id}"`));
+    expect(line).toBe(goldenOutcomeLine(row.id, row.createdAt));
+    const written = JSON.parse(line!) as { payload: Record<string, unknown> };
+    expect(Object.keys(written.payload)).toEqual([...GOLDEN_CLAIMLESS_PAYLOAD_KEYS]);
+    expect(JSON.stringify(written.payload)).toBe(GOLDEN_CLAIMLESS_PAYLOAD);
+
     // the evidence row records that the sample has nothing behind it
     const evidence = out["evidence"] as Record<string, unknown>;
     expect(evidence["verdict"]).toBe(CONTEXT_PACK_EVIDENCE_VERDICT.unresolved);

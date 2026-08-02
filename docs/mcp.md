@@ -53,7 +53,7 @@ flags for a narrower per-process full server.
 | `brain_route_metrics`       | List or summarise opt-in route-level MCP tool latency (`mcp_route_latency` records); `summary` rolls each tool up into count, error count, and min/avg/max + p50/p95/p99 latency, slowest-first. Emitted only when `mcp_route_metrics_enabled` is on; payload-safe (tool, scope, status, duration, arg key names). Read-only. | `operation`                                    |
 | `brain_retrieval_plan`      | Shadow-only retrieval advisor for one `question`: composes query intent/weights, the summary-surface route, the context-pack density allocation, the token-impact ledger, and observed route p95 latency into a strategy, token-budget allocation, graph-expansion advice, reliability, and a marginal-value stop. Optional `token_budget`. Read-only; exposes no mutating parameters and changes no ranking. | `question`                                     |
 | `brain_token_impact`        | Durable value-of-memory ledger: `record` posts a context pack's tokenizer-exact prompt-token delta (`baseline` − `packed`, `method` exact/fallback) plus an optional modeled inference-avoidance estimate; `outcome` posts first-pass/repair/retry to calibrate the model; `summary` keeps EXACT prompt-token savings strictly separate from the MODELED (outcome-calibrated) figure; `list` reads raw samples. Writes gated on `token_impact_ledger_enabled` (default off); payload-safe (counts + opaque pack id only). Reads ignore the gate. | `operation`                                    |
-| `brain_context_pack_outcome`| Agent-operable outcome loop over the context-pack quality ledger: `post` records one compact outcome row for a carried context-pack quality-sample id — first-pass/repair/retry counters plus three STRICTLY SEPARATE token signals (`exact_prompt_token_savings`, `modeled_inference_avoidance`, `observed_provider_tokens`) — and composes the token-impact ledger by posting a matching first-pass/repair/retry calibration outcome; `list`/`summary` read the rows keeping the signals separate. Writes gated on `context_pack_outcome_enabled` (default off); payload-safe (counters + opaque sample id only), a field the caller omits is never invented. Reads ignore the gate. | `operation`                                    |
+| `brain_context_pack_outcome`| Agent-operable outcome loop over the context-pack quality ledger: `post` records one compact outcome row for a carried context-pack quality-sample id — first-pass/repair/retry counters plus three STRICTLY SEPARATE token signals (`exact_prompt_token_savings`, `modeled_inference_avoidance`, `observed_provider_tokens`) — and composes the token-impact ledger by posting a matching first-pass/repair/retry calibration outcome; `list`/`summary` read the rows keeping the signals separate. Writes gated on `context_pack_outcome_enabled` (default off); payload-safe (counters + opaque sample id only), a field the caller omits is never invented. An optional `agent_id` names the ACTING agent and is recorded on every row the post lands; it is a tool ARGUMENT rather than the server's own config identity, so a config the server cannot read can never fail a telemetry post, and omitting it records no actor rather than a guessed one. Reads ignore the gate. | `operation`                                    |
 | `brain_knowledge_gaps`      | Aggregate the persisted cross-query demand log into recurring queries the vault answers poorly, ranked by frequency × (1 − IDF-weighted coverage). Read-only; the log is written only by opt-in recall telemetry.                              | —                                              |
 | `brain_generation_reports`  | Inbound, opt-in LLM generation tracing: `record` posts a generation's usage for a handoff (gated, default off; stores prompt hash + token counts only); `list`/`summary` read records and join them to memory paths. Kernel never calls an LLM. | `action`                                       |
 | `brain_obligation`          | Recurring obligations under `Brain/obligations/` with a deterministic cadence-driven next-due date: `add`, `done` (advances next_due by one cadence interval), `list` (optionally overdue-only), `show`, `remove`. Cadences: daily/weekly/biweekly/monthly/quarterly/yearly/every-<N>-days. | `operation`                                    |
@@ -66,13 +66,13 @@ flags for a narrower per-process full server.
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
-| `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and — by default — clobbering. Opt-in: `if_exists: "skip"` returns `outcome: "skipped"` instead of creating, `strict` validates the document before writing and reports coded violations, and `template` + `template_variables` render the body through a closed two-construct grammar (`{{name}}` substitution; `{{#name}}…{{/name}}` presence sections and list iteration with `{{.}}`). Unknown placeholders are left intact. | `path`                                         |
+| `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, any destination outside the declared write binding, and — by default — clobbering. Opt-in: `if_exists: "skip"` returns `outcome: "skipped"` instead of creating, `strict` validates the document before writing and reports coded violations, and `template` + `template_variables` render the body through a closed two-construct grammar (`{{name}}` substitution; `{{#name}}…{{/name}}` presence sections and list iteration with `{{.}}`). Unknown placeholders are left intact. | `path`                                         |
 | `brain_file_context`        | Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with path-derived terms. Size gate skips trivial files. Read-only; no LLM. | `file_path`                                    |
 | `brain_session_summary`     | Session-scoped structured digest over request/decisions/learnings/next_steps: `write` stores agent-extracted categories, `get` returns a session's latest digest, `list` returns all. Append-only, deduped; an all-empty digest is rejected. | `operation`                                    |
 | `brain_idea_lineage`        | Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A `ctn_` id walks the sourceRefs graph; a `pref-`/`ret-` id adapts belief-evolution. Cycle-guarded, depth-bounded; unknown id errors. | `id`                                           |
 | `brain_note_history`        | Decompose a note's git history into recallable episodic phases split on a deterministic commit-time gap (default 72h, language-agnostic). Each phase carries subjects/dates/authors. Missing repo → `available: false`; no commits → zero phases. Read-only. | `path`                                         |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
-| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`. `dry_run: true` previews instead: the pack that would result plus its leaf-level `diff`, no config write, no audit record, same validator rejections. | `mutations` (`dry_run` to preview)             |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`. `dry_run: true` previews instead: the pack that would result plus its leaf-level `diff`, no config write, no audit record. The preview runs the same pack validator the apply runs, so a batch that validator rejects raises identically in both. It does NOT cover the two checks that exist only because the apply writes: the vault-identity write guard, and the atomic writer's re-parse of the rendered YAML. A batch that renders to unparseable YAML therefore previews clean and fails on apply. | `mutations` (`dry_run` to preview)             |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
 
@@ -320,13 +320,28 @@ Three properties of that surface come from the offer chain (v1.43.0):
   records which offer the fetch came from, and `o2b brain import-session`
   stamps it onto the `skill_invoked` continuity record, where
   `joinSkillInvocationsToOffers` joins the invocation back to its offer.
-  A malformed id is refused rather than dropped; a call citing no offer is
-  stamped exactly as before and reads as unattributed, never as belonging
+  A malformed id is refused rather than dropped AT `get_skill`, which can
+  answer its caller: `isSkillOfferId` rejects it with `INVALID_PARAMS`. The
+  import boundary cannot refuse anyone - the session log is historical and
+  its author is gone - so `readSkillOfferId` reports a non-conforming value
+  the same as absence, and a host-native skill call carrying a junk id is
+  stamped with no offer and reads as unattributed. The two surfaces answer
+  the same malformed value differently, on purpose, and only one of them
+  can tell anybody. A call citing no offer is stamped exactly as before and
+  reads as unattributed, never as belonging
   to a nearby offer. The id is the acting agent's claim about where an
   invocation came from: checkable (well formed, and recomputable from the
   offer), not authenticated - this system has no credentials to
   authenticate it with. The join is also retrospective, because an
   invocation is only observed when a session log is imported.
+
+The join surfaces as ONE count under two spellings, which is worth stating
+because they look like two figures: `brain_skill_proposals` with
+`operation: "usage"` returns `offerAttributedCount` per skill, and the same
+number prints as `from_offer=` on `o2b brain skill-proposals usage`. It
+counts the invocations of that skill which cited an offer, out of
+`invocationCount` total. The remainder are not unattributed by error - most
+runtimes' skill calls follow no offer at all.
 
 `skills_attach` additionally applies a discriminating-term floor: a
 candidate whose entire match rests on terms more than half the descriptor
@@ -707,3 +722,38 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   these warnings fails the plan - the repository is an input, not operator
   intent - while a malformed operator `exclude` pattern still fails the call,
   naming the pattern and the reason it would not compile.
+- Since v1.43.0 the four caller-named write tools -- `brain_create_note`,
+  `brain_update_note`, `brain_append_note`, and the note operations of
+  `brain_write_batch` -- name the write binding among their refusals. All
+  four share one envelope, so all four raise it; the tool descriptions
+  previously enumerated a refusal list it was missing from, which a caller
+  reads as complete. The binding is declared in
+  `write_binding.path_prefixes` in `Brain/_brain.yaml`; absent block, no
+  binding, and every write path is byte-identical to before the key
+  existed.
+- Since v1.43.0 a refused write reports BOTH spellings of its reason, so an
+  agent can act on the one it received. `data.code` is the surface code
+  (`write_binding`, `invalid_path`, `excluded`, `exists`, `config_invalid`,
+  ...): snake_case, the same enumeration every other refusal on the write
+  surface uses, and what a client branches on. `data.diagnostic_code` is the
+  advisory registry spelling of the same state (`write_binding` ->
+  `write-binding-refused`, `config_invalid` -> `config-invalid`), and
+  `data.next_command` is the command that registry code resolves to (`o2b
+  vault inspect <relpath>` and `o2b brain doctor` respectively). A surface
+  code with no registered advisory code carries neither key rather than a
+  null.
+- Since v1.43.0 a vault whose `Brain/_brain.yaml` exists and does not
+  validate refuses caller-named writes with `data.code: "config_invalid"`
+  naming the config by its VAULT-RELATIVE path (`Brain/_brain.yaml`) and
+  carrying `next_command`, instead of a bare fault carrying an absolute
+  host filesystem path. It stays a JSON-RPC INTERNAL_ERROR rather than
+  INVALID_PARAMS on purpose: no argument the caller could send would
+  succeed, and the operator holds the fix.
+- Since v1.43.0 a `frontmatter` key must be a key this format can read
+  back -- a letter or underscore followed by letters, digits, `_` or `-`.
+  The emitter escaped values but wrote keys raw, so a key containing a
+  newline emitted extra frontmatter lines; combined with `brain_update_note`
+  merging caller keys over existing ones and a last-wins reader, that let a
+  caller overwrite a key it never named. `template_variables` keys are
+  unaffected: they are not frontmatter keys and never become a line of a
+  file.

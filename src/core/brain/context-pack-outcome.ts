@@ -67,12 +67,19 @@ export interface ContextPackOutcomeInput {
    */
   readonly sampleId: string;
   /**
-   * Authoring agent id, clip-protected beside session_id (t_5be0654d).
-   * The sibling `token_impact*` payloads have carried this since that
-   * task; this row carried no actor field at all, and that asymmetry is
-   * what unit I of provenance-at-the-boundary closes. Self-asserted, like
-   * every identity in this system - it names the ACTING agent and is
-   * never presented as a verifier.
+   * The ACTING agent posting this outcome, clip-protected beside
+   * session_id (t_5be0654d) and spread onto all three rows this post
+   * lands. Self-asserted, like every identity in this system, and never
+   * presented as a verifier.
+   *
+   * Supplied by the CALLER, not resolved from config here. The sibling
+   * `token_impact*` payloads have declared the same field since
+   * t_5be0654d and no production caller has ever set it, so "the siblings
+   * already carry it" was never true of anything on disk; the surface that
+   * makes it true is `brain_context_pack_outcome`'s `agent_id` argument,
+   * which reaches this row, the token-impact calibration row and the
+   * evidence row from one place. Omitted records no actor - a guessed
+   * identity is worse than a missing one.
    */
   readonly agentId?: string;
   /** Whether the packed context led to a first-pass success (no repair/retry). */

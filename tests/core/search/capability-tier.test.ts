@@ -56,6 +56,29 @@ import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
 /** An endpoint nothing listens on; used where no call may be made. */
 const REFUSED_ENDPOINT = "http://127.0.0.1:9";
 
+/**
+ * Whether `sqlite-vec` loaded in THIS process, resolved once at module
+ * load. Only the `runSemanticPhase` test needs it - that arm requires a
+ * store that really holds vectors - and it is declared with `skipIf` so a
+ * missing extension is REPORTED as a skip rather than returning before
+ * its first assertion and reading as a pass.
+ */
+const VEC_LOADABLE = sqliteVecLoadable();
+
+/**
+ * Set only on a platform that genuinely cannot load `sqlite-vec`. Absent
+ * - the default, and what CI runs - an unloadable extension is a FAULT,
+ * not a platform fact, and the loadability guard below turns this file
+ * red instead of letting the fourth site's coverage disappear silently.
+ */
+const ALLOW_MISSING_VEC_ENV = "O2B_ALLOW_MISSING_SQLITE_VEC";
+
+/** Whether this environment has declared the extension optional. */
+const VEC_DECLARED_OPTIONAL = process.env[ALLOW_MISSING_VEC_ENV] !== undefined;
+
+/** How many of the five variants are blocked, and so measurable below. */
+const BLOCKED_VARIANT_COUNT = 3;
+
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
@@ -231,56 +254,65 @@ describe("the four sites agree with the resolver", () => {
     }
   });
 
-  test("runSemanticPhase degrades with the registry label for the resolved tier", async () => {
-    if (!sqliteVecLoadable()) return;
-    const server: FakeHttp = await startFakeHttp();
-    try {
-      writeMd(vault, "a.md", "# A\n\nFirst note about something.");
-      const indexed = makeConfig({
-        vault,
-        dbPath,
-        semantic: {
-          enabled: true,
-          provider: "openai-compat",
-          baseUrl: server.url,
-          model: "fake-model",
-          apiKey: "test-key",
-          dimension: 4,
-          timeoutMs: 5_000,
-        },
-      });
-      // A store that HAS vectors and HAS the extension, so the runtime
-      // guards pass and what is measured is the config-derived arm.
-      await indexVault(indexed, { embeddings: true });
-      const store = await Store.open(indexed, { mode: "read" });
+  test.skipIf(VEC_DECLARED_OPTIONAL)(
+    "the vector extension the runSemanticPhase arm depends on is loadable",
+    () => {
+      expect(VEC_LOADABLE).toBe(true);
+    },
+  );
+
+  test.skipIf(!VEC_LOADABLE)(
+    "runSemanticPhase degrades with the registry label for the resolved tier",
+    async () => {
+      const server: FakeHttp = await startFakeHttp();
       try {
-        expect(store.counts().embeddings).toBeGreaterThan(0);
-        let measured = 0;
-        for (const variant of semanticVariants(server.url)) {
-          const cfg = makeConfig({ vault, dbPath, semantic: variant.semantic });
-          const capability = resolveSemanticCapability(cfg.semantic);
-          if (!semanticCapabilityIsBlocked(capability)) continue;
-          measured++;
-          const outcome = await runSemanticPhase(store, cfg, "something", {
-            limit: 5,
-            pathPrefix: undefined,
-            explicit: false,
-          });
-          expect(`${variant.label}: ${outcome.attempted}`).toBe(`${variant.label}: false`);
-          expect(`${variant.label}: ${outcome.warnings.join("|")}`).toBe(
-            `${variant.label}: ${await semanticCapabilityLabel(capability.code)}`,
-          );
+        writeMd(vault, "a.md", "# A\n\nFirst note about something.");
+        const indexed = makeConfig({
+          vault,
+          dbPath,
+          semantic: {
+            enabled: true,
+            provider: "openai-compat",
+            baseUrl: server.url,
+            model: "fake-model",
+            apiKey: "test-key",
+            dimension: 4,
+            timeoutMs: 5_000,
+          },
+        });
+        // A store that HAS vectors and HAS the extension, so the runtime
+        // guards pass and what is measured is the config-derived arm.
+        await indexVault(indexed, { embeddings: true });
+        const store = await Store.open(indexed, { mode: "read" });
+        try {
+          expect(store.counts().embeddings).toBeGreaterThan(0);
+          let measured = 0;
+          for (const variant of semanticVariants(server.url)) {
+            const cfg = makeConfig({ vault, dbPath, semantic: variant.semantic });
+            const capability = resolveSemanticCapability(cfg.semantic);
+            if (!semanticCapabilityIsBlocked(capability)) continue;
+            measured++;
+            const outcome = await runSemanticPhase(store, cfg, "something", {
+              limit: 5,
+              pathPrefix: undefined,
+              explicit: false,
+            });
+            expect(`${variant.label}: ${outcome.attempted}`).toBe(`${variant.label}: false`);
+            expect(`${variant.label}: ${outcome.warnings.join("|")}`).toBe(
+              `${variant.label}: ${await semanticCapabilityLabel(capability.code)}`,
+            );
+          }
+          // A loop that measured nothing would report agreement over an
+          // empty set.
+          expect(measured).toBe(BLOCKED_VARIANT_COUNT);
+        } finally {
+          await store.close();
         }
-        // A loop that measured nothing would report agreement over an
-        // empty set.
-        expect(measured).toBe(3);
       } finally {
-        await store.close();
+        await server.close();
       }
-    } finally {
-      await server.close();
-    }
-  });
+    },
+  );
 });
 
 /**

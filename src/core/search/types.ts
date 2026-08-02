@@ -147,6 +147,19 @@ export interface IndexStats {
    */
   readonly frontmatterNotices: ReadonlyArray<DegradationNotice>;
   /**
+   * Indexed documents whose EVENT ANCHOR has never been resolved by an
+   * anchor-aware binary (v11) - the rows a pre-anchor index carried
+   * across the in-place schema migration.
+   *
+   * Not the same as "documents that declare no date": that verdict is
+   * recorded, this is its absence. It cannot fall to zero on its own,
+   * because both content-identity fastpaths correctly decline to
+   * recompute an anchor for content that did not change and those
+   * documents' content never changes. `o2b search event-anchor-backfill
+   * --apply` is what closes it.
+   */
+  readonly eventAnchorsPending: number;
+  /**
    * Typed edges blocked by the schema pack's `link_constraints` during
    * this run's materialization post-pass
    * (write-time-integrity-governance). Empty when no constraints are

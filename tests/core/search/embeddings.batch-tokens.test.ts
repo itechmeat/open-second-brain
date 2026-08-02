@@ -288,10 +288,67 @@ test("embedding_batch_tokens resolves from config and env overrides config", () 
   expect(resolveSearchConfig({ vault, configPath }).semantic.batchTokens).toBe(7000);
 });
 
+test("a very large embedding_batch_tokens resolves to the number the operator wrote", () => {
+  writeFileSync(configPath, `vault: "${vault}"\nembedding_batch_tokens: "${OVER_INT32_CAP}"\n`);
+  expect(resolveSearchConfig({ vault, configPath }).semantic.batchTokens).toBe(OVER_INT32_CAP);
+});
+
+test("a fractional integer field is refused at config load, whatever its source", () => {
+  // The string path already refuses it; a programmatic override must too,
+  // or the packer downstream is handed a cap it cannot step by.
+  writeFileSync(configPath, `vault: "${vault}"\nembedding_batch_tokens: "2.5"\n`);
+  expect(() => resolveSearchConfig({ vault, configPath })).toThrow(/embedding_batch_tokens/);
+  writeFileSync(configPath, `vault: "${vault}"\n`);
+  expect(() =>
+    resolveSearchConfig({ vault, configPath, overrides: { semantic: { batchTokens: 2.5 } } }),
+  ).toThrow(/embedding_batch_tokens/);
+  expect(() =>
+    resolveSearchConfig({ vault, configPath, overrides: { semantic: { batchSize: 2.5 } } }),
+  ).toThrow(/embedding_batch_size/);
+});
+
 test("embedding_batch_tokens is rejected at zero as a string, like embedding_batch_size", () => {
   for (const key of ["embedding_batch_size", "embedding_batch_tokens"]) {
     writeFileSync(configPath, `vault: "${vault}"\n${key}: "0"\n`);
     expect(() => resolveSearchConfig({ vault, configPath })).toThrow(key);
+  }
+});
+
+// ── caps beyond the 32-bit boundary ──────────────────────────────────────────
+
+/**
+ * Above 2^31-1. `Math.max(1, n | 0)` used to truncate a cap this size into a
+ * NEGATIVE int32 and then lift it to 1, so the largest budget an operator can
+ * ask for became the smallest one possible: a batch that closes after every
+ * item, i.e. one HTTP request per chunk at full concurrency.
+ */
+const OVER_INT32_CAP = 3_000_000_000;
+
+test("a token budget above the 32-bit boundary is honoured, not truncated", () => {
+  const texts = [TEXT_10_TOKENS, TEXT_10_TOKENS, TEXT_10_TOKENS, TEXT_10_TOKENS];
+  expect(chunkArrayByTokenBudget(texts, 32, OVER_INT32_CAP, (t) => t)).toEqual([texts]);
+});
+
+test("a count cap above the 32-bit boundary is honoured, not truncated", () => {
+  const texts = [TEXT_10_TOKENS, TEXT_9_TOKENS, TEXT_25_TOKENS];
+  expect(chunkArray(texts, OVER_INT32_CAP)).toEqual([texts]);
+  expect(chunkArrayByTokenBudget(texts, OVER_INT32_CAP, 10_000, (t) => t)).toEqual([texts]);
+});
+
+test("openai-compat sends one request for a budget no batch can exhaust", async () => {
+  const sent: string[][] = [];
+  server.setHandler(captureOpenAi(sent));
+  const texts = [TEXT_10_TOKENS, TEXT_10_TOKENS, TEXT_10_TOKENS, TEXT_10_TOKENS];
+  await new OpenAICompatProvider(openAiCfg({ batchTokens: OVER_INT32_CAP })).embed(texts);
+  expect(sent).toEqual([texts]);
+  expect(server.callCount()).toBe(1);
+});
+
+test("a cap that cannot be honoured is refused, never quietly reinterpreted", () => {
+  const texts = [TEXT_10_TOKENS, TEXT_10_TOKENS];
+  for (const bad of [0, -1, 2.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    expect(() => chunkArrayByTokenBudget(texts, 32, bad, (t) => t)).toThrow(/token budget/);
+    expect(() => chunkArray(texts, bad)).toThrow(/batch size/);
   }
 });
 

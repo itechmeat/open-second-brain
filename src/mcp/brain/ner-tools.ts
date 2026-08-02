@@ -17,6 +17,7 @@
 import { intakeExtraction, IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
 import { classifySourceTrust } from "../../core/brain/intake/source-trust.ts";
 import { resolveAgentName } from "../../core/config.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { wrapToolErrors } from "./shared.ts";
@@ -33,11 +34,29 @@ async function toolBrainIntakeEntities(
       ? parsed.agent
       : resolveAgentName(ctx.configPath ?? undefined);
   // Trust is derived from the source identity the caller named, through the
-  // same classifier the ingest pipeline uses. A call that names no source is
-  // an agent registering entities from note text it was already reading, so
-  // it stays trusted - and byte-identical to before this unit.
+  // same structural classifier the ingest pipeline uses.
+  //
+  // A call that names NO source is a third answer, and collapsing it into
+  // either lane is a defect in one direction or the other. Trusting it makes
+  // the omission itself the way in: an agent reading a hostile page, told by
+  // that page to leave the source out, lands its entities active and
+  // unmarked. Quarantining it punishes the caller for a question nobody
+  // asked, and quarantine is one-way - the records leave every ordinary read
+  // and only an explicit release brings them back, while the response says
+  // the write succeeded. This is the surface that can still ask, so it asks:
+  // an intake whose provenance cannot be established is refused here, with
+  // the exit named, before anything is written.
   const source = parsed.provenance?.sources[0];
-  const trust = source !== undefined ? classifySourceTrust(ctx.vault, source) : undefined;
+  if (source === undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${TOOL}: 'source' is required - name the note this extraction came from ` +
+        "(a vault wikilink, e.g. `[[Articles/primer.md]]`) or the address it was read from. " +
+        "Entities are committed under the provenance of their source, so an unnamed source " +
+        "has no provenance to commit under.",
+    );
+  }
+  const trust = classifySourceTrust(ctx.vault, source);
   // A malformed extraction is a client-resolvable input problem, not a
   // server fault - surface it as INVALID_PARAMS, never a fabricated result.
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
@@ -51,6 +70,10 @@ async function toolBrainIntakeEntities(
       entities_created: [...result.entitiesCreated],
       entities_updated: [...result.entitiesUpdated],
       relations_applied: result.relationsApplied,
+      // The lane the entities landed in. An untrusted intake quarantines what
+      // it introduces, so a caller told only which ids it created would be
+      // told nothing about whether it can read them back.
+      trust,
     };
   });
 }
@@ -59,7 +82,7 @@ export const NER_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Intake entities the agent extracted from note text into the entity registry (OSB runs no model). Supply `entities` (category, name, optional aliases/confidence), optional typed `relations` (from, relation, to), and an optional `source` wikilink cited on new pages. Validated and idempotent.",
+      "Intake entities the agent extracted from note text into the entity registry (OSB runs no model). Supply `entities` (category, name, optional aliases), the `source` they came from, and optional typed `relations`. Entities from a source outside the vault are quarantined; the response says so.",
     inputSchema: {
       type: "object",
       properties: {
@@ -109,14 +132,15 @@ export const NER_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         source: {
           type: "string",
-          description: "Optional source wikilink cited in the Sources section of new entity pages.",
+          description:
+            "Where this extraction came from: a vault wikilink (`[[Articles/x.md]]`) or the address read. Cited on new entity pages; decides their provenance.",
         },
         agent: {
           type: "string",
           description: "Optional agent identity override; defaults to the server-resolved name.",
         },
       },
-      required: ["entities"],
+      required: ["entities", "source"],
       additionalProperties: false,
     },
     handler: toolBrainIntakeEntities,

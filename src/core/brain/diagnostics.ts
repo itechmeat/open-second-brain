@@ -298,7 +298,13 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
       // key, the provider and the env var for the operator to set.
       {
         code: "semantic-capability-disabled",
-        issueClass: "semantic search disabled (search_semantic_enabled=false)",
+        // Two configurations reach this rung - `search_semantic_enabled=false`
+        // and `embedding_provider=disabled` - so the sentence names the state
+        // rather than one of its causes. It is a thrown error message on the
+        // explicit arm now, where naming the wrong key would send an operator
+        // to edit a setting that is already correct. `o2b search check` reports
+        // which of the two it is.
+        issueClass: "semantic search not configured (disabled by config or provider)",
         nextCommand: "o2b search check",
         autoRepairable: false,
       },
@@ -333,6 +339,20 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "semantic-vectors-pending",
         issueClass: "indexed chunks with no vector",
         nextCommand: "o2b search vector-backfill --apply",
+        autoRepairable: false,
+      },
+      // --- Event-anchor population (provenance-at-the-boundary) ---
+      // The same class of index fact as the vector states, for the same
+      // reason: a schema bump migrates in place and reindexes nothing,
+      // and the indexer resolves an anchor only for content that
+      // changed, so a document carried over from a pre-anchor binary
+      // never gets one. It is a distinct code because the remedy is a
+      // distinct verb, and because "no anchor resolved" must never be
+      // reported as the note declaring no date.
+      {
+        code: "event-anchors-pending",
+        issueClass: "indexed documents with no event anchor resolved",
+        nextCommand: "o2b search event-anchor-backfill --apply",
         autoRepairable: false,
       },
       {

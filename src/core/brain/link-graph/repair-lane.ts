@@ -34,6 +34,7 @@ import {
   writeFrontmatterAtomic,
 } from "../../vault.ts";
 import { listContinuityRecords } from "../continuity/store.ts";
+import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -344,9 +345,18 @@ interface CollectedPage {
   readonly linkedKeys: ReadonlySet<string>;
 }
 
+/**
+ * Every page the repair lane may reason over.
+ *
+ * The walk covers `Brain/`, so entity pages are in it. A quarantined
+ * record's title, body and links come from an untrusted source; proposing
+ * repairs that cite them would put that source's text in front of the
+ * operator as a suggestion.
+ */
 function loadPages(vault: string): CollectedPage[] {
   const out: CollectedPage[] = [];
   for (const page of listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS] })) {
+    if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     const rel = canonicalNotePath(relative(vault, page.path));
     const key = canonicalCoOccurrenceKey(rel);
     if (key === null) continue;

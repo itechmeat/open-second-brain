@@ -122,6 +122,8 @@ describe("BRAIN_* const enums", () => {
       "doctor-repair",
       // provenance-at-the-boundary unit F (t_76b89833) vector-only backfill
       "vector-backfill",
+      // provenance-at-the-boundary (t_ac1c4176) event-anchor-only backfill
+      "event-anchor-backfill",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

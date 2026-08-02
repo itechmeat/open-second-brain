@@ -46,8 +46,9 @@ Stated here rather than discovered at review, with the reason for each.
 
 - **An independent verifier (part of t_b654e25d, and stage four of t_ccb05134).**
   Agent identity in this system is a string from an environment variable, else a
-  config key, else the literal `agent`; ten MCP tool families additionally accept
-  a caller-supplied `agent` argument that overrides it, accepted verbatim. There
+  config key, else the literal `agent`; fifteen modules under `src/mcp/brain/`
+  declare twenty-two tool schemas that additionally accept a caller-supplied
+  `agent` argument overriding it, accepted verbatim. There
   is no token, key, signature or channel binding anywhere, and the MCP server is
   a child process of the agent it labels. Two records asserting two names,
   chosen by one process from one config in one session, are not two actors.
@@ -72,8 +73,13 @@ Stated here rather than discovered at review, with the reason for each.
   fence can only refuse those wholesale, which is not a fence but an off switch.
   The census records the boundary instead of pretending it is not there.
 - **Auditing the twenty continuity readers that bypass the read model (part of
-  t_77efc212).** Established as a pre-existing gap, made visible by the census in
-  unit G, and left to its own task because closing it is a judgement per reader.
+  t_77efc212).** Nineteen of them predate this wave. The twentieth is unit I's
+  own `context-pack-evidence.ts`, which calls `listContinuityRecords` on the
+  store directly and is enumerated as such in the census
+  (`tests/core/brain/continuity/reader-census.test.ts`). So this wave does not
+  only make a pre-existing gap visible through the census in unit G - it adds
+  one reader to that gap and defers the audit, because closing it is a
+  judgement per reader.
 - **Splitting an oversized embedding batch and retrying it (part of t_39ec3fef).**
   The error category is a closed five-member union with wait-or-fail semantics,
   consumed on a second surface that renders it to the operator. A sixth,
@@ -150,17 +156,21 @@ rather than hoped against.
 
 **B1. The binding's authority is the config file, never the caller's claim.**
 There are no credentials. The nearest identity is self-asserted and additionally
-overridable by a caller-supplied argument on ten tool families, so a fence keyed
+overridable by a caller-supplied argument on twenty-two tool schemas, so a fence keyed
 to it is bypassed by passing a different string. The binding is declared in the
 vault config, which the operator controls and which no MCP call can rewrite. It
 is described as a write boundary over caller-named paths, never as a security
 boundary and never as per-credential.
 
-**B2. The census is part of the deliverable, not a follow-up.** Roughly fifty
-sites write inside the vault through `node:fs` directly, bypassing every shared
+**B2. The census is part of the deliverable, not a follow-up.** Sixty-two sites
+write inside the vault through `node:fs` directly, bypassing every shared
 helper - including one that writes a complete vault note with hand-rolled
-frontmatter, and one in a command-line verb. Shipping a fence over a surface with
-fifty known holes and describing it as enforcement would be theatre. The census
+frontmatter, and one in a command-line verb. That figure is the census's, not
+this document's: `DIRECT_WRITE_EXCLUSIONS` in
+`tests/core/architecture/write-site-census.test.ts` IS the count, and its own
+docblock keeps the number out of prose precisely so a stated figure cannot drift
+away from the list. Shipping a fence over a surface with that many known holes
+and describing it as enforcement would be theatre. The census
 enumerates every in-vault write site and requires each to either pass through a
 shared writer or carry a written exclusion, in the same shape as the vault-guard
 and terminal-state censuses this repository already runs. Two writers whose
@@ -312,10 +322,16 @@ and the mirrored manifests.
   agent-triggered path.** The reconnaissance did not establish that distinction
   and it changes how much of the surface the fence must cover. The census records
   what it finds; it does not assume.
-- **Unit D bumps the schema version, which triggers an automatic reindex.** The
-  existing migration test asserts the version literal and needs a sibling. A
-  migration that strands data on disk fails no test, so the migration is checked
-  against a rewound index rather than only a fresh one.
+- **Unit D bumps the schema version, and a bump triggers NO reindex.**
+  `applyMigrations` (`src/core/search/schema.ts`) runs the pending migrations in
+  place on an existing index and raises only when the version on disk is NEWER
+  than the binary supports; nothing anywhere re-indexes on a bump. So on an
+  already-populated index the migration alone does not populate the body-derived
+  date anchor for documents it leaves untouched: the schema v11 column exists and
+  stays empty for them until those documents are re-indexed. The existing
+  migration test asserts the version literal and needs a sibling. A migration
+  that strands data on disk fails no test, so the migration is checked against a
+  rewound index rather than only a fresh one.
 - **Unit C's template grammar is the one place a mini-language could grow.** The
   two constructs are a hard boundary; anything needing a third is out of scope
   for this release.

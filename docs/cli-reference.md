@@ -58,6 +58,8 @@ o2b brain morning-brief       Read-only session-start summary (since v0.21.0): t
 o2b brain codec               Deterministic lossless session codec (since v0.22.0): --compress | --expand over stdin or --in <file>; structured content preserved byte-for-byte
 o2b brain sources             Read-only dashboard of signals by (agent, source_type) (since v0.22.0): active/processed + distinct-topic counts; --json
 o2b brain schema              Runtime schema report/admin (since v0.26.0): report|stats|lint|graph|explain|orphans|apply|sync; mutation writes are locked and audited
+o2b brain schema apply        --mutation '<json>' (repeatable) applies audited, locked mutations to Brain/_brain.yaml; --actor NAME --reason TEXT annotate the audit record
+                              --dry-run previews instead (since v1.43.0): it returns the pack that would result plus its leaf-level diff and writes nothing at all - no config write, no audit record, no lock file. Before v1.43.0 `apply` parsed the flag and mutated anyway. The preview runs the same pack validator the apply runs, but NOT the two checks that exist only because the apply writes (the vault-identity write guard, and the atomic writer's re-parse of the rendered YAML), so a batch that renders to unparseable YAML previews clean and fails on apply
 o2b brain watchdog            Probe Brain config/dirs/search index and plan safe recovery (since v0.26.0): --remediate [--dry-run], --restore <run_id> [--force-restore], --json
 o2b brain graph-export        Serialise the vault knowledge graph (pages, wikilinks, typed relations) to a stable graph.json (since v0.22.0): stdout or --out <file>
 o2b brain graph-import        Reconstruct vault page stubs from a graph.json (since v0.22.0): --mode skip|overwrite|merge; vault-guarded writes
@@ -479,6 +481,42 @@ with no `Brain/` layer is now reported as a named `brain-root-absent`
 warning instead of `clean`, which means `o2b brain doctor --strict`
 exits 2 on an un-initialized vault where it previously exited 0.
 
+### Write binding (since v1.43.0)
+
+An optional `write_binding:` block in `Brain/_brain.yaml` declares where a
+CALLER-NAMED write may land:
+
+```yaml
+write_binding:
+  path_prefixes:
+    - Projects
+    - Journal/Weekly
+```
+
+It covers the four tools that take a vault-relative path from the caller -
+`brain_create_note`, `brain_update_note`, `brain_append_note` and
+`brain_write_batch` - because all four resolve that path through one shared
+envelope. Slug-derived writes (a signal, a preference, a dead end) and fully
+derived ones (daily logs, dream runs, continuity records, every telemetry
+surface) compute their own destination and are out of scope: a prefix rule
+could only refuse those wholesale, which is an off switch rather than a
+boundary. `tests/core/architecture/write-site-census.test.ts` is the standing
+record of every in-vault write site the binding does not cover.
+
+The check reads no identity at all. Agent names here are self-asserted and
+additionally overridable per call, so a fence keyed to one is bypassed by
+passing a different string; the binding's whole authority is `_brain.yaml`,
+which the operator controls and which no MCP call can rewrite. It is a write
+boundary over caller-named paths, never a security boundary and never
+per-credential.
+
+Both the name and the realpath must be admitted, so a symlinked directory
+under a declared prefix cannot widen it. A refusal names the path the caller
+gave, where that name actually resolves when the two differ (or `a location
+outside the vault`), the prefixes in force, and the registered exit for
+`write-binding-refused`. An absent block, or a block without `path_prefixes`,
+is inert: every write path behaves byte-identically to before the key existed.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
@@ -562,6 +600,17 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
 o2b search index              Incrementally update the index; --embeddings computes vectors
                               --force-cost bypasses the embedding cost gate (since v0.36.0)
+o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that have no vector -
+                              no vault walk, no re-chunking, no frontmatter pass (since v1.43.0).
+                              Dry-run by DEFAULT: it counts the pending chunks, reports the
+                              configured semantic capability tier, and contacts no provider.
+                              --apply is the only path that reaches a provider or writes a vector
+                              --force-cost bypasses the embedding cost gate for that run
+                              --json emits dry_run, capability_tier, capability_code, chunks_total,
+                              pending, embedded, retries, plus estimated_cost_usd only when the
+                              model's price is known - a missing price is an absent key, never 0
+                              Idempotent; an --apply run that wrote vectors appends one
+                              vector-backfill Brain log event
 o2b search status             Index status; since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
 o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
@@ -582,7 +631,16 @@ built-in `openai-compat`, the offline `local` feature-hashing embedder
 (no cloud, no key, no model download; `embedding_dimension` default 256),
 `disabled`, or any name registered via `o2b search provider add`.
 `embedding_cost_gate_usd` (default 0 = off) refuses an embedding run whose
-estimated spend exceeds it unless `--force-cost`. `search_fusion_mode`
+estimated spend exceeds it unless `--force-cost`.
+`embedding_batch_tokens` (`OPEN_SECOND_BRAIN_EMBEDDING_BATCH_TOKENS`, since
+v1.43.0) adds a per-request token budget beside `embedding_batch_size`: a
+batch closes on whichever cap fills first, so a run of long chunks cannot
+assemble a request past a provider's per-request token ceiling. The estimate
+is the same one the cost gate uses, applied to the text as it will be sent
+(instruction prefix included). With the key unset the field is absent and
+batching is byte-identical to the fixed `embedding_batch_size` stride; a
+single text whose own estimate exceeds the budget is sent alone rather than
+dropped or split. `search_fusion_mode`
 (default `linear`) may be set to `rrf` to fuse the keyword and semantic
 lanes by reciprocal rank (`search_rrf_k`, default 60); `linear` keeps
 ranking bit-identical.

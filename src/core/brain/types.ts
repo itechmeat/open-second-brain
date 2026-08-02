@@ -434,6 +434,17 @@ export const BRAIN_LOG_EVENT_KIND = {
    * records only runs that actually populated vectors.
    */
   vectorBackfill: "vector-backfill",
+  /**
+   * `event-anchor-backfill` (provenance-at-the-boundary) - the operator
+   * ran `o2b search event-anchor-backfill --apply` and event anchors were
+   * resolved for indexed documents that a pre-anchor binary had left with
+   * none. Payload carries the number `examined`, how many of those turned
+   * out to be `anchored`, the number `pending` when the run started, the
+   * `documents_total` in the index, and the `agent`. A dry run and an
+   * apply that finds nothing pending emit nothing, so the merged timeline
+   * records only runs that actually examined documents.
+   */
+  eventAnchorBackfill: "event-anchor-backfill",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

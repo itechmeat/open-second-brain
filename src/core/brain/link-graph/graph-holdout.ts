@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import { ensureInsideVault } from "../../path-safety.ts";
 import { EXCLUDED_DIRS, extractWikilinks, listVaultPages, parseFrontmatter } from "../../vault.ts";
+import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey } from "./co-occurrence.ts";
 
 /** Upper bound on the evidence hydrated from a target note. */
@@ -66,10 +67,18 @@ export interface HoldoutGateResult {
   readonly resolutions: readonly HoldoutResolution[];
 }
 
-/** Canonical-key adjacency over the vault's resolved wikilink structure. */
+/**
+ * Canonical-key adjacency over the vault's resolved wikilink structure.
+ *
+ * The walk covers `Brain/`, so entity pages are in it. A quarantined
+ * record's links were authored by the untrusted source that put it aside,
+ * and admitting them would let that source shape the graph this lane
+ * measures recall over.
+ */
 function buildKeyAdjacency(vault: string): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();
   for (const page of listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS] })) {
+    if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     const sourceKey = canonicalCoOccurrenceKey(page.path);
     if (sourceKey === null) continue;
     let body = "";

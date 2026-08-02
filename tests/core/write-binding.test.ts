@@ -7,16 +7,21 @@
  *
  *   1. ABSENT IS INERT. No `write_binding:` block - and a block that
  *      declares no `path_prefixes` - leaves every write path exactly as
- *      it was. Proved by running the same three caller-named writes
- *      against a vault with no config at all and against a vault whose
- *      config omits the block, and comparing the bytes.
+ *      it was. Proved by running the three caller-named writes against a
+ *      vault with no config at all and against a vault whose config
+ *      omits the block, and comparing both against the PRE-FEATURE bytes
+ *      in {@link GOLDEN_ABSENT_BINDING_BYTES}. The two runs are also
+ *      compared to each other, but that comparison is the weaker of the
+ *      two: both are the same inert path, so a change to the shared write
+ *      envelope shows up in both and only the golden catches it.
  *   2. DECLARED REFUSES OUTSIDE, ADMITS INSIDE, on all four caller-named
  *      surfaces (`createNote`, and the update / append / batch arms that
  *      share its envelope).
  *   3. THE AUTHORITY IS THE CONFIG FILE, NOT THE CALLER'S CLAIM. This
  *      system has no credential: agent identity is an environment
- *      variable, else a config key, else the literal `agent`, and ten
- *      MCP tool families accept a caller-supplied `agent` string that
+ *      variable, else a config key, else the literal `agent`, and
+ *      twenty-two MCP tool schemas across fifteen modules accept a
+ *      caller-supplied `agent` string that
  *      overrides it verbatim. A fence keyed to that would be bypassed by
  *      passing a different string, so the binding never reads it - and
  *      that is asserted here by passing a different one and by moving
@@ -24,15 +29,25 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
   WRITE_BINDING_REFUSED_CODE,
   checkWriteBinding,
+  normaliseWriteBindingPrefix,
   resolveWriteBinding,
   writeBindingAdmits,
+  writeBindingPrefixCovers,
 } from "../../src/core/write-binding/index.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { CreateNoteError, createNote } from "../../src/core/brain/notes/create-note.ts";
@@ -48,6 +63,25 @@ const OUTSIDE_PATH = "Elsewhere/Note.md";
 const INSIDE_PATH = "Projects/Note.md";
 /** The single prefix the declared-binding fixtures use. */
 const PREFIX = "Projects";
+
+/**
+ * The exact bytes the three caller-named write arms left behind BEFORE
+ * this unit existed, captured by running the same sequence against the
+ * store as it stood at HEAD~ of the binding.
+ *
+ * Pinned as literals on purpose. Comparing one absent-binding run against
+ * another absent-binding run - which is what "no config file" versus "a
+ * config without the block" are, both of them the same inert path - can
+ * only show the two agree; a change to the shared write envelope every
+ * caller-named write funnels through moves BOTH arms identically and the
+ * comparison stays green. Only a fixed pre-feature reference can see it.
+ */
+const GOLDEN_ABSENT_BINDING_BYTES: Readonly<Record<string, string>> = Object.freeze({
+  /** `createNote`, then the batch `update_note` and `append_note` arms. */
+  outside: "---\ntitle: T\ntag: x\n---\n\nbody\n\nmore\n",
+  /** The batch `create_note` arm. */
+  inside: "---\n---\n\ninside\n",
+});
 
 const AGENT_ENV = "VAULT_AGENT_NAME";
 
@@ -118,11 +152,19 @@ describe("absent binding is byte-identical on every caller-named write path", ()
     };
   }
 
-  test("no config file and a config without the block produce the same bytes", () => {
+  test("a vault with no config at all writes the pre-feature bytes", () => {
+    expect(runAllWritePaths(vault)).toEqual({ ...GOLDEN_ABSENT_BINDING_BYTES });
+  });
+
+  test("a config without the block writes the same pre-feature bytes", () => {
     const withConfig = mkdtempSync(join(tmpdir(), "o2b-write-binding-cfg-"));
     try {
       writeBrainConfig(withConfig, "schema_version: 1\n");
-      expect(runAllWritePaths(withConfig)).toEqual(runAllWritePaths(vault));
+      const written = runAllWritePaths(withConfig);
+      expect(written).toEqual({ ...GOLDEN_ABSENT_BINDING_BYTES });
+      // And the two inert arms still agree with each other, which is the
+      // property the golden alone does not state.
+      expect(written).toEqual(runAllWritePaths(vault));
     } finally {
       rmSync(withConfig, { recursive: true, force: true });
     }
@@ -309,5 +351,125 @@ describe("prefix declarations are validated at load", () => {
   test("a declared prefix normalises to its POSIX vault-relative form", () => {
     writeBrainConfig(vault, declaredBindingYaml("./Projects/"));
     expect(resolveWriteBinding(vault)?.pathPrefixes).toEqual(["Projects"]);
+  });
+});
+
+describe("the binding is checked against where the bytes land, not the name given", () => {
+  // Defect 1 of the v1.43.0 security review. `checkWriteBinding` used to
+  // compare the LEXICAL relative path, so one symlink under a declared
+  // prefix turned the binding into "may write anywhere in the vault" and
+  // the success payload named a path that did not hold the bytes.
+  const LINK_PATH = "Projects/link/escaped.md";
+
+  /** `<vault>/Projects/link` -> `<vault>/Journal`, both inside the vault. */
+  function linkProjectsToJournal(root: string): void {
+    mkdirSync(join(root, "Projects"), { recursive: true });
+    mkdirSync(join(root, "Journal"), { recursive: true });
+    symlinkSync(join(root, "Journal"), join(root, "Projects", "link"));
+  }
+
+  test("a symlinked directory under a declared prefix does not widen it", () => {
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    linkProjectsToJournal(vault);
+    let caught: CreateNoteError | null = null;
+    try {
+      createNote(vault, { path: LINK_PATH, content: "x" });
+    } catch (err) {
+      caught = err as CreateNoteError;
+    }
+    expect(caught?.code).toBe("write_binding");
+    expect(readdirSync(join(vault, "Journal"))).toEqual([]);
+  });
+
+  test("the refusal names the destination the bytes would have reached", () => {
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    linkProjectsToJournal(vault);
+    const refusal = checkWriteBinding(vault, LINK_PATH);
+    expect(refusal).not.toBeNull();
+    expect(refusal!.resolvedRelPath).toBe("Journal/escaped.md");
+    expect(refusal!.message).toContain("Journal/escaped.md");
+    expect(refusal!.message).toContain(LINK_PATH);
+  });
+
+  test("a symlink that stays inside the declared prefix is still admitted", () => {
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    mkdirSync(join(vault, "Projects", "real"), { recursive: true });
+    symlinkSync(join(vault, "Projects", "real"), join(vault, "Projects", "alias"));
+    expect(checkWriteBinding(vault, "Projects/alias/Note.md")).toBeNull();
+  });
+
+  test("with no binding declared the same symlink write is untouched", () => {
+    // Absent stays byte-identical: the realpath comparison is reached
+    // only once a binding exists, so an unbound vault behaves exactly as
+    // it did before the key existed.
+    linkProjectsToJournal(vault);
+    const res = createNote(vault, { path: LINK_PATH, content: "x" });
+    expect(res.path).toBe(LINK_PATH);
+    expect(readdirSync(join(vault, "Journal"))).toEqual(["escaped.md"]);
+  });
+});
+
+describe("a backslash is a filename character on POSIX, not a separator", () => {
+  // Defect 2 of the v1.43.0 security review. The matcher split on
+  // `[\\/]`, so a binding on `Projects` admitted `Projects\evil.md` -
+  // which on Linux is one filename that lands at the VAULT ROOT.
+  test("the matcher does not read a backslash as a segment boundary", () => {
+    expect(writeBindingPrefixCovers(PREFIX, "Projects\\evil.md")).toBe(false);
+    expect(writeBindingPrefixCovers(PREFIX, "Projects/evil.md")).toBe(true);
+  });
+
+  test("a declared prefix keeps its POSIX segments", () => {
+    expect(normaliseWriteBindingPrefix("./Projects//Sub/")).toBe("Projects/Sub");
+  });
+});
+
+describe("a config that does not load is a typed refusal, not a server fault", () => {
+  // Defect 3 of the v1.43.0 security review. A `_brain.yaml` that fails
+  // validation made every caller-named write throw a raw BrainConfigError
+  // carrying an ABSOLUTE host path, with no registered next step.
+  const MALFORMED = "schema_version: 99\n";
+
+  test("createNote refuses with a typed code, a vault-relative source, and a registered exit", () => {
+    writeBrainConfig(vault, MALFORMED);
+    let caught: CreateNoteError | null = null;
+    try {
+      createNote(vault, { path: INSIDE_PATH, content: "x" });
+    } catch (err) {
+      caught = err as CreateNoteError;
+    }
+    expect(caught).toBeInstanceOf(CreateNoteError);
+    expect(caught!.code).toBe("config_invalid");
+    expect(caught!.message).toContain("Brain/_brain.yaml");
+    expect(caught!.message).not.toContain(vault);
+    const step = resolveNextStep("config-invalid");
+    expect(step).not.toBeNull();
+    expect(caught!.message).toContain(step!.nextCommand);
+  });
+
+  test("the batch arms carry the same typed code", () => {
+    writeBrainConfig(vault, MALFORMED);
+    let caught: WriteBatchError | null = null;
+    try {
+      applyWriteBatch(vault, [{ kind: "create_note", path: INSIDE_PATH, content: "x" }]);
+    } catch (err) {
+      caught = err as WriteBatchError;
+    }
+    expect(caught).toBeInstanceOf(WriteBatchError);
+    expect(caught!.code).toBe("config_invalid");
+    expect(caught!.message).not.toContain(vault);
+  });
+});
+
+describe("a re-declared binding takes effect on the next call", () => {
+  test("rewriting the prefix list changes what is admitted", () => {
+    // Guards the per-vault memo that keeps a batch from re-reading and
+    // re-validating the whole config once per operation: the cached
+    // answer must never outlive the file it was read from.
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    expect(checkWriteBinding(vault, INSIDE_PATH)).toBeNull();
+    expect(checkWriteBinding(vault, OUTSIDE_PATH)).not.toBeNull();
+    writeBrainConfig(vault, declaredBindingYaml("Elsewhere"));
+    expect(checkWriteBinding(vault, OUTSIDE_PATH)).toBeNull();
+    expect(checkWriteBinding(vault, INSIDE_PATH)).not.toBeNull();
   });
 });

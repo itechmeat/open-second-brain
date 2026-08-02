@@ -34,6 +34,7 @@ import {
   parseFrontmatter,
   writeFrontmatterAtomic,
 } from "../../vault.ts";
+import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -339,10 +340,17 @@ export function acceptBridge(
   return Object.freeze({ changed: true, related: Object.freeze(next) });
 }
 
-/** Number of vault pages sharing one basename (without `.md`). */
+/**
+ * Number of vault pages sharing one basename (without `.md`).
+ *
+ * The walk has no skip list, so it reaches `Brain/entities/` like any other
+ * subtree. A quarantined entity page must not make an operator's link
+ * target read as ambiguous, so it is not counted.
+ */
 function countBasenameMatches(vault: string, base: string): number {
   let count = 0;
   for (const page of listVaultPages(vault)) {
+    if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     if (basename(page.path, ".md") === base) count++;
   }
   return count;

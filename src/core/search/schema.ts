@@ -509,6 +509,18 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
     // Additive and reindex-safe: existing rows default to NULL on all
     // three until a reindex repopulates them, so a vault whose notes
     // declare no dates ranks byte-identically.
+    //
+    // `event_anchor_examined` is the fourth column and the one that
+    // makes the other three honest. This migration runs IN PLACE - a
+    // schema bump reindexes nothing, and the indexer resolves an anchor
+    // only below its two content-identity fastpaths, so a document
+    // carried over from v10 never has one computed: its content does not
+    // change, so it is never re-read. Without this marker that row's
+    // three NULLs are indistinguishable from a note that was examined
+    // and declares no date, and the column now gates a hard `since` /
+    // `until` filter. `0` means "no anchor-aware binary has ever looked
+    // at this document", which is what every pre-existing row is and
+    // what `o2b search event-anchor-backfill` finds.
     version: 11,
     up(db) {
       const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
@@ -520,6 +532,11 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       }
       if (!docCols.some((c) => c.name === "event_anchor_source")) {
         db.exec("ALTER TABLE documents ADD COLUMN event_anchor_source TEXT");
+      }
+      if (!docCols.some((c) => c.name === "event_anchor_examined")) {
+        db.exec(
+          "ALTER TABLE documents ADD COLUMN event_anchor_examined INTEGER NOT NULL DEFAULT 0",
+        );
       }
     },
   },

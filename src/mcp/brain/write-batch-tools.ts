@@ -184,7 +184,7 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_write_batch",
     description:
-      "Apply an ordered batch of Brain write operations atomically. Ops: create_note, update_note, append_note, apply_evidence, append_log_line. Validated and projected in memory first; the first invalid op aborts with a typed error naming its index and nothing is written.",
+      "Apply an ordered batch of Brain write operations atomically. Ops: create_note, update_note, append_note, apply_evidence, append_log_line. Validated first; the first invalid op aborts with a typed error naming its index and nothing is written. Note ops honour the declared write binding.",
     inputSchema: {
       type: "object",
       properties: {

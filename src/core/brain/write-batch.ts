@@ -142,7 +142,12 @@ export type WriteBatchErrorCode =
   // `applied` count mean two different things in one result list. The
   // batch keeps refusing an occupied target outright.
   | "invalid_document"
-  | "invalid_template";
+  | "invalid_template"
+  // The vault's `Brain/_brain.yaml` exists and does not validate, so
+  // neither the vault scope nor the write binding can be determined.
+  // Propagated from the same envelope: no operation in the batch can be
+  // projected, and the operator - not the caller - holds the fix.
+  | "config_invalid";
 
 /**
  * All-or-nothing failure for {@link applyWriteBatch}. Thrown during the

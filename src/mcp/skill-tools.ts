@@ -124,7 +124,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "list_skills",
     description:
-      "List agent skills shipped with Open Second Brain (and vault-local Brain/skills/) with one-line descriptions. Read-only.",
+      "List agent skills shipped with Open Second Brain (and vault-local Brain/skills/) with one-line descriptions. Each entry carries a shadowed array naming the same-named skill directories it overrode, empty when discovery found none. Read-only.",
     inputSchema: {
       type: "object",
       properties: {},
@@ -136,7 +136,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "get_skill",
     description:
-      "Fetch a skill's SKILL.md content by name; optional file_path reads an auxiliary file inside the same skill directory. Read-only.",
+      "Fetch a skill's SKILL.md content by name; optional file_path reads an auxiliary file inside the same skill directory. An offer_id from skills_attach is echoed back on the result; a malformed one is refused, never dropped. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
@@ -162,7 +162,7 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
   {
     name: "skills_attach",
     description:
-      "Score available skills against the current turn text and return a char-budgeted block of relevant skill summaries. Returns enabled:false unless skill_auto_attach is configured.",
+      "Score skills against the current turn text; returns a char-budgeted block of relevant summaries and the offer_id to cite on get_skill (null when none was offered). A candidate matching only terms most of the corpus carries is dropped, not offered. enabled:false unless skill_auto_attach is set.",
     inputSchema: {
       type: "object",
       properties: {

@@ -319,6 +319,28 @@ export class Store {
     return documents.eventAnchorForPath(this.db, path);
   }
 
+  /**
+   * Vault-relative paths of documents no anchor-aware binary has ever
+   * examined (v11) - the rows a pre-anchor index carried across the
+   * migration, which are NOT the same as documents that declare no date.
+   */
+  unexaminedEventAnchorPaths(): string[] {
+    return documents.unexaminedEventAnchorPaths(this.db);
+  }
+
+  /** How many documents no anchor-aware binary has ever examined (v11). */
+  countUnexaminedEventAnchors(): number {
+    return documents.countUnexaminedEventAnchors(this.db);
+  }
+
+  /**
+   * Record one already-indexed document's event anchor and mark it
+   * examined, touching nothing else on the row. The backfill's only write.
+   */
+  setEventAnchor(path: string, anchor: EventAnchor | null): void {
+    documents.setEventAnchor(this.db, path, anchor);
+  }
+
   upsertDocument(doc: documents.DocumentInput): number {
     return documents.upsertDocument(this.db, doc);
   }

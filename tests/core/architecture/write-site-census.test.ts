@@ -40,10 +40,22 @@
  * write-capable MODULE asserts vault identity, this one asks whether a
  * write SITE goes through a shared writer.
  *
- * Only identifiers actually imported from `node:fs` count, so a local
- * helper that happens to be called `writeFileSync` is not miscounted,
- * and a module that reaches `fs` through the shared writers shows up in
- * the shared class instead.
+ * Only identifiers actually bound from `node:fs` or `node:fs/promises`
+ * count, so a local helper that happens to be called `writeFileSync` is
+ * not miscounted, and a module that reaches `fs` through the shared
+ * writers shows up in the shared class instead. "Bound" covers every
+ * form the language offers - several statements in one file, a renamed
+ * binding, a namespace import, either quote style - because the detector
+ * previously read only a file's FIRST `node:fs` statement and the live
+ * vault append in `src/core/brain/git/store.ts` sat on the second one.
+ * Runtime writers that need no import (`Bun.write`) are matched on the
+ * receiver instead.
+ *
+ * What it still does not see, stated rather than implied: a write issued
+ * through a `node:fs/promises` FileHandle method, or through a binding
+ * re-exported by an intermediate module. Both would be new shapes in
+ * this tree, and the shape table in "the census can fail" is where a new
+ * one gets added the day it appears.
  *
  * ## Why the exclusions are categorised
  *
@@ -83,6 +95,7 @@ const VAULT_PATHS_IMPORT_RE = /^[ \t]*import\b[^;]*?\bfrom\s*"\.[^"]*\bpaths\.ts
  * file. See the docblock for why `mkdirSync` is not among them.
  */
 const CONTENT_WRITE_CALLS: ReadonlyArray<string> = Object.freeze([
+  // `node:fs`
   "writeFileSync",
   "appendFileSync",
   "writeSync",
@@ -99,7 +112,32 @@ const CONTENT_WRITE_CALLS: ReadonlyArray<string> = Object.freeze([
   "linkSync",
   "utimesSync",
   "chmodSync",
+  // `node:fs/promises` twins of the same operations. Nothing in `src/`
+  // imports them today; they are here so the FIRST one is reported rather
+  // than admitted. The import gate below is what keeps a local helper
+  // named `rm` or `link` from being miscounted as one of these.
+  "writeFile",
+  "appendFile",
+  "rename",
+  "rm",
+  "unlink",
+  "rmdir",
+  "cp",
+  "copyFile",
+  "truncate",
+  "symlink",
+  "link",
+  "utimes",
+  "chmod",
 ]);
+
+const CONTENT_WRITE_SET: ReadonlySet<string> = new Set(CONTENT_WRITE_CALLS);
+
+/**
+ * Writers reachable with no import at all, so no import gate can see them.
+ * Named in full (`Bun.write`) because the receiver is what identifies them.
+ */
+const GLOBAL_WRITE_CALLS: ReadonlyArray<string> = Object.freeze(["Bun.write"]);
 
 /** The shared writers a site may route through instead. */
 const SHARED_WRITE_CALLS: ReadonlyArray<string> = Object.freeze([
@@ -110,14 +148,50 @@ const SHARED_WRITE_CALLS: ReadonlyArray<string> = Object.freeze([
   "writeFrontmatter",
 ]);
 
-function callRe(names: ReadonlyArray<string>): RegExp {
-  return new RegExp(`\\b(${names.join("|")})\\s*\\(`, "g");
+/** A dotted call name as a pattern that tolerates spacing around the dot. */
+function callPattern(name: string): string {
+  return name.split(".").join(String.raw`\s*\.\s*`);
 }
 
-const CONTENT_WRITE_RE = callRe(CONTENT_WRITE_CALLS);
+/** Longest name first, so a prefix cannot shadow the longer name after it. */
+function alternation(names: ReadonlyArray<string>): string {
+  return [...names]
+    .toSorted((a, b) => b.length - a.length)
+    .map(callPattern)
+    .join("|");
+}
+
+function callRe(names: ReadonlyArray<string>): RegExp {
+  return new RegExp(String.raw`\b(${alternation(names)})\s*\(`, "g");
+}
+
+/** Member calls on a namespace import, e.g. `fs.writeFileSync(...)`. */
+function namespaceCallRe(namespace: string): RegExp {
+  return new RegExp(String.raw`\b${namespace}\s*\.\s*(${CONTENT_WRITE_ALTERNATION})\s*\(`, "g");
+}
+
+/** The matched call text, with the spacing the source happened to use removed. */
+function normalizeCallName(matched: string): string {
+  return matched.replace(/\s+/g, "");
+}
+
+const CONTENT_WRITE_ALTERNATION = alternation(CONTENT_WRITE_CALLS);
+const GLOBAL_WRITE_RE = callRe(GLOBAL_WRITE_CALLS);
 const SHARED_WRITE_RE = callRe(SHARED_WRITE_CALLS);
-/** The `node:fs` import list, whose names are the only ones that count. */
-const FS_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*"node:fs"/s;
+
+/**
+ * Every `node:fs` / `node:fs/promises` import statement, in both binding
+ * forms and both quote styles.
+ *
+ * GLOBAL on purpose. It used to be non-global and read with `.exec()`, so
+ * only a module's FIRST `node:fs` statement counted - and the live vault
+ * append in `src/core/brain/git/store.ts`, whose `appendFileSync` arrives
+ * on the second statement, was invisible to a census that reported a clean
+ * sweep. `import type { … }` does not match, because a type cannot be
+ * called.
+ */
+const FS_IMPORT_RE =
+  /import\s*(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})\s*from\s*["']node:fs(?:\/promises)?["']/g;
 
 /**
  * Why a direct-`fs` write site does not go through a shared writer.
@@ -216,6 +290,18 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "the write-ahead phase log itself. Rewriting it would destroy the very record " +
       "that lets an interrupted run be detected.",
+  },
+  "src/core/brain/git/store.ts": {
+    categories: [C.appendOnlyLedger],
+    calls: ["appendFileSync"],
+    reason:
+      "one JSON line per ingested commit or tag appended to the per-repo " +
+      "`commits.jsonl`, behind `assertVaultIdentityForWrite` and after the dedup pass " +
+      "that drops shas already on disk. The `state.json` watermark beside it already " +
+      "goes through `atomicWriteFileSync`, because a watermark is a rewrite and a " +
+      "record is an append. This entry exists because the detector was fixed: the " +
+      "import arrives on the module's SECOND `node:fs` statement, and a non-global " +
+      "regex read only the first.",
   },
   "src/core/brain/health/edit-history.ts": {
     categories: [C.appendOnlyLedger],
@@ -632,31 +718,64 @@ function addressesVault(file: CensusFile): boolean {
   return VAULT_PATHS_IMPORT_RE.test(file.text);
 }
 
-/** Names this module actually imported from `node:fs`. */
-function fsImports(text: string): ReadonlySet<string> {
-  const match = FS_IMPORT_RE.exec(text);
-  if (match === null) return new Set();
-  return new Set(
-    match[1]!
-      .split(",")
-      .map((raw) =>
-        raw
-          .trim()
-          .split(/\s+as\s+/)[0]!
-          .trim(),
-      )
-      .filter((name) => name.length > 0),
-  );
+interface FsImports {
+  /**
+   * Local binding -> the `node:fs` name it was imported under. The two
+   * differ under `import { writeFileSync as put }`, and matching on the
+   * LOCAL name is what makes the renamed form countable at all.
+   */
+  readonly bindings: ReadonlyMap<string, string>;
+  /** Local names of namespace imports, e.g. `fs` in `import * as fs`. */
+  readonly namespaces: ReadonlySet<string>;
+}
+
+/** What this module actually imported from `node:fs` / `node:fs/promises`. */
+function fsImports(text: string): FsImports {
+  const bindings = new Map<string, string>();
+  const namespaces = new Set<string>();
+  for (const match of text.matchAll(FS_IMPORT_RE)) {
+    const namespace = match[1];
+    if (namespace !== undefined) {
+      namespaces.add(namespace);
+      continue;
+    }
+    for (const raw of match[2]!.split(",")) {
+      const [imported, local] = raw
+        .trim()
+        .split(/\s+as\s+/)
+        .map((part) => part.trim());
+      if (imported === undefined || imported.length === 0) continue;
+      bindings.set(local !== undefined && local.length > 0 ? local : imported, imported);
+    }
+  }
+  return { bindings, namespaces };
+}
+
+/** The `node:fs` write calls this module makes directly, by their fs name. */
+function directWriteCalls(text: string, imported: FsImports): Set<string> {
+  const direct = new Set<string>();
+  const locals = [...imported.bindings.keys()];
+  if (locals.length > 0) {
+    for (const match of text.matchAll(callRe(locals))) {
+      const name = imported.bindings.get(normalizeCallName(match[1]!));
+      if (name !== undefined && CONTENT_WRITE_SET.has(name)) direct.add(name);
+    }
+  }
+  for (const namespace of imported.namespaces) {
+    for (const match of text.matchAll(namespaceCallRe(namespace))) {
+      direct.add(normalizeCallName(match[1]!));
+    }
+  }
+  for (const match of text.matchAll(GLOBAL_WRITE_RE)) {
+    direct.add(normalizeCallName(match[1]!));
+  }
+  return direct;
 }
 
 /** Classify one file into its direct and shared write sites. */
 function classify(file: CensusFile): CensusRow | null {
   if (!addressesVault(file)) return null;
-  const imported = fsImports(file.text);
-  const direct = new Set<string>();
-  for (const match of file.text.matchAll(CONTENT_WRITE_RE)) {
-    if (imported.has(match[1]!)) direct.add(match[1]!);
-  }
+  const direct = directWriteCalls(file.text, fsImports(file.text));
   const shared = [...file.text.matchAll(SHARED_WRITE_RE)].length;
   if (direct.size === 0 && shared === 0) return null;
   return { path: file.path, directCalls: [...direct].toSorted(), sharedCalls: shared };
@@ -725,19 +844,70 @@ describe("in-vault write-site census", () => {
 });
 
 describe("the census can fail", () => {
-  test("a new direct-fs writer is reported unlisted", () => {
-    // Non-vacuity, demonstrated rather than asserted: the same
-    // classifier, over the same tree plus one synthetic module in a
-    // vault-write root, must report exactly that module.
-    const intruder: CensusFile = {
-      path: "src/core/brain/synthetic-intruder.ts",
-      text: 'import { writeFileSync } from "node:fs";\nwriteFileSync("x", "y");\n',
-    };
-    const rows = census([...SOURCE_TREE, intruder]).filter((row) => row.directCalls.length > 0);
-    const unlisted = rows
+  /** Run the real census over the real tree plus one synthetic module. */
+  function unlistedWith(intruder: CensusFile): string[] {
+    return census([...SOURCE_TREE, intruder])
+      .filter((row) => row.directCalls.length > 0)
       .filter((row) => !(row.path in DIRECT_WRITE_EXCLUSIONS))
       .map((row) => row.path);
-    expect(unlisted).toEqual([intruder.path]);
+  }
+
+  /**
+   * Every source shape a direct write can arrive in. Each must be reported
+   * on its own: the detector used to see only the first `node:fs` import
+   * statement of a file, in the one binding form and the one quote style,
+   * so the shapes below were unreachable by construction and the suite
+   * still passed. A shape that stops being detected shows up here as a
+   * named failure rather than as a silently smaller census.
+   */
+  const INTRUDER_SHAPES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+    [
+      "a plain named import",
+      'import { writeFileSync } from "node:fs";\nwriteFileSync("x", "y");\n',
+    ],
+    [
+      "a second `node:fs` import statement",
+      'import { readFileSync } from "node:fs";\nimport { appendFileSync } from "node:fs";\nappendFileSync("x", "y");\n',
+    ],
+    ["a renamed binding", 'import { writeFileSync as put } from "node:fs";\nput("x", "y");\n'],
+    ["a namespace import", 'import * as fs from "node:fs";\nfs.writeFileSync("x", "y");\n'],
+    [
+      "the promise API",
+      'import { writeFile } from "node:fs/promises";\nawait writeFile("x", "y");\n',
+    ],
+    [
+      "a single-quoted specifier",
+      "import { writeFileSync } from 'node:fs';\nwriteFileSync('x', 'y');\n",
+    ],
+    ["a runtime built-in needing no import", 'await Bun.write("x", "y");\n'],
+  ]);
+
+  for (const [shape, source] of INTRUDER_SHAPES) {
+    test(`a new direct writer using ${shape} is reported unlisted`, () => {
+      const path = "src/core/brain/synthetic-intruder.ts";
+      expect(unlistedWith({ path, text: source })).toEqual([path]);
+    });
+  }
+
+  test("a type-only fs import is not a write site", () => {
+    // The complement of the import gate: naming a type cannot write bytes,
+    // and counting it would put every module that annotates a `Dirent` in
+    // the record.
+    expect(
+      classify({
+        path: "src/core/brain/synthetic-types-only.ts",
+        text: 'import type { WriteFileOptions } from "node:fs";\nexport type T = WriteFileOptions;\n',
+      }),
+    ).toBeNull();
+  });
+
+  test("the live second-statement import stays visible", () => {
+    // The concrete defect this detector fix closes, pinned by name: the
+    // vault append in the git record store arrives through the module's
+    // SECOND `node:fs` statement. A regression to a single-statement read
+    // makes this row vanish and the sweep read as clean.
+    const row = DIRECT_ROWS.find((candidate) => candidate.path === "src/core/brain/git/store.ts");
+    expect(row?.directCalls).toEqual(["appendFileSync"]);
   });
 
   test("a writer outside every vault root is out of population, not silently listed", () => {
@@ -753,7 +923,10 @@ describe("the census can fail", () => {
   test("the detectors still match the shapes they measure", () => {
     // A regex that stopped matching would report a clean sweep over an
     // empty set. Pin the measurement, not only its verdict.
-    expect(DIRECT_ROWS.length).toBeGreaterThan(40);
-    expect(ROWS.filter((row) => row.sharedCalls > 0).length).toBeGreaterThan(30);
+    // Set just under the measurement, not an order of magnitude under it:
+    // a floor of 40 against 63 would let a third of the tree stop being
+    // seen and still report a clean sweep.
+    expect(DIRECT_ROWS.length).toBeGreaterThan(58);
+    expect(ROWS.filter((row) => row.sharedCalls > 0).length).toBeGreaterThan(88);
   });
 });

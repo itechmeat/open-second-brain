@@ -34,6 +34,19 @@ const SAFEGUARD_OPERATION = "reindex";
 /** Terminal state both builders reach when the index covers every document. */
 const INDEX_BUILT = "search-index-built";
 
+/**
+ * The state a run leaves when the index holds documents whose EVENT
+ * ANCHOR has never been resolved (provenance at the boundary).
+ *
+ * It outranks `INDEX_BUILT` as this run's exit, and deliberately: a
+ * schema bump migrates in place and reindexes nothing, so every
+ * pre-anchor document takes the unchanged fastpath and the run truly did
+ * cover the vault - but a hard `since` / `until` filter is now judged on
+ * a column those rows do not carry, and naming `o2b search query` next
+ * would send the operator at exactly the query that answers wrongly.
+ */
+const EVENT_ANCHORS_PENDING = "event-anchors-pending";
+
 /** Default flush cadence for the generated `reindex --cron-template`. */
 const DEFAULT_CRON_INTERVAL = "30m";
 
@@ -78,6 +91,7 @@ function reportIndexRun(
   jsonRequested: boolean,
 ): void {
   const complete = indexIsComplete(stats);
+  const exitCode = stats.eventAnchorsPending > 0 ? EVENT_ANCHORS_PENDING : INDEX_BUILT;
   if (jsonRequested) {
     // no-dead-ends, phase 3: the rail suppresses its line on this stream
     // and returns the resolved step precisely so the payload can carry
@@ -85,14 +99,14 @@ function reportIndexRun(
     process.stdout.write(
       JSON.stringify({
         ...(jsonForStats(stats, cfg) as Record<string, unknown>),
-        ...(complete ? nextCommandField(INDEX_BUILT) : {}),
+        ...(complete ? nextCommandField(exitCode) : {}),
       }) + "\n",
     );
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
   if (complete) {
-    emitNextStep(INDEX_BUILT, searchAdvisoryStream(argv, jsonRequested));
+    emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested));
   }
 }
 
@@ -174,6 +188,11 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
       chunks_total: stats.chunksTotal,
       embeddings_computed: stats.embeddingsComputed,
       embeddings_retries: stats.embeddingsRetries,
+      // Conditional: a vault with nothing pending emits exactly the
+      // payload it emitted before this field existed.
+      ...(stats.eventAnchorsPending > 0
+        ? { event_anchors_pending: stats.eventAnchorsPending }
+        : {}),
     },
     errors: stats.errors.map((e) => ({ path: e.path, message: e.message })),
     // Unit F. Conditional so a vault with no malformed frontmatter emits
@@ -204,6 +223,13 @@ function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string 
   if (stats.embeddingsComputed > 0 || stats.embeddingsRetries > 0) {
     lines.push(
       `  embeddings: ${stats.embeddingsComputed} computed (${stats.embeddingsRetries} retries)`,
+    );
+  }
+  // Above the errors block: these documents indexed fine, under a
+  // binary that had no event anchor to compute for them.
+  if (stats.eventAnchorsPending > 0) {
+    lines.push(
+      `  event anchors: ${stats.eventAnchorsPending} document(s) indexed before anchors existed`,
     );
   }
   if (stats.errors.length > 0) {

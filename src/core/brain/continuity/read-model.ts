@@ -2,7 +2,7 @@
  * Continuity read-model (Memory Observability Suite kernel).
  *
  * The normalization layer between the raw JSONL continuity store and the
- * read-side consumers that go through it. It absorbs four concerns
+ * read-side consumers that go through it. It absorbs three concerns
  * exactly once so those consumers cannot disagree on them:
  *
  *   - schema-version dispatch: records written before the stamp
@@ -10,9 +10,6 @@
  *   - masking policy: `private` records are DROPPED by default and
  *     kept only on explicit request; payload text is already
  *     redaction-masked at write time and is never un-masked here;
- *   - declared scope: a record whose author declared a scope is retained
- *     only for a filter that asks for that scope, so a declaration can
- *     never widen what an existing caller already sees (t_77efc212);
  *   - fail-soft reads: malformed rows normalize to null and unknown
  *     kinds stay readable (the evolution rule is additive).
  *
@@ -46,13 +43,6 @@ export interface NormalizedContinuityRecord {
   readonly payload: Readonly<Record<string, unknown>>;
   readonly private: boolean;
   readonly redacted: boolean;
-  /**
-   * Scope the record's author declared, absent when none was declared.
-   * Kept as a plain string rather than the write-side union: a token from
-   * a newer version stays readable here (and stays excluded from every
-   * filter that did not name it) instead of being lost as malformed.
-   */
-  readonly scope?: string;
   /** Correlation ids lifted out of the payload when present. */
   readonly sessionId?: string;
   readonly turnId?: string;
@@ -70,15 +60,6 @@ export interface ContinuityReadModelFilter {
   readonly until?: string;
   /** Keep records flagged `private` (default: drop them). */
   readonly keepPrivate?: boolean;
-  /**
-   * Retain records declaring this scope. Records that declare NO scope
-   * are unaffected and always retained - that is the whole of today's
-   * behaviour. Records declaring any other scope stay excluded, so this
-   * is a widening request for one named scope and never a blanket one.
-   * Independent of {@link ContinuityReadModelFilter.keepPrivate}: asking
-   * for a scope is not a way around the masking drop.
-   */
-  readonly scope?: string;
 }
 
 /** Normalize one raw record (parsed JSONL row). Fail-soft: null on malformed input. */
@@ -102,10 +83,6 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
   const handoff = isPlainObject(payload["handoff"]) ? payload["handoff"] : undefined;
   const handoffKind = handoff !== undefined ? readString(handoff["kind"]) : undefined;
   const handoffRef = handoff !== undefined ? readString(handoff["ref"]) : undefined;
-  // A non-string `scope` is not a declaration - junk must read as absent
-  // rather than as "declared something", which would hide the record
-  // from every filter at once.
-  const scope = readString(record["scope"]);
   return Object.freeze({
     schema: schema ?? CONTINUITY_SCHEMA_VERSION,
     legacy: schema === undefined,
@@ -116,7 +93,6 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
     payload: Object.freeze({ ...payload }),
     private: record["private"] === true,
     redacted: record["redacted"] === true,
-    ...(scope !== undefined ? { scope } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(turnId !== undefined ? { turnId } : {}),
     ...(agentId !== undefined ? { agentId } : {}),
@@ -125,12 +101,7 @@ export function normalizeContinuityRecord(raw: unknown): NormalizedContinuityRec
   });
 }
 
-/**
- * Load, normalize, and filter the whole store. Private records drop
- * unless kept; a record declaring a scope drops unless that exact scope
- * was requested. An unscoped record - every record any writer produces
- * today - passes both gates untouched.
- */
+/** Load, normalize, and filter the whole store. Private records drop unless kept. */
 export function loadNormalizedContinuityRecords(
   vault: string,
   filter: ContinuityReadModelFilter = {},
@@ -144,7 +115,6 @@ export function loadNormalizedContinuityRecords(
     const entry = normalizeContinuityRecord(record);
     if (entry === null) continue;
     if (entry.private && filter.keepPrivate !== true) continue;
-    if (entry.scope !== undefined && entry.scope !== filter.scope) continue;
     if (filter.kind !== undefined && entry.kind !== filter.kind) continue;
     if (filter.sessionId !== undefined && entry.sessionId !== filter.sessionId) continue;
     normalized.push(entry);

@@ -61,7 +61,19 @@ import {
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
-const KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
+/**
+ * The key grammar, written once and used by BOTH directions.
+ *
+ * The scanner has only ever recognised this shape, so it is also the
+ * only shape the emitter may write: a key outside it is a key the
+ * emitter would put on disk and the parser would then drop or, worse,
+ * read as something else. Deriving `KEY_VALUE_RE` from the same source
+ * is what makes "round-trips" a fact rather than a claim two regexes
+ * happen to agree on.
+ */
+const FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*";
+const FRONTMATTER_KEY_RE = new RegExp(`^${FRONTMATTER_KEY_PATTERN}$`);
+const KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*$`);
 // Block-sequence dash item: `- item` or a bare `-` (empty item). The
 // leading whitespace is required so `-foo` (a dash-prefixed string, not a
 // list item) is NOT matched. Captures the item text after the whitespace.
@@ -315,13 +327,60 @@ function clipNoticeLine(line: string): string {
 }
 
 /**
+ * Whether `key` is a frontmatter key this format can round-trip: one the
+ * emitter may write and the scanner will read back as the same key.
+ *
+ * Exported so a boundary that wants to reject a bad key as the CALLER's
+ * fault, naming the argument, can ask the same question the emitter asks
+ * rather than restating the grammar.
+ */
+export function isFrontmatterKey(key: string): boolean {
+  return FRONTMATTER_KEY_RE.test(key);
+}
+
+/** A frontmatter key this emitter will not write. See {@link formatFrontmatter}. */
+export class FrontmatterKeyError extends Error {
+  /** The offending key, verbatim, so a caller can point at which one. */
+  readonly key: string;
+  constructor(key: string) {
+    super(
+      `frontmatter key ${JSON.stringify(key)} is not a key this format can round-trip; ` +
+        "keys are a letter or underscore followed by letters, digits, '_' or '-'",
+    );
+    this.name = "FrontmatterKeyError";
+    this.key = key;
+  }
+}
+
+/**
  * Render a Markdown file with YAML-like frontmatter to a string. Pure
  * function — exposed so callers can decide *how* to persist (atomic,
  * exclusive, plain) without duplicating the YAML formatter.
+ *
+ * ## Keys are checked, not escaped
+ *
+ * The value side was already sound: {@link formatYamlScalar} quotes and
+ * escapes any scalar that would break the scanner, so no VALUE has ever
+ * been able to add a line to the block. Keys were emitted raw, which
+ * made the same guarantee false in the other direction — a key
+ * containing a newline emitted extra frontmatter lines, and because the
+ * scanner is last-wins and `update_note` merges `{...existing,
+ * ...caller}`, a caller could overwrite a key it was never asked to
+ * touch. That reach was bounded by the `Brain/` machinery-root refusal,
+ * so it was latent rather than live; it is fixed here, at the emitter,
+ * so every writer in the tree inherits the guarantee rather than each
+ * entry point having to remember it.
+ *
+ * Escaping is not the fix, because the reader has no quoted-key form to
+ * escape INTO: a quoted key would fail `KEY_VALUE_RE` and be dropped on
+ * the next parse, which trades an injection for a silent loss. So a key
+ * outside the grammar is a typed {@link FrontmatterKeyError}, raised
+ * before a single byte is rendered.
  */
 export function formatFrontmatter(metadata: FrontmatterMap, body: string): string {
   const lines: string[] = ["---"];
   for (const [key, value] of Object.entries(metadata)) {
+    if (!isFrontmatterKey(key)) throw new FrontmatterKeyError(key);
     lines.push(`${key}: ${formatYamlValue(value)}`);
   }
   lines.push("---");

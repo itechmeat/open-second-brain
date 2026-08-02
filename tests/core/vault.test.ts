@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { DEGRADATION_CODE, type DegradationNotice } from "../../src/core/integrity/degradation.ts";
 import {
+  FrontmatterKeyError,
   extractWikilinks,
+  formatFrontmatter,
   listVaultPages,
   parseFrontmatter,
   parseFrontmatterText,
@@ -435,5 +445,37 @@ describe("listVaultPages", () => {
     } finally {
       chmodSync(locked, 0o755);
     }
+  });
+});
+
+describe("formatFrontmatter refuses a key the parser could not read back", () => {
+  // The emitter escaped VALUES but emitted KEYS raw, so a key carrying a
+  // newline emitted extra frontmatter lines. Because `update_note` merges
+  // `{...existing, ...caller}` and the scanner is last-wins, that let a
+  // caller override a frontmatter key it was not asked to touch. The
+  // guarantee belongs at the emitter so every writer inherits it.
+  for (const [label, key] of [
+    ["a newline", "title\nowner"],
+    ["a carriage return", "title\rowner"],
+    ["a colon", "ti:tle"],
+    ["a leading digit", "1title"],
+    ["a space", "my title"],
+    ["an empty key", ""],
+  ] as const) {
+    test(`${label} is refused`, () => {
+      expect(() => formatFrontmatter({ [key]: "v" }, "body")).toThrow(FrontmatterKeyError);
+    });
+  }
+
+  test("a conforming key still round-trips through the parser", () => {
+    const text = formatFrontmatter({ title: "T", owner_name: "a-b", x2: "v" }, "body");
+    const [meta] = parseFrontmatterText(text);
+    expect(meta).toEqual({ title: "T", owner_name: "a-b", x2: "v" });
+  });
+
+  test("the refusal fires before any byte reaches disk", () => {
+    const path = join(tmp, "note.md");
+    expect(() => writeFrontmatter(path, { "a\nb: c": "v" }, "body")).toThrow(FrontmatterKeyError);
+    expect(existsSync(path)).toBe(false);
   });
 });

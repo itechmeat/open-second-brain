@@ -28,6 +28,30 @@ import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
+/**
+ * Whether `sqlite-vec` loaded in THIS process, resolved once at module
+ * load. Every test below needs a vector index, so the answer decides
+ * whether this file has any coverage at all - and it is therefore
+ * reported, never swallowed: the tests are declared with `skipIf` so a
+ * missing extension shows up as SKIPPED in the runner rather than as a
+ * body that returned before its first assertion and read as a pass.
+ */
+const VEC_LOADABLE = sqliteVecLoadable();
+
+/**
+ * Set only on a platform that genuinely cannot load `sqlite-vec`. Absent
+ * - the default, and what CI runs - an unloadable extension is a FAULT,
+ * not a platform fact, and the loadability guard below turns the whole
+ * file red instead of letting its coverage evaporate into skips.
+ */
+const ALLOW_MISSING_VEC_ENV = "O2B_ALLOW_MISSING_SQLITE_VEC";
+
+/** Whether this environment has declared the extension optional. */
+const VEC_DECLARED_OPTIONAL = process.env[ALLOW_MISSING_VEC_ENV] !== undefined;
+
+/** Root ignores the directory mode bits the unwritable-log test drives. */
+const RUNNING_AS_ROOT = process.getuid?.() === 0;
+
 let vault: string;
 let dbPath: string;
 let cleanup: () => void;
@@ -70,65 +94,79 @@ async function indexWithoutVectors(): Promise<void> {
   await indexVault(semanticConfig());
 }
 
-test("the planner reports pending vectors and writes nothing by default", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
+test.skipIf(VEC_DECLARED_OPTIONAL)(
+  "the vector extension every test in this file depends on is loadable",
+  () => {
+    expect(VEC_LOADABLE).toBe(true);
+  },
+);
 
-  const plan = await planVectorBackfill(semanticConfig());
+test.skipIf(!VEC_LOADABLE)(
+  "the planner reports pending vectors and writes nothing by default",
+  async () => {
+    await indexWithoutVectors();
 
-  expect(plan.applied).toBe(false);
-  expect(plan.capability.tier).toBe(SEMANTIC_CAPABILITY_TIER.configured);
-  expect(plan.chunksTotal).toBeGreaterThan(0);
-  expect(plan.pending).toBe(plan.chunksTotal);
-  expect(plan.embedded).toBe(0);
+    const plan = await planVectorBackfill(semanticConfig());
 
-  // A second dry run sees exactly the same work: nothing was consumed.
-  const again = await planVectorBackfill(semanticConfig());
-  expect(again.pending).toBe(plan.pending);
-});
+    expect(plan.applied).toBe(false);
+    expect(plan.capability.tier).toBe(SEMANTIC_CAPABILITY_TIER.configured);
+    expect(plan.chunksTotal).toBeGreaterThan(0);
+    expect(plan.pending).toBe(plan.chunksTotal);
+    expect(plan.embedded).toBe(0);
 
-test("--apply is the only path that computes vectors, and it is resumable", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
+    // A second dry run sees exactly the same work: nothing was consumed.
+    const again = await planVectorBackfill(semanticConfig());
+    expect(again.pending).toBe(plan.pending);
+  },
+);
 
-  const applied = await planVectorBackfill(semanticConfig(), { apply: true });
-  expect(applied.applied).toBe(true);
-  expect(applied.embedded).toBe(applied.pending);
-  expect(applied.embedded).toBeGreaterThan(0);
+test.skipIf(!VEC_LOADABLE)(
+  "--apply is the only path that computes vectors, and it is resumable",
+  async () => {
+    await indexWithoutVectors();
 
-  // Idempotent: a re-run finds nothing left to do.
-  const rerun = await planVectorBackfill(semanticConfig(), { apply: true });
-  expect(rerun.pending).toBe(0);
-  expect(rerun.embedded).toBe(0);
-});
+    const applied = await planVectorBackfill(semanticConfig(), { apply: true });
+    expect(applied.applied).toBe(true);
+    expect(applied.embedded).toBe(applied.pending);
+    expect(applied.embedded).toBeGreaterThan(0);
 
-test("a blocked capability tier is reported by the dry run without attempting anything", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
+    // Idempotent: a re-run finds nothing left to do.
+    const rerun = await planVectorBackfill(semanticConfig(), { apply: true });
+    expect(rerun.pending).toBe(0);
+    expect(rerun.embedded).toBe(0);
+  },
+);
 
-  // Same index, semantic switched off: the plan still counts the work and
-  // names the tier rather than pretending there is none.
-  const plan = await planVectorBackfill(makeConfig({ vault, dbPath }));
-  expect(plan.capability.tier).toBe(SEMANTIC_CAPABILITY_TIER.disabled);
-  expect(plan.pending).toBeGreaterThan(0);
-  expect(plan.embedded).toBe(0);
-});
+test.skipIf(!VEC_LOADABLE)(
+  "a blocked capability tier is reported by the dry run without attempting anything",
+  async () => {
+    await indexWithoutVectors();
 
-test("--apply on a blocked tier refuses with the typed attempt error", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
+    // Same index, semantic switched off: the plan still counts the work and
+    // names the tier rather than pretending there is none.
+    const plan = await planVectorBackfill(makeConfig({ vault, dbPath }));
+    expect(plan.capability.tier).toBe(SEMANTIC_CAPABILITY_TIER.disabled);
+    expect(plan.pending).toBeGreaterThan(0);
+    expect(plan.embedded).toBe(0);
+  },
+);
 
-  let code: string | null = null;
-  try {
-    await planVectorBackfill(makeConfig({ vault, dbPath }), { apply: true });
-  } catch (err) {
-    code = (err as { code?: string }).code ?? null;
-  }
-  expect(code).toBe("EMBEDDING_DISABLED");
-});
+test.skipIf(!VEC_LOADABLE)(
+  "--apply on a blocked tier refuses with the typed attempt error",
+  async () => {
+    await indexWithoutVectors();
 
-test("the CLI dry-runs by default and emits both report shapes", async () => {
-  if (!sqliteVecLoadable()) return;
+    let code: string | null = null;
+    try {
+      await planVectorBackfill(makeConfig({ vault, dbPath }), { apply: true });
+    } catch (err) {
+      code = (err as { code?: string }).code ?? null;
+    }
+    expect(code).toBe("EMBEDDING_DISABLED");
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)("the CLI dry-runs by default and emits both report shapes", async () => {
   await indexWithoutVectors();
   const config = join(vault, "cli-config.yaml");
   await Bun.write(
@@ -166,100 +204,55 @@ test("the CLI dry-runs by default and emits both report shapes", async () => {
   expect(human.stdout).toContain("next: o2b search vector-backfill --apply");
 });
 
-test("a blocked tier names the tier's exit, never an --apply that cannot succeed", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
-  const config = join(vault, "cli-config.yaml");
-  // Semantic on, no key: work is pending but `--apply` would refuse.
-  await Bun.write(
-    config,
-    [
-      `vault: "${vault}"`,
-      "search_semantic_enabled: true",
-      "embedding_provider: openai-compat",
-      "embedding_model: fake-model",
-      "",
-    ].join("\n"),
-  );
-
-  const json = await runCli(
-    ["search", "vector-backfill", "--vault", vault, "--db", dbPath, "--config", config, "--json"],
-    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-  );
-  expect(json.returncode).toBe(0);
-  const payload = JSON.parse(json.stdout) as Record<string, unknown>;
-  expect(payload["capability_tier"]).toBe(SEMANTIC_CAPABILITY_TIER.credentialMissing);
-  expect(payload["pending"]).toBeGreaterThan(0);
-  expect(payload["next_command"]).toBe("o2b search check");
-});
-
-test("the CLI --apply records a registered log event and surfaces an append failure", async () => {
-  if (!sqliteVecLoadable()) return;
-  await indexWithoutVectors();
-  const config = join(vault, "cli-config.yaml");
-  await Bun.write(
-    config,
-    [
-      `vault: "${vault}"`,
-      "search_semantic_enabled: true",
-      "embedding_provider: openai-compat",
-      `embedding_base_url: "${server.url}"`,
-      "embedding_model: fake-model",
-      "embedding_api_key: test-key",
-      "embedding_dimension: 4",
-      "",
-    ].join("\n"),
-  );
-  bootstrapBrain(vault, { configPath: config });
-
-  const applied = await runCli(
-    [
-      "search",
-      "vector-backfill",
-      "--vault",
-      vault,
-      "--db",
-      dbPath,
-      "--config",
+test.skipIf(!VEC_LOADABLE)(
+  "a blocked tier names the tier's exit, never an --apply that cannot succeed",
+  async () => {
+    await indexWithoutVectors();
+    const config = join(vault, "cli-config.yaml");
+    // Semantic on, no key: work is pending but `--apply` would refuse.
+    await Bun.write(
       config,
-      "--apply",
-      "--json",
-    ],
-    { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
-  );
-  expect(applied.returncode).toBe(0);
-  expect(JSON.parse(applied.stdout)["embedded"]).toBeGreaterThan(0);
+      [
+        `vault: "${vault}"`,
+        "search_semantic_enabled: true",
+        "embedding_provider: openai-compat",
+        "embedding_model: fake-model",
+        "",
+      ].join("\n"),
+    );
 
-  const logDir = join(vault, "Brain", "log");
-  const logged = readdirSync(logDir)
-    .map((f) => readFileSync(join(logDir, f), "utf8"))
-    .join("\n");
-  expect(logged).toContain("vector-backfill");
-});
+    const json = await runCli(
+      ["search", "vector-backfill", "--vault", vault, "--db", dbPath, "--config", config, "--json"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(json.returncode).toBe(0);
+    const payload = JSON.parse(json.stdout) as Record<string, unknown>;
+    expect(payload["capability_tier"]).toBe(SEMANTIC_CAPABILITY_TIER.credentialMissing);
+    expect(payload["pending"]).toBeGreaterThan(0);
+    expect(payload["next_command"]).toBe("o2b search check");
+  },
+);
 
-test("an unwritable Brain log surfaces on stderr rather than being swallowed", async () => {
-  if (!sqliteVecLoadable()) return;
-  if (process.getuid?.() === 0) return; // root ignores the mode bits
-  await indexWithoutVectors();
-  const config = join(vault, "cli-config.yaml");
-  await Bun.write(
-    config,
-    [
-      `vault: "${vault}"`,
-      "search_semantic_enabled: true",
-      "embedding_provider: openai-compat",
-      `embedding_base_url: "${server.url}"`,
-      "embedding_model: fake-model",
-      "embedding_api_key: test-key",
-      "embedding_dimension: 4",
-      "",
-    ].join("\n"),
-  );
-  bootstrapBrain(vault, { configPath: config });
-  const logDir = join(vault, "Brain", "log");
-  mkdirSync(logDir, { recursive: true });
-  chmodSync(logDir, 0o500);
-  try {
+test.skipIf(!VEC_LOADABLE)(
+  "the CLI --apply records a registered log event and surfaces an append failure",
+  async () => {
+    await indexWithoutVectors();
+    const config = join(vault, "cli-config.yaml");
+    await Bun.write(
+      config,
+      [
+        `vault: "${vault}"`,
+        "search_semantic_enabled: true",
+        "embedding_provider: openai-compat",
+        `embedding_base_url: "${server.url}"`,
+        "embedding_model: fake-model",
+        "embedding_api_key: test-key",
+        "embedding_dimension: 4",
+        "",
+      ].join("\n"),
+    );
+    bootstrapBrain(vault, { configPath: config });
+
     const applied = await runCli(
       [
         "search",
@@ -271,17 +264,67 @@ test("an unwritable Brain log surfaces on stderr rather than being swallowed", a
         "--config",
         config,
         "--apply",
+        "--json",
       ],
       { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
     );
-    // The vectors were still written - telemetry never fails the primary
-    // operation - but the operator is told the record did not land.
     expect(applied.returncode).toBe(0);
-    expect(applied.stderr).toContain("vector-backfill log");
-  } finally {
-    chmodSync(logDir, 0o700);
-  }
-});
+    expect(JSON.parse(applied.stdout)["embedded"]).toBeGreaterThan(0);
+
+    const logDir = join(vault, "Brain", "log");
+    const logged = readdirSync(logDir)
+      .map((f) => readFileSync(join(logDir, f), "utf8"))
+      .join("\n");
+    expect(logged).toContain("vector-backfill");
+  },
+);
+
+test.skipIf(!VEC_LOADABLE || RUNNING_AS_ROOT)(
+  "an unwritable Brain log surfaces on stderr rather than being swallowed",
+  async () => {
+    await indexWithoutVectors();
+    const config = join(vault, "cli-config.yaml");
+    await Bun.write(
+      config,
+      [
+        `vault: "${vault}"`,
+        "search_semantic_enabled: true",
+        "embedding_provider: openai-compat",
+        `embedding_base_url: "${server.url}"`,
+        "embedding_model: fake-model",
+        "embedding_api_key: test-key",
+        "embedding_dimension: 4",
+        "",
+      ].join("\n"),
+    );
+    bootstrapBrain(vault, { configPath: config });
+    const logDir = join(vault, "Brain", "log");
+    mkdirSync(logDir, { recursive: true });
+    chmodSync(logDir, 0o500);
+    try {
+      const applied = await runCli(
+        [
+          "search",
+          "vector-backfill",
+          "--vault",
+          vault,
+          "--db",
+          dbPath,
+          "--config",
+          config,
+          "--apply",
+        ],
+        { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+      );
+      // The vectors were still written - telemetry never fails the primary
+      // operation - but the operator is told the record did not land.
+      expect(applied.returncode).toBe(0);
+      expect(applied.stderr).toContain("vector-backfill log");
+    } finally {
+      chmodSync(logDir, 0o700);
+    }
+  },
+);
 
 test("a temp directory is never the real vault", () => {
   // Guard on the fixtures themselves: every path this file writes to is

@@ -141,9 +141,16 @@ describe("registry reads honour the scope", () => {
   test("a trusted mention does not promote a quarantined record on its own", () => {
     quarantined("Scraped Claim");
     upsertEntity(vault, { category: "concept", name: "Scraped Claim", agent: "op", now: NOW });
-    const all = listEntities(vault, { status: BRAIN_ENTITY_STATUS.quarantine });
-    expect(all).toHaveLength(1);
-    expect(listEntities(vault, { category: "concept" })).toHaveLength(0);
+    const quarantinedRecords = listEntities(vault, { status: BRAIN_ENTITY_STATUS.quarantine });
+    expect(quarantinedRecords).toHaveLength(1);
+    // ...and the trusted write is not swallowed by it either. Until v1.43.0
+    // this asserted zero readable records, which is the defect rather than
+    // the guarantee: an untrusted source that guessed a name captured it, and
+    // every later trusted write landed inside the quarantined record and read
+    // back as absent. A trusted write now creates its own canonical record.
+    const readable = listEntities(vault, { category: "concept" });
+    expect(readable).toHaveLength(1);
+    expect(readable[0]!.status).toBe(BRAIN_ENTITY_STATUS.active);
   });
 
   test("restore is the named exit from quarantine, not a dead end", () => {

@@ -270,6 +270,14 @@ function validateIntegerRange(n: number, fieldName: string, range?: IntegerRange
   if (!Number.isFinite(n)) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be a finite number, got '${n}'`);
   }
+  // Integrality, for the same reason: a string-sourced value has already
+  // been through `parseInteger`, which refuses a fraction, so accepting one
+  // from a programmatic override would leave two entry paths disagreeing
+  // about what the field means - and hand a downstream consumer (the batch
+  // packer, the chunker's stride) a value it cannot step by.
+  if (!Number.isInteger(n)) {
+    throw new SearchError("INVALID_INPUT", `${fieldName} must be an integer, got ${n}`);
+  }
   if (range?.min !== undefined && n < range.min) {
     throw new SearchError("INVALID_INPUT", `${fieldName} must be >= ${range.min}, got ${n}`);
   }

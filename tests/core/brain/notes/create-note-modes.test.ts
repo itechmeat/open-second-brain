@@ -49,6 +49,49 @@ import { applyWriteBatch, WriteBatchError } from "../../../../src/core/brain/wri
  */
 const CONTROL_CHAR = String.fromCharCode(7);
 
+/** The YAML fence `formatFrontmatter` opens and closes the block with. */
+const FRONTMATTER_FENCE = "---";
+/** What separates a frontmatter key from its value on one line. */
+const FRONTMATTER_KEY_SEPARATOR = ":";
+
+/**
+ * One fixed create input, reused so the with-options and without-options
+ * cases differ in exactly one thing: whether an option was supplied. It
+ * carries three frontmatter keys in a deliberate, non-alphabetical order,
+ * because a reordering is one of the two ways the bytes can move without
+ * any assertion on `created`/`outcome` noticing.
+ */
+const BASELINE_INPUT = Object.freeze({
+  path: "Notes/Golden.md",
+  frontmatter: Object.freeze({ title: "Golden", type: "note", tags: Object.freeze(["a", "b"]) }),
+  content: "Body line one.\n\nBody line two.",
+});
+
+/**
+ * The exact bytes {@link BASELINE_INPUT} produced with none of the three
+ * authoring options set, captured from the primitive as it stood before
+ * they existed. Pinned as a literal rather than recomputed from the
+ * implementation, because an expectation derived from the implementation
+ * cannot notice the implementation moving: an unconditional spread adding
+ * one frontmatter key, or a reordering of the block, changes this string
+ * and nothing else in this file.
+ */
+const GOLDEN_BASELINE_NOTE =
+  "---\ntitle: Golden\ntype: note\ntags: [a, b]\n---\n\nBody line one.\n\nBody line two.\n";
+
+/** Frontmatter key order of the pre-feature note, top to bottom. */
+const GOLDEN_BASELINE_FRONTMATTER_KEYS: ReadonlyArray<string> = Object.freeze([
+  "title",
+  "type",
+  "tags",
+]);
+
+/** The pre-feature bytes for a note with no frontmatter map at all. */
+const GOLDEN_BARE_NOTE = "---\n---\n\njust a body\n";
+
+/** Result field order the MCP surface and the SDK both read. */
+const GOLDEN_RESULT_KEYS: ReadonlyArray<string> = Object.freeze(["path", "outcome", "created"]);
+
 let vault: string;
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-create-note-modes-"));
@@ -74,12 +117,65 @@ function snapshotTree(root: string): ReadonlyArray<string> {
   return out;
 }
 
+/**
+ * Frontmatter keys of a written note, in the order they appear on disk.
+ * Order is half of what byte-identity means here: the same set of keys
+ * emitted in a different sequence is a different file, and a test that
+ * compared sets would not see it. A note with no frontmatter block is a
+ * caller error rather than an empty list - absence and "could not parse"
+ * must not collapse into one answer.
+ */
+function frontmatterKeys(markdown: string): ReadonlyArray<string> {
+  const lines = markdown.split("\n");
+  const end = lines[0] === FRONTMATTER_FENCE ? lines.indexOf(FRONTMATTER_FENCE, 1) : -1;
+  if (end < 0) {
+    throw new Error(`note carries no frontmatter block: ${JSON.stringify(markdown)}`);
+  }
+  return lines.slice(1, end).map((line) => {
+    const colon = line.indexOf(FRONTMATTER_KEY_SEPARATOR);
+    if (colon < 0) throw new Error(`frontmatter line carries no key: ${JSON.stringify(line)}`);
+    return line.slice(0, colon);
+  });
+}
+
+/** Read one written note back as raw text, so disk is checked, not memory. */
+function writtenNote(path: string): string {
+  return readFileSync(join(vault, path), "utf8");
+}
+
 describe("createNote - the new options are byte-identical when absent", () => {
+  test("with none of the options set the written bytes are the pre-feature golden", () => {
+    const res = createNote(vault, { ...BASELINE_INPUT });
+    expect(res.outcome).toBe("created");
+    // Byte for byte on disk...
+    expect(writtenNote(BASELINE_INPUT.path)).toBe(GOLDEN_BASELINE_NOTE);
+    // ...frontmatter key order included.
+    expect(frontmatterKeys(writtenNote(BASELINE_INPUT.path))).toEqual([
+      ...GOLDEN_BASELINE_FRONTMATTER_KEYS,
+    ]);
+  });
+
+  test("options spread in as undefined write the same bytes as options omitted", () => {
+    // That is the shape every conditional spread in this codebase
+    // produces when its condition is false, so an option threaded as an
+    // explicit `undefined` must not become a different document.
+    createNote(vault, {
+      ...BASELINE_INPUT,
+      ifExists: undefined,
+      strict: undefined,
+      template: undefined,
+      templateVariables: undefined,
+    });
+    expect(writtenNote(BASELINE_INPUT.path)).toBe(GOLDEN_BASELINE_NOTE);
+  });
+
   test("a document the strict validator would reject is still written when strict is unset", () => {
     // No frontmatter at all: `validateArtifact` reports frontmatter-missing.
     const res = createNote(vault, { path: "Notes/Bare.md", content: "just a body" });
     expect(res.created).toBe(true);
-    expect(readFileSync(join(vault, "Notes/Bare.md"), "utf8")).toContain("just a body");
+    // The whole file, not a substring: an empty frontmatter block is part
+    // of the pre-feature shape and a body-only file is not the same note.
+    expect(writtenNote("Notes/Bare.md")).toBe(GOLDEN_BARE_NOTE);
   });
 
   test("with ifExists unset an existing target is still refused with the exists code", () => {
@@ -98,6 +194,9 @@ describe("createNote - the new options are byte-identical when absent", () => {
     const res = createNote(vault, { path: "Notes/New.md", content: "x" });
     expect(res.outcome).toBe("created");
     expect(res.created).toBe(true);
+    // The result envelope is the one addition this unit makes, and it is
+    // pinned in full so a fourth field cannot arrive unannounced.
+    expect(Object.keys(res)).toEqual([...GOLDEN_RESULT_KEYS]);
   });
 });
 

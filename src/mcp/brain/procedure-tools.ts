@@ -95,6 +95,10 @@ async function toolBrainSkillProposals(
     // Per-skill invocation telemetry (t_56a12bde): deterministic counts
     // derived from skill_invoked continuity records, distinct from proposing
     // or ranking. Real usage evidence for the dream/synthesis pass.
+    // Each row also carries `offerAttributedCount` (t_ccb05134) - how many of
+    // those invocations cited the offer they came from. The command-line
+    // surface prints the same figure as `from_offer=`. The remainder are not
+    // unattributed-by-error: most runtimes' skill calls follow no offer.
     const usage = deriveSkillUsage(ctx.vault);
     return { total: usage.length, usage };
   }
@@ -264,7 +268,7 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
     description:
-      "Learn/list/review deterministic skill proposals from continuity records (learn, list, accept, reject), resolve abandoned accept sequences (recover), read per-skill invocation counts (usage), and resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
+      "Deterministic skill proposals from continuity records: learn, list, accept, reject; resolve abandoned accept sequences (recover); read per-skill invocation and offer-attribution counts (usage); resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
     inputSchema: {
       type: "object",
       properties: {

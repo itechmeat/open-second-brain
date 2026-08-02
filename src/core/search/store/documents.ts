@@ -12,6 +12,15 @@ import { SearchError } from "../types.ts";
 import { nowIso } from "./sql.ts";
 import { purgeVecRowsForDocument } from "./vectors.ts";
 
+/**
+ * `documents.event_anchor_examined`: whether an anchor-aware binary has
+ * ever resolved this document's event anchor. SQLite has no boolean, so
+ * the two values are named once here rather than written as bare 0/1 at
+ * each of the four sites that read or write them.
+ */
+const EXAMINED_YES = 1;
+const EXAMINED_NO = 0;
+
 export interface DocumentInput {
   readonly path: string; // vault-relative POSIX
   readonly title: string | null;
@@ -34,9 +43,19 @@ export interface DocumentInput {
   /**
    * The interval this note is ABOUT, resolved from its own frontmatter or
    * body by `resolveEventAnchor` (provenance at the boundary, v11), with
-   * the registered token naming which rung produced it. Absent / null for
-   * a note that declares no readable date, which then keeps ranking on
-   * storage mtime exactly as before the anchor existed.
+   * the registered token naming which rung produced it.
+   *
+   * The three states are distinct and all three are recorded:
+   *
+   *   - an `EventAnchor` - the caller resolved one;
+   *   - `null` - the caller resolved the anchor and the note declares no
+   *     readable date, so it keeps ranking on storage mtime exactly as
+   *     before the anchor existed;
+   *   - ABSENT - the caller did not resolve an anchor at all. The row is
+   *     then marked unexamined and `o2b search event-anchor-backfill`
+   *     finds it. Omitting the field is not the same statement as
+   *     passing `null`, and the column that separates them exists
+   *     because a hard time filter now depends on the difference.
    */
   readonly eventAnchor?: EventAnchor | null;
 }
@@ -98,14 +117,16 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         number | null,
         number | null,
         string | null,
+        number,
         string,
         string,
         string,
       ]
     >(
       "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, " +
-        "  event_anchor_start_ms, event_anchor_end_ms, event_anchor_source, created_at, updated_at, indexed_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "  event_anchor_start_ms, event_anchor_end_ms, event_anchor_source, event_anchor_examined, " +
+        "  created_at, updated_at, indexed_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT(path) DO UPDATE SET " +
         "  basename = excluded.basename, " +
         "  title = excluded.title, " +
@@ -117,6 +138,7 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         "  event_anchor_start_ms = excluded.event_anchor_start_ms, " +
         "  event_anchor_end_ms = excluded.event_anchor_end_ms, " +
         "  event_anchor_source = excluded.event_anchor_source, " +
+        "  event_anchor_examined = excluded.event_anchor_examined, " +
         "  updated_at = excluded.updated_at, " +
         "  indexed_at = excluded.indexed_at " +
         "RETURNING id",
@@ -133,6 +155,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       doc.eventAnchor?.startMs ?? null,
       doc.eventAnchor?.endMs ?? null,
       doc.eventAnchor?.source ?? null,
+      // Examined iff the caller stated an answer. `null` IS an answer
+      // ("this note declares nothing"); leaving the field out is not.
+      doc.eventAnchor === undefined ? EXAMINED_NO : EXAMINED_YES,
       now,
       now,
       now,
@@ -153,6 +178,14 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
  * null, because "no anchor" and "an anchor I cannot read" are different
  * answers and the caller must not receive the first when the truth is the
  * second.
+ *
+ * A row that was never EXAMINED also returns null, and deliberately does
+ * not raise: it holds exactly the answer the previous binary held, so
+ * the query degrades to storage mtime precisely as it did before this
+ * feature, rather than failing every query on an index that predates it.
+ * That state is not left silent either - it is counted by
+ * {@link countUnexaminedEventAnchors}, reported by every index run, and
+ * closed by `o2b search event-anchor-backfill --apply`.
  */
 export function eventAnchorForPath(db: Database, path: string): EventAnchor | null {
   const row = db
@@ -186,6 +219,59 @@ export function eventAnchorForPath(db: Database, path: string): EventAnchor | nu
     endMs: row.event_anchor_end_ms,
     source: row.event_anchor_source,
   });
+}
+
+/**
+ * Vault-relative paths of the documents no anchor-aware binary has ever
+ * examined (v11), in stable path order.
+ *
+ * These are the rows a v10 index carried across the migration: the
+ * columns exist, the fastpaths correctly decline to recompute anything
+ * for content that did not change, and so nothing ever populates them.
+ * They are NOT documents that declare no date - that is the state this
+ * list exists to be distinguishable from.
+ */
+export function unexaminedEventAnchorPaths(db: Database): string[] {
+  return db
+    .query<{ path: string }, [number]>(
+      "SELECT path FROM documents WHERE event_anchor_examined = ? ORDER BY path",
+    )
+    .all(EXAMINED_NO)
+    .map((r) => r.path);
+}
+
+/** How many documents no anchor-aware binary has ever examined (v11). */
+export function countUnexaminedEventAnchors(db: Database): number {
+  return (
+    db
+      .query<{ c: number }, [number]>(
+        "SELECT count(*) AS c FROM documents WHERE event_anchor_examined = ?",
+      )
+      .get(EXAMINED_NO)?.c ?? 0
+  );
+}
+
+/**
+ * Record the event anchor of an already-indexed document and mark it
+ * examined, touching nothing else on the row - no chunks, no links, no
+ * stat fingerprint. This is the backfill's only write.
+ *
+ * `null` stores the verdict "this note declares no readable date", which
+ * is a result and not an absence of one.
+ */
+export function setEventAnchor(db: Database, path: string, anchor: EventAnchor | null): void {
+  db.run(
+    "UPDATE documents SET event_anchor_start_ms = ?, event_anchor_end_ms = ?, " +
+      "event_anchor_source = ?, event_anchor_examined = ?, updated_at = ? WHERE path = ?",
+    [
+      anchor?.startMs ?? null,
+      anchor?.endMs ?? null,
+      anchor?.source ?? null,
+      EXAMINED_YES,
+      nowIso(),
+      path,
+    ],
+  );
 }
 
 /**

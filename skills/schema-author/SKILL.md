@@ -12,7 +12,7 @@ Use this skill when a task changes the active Brain schema pack in `Brain/_brain
 1. Inspect the active schema pack with `schema_inspect` (`view="active_pack"`) or `o2b brain schema --json`.
 2. Check current usage and findings with `schema_inspect` views `stats`, `lint`, and `orphans`.
 3. Explain candidate tokens with `schema_inspect` (`view="explain_type"`) before renaming or deleting them.
-4. Preview the batch first with `schema_apply_mutations` (`dry_run=true`) or `o2b brain schema apply --dry-run --mutation ...`: it returns the pack that would result and its diff, writes nothing, and rejects an invalid batch exactly as the apply would.
+4. Preview the batch first with `schema_apply_mutations` (`dry_run=true`) or `o2b brain schema apply --dry-run --mutation ...`: it returns the pack that would result and its diff and writes nothing at all - no config write, no audit record, no lock file. It runs the same pack validator the apply runs, so a batch that validator rejects raises identically in both. It does not run the two checks that exist only because the apply writes: the vault-identity write guard, and the atomic writer's re-parse of the rendered YAML. A batch that renders to unparseable YAML previews clean and fails on apply, so treat a clean preview as "the mutations are valid", not as "the apply will succeed".
 5. Apply schema changes only through `schema_apply_mutations` or `o2b brain schema apply --mutation ...` so writes are locked, atomic, and audited.
 6. Re-run lint/stats after mutation and report changed tokens plus any remaining findings.
 

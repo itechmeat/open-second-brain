@@ -9,7 +9,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -96,5 +104,37 @@ describe("createNote", () => {
       expect(err).toBeInstanceOf(CreateNoteError);
       expect((err as CreateNoteError).code).toBe("invalid_path");
     }
+  });
+});
+
+describe("a caller-named path is read with this host's separator only", () => {
+  // Defect 2 of the v1.43.0 security review, reproduced at the envelope.
+  // On POSIX a backslash is an ordinary filename character, and three
+  // layers disagreed about it: the write-binding matcher split on it, the
+  // result renderer rewrote it to `/`, and the Brain-root and vault-scope
+  // checks treated it as literal. The envelope refuses the path rather
+  // than picking one reading.
+  for (const [label, path] of [
+    ["a backslash inside a segment", "Projects\\evil.md"],
+    ["a backslash traversal", "Projects\\..\\..\\..\\etc\\x.md"],
+    ["a backslash-hidden Brain root", "Brain\\x.md"],
+  ] as const) {
+    test(`${label} is refused, not reinterpreted`, () => {
+      let caught: CreateNoteError | null = null;
+      try {
+        createNote(vault, { path, content: "x" });
+      } catch (err) {
+        caught = err as CreateNoteError;
+      }
+      expect(caught).toBeInstanceOf(CreateNoteError);
+      expect(caught!.code).toBe("invalid_path");
+      expect(readdirSync(vault)).toEqual([]);
+    });
+  }
+
+  test("a POSIX path with the same segments is still created", () => {
+    const res = createNote(vault, { path: "Projects/evil.md", content: "x" });
+    expect(res.path).toBe("Projects/evil.md");
+    expect(existsSync(join(vault, "Projects", "evil.md"))).toBe(true);
   });
 });

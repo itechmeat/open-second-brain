@@ -43,6 +43,7 @@ const handler = NER_TOOLS[0]!.handler;
 describe("brain_intake_entities", () => {
   test("intakes agent-supplied entities into the registry", async () => {
     const res = await handler(ctx, {
+      source: "[[Notes/scaling.md]]",
       entities: [
         { category: "concept", name: "Layer 2s" },
         { category: "people", name: "Vitalik", aliases: ["V."] },
@@ -52,6 +53,7 @@ describe("brain_intake_entities", () => {
       entities_created: [expect.any(String), expect.any(String)],
       entities_updated: [],
       relations_applied: 0,
+      trust: "trusted",
     });
     expect(listEntities(vault)).toHaveLength(2);
     expect(getEntity(vault, { category: "concept", query: "Layer 2s" })?.name).toBe("Layer 2s");
@@ -59,6 +61,7 @@ describe("brain_intake_entities", () => {
 
   test("applies typed relations between extracted entities", async () => {
     const res = await handler(ctx, {
+      source: "[[Notes/restaking.md]]",
       entities: [
         { category: "concept", name: "Restaking" },
         { category: "concept", name: "Validators" },

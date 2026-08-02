@@ -30,6 +30,20 @@
  * lower rung's answer for it would report a date the document never
  * stated.
  *
+ * ## Recorded provenance is not the same as event time
+ *
+ * All four rungs are RECORDED - that is what "provenance at the
+ * boundary" means, and it is why the rung is stored as a registered
+ * token instead of being thrown away. Which of them the query side is
+ * allowed to JUDGE a document by is a separate, narrower question, and
+ * {@link anchorIsEventTime} answers it: `created_at` and `date` are
+ * stamped by every Brain writer, describe when a file was authored, and
+ * were never event time before this release. The query-side event-time
+ * resolver feeds a filter that DROPS candidates, so promoting them into
+ * it would silently change what a time-ranged query means - "what did I
+ * touch since January" would start answering about authorship. The body
+ * rung is the one this release adds, and it is the one that judges.
+ *
  * ## Two deliberate refusals and one deliberate acceptance
  *
  * - **Slash-formatted dates are not recognised.** Resolving `04/03/2026`
@@ -87,6 +101,22 @@ const EVENT_ANCHOR_SOURCE_VALUES: ReadonlyArray<string> = Object.freeze(
 
 export function isEventAnchorSource(value: unknown): value is EventAnchorSource {
   return typeof value === "string" && EVENT_ANCHOR_SOURCE_VALUES.includes(value);
+}
+
+/**
+ * The rungs that are EVENT TIME, and may therefore decide whether a
+ * candidate survives the hard `since` / `until` filter. See the
+ * "recorded provenance is not the same as event time" section above for
+ * why the two frontmatter point fields are not among them.
+ */
+const EVENT_TIME_ANCHOR_SOURCES: ReadonlyArray<EventAnchorSource> = Object.freeze([
+  EVENT_ANCHOR_SOURCE.validity,
+  EVENT_ANCHOR_SOURCE.body,
+]);
+
+/** True when `anchor` came from a rung the query side judges a document by. */
+export function anchorIsEventTime(anchor: EventAnchor): boolean {
+  return EVENT_TIME_ANCHOR_SOURCES.includes(anchor.source);
 }
 
 /**

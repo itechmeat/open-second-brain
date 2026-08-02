@@ -199,6 +199,7 @@ export async function search(
         semanticHits,
         timeRange,
         validityWindowFor: eventTime.validityWindowFor,
+        inferredEventTimeSourceFor: eventTime.inferredEventTimeSourceFor,
       });
       keywordHits = inRange.keywordHits;
       semanticHits = inRange.semanticHits;

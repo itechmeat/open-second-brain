@@ -128,6 +128,7 @@ interface MutableStats {
   relationViolations: IndexStats["relationViolations"];
   tierDrift: IndexStats["tierDrift"];
   aliasResolved: number;
+  eventAnchorsPending: number;
   backend: IndexStats["backend"];
   deferredReason: IndexStats["deferredReason"];
 }
@@ -146,6 +147,9 @@ function newStats(): MutableStats {
     relationViolations: [],
     tierDrift: [],
     aliasResolved: 0,
+    // Counted at the end of the run, once every changed document has
+    // been upserted: what is left is what this run did not reach.
+    eventAnchorsPending: 0,
     // Resolved lazily at the end of the run, after content detection.
     // Defaults to the deterministic offline backend.
     backend: "offline",
@@ -167,6 +171,7 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     relationViolations: Object.freeze([...s.relationViolations]),
     tierDrift: Object.freeze([...s.tierDrift]),
     aliasResolved: s.aliasResolved,
+    eventAnchorsPending: s.eventAnchorsPending,
     backend: s.backend,
     deferredReason: s.deferredReason,
     durationMs,
@@ -542,6 +547,16 @@ async function indexInto(
       stats.backend = "offline";
       stats.deferredReason = await offlineDeferredReason(config);
     }
+
+    // Documents this run left with no event anchor RESOLVED - not
+    // documents that declare no date. A schema bump migrates in place
+    // and reindexes nothing, and both fastpaths above correctly decline
+    // to recompute an anchor for content that did not change, so a
+    // document carried over from a pre-anchor binary is never examined
+    // by any number of index runs. Reported here because this run is the
+    // surface an upgrading operator reaches first, and because a hard
+    // `since` / `until` filter now depends on the answer.
+    stats.eventAnchorsPending = store.countUnexaminedEventAnchors();
 
     const now = new Date().toISOString();
     store.setState(LAST_INDEXED_AT_STATE_KEY, now);

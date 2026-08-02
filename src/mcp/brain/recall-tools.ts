@@ -603,11 +603,14 @@ function coerceNonNegativeTokenValue(
 /**
  * Agent-operable context-pack outcome loop. `post` writes one compact
  * outcome row (gated on `context_pack_outcome_enabled`, payload-safe:
- * counters + an opaque sample id only) AND composes the C3 ledger by posting
- * a matching first-pass/repair/retry calibration record. `list`/`summary`
- * read the rows regardless of the gate so historical aggregates stay
- * inspectable. The three token signals (exact/modeled/observed) stay strictly
- * separate; a field the caller omits is never invented.
+ * counters + an opaque sample id only), composes the C3 ledger by posting
+ * a matching first-pass/repair/retry calibration record, and composes the
+ * evidence half by posting the kernel's own reading of the sample beside
+ * the agent's claim. All three rows join on the one sample id and carry
+ * the same acting agent. `list`/`summary` read the rows regardless of the
+ * gate so historical aggregates stay inspectable. The three token signals
+ * (exact/modeled/observed) stay strictly separate; a field the caller omits
+ * is never invented.
  */
 async function toolBrainContextPackOutcome(
   ctx: ServerContext,
@@ -701,18 +704,34 @@ async function toolBrainContextPackOutcome(
   );
 }
 
+/**
+ * The correlation keys a `post` records, read from the caller's arguments.
+ *
+ * `agent_id` is the ACTING agent, and it is an ARGUMENT rather than
+ * `ServerContext.agentName` deliberately. That getter resolves the plugin
+ * config on every access and RAISES on a config that is present but
+ * unreadable - correctly, since the alternative is writing under a guessed
+ * identity - so consulting it here would let one broken line in an
+ * unrelated file turn a working telemetry post into a tool error. The
+ * identity a client asserts is exactly as self-asserted as the one the
+ * config holds and costs nothing when the config is broken, so it is the
+ * one this row carries. Omitted stays omitted: no identity is invented.
+ */
 function contextPackOutcomeCorrelation(args: Record<string, unknown>): {
   host?: string;
   sessionId?: string;
   turnId?: string;
+  agentId?: string;
 } {
   const host = optionalStringArg("brain_context_pack_outcome", args, "host");
   const sessionId = optionalStringArg("brain_context_pack_outcome", args, "session_id");
   const turnId = optionalStringArg("brain_context_pack_outcome", args, "turn_id");
+  const agentId = optionalStringArg("brain_context_pack_outcome", args, "agent_id");
   return {
     ...(host !== undefined ? { host } : {}),
     ...(sessionId !== undefined ? { sessionId } : {}),
     ...(turnId !== undefined ? { turnId } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
   };
 }
 
@@ -1225,8 +1244,15 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         evidence_claim: {
           type: "object",
+          // Every client pays for this string on every request (the
+          // registry guard caps it at 160 chars), so the reasoning lives
+          // on `contextPackEvidenceClaim` below and the wire text states
+          // only what a caller must know to use the field correctly: the
+          // FOUR verdicts it can produce, and that a malformed member is
+          // refused rather than downgraded - the earlier "Never rejects"
+          // described the disagreement path and read as covering both.
           description:
-            "post (optional): what you assert about this sample; the kernel reads its receipt off disk and records match|mismatch|unclaimed as a second row. Never rejects.",
+            "post (optional): what you assert about this sample; kernel reads its receipt off disk, records match|mismatch|unclaimed|unresolved. Malformed = INVALID_PARAMS.",
           properties: {
             final_text_hash: {
               type: "string",
@@ -1248,6 +1274,11 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         host: { type: "string", description: "Optional host/runtime label; also a filter." },
         session_id: { type: "string", description: "Optional session id recorded on the row." },
         turn_id: { type: "string", description: "Optional turn id recorded on the row." },
+        agent_id: {
+          type: "string",
+          description:
+            "post (optional): the ACTING agent, recorded on all three rows this post lands. Self-asserted, never a verifier; omitted records no actor rather than a guess.",
+        },
         since: { type: "string", description: "Optional inclusive lower timestamp bound." },
         until: { type: "string", description: "Optional inclusive upper timestamp bound." },
         limit: {

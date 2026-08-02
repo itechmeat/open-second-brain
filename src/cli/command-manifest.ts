@@ -448,6 +448,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "vector-backfill",
           "Compute vectors for indexed chunks that have none (dry-run unless --apply)",
         ),
+        command(
+          "event-anchor-backfill",
+          "Resolve event anchors for indexed documents that have none (dry-run unless --apply)",
+        ),
       ],
     ),
     command(

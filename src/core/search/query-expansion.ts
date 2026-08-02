@@ -24,6 +24,7 @@
  */
 
 import { listEntities } from "../brain/entities/registry.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../brain/entities/status-scope.ts";
 import { tokenizeForExpansion } from "./synonyms.ts";
 import type { StructuredRecallQueryDocument } from "./types.ts";
 
@@ -98,13 +99,22 @@ export function expandQuery(
  * Registry entities whose name (or alias) shares a token with the
  * query, sorted by name for determinism. Fail-soft: a vault without a
  * registry simply matches nothing.
+ *
+ * Anchoring is a CANONICAL-scope read: only a record that may hold an
+ * identity may lend its name to a query. The scope comes from the shared
+ * predicate rather than from an explicit `{ status }` ask, because the
+ * explicit ask is the registry's deliberate bypass of that predicate -
+ * it exists so an operator can look at what is quarantined, and a
+ * machine read path taking it would re-implement the filter it is meant
+ * to defer to.
  */
 function matchEntities(vault: string, queryTokens: ReadonlyArray<string>): string[] {
   if (queryTokens.length === 0) return [];
   const wanted = new Set(queryTokens);
   let names: string[];
   try {
-    names = listEntities(vault, { status: "active" })
+    names = listEntities(vault)
+      .filter((entity) => entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical))
       .filter((entity) =>
         [entity.name, ...entity.aliases].some((label) =>
           tokenizeForExpansion(label).some((token) => wanted.has(token)),
