@@ -5,6 +5,12 @@
  * to keyword-only with warnings when the lane cannot run).
  */
 
+import {
+  resolveSemanticCapability,
+  SEMANTIC_CAPABILITY_TIER,
+  semanticCapabilityIsBlocked,
+  semanticCapabilityLabel,
+} from "./capability-tier.ts";
 import { classifyEmbeddingError } from "./embeddings/openai-compat.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import { Store } from "./store.ts";
@@ -74,18 +80,21 @@ export async function runSemanticPhase(
     warnings.push("sqlite-vec unavailable, semantic disabled this session");
     return { attempted: false, hits: [], warnings };
   }
-  if (!config.semantic.enabled) {
-    // Defensive: should be handled at policy layer, but in case caller
-    // forced wantSemantic without enabling, treat as implicit warning.
-    warnings.push("semantic not enabled in config; using keyword-only");
-    return { attempted: false, hits: [], warnings };
+  // What the OPERATOR CONFIGURED, from the one shared resolver
+  // (provenance-at-the-boundary, F1). The two runtime guards above stay
+  // where they are: an empty vector table and a missing extension are
+  // facts about this index and this machine, not about the configuration.
+  //
+  // The explicit arm is the one that ATTEMPTED something and could not,
+  // so it keeps reporting the typed `SearchError`; the implicit arm
+  // refused before attempting and reports the capability. Neither
+  // condition is reported both ways.
+  const capability = resolveSemanticCapability(config.semantic);
+  if (capability.tier === SEMANTIC_CAPABILITY_TIER.credentialMissing && opts.explicit) {
+    throw new SearchError("EMBEDDING_KEY_MISSING", "embedding key not configured");
   }
-  // The offline local provider needs no key; every remote provider does.
-  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
-    if (opts.explicit) {
-      throw new SearchError("EMBEDDING_KEY_MISSING", "embedding key not configured");
-    }
-    warnings.push("embedding key not configured; semantic disabled");
+  if (semanticCapabilityIsBlocked(capability)) {
+    warnings.push(await semanticCapabilityLabel(capability.code));
     return { attempted: false, hits: [], warnings };
   }
 

@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import { resolveSearchConfig } from "../../../search/index.ts";
 import { makeProvider } from "../../../search/embeddings/provider.ts";
+import { providerProducesVectors } from "../../../search/embeddings/contract.ts";
 import type { EmbeddingProvider } from "../../../search/embeddings/contract.ts";
 import { findMergeCandidates } from "../../merge-candidates.ts";
 import { brainDirs } from "../../paths.ts";
@@ -103,7 +104,7 @@ function cosine(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
 function resolveConfiguredProvider(vault: string): EmbeddingProvider | null {
   try {
     const provider = makeProvider(resolveSearchConfig({ vault }).semantic);
-    return provider.name === "null" ? null : provider;
+    return providerProducesVectors(provider) ? provider : null;
   } catch {
     return null;
   }
@@ -130,7 +131,10 @@ export async function detectSemanticDedup(
         opts.lexicalThreshold !== undefined ? { lexicalThreshold: opts.lexicalThreshold } : {},
       ),
     });
-  if (provider === null || provider.name === "null") return lexical();
+  // An INJECTED provider reaches here without passing through
+  // `resolveConfiguredProvider`, so the contract predicate is asked again
+  // rather than assumed (provenance-at-the-boundary, F2).
+  if (provider === null || !providerProducesVectors(provider)) return lexical();
 
   const candidates = listPreferenceCandidates(vault);
   if (candidates.length < 2) return lexical();

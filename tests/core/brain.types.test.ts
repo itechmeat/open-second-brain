@@ -120,6 +120,8 @@ describe("BRAIN_* const enums", () => {
       "source-citation",
       // Source pipeline integrity suite (t_bd6cc4cb) guarded doctor repair
       "doctor-repair",
+      // provenance-at-the-boundary unit F (t_76b89833) vector-only backfill
+      "vector-backfill",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

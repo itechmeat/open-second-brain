@@ -444,6 +444,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("rerank-provider", "Manage reranker provider profiles"),
         command("rerank-fit", "Diagnose whether the configured reranker fits this vault's queries"),
         command("plan", "Preview the should-read shortlist for a query without reading the notes"),
+        command(
+          "vector-backfill",
+          "Compute vectors for indexed chunks that have none (dry-run unless --apply)",
+        ),
       ],
     ),
     command(

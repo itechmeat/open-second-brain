@@ -284,6 +284,57 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b search index",
         autoRepairable: false,
       },
+      // --- Semantic capability tiers (provenance-at-the-boundary, F1) ---
+      // WHAT THE OPERATOR CONFIGURED, resolved by
+      // `core/search/capability-tier.ts` and reported by the four
+      // surfaces that used to each derive it themselves - one of them by
+      // assembling these very sentences beside the call. The `SearchError`
+      // codes answer the different question of what a call attempted and
+      // could not do; nothing reports both for one condition.
+      //
+      // The exit for the two blocked tiers is the pre-flight diagnostic
+      // rather than an edit command: the remediation is a config key, and
+      // no verb in this tool writes one. `search check` is what names the
+      // key, the provider and the env var for the operator to set.
+      {
+        code: "semantic-capability-disabled",
+        issueClass: "semantic search disabled (search_semantic_enabled=false)",
+        nextCommand: "o2b search check",
+        autoRepairable: false,
+      },
+      {
+        code: "semantic-capability-key-missing",
+        issueClass: "embedding_api_key not configured",
+        nextCommand: "o2b search check",
+        autoRepairable: false,
+      },
+      {
+        // Not a fault - the tier an operator wants to be at. It is
+        // registered because the ladder must be total: a surface that
+        // resolves a label per tier cannot have one rung with no entry,
+        // and the honest exit from "configured" is to populate vectors.
+        code: "semantic-capability-configured",
+        issueClass: "semantic search configured",
+        nextCommand: "o2b search vector-backfill",
+        autoRepairable: false,
+      },
+      // --- Vector-population states (provenance-at-the-boundary, F) ---
+      // Index facts, deliberately named apart from the capability tiers:
+      // a chunk with no vector is a `chunks` row with no `embeddings` row,
+      // which is a first-class, already-resumable state and not a
+      // degraded one.
+      {
+        code: "semantic-vectors-deferred",
+        issueClass: "embeddings not requested this run",
+        nextCommand: "o2b search vector-backfill --apply",
+        autoRepairable: false,
+      },
+      {
+        code: "semantic-vectors-pending",
+        issueClass: "indexed chunks with no vector",
+        nextCommand: "o2b search vector-backfill --apply",
+        autoRepairable: false,
+      },
       {
         code: "git-history-absent",
         issueClass: "no ingested git history",
@@ -294,6 +345,18 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "bridge-proposals-absent",
         issueClass: "no bridge-proposal artifact yet",
         nextCommand: "o2b brain bridges discover",
+        autoRepairable: false,
+      },
+      {
+        // provenance-at-the-boundary, unit B. A caller-named write
+        // landed outside the `write_binding.path_prefixes` the operator
+        // declared. The exit is the per-path policy inspector, which
+        // reports the binding verdict for one path beside the
+        // vault-scope verdict, so the operator sees WHY the write was
+        // refused and what the declaration currently admits.
+        code: "write-binding-refused",
+        issueClass: "caller-named write outside the declared write binding",
+        nextCommand: "o2b vault inspect <relpath>",
         autoRepairable: false,
       },
       {

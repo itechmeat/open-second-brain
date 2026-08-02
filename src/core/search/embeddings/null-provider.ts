@@ -14,6 +14,13 @@ export class NullProvider implements EmbeddingProvider {
   readonly name = "null";
   readonly model = "";
   readonly dimension = null;
+  /**
+   * The one implementation in the tree that embeds nothing, and the
+   * reason the contract carries this flag at all
+   * (provenance-at-the-boundary, F2). Callers ask
+   * `providerProducesVectors(provider)`, never `provider.name === "null"`.
+   */
+  readonly producesVectors = false;
 
   embed(_texts: ReadonlyArray<string>): Promise<number[][]> {
     return Promise.reject(

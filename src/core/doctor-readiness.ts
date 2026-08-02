@@ -23,6 +23,13 @@
  */
 
 import { discoverConfig } from "./config.ts";
+import {
+  resolveSemanticCapability,
+  SEMANTIC_CAPABILITY_CODE,
+  semanticCapabilityIsBlocked,
+  semanticCapabilityLabel,
+} from "./search/capability-tier.ts";
+import { providerProducesVectors } from "./search/embeddings/contract.ts";
 import { makeProvider } from "./search/embeddings/provider.ts";
 import { resolveSearchConfig } from "./search/index.ts";
 import { buildPayload } from "./install/payload.ts";
@@ -174,18 +181,47 @@ export async function probeLlmKey(opts: ReadinessOptions): Promise<ReadinessVerd
  * dimension. The provider's `ping()` is the authoritative source of the
  * dimension (a cloud provider learns it from the first response), so the
  * probe pings under the per-check timeout rather than trusting config.
+ *
+ * A configuration the operator has not finished is `skipped`, not
+ * `failed`, and WHICH configuration it is comes from the shared
+ * capability tier (provenance-at-the-boundary, F1). Two consequences,
+ * both deliberate: the sentinel provider is now recognised by the
+ * contract predicate rather than by the literal name it happens to
+ * carry, and a key-less remote provider is refused HERE instead of
+ * making a credential-free outbound request whose only possible outcome
+ * is an auth error. `probeLlmKey` above is the probe that reports the
+ * missing key as a failure, so nothing is lost by skipping here.
  */
 export async function probeEmbeddingProvider(opts: ReadinessOptions): Promise<ReadinessVerdict> {
   const configPath = resolveConfigPath(opts);
+  let semantic;
+  try {
+    semantic = resolveSearchConfig({ vault: opts.vault, configPath }).semantic;
+  } catch (err) {
+    return { status: "fail", detail: `config failed to resolve: ${(err as Error).message}` };
+  }
+  // The tier is read BEFORE the provider is constructed: a provider whose
+  // credential is missing refuses at construction, and reporting that as
+  // "failed to load" described the wrong thing entirely.
+  const capability = resolveSemanticCapability(semantic);
+  if (semanticCapabilityIsBlocked(capability)) {
+    return { status: "skipped", detail: await semanticCapabilityLabel(capability.code) };
+  }
   let provider;
   try {
-    const { semantic } = resolveSearchConfig({ vault: opts.vault, configPath });
     provider = makeProvider(semantic);
   } catch (err) {
     return { status: "fail", detail: `provider failed to load: ${(err as Error).message}` };
   }
-  if (provider.name === "null") {
-    return { status: "skipped", detail: "semantic search disabled; no embedding provider" };
+  // A provider that embeds nothing IS the `disabled` capability, whatever
+  // the rest of the configuration says, so it names that code rather than
+  // the tier's - the two agree for every provider in the tree and this
+  // keeps them agreeing for one that is added later.
+  if (!providerProducesVectors(provider)) {
+    return {
+      status: "skipped",
+      detail: await semanticCapabilityLabel(SEMANTIC_CAPABILITY_CODE.disabled),
+    };
   }
   const pong = await provider.ping();
   if (!pong.ok) {

@@ -28,4 +28,32 @@ export interface EmbeddingProvider {
    * (NullProvider, MockEmbeddingProvider) leave this undefined.
    */
   consumeRetryCount?(): number;
+  /**
+   * Whether this provider produces vectors at all
+   * (provenance-at-the-boundary, F2). Read through
+   * {@link providerProducesVectors}, never directly.
+   *
+   * Four call sites used to answer this by comparing `name` to the
+   * literal `"null"`, so any provider registered under a different name
+   * bypassed all four silently. The question belongs to the contract, so
+   * the contract answers it.
+   *
+   * Optional and additive, in the same shape as `consumeRetryCount`
+   * above. An absent declaration means "produces vectors", which is the
+   * truthful default for every implementation that is a real embedder -
+   * it is not a fallback covering a failure, because there is no failure
+   * here to cover: a provider that CANNOT embed is a configuration
+   * sentinel, and a sentinel is written knowing it is one.
+   */
+  readonly producesVectors?: boolean;
+}
+
+/**
+ * True when `provider` embeds text. The single predicate every site that
+ * needs to tell a real provider from the configuration sentinel calls -
+ * `resolveConfiguredEmbeddingProvider`, the hygiene dedup detector, and
+ * the readiness probe.
+ */
+export function providerProducesVectors(provider: EmbeddingProvider): boolean {
+  return provider.producesVectors ?? true;
 }

@@ -24,6 +24,7 @@ import { cmdSearchProvider, cmdSearchRerankProvider } from "./search/verbs/provi
 import { cmdSearchQuery } from "./search/verbs/query.ts";
 import { cmdSearchRerankFit } from "./search/verbs/rerank-fit.ts";
 import { cmdSearchStatus } from "./search/verbs/status.ts";
+import { cmdSearchVectorBackfill } from "./search/verbs/vector-backfill.ts";
 import { cmdSearchWatch } from "./search/verbs/watch.ts";
 
 const KNOWN_VERBS = new Set([
@@ -41,6 +42,7 @@ const KNOWN_VERBS = new Set([
   "rerank-fit",
   "plan",
   "watch",
+  "vector-backfill",
 ]);
 
 export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promise<number> {
@@ -83,6 +85,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchRerankFit(rest);
       case "plan":
         return await cmdSearchPlan(rest);
+      case "vector-backfill":
+        return await cmdSearchVectorBackfill(rest);
       default:
         process.stderr.write(`error: unknown search verb: ${verb}\n`);
         return 2;
