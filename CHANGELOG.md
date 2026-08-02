@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.43.0] - 2026-08-02
+
+Ten units on one seam: the boundary where content, authority and claims enter the vault. Open Second Brain could say a great deal about what it holds and almost nothing about where any of it came from, who was entitled to put it there, or what backs a claim made about it. An entity extracted from a scraped page became a first-class Brain entity on the same terms as one the operator typed. A write named any path it liked. A note was created with whatever frontmatter the caller assembled. A record was ranked by when its file was touched rather than by what it is about. An agent posted its own success and nothing recomputed it.
+
+A reconnaissance pass over the code preceded the design and changed the work substantially: load-bearing premises were falsified in nine of the ten tasks. Two described a capability that cannot be built honestly on this architecture and were scoped down rather than faked. An independent verifier is not definable here - agent identity is an environment variable, else a config key, else the literal string `agent`, with any caller-supplied string accepted verbatim, and the server is a child process of the agent it labels, so two records asserting two names chosen by one process are not two actors. A schema pack fetched by URL is not implementable either - a pack is a block inside one config file, the listing returns a single hardcoded entry, and there is no registry to install into and no signature verification anywhere. Three tasks described gaps that are already closed while the open gap sat one layer away unmentioned: ranking already used a content-derived event time, skill invocation was already observed, and a document validator already existed.
+
+Five reviewers were then given the finished branch and the claims made for it, with no knowledge of how the work was done, one of them told to treat every test as guilty until proven innocent. They found thirty defects, nine introduced by this wave. Every one is fixed or named below. Three were a mechanism nothing could make fire, which is the shape this repository reverted a unit for one release ago, and one of those three was removed rather than repaired.
+
+### Added
+
+- Untrusted intake lands in a quarantine lane instead of the registry. Trust is originated where content arrives and derived structurally from the source identity's shape, with no host list, scheme list or word list in any language. The entity status filter, previously re-implemented at every caller and absent at eight of them, is one shared predicate a census keeps singular, and a status nothing can leave would be a dead end so release from quarantine is the named exit.
+- A write boundary the operator declares in the vault config. A caller-named write outside the declared path prefixes is refused through a registered code. Its authority is the config file, never the caller: identity here is self-asserted and additionally overridable by an argument on twenty-two tool schemas, so a fence keyed to it is bypassed by passing a different string. This is a write boundary over caller-named paths and not a security boundary, and nothing describes it as one.
+- Note creation gains an idempotent skip whose result says which happened, pre-write validation over the existing artifact validator, and a template mode with a closed two-construct grammar - typed variables, and presence-driven sections with list iteration - parsed by recursive descent with no dependency.
+- A body-derived date anchor, materialised at index time with the rung that won recorded beside it as a registered token, so a back-dated note ranks by what it is about. `o2b search event-anchor-backfill` resolves anchors for documents indexed before this release; an index run counts what is still pending and names that command as its exit.
+- `embedding_batch_tokens` closes an embedding batch on accumulated tokens as well as on item count, on both batching providers.
+- One capability-tier resolver shared by the five sites that computed those facts separately, behind registered codes, with a contract predicate replacing a provider-name string comparison duplicated at five sites. `o2b search vector-backfill` runs the vector phase alone.
+- `schema_apply_mutations` and `o2b brain schema apply` gain a dry run returning the pack that would result and its diff, with the same validator rejections and no write.
+- A second ledger record carrying the kernel's own on-disk evidence against the acting agent's claim, joined by the existing sample id. It carries no verifier identity and no surface calls it independently witnessed, because it cannot be.
+- A skill offer now has a content-addressed identity an invocation can be joined back to, a discriminating-term ranking floor derived from corpus document frequency, and retained provenance where a skill is shadowed by a same-named one in a later root.
+
+### Fixed
+
+- `o2b brain schema apply --dry-run` parsed the flag and wrote the vault schema anyway. It previews now.
+- An untrusted source that guessed an entity name captured it permanently: every later trusted write landed inside the quarantined record, returned a not-created result, and read back as absent. Trusted and untrusted writes are separate lanes that never resolve across.
+- The trust classifier had the wrong polarity in three ways. A bare host classified as trusted, an intake naming no source classified as trusted, and a vault filename containing a colon parsed as an external URI and quarantined everything it touched. It trusts only what is shaped like a location inside this vault, and an intake naming no source is refused before any write.
+- A symlink under a declared write prefix widened the binding to the whole vault while the response named a path the bytes were not at. A backslash was a separator to the prefix matcher and an ordinary character to the filesystem, so a binding admitted a write that landed at the vault root - and the same mismatch had been hiding the Brain machinery root from its own guard with no config present at all. Both are pre-existing and both are closed.
+- The anchor ladder had promoted two frontmatter keys into event time, and event time feeds the hard `since`/`until` filter rather than only the ranking boost, so a note carrying an old `created_at` and edited today disappeared from a query for recent work. Those keys stay recorded with their provenance; they are no longer consulted by the query side.
+- A frontmatter key containing a newline emitted extra lines, and because an update merges last-wins a caller could overwrite a key it was not asked to touch. Keys are refused at the emitter rather than escaped: the reader has no quoted-key form to escape into, so a quoted key would be lost on the next parse, trading an injection for a silent loss.
+- An explicit semantic request degraded to lexical results with a success exit on one rung of the capability ladder. A token budget above the 32-bit boundary truncated to one item per request, and the sibling count cap had the same defect; both are refused rather than quietly reinterpreted.
+- Quarantined records were readable through page walkers, which no entity-reader rule can see because entity records are ordinary vault pages.
+- A capability probe made an outbound request with no credential whose only possible outcome was an authentication error, a working local provider was reported as having an unresolved key and advised to set one it does not use, and a fourth branch of the deferred-reason function was unreachable because its only call site passed a constant.
+
+### Changed
+
+- The declared continuity scope was built and removed before release rather than shipped. Nothing could supply one, and its single vocabulary member would have made a record less visible, since a declared scope is dropped by every reader that does not name it. The record envelope is unchanged, dedup id included, and is now pinned as a known answer.
+- Three censuses were added and two of them were the disease they were written to cure. The write-site census read only the first `node:fs` import statement per file and was already missing a live vault append. The entity-read census missed the registry API whose explicit status branch bypasses the shared predicate, had the quarantine value absent from its own vocabulary, and its second rule reached nothing at all. Every rule now has to reach modules no other rule reaches, and that is asserted rather than described.
+- Four tests claimed byte-identity without comparing bytes, one by sorting the keys whose order was the property. Each compares a golden now and each was shown failing against a real mutation of the code it pins.
+
+### Notes
+
+- Three modules carried literal NUL bytes as key separators, which makes `grep` classify the file as binary and print nothing for it. They were invisible to every grep-based sweep, including this release's own reconnaissance, which is why it undercounted the continuity readers as five of twenty-one when the measured figure is four of twenty-four. All three now use the two-character escape.
+- Found and deliberately not closed: roughly forty test sites report a silent pass when the vector extension is absent, so a host without it loses the coverage while the suite reads green - two files were converted and the shared helper is a follow-up. Twenty continuity readers bypass the masking read model, nineteen of them predating this release and the twentieth added by it. Page walkers outside the link-graph tree are not asserted by the new rule. The concurrency cap has the same 32-bit truncation as the batch caps, left alone because there the clamp is protective and a maximum is a policy decision. And `brain_token_impact` still has no actor wiring - the asymmetry one unit set out to close did not exist in the direction stated.
+- Two review findings were measured false and no fix was written for them.
+- The vault schema goes to version 11. The migration is additive and runs in place; it does not reindex, which is what the new backfill verb and the index run's changed exit exist to say out loud.
+
 ## [1.42.0] - 2026-07-27
 
 A structural wave with no new capability: the six modules that cost the most to change, plus the two import cycles in the graph, plus the silent fallbacks the split uncovered on the way. The targets were chosen by measurement rather than by impression - a maintainability index, a cognitive-complexity count and a fan-in count per file - and the six worst were a config validator with a single twelve-hundred-line function, the SQLite store as one class holding fourteen tables, the recall pipeline as one function running twelve stages, every search subcommand in one file, the vault doctor as twenty-six unrelated diagnostics in one body, and the dream pass with its orchestration fused into the mechanics it orchestrates.
@@ -6800,6 +6845,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.43.0]: https://github.com/itechmeat/open-second-brain/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/itechmeat/open-second-brain/compare/v1.41.0...v1.42.0
 [1.41.0]: https://github.com/itechmeat/open-second-brain/compare/v1.40.0...v1.41.0
 [1.40.0]: https://github.com/itechmeat/open-second-brain/compare/v1.39.0...v1.40.0
