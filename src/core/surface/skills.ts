@@ -42,6 +42,25 @@ export interface SkillEntry {
   readonly path: string;
   /** Absolute path to the SKILL.md file. */
   readonly skillFile: string;
+  /**
+   * Absolute paths of same-named skill directories this entry overrode, in
+   * discovery order (earliest first). Empty means discovery checked and
+   * found nothing shadowed; `undefined` means the entry did not come from
+   * {@link discoverSkills} and therefore carries no shadow information at
+   * all. Those are different answers and are not collapsed.
+   */
+  readonly shadowed?: ReadonlyArray<string>;
+}
+
+/**
+ * A {@link SkillEntry} that came out of {@link discoverSkills}, where the
+ * shadow list is always present. Narrowing it here means a caller reading
+ * discovery output never needs a fallback for a field discovery always sets -
+ * and a fallback there would be exactly the "absent read as empty" collapse
+ * the optional field exists to prevent.
+ */
+export interface DiscoveredSkill extends SkillEntry {
+  readonly shadowed: ReadonlyArray<string>;
 }
 
 export interface SkillRootsOptions {
@@ -96,7 +115,7 @@ function flattenTriggers(raw: FrontmatterValue): string {
   return "";
 }
 
-function readSkillEntry(root: string, dir: string): SkillEntry | null {
+function readSkillEntry(root: string, dir: string): DiscoveredSkill | null {
   const path = join(root, dir);
   const skillFile = join(path, SKILL_FILE_NAME);
   if (!existsSync(skillFile)) return null;
@@ -111,6 +130,7 @@ function readSkillEntry(root: string, dir: string): SkillEntry | null {
     triggers,
     path,
     skillFile,
+    shadowed: Object.freeze([] as string[]),
   });
 }
 
@@ -128,26 +148,48 @@ function firstBodyLine(body: string): string {
  * Discover skills across roots. A later root overrides an earlier one
  * on name collision (vault-local skills shadow shipped ones). Output
  * is sorted by name. Fail-soft: unreadable roots/directories skip.
+ *
+ * The override RETAINS the loser: the winning entry lists every path it
+ * shadowed in `shadowed`, so an operator reading a surprising skill body can
+ * see that a second copy exists and where it lives. Dropping that path was
+ * the whole of the defect - the collapse itself is correct and deliberate.
+ *
+ * Directory entries are sorted within each root so a collision between two
+ * same-named skills in ONE root resolves the same way on every filesystem;
+ * `readdirSync` order is not specified, and an unordered winner would make
+ * both the surviving entry and the recorded shadow list arbitrary.
  */
-export function discoverSkills(roots: ReadonlyArray<string>): SkillEntry[] {
-  const byName = new Map<string, SkillEntry>();
+export function discoverSkills(roots: ReadonlyArray<string>): DiscoveredSkill[] {
+  const byName = new Map<string, DiscoveredSkill>();
   for (const root of roots) {
     let dirs: string[];
     try {
-      dirs = readdirSync(root).filter((d) => {
-        try {
-          return statSync(join(root, d)).isDirectory();
-        } catch {
-          return false;
-        }
-      });
+      dirs = readdirSync(root)
+        .filter((d) => {
+          try {
+            return statSync(join(root, d)).isDirectory();
+          } catch {
+            return false;
+          }
+        })
+        .toSorted((a, b) => (a < b ? -1 : a > b ? 1 : 0));
     } catch {
       continue;
     }
     for (const dir of dirs) {
       try {
         const entry = readSkillEntry(root, dir);
-        if (entry !== null) byName.set(entry.name, entry);
+        if (entry === null) continue;
+        const shadowedEntry = byName.get(entry.name);
+        byName.set(
+          entry.name,
+          shadowedEntry === undefined
+            ? entry
+            : Object.freeze({
+                ...entry,
+                shadowed: Object.freeze([...shadowedEntry.shadowed, shadowedEntry.path]),
+              }),
+        );
       } catch {
         // One malformed skill never hides the rest.
       }

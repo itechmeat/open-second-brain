@@ -28,6 +28,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
+import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "../inline.ts";
@@ -420,6 +421,12 @@ export async function importSession(
       // double-counts). Skipped on a dry run.
       const invokedSkill = resolveInvokedSkill(call);
       if (invokedSkill !== null && opts.dryRun !== true) {
+        // Offer provenance (t_ccb05134): when the call cites the offer that
+        // produced it, the id rides onto the record so the invocation can be
+        // joined back to that offer. A call citing none is stamped exactly as
+        // before - the key is omitted, never defaulted, so "no offer was
+        // cited" can never be read as "offer unknown-but-present".
+        const citedOffer = readSkillOfferId(call.input);
         try {
           appendContinuityRecord(vault, {
             kind: "skill_invoked",
@@ -430,6 +437,7 @@ export async function importSession(
               agent: agentLabelForTurn(turn, adapter.id, opts.agent),
               tool: call.name,
               runtime: adapter.id,
+              ...(citedOffer !== null ? { [SKILL_OFFER_ID_KEY]: citedOffer } : {}),
             },
           });
           skillInvocations++;

@@ -86,7 +86,9 @@ function usage(argv: string[]): number {
 
   process.stdout.write(`${rows.length} skill(s) with recorded invocations:\n`);
   for (const row of rows) {
-    process.stdout.write(`  ${row.skill}  invocations=${row.invocationCount}\n`);
+    process.stdout.write(
+      `  ${row.skill}  invocations=${row.invocationCount}  from_offer=${row.offerAttributedCount}\n`,
+    );
   }
   return 0;
 }

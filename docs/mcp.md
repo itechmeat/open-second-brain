@@ -66,13 +66,13 @@ flags for a narrower per-process full server.
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
 | `brain_session_expand`      | Expand a raw or summary session recall node to immediate sources and paginated raw turn content.                                               | `id`                                           |
 | `brain_sources`             | Read-only dashboard of signals grouped by (agent, source_type) with active/processed and distinct-topic counts.                                | —                                              |
-| `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and clobbering. | `path`                                         |
+| `brain_create_note`         | Write an actual vault note file (path + frontmatter + content) atomically inside the vault. Distinct from `brain_note` (log append); refuses traversal, the Brain root, excluded paths, and — by default — clobbering. Opt-in: `if_exists: "skip"` returns `outcome: "skipped"` instead of creating, `strict` validates the document before writing and reports coded violations, and `template` + `template_variables` render the body through a closed two-construct grammar (`{{name}}` substitution; `{{#name}}…{{/name}}` presence sections and list iteration with `{{.}}`). Unknown placeholders are left intact. | `path`                                         |
 | `brain_file_context`        | Given a file path, surface prior vault work that mentions it (decisions, bug notes, refactor history) by querying the index with path-derived terms. Size gate skips trivial files. Read-only; no LLM. | `file_path`                                    |
 | `brain_session_summary`     | Session-scoped structured digest over request/decisions/learnings/next_steps: `write` stores agent-extracted categories, `get` returns a session's latest digest, `list` returns all. Append-only, deduped; an all-empty digest is rejected. | `operation`                                    |
 | `brain_idea_lineage`        | Read-only provenance tracer: reconstruct how a derived artifact was reached as an observation -> synthesis -> conclusion graph. A `ctn_` id walks the sourceRefs graph; a `pref-`/`ret-` id adapts belief-evolution. Cycle-guarded, depth-bounded; unknown id errors. | `id`                                           |
 | `brain_note_history`        | Decompose a note's git history into recallable episodic phases split on a deterministic commit-time gap (default 72h, language-agnostic). Each phase carries subjects/dates/authors. Missing repo → `available: false`; no commits → zero phases. Read-only. | `path`                                         |
 | `schema_inspect`            | Read-only schema inspection for any view: `view: graph \| lint \| stats \| orphans \| explain_type \| active_pack \| packs`.                   | `view` (`token` for `explain_type`)            |
-| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`.                                                                                 | `mutations`                                    |
+| `schema_apply_mutations`    | Apply audited, locked schema mutations to `Brain/_brain.yaml`. `dry_run: true` previews instead: the pack that would result plus its leaf-level `diff`, no config write, no audit record, same validator rejections. | `mutations` (`dry_run` to preview)             |
 | `brain_watchdog`            | Probe Brain config, required dirs, and search-index health; optionally apply safe directory remediation.                                       | —                                              |
 | `brain_switch_vault`        | Activate a named vault profile; the change takes effect on the next server launch.                                                             | `name`                                         |
 
@@ -301,6 +301,41 @@ scorer and returns a char-budgeted block of top matches; it returns
 `enabled: false` with an empty block unless the `skill_auto_attach`
 config key is `"true"`, so default per-turn injection is unchanged. The
 native Hermes provider calls it from `prefetch()` fail-soft.
+
+Three properties of that surface come from the offer chain (v1.43.0):
+
+- **`list_skills` reports what a skill shadows.** Each entry carries a
+  `shadowed` array of the same-named skill directories it overrode, in
+  discovery order. Previously the losing path was discarded, so an
+  operator reading a surprising skill body had nothing telling them a
+  second copy existed. An empty array means discovery found none.
+- **`skills_attach` returns an `offer_id`.** It is a content-addressed
+  digest of the offer itself - the normalised turn text plus the offered
+  `(name, path)` pairs in rank order - so anyone holding the offer can
+  recompute it and no offer store has to exist. It is `null` when nothing
+  was offered; an offer that was never made has no identity. The rendered
+  block cites the id too, so an agent that reads only the block can quote
+  it back.
+- **`get_skill` accepts that `offer_id`.** The runtime's session log then
+  records which offer the fetch came from, and `o2b brain import-session`
+  stamps it onto the `skill_invoked` continuity record, where
+  `joinSkillInvocationsToOffers` joins the invocation back to its offer.
+  A malformed id is refused rather than dropped; a call citing no offer is
+  stamped exactly as before and reads as unattributed, never as belonging
+  to a nearby offer. The id is the acting agent's claim about where an
+  invocation came from: checkable (well formed, and recomputable from the
+  offer), not authenticated - this system has no credentials to
+  authenticate it with. The join is also retrospective, because an
+  invocation is only observed when a session log is imported.
+
+`skills_attach` additionally applies a discriminating-term floor: a
+candidate whose entire match rests on terms more than half the descriptor
+corpus carries is dropped rather than offered, because such a term is
+evidence for no skill in particular. The only input is corpus document
+frequency, so the rule holds in any language and there is no word list
+anywhere in its derivation. A single-skill corpus carries no
+discrimination at all, so the floor abstains there rather than dropping
+the only candidate.
 
 Two optional config keys (each with a matching environment variable)
 tune the surface; both are off/unset by default, so behaviour is

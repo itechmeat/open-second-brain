@@ -16,6 +16,7 @@ import {
   resolveSkillsAttachTriggers,
 } from "../core/config.ts";
 import { buildSkillAttachment } from "../core/surface/skill-attach.ts";
+import { isSkillOfferId, SKILL_OFFER_ID_KEY } from "../core/surface/skill-offer.ts";
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
 import { coerceInt, coerceStr } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
@@ -35,13 +36,36 @@ function toolListSkills(ctx: ServerContext): Record<string, unknown> {
       name: s.name,
       description: s.description,
       path: s.path,
+      // Same-named skills in an earlier root: the entry that won, plus where
+      // the copies it hid live. Empty means discovery found none.
+      shadowed: s.shadowed,
     })),
   };
+}
+
+/**
+ * The offer this fetch cites, or undefined when it cites none.
+ *
+ * A present-but-malformed value is refused rather than dropped: the caller is
+ * here and can be told, and silently continuing would put a skill fetch into
+ * the runtime's session log looking exactly like one that cited no offer.
+ */
+function readCitedOffer(args: Record<string, unknown>): string | undefined {
+  const raw = args[SKILL_OFFER_ID_KEY];
+  if (raw === undefined || raw === null) return undefined;
+  if (!isSkillOfferId(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${SKILL_OFFER_ID_KEY} must be an offer id returned by skills_attach`,
+    );
+  }
+  return raw;
 }
 
 function toolGetSkill(ctx: ServerContext, args: Record<string, unknown>): Record<string, unknown> {
   const name = coerceStr(args, "name", true)!;
   const filePath = coerceStr(args, "file_path", false) ?? undefined;
+  const citedOffer = readCitedOffer(args);
   const skills = discoverSkills(rootsFor(ctx));
   const skill = skills.find((s) => s.name === name);
   if (skill === undefined) {
@@ -60,6 +84,7 @@ function toolGetSkill(ctx: ServerContext, args: Record<string, unknown>): Record
     description: skill.description,
     path: skill.path,
     ...(filePath !== undefined ? { file_path: filePath } : {}),
+    ...(citedOffer !== undefined ? { [SKILL_OFFER_ID_KEY]: citedOffer } : {}),
     content,
   };
 }
@@ -71,7 +96,7 @@ function toolSkillsAttach(
   const query = coerceStr(args, "query", true)!;
   const maxSkills = coerceInt(args, "max_skills", 3, 1, 10);
   if (!resolveSkillAutoAttach(ctx.configPath ?? undefined)) {
-    return { enabled: false, block: "", skills: [] };
+    return { enabled: false, block: "", skills: [], [SKILL_OFFER_ID_KEY]: null };
   }
   const includeTriggers = resolveSkillsAttachTriggers(ctx.configPath ?? undefined);
   const attachment = buildSkillAttachment({
@@ -83,6 +108,9 @@ function toolSkillsAttach(
   return {
     enabled: true,
     block: attachment.block,
+    // Identity of this offer, for the agent to cite back on get_skill so the
+    // invocation can be joined to it. Null when nothing was offered.
+    [SKILL_OFFER_ID_KEY]: attachment.offerId,
     skills: attachment.items.map((item) => ({
       name: item.name,
       description: item.description,
@@ -119,6 +147,11 @@ export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [
         file_path: {
           type: "string",
           description: "Optional relative path to an auxiliary file inside the skill directory.",
+        },
+        [SKILL_OFFER_ID_KEY]: {
+          type: "string",
+          description:
+            "Optional offer_id from skills_attach, recording which offer this fetch came from.",
         },
       },
       required: ["name"],

@@ -55,12 +55,25 @@ export function idfForTerm(df: number, documentCount: number): number {
 }
 
 /**
- * A term is rare (high-signal) when it appears in at most
- * `RARE_TERM_CORPUS_SHARE` of the corpus, with a floor of one document
- * so tiny corpora still classify their unique terms as rare.
+ * A term is rare (high-signal) when it appears in at most `corpusShare` of
+ * the corpus, with a floor of one document so tiny corpora still classify
+ * their unique terms as rare.
+ *
+ * `corpusShare` defaults to {@link RARE_TERM_CORPUS_SHARE}, the vault-corpus
+ * value this function was written for. It is a parameter because the same
+ * classification - corpus document frequency against a share of the corpus,
+ * with no vocabulary list anywhere in it - is what separates a
+ * discriminating term from a corpus-common one in the far smaller skill
+ * descriptor corpus (t_ccb05134). The share differs by corpus; the shape
+ * must not, or the two would drift into disagreeing about what "common"
+ * means.
  */
-export function isRareTerm(df: number, documentCount: number): boolean {
-  return df <= Math.max(1, Math.floor(RARE_TERM_CORPUS_SHARE * documentCount));
+export function isRareTerm(
+  df: number,
+  documentCount: number,
+  corpusShare: number = RARE_TERM_CORPUS_SHARE,
+): boolean {
+  return df <= Math.max(1, Math.floor(corpusShare * documentCount));
 }
 
 export interface TermCoverage {

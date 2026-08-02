@@ -12,9 +12,23 @@
 
 import type { SurfaceDescriptor } from "./descriptor.ts";
 
+/**
+ * One query token a descriptor matched, with the document frequency of that
+ * token over the SCORED CORPUS (not the vault). Exposed because the score
+ * alone cannot say whether a match rests on a term that separates this
+ * descriptor from the others or on one every descriptor carries.
+ */
+export interface MatchedTerm {
+  readonly term: string;
+  /** Descriptors in the scored corpus containing the term. Always >= 1. */
+  readonly df: number;
+}
+
 export interface ScoredDescriptor {
   readonly descriptor: SurfaceDescriptor;
   readonly score: number;
+  /** Query tokens this descriptor matched, in query order. Never empty. */
+  readonly matched: ReadonlyArray<MatchedTerm>;
 }
 
 export interface LexicalScoreOptions {
@@ -124,17 +138,21 @@ export function scoreDescriptors(
   const scored: ScoredDescriptor[] = [];
   for (const doc of docs) {
     let score = 0;
+    const matched: MatchedTerm[] = [];
     for (const token of queryTokens) {
       const tf = doc.tf.get(token);
       if (tf === undefined) continue;
       const docFreq = df.get(token) ?? 0;
+      matched.push({ term: token, df: docFreq });
       // BM25+ style idf floor: keeps a term present in every document
       // from zeroing out, which matters in tiny descriptor corpora.
       const idf = Math.log(1 + (n - docFreq + 0.5) / (docFreq + 0.5));
       const norm = tf + opts.k1 * (1 - opts.b + opts.b * (doc.length / avgLength));
       score += idf * ((tf * (opts.k1 + 1)) / norm);
     }
-    if (score > 0) scored.push({ descriptor: doc.descriptor, score });
+    if (score > 0) {
+      scored.push({ descriptor: doc.descriptor, score, matched: Object.freeze(matched) });
+    }
   }
 
   scored.sort(
