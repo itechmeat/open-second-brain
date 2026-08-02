@@ -16,7 +16,7 @@ import { SearchError } from "./types.ts";
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 10;
+export const LATEST_SCHEMA_VERSION = 11;
 
 /**
  * The wikilink-resolution basename of a stored document path: the final
@@ -487,6 +487,39 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
       if (!docCols.some((c) => c.name === "authored_at")) {
         db.exec("ALTER TABLE documents ADD COLUMN authored_at INTEGER");
+      }
+    },
+  },
+  {
+    // v11 (provenance at the boundary, t_ac1c4176) - the materialised
+    // EVENT ANCHOR: the interval a note is ABOUT, resolved from its own
+    // frontmatter or body by `event-anchor.ts`, plus the registered token
+    // naming which rung of that ladder produced it. Materialised here so
+    // the query side never re-scans a candidate's body.
+    //
+    // Naming: `event_anchor_*`, deliberately NOT `created_at`-adjacent.
+    // `documents.created_at` on this same table is the row-INSERT
+    // timestamp and has nothing to do with the `created_at` FRONTMATTER
+    // key that is one rung of the anchor ladder; a column named after
+    // either would be read as the other. The `_ms` suffix is likewise
+    // load-bearing: `mtime` and `authored_at` beside it are unix SECONDS,
+    // and a day-end bound truncated to whole seconds would move every
+    // interval comparison by almost a second.
+    //
+    // Additive and reindex-safe: existing rows default to NULL on all
+    // three until a reindex repopulates them, so a vault whose notes
+    // declare no dates ranks byte-identically.
+    version: 11,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === "event_anchor_start_ms")) {
+        db.exec("ALTER TABLE documents ADD COLUMN event_anchor_start_ms INTEGER");
+      }
+      if (!docCols.some((c) => c.name === "event_anchor_end_ms")) {
+        db.exec("ALTER TABLE documents ADD COLUMN event_anchor_end_ms INTEGER");
+      }
+      if (!docCols.some((c) => c.name === "event_anchor_source")) {
+        db.exec("ALTER TABLE documents ADD COLUMN event_anchor_source TEXT");
       }
     },
   },

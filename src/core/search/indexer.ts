@@ -26,6 +26,14 @@ import {
 } from "node:fs";
 import { basename, dirname } from "node:path";
 
+import {
+  resolveSemanticCapability,
+  SEMANTIC_CAPABILITY_CODE,
+  SEMANTIC_CAPABILITY_TIER,
+  semanticCapabilityIsBlocked,
+  semanticCapabilityLabel,
+  SEMANTIC_VECTOR_CODE,
+} from "./capability-tier.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { makeProvider } from "./embeddings/provider.ts";
@@ -37,6 +45,7 @@ import {
   pricePerMillionTokens,
   LOCAL_EMBEDDING_MODEL,
 } from "./embeddings/signature.ts";
+import { resolveEventAnchor } from "./event-anchor.ts";
 import { extractLinks } from "./links.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
 import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
@@ -166,21 +175,28 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
 
 /**
  * Explain why the semantic backend was not engaged, inspecting only the
- * already-resolved config (never `process.env`). Used for an offline run
- * so operators see whether the cause is an unset option, disabled
- * semantic search, or a missing credential.
+ * already-resolved config (never `process.env`).
+ *
+ * The sentence is the diagnostics registry's, resolved from a REGISTERED
+ * code through the advisory rail (provenance-at-the-boundary, F1). It
+ * used to be assembled here from four hand-written branches, which is the
+ * one thing the v1.40.0 rail exists to stop.
+ *
+ * Two of those branches are now the shared capability tier. The third -
+ * a fully configured vault that simply was not asked for embeddings this
+ * run - is an INDEX state rather than a capability fault and carries its
+ * own code, whose registered exit is the vector backfill verb. The
+ * fourth was unreachable: the only call site passed a constant `false`
+ * for `embeddingsRequested`, because the caller reaches this function
+ * exclusively on the else-arm of `if (opts?.embeddings)`. The parameter
+ * and the branch are gone rather than kept as a shape that could never
+ * be observed.
  */
-function offlineDeferredReason(config: ResolvedSearchConfig, embeddingsRequested: boolean): string {
-  if (!config.semantic.enabled) {
-    return "semantic search disabled (search_semantic_enabled=false); ran offline lexical backend";
-  }
-  if (config.semantic.provider !== "local" && !config.semantic.apiKey) {
-    return "embedding_api_key not configured; semantic backend deferred, ran offline lexical backend";
-  }
-  if (!embeddingsRequested) {
-    return "embeddings not requested this run; ran offline lexical backend";
-  }
-  return "semantic backend not engaged; ran offline lexical backend";
+async function offlineDeferredReason(config: ResolvedSearchConfig): Promise<string> {
+  const capability = resolveSemanticCapability(config.semantic);
+  return semanticCapabilityLabel(
+    semanticCapabilityIsBlocked(capability) ? capability.code : SEMANTIC_VECTOR_CODE.deferred,
+  );
 }
 
 function sha256(text: string): string {
@@ -339,7 +355,7 @@ async function indexInto(
         // failing, so a note keeps indexing while a field silently
         // vanishes. Collect what it dropped; the run reports it and
         // nothing about the indexing changes.
-        const [frontmatter, , fmNotices] = parseFrontmatterTextWithNotices(content, {
+        const [frontmatter, body, fmNotices] = parseFrontmatterTextWithNotices(content, {
           site: INDEX_FRONTMATTER_SITE,
           path: file.relPath,
         });
@@ -352,6 +368,14 @@ async function indexInto(
           size: file.stat.size,
           pageType: pageTypeFromFrontmatter(frontmatter),
           authoredAt: authoredAtFromFrontmatter(frontmatter),
+          // The event anchor is materialised HERE, on the same pass that
+          // already holds the parsed frontmatter and the body, so the
+          // query side never re-scans a candidate's body. It is a pure
+          // function of this file's content, which is exactly what makes
+          // it safe to store behind the two content-identity fastpaths
+          // above: unchanged content can only ever resolve to the same
+          // anchor, so declining to recompute it cannot stale it.
+          eventAnchor: resolveEventAnchor(frontmatter, body),
         });
         // Framework-kind files feed the tier-guard post-pass: keep the
         // parsed frontmatter of this run's changed docs that declare a
@@ -507,19 +531,16 @@ async function indexInto(
     // semantic backend is genuinely active. Otherwise the run is offline
     // and we record why the semantic backend was deferred.
     if (opts?.embeddings) {
-      await populateEmbeddings(
-        store,
-        config,
-        stats,
-        opts?.forceCost === true,
-        opts?.safeguard,
-        opts?.signal,
-      );
+      await runEmbeddingPhase(store, config, stats, {
+        forceCost: opts?.forceCost === true,
+        ...(opts?.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
+        ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+      });
       stats.backend = "semantic";
       stats.deferredReason = null;
     } else {
       stats.backend = "offline";
-      stats.deferredReason = offlineDeferredReason(config, false);
+      stats.deferredReason = await offlineDeferredReason(config);
     }
 
     const now = new Date().toISOString();
@@ -581,14 +602,46 @@ function activeEmbeddingSignature(
   return embeddingSignature({ provider, model, dimension });
 }
 
-async function populateEmbeddings(
+/**
+ * The two counters the vector phase writes back. Declared as its own
+ * shape so the phase can serve the index run's `MutableStats` and the
+ * standalone vector backfill without either knowing about the other;
+ * `MutableStats` satisfies it structurally.
+ */
+export interface EmbeddingPhaseTally {
+  embeddingsComputed: number;
+  embeddingsRetries: number;
+}
+
+export interface EmbeddingPhaseOptions {
+  /** Bypass the configured spend ceiling for this run. */
+  readonly forceCost?: boolean;
+  readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Compute and store a vector for every indexed chunk that has none.
+ *
+ * Exported (provenance-at-the-boundary, F) because it is the whole of
+ * `o2b search vector-backfill --apply`: the population step is already
+ * resumable by construction - the anti-join finds exactly the chunks
+ * still missing a row and `vecUpsert` commits per chunk - so the backfill
+ * verb is this phase run on its own, not a second implementation of it.
+ *
+ * Every refusal here is a SearchError, because reaching this function is
+ * an attempt: the capability tier is what a caller reports when it
+ * declines to attempt.
+ */
+export async function runEmbeddingPhase(
   store: Store,
   config: ResolvedSearchConfig,
-  stats: MutableStats,
-  forceCost: boolean,
-  safeguard?: import("../brain/safeguard.ts").Safeguard,
-  signal?: AbortSignal,
+  stats: EmbeddingPhaseTally,
+  opts: EmbeddingPhaseOptions = {},
 ): Promise<void> {
+  const forceCost = opts.forceCost === true;
+  const safeguard = opts.safeguard;
+  const signal = opts.signal;
   if (!config.semantic.enabled) {
     throw new SearchError(
       "EMBEDDING_DISABLED",
@@ -633,10 +686,14 @@ async function populateEmbeddings(
     );
   }
   const batchSize = Math.max(1, config.semantic.batchSize);
-  // Hand the provider a super-batch sized to fully saturate its
-  // internal `embedding_concurrency` semaphore. Without this multiplier
-  // the indexer's outer loop would serialise provider.embed() calls and
-  // the configured concurrency would never kick in.
+  // Hand the provider a super-batch large enough to keep its internal
+  // `embedding_concurrency` semaphore busy. Without this multiplier the
+  // indexer's outer loop would serialise provider.embed() calls and the
+  // configured concurrency would never kick in. It is an upper bound, not
+  // an exact fill: when `embedding_batch_tokens` is set the provider closes
+  // a batch on the token estimate as well as on the count, so a super-batch
+  // may split into more - and therefore smaller - requests than
+  // `embedding_concurrency`.
   const superBatch = batchSize * Math.max(1, config.semantic.concurrency);
 
   for (let i = 0; i < pending.length; i += superBatch) {
@@ -870,12 +927,14 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     if (config.semantic.enabled && !store.vecLoaded()) {
       warnings.push("sqlite-vec unavailable; semantic search disabled this session");
     }
+    // A FIFTH site that derived the credential fact for itself, in a
+    // fourth spelling, and which the unit-F brief did not name. Routed
+    // through the same resolver while the file is open: two of these
+    // copies disagreed about whether the local provider needs a key.
     if (
-      config.semantic.enabled &&
-      config.semantic.provider !== "local" &&
-      !config.semantic.apiKey
+      resolveSemanticCapability(config.semantic).tier === SEMANTIC_CAPABILITY_TIER.credentialMissing
     ) {
-      warnings.push("embedding_api_key not configured; semantic search disabled");
+      warnings.push(await semanticCapabilityLabel(SEMANTIC_CAPABILITY_CODE.credentialMissing));
     }
 
     // Instruction-prefix drift (memory-write-path-integrity B2). Stored
@@ -974,6 +1033,10 @@ function isDirectoryWritable(dir: string): boolean {
 export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexCheckReport> {
   const warnings: string[] = [];
   const fatal: string[] = [];
+  // One resolver for what the operator configured, shared with the index
+  // run, the semantic lane and the readiness probe
+  // (provenance-at-the-boundary, F1).
+  const capability = resolveSemanticCapability(config.semantic);
 
   let vaultReadable = false;
   try {
@@ -1009,7 +1072,10 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
       const msg = e instanceof Error ? e.message : String(e);
       fatal.push(`FTS5 not available: ${msg}`);
     }
-    if (config.semantic.enabled) {
+    // Probed whenever semantic search is switched on at all - including
+    // while the credential is still missing, because the extension is a
+    // machine fact the operator can fix independently of the key.
+    if (capability.tier !== SEMANTIC_CAPABILITY_TIER.disabled) {
       try {
         // eslint-disable-next-line @typescript-eslint/no-require-imports
         const vec = require("sqlite-vec") as { getLoadablePath(): string };
@@ -1027,14 +1093,18 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     fatal.push(`bun:sqlite open failed: ${e instanceof Error ? e.message : String(e)}`);
   }
 
-  const embeddingKeyResolved = !!(config.semantic.enabled && config.semantic.apiKey);
-  if (config.semantic.enabled && !config.semantic.apiKey) {
-    warnings.push("embedding_api_key not configured");
+  // "The credential side of the configuration is satisfied" - which for
+  // the offline local provider means it needed none. This used to read
+  // `enabled && apiKey`, which reported a fully working local install as
+  // key-less and then recommended setting a key it does not use.
+  const embeddingKeyResolved = !semanticCapabilityIsBlocked(capability);
+  if (capability.tier === SEMANTIC_CAPABILITY_TIER.credentialMissing) {
+    warnings.push(await semanticCapabilityLabel(capability.code));
   }
 
   let providerReachable: boolean | null = null;
   let providerReason: string | null = null;
-  if (config.semantic.enabled && embeddingKeyResolved) {
+  if (embeddingKeyResolved) {
     try {
       const provider = makeProvider(config.semantic);
       const probe = await withTimeout(provider.ping(), 5_000);

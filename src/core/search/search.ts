@@ -162,7 +162,9 @@ export async function search(
     // One event-time resolver for the whole call: the targeted-retry
     // coverage gate, the hard time filter, the temporal bridge and the
     // ranker's declared-event-time map all judge a page the same way.
-    const eventTime = createEventTimeResolver(effectiveConfig.vault, frontmatterCache);
+    const eventTime = createEventTimeResolver(effectiveConfig.vault, frontmatterCache, (path) =>
+      store.eventAnchorForPath(path),
+    );
 
     // Second-pass recall (t_ef92dfdc, t_8eb5ca32): evidence-pack mode only,
     // at most one retry, merged into the pool before ranking.

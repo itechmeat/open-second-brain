@@ -31,6 +31,7 @@ import {
 
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import type { EventAnchor } from "./event-anchor.ts";
 import { readSchemaVersion } from "./schema.ts";
 
 import * as aliases from "./store/aliases.ts";
@@ -84,6 +85,7 @@ export {
 export { normalizeAlias } from "./store/aliases.ts";
 
 export type { DocumentInput, DocumentSummary } from "./store/documents.ts";
+export type { EventAnchor } from "./event-anchor.ts";
 export type { ChunkInput, ChunkRow, HydratedChunk } from "./store/chunks.ts";
 export type { KeywordHit } from "./store/keyword.ts";
 export type { LinkInput, LinkResolutionCounts } from "./store/links.ts";
@@ -305,6 +307,16 @@ export class Store {
 
   getDocumentIdByPath(path: string): number | null {
     return documents.getDocumentIdByPath(this.db, path);
+  }
+
+  /**
+   * The materialised event anchor of one path (v11), or null when the
+   * document is absent or declared no readable date. The query-side
+   * event-time resolver consults this instead of re-scanning the note's
+   * body on every query.
+   */
+  eventAnchorForPath(path: string): EventAnchor | null {
+    return documents.eventAnchorForPath(this.db, path);
   }
 
   upsertDocument(doc: documents.DocumentInput): number {

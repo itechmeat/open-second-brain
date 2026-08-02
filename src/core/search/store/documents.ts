@@ -6,6 +6,7 @@
 
 import { Database } from "bun:sqlite";
 
+import { isEventAnchorSource, type EventAnchor } from "../event-anchor.ts";
 import { documentBasename } from "../schema.ts";
 import { SearchError } from "../types.ts";
 import { nowIso } from "./sql.ts";
@@ -30,6 +31,14 @@ export interface DocumentInput {
    * turn instant, which then ranks byte-identically to pre-feature.
    */
   readonly authoredAt?: number | null;
+  /**
+   * The interval this note is ABOUT, resolved from its own frontmatter or
+   * body by `resolveEventAnchor` (provenance at the boundary, v11), with
+   * the registered token naming which rung produced it. Absent / null for
+   * a note that declares no readable date, which then keeps ranking on
+   * storage mtime exactly as before the anchor existed.
+   */
+  readonly eventAnchor?: EventAnchor | null;
 }
 
 export interface DocumentSummary {
@@ -86,13 +95,17 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         number,
         string | null,
         number | null,
+        number | null,
+        number | null,
+        string | null,
         string,
         string,
         string,
       ]
     >(
-      "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, created_at, updated_at, indexed_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+      "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, " +
+        "  event_anchor_start_ms, event_anchor_end_ms, event_anchor_source, created_at, updated_at, indexed_at) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT(path) DO UPDATE SET " +
         "  basename = excluded.basename, " +
         "  title = excluded.title, " +
@@ -101,6 +114,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         "  size = excluded.size, " +
         "  page_type = excluded.page_type, " +
         "  authored_at = excluded.authored_at, " +
+        "  event_anchor_start_ms = excluded.event_anchor_start_ms, " +
+        "  event_anchor_end_ms = excluded.event_anchor_end_ms, " +
+        "  event_anchor_source = excluded.event_anchor_source, " +
         "  updated_at = excluded.updated_at, " +
         "  indexed_at = excluded.indexed_at " +
         "RETURNING id",
@@ -114,6 +130,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       doc.size,
       doc.pageType ?? null,
       doc.authoredAt ?? null,
+      doc.eventAnchor?.startMs ?? null,
+      doc.eventAnchor?.endMs ?? null,
+      doc.eventAnchor?.source ?? null,
       now,
       now,
       now,
@@ -122,6 +141,51 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
     throw new SearchError("INDEX_UNREADABLE", `upsertDocument returned no id for '${doc.path}'`);
   }
   return row.id;
+}
+
+/**
+ * The materialised event anchor of one path, or null when the document is
+ * absent from the index or declared no readable date (v11).
+ *
+ * A row carrying an anchor whose source token is not in the registered
+ * vocabulary, or whose bounds are both NULL beside a non-NULL source, is
+ * an index this binary cannot interpret - it raises rather than returning
+ * null, because "no anchor" and "an anchor I cannot read" are different
+ * answers and the caller must not receive the first when the truth is the
+ * second.
+ */
+export function eventAnchorForPath(db: Database, path: string): EventAnchor | null {
+  const row = db
+    .query<
+      {
+        event_anchor_start_ms: number | null;
+        event_anchor_end_ms: number | null;
+        event_anchor_source: string | null;
+      },
+      [string]
+    >(
+      "SELECT event_anchor_start_ms, event_anchor_end_ms, event_anchor_source " +
+        "FROM documents WHERE path = ?",
+    )
+    .get(path);
+  if (!row || row.event_anchor_source === null) return null;
+  if (!isEventAnchorSource(row.event_anchor_source)) {
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      `documents.event_anchor_source for '${path}' is not a registered anchor source: '${row.event_anchor_source}'`,
+    );
+  }
+  if (row.event_anchor_start_ms === null && row.event_anchor_end_ms === null) {
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      `documents row for '${path}' names an anchor source with no bounds on either side`,
+    );
+  }
+  return Object.freeze({
+    startMs: row.event_anchor_start_ms,
+    endMs: row.event_anchor_end_ms,
+    source: row.event_anchor_source,
+  });
 }
 
 /**

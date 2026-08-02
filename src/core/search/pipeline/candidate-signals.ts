@@ -258,6 +258,12 @@ function collectReuseRates(input: CandidateSignalsInput): ReadonlyMap<number, nu
  * judges a note by when it is about rather than by when it was last
  * written. Candidates with no declaration are omitted and the ranker falls
  * back to their mtime.
+ *
+ * "Declared" here means whatever the shared event-time resolver counts as
+ * a declaration: validity frontmatter first, then the event anchor the
+ * indexer materialised from the note's `created_at` / `date` frontmatter
+ * or its body (t_ac1c4176). This function does not resolve any of that
+ * itself - one definition, one resolver, every time filter agreeing.
  */
 function collectDeclaredEventTimes(
   input: CandidateSignalsInput,
