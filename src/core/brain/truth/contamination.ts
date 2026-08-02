@@ -9,6 +9,7 @@
  */
 
 import { normalizeEntityName } from "../entities/canonical.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /**
  * Frontmatter marker key stamped on a page whose synthesized conclusion
@@ -73,7 +74,7 @@ export function checkEntityContamination(input: ContaminationInput): Contaminati
 
   const violations: ContaminationViolation[] = [];
   for (const entity of input.entities) {
-    if (entity.status !== "active") continue;
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     if (!mentions(conclusion, entity)) continue;
     const cited = sources.some((source) => mentions(source, entity));
     if (!cited) violations.push(Object.freeze({ entityId: entity.id, name: entity.name }));

@@ -15,6 +15,7 @@
  */
 
 import { intakeExtraction, IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
+import { classifySourceTrust } from "../../core/brain/intake/source-trust.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
@@ -31,6 +32,12 @@ async function toolBrainIntakeEntities(
     parsed.agent && parsed.agent.trim().length > 0
       ? parsed.agent
       : resolveAgentName(ctx.configPath ?? undefined);
+  // Trust is derived from the source identity the caller named, through the
+  // same classifier the ingest pipeline uses. A call that names no source is
+  // an agent registering entities from note text it was already reading, so
+  // it stays trusted - and byte-identical to before this unit.
+  const source = parsed.provenance?.sources[0];
+  const trust = source !== undefined ? classifySourceTrust(ctx.vault, source) : undefined;
   // A malformed extraction is a client-resolvable input problem, not a
   // server fault - surface it as INVALID_PARAMS, never a fabricated result.
   return wrapToolErrors(TOOL, [IntakeValidationError], async () => {
@@ -38,6 +45,7 @@ async function toolBrainIntakeEntities(
       agent,
       now: new Date(),
       ...(parsed.provenance !== undefined ? { provenance: parsed.provenance } : {}),
+      ...(trust !== undefined ? { trust } : {}),
     });
     return {
       entities_created: [...result.entitiesCreated],

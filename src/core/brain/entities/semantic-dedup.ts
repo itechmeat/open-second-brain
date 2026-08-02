@@ -27,7 +27,9 @@ import type { EmbeddingProvider } from "../../search/embeddings/contract.ts";
 import { jaccard, tokenise } from "../similarity.ts";
 import { buildEntityIndex } from "./index-builder.ts";
 import { normalizeEntityName } from "./canonical.ts";
-import { BRAIN_ENTITY_STATUS, type BrainEntity } from "./types.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./status-scope.ts";
+import { providerProducesVectors } from "../../search/embeddings/contract.ts";
+import type { BrainEntity } from "./types.ts";
 
 /**
  * Cosine threshold for the embedding layer. Default deliberately high so
@@ -168,8 +170,8 @@ export function entityEvolutionChain(entity: BrainEntity): ReadonlyArray<string>
 
 /** Active entities, id-sorted, capped — the comparison universe. */
 function activeEntities(vault: string): BrainEntity[] {
-  const entities = buildEntityIndex(vault).entities.filter(
-    (e) => e.status === BRAIN_ENTITY_STATUS.active,
+  const entities = buildEntityIndex(vault).entities.filter((e) =>
+    entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical),
   );
   return entities.slice(0, ENTITY_DEDUP_CANDIDATE_CAP);
 }
@@ -316,7 +318,7 @@ export async function detectEntityAliasCandidates(
       ),
     });
 
-  if (provider === null || provider.name === "null") return lexical();
+  if (provider === null || !providerProducesVectors(provider)) return lexical();
 
   const entities = activeEntities(vault);
   const pairs = comparablePairs(entities);

@@ -34,6 +34,8 @@ import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
+import { classifySourceTrust } from "../intake/source-trust.ts";
+import { untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
 import {
   renderProvenanceSection,
   sourceIdentityHash,
@@ -117,11 +119,17 @@ export function ingestSource(
   const preExtract = opts.preExtract === true ? runPreExtract(vault, canonicalSource) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
   const provenance: Provenance = { level: "stated", sources: [sourceLink], premises: [] };
+  // Derived per source, not stamped uniformly: until this unit every source
+  // carried the same provenance regardless of where it came from, which made
+  // a scraped URL and a file in the operator's own vault indistinguishable at
+  // the moment they entered the brain.
+  const trust = classifySourceTrust(vault, canonicalSource);
 
   const intake = intakeExtraction(vault, input.extraction, {
     agent: opts.agent,
     now: opts.now,
     provenance,
+    trust,
   });
   const connections = intake.entitiesUpdated;
   const allEntities = [...intake.entitiesCreated, ...intake.entitiesUpdated];
@@ -143,6 +151,11 @@ export function ingestSource(
     source_path: canonicalSource,
     source_hash: sourceHash,
     provenance: provenance.level,
+    // Marks the summary page itself when the material behind it came from
+    // outside the vault, so the retrieval trust gate excludes it with a
+    // reason rather than ranking it beside the operator's own notes. Trusted
+    // sources add nothing, keeping their page byte-identical to before.
+    ...untrustedSourceFrontmatter(trust),
     created_at: createdAt,
     updated_at: stamp,
     tags: ["brain", "brain/source"],

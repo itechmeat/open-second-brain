@@ -11,6 +11,7 @@
  */
 
 import { entityMatchForms, normalizeEntityName } from "./entities/canonical.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 
 /** Cap on one assertion's text length. */
 export const MAX_ASSERTION_CHARS = 300;
@@ -125,7 +126,7 @@ function anchorEntities(text: string, entities: ReadonlyArray<AtomicEntityLike>)
   const haystack = normalizeEntityName(text);
   const ids: string[] = [];
   for (const entity of entities) {
-    if (entity.status !== "active") continue;
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     const forms = entityMatchForms([entity.name, ...entity.aliases]).filter(
       (f) => f.length >= MIN_ANCHOR_FORM_LENGTH,
     );

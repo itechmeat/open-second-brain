@@ -21,6 +21,7 @@
  * not cross-resolved, mirroring the existing per-chunk extraction unit.
  */
 
+import { hasUriScheme } from "../path-safety.ts";
 import { WIKILINK_ALIAS_RE } from "../brain/wikilink.ts";
 
 export type LinkType = "wikilink" | "markdown_link" | "tag";
@@ -59,9 +60,8 @@ function stripCode(text: string): string {
   return out;
 }
 
-function isUrl(target: string): boolean {
-  return /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//");
-}
+/** An external address rather than a note path - see {@link hasUriScheme}. */
+const isUrl = hasUriScheme;
 
 function isMailto(target: string): boolean {
   return target.toLowerCase().startsWith("mailto:");

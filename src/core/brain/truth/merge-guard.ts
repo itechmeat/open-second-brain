@@ -10,6 +10,7 @@
  */
 
 import { normalizeEntityName } from "../entities/canonical.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../entities/status-scope.ts";
 
 /** Categories guarded by default: people and organisations. */
 export const GUARDED_ENTITY_CATEGORIES: ReadonlyArray<string> = Object.freeze([
@@ -61,7 +62,7 @@ function guardedAnchors(
   const haystack = normalizeEntityName(text);
   const ids: string[] = [];
   for (const entity of entities) {
-    if (entity.status !== "active") continue;
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     if (!categories.has(entity.category.toLowerCase())) continue;
     const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
     if (forms.some((f) => f.length >= 3 && haystack.includes(f))) ids.push(entity.id);

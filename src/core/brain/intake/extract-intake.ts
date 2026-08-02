@@ -20,12 +20,20 @@
  * authoritative cross-source citation list, so an entity page cites the
  * source that first introduced it without being clobbered on every later
  * mention.
+ *
+ * Trust: the caller declares where the material came from
+ * ({@link IntakeOptions.trust}), because only the caller knows. An untrusted
+ * intake lands each entity it INTRODUCES quarantined and marked, on the same
+ * created-only rule as the body stamp above - so an untrusted mention can
+ * never downgrade a record the operator already holds. Absent → trusted,
+ * which is byte-identical to an intake that never knew about trust.
  */
 
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
 import { validateEntityCategory, normalizeEntityName } from "../entities/canonical.ts";
 import { getEntity, relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
+import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
 
 /** One entity the agent extracted from a source. */
 export interface IntakeEntity {
@@ -58,6 +66,13 @@ export interface IntakeOptions {
   readonly now: Date;
   /** When set, its Sources section is stamped into newly created entity bodies. */
   readonly provenance?: Provenance;
+  /**
+   * Whether the material this extraction came from carries the vault's own
+   * authority. Originated by the caller (both callers derive it from the
+   * source identity through `classifySourceTrust`), never inferred here.
+   * Absent → {@link INTAKE_TRUST.trusted}.
+   */
+  readonly trust?: IntakeTrust;
 }
 
 export interface IntakeResult {
@@ -131,6 +146,7 @@ export function intakeExtraction(
   validateIntake(intake);
 
   const provenanceSection = opts.provenance ? renderProvenanceSection(opts.provenance) : "";
+  const untrustedOrigin = opts.trust === INTAKE_TRUST.untrusted;
 
   const entitiesCreated: string[] = [];
   const entitiesUpdated: string[] = [];
@@ -152,6 +168,7 @@ export function intakeExtraction(
       now: opts.now,
       ...(entity.confidence !== undefined ? { confidence: entity.confidence } : {}),
       ...(body !== undefined ? { body } : {}),
+      ...(untrustedOrigin ? { untrustedOrigin } : {}),
     });
     if (res.created) entitiesCreated.push(res.entity.id);
     else entitiesUpdated.push(res.entity.id);

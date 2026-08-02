@@ -41,7 +41,7 @@ import {
   sanitizeEntityLabel,
   validateEntityLabel,
 } from "./entities/canonical.ts";
-import { BRAIN_ENTITY_STATUS } from "./entities/types.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./entities/status-scope.ts";
 
 export type FactFamily = "url" | "email" | "quantity";
 
@@ -257,7 +257,7 @@ function buildAnchorables(
 ): AnchorableEntity[] {
   const out: AnchorableEntity[] = [];
   for (const entity of index.entities) {
-    if (entity.status !== BRAIN_ENTITY_STATUS.active) continue;
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     const nameVerdict = validateEntityLabel(sanitizeEntityLabel(entity.name));
     if (!nameVerdict.valid) {
       try {

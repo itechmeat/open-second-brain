@@ -10,17 +10,33 @@
 
 import type { RelationEdge } from "../../graph/frontmatter-relations.ts";
 
+/**
+ * Lifecycle status of a stored entity.
+ *
+ * `quarantine` is not a third kind of retirement: it records that the entity
+ * ENTERED the vault under untrusted provenance and has never been vouched
+ * for. Which reads may see each value is not decided here - it is decided
+ * once, in `status-scope.ts`, so a new value cannot be added without every
+ * read path getting an answer.
+ */
 export const BRAIN_ENTITY_STATUS = {
   active: "active",
   archived: "archived",
+  quarantine: "quarantine",
 } as const;
 
 export type BrainEntityStatus = (typeof BRAIN_ENTITY_STATUS)[keyof typeof BRAIN_ENTITY_STATUS];
 
-const STATUS_VALUES: ReadonlyArray<string> = Object.values(BRAIN_ENTITY_STATUS);
+/** Every status, in declaration order. The one list a surface may render. */
+export const BRAIN_ENTITY_STATUS_VALUES: ReadonlyArray<BrainEntityStatus> = Object.freeze(
+  Object.values(BRAIN_ENTITY_STATUS),
+);
 
 export function isBrainEntityStatus(value: unknown): value is BrainEntityStatus {
-  return typeof value === "string" && STATUS_VALUES.includes(value);
+  return (
+    typeof value === "string" &&
+    BRAIN_ENTITY_STATUS_VALUES.some((status): boolean => status === value)
+  );
 }
 
 /** Frontmatter `kind:` marker of an entity file. */

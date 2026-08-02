@@ -12,7 +12,7 @@
 
 import { buildEntityIndex } from "../brain/entities/index-builder.ts";
 import { normalizeEntityName } from "../brain/entities/canonical.ts";
-import { BRAIN_ENTITY_STATUS } from "../brain/entities/types.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "../brain/entities/status-scope.ts";
 
 export interface QueryEntityExpansion {
   /** Original query entities plus every form added by the registry. */
@@ -54,7 +54,7 @@ export function expandQueryEntities(
   const sourceIds: string[] = [];
 
   for (const entity of index.entities) {
-    if (entity.status !== BRAIN_ENTITY_STATUS.active) continue;
+    if (!entityStatusInScope(entity.status, ENTITY_STATUS_SCOPE.canonical)) continue;
     const forms = [entity.name, ...entity.aliases].map((f) => normalizeEntityName(f));
     if (!forms.some((f) => querySet.has(f))) continue;
     let contributed = false;

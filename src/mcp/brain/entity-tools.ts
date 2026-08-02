@@ -12,6 +12,10 @@ import {
   listEntities,
 } from "../../core/brain/entities/registry.ts";
 import { validateEntityCategory } from "../../core/brain/entities/canonical.ts";
+import {
+  BRAIN_ENTITY_STATUS_VALUES,
+  isBrainEntityStatus,
+} from "../../core/brain/entities/types.ts";
 import { switchProfile, listProfiles } from "../../core/brain/portability/profiles.ts";
 import { defaultConfigPath } from "../../core/config.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -59,8 +63,13 @@ async function toolBrainEntity(
     }
   }
   const status = coerceStr(args, "status", false);
-  if (status !== null && status !== "active" && status !== "archived") {
-    throw new MCPError(INVALID_PARAMS, "brain_entity: status must be 'active' or 'archived'");
+  // Validated against the vocabulary itself, so the enum below and this
+  // check cannot drift and a new status is reachable the day it exists.
+  if (status !== null && !isBrainEntityStatus(status)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_entity: status must be one of: ${BRAIN_ENTITY_STATUS_VALUES.join(", ")}`,
+    );
   }
   const query = view === "get" ? coerceStr(args, "query", true)! : null;
 
@@ -137,8 +146,10 @@ export const ENTITY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         status: {
           type: "string",
-          enum: ["active", "archived"],
-          description: "Optional status filter for view: list.",
+          enum: [...BRAIN_ENTITY_STATUS_VALUES],
+          description:
+            "Optional status filter for view: list. Omits quarantined entities " +
+            "(they entered under untrusted provenance) unless you pass `quarantine`.",
         },
       },
       required: ["view"],

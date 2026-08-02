@@ -12,8 +12,9 @@
  *   - self-approval guardrail state: a preference whose persisted status
  *     is `quarantine` ({@link BRAIN_PREFERENCE_STATUS.quarantine}, written
  *     by the dream self-approval guardrail),
- *   - untrusted-source provenance: a page flagged with the untrusted-source
- *     module's own tag ({@link UNTRUSTED_SOURCE_TAG}),
+ *   - untrusted-source provenance: a page carrying the untrusted-source
+ *     marker ({@link hasUntrustedSourceMarker}), which the intake boundary
+ *     stamps when content enters the vault under untrusted provenance,
  *   - entity contamination: a page carrying the contamination module's
  *     marker ({@link ENTITY_CONTAMINATION_FRONTMATTER_KEY}).
  *
@@ -30,7 +31,7 @@ import {
 } from "../../search/rank-adjust.ts";
 import type { BrainSearchResult } from "../../search/types.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
-import { UNTRUSTED_SOURCE_TAG } from "../untrusted-source.ts";
+import { hasUntrustedSourceMarker } from "./untrusted-provenance.ts";
 import { hasEntityContaminationMarker } from "../truth/contamination.ts";
 
 /** Namespace name kernel 1 uses when attributing the gate's exclusions. */
@@ -64,10 +65,6 @@ function statusScalar(meta: Readonly<Record<string, unknown>>): string | null {
   return typeof raw === "string" ? raw.trim().toLowerCase() : null;
 }
 
-function truthy(value: unknown): boolean {
-  return value === true || value === "true";
-}
-
 /**
  * Classify a candidate's frontmatter as quarantined or clean. Pure and
  * O(1): three controlled-vocabulary key reads. Reasons are returned in a
@@ -83,7 +80,7 @@ export function classifyRetrievalTrust(
   if (statusScalar(meta) === BRAIN_PREFERENCE_STATUS.quarantine) {
     reasons.push(RETRIEVAL_TRUST_EXCLUSION_REASON.selfApprovalQuarantine);
   }
-  if (truthy(meta[UNTRUSTED_SOURCE_TAG])) {
+  if (hasUntrustedSourceMarker(meta)) {
     reasons.push(RETRIEVAL_TRUST_EXCLUSION_REASON.untrustedSourceProvenance);
   }
   if (reasons.length === 0) return CLEAN;

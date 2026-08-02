@@ -29,6 +29,12 @@ import {
 } from "./canonical.ts";
 import { resolveEntityLabelDenylist } from "./label-hygiene.ts";
 import { buildEntityIndex, parseEntityFile, type EntityIndex } from "./index-builder.ts";
+import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./status-scope.ts";
+import {
+  INTAKE_TRUST,
+  UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+  untrustedSourceFrontmatter,
+} from "../trust/untrusted-provenance.ts";
 import {
   BRAIN_ENTITY_ID_PREFIX,
   BRAIN_ENTITY_KIND,
@@ -52,6 +58,22 @@ export interface UpsertEntityInput {
   readonly body?: string;
   /** Config path for denylist resolution; env still wins when set. */
   readonly configPath?: string;
+  /**
+   * The entity is being INTRODUCED under untrusted provenance (see
+   * `intake/source-trust.ts`). On create the record lands `quarantine` and
+   * carries the untrusted-source marker the retrieval gate reads, so it is
+   * absent from every ordinary read until an operator releases it with
+   * {@link archiveEntity}'s `restore`.
+   *
+   * On update it is deliberately IGNORED: an entity that already exists on
+   * its own authority is not downgraded by a later untrusted mention of its
+   * name, which is the same rule the intake primitive applies to the body's
+   * `## Sources` stamp - and without it an untrusted source could quarantine
+   * the operator's own records by naming them.
+   *
+   * Absent → byte-identical to an upsert that never knew about trust.
+   */
+  readonly untrustedOrigin?: boolean;
 }
 
 export interface UpsertEntityResult {
@@ -73,7 +95,13 @@ export interface RelateEntitiesInput {
 
 export interface ArchiveEntityOptions {
   readonly now: Date;
-  /** When true, return an archived entity to active lookup. */
+  /**
+   * Return a record that is outside the canonical scope - archived OR
+   * quarantined - to active lookup. This is the named exit from quarantine:
+   * without it a record that entered under untrusted provenance would be
+   * invisible with no way back, and a status nothing can leave is a dead end
+   * rather than a lane.
+   */
   readonly restore?: boolean;
 }
 
@@ -89,7 +117,11 @@ export class EntityAmbiguityError extends Error {
   }
 }
 
-/** Resolve a ref against ACTIVE entities: canonical name first, then alias. */
+/**
+ * Resolve a ref at the CANONICAL status scope: canonical name first, then
+ * alias. The index's lookup maps are built at the same scope, so the two
+ * branches below agree by construction rather than by coincidence.
+ */
 function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
   const query = normalizeEntityName(ref.query);
   if (!query) return null;
@@ -102,7 +134,38 @@ function resolveActive(index: EntityIndex, ref: EntityRef): BrainEntity | null {
   }
   const matches = index.entities.filter(
     (e) =>
-      e.status === BRAIN_ENTITY_STATUS.active &&
+      entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
+      (normalizeEntityName(e.name) === query ||
+        e.aliases.some((a) => normalizeEntityName(a) === query)),
+  );
+  if (matches.length > 1) {
+    throw new EntityAmbiguityError(
+      ref.query,
+      matches.map((m) => m.id),
+    );
+  }
+  return matches[0] ?? null;
+}
+
+/**
+ * Resolve a ref to the record that HOLDS the name, whether or not a read may
+ * see it. Write paths need this and read paths must not have it: a
+ * quarantined record still owns its identity, so an upsert or an edge naming
+ * it has to land ON it. Without this a second intake of the same untrusted
+ * source would fork a second page under an `-2` id, and a relation between
+ * two quarantined entities would fail as not-found after its endpoints had
+ * already been written - a partial write this module exists to prevent.
+ */
+function resolveIdentityHolder(index: EntityIndex, ref: EntityRef): BrainEntity | null {
+  const canonical = resolveActive(index, ref);
+  if (canonical !== null) return canonical;
+  const query = normalizeEntityName(ref.query);
+  if (!query) return null;
+  const category = ref.category !== undefined ? validateEntityCategory(ref.category) : undefined;
+  const matches = index.entities.filter(
+    (e) =>
+      e.status === BRAIN_ENTITY_STATUS.quarantine &&
+      (category === undefined || e.category === category) &&
       (normalizeEntityName(e.name) === query ||
         e.aliases.some((a) => normalizeEntityName(a) === query)),
   );
@@ -119,12 +182,20 @@ export function getEntity(vault: string, ref: EntityRef): BrainEntity | null {
   return resolveActive(buildEntityIndex(vault), ref);
 }
 
+/**
+ * List entities. Without a `status`, the listing is the READABLE scope: the
+ * statuses a surface may show, which is `active` and `archived` exactly as
+ * before, and never `quarantine`. A `status` is an explicit ask and is
+ * honoured verbatim - that is how an operator sees what is quarantined.
+ */
 export function listEntities(vault: string, opts: ListEntitiesOptions = {}): BrainEntity[] {
   const category = opts.category !== undefined ? validateEntityCategory(opts.category) : undefined;
   return buildEntityIndex(vault).entities.filter(
     (e) =>
       (category === undefined || e.category === category) &&
-      (opts.status === undefined || e.status === opts.status),
+      (opts.status === undefined
+        ? entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.readable)
+        : e.status === opts.status),
   );
 }
 
@@ -233,13 +304,11 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
   const index = buildEntityIndex(vault);
   const stamp = isoSecond(input.now);
 
-  // Resolve to an existing canonical entity: name key first, alias second.
+  // Resolve to the record that holds this identity: name key first, alias
+  // second, and a quarantined holder last - re-ingesting the same untrusted
+  // source is an ordinary operation and must update its record, not fork one.
   const key = entityIdentityKey(category, name);
-  let target = index.byKey.get(key) ?? null;
-  if (target === null) {
-    const viaAlias = index.byAlias.get(normalizeEntityName(name));
-    if (viaAlias && viaAlias.category === category) target = viaAlias;
-  }
+  const target = resolveIdentityHolder(index, { category, query: name });
 
   if (target === null) {
     // The name may be held by an archived entity - refuse with the remedy
@@ -297,20 +366,27 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
 
   const id = allocateEntityId(index, category, name);
   const path = entityPath(vault, category, id);
+  // Untrusted provenance decides two things about a NEW record and nothing
+  // about an existing one: the status it lands at, and the marker the
+  // retrieval gate reads. Both come from one flag so they cannot disagree.
+  const untrusted = input.untrustedOrigin === true;
   const fields: FrontmatterMap = {
     kind: BRAIN_ENTITY_KIND,
     entity_id: id,
     category,
     name,
     ...(aliases.length > 0 ? { aliases } : {}),
-    status: BRAIN_ENTITY_STATUS.active,
+    status: untrusted ? BRAIN_ENTITY_STATUS.quarantine : BRAIN_ENTITY_STATUS.active,
     source_agent: input.agent,
     ...(input.confidence !== undefined ? { confidence: input.confidence } : {}),
     created_at: stamp,
     updated_at: stamp,
     tags: ["brain", "brain/entity"],
   };
-  writeEntityFile(path, fields, {}, input.body ?? `# ${name}`, { overwrite: false });
+  const marker = untrustedSourceFrontmatter(
+    untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted,
+  );
+  writeEntityFile(path, fields, marker, input.body ?? `# ${name}`, { overwrite: false });
   const entity = parseEntityFile(path);
   if (entity === null) throw new Error(`entity file unreadable after write: ${path}`);
   return { entity, created: true };
@@ -326,9 +402,12 @@ export function relateEntities(vault: string, input: RelateEntitiesInput): Brain
     );
   }
   const index = buildEntityIndex(vault);
-  const from = resolveActive(index, input.from);
+  // Identity holders, not canonical lookups: an intake that just created two
+  // quarantined entities must be able to link them, and the edge stays
+  // inside the quarantine because both endpoints are unreadable.
+  const from = resolveIdentityHolder(index, input.from);
   if (from === null) throw new Error(`entity not found: ${JSON.stringify(input.from)}`);
-  const to = resolveActive(index, input.to);
+  const to = resolveIdentityHolder(index, input.to);
   if (to === null) throw new Error(`entity not found: ${JSON.stringify(input.to)}`);
   if (from.id === to.id) throw new Error("an entity cannot relate to itself");
 
@@ -372,10 +451,13 @@ export function archiveEntity(
   const index = buildEntityIndex(vault);
   let target: BrainEntity | null;
   if (opts.restore) {
+    // Restore resolves what canonical lookup cannot see - archived AND
+    // quarantined - because both are records that hold a name without being
+    // reachable through it.
     const query = normalizeEntityName(ref.query);
     const matches = index.entities.filter(
       (e) =>
-        e.status === BRAIN_ENTITY_STATUS.archived &&
+        !entityStatusInScope(e.status, ENTITY_STATUS_SCOPE.canonical) &&
         (ref.category === undefined || e.category === validateEntityCategory(ref.category)) &&
         (normalizeEntityName(e.name) === query ||
           e.aliases.some((a) => normalizeEntityName(a) === query)),
@@ -416,7 +498,12 @@ export function archiveEntity(
   };
   // `archived_at` must disappear on restore: writeEntityFile only emits
   // the keys present in `fields`, and extras never override own fields.
-  writeEntityFile(target.path, fields, meta, body, { overwrite: true });
+  // The untrusted-source marker must disappear too, and it is an EXTRA, so
+  // it is dropped explicitly: a released record the retrieval gate still
+  // excluded would be a restore that reads as success without being one.
+  const extras: FrontmatterMap = { ...meta };
+  if (opts.restore) delete extras[UNTRUSTED_SOURCE_FRONTMATTER_KEY];
+  writeEntityFile(target.path, fields, extras, body, { overwrite: true });
   const entity = parseEntityFile(target.path);
   if (entity === null) throw new Error(`entity file unreadable after write: ${target.path}`);
   return entity;

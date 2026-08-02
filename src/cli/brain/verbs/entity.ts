@@ -12,7 +12,11 @@ import {
   relateEntities,
   upsertEntity,
 } from "../../../core/brain/entities/registry.ts";
-import { BRAIN_ENTITY_STATUS, type BrainEntity } from "../../../core/brain/entities/types.ts";
+import {
+  BRAIN_ENTITY_STATUS_VALUES,
+  isBrainEntityStatus,
+  type BrainEntity,
+} from "../../../core/brain/entities/types.ts";
 import { pruneEntityLabels } from "../../../core/brain/entities/label-hygiene.ts";
 import {
   brainVerbContext,
@@ -147,12 +151,11 @@ function entityList(argv: string[]): number {
   const vault = brainVerbContext(flags).vault;
   const category = normalizeFlagString(flags["category"]);
   const statusRaw = normalizeFlagString(flags["status"]);
-  if (
-    statusRaw !== null &&
-    statusRaw !== BRAIN_ENTITY_STATUS.active &&
-    statusRaw !== BRAIN_ENTITY_STATUS.archived
-  ) {
-    return fail("--status must be 'active' or 'archived'");
+  // Validated against the vocabulary itself rather than a hand-written pair,
+  // so a new status is listable the day it exists. `--status quarantine` is
+  // how an operator sees what an untrusted intake put aside.
+  if (statusRaw !== null && !isBrainEntityStatus(statusRaw)) {
+    return fail(`--status must be one of: ${BRAIN_ENTITY_STATUS_VALUES.join(", ")}`);
   }
   try {
     const entities = listEntities(vault, {

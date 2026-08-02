@@ -138,6 +138,28 @@ export function canonicalNotePath(p: string): string {
 }
 
 /**
+ * A URI scheme per RFC 3986 §3.1: an ASCII letter followed by letters,
+ * digits, `+`, `-` and `.`, terminated by a colon. Structural - never a
+ * list of known scheme names, which could not be complete.
+ */
+const URI_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+
+/**
+ * Does `target` name a location somewhere other than inside this vault -
+ * either by carrying a URI scheme (`https:`, `mailto:`, `obsidian:`) or by
+ * being protocol-relative (`//host/x`)?
+ *
+ * This is the boundary between "a path in the vault" and "an address
+ * elsewhere", and both readings of that boundary want the same answer: a
+ * markdown link target with a scheme is an external link rather than a note
+ * reference, and a source identity with one entered the vault from outside
+ * it. One predicate, so the two cannot drift apart.
+ */
+export function hasUriScheme(target: string): boolean {
+  return URI_SCHEME_RE.test(target) || target.startsWith("//");
+}
+
+/**
  * Vault-relative path with forward slashes.
  *
  * Markdown rendering and Obsidian wikilinks both want forward slashes
