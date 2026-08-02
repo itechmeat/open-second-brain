@@ -6,13 +6,19 @@ import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { safeContinuityPayload } from "./redaction.ts";
-import { CLIP_PROTECTED_PAYLOAD_KEYS, CONTINUITY_SCHEMA_VERSION } from "./types.ts";
+import {
+  CLIP_PROTECTED_PAYLOAD_KEYS,
+  CONTINUITY_RECORD_SCOPE,
+  CONTINUITY_SCHEMA_VERSION,
+  isContinuityRecordScope,
+} from "./types.ts";
 import type {
   AppendContinuityRecordInput,
   ContinuityRecord,
   ContinuityRecordFilter,
   ContinuityRecordKind,
   ContinuityRecordPage,
+  ContinuityRecordScope,
   ContinuitySourceRef,
 } from "./types.ts";
 
@@ -23,6 +29,7 @@ export type {
   ContinuityRecordFilter,
   ContinuityRecordKind,
   ContinuityRecordPage,
+  ContinuityRecordScope,
   ContinuitySourceRef,
 } from "./types.ts";
 
@@ -90,6 +97,25 @@ export function assertCanonicalCreatedAt(createdAt: unknown): string {
     );
   }
   return createdAt;
+}
+
+/**
+ * Guard a caller-declared scope at the store boundary, the way
+ * {@link assertCanonicalCreatedAt} guards the timestamp. Absent stays
+ * absent - there is no default scope and none is invented. An unknown
+ * token THROWS rather than being stored: a scope no reader recognises is
+ * excluded by every filter, so accepting one would write a record that
+ * silently disappears from the surfaces its author meant it for.
+ */
+export function assertDeclaredScope(scope: unknown): ContinuityRecordScope | undefined {
+  if (scope === undefined) return undefined;
+  if (!isContinuityRecordScope(scope)) {
+    throw new Error(
+      `invalid continuity scope: expected one of ` +
+        `${Object.values(CONTINUITY_RECORD_SCOPE).join(", ")}, got ${JSON.stringify(scope)}`,
+    );
+  }
+  return scope;
 }
 
 export function continuityLogPath(vault: string, month: string): string {
@@ -264,11 +290,15 @@ function buildRecord(
       },
 ): ContinuityRecord {
   assertCanonicalCreatedAt(input.createdAt);
+  const scope = assertDeclaredScope("scope" in input ? input.scope : undefined);
   const payloadResult = safeContinuityPayload(input.payload ?? {});
   const sourceRefs = Object.freeze([...(input.sourceRefs ?? [])]);
   // `schema` stays OUT of recordId(): identical records must keep
-  // identical dedup ids across the version-stamp transition.
-  const id = recordId(input.kind, input.createdAt, sourceRefs, payloadResult.payload);
+  // identical dedup ids across the version-stamp transition. `scope` is
+  // IN, because it is part of what the record is rather than a stamp on
+  // it - two records differing only in their declaration are two records,
+  // and collapsing them onto one dedup id would lose one silently.
+  const id = recordId(input.kind, input.createdAt, sourceRefs, payloadResult.payload, scope);
   return Object.freeze({
     schema: CONTINUITY_SCHEMA_VERSION,
     id,
@@ -278,6 +308,9 @@ function buildRecord(
     payload: payloadResult.payload,
     private: payloadResult.private,
     redacted: payloadResult.redacted,
+    // Last, and only when declared: the serialized form of an unscoped
+    // record stays byte-identical to the pre-scope envelope.
+    ...(scope !== undefined ? { scope } : {}),
   });
 }
 
@@ -373,9 +406,22 @@ function recordId(
   createdAt: string,
   sourceRefs: ReadonlyArray<ContinuitySourceRef>,
   payload: Readonly<Record<string, unknown>>,
+  scope: ContinuityRecordScope | undefined,
 ): string {
   const hash = createHash("sha256")
-    .update(JSON.stringify({ kind, createdAt, sourceRefs, payload }), "utf8")
+    .update(
+      // The scope key is appended only when declared, so the hashed text
+      // for an unscoped record is character-for-character what it was
+      // before the field existed and its id is unchanged.
+      JSON.stringify({
+        kind,
+        createdAt,
+        sourceRefs,
+        payload,
+        ...(scope !== undefined ? { scope } : {}),
+      }),
+      "utf8",
+    )
     .digest("hex")
     .slice(0, 16);
   return `ctn_${createdAt.replace(/[^0-9]/g, "").slice(0, 14)}_${hash}`;

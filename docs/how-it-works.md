@@ -906,9 +906,12 @@ ids. Gated telemetry surfaces (context-pack receipts and telemetry,
 pre-compress, search, the recall gate) route through one lazy emit
 kernel: with the gate off the payload thunk never runs, and a broken
 continuity store can never fail the operation it was observing. A
-read-model normalizes stamped and legacy records identically and
-drops `private` records by default, so every read-side consumer
-agrees on masking.
+read-model normalizes stamped and legacy records identically, drops
+`private` records by default, and honours a caller-declared record
+scope - for the four consumers that read through it. Most readers
+call the store directly and see raw records; the split is asserted in
+`tests/core/brain/continuity/reader-census.test.ts` and detailed in
+`docs/observability.md`.
 
 Two consumers ship with the suite. `o2b brain continuity export`
 renders the store as standard trajectory formats - ATOF JSONL events
