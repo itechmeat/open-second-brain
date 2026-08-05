@@ -14,13 +14,17 @@ unit-tested against in-memory streams.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import subprocess
+import sys
 import threading
 import time
 from typing import Any, Protocol, runtime_checkable
 
 PROTOCOL_VERSION = "2025-06-18"
 CLIENT_NAME = "open-second-brain-hermes-provider"
+logger = logging.getLogger(__name__)
 
 
 class BridgeError(RuntimeError):
@@ -139,6 +143,10 @@ class McpBrainBridge:
         self._command = command
         self._spawn = spawn or self._default_spawn
         self._cwd = cwd
+        # A gateway may serve several AIAgents concurrently, but one shared
+        # bridge has one request/response stream. Serialise lifecycle and RPC
+        # operations so request ids and stdout frames cannot interleave.
+        self._lock = threading.RLock()
         self._proc: Any = None
         self._client: JsonRpcStdioClient | None = None
         self._tools: list[dict[str, Any]] = []
@@ -155,6 +163,29 @@ class McpBrainBridge:
             argv += ["--repo", self._repo_root]
         return argv
 
+    @staticmethod
+    def _watchdog_argv(argv: list[str]) -> list[str]:
+        """Wrap POSIX MCP children in Hermes' parent-death watchdog."""
+        if os.name != "posix":
+            return argv
+        try:
+            from tools import mcp_stdio_watchdog
+        except ImportError:
+            # The plugin can still operate from a standalone checkout; Hermes'
+            # normal runtime has this module and gets descendant cleanup.
+            return argv
+        watchdog_path = getattr(mcp_stdio_watchdog, "__file__", None)
+        if not watchdog_path:
+            return argv
+        return [
+            sys.executable,
+            str(watchdog_path),
+            "--ppid",
+            str(os.getpid()),
+            "--",
+            *argv,
+        ]
+
     def _default_spawn(self, argv: list[str]) -> Any:
         # Use a small thread to drain stderr continuously; otherwise the child
         # can block on a full stderr pipe after logging init warnings and
@@ -163,8 +194,11 @@ class McpBrainBridge:
         # avoids the line-buffering deadlock that `text=True, bufsize=1`
         # classically triggers with Popen pipes: a fast child writer +
         # a slow parent reader fills the kernel buffer and both block.
+        # Hermes' watchdog owns the real child process group, forwards the
+        # stdio streams transparently, and kills the group when this gateway
+        # exits unexpectedly.
         process = subprocess.Popen(  # noqa: S603 - argv is a fixed command + config path
-            argv,
+            self._watchdog_argv(argv),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -202,33 +236,43 @@ class McpBrainBridge:
             pass
 
     def start(self) -> None:
-        if self._started:
-            return
-        self._proc = self._spawn(self._argv())
-        self._client = JsonRpcStdioClient(self._proc.stdin, self._proc.stdout)
-        try:
-            self._client.request(
-                "initialize",
-                {
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {"name": CLIENT_NAME, "version": "1"},
-                },
-            )
-            self._client.notify("notifications/initialized")
-            result = self._client.request("tools/list", {})
-        except BaseException:
-            # A failed handshake must not leak the spawned process.
-            self.stop()
-            raise
-        self._tools = list((result or {}).get("tools", []))
-        self._started = True
+        with self._lock:
+            if self._started:
+                return
+            self._proc = self._spawn(self._argv())
+            self._client = JsonRpcStdioClient(self._proc.stdin, self._proc.stdout)
+            pid = getattr(self._proc, "pid", "unknown")
+            logger.debug("open-second-brain MCP child spawned pid=%s", pid)
+            try:
+                self._client.request(
+                    "initialize",
+                    {
+                        "protocolVersion": PROTOCOL_VERSION,
+                        "capabilities": {},
+                        "clientInfo": {"name": CLIENT_NAME, "version": "1"},
+                    },
+                )
+                self._client.notify("notifications/initialized")
+                result = self._client.request("tools/list", {})
+            except BaseException:
+                # A failed handshake must not leak the spawned process.
+                logger.warning("open-second-brain MCP handshake failed pid=%s", pid)
+                self.stop()
+                raise
+            self._tools = list((result or {}).get("tools", []))
+            self._started = True
+            logger.debug("open-second-brain MCP child ready pid=%s", pid)
 
     def list_tools(self) -> list[dict[str, Any]]:
-        self._ensure_started()
-        return self._tools
+        with self._lock:
+            self._ensure_started()
+            return list(self._tools)
 
     def call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            return self._call_tool(name, args)
+
+    def _call_tool(self, name: str, args: dict[str, Any]) -> dict[str, Any]:
         # Hard cap on restarts: o2b mcp can flake under load (e.g. bun runtime
         # SIGPIPE on a parent process briefly holding the pipe). One restart is
         # not enough; a bounded retry with backoff turns a transient subproc
@@ -290,24 +334,45 @@ class McpBrainBridge:
         return poll() is not None
 
     def stop(self) -> None:
-        proc = self._proc
-        self._started = False
-        self._client = None
-        self._proc = None
-        if proc is None:
-            return
-        try:
-            proc.terminate()
-            proc.wait(timeout=5)
-        except Exception:  # noqa: BLE001 - never raise on shutdown
-            kill = getattr(proc, "kill", None)
-            if callable(kill):
-                kill()
-            # Reap the killed child so it cannot linger as a zombie.
+        with self._lock:
+            proc = self._proc
+            self._started = False
+            self._client = None
+            self._proc = None
+            if proc is None:
+                return
+            pid = getattr(proc, "pid", "unknown")
             try:
-                proc.wait(timeout=5)
-            except Exception:  # noqa: BLE001
+                poll = getattr(proc, "poll", None)
+                if not callable(poll) or poll() is None:
+                    proc.terminate()
+            except Exception:  # noqa: BLE001 - shutdown is best-effort
                 pass
+            try:
+                proc.wait(timeout=8)
+            except Exception:  # noqa: BLE001 - escalate once, then still reap
+                kill = getattr(proc, "kill", None)
+                if callable(kill):
+                    try:
+                        kill()
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    proc.wait(timeout=5)
+                except Exception:  # noqa: BLE001
+                    pass
+            finally:
+                # Release the parent's pipe descriptors as well as reaping the
+                # child. The old implementation only waited for the process.
+                for stream_name in ("stdin", "stdout", "stderr"):
+                    stream = getattr(proc, stream_name, None)
+                    close = getattr(stream, "close", None)
+                    if callable(close):
+                        try:
+                            close()
+                        except Exception:  # noqa: BLE001
+                            pass
+                logger.debug("open-second-brain MCP child stopped pid=%s", pid)
 
     def _ensure_started(self) -> None:
         if not self._started:

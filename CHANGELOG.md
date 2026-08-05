@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.44.1] - 2026-08-08
+
+### Fixed
+
+- **Reuse and reap Hermes MCP bridges.** A Hermes memory provider is constructed per agent while the MCP server is a gateway resource, so every new session spawned its own Bun child - and cache eviction released the client without shutting the provider down, so nothing reaped it. A long-lived backend accumulated processes and descriptors until it hit `EMFILE` and lost its listening socket. Providers now share one bridge per effective vault, repository and command; shutdown terminates, escalates, reaps and closes the child's pipes rather than only waiting on the process; a failed handshake no longer leaves its child alive; and POSIX children run under the host's parent-death watchdog so a hard gateway exit cannot orphan them. Reported and fixed by @DanBennettUK in #156.
+- One shared bridge is one stdio stream, so its calls are serialised - which makes a child that stops answering everyone's problem rather than one session's. Every request therefore carries a deadline, and a bridge that misses one is torn down and restarted rather than holding the gateway behind an unbounded read. There was no read timeout anywhere in this transport before, and with a bridge per session that was survivable; with a shared one it is not.
+- The parent-death watchdog is optional by construction - the host module may be absent in a standalone checkout - and its absence was silent, so descendant cleanup could disappear in a rename without a word. It says so now, once per process.
+
 ## [1.44.0] - 2026-08-08
 
 Thirteen units on the retrieval path and the store beneath it. A reconnaissance pass ran before any design and falsified the load-bearing premise of nine of the eleven tasks in scope, and what survived had a shape none of the task descriptions predicted: with two exceptions these were not missing capabilities but values the system already computed and discarded before anything could see them, and checks that were never run at all. A structure recording which candidates were evaluated, surfaced and excluded was built on every gated search and serialized by nothing. A content hash had been on every chunk since the first schema version and was never read back. A match-centred snippet function was written, tested, and mounted on the wrong surface. An expiry filter took an as-of date as a parameter and no caller ever passed one. A ranker accepted an injected clock and the stage above it did not inject.
@@ -6886,6 +6894,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.44.1]: https://github.com/itechmeat/open-second-brain/compare/v1.44.0...v1.44.1
 [1.44.0]: https://github.com/itechmeat/open-second-brain/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/itechmeat/open-second-brain/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/itechmeat/open-second-brain/compare/v1.41.0...v1.42.0

@@ -37,6 +37,7 @@ from plugins.hermes.provider import (  # noqa: E402
     MEMORY_TOOLS,
     OpenSecondBrainMemoryProvider,
     _find_executable,
+    _reset_shared_bridges_for_tests,
 )
 from plugins.hermes.cli import register_cli  # noqa: E402
 
@@ -658,6 +659,39 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider.shutdown()
 
 
+class SharedProviderBridgeTests(unittest.TestCase):
+    def tearDown(self):
+        _reset_shared_bridges_for_tests()
+
+    def test_provider_instances_share_one_gateway_bridge(self):
+        shared = FakeBrainBridge()
+        with patch("plugins.hermes.provider.McpBrainBridge", return_value=shared) as factory:
+            with patch("plugins.hermes.provider.config.resolve_vault", return_value="/vault"):
+                with patch.object(
+                    OpenSecondBrainMemoryProvider,
+                    "_repo_root",
+                    return_value="/repo",
+                ):
+                    with patch.object(
+                        OpenSecondBrainMemoryProvider,
+                        "_resolve_command",
+                        return_value=("bun", "run", "main.ts", "mcp"),
+                    ):
+                        first = OpenSecondBrainMemoryProvider()
+                        second = OpenSecondBrainMemoryProvider()
+                        first.initialize("session-1", hermes_home="/hh")
+                        second.initialize("session-2", hermes_home="/hh")
+
+        self.assertEqual(factory.call_count, 1)
+        self.assertTrue(shared.started)
+        first.shutdown()
+        second.shutdown()
+        self.assertFalse(shared.stopped)
+
+        _reset_shared_bridges_for_tests()
+        self.assertTrue(shared.stopped)
+
+
 class InPlaceCompactionLifecycleTests(unittest.TestCase):
     """Regression guards for Hermes PR #52658 (compression.in_place default
     False->True). Compaction now keeps ONE durable session id instead of
@@ -954,6 +988,7 @@ class McpBrainBridgeTests(unittest.TestCase):
         result = bridge.call_tool("brain_query", {"topic": "x"})
         self.assertEqual(result, {"ok": True})
         self.assertEqual(spawn.state["n"], 3)
+        self.assertTrue(broken.terminated)
 
 
 class FakeBrainBridgeTests(unittest.TestCase):

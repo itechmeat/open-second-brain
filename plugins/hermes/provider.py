@@ -12,6 +12,7 @@ are added alongside.
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
@@ -53,6 +54,62 @@ _CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
+
+# A provider instance is created per AIAgent, but the MCP server is a gateway
+# resource rather than a session resource. Keep one bridge per effective server
+# configuration in this Python process. Cache eviction deliberately calls
+# AIAgent.release_clients() without shutting down memory providers, so
+# constructing one Bun child per provider leaks a child for every new session.
+_SHARED_BRIDGES: dict[tuple[str | None, str | None, tuple[str, ...]], BrainBridge] = {}
+_SHARED_BRIDGES_LOCK = threading.RLock()
+
+
+def _shared_bridge_key(
+    vault: str | None,
+    repo_root: str | None,
+    command: tuple[str, ...],
+) -> tuple[str | None, str | None, tuple[str, ...]]:
+    return (vault, repo_root, tuple(command))
+
+
+def _get_shared_bridge(
+    *,
+    vault: str | None,
+    repo_root: str | None,
+    command: tuple[str, ...],
+) -> BrainBridge:
+    """Return the one bridge for this gateway/configuration key."""
+    key = _shared_bridge_key(vault, repo_root, command)
+    with _SHARED_BRIDGES_LOCK:
+        bridge = _SHARED_BRIDGES.get(key)
+        if bridge is None:
+            bridge = McpBrainBridge(
+                vault=vault,
+                repo_root=repo_root,
+                command=command,
+            )
+            _SHARED_BRIDGES[key] = bridge
+        return bridge
+
+
+def _shutdown_shared_bridges() -> None:
+    """Stop all gateway-owned bridges during normal interpreter shutdown."""
+    with _SHARED_BRIDGES_LOCK:
+        bridges = list(_SHARED_BRIDGES.values())
+        _SHARED_BRIDGES.clear()
+    for bridge in bridges:
+        try:
+            bridge.stop()
+        except Exception:  # noqa: BLE001 - shutdown is best-effort
+            pass
+
+
+def _reset_shared_bridges_for_tests() -> None:
+    """Clear the process registry without exposing it as provider API."""
+    _shutdown_shared_bridges()
+
+
+atexit.register(_shutdown_shared_bridges)
 
 
 def _fallback_exe_dirs() -> tuple[Path, ...]:
@@ -110,6 +167,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     def __init__(self, bridge: BrainBridge | None = None) -> None:
         self._bridge_override = bridge
         self._bridge: BrainBridge | None = None
+        self._bridge_shared = False
         self._hermes_home: str | None = None
         self._session_id: str = ""
         self._buffer: list[tuple[str, str]] = []
@@ -131,19 +189,32 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """Start the bridge to the TS core. Fail-soft: never break gateway boot."""
         self._session_id = session_id or ""
         self._hermes_home = kwargs.get("hermes_home")
-        if self._bridge is not None:
+        old_bridge = self._bridge
+        old_bridge_shared = self._bridge_shared
+        self._bridge = None
+        self._bridge_shared = False
+        if old_bridge is not None and not old_bridge_shared:
             # Re-initialization (a new session on a reused instance) must not
-            # leak the previous bridge's subprocess.
+            # leak an injected/test bridge's subprocess. Gateway bridges are
+            # shared and intentionally remain alive for the gateway lifetime.
             try:
-                self._bridge.stop()
+                old_bridge.stop()
             except Exception:  # noqa: BLE001
                 pass
-        self._bridge = self._bridge_override or McpBrainBridge(
-            vault=config.resolve_vault(),
-            repo_root=self._repo_root(),
-            command=self._resolve_command(),
-        )
+        if self._bridge_override is not None:
+            self._bridge = self._bridge_override
+        else:
+            vault = config.resolve_vault()
+            repo_root = self._repo_root()
+            command = self._resolve_command()
+            self._bridge = _get_shared_bridge(
+                vault=vault,
+                repo_root=repo_root,
+                command=command,
+            )
+            self._bridge_shared = True
         try:
+            assert self._bridge is not None
             self._bridge.start()
         except Exception:  # noqa: BLE001 - degrade to inert; tool calls surface errors
             pass
@@ -390,12 +461,18 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._safe_call("brain_memory_bridge", args)
 
     def shutdown(self) -> None:
-        """Drain captures, flush, and stop the bridge. Never raises."""
+        """Drain captures, flush, and stop owned test bridges. Never raises."""
         self._drain_captures()
         self._flush_buffer()
-        if self._bridge is not None:
+        bridge = self._bridge
+        bridge_shared = self._bridge_shared
+        self._bridge = None
+        self._bridge_shared = False
+        # Shared production bridges belong to the gateway, not an evictable
+        # session. The process registry/atexit hook owns their final stop.
+        if bridge is not None and not bridge_shared:
             try:
-                self._bridge.stop()
+                bridge.stop()
             except Exception:  # noqa: BLE001 - shutdown is best-effort
                 pass
 
