@@ -21,6 +21,15 @@ export interface TrigramCandidateOutcome {
 const NO_WARNINGS: ReadonlyArray<string> = Object.freeze([]);
 
 /**
+ * Total ordering for the top-K cut, for the reason the keyword lane's
+ * own `CHUNK_ORDER` gives: BM25 ties are common in a trigram index -
+ * every chunk sharing the same trigram profile scores alike - and
+ * `LIMIT` over a partial order picks by scan artefact. `chunks.id` is
+ * `INTEGER PRIMARY KEY`, so no schema change is involved.
+ */
+const CHUNK_ORDER = "ORDER BY bm25 ASC, chunk_id ASC";
+
+/**
  * The one condition this lane stays SILENT for: `chunk_trigram` itself is
  * absent, which is a store migrated to v9 but never rebuilt - the table
  * is documented as optional. Anchored on the right, because a message
@@ -96,7 +105,7 @@ export function trigramCandidates(
             "JOIN chunks c ON c.id = chunk_trigram.rowid " +
             "JOIN documents d ON d.id = c.document_id " +
             "WHERE chunk_trigram MATCH ? AND substr(d.path, 1, length(?)) = ? " +
-            "ORDER BY bm25 ASC LIMIT ?",
+            `${CHUNK_ORDER} LIMIT ?`,
         )
         .all(trigramQuery, prefix, prefix, limit);
       return {
@@ -108,7 +117,7 @@ export function trigramCandidates(
       .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
         "SELECT c.id AS chunk_id, c.document_id AS document_id, bm25(chunk_trigram) AS bm25 " +
           "FROM chunk_trigram JOIN chunks c ON c.id = chunk_trigram.rowid " +
-          "WHERE chunk_trigram MATCH ? ORDER BY bm25 ASC LIMIT ?",
+          `WHERE chunk_trigram MATCH ? ${CHUNK_ORDER} LIMIT ?`,
       )
       .all(trigramQuery, limit);
     return {

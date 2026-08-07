@@ -360,6 +360,34 @@ export function ensureEmbeddingModel(
   });
 }
 
+/**
+ * Total ordering for the rows the KNN returns. Distance ties are not
+ * exotic here - two chunks with identical text embed to the same vector
+ * and therefore to the same distance - and the caller truncates, so a
+ * partial order lets the scan decide which tied neighbour survives.
+ * `chunk_id` is `chunks.id`, an `INTEGER PRIMARY KEY`, so the extra sort
+ * key needs no schema change.
+ */
+const VEC_ORDER = "ORDER BY v.distance ASC, m.chunk_id ASC";
+
+/**
+ * How much wider than `limit` the `k` of the KNN is asked for.
+ *
+ * `ORDER BY` alone cannot make the cut deterministic: sqlite-vec selects
+ * its `k` nearest rows FIRST, by its own internal order, and the sort
+ * only ever reaches the rows that selection already kept. Asking for a
+ * wider `k` and cutting here means a group of equidistant neighbours
+ * straddling the boundary is resolved by the unique sort key rather than
+ * by vec's traversal. The scan is a full one with a k-sized heap either
+ * way, so the wider k costs heap, not passes.
+ *
+ * The prefixed branch has always widened by this factor for the
+ * different reason that its path predicate drops rows after the KNN; the
+ * two branches now share one constant instead of one of them carrying a
+ * bare literal.
+ */
+const VEC_KNN_OVERFETCH = 4;
+
 export function semanticTopK(
   db: Database,
   vecLoaded: boolean,
@@ -373,6 +401,7 @@ export function semanticTopK(
     );
   }
   const limit = Math.max(1, opts.limit | 0);
+  const knn = limit * VEC_KNN_OVERFETCH;
   const prefix = opts.pathPrefix && opts.pathPrefix.length > 0 ? opts.pathPrefix : null;
 
   assertValidVector(queryVector, "semanticTopK");
@@ -389,9 +418,9 @@ export function semanticTopK(
           "JOIN chunks c ON c.id = m.chunk_id " +
           "JOIN documents d ON d.id = c.document_id " +
           "WHERE v.embedding MATCH ? AND k = ? AND substr(d.path, 1, length(?)) = ? " +
-          "ORDER BY v.distance ASC",
+          VEC_ORDER,
       )
-      .all(buf, limit * 4, prefix, prefix);
+      .all(buf, knn, prefix, prefix);
     return rows.slice(0, limit).map((r) => ({
       chunkId: r.chunk_id,
       documentId: r.document_id,
@@ -406,10 +435,10 @@ export function semanticTopK(
         "JOIN chunk_vec_map m ON m.vec_rowid = v.rowid " +
         "JOIN chunks c ON c.id = m.chunk_id " +
         "WHERE v.embedding MATCH ? AND k = ? " +
-        "ORDER BY v.distance ASC",
+        VEC_ORDER,
     )
-    .all(buf, limit);
-  return rows.map((r) => ({
+    .all(buf, knn);
+  return rows.slice(0, limit).map((r) => ({
     chunkId: r.chunk_id,
     documentId: r.document_id,
     distance: r.distance,

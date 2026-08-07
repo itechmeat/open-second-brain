@@ -46,11 +46,25 @@ import {
   coerceStringOptional,
 } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
+import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
+import {
+  ELLIPSIS,
+  HEAD_WINDOW_START,
+  markWindow,
+  matchOffset,
+  windowStart,
+} from "../core/search/snippet-window.ts";
 import { projectScoreBreakdown } from "../core/search/enrich.ts";
 import { recordReinforce } from "../core/search/reinforce.ts";
 import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/benchmark.ts";
-import { emitRecallTelemetry } from "../core/brain/recall-telemetry.ts";
+import {
+  deriveRecallSignals,
+  emitRecallTelemetry,
+  RECALL_SIGNALS_UNMEASURED_CARDS,
+  type RecallQualitySignals,
+  type RecallSignalsUnmeasured,
+} from "../core/brain/recall-telemetry.ts";
 import { emitGateTelemetry } from "../core/brain/gate-telemetry.ts";
 import { emitGatedTelemetry } from "../core/brain/continuity/emit.ts";
 import { recordQueryDemand, recordRecallAdequacyDemand } from "../core/brain/query-demand.ts";
@@ -58,6 +72,8 @@ import { recordQueryDemand, recordRecallAdequacyDemand } from "../core/brain/que
 const MCP_LIMIT_MAX = 50;
 const MCP_CONTENT_MAX = 600;
 const SEARCH_TIMEOUT_MS = 10_000;
+/** Surfaced rows named as source refs on one recall-telemetry record. */
+const TELEMETRY_TOP_ARTIFACTS_MAX = 10;
 
 const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -82,13 +98,13 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       maxLength: 64,
       description:
-        "Time-aware recall: only documents modified at/after this point. ISO date/datetime, 'today', 'yesterday', 'last week', 'last month', or <n>h/<n>d/<n>w.",
+        "Hard filter on event time (validity, body anchor, mtime last): at/after this point. ISO date/datetime, today, yesterday, last week, last month, <n>h/<n>d/<n>w.",
     },
     until: {
       type: "string",
       maxLength: 64,
       description:
-        "Time-aware recall: only documents modified at/before this point. Same forms as 'since'.",
+        "Hard filter on event time (validity, body anchor, mtime last): at/before this point. Same forms as 'since'.",
     },
     limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
     semantic: { type: "boolean" },
@@ -108,7 +124,7 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
     explain: {
       type: "boolean",
       description:
-        "Include a structured score_breakdown (per-layer numeric components) on each result. Default false.",
+        "Add a per-result score_breakdown plus the retrieval_decision_trace and memory_trust_assessment receipts. Default false.",
     },
     trust: {
       type: "boolean",
@@ -258,6 +274,27 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
               conflict: { type: "boolean" },
             },
           },
+          // Exact-duplicate merge: locations folded into this row.
+          // Declared deliberately — this output schema does not set
+          // `additionalProperties: false`, so an undeclared field would
+          // pass validation silently and be invisible to a caller
+          // reading the contract.
+          duplicates: {
+            type: "array",
+            items: {
+              type: "object",
+              required: ["documentId", "chunkId", "path", "title", "startLine", "endLine"],
+              properties: {
+                documentId: { type: "integer" },
+                chunkId: { type: "integer" },
+                path: { type: "string" },
+                // Nullable, same as the result title above.
+                title: {},
+                startLine: { type: "integer" },
+                endLine: { type: "integer" },
+              },
+            },
+          },
         },
       },
     },
@@ -290,9 +327,52 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
       },
     },
     warnings: { type: "array", items: { type: "string" } },
+    // The ranked pool the `limit` sliced these rows from (task F) - how
+    // many candidates were ranked, not how many came back. The descriptor
+    // grammar carries no prose, so the meaning is documented here, in
+    // SearchOutcome.total, and in docs/mcp.md.
     total: { type: "integer" },
     recall_hint: { type: "string" },
     evidence_pack: { type: "object" },
+    // Retrieval receipts under `explain` (what-the-index-already-knew,
+    // task F). Declared deliberately: this output schema does not set
+    // `additionalProperties: false`, so an undeclared key would pass
+    // validation silently and stay invisible to a caller reading the
+    // contract.
+    retrieval_decision_trace: {
+      type: "object",
+      required: ["evaluated", "surfaced", "excluded", "exclusions"],
+      properties: {
+        evaluated: { type: "integer" },
+        surfaced: { type: "integer" },
+        excluded: { type: "integer" },
+        exclusions: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["document_id", "chunk_id", "path", "reasons"],
+            properties: {
+              document_id: { type: "integer" },
+              chunk_id: { type: "integer" },
+              path: { type: "string" },
+              reasons: { type: "array", items: { type: "string" } },
+            },
+          },
+        },
+      },
+    },
+    memory_trust_assessment: {
+      type: "object",
+      required: ["evaluated", "surfaced", "quarantined", "reason_counts"],
+      properties: {
+        evaluated: { type: "integer" },
+        surfaced: { type: "integer" },
+        quarantined: { type: "integer" },
+        // Open-keyed histogram: one integer per namespaced exclusion reason.
+        reason_counts: { type: "object" },
+      },
+    },
+    retrieval_trace_unavailable: { type: "string" },
     telemetry_id: { type: "string" },
   },
 };
@@ -442,9 +522,23 @@ function parseReinforceArgument(raw: unknown): string[] | undefined {
   return out;
 }
 
-function truncateContent(c: string, max: number): string {
+/**
+ * The `content` window for one MCP result: at most `max` characters
+ * INCLUDING its continuation markers, centred on the first significant
+ * query term the chunk contains (task E).
+ *
+ * With no occurrence the window is the head of the chunk and the bytes
+ * are exactly what the pre-anchoring head truncation produced: content
+ * at or under the cap passes through untouched, and content over it is
+ * cut one character short to make room for the trailing marker.
+ */
+function windowContent(c: string, query: string, max: number): string {
   if (c.length <= max) return c;
-  return c.slice(0, max - 1) + "…";
+  const start = windowStart(matchOffset(c, query), max);
+  const budget = max - (start > HEAD_WINDOW_START ? ELLIPSIS.length : 0);
+  const hasMore = start + budget < c.length;
+  const body = c.slice(start, start + budget - (hasMore ? ELLIPSIS.length : 0));
+  return markWindow(body, start, hasMore, ELLIPSIS);
 }
 
 export function searchErrorToMcp(e: SearchError): MCPError {
@@ -648,8 +742,13 @@ async function toolBrainSearch(
   // `results`; both shapes carry documentId/chunkId/path/score, so the
   // telemetry count/status/top-artifacts stay honest either way.
   const surfaced = outcome.cards ?? outcome.results;
-  const telemetryRecord = emitGatedTelemetry(telemetry || undefined, () =>
-    emitRecallTelemetry(ctx.vault, {
+  const telemetryRecord = emitGatedTelemetry(telemetry || undefined, () => {
+    // Recall signals (what-the-index-already-knew, task G): derived
+    // INSIDE the gated thunk, so with the gate off - the default - not a
+    // single comparison runs. `search()` has already returned and its
+    // outcome and rows are frozen, so this lane can only read them.
+    const signals = searchRecallSignals(outcome);
+    return emitRecallTelemetry(ctx.vault, {
       host: telemetryHost,
       ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
       ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
@@ -657,7 +756,7 @@ async function toolBrainSearch(
       status: surfaced.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,
       resultCount: surfaced.length,
-      topArtifacts: surfaced.slice(0, 10).map((result) => ({
+      topArtifacts: surfaced.slice(0, TELEMETRY_TOP_ARTIFACTS_MAX).map((result) => ({
         id: `${result.documentId}:${result.chunkId}`,
         path: result.path,
         score: result.score,
@@ -672,8 +771,9 @@ async function toolBrainSearch(
         warnings_count: outcome.warnings.length,
         ...(pathPrefix !== undefined ? { path_prefix: pathPrefix } : {}),
       },
-    }),
-  );
+      ...(signals !== null ? { signals } : {}),
+    });
+  });
   // Cross-query demand log (t_97091fff): persist the normalized query
   // terms, result count, and (when the evidence pack computed it) the
   // IDF-weighted coverage so recurring poorly-answered queries can be
@@ -690,7 +790,7 @@ async function toolBrainSearch(
     results: outcome.results.map((r: BrainSearchResult) => ({
       path: r.path,
       title: r.title,
-      content: truncateContent(r.content, MCP_CONTENT_MAX),
+      content: windowContent(r.content, query, MCP_CONTENT_MAX),
       score: r.score,
       startLine: r.startLine,
       endLine: r.endLine,
@@ -704,6 +804,9 @@ async function toolBrainSearch(
       ...(r.origin !== undefined ? { origin: r.origin } : {}),
       ...(outcome.evidencePack ? { why_retrieved: r.reasons } : {}),
       ...(r.relations && r.relations.length > 0 ? { relations: r.relations } : {}),
+      // Exact-duplicate merge (task D): the locations this row was folded
+      // from. Absent, never null, when nothing was merged.
+      ...(r.duplicates && r.duplicates.length > 0 ? { duplicates: r.duplicates } : {}),
     })),
     ...(outcome.cards ? { cards: outcome.cards.map(serializeSearchCard) } : {}),
     warnings: outcome.warnings,
@@ -715,8 +818,30 @@ async function toolBrainSearch(
     // Absent on the generic path, so the default response stays
     // byte-identical.
     ...(outcome.surface !== undefined ? { surface: outcome.surface } : {}),
+    // Retrieval receipts (what-the-index-already-knew, task F): the
+    // decision trace and the trust assessment every gated search already
+    // built and no surface serialized. Under `explain` only, absent -
+    // never null - otherwise; when the gate is off, one line naming the
+    // switch that produces them rather than an unexplained silence.
+    ...explainEnvelope(outcome, { explain, crossVault: globalSearch }),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
   };
+}
+
+/**
+ * The recall signals for one query, or `null` when the window is empty
+ * and there is nothing to measure - `result_count: 0` already says that.
+ *
+ * Under `disclosure: "cards"` the pipeline returns projected cards and an
+ * EMPTY `results` array, so none of the per-row values the signals are
+ * derived from exist; that path records the named unmeasured marker
+ * rather than an all-zero block that would read as a measurement.
+ */
+function searchRecallSignals(
+  outcome: SearchOutcome,
+): RecallQualitySignals | RecallSignalsUnmeasured | null {
+  if (outcome.cards !== undefined) return RECALL_SIGNALS_UNMEASURED_CARDS;
+  return deriveRecallSignals(outcome.results);
 }
 
 function searchTelemetryGaps(outcome: SearchOutcome): ReadonlyArray<string> {

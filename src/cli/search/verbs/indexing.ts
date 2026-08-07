@@ -8,10 +8,15 @@
 
 import { formatDegradationNotice } from "../../../core/integrity/degradation.ts";
 import { createSafeguard, resolveSafeguardTimeoutMs } from "../../../core/brain/safeguard.ts";
-import { indexVault, reindexVault } from "../../../core/search/index.ts";
-import type { IndexStats } from "../../../core/search/index.ts";
+import {
+  chunkWindowDiagnosticCode,
+  indexVault,
+  reindexVault,
+  serializeChunkWindowCensus,
+} from "../../../core/search/index.ts";
+import type { ChunkWindowCensus, IndexStats } from "../../../core/search/index.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
-import { emitNextStep } from "../../advisory-rail.ts";
+import { emitNextSteps } from "../../advisory-rail.ts";
 import { CronTemplateError, renderCronTemplate } from "../../search-cron-template.ts";
 import {
   flagBoolean,
@@ -105,9 +110,15 @@ function reportIndexRun(
   } else {
     process.stdout.write(renderStatsHuman(stats, cfg));
   }
-  if (complete) {
-    emitNextStep(exitCode, searchAdvisoryStream(argv, jsonRequested));
-  }
+  // The census verdict is its own state with its own exit, and it is
+  // reported whether or not the run completed - an incomplete run still
+  // wrote the chunks it wrote. The batch form de-duplicates on the
+  // resolved command, so a run with no census emits exactly the one line
+  // it emitted before this feature.
+  const codes: string[] = [];
+  if (stats.chunkWindow !== undefined) codes.push(chunkWindowDiagnosticCode(stats.chunkWindow));
+  if (complete) codes.push(exitCode);
+  emitNextSteps(codes, searchAdvisoryStream(argv, jsonRequested));
 }
 
 export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<number> {
@@ -178,6 +189,38 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   return 0;
 }
 
+/**
+ * The census verdict on THIS surface: the shared wire shape plus the
+ * registered exit for its state. The exit belongs here and not in the
+ * shared serializer because it is a property of the surface, not of the
+ * verdict - the status snapshot carries the same record without one.
+ * A run can index every document cleanly and still have produced chunks
+ * the model cannot read whole, so this exit is not the run's terminal
+ * state either.
+ */
+function serializeChunkWindow(census: ChunkWindowCensus): Record<string, unknown> {
+  return {
+    ...serializeChunkWindowCensus(census),
+    ...nextCommandField(chunkWindowDiagnosticCode(census)),
+  };
+}
+
+/**
+ * One human line per census verdict. It states the condition and no
+ * command: the forward pointer is the advisory rail's, emitted for this
+ * run's census code beside the run's terminal state.
+ */
+function describeChunkWindow(census: ChunkWindowCensus): string {
+  if (census.verdict === "window-undeclared") {
+    const model = census.model === null ? "(none configured)" : census.model;
+    return `not checked - no input window is declared for ${model}`;
+  }
+  return (
+    `${census.chunksOverWindow} of ${census.chunksMeasured} chunk(s) estimate above the ` +
+    `${census.windowTokens}-token window declared for ${census.model}`
+  );
+}
+
 function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
   return {
     stats: {
@@ -193,6 +236,14 @@ function jsonForStats(stats: IndexStats, cfg: ResolvedSearchConfig): unknown {
       ...(stats.eventAnchorsPending > 0
         ? { event_anchors_pending: stats.eventAnchorsPending }
         : {}),
+      // Oversize-chunk census. Absent - not zero, not null - whenever it
+      // has nothing to report, so an index whose chunks fit the model's
+      // declared window emits exactly the payload it emitted before this
+      // field existed. `window-undeclared` carries no count on purpose:
+      // nothing was counted.
+      ...(stats.chunkWindow === undefined
+        ? {}
+        : { chunk_window: serializeChunkWindow(stats.chunkWindow) }),
     },
     errors: stats.errors.map((e) => ({ path: e.path, message: e.message })),
     // Unit F. Conditional so a vault with no malformed frontmatter emits
@@ -231,6 +282,12 @@ function renderStatsHuman(stats: IndexStats, cfg: ResolvedSearchConfig): string 
     lines.push(
       `  event anchors: ${stats.eventAnchorsPending} document(s) indexed before anchors existed`,
     );
+  }
+  // Same placement rule as the event-anchor line above and for the same
+  // reason: these chunks indexed fine, against a model whose declared
+  // window they do not fit - or against one that declares no window.
+  if (stats.chunkWindow !== undefined) {
+    lines.push(`  chunk window: ${describeChunkWindow(stats.chunkWindow)}`);
   }
   if (stats.errors.length > 0) {
     lines.push(`  errors:`);

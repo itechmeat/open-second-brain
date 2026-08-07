@@ -60,6 +60,7 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     "no-record-access": { type: "boolean" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
+    explain: { type: "boolean" },
   });
 
   const rawQueryDocument = flagString(flags, "query-doc");
@@ -149,11 +150,19 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     ? await searchAcrossVaults(resolveConfigPath(flags), cfg.vault, searchOpts, cfg)
     : await search(cfg, searchOpts);
 
+  // Retrieval receipts (what-the-index-already-knew, task F): --explain
+  // appends the decision trace and the trust assessment the search
+  // already built. Omitted, both projections are byte-identical to the
+  // pre-flag ones.
+  const explainOptions = { explain: flagBoolean(flags, "explain"), crossVault: isGlobal };
+
   if (flagBoolean(flags, "json")) {
-    process.stdout.write(JSON.stringify(jsonForOutcome(outcome)) + "\n");
+    process.stdout.write(JSON.stringify(jsonForOutcome(outcome, explainOptions)) + "\n");
     return 0;
   }
-  process.stdout.write(renderOutcomeHuman(outcome, flagBoolean(flags, "verbose")));
+  process.stdout.write(
+    renderOutcomeHuman(outcome, flagBoolean(flags, "verbose"), query, explainOptions),
+  );
   return 0;
 }
 

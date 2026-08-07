@@ -67,6 +67,18 @@ function renderStatusHuman(s: IndexStatusSnapshot): string {
   lines.push(`embedding_key:       ${s.embeddingKeyPresent ? "present" : "missing"}`);
   lines.push(`last_indexed_at:     ${s.lastIndexedAt ?? "(never)"}`);
   lines.push(`last_full_index_at:  ${s.lastFullIndexAt ?? "(never)"}`);
+  // The oversize-chunk census when it could NOT run. Above the warnings
+  // and not among them, deliberately: this line reports a check that did
+  // not happen, and there is no command an operator runs about it. Its
+  // absence here means the check ran - and if it found something, that
+  // IS a warning below.
+  if (s.chunkWindowUndeclared !== undefined) {
+    const model = s.chunkWindowUndeclared.model ?? "(none configured)";
+    lines.push(
+      `chunk_window_check:  not run - no input window is declared for ${model} ` +
+        `(${s.chunkWindowUndeclared.chunksMeasured} chunk(s) uncompared)`,
+    );
+  }
   for (const w of s.warnings) lines.push(`warning: ${w}`);
   return lines.join("\n") + "\n";
 }

@@ -63,18 +63,46 @@ export function pricePerMillionTokens(model: string | null): number {
 }
 
 /**
+ * Characters per estimated token. Lifted out of {@link estimateTokens}
+ * because the ratio now has a second reader: the store-side oversize
+ * census selects the same population with a length comparison instead of
+ * materialising chunk content, and a second literal `4` in that predicate
+ * would be a magic number the two sites could drift on.
+ */
+export const CHARS_PER_ESTIMATED_TOKEN = 4;
+
+/**
  * Cheap token estimate: a chars/4 heuristic per text, rounded up, summed.
  * This is the same order-of-magnitude approximation embedding providers
  * use for quick quotes; it intentionally avoids a real tokenizer so the
  * estimate stays dependency-free and deterministic.
+ *
+ * A "character" here is a UTF-16 code unit (JavaScript `String.length`),
+ * which matters to any reader that reproduces this arithmetic outside
+ * JavaScript - see {@link charLengthOverTokenBudget}.
  */
 export function estimateTokens(texts: ReadonlyArray<string>): number {
   let total = 0;
   for (const t of texts) {
     if (t.length === 0) continue;
-    total += Math.ceil(t.length / 4);
+    total += Math.ceil(t.length / CHARS_PER_ESTIMATED_TOKEN);
   }
   return total;
+}
+
+/**
+ * The character length a single text must EXCEED for its
+ * {@link estimateTokens} value to exceed `tokens`.
+ *
+ * `ceil(L / 4) > W` holds exactly when `L > 4W` for an integer window
+ * `W`, so a caller that only needs the predicate - "does this text's
+ * estimate exceed the budget" - can evaluate it against a length instead
+ * of computing the estimate. That is what lets the oversize-chunk census
+ * run as one SQL aggregate over `chunks.content` rather than reading
+ * every chunk body into memory.
+ */
+export function charLengthOverTokenBudget(tokens: number): number {
+  return tokens * CHARS_PER_ESTIMATED_TOKEN;
 }
 
 /** Estimated spend in USD for `tokens` against `model`'s rate. */

@@ -26,6 +26,7 @@ import {
   LEARNED_WEIGHT_MIN,
   LEARNED_WEIGHT_MAX,
   type RecallFeedbackEvent,
+  writeLearnedWeights,
 } from "../../../src/core/search/feedback.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
@@ -205,6 +206,28 @@ describe("derived weights file", () => {
     resetLearnedWeights(vault);
     expect(existsSync(learnedWeightsPath(vault))).toBe(false);
     expect(loadFeedbackEvents(vault)).toHaveLength(1);
+  });
+
+  test("a hand-edited multiplier outside the fold's own bounds is refused", () => {
+    // The fold clamps every multiplier into [LEARNED_WEIGHT_MIN,
+    // LEARNED_WEIGHT_MAX], so a value outside that range is one
+    // computeLearnedWeights could never have produced. Under rank fusion a
+    // zero deletes a lane and a negative inverts its rank order, so the
+    // reader refuses the file rather than composing with it.
+    const sound = computeLearnedWeights([event({})]);
+    writeLearnedWeights(vault, sound);
+    expect(readLearnedWeights(vault)).not.toBeNull();
+
+    for (const bad of [0, -1, LEARNED_WEIGHT_MAX + 0.1, LEARNED_WEIGHT_MIN - 0.1]) {
+      writeLearnedWeights(vault, { ...sound, keywordMul: bad });
+      expect(readLearnedWeights(vault)).toBeNull();
+    }
+
+    // The bound is inclusive at both ends - the fold can emit exactly these.
+    for (const edge of [LEARNED_WEIGHT_MIN, LEARNED_WEIGHT_MAX]) {
+      writeLearnedWeights(vault, { ...sound, keywordMul: edge });
+      expect(readLearnedWeights(vault)).not.toBeNull();
+    }
   });
 
   test("fingerprint changes when weights change and is stable otherwise", () => {

@@ -776,10 +776,16 @@ Key behaviours, all driven from `Brain/_brain.yaml`-free `search_*` /
   unless `--force-cost`, and the local / unlisted-model price is 0.
 - **Fusion modes (v0.36.0).** `search_fusion_mode` is `linear` (default,
   the weighted sum below) or `rrf` - Reciprocal Rank Fusion, which scores
-  each candidate `Σ 1/(search_rrf_k + rank_in_lane)` across the keyword
-  and semantic lanes, min-max-normalised to `[0,1]`. RRF is weightless
-  and replaces only the relevance term; every boost below still applies,
-  and `linear` is bit-identical to pre-v0.36.0 ranking.
+  each candidate `Σ w_lane/(search_rrf_k + rank_in_lane)` across the
+  keyword and semantic lanes, min-max-normalised to `[0,1]`. RRF ignores
+  the configured `search_keyword_weight` / `search_semantic_weight` -
+  those calibrate two score magnitudes and this fusion reads none - but
+  `w_lane` does carry the per-query intent profile (and the learned
+  recall weights), so a quoted phrase favours the lexical lane in both
+  fusion modes. A query that declares no intent weights both lanes 1,
+  which is the classic weightless term. RRF replaces only the relevance
+  term; every boost below still applies, and `linear` is bit-identical to
+  pre-v0.36.0 ranking.
 - **Ranking.** `final_score = clamp01(keyword_weight·norm_BM25 +
 semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   (linear mode; in `rrf` mode the first two terms are replaced by the

@@ -65,6 +65,23 @@ export interface TrustMetadata {
   readonly replacement: string | null;
 }
 
+/**
+ * One location a merged-away exact duplicate was found at
+ * (what-the-index-already-knew, task D). A passage whose `content_hash`
+ * equals a higher-ranked candidate's is folded into that candidate rather
+ * than occupying a second slot in the caller's window; every location it
+ * was folded from is recorded here so the caller can still see that the
+ * same bytes live at more than one path.
+ */
+export interface DuplicatePassageLocation {
+  readonly documentId: number;
+  readonly chunkId: number;
+  readonly path: string;
+  readonly title: string | null;
+  readonly startLine: number;
+  readonly endLine: number;
+}
+
 export interface BrainSearchResult {
   readonly documentId: number;
   readonly chunkId: number;
@@ -129,4 +146,12 @@ export interface BrainSearchResult {
    * absent, keeping the legacy result shape byte-identical.
    */
   readonly origin?: string;
+  /**
+   * Locations of the exact duplicates folded into this row
+   * (what-the-index-already-knew, task D). Present ONLY when at least one
+   * byte-identical passage was merged away, so a corpus that holds no
+   * duplicate passages produces rows byte-identical to pre-merge ones.
+   * Never empty when present, and never contains this row's own location.
+   */
+  readonly duplicates?: ReadonlyArray<DuplicatePassageLocation>;
 }

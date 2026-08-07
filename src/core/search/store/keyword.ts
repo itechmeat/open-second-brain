@@ -23,6 +23,17 @@ export interface KeywordHit {
  */
 const CHUNK_FTS_BM25 = "bm25(chunk_fts, 1.0, 0.3)";
 
+/**
+ * Total ordering for the top-K cut. BM25 alone is not a total order -
+ * two chunks with the same term frequencies and the same length score
+ * identically - so `LIMIT` would otherwise take whichever tied rows the
+ * scan happened to reach first, which is an artefact of the b-tree and
+ * not a property of the query. `chunks.id` is `INTEGER PRIMARY KEY`, so
+ * it is unique and already present; ending the sort on it makes the cut
+ * reproducible without touching the schema.
+ */
+const CHUNK_ORDER = "ORDER BY bm25 ASC, chunk_id ASC";
+
 export function ensureFts5(db: Database): void {
   // Probe FTS5 by attempting a benign expression. bun:sqlite ships with
   // FTS5 enabled in the embedded amalgamation; failing here means a
@@ -102,7 +113,7 @@ export function keywordTopK(
           "JOIN chunks c ON c.id = chunk_fts.rowid " +
           "JOIN documents d ON d.id = c.document_id " +
           "WHERE chunk_fts MATCH ? AND substr(d.path, 1, length(?)) = ? " +
-          "ORDER BY bm25 ASC LIMIT ?",
+          `${CHUNK_ORDER} LIMIT ?`,
       )
       .all(fts5Query, prefix, prefix, limit);
     return rows.map((r) => ({
@@ -116,7 +127,7 @@ export function keywordTopK(
     .query<{ chunk_id: number; document_id: number; bm25: number }, [string, number]>(
       `SELECT c.id AS chunk_id, c.document_id AS document_id, ${CHUNK_FTS_BM25} AS bm25 ` +
         "FROM chunk_fts JOIN chunks c ON c.id = chunk_fts.rowid " +
-        "WHERE chunk_fts MATCH ? ORDER BY bm25 ASC LIMIT ?",
+        `WHERE chunk_fts MATCH ? ${CHUNK_ORDER} LIMIT ?`,
     )
     .all(fts5Query, limit);
   return rows.map((r) => ({

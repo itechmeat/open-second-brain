@@ -36,6 +36,7 @@ import {
 } from "./capability-tier.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
+import { declaredInputWindowTokens } from "./embeddings/presets.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
@@ -71,11 +72,12 @@ import {
   LAST_INDEXED_AT_STATE_KEY,
 } from "./store.ts";
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
-import { SearchError } from "./types.ts";
+import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import { withTimeout } from "./with-timeout.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
 import type {
+  ChunkWindowCensus,
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
@@ -131,6 +133,8 @@ interface MutableStats {
   eventAnchorsPending: number;
   backend: IndexStats["backend"];
   deferredReason: IndexStats["deferredReason"];
+  /** Null until the census runs, and null whenever it has nothing to report. */
+  chunkWindow: ChunkWindowCensus | null;
 }
 
 function newStats(): MutableStats {
@@ -154,6 +158,8 @@ function newStats(): MutableStats {
     // Defaults to the deterministic offline backend.
     backend: "offline",
     deferredReason: null,
+    // Taken at the end of the run, over the index the run left behind.
+    chunkWindow: null,
   };
 }
 
@@ -174,6 +180,10 @@ function freezeStats(s: MutableStats, durationMs: number): IndexStats {
     eventAnchorsPending: s.eventAnchorsPending,
     backend: s.backend,
     deferredReason: s.deferredReason,
+    // Absent, not null, when the census has nothing to report: a run
+    // with no oversize chunks and a declared window produces the exact
+    // statistics object it produced before this field existed.
+    ...(s.chunkWindow === null ? {} : { chunkWindow: s.chunkWindow }),
     durationMs,
   });
 }
@@ -558,6 +568,15 @@ async function indexInto(
     // `since` / `until` filter now depends on the answer.
     stats.eventAnchorsPending = store.countUnexaminedEventAnchors();
 
+    // Oversize-chunk census. Taken here, over the index this run just
+    // wrote, because the chunk boundaries the run produced are exactly
+    // what the configured model's declared window has to hold - and the
+    // configured chunk size is expressed in whitespace WORDS while a
+    // window is expressed in tokens, so the two settings can only be
+    // compared through what they actually produced. The stored model
+    // fills in a config that leaves `embedding_model` unset.
+    stats.chunkWindow = censusChunkWindow(store, config, store.getState("embedding_model"));
+
     const now = new Date().toISOString();
     store.setState(LAST_INDEXED_AT_STATE_KEY, now);
     // The SAME instant on a forced run: their equality is the
@@ -599,6 +618,20 @@ async function indexInto(
 }
 
 /**
+ * The model an embedding request would name right now. The local
+ * provider has an implicit model string; every other provider takes the
+ * configured one, falling back to what the index recorded when the
+ * config leaves it unset.
+ */
+function activeEmbeddingModel(
+  config: ResolvedSearchConfig,
+  storedModel: string | null = null,
+): string | null {
+  if (config.semantic.provider === "local") return LOCAL_EMBEDDING_MODEL;
+  return config.semantic.model ?? storedModel;
+}
+
+/**
  * Canonical signature of the ACTIVE embedding configuration for status
  * reporting. Null when semantic search is disabled. Stored model and
  * dimension fill in fields the config leaves unset (e.g. an
@@ -610,11 +643,85 @@ function activeEmbeddingSignature(
   storedDim: number | null = null,
 ): string | null {
   if (!config.semantic.enabled) return null;
-  const provider = config.semantic.provider;
-  const model =
-    provider === "local" ? LOCAL_EMBEDDING_MODEL : (config.semantic.model ?? storedModel);
-  const dimension = config.semantic.dimension ?? storedDim;
-  return embeddingSignature({ provider, model, dimension });
+  return embeddingSignature({
+    provider: config.semantic.provider,
+    model: activeEmbeddingModel(config, storedModel),
+    dimension: config.semantic.dimension ?? storedDim,
+  });
+}
+
+/**
+ * The config key whose value produced the chunk boundaries under census.
+ * Named once so the warning and any future surface cannot spell it
+ * differently from `resolveSearchConfig`.
+ */
+const CHUNK_SIZE_CONFIG_KEY = "search_chunk_size";
+
+/**
+ * Take the oversize-chunk census over an open index.
+ *
+ * Returns `null` when there is nothing to report, which covers three
+ * genuinely different silences, all of them states in which no chunk can
+ * overflow a window:
+ *
+ *   - semantic search is off, so nothing is ever embedded;
+ *   - the provider is the offline local embedder, which hashes n-gram
+ *     features over the whole text - no encoder, no positional limit,
+ *     nothing to truncate. A provably absent window, not an unknown one;
+ *   - the census ran against a declared window and every chunk fits.
+ *
+ * The one silence it does NOT produce is a model with no declared
+ * window: that is reported as `window-undeclared`, because a check that
+ * could not run and a check that passed are not the same statement.
+ */
+function censusChunkWindow(
+  store: Store,
+  config: ResolvedSearchConfig,
+  storedModel: string | null,
+): ChunkWindowCensus | null {
+  if (!config.semantic.enabled) return null;
+  if (config.semantic.provider === "local") return null;
+  const chunksMeasured = store.chunkCount();
+  if (chunksMeasured === 0) return null;
+
+  const model = activeEmbeddingModel(config, storedModel);
+  const windowTokens = declaredInputWindowTokens(model);
+  if (model === null || windowTokens === null) {
+    return Object.freeze({ verdict: "window-undeclared" as const, model, chunksMeasured });
+  }
+  const chunksOverWindow = store.chunksOverTokenWindow(windowTokens);
+  if (chunksOverWindow === 0) return null;
+  return Object.freeze({
+    verdict: "over-window" as const,
+    model,
+    windowTokens,
+    chunksOverWindow,
+    chunksMeasured,
+  });
+}
+
+/**
+ * The operator-facing warning line for measured overflow, ending in the
+ * command its REGISTERED diagnostic names. The command is resolved from
+ * the registry rather than written here, so this sentence cannot name an
+ * exit the registry does not hold; an unregistered code throws at the
+ * point the sentence is built rather than shipping a dead end.
+ *
+ * Typed to the overflow member alone, so the undeclared verdict cannot
+ * reach the warning channel by accident - it is a snapshot field, and
+ * the type is what enforces that rather than a branch nobody calls.
+ */
+async function formatChunkWindowOverflow(
+  census: Extract<ChunkWindowCensus, { verdict: "over-window" }>,
+): Promise<string> {
+  const { requireNextStep } = await import("../brain/next-step.ts");
+  const step = requireNextStep(chunkWindowDiagnosticCode(census));
+  return (
+    `${census.chunksOverWindow} of ${census.chunksMeasured} indexed chunk(s) estimate above ` +
+    `the ${census.windowTokens}-token input window declared for ${census.model}; whatever ` +
+    `does not fit is truncated by the provider, silently. Lower ${CHUNK_SIZE_CONFIG_KEY}, ` +
+    `then run: ${step.nextCommand}`
+  );
 }
 
 /**
@@ -990,12 +1097,33 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       warnings.push(formatEmbeddingAbiDrift(abiDrift));
     }
 
+    // Oversize-chunk census (what-the-index-already-knew, task H). The
+    // two reportable states leave by different doors, following the
+    // convention the ABI drift beside them already sets: the warning
+    // channel is for what an operator can act on, the structured field
+    // for what is simply true.
+    //
+    //   - chunks past a DECLARED window is a measured fault with a
+    //     command behind it, so it is a warning;
+    //   - a model with no declared window is a check that could not run.
+    //     It has no command - nobody can declare a window for someone
+    //     else's model - and it is the COMMON case, so a warning here
+    //     would repeat forever on the majority of configurations and
+    //     train operators to skip the channel. It rides the snapshot as
+    //     its own field instead, which still distinguishes it from a
+    //     pass.
+    //
+    // A clean census is neither, so a status that had no warning before
+    // this feature still has none.
+    const chunkWindow = censusChunkWindow(store, config, model);
+    const chunkWindowUndeclared = chunkWindow?.verdict === "window-undeclared" ? chunkWindow : null;
+    if (chunkWindow !== null && chunkWindow.verdict === "over-window") {
+      warnings.push(await formatChunkWindowOverflow(chunkWindow));
+    }
+
     // Best-effort spend estimate to bring stale/missing embeddings current.
     // Only scan chunk content when the active model is actually priced.
-    const activeModel =
-      config.semantic.provider === "local"
-        ? LOCAL_EMBEDDING_MODEL
-        : (config.semantic.model ?? model);
+    const activeModel = activeEmbeddingModel(config, model);
     let estimatedRefreshCostUsd = 0;
     if (config.semantic.enabled && pricePerMillionTokens(activeModel) > 0) {
       const pending = store.findChunksWithoutEmbeddings();
@@ -1023,6 +1151,9 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       lastIndexedAt: last,
       lastFullIndexAt: full,
       embeddingAbi: abiDrift,
+      // Absent, not null, whenever the check could run - so a status
+      // over a curated model serializes the bytes it always has.
+      ...(chunkWindowUndeclared === null ? {} : { chunkWindowUndeclared }),
       warnings: Object.freeze(warnings),
     });
   } finally {

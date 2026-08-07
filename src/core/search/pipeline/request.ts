@@ -89,14 +89,14 @@ export function resolveSearchRequest(
   }
   const pathPrefix = assertSafePathPrefix(opts.pathPrefix);
   const policy = resolveSemanticPolicy(resolvedConfig, opts);
+  // One clock for every time-resolving decision in this call, so the hard
+  // filter, the session-focus expiry and the query-declared window below
+  // cannot disagree by a few milliseconds of wall-clock drift.
+  const nowMs = Date.now();
   const sessionFocus =
     opts.sessionFocus === undefined
-      ? readActiveSessionFocus(resolvedConfig, opts.focusSession, Date.now())
+      ? readActiveSessionFocus(resolvedConfig, opts.focusSession, nowMs)
       : opts.sessionFocus;
-  // One clock for every time-resolving decision in this call, so the hard
-  // filter and the query-declared window below cannot disagree by a few
-  // milliseconds of wall-clock drift.
-  const nowMs = Date.now();
   // Time-aware recall (recall-trust-suite): resolve since/until up front
   // so invalid input fails fast, before any store I/O.
   const timeRange =

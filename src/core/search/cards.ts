@@ -7,6 +7,7 @@
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
 import { isPathOwnerVisible } from "./result-filters.ts";
+import { markWindow, matchOffset, toCodePointOffset, windowStart } from "./snippet-window.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -19,16 +20,29 @@ import type {
 
 /** Max chars of a layer-1 card snippet — enough to judge a hit, cheap to carry. */
 const CARD_SNIPPET_CHARS = 240;
+/**
+ * Continuation marker for a card snippet that does not cover the whole
+ * chunk. Three ASCII dots, not U+2026: the card grammar has shipped this
+ * spelling since progressive disclosure landed, and the other preview
+ * surfaces use the single-character form.
+ */
+const CARD_ELLIPSIS = "...";
 /** Default layer-3 raw-chunk page size for `expandHit`. */
 const DEFAULT_EXPAND_RAW_LIMIT = 10;
 
 /**
  * Project a ranked result into a layer-1 card (progressive disclosure):
  * identity + score + the same `reasons`, a whitespace-collapsed snippet
- * capped at {@link CARD_SNIPPET_CHARS}, and a `path:Lstart-Lend` pointer
- * (D2 grammar) over the chunk's stored line span. No full content.
+ * capped at {@link CARD_SNIPPET_CHARS} and anchored on the query match,
+ * and a `path:Lstart-Lend` pointer (D2 grammar) over the chunk's stored
+ * line span. No full content.
+ *
+ * `query` is the residual query text the row was retrieved for; it
+ * decides where the snippet window opens. It is required rather than
+ * optional because a card whose snippet silently reverted to the head of
+ * the chunk is the defect this signature exists to prevent.
  */
-export function toSearchCard(result: BrainSearchResult): SearchCard {
+export function toSearchCard(result: BrainSearchResult, query: string): SearchCard {
   return Object.freeze({
     chunkId: result.chunkId,
     documentId: result.documentId,
@@ -36,22 +50,36 @@ export function toSearchCard(result: BrainSearchResult): SearchCard {
     title: result.title,
     score: result.score,
     reasons: result.reasons,
-    snippet: cardSnippet(result.content),
+    snippet: cardSnippet(result.content, query),
     pointer: formatLinePointer(result.path, result.startLine, result.endLine),
     ...(result.origin !== undefined ? { origin: result.origin } : {}),
   });
 }
 
-export function cardSnippet(content: string): string {
+/**
+ * The card snippet: whitespace-collapsed content, windowed on the first
+ * significant `query` term it contains, capped at
+ * {@link CARD_SNIPPET_CHARS} code points.
+ *
+ * `query` defaults to the empty string, which has no significant terms
+ * and is therefore the defined no-match case — the head of the chunk,
+ * byte-identical to the pre-anchoring snippet. That default exists for
+ * callers that hold content without a query at all; the ranked path
+ * always passes one through {@link toSearchCard}.
+ */
+export function cardSnippet(content: string, query = ""): string {
   const collapsed = content.replace(/\s+/g, " ").trim();
-  // Truncate on code points, not UTF-16 units: a raw `.slice` can cut an
-  // astral character (emoji, rare CJK) mid-surrogate-pair, shipping a lone
-  // surrogate that renders as U+FFFD. Spreading into an array iterates by
-  // code point, so the cap never splits a character.
+  // Window and truncate on code points, not UTF-16 units: a raw `.slice`
+  // can cut an astral character (emoji, rare CJK) mid-surrogate-pair,
+  // shipping a lone surrogate that renders as U+FFFD. Spreading into an
+  // array iterates by code point, so neither edge splits a character.
   const points = [...collapsed];
-  return points.length <= CARD_SNIPPET_CHARS
-    ? collapsed
-    : `${points.slice(0, CARD_SNIPPET_CHARS).join("")}...`;
+  const start = windowStart(
+    toCodePointOffset(collapsed, matchOffset(collapsed, query)),
+    CARD_SNIPPET_CHARS,
+  );
+  const end = start + CARD_SNIPPET_CHARS;
+  return markWindow(points.slice(start, end).join(""), start, end < points.length, CARD_ELLIPSIS);
 }
 
 /**

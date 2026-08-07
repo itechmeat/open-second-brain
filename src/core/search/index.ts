@@ -40,6 +40,7 @@ type SearchConfigOverrides = Partial<
 
 export type {
   BrainSearchResult,
+  ChunkWindowCensus,
   DisclosureMode,
   EvidencePack,
   ExpandedNote,
@@ -61,7 +62,13 @@ export type {
   StructuredRecallQueryDocument,
   VaultIgnoreRule,
 } from "./types.ts";
-export { EMBEDDING_QUOTA_MESSAGE, SearchError, SEARCH_ERROR_CODES } from "./types.ts";
+export {
+  chunkWindowDiagnosticCode,
+  CHUNK_WINDOW_CODE,
+  EMBEDDING_QUOTA_MESSAGE,
+  SearchError,
+  SEARCH_ERROR_CODES,
+} from "./types.ts";
 export {
   parseStructuredRecallQueryDocument,
   structuredRecallQueryText,
@@ -76,6 +83,7 @@ export {
 export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-gate.ts";
 export { buildEvidencePack, serializeEvidencePack } from "./evidence-pack.ts";
 export {
+  serializeChunkWindowCensus,
   serializeSearchCard,
   serializeIndexStatus,
   serializeStampMismatches,

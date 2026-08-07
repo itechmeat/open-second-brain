@@ -384,6 +384,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       semanticRankedChunkIds: semanticRanked,
       relationalRankedChunkIds: inputs.relationalRankedChunkIds ?? [],
       k: opts.rrfK ?? DEFAULT_RRF_K,
+      // The intent profile weights the per-lane CONTRIBUTIONS, not the
+      // fused score: a post-fusion multiplier is a constant factor on
+      // every candidate and could not express a lane preference at all.
+      // A neutral profile passes 1 on both lanes, which is the classic
+      // weightless term bit for bit.
+      laneWeights: { keyword: kwMul, semantic: semMul },
     });
   }
 
@@ -495,8 +501,10 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // removed - `recencyAmplitude: 0` stays the only off switch.
     const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul * temporalDamping;
     // Relevance term: reciprocal-rank-fused when in rrf mode, otherwise
-    // the weighted sum of the normalised lanes. RRF is weightless, so the
-    // per-lane weights and intent multipliers do not apply to it.
+    // the weighted sum of the normalised lanes. The fused value already
+    // carries the intent multipliers (applied per lane, above); the
+    // CONFIGURED lane weights stay out of it, because they calibrate two
+    // score magnitudes and rank fusion reads no magnitudes.
     const rrf = rrfByChunk?.get(c.chunkId) ?? 0;
     const weighted =
       rrfByChunk !== null

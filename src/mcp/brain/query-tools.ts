@@ -17,6 +17,7 @@ import {
   queryByPreference,
   queryByTopic,
 } from "../../core/brain/query.ts";
+import { parseIsoUtc } from "../../core/brain/health/iso-time.ts";
 import { diffAgentSources, type AgentSourceDiffMode } from "../../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
 import type { AgentSourceContributionKind } from "../../core/brain/agent-source/types.ts";
@@ -44,6 +45,49 @@ import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
 
+/** Accepted `at` forms, named in every refusal so the exit is actionable. */
+const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
+
+/**
+ * The as-of instant the expiration filter is evaluated against.
+ *
+ * `queryByTopic` has taken a `now` option since C5 and this handler
+ * dropped it, so an agent could ask to SEE lapsed memories
+ * (`show_expired`) but never to ask what the brain held at an instant.
+ * Only topic mode runs that filter, so an `at` supplied beside
+ * `preference` / `since` is refused rather than quietly ignored, and an
+ * unparseable one is refused rather than coerced to the wall clock -
+ * which would answer a different question without saying so.
+ */
+const EXPIRY_ARG_SCOPE = "only applies to topic mode (the expiration filter runs there)";
+
+/**
+ * `show_expired` shares `at`'s scope: both steer the one expiration
+ * filter, and that filter runs in topic mode alone. Its schema already
+ * said so while the handler read it in topic mode and ignored it
+ * everywhere else, so a caller asking to see lapsed memories beside
+ * `preference` got the documented answer's opposite in silence. Two
+ * arguments with one scope now refuse on the same terms.
+ */
+function assertExpiryArgScope(args: Record<string, unknown>, topicMode: boolean): void {
+  if (topicMode) return;
+  if (coerceBoolOptional(args, "show_expired") === undefined) return;
+  throw new MCPError(INVALID_PARAMS, `brain_query: 'show_expired' ${EXPIRY_ARG_SCOPE}`);
+}
+
+function coerceAsOf(args: Record<string, unknown>, topicMode: boolean): Date | null {
+  const raw = coerceStr(args, "at", false);
+  if (raw === null) return null;
+  if (!topicMode) {
+    throw new MCPError(INVALID_PARAMS, `brain_query: 'at' ${EXPIRY_ARG_SCOPE}`);
+  }
+  const atMs = parseIsoUtc(raw);
+  if (!Number.isFinite(atMs)) {
+    throw new MCPError(INVALID_PARAMS, `brain_query: 'at' must be ${AS_OF_FORMS}; got ${raw}`);
+  }
+  return new Date(atMs);
+}
+
 async function toolBrainQuery(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -70,6 +114,9 @@ async function toolBrainQuery(
       "brain_query accepts at most one of: preference, topic, since",
     );
   }
+
+  assertExpiryArgScope(args, topic !== null);
+  const asOf = coerceAsOf(args, topic !== null);
 
   // Recall telemetry (t_405b8053): per-call opt-in mirroring
   // brain_search. The payload carries the query KIND only - never the
@@ -137,9 +184,13 @@ async function toolBrainQuery(
 
     if (topic !== null) {
       // Expiration opt-in (C5): default drops memories past their
-      // expiration_date; show_expired re-includes them for audit.
+      // expiration_date; show_expired re-includes them for audit, and
+      // `at` moves the clock that filter compares against.
       const showExpired = coerceBoolOptional(args, "show_expired") ?? false;
-      const res = queryByTopic(ctx.vault, topic, { showExpired });
+      const res = queryByTopic(ctx.vault, topic, {
+        showExpired,
+        ...(asOf !== null ? { now: asOf } : {}),
+      });
       const resultCount = res.signals.length + res.all_log_events.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
       const topicPrefOwner = res.preference?.owner;
@@ -491,6 +542,11 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "boolean",
           description:
             "Topic mode only: include memories past their `expiration_date`. Default false (expired memories are silently dropped from the result).",
+        },
+        at: {
+          type: "string",
+          description:
+            "Topic mode only: evaluate `expiration_date` as of this instant, so a memory that lapsed after it comes back. ISO-8601 instant or YYYY-MM-DD. Default now.",
         },
         since: {
           type: "string",

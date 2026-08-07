@@ -54,6 +54,24 @@ export const EMBEDDING_VEC_VERSION_STATE_KEY = "embedding_vec_version";
 export const LAST_INDEXED_AT_STATE_KEY = "last_indexed_at";
 export const LAST_FULL_INDEX_AT_STATE_KEY = "last_full_index_at";
 
+/**
+ * `index_state` keys behind the store-integrity gate (what-the-index-
+ * already-knew, unit K).
+ *
+ * `integrity_checked_at` is the ISO instant a FULL `PRAGMA quick_check`
+ * last COMPLETED on this file - written whether it passed or failed, and
+ * never written by anything else. Absent therefore means "no full check
+ * has ever run here", which is a different claim from "it passed", and
+ * nothing reads it as a pass.
+ *
+ * `integrity_fault` carries the check's verdict text and exists ONLY while
+ * the last completed check found the file malformed. A passing check
+ * deletes it. Its presence is what a read open refuses on, because the
+ * scan that produced it is far too expensive to repeat per query.
+ */
+export const INTEGRITY_CHECKED_AT_STATE_KEY = "integrity_checked_at";
+export const INTEGRITY_FAULT_STATE_KEY = "integrity_fault";
+
 const SELECT_STATE_SQL = "SELECT value FROM index_state WHERE key = ?";
 
 export function getState(db: Database, key: string): string | null {

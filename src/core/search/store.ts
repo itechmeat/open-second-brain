@@ -780,6 +780,15 @@ export class Store {
     return census.counts(this.db, this.config.semantic.model, this.config.semantic.dimension);
   }
 
+  /**
+   * Indexed chunks whose estimated embedding-request size exceeds a
+   * model's declared input window. One aggregate, no chunk bodies read;
+   * see `store/counts.ts` for the unit and its stated bound.
+   */
+  chunksOverTokenWindow(windowTokens: number): number {
+    return census.chunksOverTokenWindow(this.db, windowTokens);
+  }
+
   // ── direct accessors used by indexer/CLI/status ────────────────────────────
 
   /** Escape hatch for status queries that don't fit the typed API. */

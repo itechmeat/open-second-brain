@@ -36,7 +36,7 @@ o2b brain digest              Render a Markdown or JSON summary of recent Brain 
 o2b brain intent-review       Read-only pre-dream review of active signal clusters; --now ISO; --json mirrors brain_intent_review
 o2b brain retention           Recommendation-only lifecycle review over retired preferences and processed signals; --now ISO; --json mirrors brain_retention
 o2b brain monthly             Month-level Brain synthesis over timeline events, transitions, retirements, contradictions, and neglected areas; --month YYYY-MM; --json mirrors brain_brief view=monthly
-o2b brain query               Read helper: by preference, by topic, or by log timestamp
+o2b brain query               Read helper: by preference, by topic, or by log timestamp; --topic adds point-in-time recall over the expiration filter: --at <ISO|YYYY-MM-DD> evaluates expiration_date as of that instant (default now, unparseable is refused with exit 2, never coerced) and --show-expired keeps lapsed memories. Both apply to --topic only and are refused elsewhere; omitting both leaves the output byte-identical
 o2b brain agent-query         Read source-agent provenance; filters by --agent, --topic, --query, --kind, --limit; --json mirrors brain_agent_query
 o2b brain agent-diff          Compare source-agent coverage in browse/search/diff/map modes; --json mirrors brain_agent_diff
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
@@ -351,7 +351,7 @@ byte-identical when unset.
 o2b brain telegram-capture   run | catchup - explicit inbound capture runner (fetch-based long-poll getUpdates); gated by telegram_bot_token (env TELEGRAM_BOT_TOKEN) and the telegram_chat_allowlist chat-id allowlist (env TELEGRAM_CHAT_ALLOWLIST, empty accepts nothing); each accepted message becomes one staged capture note under Brain/captures/ with provenance; rejected updates log one decision each; catchup replays captures since the last acknowledged one; a missing token is a typed startup error
 o2b brain inbox-drain        [--apply] - walk staged captures, classify each structurally (URL-shaped body -> source reference, explicit obligation marker -> task, otherwise atomic idea), route on apply (source ingest, note in captured/, obligation open), archive processed captures, and report every item with action and reason; dry-run default writes nothing; rerun after apply is a no-op
 o2b brain diarize            <entity> [--json] - entity profile skeleton plus one needs-llm-step envelope; the stated-vs-evidenced section is computed deterministically (stated claims versus evidence frequency and recency), every line carrying an evidence identity; unknown entity is a typed error
-o2b brain repair-lane        [--apply --confirm "apply repair"] - propose link-graph edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred opt-in) under a confidence threshold and a hard per-run write cap; dry-run default; reruns after apply converge to zero writes; the holdout harness reports graph lift separately from direct recall and fails on dangling or unhydrated targets
+o2b brain repair-lane        [--apply --confirm "apply repair"] - propose link-graph edges ordered by identity strength (explicit references, session continuity, same-topic evidence; inferred opt-in) under a confidence threshold and a hard per-run write cap; dry-run default; reruns after apply converge to zero writes. --apply plans first and then runs the paired graph-efficacy holdout harness over every edge that plan proposes, taking anchor and target from the edge itself: it reports graph lift (targets reachable only through the graph) apart from direct recall (targets already a 1-hop neighbour) and refuses the apply, writing nothing, when any target resolves to no durable-memory note or hydrates into no evidence. The refusal names the failing edges with their verdict and resolves its exit through the registered repair-holdout-unresolved diagnostic; --json carries the counts in an additive holdout object beside next_command. Dry-run does not evaluate the gate and its bytes are unchanged - it already names each unresolvable endpoint as a skip-missing-target decision
 o2b brain deep-synthesis     --json now also carries findings with causal_context, decomposed confidence (support, opposition, freshness, coverage), and the excluded_findings ledger with excluded_finding_count
 ```
 
@@ -585,7 +585,11 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               today / yesterday / last week / last month, or 24h / 7d / 2w shorthand)
                               --include-superseded keeps superseded predecessors undemoted (history mode)
                               --verbose adds per-result why_retrieved reasons
+                              --explain appends the retrieval decision trace and the memory trust
+                              assessment (what the trust gate evaluated, surfaced and excluded, with
+                              reasons); with the gate off it says so and names the switch that enables it
                               --json for structured output (includes reasons[])
+                              total is the pre-truncation ranked pool, not the number of rows returned
                               CJK text is expanded for FTS recall without polluting returned content
 o2b search feedback           Record explicit recall feedback for one result
                               (--query Q --result <path> --verdict up|down; one JSON event file
@@ -613,6 +617,20 @@ o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that
                               vector-backfill Brain log event
 o2b search status             Index status; since v0.36.0 also reports the active embedding
                               signature (<provider>:<model>:<dimension>) and a refresh-cost estimate
+o2b search check              Pre-flight diagnostics: vault, index directory, SQLite/FTS5, the
+                              vector extension, the embedding key, the provider, the vector ABI stamp
+                              --integrity additionally runs a full PRAGMA quick_check over the index
+                              file, on demand and regardless of the store's 24-hour interval gate.
+                              Opt-in because the scan is linear in the index size (~22 ms per MB, so
+                              about 30 s on a 1.3 GB index); the size and a time estimate are printed
+                              on stderr before it starts and the time spent is reported after.
+                              The verdict lands in the same integrity_checked_at / integrity_fault
+                              cells the write-open gate writes, so a condemned file is refused by
+                              every later read; a fault names o2b search reindex and exits 1.
+                              A store that has never been scanned reports previous_full_check: never -
+                              the absence of a fault is never reported as a pass.
+                              --json adds an integrity object; without the flag the output is
+                              unchanged and no index_state cell is touched
 o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
                               --base-url U --model M --env-key K (K is the env var NAME holding the key);
                               persisted to Brain/search/embedding-providers.json, resolved after built-ins

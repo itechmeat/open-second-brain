@@ -186,14 +186,13 @@ const CLASSIFIED_BY_MODULE_WALK: Readonly<Record<string, StateNote>> = Object.fr
       "judgement over content that naming any one of would be a guess dressed as an " +
       "instruction.",
   },
-  "o2b search check": {
-    cls: STATE_CLASS.refusal,
-    reason:
-      "refuses through `resolveConfig` in `search/helpers.ts`, which throws a `CliError` " +
-      "naming `--vault` and `o2b init` when no vault resolves. Splitting `search.ts` by " +
-      "verb moved that refusal out of this verb's own file and changed nothing about which " +
-      "verb makes it.",
-  },
+  // `o2b search check` sat here while its only refusal was the shared
+  // `resolveConfig` one, a module hop away. It classifies in its own file
+  // now: `--integrity` (what-the-index-already-knew, unit K) writes the
+  // scan's cost notice to stderr and resolves a structural fault through
+  // `emitNextStep`. The entry is deleted rather than reworded because an
+  // inventory of states the walk RESCUES may not hold a state the walk no
+  // longer has to rescue - that would be an exclusion covering nothing.
   "o2b search weights": {
     cls: STATE_CLASS.refusal,
     reason:

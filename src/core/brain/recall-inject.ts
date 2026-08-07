@@ -55,7 +55,7 @@ export interface RecallCandidate {
   readonly origin?: RecallSource["alias"];
 }
 
-/** A retriever's ranked candidate set plus the corpus match total. */
+/** A retriever's returned candidates plus the ranked pool they came from. */
 export interface RecallResultSet {
   readonly candidates: ReadonlyArray<RecallCandidate>;
   readonly total: number;

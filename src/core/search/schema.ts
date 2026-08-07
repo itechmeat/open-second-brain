@@ -7,7 +7,7 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §5.
  */
 
-import type { Database } from "bun:sqlite";
+import { Database } from "bun:sqlite";
 
 import { SearchError } from "./types.ts";
 
@@ -17,6 +17,12 @@ import { SearchError } from "./types.ts";
  * with a newer binary.
  */
 export const LATEST_SCHEMA_VERSION = 11;
+
+/**
+ * The one command that rebuilds an index this binary cannot read. Every
+ * refusal on the open path names it, and names it identically.
+ */
+export const REINDEX_COMMAND = "o2b search reindex";
 
 /**
  * The wikilink-resolution basename of a stored document path: the final
@@ -542,6 +548,183 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
   },
 ]);
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The expected-object manifest
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A table, or a column of a table, that the schema declares and an opened
+ * database does not have. `column: null` means the whole table is absent.
+ */
+export interface SchemaGap {
+  /** Table the gap is in. */
+  readonly table: string;
+  /** Missing column, or null when the table itself is missing. */
+  readonly column: string | null;
+}
+
+/**
+ * Table names present in a database. Internal `sqlite_*` tables are
+ * excluded: they are SQLite's own bookkeeping (`sqlite_stat1` appears only
+ * after `ANALYZE`), never something a query of ours reads.
+ */
+const TABLE_NAMES_SQL =
+  "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'";
+
+/** Column names of one table. */
+const TABLE_COLUMNS_SQL = "SELECT name FROM pragma_table_info(?)";
+
+function tableNames(db: Database): Set<string> {
+  return new Set(
+    db
+      .query<{ name: string }, []>(TABLE_NAMES_SQL)
+      .all()
+      .map((r) => r.name),
+  );
+}
+
+function columnNames(db: Database, table: string): Set<string> {
+  return new Set(
+    db
+      .query<{ name: string }, [string]>(TABLE_COLUMNS_SQL)
+      .all(table)
+      .map((r) => r.name),
+  );
+}
+
+/**
+ * Virtual tables the query path can run WITHOUT, and therefore must not be
+ * refused for. The manifest requires what a query cannot survive the
+ * absence of; a lane that already classifies its own table as missing and
+ * degrades is not that.
+ *
+ * `chunk_trigram` is the opt-in substring broadener from v9. `trigram.ts`
+ * detects its absence (`isMissingTrigramTable`) and returns no candidates
+ * silently, which is a documented, tested behaviour. Demanding it here
+ * would push a legitimately readable index into a reindex that drops every
+ * embedding, to restore a table the query path never needed.
+ *
+ * `chunk_vec` needs no entry: it is created by `ensureVecTable` only when
+ * sqlite-vec is loaded, so the reference database never has one to begin
+ * with.
+ */
+const OPTIONAL_VIRTUAL_TABLES: ReadonlyArray<string> = Object.freeze(["chunk_trigram"]);
+
+/** The shadow tables FTS5 creates alongside a virtual table it owns. */
+const FTS5_SHADOW_SUFFIXES: ReadonlyArray<string> = Object.freeze([
+  "_data",
+  "_idx",
+  "_docsize",
+  "_content",
+  "_config",
+]);
+
+function isOptionalTable(name: string): boolean {
+  return OPTIONAL_VIRTUAL_TABLES.some(
+    (base) => name === base || FTS5_SHADOW_SUFFIXES.some((suffix) => name === base + suffix),
+  );
+}
+
+/**
+ * Every required table and its columns. Used to build the reference
+ * manifest from a database this module has just migrated itself, so every
+ * table in it is one of ours and introspecting all of them is safe.
+ *
+ * It is NOT how a live index is inspected: `PRAGMA table_info` on a virtual
+ * table whose module is not loaded raises (`no such module: vec0`), and a
+ * live index legitimately carries a `chunk_vec` table that the read open
+ * has not loaded sqlite-vec for yet. {@link findSchemaGaps} therefore asks
+ * only about the tables the manifest actually names.
+ */
+function schemaCensus(db: Database): Map<string, Set<string>> {
+  const census = new Map<string, Set<string>>();
+  for (const table of tableNames(db)) {
+    if (isOptionalTable(table)) continue;
+    census.set(table, columnNames(db, table));
+  }
+  return census;
+}
+
+/** Memoised {@link expectedSchemaObjects}; the reference build is not free. */
+let expectedObjects: ReadonlyMap<string, ReadonlySet<string>> | null = null;
+
+/**
+ * The tables and columns a current index must have, DERIVED by running the
+ * frozen {@link MIGRATIONS} against a fresh in-memory database and asking
+ * SQLite what that produced.
+ *
+ * Deriving it is the whole point. A second hand-maintained list of tables
+ * and columns would drift from the migrations that create them, and a
+ * manifest that has drifted is worse than no manifest: it either refuses a
+ * healthy index or blesses a broken one. Running the migrations cannot
+ * drift from the migrations.
+ *
+ * It includes the FTS5 shadow tables of `chunk_fts` (`chunk_fts_data` and
+ * friends) because a keyword query reads straight through them, and
+ * excludes {@link OPTIONAL_VIRTUAL_TABLES} because the query path is
+ * written to survive their absence.
+ *
+ * The tokenizer clause does not appear: it changes how `chunk_fts` tokenizes,
+ * never what it or its shadows are CALLED, so the reference is built at the
+ * default and matches an index built under any configured tokenizer.
+ *
+ * Cost is one in-memory migration run (tens of milliseconds), paid lazily
+ * once per process and memoised, then nothing.
+ */
+export function expectedSchemaObjects(): ReadonlyMap<string, ReadonlySet<string>> {
+  if (expectedObjects !== null) return expectedObjects;
+  let reference: Database;
+  try {
+    reference = new Database(":memory:");
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      `cannot build the reference schema for the index presence check: ${msg}`,
+    );
+  }
+  try {
+    applyMigrations(reference);
+    expectedObjects = schemaCensus(reference);
+    return expectedObjects;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new SearchError(
+      "INDEX_UNREADABLE",
+      `cannot build the reference schema for the index presence check: ${msg}`,
+    );
+  } finally {
+    reference.close();
+  }
+}
+
+/**
+ * Tables and columns {@link expectedSchemaObjects} declares that `db` does
+ * not have. Empty for a healthy current index. Extra tables are NOT a gap:
+ * `chunk_vec`, `sqlite_stat1` and a future version's additions are all
+ * legitimately present in a database this binary can still read.
+ */
+export function findSchemaGaps(db: Database): ReadonlyArray<SchemaGap> {
+  const present = tableNames(db);
+  const gaps: SchemaGap[] = [];
+  for (const [table, columns] of expectedSchemaObjects()) {
+    if (!present.has(table)) {
+      gaps.push({ table, column: null });
+      continue;
+    }
+    const actual = columnNames(db, table);
+    for (const column of columns) {
+      if (!actual.has(column)) gaps.push({ table, column });
+    }
+  }
+  return gaps;
+}
+
+/** Render {@link SchemaGap}s as `table` / `table.column`, for an error message. */
+export function formatSchemaGaps(gaps: ReadonlyArray<SchemaGap>): string {
+  return gaps.map((g) => (g.column === null ? g.table : `${g.table}.${g.column}`)).join(", ");
+}
+
 /** Read the current schema version from `index_state`. Returns 0 if not yet recorded. */
 export function readSchemaVersion(db: Database): number {
   const row = db
@@ -601,7 +784,7 @@ export function applyMigrations(db: Database, opts: ApplyMigrationsOptions = {})
     throw new SearchError(
       "SCHEMA_MISMATCH",
       `index schema version ${current} is newer than this binary supports (${LATEST_SCHEMA_VERSION}). ` +
-        `Run: o2b search reindex`,
+        `Run: ${REINDEX_COMMAND}`,
     );
   }
 

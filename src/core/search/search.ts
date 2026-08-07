@@ -235,6 +235,7 @@ export async function search(
       temporalIntent,
       declaredEventTimeMs: eventTime.declaredEventTimeMs,
       limit,
+      nowMs,
     });
 
     const postRank = await applyPostRankPhases({
@@ -247,6 +248,12 @@ export async function search(
       frontmatterCache,
     });
     for (const w of postRank.warnings) warnings.push(w);
+
+    // The pool the window is cut from (task F). `postRank.results` is the
+    // last stage that can still add, drop or re-order a candidate, so its
+    // length is the honest answer to "how many did you rank before
+    // handing me these" - reported inline as `total`.
+    const poolSize = postRank.results.length;
 
     const results = decorateFinalResults({
       store,
@@ -273,6 +280,7 @@ export async function search(
         routedSurface,
         trustReceipts: postRank.trustReceipts,
         frontmatterCache,
+        poolSize,
       }),
     );
   } finally {

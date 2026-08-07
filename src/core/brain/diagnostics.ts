@@ -54,6 +54,10 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { UnclassifiedRepairCodeError, requireMechanicalRepair } from "./applier-capability.ts";
 
 import { collectAllBasenames, runDoctor } from "./doctor.ts";
+import {
+  ENTITY_QUOTE_VARIANT_COLLISION_CODE,
+  ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
+} from "./entities/canonical.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
 import { appendLogEvent } from "./log.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
@@ -79,6 +83,25 @@ export interface DiagnosticSignal {
   /** True iff a fixer in this module repairs the class. */
   readonly autoRepairable: boolean;
 }
+
+/**
+ * The two states of the search index FILE itself, named here so the
+ * producer and the registry entry cannot drift into two spellings of one
+ * code. They are separate classes because their exits differ: an absent
+ * index is built incrementally, a malformed one is only ever replaced.
+ */
+export const SEARCH_INDEX_MISSING_CODE = "search-index-missing";
+export const SEARCH_INDEX_CORRUPT_CODE = "search-index-corrupt";
+
+/**
+ * The state the memory-graph repair lane's holdout gate refuses in: at
+ * least one edge the lane proposes has a target that resolves to no
+ * durable-memory note, or resolves to one that hydrates into no evidence.
+ * Named here beside the code it is registered under so the producer in
+ * `cli/brain/verbs/repair-lane.ts` and the entry below cannot drift into
+ * two spellings of one code.
+ */
+export const REPAIR_HOLDOUT_UNRESOLVED_CODE = "repair-holdout-unresolved";
 
 /** Fixer codes (the two auto-repairable classes this release ships). */
 export const REPAIR_CODE = Object.freeze({
@@ -279,9 +302,24 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
-        code: "search-index-missing",
+        code: SEARCH_INDEX_MISSING_CODE,
         issueClass: "search index not built",
         nextCommand: "o2b search index",
+        autoRepairable: false,
+      },
+      {
+        // The state a completed `PRAGMA quick_check` reports when the
+        // index file is structurally malformed - pages damaged in place
+        // by a truncated sync, a half-finished replication of the vault
+        // directory, or failing storage. It is deliberately NOT
+        // `search-index-missing`: that state's exit is `o2b search
+        // index`, which is INCREMENTAL and would walk a vault whose
+        // files have not changed, decide there is nothing to do, and
+        // leave every damaged page exactly where it is. Only a rebuild
+        // replaces the file, so only a rebuild ends this state.
+        code: SEARCH_INDEX_CORRUPT_CODE,
+        issueClass: "search index failed a structural integrity check",
+        nextCommand: "o2b search reindex",
         autoRepairable: false,
       },
       // --- Semantic capability tiers (provenance-at-the-boundary, F1) ---
@@ -355,6 +393,36 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         nextCommand: "o2b search event-anchor-backfill --apply",
         autoRepairable: false,
       },
+      // --- Oversize-chunk census (what-the-index-already-knew, task H) ---
+      // The configured chunk size and the configured model's declared
+      // input window are two settings that overflow each other in
+      // silence: a provider that truncates server-side returns a vector
+      // of the right width for a prefix of the passage, and nothing
+      // local can see that it happened. The census is what makes the
+      // condition observable; these are its two exits.
+      {
+        code: "search-chunk-window-overflow",
+        issueClass: "indexed chunks larger than the embedding model's input window",
+        // The chunk boundaries are what must change, and only a rebuild
+        // re-cuts them - `--embeddings` because vectors computed over the
+        // old boundaries do not describe the new chunks. Lowering
+        // `search_chunk_size` first is what makes the rebuild different
+        // from the run that produced this state; no verb in this tool
+        // writes a config key, so that half is named in the warning prose
+        // rather than invented as a command here.
+        nextCommand: "o2b search reindex --embeddings",
+        autoRepairable: false,
+      },
+      {
+        code: "search-chunk-window-undeclared",
+        issueClass: "embedding model with no declared input window",
+        // Not a fault and not a pass: the check could not run. The exit
+        // is the curated catalog, because a declared window is exactly
+        // what distinguishes a model in that table from one outside it,
+        // and switching models is a config key no verb writes.
+        nextCommand: "o2b search provider presets",
+        autoRepairable: false,
+      },
       {
         code: "git-history-absent",
         issueClass: "no ingested git history",
@@ -389,6 +457,24 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "staged-captures-pending",
         issueClass: "staged captures previewed but not routed",
         nextCommand: "o2b brain inbox-drain --apply",
+        autoRepairable: false,
+      },
+      {
+        // what-the-index-already-knew, final unit. The repair lane's
+        // holdout gate refuses an apply whose proposed edges point at
+        // memory that is absent or empty. The exit is the vault-wide
+        // structural scan rather than the lane itself: the lane reports
+        // WHICH edges fail (every decision names its action and its
+        // endpoints), but what has to change is the referenced note - a
+        // reference to a note that was deleted, or a note that exists
+        // with nothing in it. The doctor is the surface that finds those
+        // across the vault, and `--repair --apply` prunes the subset it
+        // can safely repair. Deliberately NOT `broken-wikilink`: these
+        // edges are not written yet, so its fixer would find nothing to
+        // prune and the pointer would promise a repair that never runs.
+        code: REPAIR_HOLDOUT_UNRESOLVED_CODE,
+        issueClass: "proposed repair edges point at absent or empty memory",
+        nextCommand: "o2b brain doctor",
         autoRepairable: false,
       },
       // The five states whose exits used to be retyped inside an `ok()`
@@ -451,6 +537,28 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         code: "entity-label-malformed",
         issueClass: "entity label fails the quality gate",
         nextCommand: "o2b brain entity prune",
+        autoRepairable: false,
+      },
+      {
+        // what-the-index-already-knew, task A. The identity kernel now
+        // folds typographic quote variants, so two records that differ
+        // only in which apostrophe an editor inserted resolve to one
+        // identity key. Records that coexisted before the fold therefore
+        // collide after it, at a write seam the operator did nothing new
+        // to reach - and a refusal met for the first time straight after
+        // an upgrade is worse than the duplicate it fixes if it names no
+        // way out.
+        //
+        // The exit is `entity archive`, not a merge verb: there is none,
+        // and there should not be one here. Which of the two records
+        // keeps the identity, its history and its edges is a reading of
+        // both files - the same judgement `doctor-exits.ts` records for
+        // `duplicate-entity` - so the command names the one mechanical
+        // step that ends the collision and leaves the choice with the
+        // operator.
+        code: ENTITY_QUOTE_VARIANT_COLLISION_CODE,
+        issueClass: "entity labels differing only in typographic quote form",
+        nextCommand: ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
         autoRepairable: false,
       },
       {

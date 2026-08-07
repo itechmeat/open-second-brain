@@ -72,6 +72,15 @@ export interface OutcomeInput {
   readonly routedSurface: QuerySurface;
   readonly trustReceipts: TrustReceipts | null;
   readonly frontmatterCache: FrontmatterCache;
+  /**
+   * Size of the ranked pool the caller's `limit` sliced `results` out of
+   * (what-the-index-already-knew, task F). Reported inline as `total`:
+   * it is the only place the outcome says how many candidates were
+   * ranked and then dropped, and it is a property of the answer rather
+   * than a diagnostic, so no flag gates it. Always >= `results.length`,
+   * because the results ARE its prefix.
+   */
+  readonly poolSize: number;
 }
 
 export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
@@ -141,12 +150,14 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   // only the surfaced depth differs - so the contract stays
   // deterministic and the default `full` path is byte-identical.
   if ((opts.disclosure ?? "full") === "cards") {
-    const cards = resultsOut.map(toSearchCard);
+    // The residual query text anchors each card's snippet window on the
+    // match instead of the head of the chunk (task E).
+    const cards = resultsOut.map((result) => toSearchCard(result, query));
     return Object.freeze({
       results: NO_RESULTS,
       cards: Object.freeze(cards),
       warnings: Object.freeze(warnings),
-      total: cards.length,
+      total: input.poolSize,
       ...tail,
     });
   }
@@ -154,7 +165,7 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   return Object.freeze({
     results: Object.freeze(resultsOut),
     warnings: Object.freeze(warnings),
-    total: resultsOut.length,
+    total: input.poolSize,
     ...tail,
   });
 }

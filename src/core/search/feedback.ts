@@ -209,10 +209,19 @@ export function writeLearnedWeights(vault: string, weights: LearnedWeights): voi
 export function readLearnedWeights(vault: string): LearnedWeights | null {
   try {
     const parsed = JSON.parse(readFileSync(learnedWeightsPath(vault), "utf8")) as LearnedWeights;
-    // All four multipliers must be finite numbers — a partially-corrupt
-    // file must not feed NaN into the weight composition.
+    // All four multipliers must be finite numbers inside the bounds the
+    // fold itself clamps to — a partially-corrupt file must not feed NaN
+    // into the weight composition, and a hand-edited one must not inject a
+    // value `computeLearnedWeights` could never have produced. Zero deletes
+    // a lane and a negative value inverts its rank order under rank fusion,
+    // so the bound is the guard, not merely finiteness.
     const muls = [parsed.keywordMul, parsed.semanticMul, parsed.entityMul, parsed.recencyMul];
-    if (!muls.every((m) => typeof m === "number" && Number.isFinite(m))) return null;
+    const inBounds = (m: unknown): boolean =>
+      typeof m === "number" &&
+      Number.isFinite(m) &&
+      m >= LEARNED_WEIGHT_MIN &&
+      m <= LEARNED_WEIGHT_MAX;
+    if (!muls.every(inBounds)) return null;
     if (typeof parsed.events !== "number") return null;
     return parsed;
   } catch {

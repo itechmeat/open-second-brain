@@ -54,6 +54,26 @@ export interface HydratedChunk {
    * instant, keeping their ordering byte-identical.
    */
   readonly authoredAt?: number | null;
+  /**
+   * sha256 of the chunk content, written on every index run since schema
+   * v1 (`chunks.content_hash`). Projected by {@link hydrateChunks} so the
+   * assembly stage can fold byte-identical passages into one result row.
+   * ABSENT - not null - on reads that do not project it (the
+   * representative-chunk read behind traversal expansion), keeping those
+   * rows byte-identical to what they were before the projection existed.
+   */
+  readonly contentHash?: string;
+  /**
+   * sha256 of the WHOLE source file of this chunk's document, frontmatter
+   * included (`documents.content_hash`, also schema v1). The chunk hash
+   * alone cannot tell a copied file from two distinct records that happen
+   * to share a body: frontmatter is stripped before chunking, so two notes
+   * with the same prose but different `authored_at`, `freshness_trend` or
+   * declared dates hash their chunks identically while ranking - correctly -
+   * differently. Pairing the two hashes makes the duplicate merge fire only
+   * on a genuine copy. Absent under the same rule as `contentHash`.
+   */
+  readonly documentHash?: string;
 }
 
 export function getChunksByDocument(db: Database, documentId: number): ChunkRow[] {
@@ -211,12 +231,15 @@ export function hydrateChunks(
         end_line: number;
         mtime: number;
         authored_at: number | null;
+        content_hash: string;
+        document_hash: string;
       },
       number[]
     >(
       "SELECT c.id AS chunk_id, c.document_id, d.path AS path, d.title AS title, " +
         "       c.content AS content, c.start_line AS start_line, c.end_line AS end_line, d.mtime AS mtime, " +
-        "       d.authored_at AS authored_at " +
+        "       d.authored_at AS authored_at, c.content_hash AS content_hash, " +
+        "       d.content_hash AS document_hash " +
         "FROM chunks c JOIN documents d ON d.id = c.document_id " +
         `WHERE c.id IN (${placeholders})`,
     )
@@ -232,6 +255,8 @@ export function hydrateChunks(
       endLine: r.end_line,
       mtime: r.mtime,
       authoredAt: r.authored_at,
+      contentHash: r.content_hash,
+      documentHash: r.document_hash,
     });
   }
   return out;

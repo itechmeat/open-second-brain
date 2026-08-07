@@ -29,7 +29,9 @@ import { entityPath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   assertValidEntityLabel,
+  differsOnlyByQuoteVariant,
   entityIdentityKey,
+  ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
   normalizeEntityName,
   validateEntityCategory,
 } from "./canonical.ts";
@@ -125,6 +127,23 @@ export interface ArchiveEntityOptions {
    * {@link archiveEntity}.
    */
   readonly restore?: boolean;
+}
+
+// ----- Quote-variant collision exit ------------------------------------------
+
+/**
+ * The tail a collision message carries when, and only when, the two
+ * labels were distinct identities before the quote fold and are one
+ * after it. Empty for every other collision, so the messages an operator
+ * already knows are unchanged and the new sentence means exactly what it
+ * says: this refusal is new, and here is why.
+ */
+function quoteVariantCollisionTail(claimed: string, held: string): string {
+  if (!differsOnlyByQuoteVariant(claimed, held)) return "";
+  return (
+    " - the two differ only in typographic quote form and now resolve to one identity key; " +
+    `run ${ENTITY_QUOTE_VARIANT_COLLISION_COMMAND} on the record you do not keep`
+  );
 }
 
 // ----- Lookup ----------------------------------------------------------------
@@ -319,14 +338,22 @@ function checkAliasClaims(
     seen.add(normalized);
     const aliasHolder = index.byAlias.get(normalized);
     if (aliasHolder && aliasHolder.id !== selfId) {
+      // The holder's own spelling of the claimed form, so the collision
+      // message can say whether the two labels differ by anything other
+      // than quote shape. Falling back to its canonical name would compare
+      // the wrong pair, so the alias that actually matched is found first.
+      const heldForm =
+        aliasHolder.aliases.find((a) => normalizeEntityName(a) === normalized) ?? aliasHolder.name;
       throw new Error(
-        `alias '${alias}' is already claimed by ${aliasHolder.id} (${aliasHolder.path})`,
+        `alias '${alias}' is already claimed by ${aliasHolder.id} (${aliasHolder.path})` +
+          quoteVariantCollisionTail(alias, heldForm),
       );
     }
     const nameHolder = index.byKey.get(`${category}:${normalized}`);
     if (nameHolder && nameHolder.id !== selfId) {
       throw new Error(
-        `alias '${alias}' collides with the canonical name of ${nameHolder.id} (${nameHolder.path})`,
+        `alias '${alias}' collides with the canonical name of ${nameHolder.id} (${nameHolder.path})` +
+          quoteVariantCollisionTail(alias, nameHolder.name),
       );
     }
     kept.push(alias);
@@ -586,7 +613,8 @@ export function archiveEntity(
     if (holder) {
       throw new Error(
         `cannot restore ${target.id}: ${holder.id} already holds '${target.name}' ` +
-          `(${target.category}). Archive or rename ${holder.id} first, or merge the two.`,
+          `(${target.category}). Archive or rename ${holder.id} first, or merge the two` +
+          `${quoteVariantCollisionTail(target.name, holder.name)}.`,
       );
     }
   }

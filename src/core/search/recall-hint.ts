@@ -48,9 +48,10 @@ export function deriveRecallHint(
     .join(", ");
 
   const top = results[0]!;
-  // `total` is the corpus match count and should be >= the returned slice;
-  // guard against a caller passing a smaller total so the string never
-  // reads "Recalled 10 of 3".
+  // `total` is the ranked pool the window was sliced from (a lower bound
+  // on the corpus matches) and should be >= the returned slice; guard
+  // against a caller passing a smaller total so the string never reads
+  // "Recalled 10 of 3".
   const denom = Math.max(total, results.length);
   return (
     `Recalled ${results.length} of ${denom} matches (${breakdown}). ` +

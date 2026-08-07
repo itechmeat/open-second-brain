@@ -11,10 +11,26 @@ import { Database } from "bun:sqlite";
 import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { applyMigrations, LATEST_SCHEMA_VERSION, readSchemaVersion } from "../schema.ts";
+import {
+  applyMigrations,
+  findSchemaGaps,
+  formatSchemaGaps,
+  LATEST_SCHEMA_VERSION,
+  readSchemaVersion,
+  REINDEX_COMMAND,
+  type SchemaGap,
+} from "../schema.ts";
 import { SearchError } from "../types.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
 import { ensureFts5 } from "./keyword.ts";
+import { nowIso } from "./sql.ts";
+import {
+  deleteState,
+  getState,
+  INTEGRITY_CHECKED_AT_STATE_KEY,
+  INTEGRITY_FAULT_STATE_KEY,
+  setState,
+} from "./state.ts";
 import { loadVecExtension } from "./vectors.ts";
 import { acquireWriterLock, acquireWriterLockSync } from "./writer-lock.ts";
 
@@ -89,6 +105,19 @@ export function restoreFromBakIfMissing(dbPath: string): void {
  * index path can make readSchemaVersion throw raw SQLITE errors (e.g.
  * "no such table: index_state"). Surface those as a typed
  * INDEX_UNREADABLE so callers see a code, not a stray Error.
+ *
+ * The version integer alone is not the schema. A file stamped with the
+ * current version whose `chunk_entities` table or `documents.authored_at`
+ * column has gone missing passes the integer comparison and then fails
+ * deep inside a query with a raw `no such table` / `no such column`, which
+ * names no exit. The presence check closes that: it compares the file
+ * against the manifest DERIVED from the migrations (see
+ * {@link findSchemaGaps}) and refuses through the SAME `SCHEMA_MISMATCH`
+ * that already names the reindex command, because a structurally
+ * incomplete index is a schema mismatch by any useful definition.
+ *
+ * It is metadata-only - a table listing plus one `table_info` per expected
+ * table - and costs about a third of a millisecond on the query hot path.
  */
 function assertSchemaIsCurrent(db: Database, dbPath: string): void {
   let version: number;
@@ -102,8 +131,145 @@ function assertSchemaIsCurrent(db: Database, dbPath: string): void {
   if (version !== LATEST_SCHEMA_VERSION) {
     throw new SearchError(
       "SCHEMA_MISMATCH",
-      `index schema version ${version} != ${LATEST_SCHEMA_VERSION}. Run: o2b search reindex`,
+      `index schema version ${version} != ${LATEST_SCHEMA_VERSION}. Run: ${REINDEX_COMMAND}`,
     );
+  }
+  let gaps: ReadonlyArray<SchemaGap>;
+  try {
+    gaps = findSchemaGaps(db);
+  } catch (e) {
+    if (e instanceof SearchError) throw e;
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new SearchError("INDEX_UNREADABLE", `cannot read the schema of ${dbPath}: ${msg}`);
+  }
+  if (gaps.length > 0) {
+    throw new SearchError(
+      "SCHEMA_MISMATCH",
+      `index at ${dbPath} is stamped schema version ${version} but is missing ` +
+        `${formatSchemaGaps(gaps)}. Run: ${REINDEX_COMMAND}`,
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The structural integrity gate
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** `PRAGMA quick_check`'s verdict text when the file is intact. */
+const QUICK_CHECK_OK = "ok";
+
+/**
+ * Errors `PRAGMA quick_check` is asked to report before it stops. A
+ * refusal needs a cause, not an inventory, and a bounded list keeps a
+ * badly damaged file from producing a megabyte of verdict text.
+ */
+const QUICK_CHECK_MAX_ERRORS = 5;
+
+/**
+ * How long a completed full check stands for. The scan is linear in the
+ * size of the index - measured at roughly 22 ms per megabyte, so ~0.9 s
+ * for a 38 MB index and ~30 s for a 1.3 GB one - which is why it can never
+ * run on the read path (that is per query) and why even the write path
+ * runs it at most once a day rather than on every open.
+ */
+const INTEGRITY_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** The outcome of a completed full structural scan. */
+export type IntegrityVerdict =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly fault: string };
+
+/**
+ * Run `PRAGMA quick_check` and classify the result.
+ *
+ * Three outcomes collapse to "faulty", and deliberately so: a verdict
+ * other than `ok`, a scan that raises SQLITE_CORRUPT because the damage
+ * stops it completing, and a scan that returns no verdict row at all.
+ * None of them is evidence of a healthy file, so none of them may pass.
+ */
+export function runIntegrityCheck(db: Database): IntegrityVerdict {
+  let rows: ReadonlyArray<{ quick_check: string }>;
+  try {
+    rows = db
+      .query<{ quick_check: string }, []>(`PRAGMA quick_check(${QUICK_CHECK_MAX_ERRORS})`)
+      .all();
+  } catch (e) {
+    return { ok: false, fault: e instanceof Error ? e.message : String(e) };
+  }
+  if (rows.length === 0) return { ok: false, fault: "quick_check returned no verdict" };
+  const verdict = rows.map((r) => r.quick_check).join("; ");
+  return verdict === QUICK_CHECK_OK ? { ok: true } : { ok: false, fault: verdict };
+}
+
+/** The message every refusal on a recorded fault carries. */
+function integrityFaultMessage(dbPath: string, fault: string): string {
+  return (
+    `search index at ${dbPath} failed a structural integrity check: ${fault}. ` +
+    `Run: ${REINDEX_COMMAND}`
+  );
+}
+
+/**
+ * The read open's integrity gate: consult the verdict a previous FULL
+ * check recorded, and refuse while it stands.
+ *
+ * A read open cannot run the scan itself - it happens on every single
+ * query and the scan costs seconds - so what it can honestly do is refuse
+ * to answer from a file that a completed check found malformed. The
+ * absence of a fault is NOT a pass and is never reported as one: it means
+ * either that the last check passed or that no check has run here yet, and
+ * `integrity_checked_at` is the only thing that distinguishes those two.
+ */
+function assertNoRecordedIntegrityFault(db: Database, dbPath: string): void {
+  const fault = getState(db, INTEGRITY_FAULT_STATE_KEY);
+  if (fault === null) return;
+  throw new SearchError("INDEX_UNREADABLE", integrityFaultMessage(dbPath, fault));
+}
+
+/**
+ * The write open's integrity gate: where the scan actually runs.
+ *
+ * This is the one seam where a multi-second scan is already noise - an
+ * index run reads, chunks and often embeds the whole vault - and it is
+ * also the moment it matters most, because everything after it WRITES into
+ * the file. The verdict is recorded in `index_state`, which needs no
+ * migration, so the read path can act on it for the price of one key
+ * lookup.
+ *
+ * The interval gate is the cost control: a burst of index runs pays for
+ * one scan, not one per open. The price of that gate is stated plainly -
+ * corruption arising inside the window is not noticed until the window
+ * closes. Paying it on every write open instead would put up to half a
+ * minute in front of every `o2b brain tiers` invocation, and paying it on
+ * the read path would put it in front of every query.
+ *
+ * Recording is best effort - a file damaged badly enough may refuse the
+ * write - but the REFUSAL is not: the fault is thrown either way, naming
+ * its cause and its exit.
+ */
+function runWriteOpenIntegrityGate(db: Database, dbPath: string): void {
+  const stamp = getState(db, INTEGRITY_CHECKED_AT_STATE_KEY);
+  // A stamp that is absent, unparseable, or in the FUTURE (a clock that
+  // moved backwards) all mean the same thing: nothing here can be relied on
+  // to say when the last scan happened, so scan.
+  const ageMs = stamp === null ? Number.NaN : Date.now() - Date.parse(stamp);
+  if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < INTEGRITY_CHECK_INTERVAL_MS) return;
+
+  const verdict = runIntegrityCheck(db);
+  try {
+    setState(db, INTEGRITY_CHECKED_AT_STATE_KEY, nowIso());
+    if (verdict.ok) deleteState(db, INTEGRITY_FAULT_STATE_KEY);
+    else setState(db, INTEGRITY_FAULT_STATE_KEY, verdict.fault);
+  } catch (e) {
+    if (verdict.ok) throw e;
+    // The file is malformed AND will not accept the record of it. The
+    // refusal below still names the cause; only the memo is lost.
+    const msg = e instanceof Error ? e.message : String(e);
+    // eslint-disable-next-line no-console
+    console.error(`search store: could not record the integrity fault in ${dbPath}: ${msg}`);
+  }
+  if (!verdict.ok) {
+    throw new SearchError("INDEX_UNREADABLE", integrityFaultMessage(dbPath, verdict.fault));
   }
 }
 
@@ -130,10 +296,18 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
     applyPragmas(db);
     ensureFts5(db);
     assertSchemaIsCurrent(db, config.dbPath);
+    assertNoRecordedIntegrityFault(db, config.dbPath);
     return { db, vecVersion: loadVec ? loadVecExtension(db) : null };
   } catch (e) {
     db.close();
-    throw e;
+    if (e instanceof SearchError) throw e;
+    // `new Database()` above is lazy: a file that is not a SQLite database
+    // at all only raises on the FIRST statement, which is `applyPragmas`.
+    // Untyped, that error escaped the self-heal path this module's callers
+    // rely on, so the very case the read path documents itself as healing -
+    // a non-OSB file at the index path - was the one it did not heal.
+    const msg = e instanceof Error ? e.message : String(e);
+    throw new SearchError("INDEX_UNREADABLE", `cannot open ${config.dbPath}: ${msg}`);
   }
 }
 
@@ -166,6 +340,7 @@ export async function openWriteDatabase(
   try {
     applyPragmas(db);
     applyMigrations(db, { ftsTokenize: config.ftsTokenize });
+    runWriteOpenIntegrityGate(db, config.dbPath);
     ensureFts5(db);
     return { db, vecVersion: loadVec ? loadVecExtension(db) : null, release };
   } catch (e) {

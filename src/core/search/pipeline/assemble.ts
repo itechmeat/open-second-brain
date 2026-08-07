@@ -20,6 +20,7 @@ import { semanticPoolSize } from "../semantic-phase.ts";
 import { applyTemporalBridge } from "../temporal-bridge.ts";
 import { applyPoolFilters, resolvePoolFilters, type FilterContext } from "./pool-filters.ts";
 import type { CandidateSignals } from "./candidate-signals.ts";
+import type { DuplicatePassageLocation } from "../search-result.ts";
 import type { HydratedChunk, KeywordHit, SemanticHit, Store } from "../store.ts";
 import type { ResolvedTimeRange } from "../time-range.ts";
 import type { TemporalIntent } from "../temporal-intent.ts";
@@ -35,6 +36,12 @@ import type {
 /** Widening factors for the phases that need a pool wider than `limit`. */
 const POOL_LIMIT_MULTIPLIER = 3;
 const POOL_MIN_WIDTH = 30;
+
+/**
+ * Joins the two halves of a duplicate-identity key. Never occurs in a
+ * sha256 hex digest, so the concatenation cannot be ambiguous.
+ */
+const DUPLICATE_KEY_SEPARATOR = ":";
 
 /** Traversal is off at zero hops; MMR is off at a lambda of 1. */
 const NO_TRAVERSAL_HOPS = 0;
@@ -58,6 +65,15 @@ export interface AssemblyInput {
   readonly temporalIntent: TemporalIntent | null;
   readonly declaredEventTimeMs: (path: string) => number | null;
   readonly limit: number;
+  /**
+   * The single instant the request resolved, forwarded to the ranker so
+   * the freshness layer scores against the same clock every other
+   * time-resolving decision in this call used. Without it the ranker
+   * falls back to its own `Date.now()` and a score - and therefore the
+   * exact-float first rung of the tie-break ladder - carries a clock
+   * reading taken at an arbitrary later point in the pipeline.
+   */
+  readonly nowMs: number;
 }
 
 interface Assembly {
@@ -65,6 +81,91 @@ interface Assembly {
   readonly visible: ReadonlyArray<BrainSearchResult>;
   /** Whether the cap truncated the pool, as opposed to the pool running out. */
   readonly capHit: boolean;
+  /** Rows the exact-duplicate merge folded into a higher-ranked row. */
+  readonly mergedAway: number;
+}
+
+/** The location record a merged-away duplicate leaves on its survivor. */
+function duplicateLocation(r: BrainSearchResult): DuplicatePassageLocation {
+  return Object.freeze({
+    documentId: r.documentId,
+    chunkId: r.chunkId,
+    path: r.path,
+    title: r.title,
+    startLine: r.startLine,
+    endLine: r.endLine,
+  });
+}
+
+/**
+ * The duplicate-identity key of a hydrated candidate, or `null` when the
+ * row cannot state one.
+ *
+ * Both halves are sha256 hex written on every index run since schema v1:
+ * `chunks.content_hash` over the passage, `documents.content_hash` over
+ * the whole source file. The document half is load-bearing, not belt and
+ * braces - frontmatter is stripped before chunking, so two genuinely
+ * distinct records that share a body (the same rule with a different
+ * `freshness_trend`, the same prose with a different `authored_at`) hash
+ * their chunks identically while the ranker scores them differently on
+ * purpose. Requiring both means the merge fires only on a real copy of a
+ * file, where the merged-away row provably carries nothing but its path.
+ */
+function duplicateKey(hydrated: HydratedChunk | undefined): string | null {
+  if (hydrated?.contentHash === undefined || hydrated.documentHash === undefined) return null;
+  return `${hydrated.documentHash}${DUPLICATE_KEY_SEPARATOR}${hydrated.contentHash}`;
+}
+
+/**
+ * Fold byte-identical passages into their highest-ranked occurrence.
+ *
+ * Equal key means equal bytes at both the passage and the file level, so
+ * the second occurrence adds no information to the answer while consuming
+ * a slot in the caller's window; MMR only demoted it, and a demoted row is
+ * still a returned row. Every folded location is recorded on the survivor,
+ * so nothing is silently dropped.
+ *
+ * A near-duplicate hashes differently and is left entirely alone - the
+ * diversity rerank remains the only thing that judges similarity.
+ * A candidate whose hydrated row states no key (traversal expansions,
+ * hydrated through the representative-chunk read) is passed through
+ * untouched rather than treated as equal to its peers.
+ *
+ * `ranked` is score-sorted, so the survivor is always the best-ranked
+ * occurrence and the relative order of the surviving rows is preserved.
+ */
+function mergeExactDuplicates(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  hydrated: ReadonlyMap<number, HydratedChunk>,
+): { readonly results: BrainSearchResult[]; readonly mergedAway: number } {
+  const survivorAt = new Map<string, number>();
+  const foldedInto = new Map<number, DuplicatePassageLocation[]>();
+  const results: BrainSearchResult[] = [];
+  for (const r of ranked) {
+    const hash = duplicateKey(hydrated.get(r.chunkId));
+    if (hash === null) {
+      results.push(r);
+      continue;
+    }
+    const at = survivorAt.get(hash);
+    if (at === undefined) {
+      survivorAt.set(hash, results.length);
+      results.push(r);
+      continue;
+    }
+    const folded = foldedInto.get(at);
+    if (folded === undefined) foldedInto.set(at, [duplicateLocation(r)]);
+    else folded.push(duplicateLocation(r));
+  }
+  let mergedAway = 0;
+  for (const [at, locations] of foldedInto) {
+    mergedAway += locations.length;
+    results[at] = Object.freeze({
+      ...results[at]!,
+      duplicates: Object.freeze(locations),
+    });
+  }
+  return { results, mergedAway };
 }
 
 export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<BrainSearchResult> {
@@ -126,6 +227,13 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     // phase can surface it. No-op (same reference) when the pool has none,
     // so a vault that never used the lane is byte-identical.
     ranked = applyExactStateBarrier(ranked).slice();
+    // Exact-duplicate merge (what-the-index-already-knew, task D): fold
+    // byte-identical passages into their best-ranked occurrence BEFORE
+    // traversal and the diversity rerank, so a duplicate neither seeds
+    // expansion twice nor pays for a quadratic Jaccard comparison that
+    // the hash already settled. No-op when the pool holds no duplicates.
+    const merge = mergeExactDuplicates(ranked, input.hydrated);
+    ranked = merge.results;
     // Link-graph traversal (v0.13.0): walk outbound links from the top
     // hits and surface related documents not already matched, scored by
     // decay. No-op when maxHops == 0. Runs before MMR so expansions are
@@ -164,22 +272,34 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     if (rerankActive) {
       ranked = rerankByRelevance(ranked).slice();
     }
-    return { ...applyPoolFilters(ranked, filters, filterContext), capHit };
+    return {
+      ...applyPoolFilters(ranked, filters, filterContext),
+      capHit,
+      mergedAway: merge.mergedAway,
+    };
   };
 
   let assembled = assemble(rankLimit);
-  // Default-scope visibility (no explicit filter, so no overfetch above)
-  // can drop tagged pages and leave fewer than `limit` rows while more
-  // untagged matches sit deeper in the candidate pool. When that happens
-  // and the narrow cap was actually hit, re-assemble once at the wider
-  // cap from the same in-memory candidates - no extra DB fetch. Untagged
-  // vaults never drop rows, so this never fires and their results stay
-  // byte-identical.
+  // Two phases can leave fewer than `limit` rows out of a pool that was
+  // capped at `limit`, while more qualifying matches sit deeper in the
+  // candidate list:
+  //
+  //  - default-scope visibility (no explicit filter, so no overfetch
+  //    above) drops tagged pages; untagged vaults never drop a row, so
+  //    this never fires for them,
+  //  - the exact-duplicate merge folds byte-identical passages away.
+  //
+  // In either case, and only when the narrow cap was actually hit (as
+  // opposed to the candidate list simply running out), re-assemble once
+  // at the wider cap from the same in-memory candidates - no extra DB
+  // fetch. A pool with no dropped and no merged rows never re-assembles,
+  // so its results stay byte-identical.
+  const visibilityDropped =
+    !filters.canDropRows && assembled.visible.length < assembled.preVisibility;
   if (
-    !filters.canDropRows &&
     assembled.visible.length < limit &&
-    assembled.visible.length < assembled.preVisibility &&
-    assembled.capHit
+    assembled.capHit &&
+    (visibilityDropped || assembled.mergedAway > 0)
   ) {
     const wideCap = Math.max(
       semanticPoolSize(limit),
@@ -225,6 +345,11 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
       semanticWeight: opts.semanticWeight ?? config.semanticWeight,
       limit: rankCap,
       semanticEnabled: input.semanticEnabled,
+      // The request's clock, not the ranker's. Ranking is called up to
+      // twice per search (the visibility backfill re-assembles from the
+      // same candidates), and both passes must judge freshness against
+      // the same instant as the time filter and the temporal intent did.
+      nowMs: input.nowMs,
       recency: {
         shape: config.recall.recencyShape,
         scale: config.recall.recencyScale,

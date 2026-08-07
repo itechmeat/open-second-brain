@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 
 import { charSpanToLineSpan } from "../search/line-numbering.ts";
+import { caseInsensitiveIndex, NO_MATCH_OFFSET, snippetAround } from "../search/snippet-window.ts";
 import {
   appendContinuityRecord,
   clipPayloadToBudget,
@@ -499,24 +500,6 @@ function lineageScope(
   return scope;
 }
 
-/**
- * Case-insensitive search that returns an offset into the ORIGINAL `text`,
- * so `snippet()` and `charSpanToLineSpan()` (both of which slice the
- * original text) stay aligned. `text.toLowerCase()` is not always
- * length-preserving (e.g. U+0130 lowercases to two code units), which would
- * otherwise shift the offset taken from the lowercased copy. The fast path
- * keeps normal text O(n) and bit-identical; the scan runs only when
- * lowercasing changed the length.
- */
-function caseInsensitiveIndex(text: string, needleLower: string): number {
-  const lower = text.toLowerCase();
-  if (lower.length === text.length) return lower.indexOf(needleLower);
-  for (let i = 0; i < text.length; i++) {
-    if (text.slice(i).toLowerCase().startsWith(needleLower)) return i;
-  }
-  return -1;
-}
-
 function hitFor(
   record: ContinuityRecord,
   needle: string,
@@ -525,14 +508,14 @@ function hitFor(
   const text = recordText(record);
   const haystack = text.toLowerCase();
   const index = caseInsensitiveIndex(text, needle);
-  if (index < 0) return null;
+  if (index === NO_MATCH_OFFSET) return null;
   const score = (record.kind === "session_turn" ? 2 : 1) + occurrenceCount(haystack, needle);
   const span = charSpanToLineSpan(text, index, needle.length);
   const base = {
     id: record.id,
     kind: record.kind as "session_turn" | "session_summary_node",
     score,
-    snippet: snippet(text, index, snippetChars),
+    snippet: snippetAround(text, index, snippetChars),
     line_start: span.lineStart,
     line_end: span.lineEnd,
   };
@@ -624,12 +607,6 @@ function findByDedupeKey(vault: string, dedupeKey: string): ContinuityRecord | n
     listContinuityRecords(vault).find((record) => record.payload["dedupe_key"] === dedupeKey) ??
     null
   );
-}
-
-function snippet(text: string, index: number, maxChars: number): string {
-  const half = Math.floor(maxChars / 2);
-  const start = Math.max(0, index - half);
-  return text.slice(start, start + maxChars);
 }
 
 function oneLine(text: string, maxChars: number): string {

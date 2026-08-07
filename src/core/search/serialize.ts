@@ -5,7 +5,7 @@
  */
 
 import type { StampMismatch } from "../integrity/stamp.ts";
-import type { IndexStatusSnapshot, SearchCard } from "./types.ts";
+import type { ChunkWindowCensus, IndexStatusSnapshot, SearchCard } from "./types.ts";
 
 /**
  * Wire shape for a stamp comparison. `recorded` is what the index
@@ -40,6 +40,33 @@ export function serializeSearchCard(c: SearchCard): Record<string, unknown> {
 }
 
 /**
+ * Wire shape of an oversize-chunk census verdict, shared by the index
+ * run's report and the status snapshot so the two cannot describe one
+ * verdict with different field names.
+ *
+ * No `next_command` here: whether a surface names an exit beside a
+ * verdict is that surface's decision, and the index run spreads its own
+ * on top. Baking one in would put a command on the status field the
+ * ruling deliberately keeps out of the warning channel.
+ */
+export function serializeChunkWindowCensus(census: ChunkWindowCensus): Record<string, unknown> {
+  if (census.verdict === "window-undeclared") {
+    return {
+      verdict: census.verdict,
+      model: census.model,
+      chunks_measured: census.chunksMeasured,
+    };
+  }
+  return {
+    verdict: census.verdict,
+    model: census.model,
+    window_tokens: census.windowTokens,
+    chunks_over_window: census.chunksOverWindow,
+    chunks_measured: census.chunksMeasured,
+  };
+}
+
+/**
  * Full snake_case index-status mapping. The CLI surfaces every field; the
  * MCP block (token-budget conscious) picks a subset of the returned object
  * rather than re-declaring the mapping.
@@ -67,6 +94,14 @@ export function serializeIndexStatus(s: IndexStatusSnapshot): Record<string, unk
     ...(s.embeddingAbi.length > 0
       ? { embedding_abi: serializeStampMismatches(s.embeddingAbi) }
       : {}),
+    // Emitted only when the oversize-chunk census could NOT run, on the
+    // same terms and for the same reason: a status over a model with a
+    // declared window is byte-identical to the pre-census output. The
+    // measured-overflow verdict is not here - it is a warning, because
+    // it names a command.
+    ...(s.chunkWindowUndeclared === undefined
+      ? {}
+      : { chunk_window_undeclared: serializeChunkWindowCensus(s.chunkWindowUndeclared) }),
     warnings: s.warnings,
   };
 }

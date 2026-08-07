@@ -109,6 +109,19 @@ classification, per-token `union_records` for uncovered terms, and a
 `completeness` verdict whose `uncovered_but_present_in_corpus` list is the
 false-absence guard. It can also emit opt-in recall telemetry with
 `telemetry: true`.
+Since v1.44.0 `explain: true` adds two top-level receipts alongside the
+per-result `score_breakdown`: `retrieval_decision_trace` (evaluated /
+surfaced / excluded counts plus every excluded candidate as a compact
+reference with its structural reasons) and `memory_trust_assessment` (the
+same exclusion set as a reason histogram). Both are by-products of the
+retrieval trust gate; with the gate off the response carries
+`retrieval_trace_unavailable` naming the switch that produces them
+(`search_trust_gate_enabled`) instead of going quiet. Without `explain` no
+key appears at all. In the same release `total` stopped echoing the row
+count: it is the ranked candidate pool the `limit` sliced the returned rows
+from - a lower bound on the matches, never an over-count - so
+`total > results.length` now means the vault held more than you were
+handed.
 A deterministic summary-search router (t_7b96f242) inspects each query for
 structural summary signals - a source-targeted `source:<path>` token, or a
 `kind:<t>`/`type:<t>` token whose value is a declared artifact kind in the

@@ -111,7 +111,7 @@ Brain verbs (observing memory):
   signal              Fact signal lifecycle: retire <id> --reason <text>
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
   inbox-drain         Classify and route staged captures (dry-run; --apply to route)
-  repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write)
+  repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write, holdout-gated)
   session-grep        Search imported session recall turns and summaries
   session-describe    Describe an imported session recall DAG
   session-expand      Expand a session recall node to source turns
@@ -248,8 +248,11 @@ export const VERB_HELP: Record<string, string> = {
     "transitions, retirements, contradictions, and neglected areas when\n" +
     "expected areas are supplied by future callers.\n",
   query:
-    "usage: o2b brain query --preference <id> | --topic <slug> | --since <ISO> [--vault <path>] [--json]\n" +
-    "Read-only lookup. One of --preference / --topic / --since is required.\n",
+    "usage: o2b brain query --preference <id> | --topic <slug> | --since <ISO>\n" +
+    "                      [--at <ISO|YYYY-MM-DD>] [--show-expired] [--vault <path>] [--json]\n" +
+    "Read-only lookup. One of --preference / --topic / --since is required.\n" +
+    "--at evaluates expiration_date as of that instant (default now) and\n" +
+    "--show-expired keeps lapsed memories; both apply to --topic only.\n",
   "agent-query":
     "usage: o2b brain agent-query [--agent <id>...] [--topic <slug>] [--query <text>]\n" +
     "                             [--kind signal|preference|log] [--limit <n>]\n" +
@@ -832,7 +835,13 @@ export const VERB_HELP: Record<string, string> = {
     "writes nothing; --apply writes edges and requires the exact confirmation\n" +
     "phrase via --confirm. A confidence threshold and a hard per-run write cap\n" +
     "bound the writes; existing edges are skipped, so a rerun converges to zero\n" +
-    "writes. Inferred candidates are opt-in behind --include-inferred.\n",
+    "writes. Inferred candidates are opt-in behind --include-inferred.\n" +
+    "--apply is gated by the paired graph-efficacy holdout harness: every\n" +
+    "proposed edge is checked as an (anchor, target) holdout, graph lift is\n" +
+    "counted apart from direct recall, and the apply is refused without writing\n" +
+    "anything when any target resolves to no durable-memory note or hydrates\n" +
+    "into no evidence. Dry-run does not run the gate and is byte-identical; it\n" +
+    "already names each unresolvable endpoint as a skip-missing-target decision.\n",
   agenda:
     "usage: o2b brain agenda --events <file|-> [args]\n" +
     "Deterministic agenda synthesis over caller-provided calendar events (JSON array or {events:[...]}).\n" +
