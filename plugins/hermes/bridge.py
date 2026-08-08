@@ -27,6 +27,40 @@ CLIENT_NAME = "open-second-brain-hermes-provider"
 logger = logging.getLogger(__name__)
 
 
+# A shared bridge is one stdio stream, so its calls are serialised: a child
+# that stops answering blocks every agent in the gateway rather than one
+# session. Nothing in this transport bounded a read before - with a bridge per
+# session that was survivable, and with a shared one it is not. The deadline is
+# generous on purpose: a tool call can legitimately take tens of seconds when
+# it opens the store for writing and the integrity scan runs.
+DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
+REQUEST_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_MCP_TIMEOUT"
+
+
+def resolve_request_timeout() -> float | None:
+    """Seconds a single JSON-RPC round trip may take, or None to wait forever.
+
+    A non-positive value disables the deadline, which is the escape hatch for
+    an operator whose vault legitimately outruns it; it is spelled explicitly
+    rather than reached by a malformed value, and a malformed value falls back
+    to the default rather than to no bound at all.
+    """
+    raw = os.environ.get(REQUEST_TIMEOUT_ENV)
+    if raw is None or raw.strip() == "":
+        return DEFAULT_REQUEST_TIMEOUT_SECONDS
+    try:
+        seconds = float(raw)
+    except ValueError:
+        logger.warning(
+            "%s is not a number (%r); using the %.0fs default",
+            REQUEST_TIMEOUT_ENV,
+            raw,
+            DEFAULT_REQUEST_TIMEOUT_SECONDS,
+        )
+        return DEFAULT_REQUEST_TIMEOUT_SECONDS
+    return None if seconds <= 0 else seconds
+
+
 class BridgeError(RuntimeError):
     """Base error: a JSON-RPC error response or a transport failure."""
 
@@ -37,6 +71,16 @@ class BridgeTransportError(BridgeError):
     Distinct from a plain ``BridgeError``, which signals a JSON-RPC error
     response (e.g. invalid tool arguments) - a server-level rejection that a
     restart would only repeat, so it must propagate unchanged.
+    """
+
+
+class BridgeTimeoutError(BridgeTransportError):
+    """The child is alive but did not answer inside the request deadline.
+
+    A subclass of the transport error on purpose: the restart-and-retry ladder
+    that already handles a dead child is the right response to an unresponsive
+    one too, and a bridge nobody can get an answer from is not usefully
+    different from a bridge that died.
     """
 
 
@@ -67,10 +111,11 @@ class JsonRpcStdioClient:
     block, surfacing as a silent EOF on the JSON-RPC channel.
     """
 
-    def __init__(self, writer: Any, reader: Any) -> None:
+    def __init__(self, writer: Any, reader: Any, timeout: float | None = None) -> None:
         self._writer = writer
         self._reader = reader
         self._id = 0
+        self._timeout = timeout
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         frame: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
@@ -97,9 +142,46 @@ class JsonRpcStdioClient:
         except (BrokenPipeError, ValueError, OSError) as exc:
             raise BridgeTransportError(f"write failed: {exc}") from exc
 
+    def _readline(self, deadline: float | None) -> Any:
+        """One line, or a timeout. Blocks plainly when no deadline is set.
+
+        A blocking ``readline`` on a pipe cannot be interrupted, so the read
+        runs on a daemon thread whose result is collected with the remaining
+        budget. The thread is left behind on a timeout deliberately: the caller
+        tears the child down, which closes the pipe and releases it. Daemon,
+        because a thread stuck on a dead pipe must never hold up interpreter
+        exit - the failure this whole change is about is a process that would
+        not go away.
+        """
+        if deadline is None:
+            return self._reader.readline()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise BridgeTimeoutError("no response from MCP server within the deadline")
+        box: list[Any] = []
+        error: list[BaseException] = []
+
+        def pump() -> None:
+            try:
+                box.append(self._reader.readline())
+            except BaseException as exc:  # noqa: BLE001 - reported to the caller
+                error.append(exc)
+
+        worker = threading.Thread(target=pump, daemon=True)
+        worker.start()
+        worker.join(remaining)
+        if worker.is_alive():
+            raise BridgeTimeoutError(
+                f"no response from MCP server within {self._timeout:.0f}s"
+            )
+        if error:
+            raise BridgeTransportError(f"read failed: {error[0]}") from error[0]
+        return box[0] if box else None
+
     def _read_response(self, rid: int) -> Any:
+        deadline = None if self._timeout is None else time.monotonic() + self._timeout
         while True:
-            line = self._reader.readline()
+            line = self._readline(deadline)
             # EOF arrives as b"" from a bytes reader, as "" from a str reader
             # (e.g. the StringIO-based _ScriptedReader in test_memory_provider),
             # and as None from a closed pipe. All three terminate the read.
@@ -163,6 +245,18 @@ class McpBrainBridge:
             argv += ["--repo", self._repo_root]
         return argv
 
+    _watchdog_absent_warned = False
+
+    @classmethod
+    def _warn_watchdog_absent(cls) -> None:
+        if cls._watchdog_absent_warned:
+            return
+        cls._watchdog_absent_warned = True
+        logger.warning(
+            "parent-death watchdog module unavailable; open-second-brain MCP "
+            "children will not be reaped if this process exits abruptly"
+        )
+
     @staticmethod
     def _watchdog_argv(argv: list[str]) -> list[str]:
         """Wrap POSIX MCP children in Hermes' parent-death watchdog."""
@@ -171,8 +265,13 @@ class McpBrainBridge:
         try:
             from tools import mcp_stdio_watchdog
         except ImportError:
-            # The plugin can still operate from a standalone checkout; Hermes'
-            # normal runtime has this module and gets descendant cleanup.
+            # The plugin can still operate from a standalone checkout; the
+            # host's normal runtime has this module and gets descendant
+            # cleanup. Say so rather than degrading in silence: if the module
+            # is ever renamed, the guarantee disappears and nothing else would
+            # report it. Once per process, because this is a property of the
+            # installation and not of the call.
+            McpBrainBridge._warn_watchdog_absent()
             return argv
         watchdog_path = getattr(mcp_stdio_watchdog, "__file__", None)
         if not watchdog_path:
@@ -240,7 +339,9 @@ class McpBrainBridge:
             if self._started:
                 return
             self._proc = self._spawn(self._argv())
-            self._client = JsonRpcStdioClient(self._proc.stdin, self._proc.stdout)
+            self._client = JsonRpcStdioClient(
+                self._proc.stdin, self._proc.stdout, timeout=resolve_request_timeout()
+            )
             pid = getattr(self._proc, "pid", "unknown")
             logger.debug("open-second-brain MCP child spawned pid=%s", pid)
             try:

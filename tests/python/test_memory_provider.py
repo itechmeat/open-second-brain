@@ -12,6 +12,8 @@ import json
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -26,12 +28,17 @@ from plugins.hermes._base import (  # noqa: E402
     MemoryProvider,
     _FallbackMemoryProviderBase,
 )
+from plugins.hermes import bridge as bridge_module  # noqa: E402
 from plugins.hermes.bridge import (  # noqa: E402
+    DEFAULT_REQUEST_TIMEOUT_SECONDS,
+    REQUEST_TIMEOUT_ENV,
     BridgeError,
+    BridgeTimeoutError,
     BridgeTransportError,
     FakeBrainBridge,
     JsonRpcStdioClient,
     McpBrainBridge,
+    resolve_request_timeout,
 )
 from plugins.hermes.provider import (  # noqa: E402
     MEMORY_TOOLS,
@@ -989,6 +996,134 @@ class McpBrainBridgeTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(spawn.state["n"], 3)
         self.assertTrue(broken.terminated)
+
+
+class BridgeRequestDeadlineTests(unittest.TestCase):
+    """A shared bridge is one stream, so an unanswered call is everyone's.
+
+    Before the bridge became shared, a child that stopped answering blocked the
+    one session that owned it. Sharing it made that block gateway-wide, and
+    nothing in this transport bounded a read - so the deadline is not a nicety
+    here, it is what keeps the fix from trading a descriptor leak for a stall.
+    """
+
+    class _MuteReader:
+        """Answers the handshake, then never answers again."""
+
+        def __init__(self, frames):
+            self._frames = list(frames)
+            self.reads_after_handshake = 0
+
+        def readline(self):
+            if self._frames:
+                return (json.dumps(self._frames.pop(0)) + "\n").encode("utf-8")
+            self.reads_after_handshake += 1
+            time.sleep(30)
+            return b""
+
+    class _MuteProcess:
+        pid = 4242
+
+        def __init__(self, frames):
+            self.stdin = io.BytesIO()
+            self.stdout = BridgeRequestDeadlineTests._MuteReader(frames)
+            self.stderr = io.BytesIO()
+            self.terminated = False
+
+        def poll(self):
+            return None
+
+        def terminate(self):
+            self.terminated = True
+
+        def wait(self, timeout=None):
+            return 0
+
+    HANDSHAKE = [
+        {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}},
+        {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+    ]
+
+    def test_a_child_that_stops_answering_raises_instead_of_blocking(self):
+        spawned = []
+
+        def spawn(argv):
+            proc = self._MuteProcess(list(self.HANDSHAKE))
+            spawned.append(proc)
+            return proc
+
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "0.2"}):
+            bridge.start()
+            started = time.monotonic()
+            with self.assertRaises(BridgeTimeoutError):
+                bridge.call_tool("brain_query", {})
+            elapsed = time.monotonic() - started
+
+        # Bounded, not merely non-infinite: three attempts at 0.2s plus the
+        # existing backoff. The generous ceiling keeps this off the flake list
+        # on a loaded runner while still failing outright if the read is
+        # unbounded again.
+        self.assertLess(elapsed, 10.0)
+        # The stuck child is torn down rather than left holding the stream.
+        self.assertTrue(spawned[0].terminated)
+
+    def test_a_timed_out_bridge_does_not_hold_the_next_caller(self):
+        """The property the shared bridge actually needs: the lock is released."""
+
+        def spawn(argv):
+            return self._MuteProcess(list(self.HANDSHAKE))
+
+        bridge = McpBrainBridge(vault="/v", spawn=spawn)
+        unblocked = threading.Event()
+
+        with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "0.2"}):
+            bridge.start()
+
+            def first():
+                try:
+                    bridge.call_tool("brain_query", {})
+                except BridgeTimeoutError:
+                    pass
+
+            worker = threading.Thread(target=first, daemon=True)
+            worker.start()
+            time.sleep(0.05)
+
+            def second():
+                bridge.list_tools()
+                unblocked.set()
+
+            threading.Thread(target=second, daemon=True).start()
+            self.assertTrue(unblocked.wait(10.0))
+
+    def test_the_deadline_is_configurable_and_its_absence_is_explicit(self):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(REQUEST_TIMEOUT_ENV, None)
+            self.assertEqual(resolve_request_timeout(), DEFAULT_REQUEST_TIMEOUT_SECONDS)
+        with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "45"}):
+            self.assertEqual(resolve_request_timeout(), 45.0)
+        # Non-positive is the deliberate escape hatch for a vault that
+        # legitimately outruns any bound.
+        with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "0"}):
+            self.assertIsNone(resolve_request_timeout())
+        # A malformed value falls back to the default, never to no bound:
+        # a typo must not silently remove the protection.
+        with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "soon"}):
+            self.assertEqual(resolve_request_timeout(), DEFAULT_REQUEST_TIMEOUT_SECONDS)
+
+    def test_a_missing_parent_death_watchdog_says_so_once(self):
+        McpBrainBridge._watchdog_absent_warned = False
+        argv = ["o2b", "mcp"]
+        with patch.dict(sys.modules, {"tools": None}):
+            with self.assertLogs("plugins.hermes.bridge", level="WARNING") as logs:
+                self.assertEqual(McpBrainBridge._watchdog_argv(argv), argv)
+            self.assertTrue(any("watchdog" in line for line in logs.output))
+            # Once per process: a property of the installation, not the call.
+            with patch.object(bridge_module.logger, "warning") as warn:
+                McpBrainBridge._watchdog_argv(argv)
+                warn.assert_not_called()
+        McpBrainBridge._watchdog_absent_warned = False
 
 
 class FakeBrainBridgeTests(unittest.TestCase):
