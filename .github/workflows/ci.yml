@@ -43,6 +43,21 @@ jobs:
       - name: Verify manifest version sync
         run: bun run sync-version:check
 
+      - name: OpenClaw bundle is in sync with sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The release workflow has always checked this, but only on a tag -
+          # so a stale `openclaw/index.js` shipped to plugin users and turned
+          # the release job red two versions running before anyone looked.
+          # Checking it here fails the pull request that caused it instead.
+          bun build src/openclaw/index.ts \
+            --outfile /tmp/openclaw-rebuild.js \
+            --target=node --format=esm \
+            --external openclaw/plugin-sdk/plugin-entry
+          diff -q /tmp/openclaw-rebuild.js openclaw/index.js \
+            || { echo "openclaw/index.js is out of date; run: bun run build:openclaw" >&2; exit 1; }
+
       - name: Broken-link ratchet
         run: bun run link-ratchet:check
 

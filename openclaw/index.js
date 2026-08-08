@@ -1554,21 +1554,24 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 
 // src/openclaw/index.ts
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { existsSync as existsSync4 } from "node:fs";
 
 // src/core/config.ts
-import { mkdirSync, readFileSync } from "node:fs";
-var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
+import { mkdirSync, readFileSync, statSync as statSync2 } from "node:fs";
+var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+
+// src/core/brain/portability/profiles.ts
+var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
 
 // src/core/fs-utils.ts
-import { existsSync, statSync } from "node:fs";
-function isFile(p) {
-  if (!existsSync(p))
-    return false;
+import { statSync } from "node:fs";
+function statOrAbsent(p) {
+  return statSync(p, { throwIfNoEntry: false });
+}
+function isDir(p) {
   try {
-    return statSync(p).isFile();
+    return statOrAbsent(p)?.isDirectory() ?? false;
   } catch {
     return false;
   }
@@ -1584,17 +1587,47 @@ var WIKI_LINK_FORMATS = Object.freeze([
   "full",
   "short"
 ]);
+var SUFFIX_INDEX_MEMO = new WeakMap;
 
 // src/core/config.ts
 var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
-function defaultConfigPath() {
-  const override = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+var UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze(["win32"]);
+
+class UnsupportedPlatformError extends Error {
+  platform;
+  constructor(platform) {
+    super(`open-second-brain has no configuration layout for platform '${platform}': ` + "the default path $HOME/.config/open-second-brain/config.yaml is a POSIX " + "convention and this build does not implement the Windows one. Set " + "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " + "to a configuration root, to choose the location yourself.");
+    this.name = "UnsupportedPlatformError";
+    this.platform = platform;
+  }
+}
+
+class ConfigReadError extends Error {
+  path;
+  constructor(path, reason) {
+    super(`failed to read plugin config ${path}: ${reason}. The file is present, so its ` + "settings are NOT in force and are not read as absent; make it readable " + `(chmod u+r "${path}") or set OPEN_SECOND_BRAIN_CONFIG to a readable config file.`);
+    this.name = "ConfigReadError";
+    this.path = path;
+  }
+}
+function resolveDefaultConfigPath(source) {
+  const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
   if (override)
     return expandTilde(override);
-  const xdg = process.env["XDG_CONFIG_HOME"];
+  const xdg = source.env["XDG_CONFIG_HOME"];
   if (xdg)
     return join(expandTilde(xdg), "open-second-brain", "config.yaml");
-  return join(homedir(), ".config", "open-second-brain", "config.yaml");
+  if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
+    throw new UnsupportedPlatformError(source.platform);
+  }
+  return join(source.home, ".config", "open-second-brain", "config.yaml");
+}
+function defaultConfigPath() {
+  return resolveDefaultConfigPath({
+    platform: process.platform,
+    home: homedir(),
+    env: process.env
+  });
 }
 function parseSimpleYaml(text) {
   const data = {};
@@ -1618,14 +1651,33 @@ function parseSimpleYaml(text) {
 }
 function discoverConfig(path) {
   const resolved = path ?? defaultConfigPath();
-  if (!isFile(resolved)) {
+  const stat = statConfigPath(resolved);
+  if (stat === undefined) {
     return { path: resolved, exists: false, data: {} };
   }
+  if (!stat.isFile()) {
+    throw new ConfigReadError(resolved, "path exists but is not a regular file");
+  }
+  return { path: resolved, exists: true, data: parseSimpleYaml(readConfigText(resolved)) };
+}
+function statConfigPath(resolved) {
   try {
-    const text = readFileSync(resolved, "utf8");
-    return { path: resolved, exists: true, data: parseSimpleYaml(text) };
-  } catch {
-    return { path: resolved, exists: false, data: {} };
+    return statSync2(resolved, { throwIfNoEntry: false });
+  } catch (err) {
+    throw new ConfigReadError(resolved, err.message ?? String(err));
+  }
+}
+function readConfigText(resolved) {
+  let bytes;
+  try {
+    bytes = readFileSync(resolved);
+  } catch (err) {
+    throw new ConfigReadError(resolved, err.message ?? String(err));
+  }
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch (err) {
+    throw new ConfigReadError(resolved, `not valid UTF-8: ${err.message ?? String(err)}`);
   }
 }
 function resolveAgentName(configPath) {
@@ -1658,9 +1710,24 @@ function expandTilde(p) {
   return p;
 }
 
+// src/core/vault-presence.ts
+function vaultUnexaminable(vault, err) {
+  const reason = err?.message ?? String(err);
+  return {
+    error: `cannot determine whether the vault directory ${vault} exists: ${reason}. ` + "It is NOT reported as absent - a path that cannot be examined is not a " + "path that is not there; make it and every parent directory traversable " + "(chmod u+rx), or set VAULT_DIR to a vault this process can read."
+  };
+}
+function probeVaultDirectory(vault) {
+  try {
+    return { present: statOrAbsent(vault)?.isDirectory() === true, unexaminable: null };
+  } catch (err) {
+    return { present: false, unexaminable: vaultUnexaminable(vault, err) };
+  }
+}
+
 // src/core/doctor.ts
 import {
-  existsSync as existsSync3,
+  existsSync as existsSync2,
   mkdirSync as mkdirSync2,
   openSync,
   readFileSync as readFileSync2,
@@ -1671,8 +1738,59 @@ import {
 import { dirname as dirname3, join as join3 } from "node:path";
 
 // src/core/partner/codegraph.ts
-import { existsSync as existsSync2, readdirSync, statSync as statSync2 } from "node:fs";
-import { dirname as dirname2, join as join2, resolve } from "node:path";
+import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
+
+// src/core/partner/codegraph-health.ts
+function stripTrailingSlash(p) {
+  return p.replace(/\/+$/, "");
+}
+function samePath(a, b) {
+  return stripTrailingSlash(a) === stripTrailingSlash(b);
+}
+function assessGraphHealth(input) {
+  const warnings = [];
+  const nodes = Number.isFinite(input.nodeCount) ? input.nodeCount : 0;
+  const edges = Number.isFinite(input.edgeCount) ? input.edgeCount : 0;
+  if (nodes <= 0) {
+    warnings.push({
+      code: "empty-graph",
+      message: "index is initialized but holds 0 nodes; extraction produced an empty graph - " + "labeling and recall will find nothing until it is re-indexed"
+    });
+  } else if (edges <= 0) {
+    warnings.push({
+      code: "collapsed-edges",
+      message: `graph has ${nodes} node(s) but 0 edges; relationship extraction collapsed - ` + "callers/callees/impact traversal will be empty"
+    });
+  }
+  if (input.danglingRefs !== undefined && input.danglingRefs > 0) {
+    warnings.push({
+      code: "dangling-references",
+      message: `${input.danglingRefs} dangling reference(s): edges point at nodes absent from the ` + "index; derived labels/imports built from them would reference missing symbols"
+    });
+  }
+  if (input.selfLoops !== undefined && input.selfLoops > 0) {
+    warnings.push({
+      code: "self-loops",
+      message: `${input.selfLoops} self-loop edge(s): a node references itself; ` + "impact and traversal surfaces may double-count or cycle"
+    });
+  }
+  if (input.indexRoot && input.worktreeRoot && !samePath(input.indexRoot, input.worktreeRoot)) {
+    warnings.push({
+      code: "cache-root-mismatch",
+      message: `index was built for '${input.indexRoot}' but is being read from ` + `'${input.worktreeRoot}'; file and line references may be stale for this tree - ` + "re-index the current root before trusting graph-derived artifacts"
+    });
+  }
+  return { ok: warnings.length === 0, warnings };
+}
+function summarizeGraphHealth(report) {
+  if (report.warnings.length === 0)
+    return "ok";
+  const codes = report.warnings.map((w) => w.code).join(", ");
+  return `${report.warnings.length} warning(s) [${codes}]`;
+}
+
+// src/core/partner/codegraph.ts
 var CODE_MANIFESTS = [
   "package.json",
   "pyproject.toml",
@@ -1685,20 +1803,13 @@ var CODE_MANIFESTS = [
   "pom.xml"
 ];
 var DEFAULT_LIMIT = 50;
-function isDir(path) {
-  try {
-    return statSync2(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
 function isCodeProject(dir) {
   try {
-    if (!existsSync2(dir))
+    if (!existsSync(dir))
       return false;
     if (!isDir(join2(dir, ".git")))
       return false;
-    return CODE_MANIFESTS.some((m) => existsSync2(join2(dir, m)));
+    return CODE_MANIFESTS.some((m) => existsSync(join2(dir, m)));
   } catch {
     return false;
   }
@@ -1711,7 +1822,7 @@ function findCodeProjects(opts) {
   const consider = (raw) => {
     if (scanned >= limit)
       return;
-    const path = resolve(raw);
+    const path = resolve2(raw);
     if (seen.has(path))
       return;
     seen.add(path);
@@ -1722,7 +1833,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname2(resolve(opts.vault));
+  const vaultParent = dirname2(resolve2(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -1751,6 +1862,20 @@ function defaultWhichCodegraph() {
   }
   return null;
 }
+var CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
+function defaultDetectProjectPathSupport() {
+  try {
+    const proc = Bun.spawnSync({
+      cmd: ["codegraph", "status", "--help"],
+      stdout: "pipe",
+      stderr: "pipe"
+    });
+    const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
+    return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
+  } catch {
+    return false;
+  }
+}
 function defaultRunStatusJson(projectPath) {
   try {
     const proc = Bun.spawnSync({
@@ -1777,53 +1902,6 @@ function defaultRunStatusJson(projectPath) {
   } catch (exc) {
     return { ok: false, error: exc.message ?? String(exc) };
   }
-}
-var CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
-function defaultDetectProjectPathSupport() {
-  try {
-    const proc = Bun.spawnSync({
-      cmd: ["codegraph", "status", "--help"],
-      stdout: "pipe",
-      stderr: "pipe"
-    });
-    const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
-    return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
-  } catch {
-    return false;
-  }
-}
-function evaluateProjectStatus(project, deps) {
-  const indexDir = join2(project, ".codegraph");
-  if (!isDir(indexDir)) {
-    return {
-      name: "code_graph",
-      ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
-    };
-  }
-  const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
-  const status = runFn(project);
-  if (!status.ok) {
-    return {
-      name: "code_graph",
-      ok: false,
-      message: `code project at ${project}: codegraph status failed: ${status.error}`
-    };
-  }
-  if (!status.data.initialized) {
-    return {
-      name: "code_graph",
-      ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
-    };
-  }
-  const nodes = status.data.nodeCount ?? 0;
-  const files = status.data.fileCount ?? 0;
-  return {
-    name: "code_graph",
-    ok: true,
-    message: `code project at ${project}: indexed (${nodes} nodes, ${files} files)`
-  };
 }
 function checkCodegraph(opts, deps) {
   if (opts.disabled)
@@ -1857,11 +1935,79 @@ function checkCodegraph(opts, deps) {
 `)
   };
 }
+function evaluateProjectStatus(project, deps) {
+  const indexDir = join2(project, ".codegraph");
+  let indexed;
+  try {
+    indexed = statOrAbsent(indexDir)?.isDirectory() === true;
+  } catch (exc) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: index directory unreadable: ${exc.message ?? exc}`,
+      fix: `chmod u+rx "${indexDir}"`
+    };
+  }
+  if (!indexed) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+    };
+  }
+  const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
+  const status = runFn(project);
+  if (!status.ok) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: codegraph status failed: ${status.error}`
+    };
+  }
+  if (!status.data.initialized) {
+    return {
+      name: "code_graph",
+      ok: false,
+      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+    };
+  }
+  const nodes = status.data.nodeCount ?? 0;
+  const files = status.data.fileCount ?? 0;
+  const base = `code project at ${project}: indexed (${nodes} nodes, ${files} files)`;
+  const health = assessGraphHealth({
+    nodeCount: nodes,
+    edgeCount: status.data.edgeCount ?? 0,
+    ...status.data.danglingRefs !== undefined ? { danglingRefs: status.data.danglingRefs } : {},
+    ...status.data.selfLoops !== undefined ? { selfLoops: status.data.selfLoops } : {},
+    indexRoot: resolveRealpath(status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null),
+    worktreeRoot: resolveRealpath(status.data.worktreeMismatch?.worktreeRoot ?? project)
+  });
+  return {
+    name: "code_graph",
+    ok: true,
+    message: health.ok ? base : `${base}; graph-health: ${summarizeGraphHealth(health)} - run: o2b partner codegraph report`
+  };
+}
+function resolveRealpath(value) {
+  if (!value)
+    return null;
+  try {
+    return realpathSync(value);
+  } catch {
+    return value;
+  }
+}
 
 // src/core/doctor.ts
+var MANIFEST_FIX = "o2b update";
 function checkVaultWriteable(vault) {
-  if (!existsSync3(vault)) {
-    return { name: "vault_writeable", ok: false, message: `vault directory missing: ${vault}` };
+  if (!existsSync2(vault)) {
+    return {
+      name: "vault_writeable",
+      ok: false,
+      message: `vault directory missing: ${vault}`,
+      fix: `mkdir -p "${vault}"`
+    };
   }
   const probe = join3(vault, ".open-second-brain-doctor-test");
   try {
@@ -1872,7 +2018,8 @@ function checkVaultWriteable(vault) {
     return {
       name: "vault_writeable",
       ok: false,
-      message: `cannot write to vault: ${exc.message ?? exc}`
+      message: `cannot write to vault: ${exc.message ?? exc}`,
+      fix: `chmod u+rwx "${vault}"`
     };
   }
   return { name: "vault_writeable", ok: true, message: `vault exists and is writable: ${vault}` };
@@ -1881,7 +2028,7 @@ function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
     mkdirSync2(dirname3(config), { recursive: true });
-    if (!existsSync3(config))
+    if (!existsSync2(config))
       createdForCheck = true;
     const fd = openSync(config, "a");
     writeSync(fd, "");
@@ -1892,15 +2039,32 @@ function checkConfigWriteable(config) {
     return {
       name: "config_writeable",
       ok: false,
-      message: `cannot write config ${config}: ${exc.message ?? exc}`
+      message: `cannot write config ${config}: ${exc.message ?? exc}`,
+      fix: `mkdir -p "${dirname3(config)}" && chmod u+rwx "${dirname3(config)}"`
     };
   }
   return { name: "config_writeable", ok: true, message: `config writable: ${config}` };
 }
-function loadJsonManifest(path, name) {
-  if (!isFile(path)) {
+function manifestFileProblem(path) {
+  let stat;
+  try {
+    stat = statOrAbsent(path);
+  } catch (exc) {
     return {
-      result: { name, ok: false, message: `missing: ${path}` },
+      absent: false,
+      message: `unreadable: ${path} (${exc.message ?? exc})`,
+      fix: `chmod u+r "${path}"`
+    };
+  }
+  if (stat?.isFile() === true)
+    return null;
+  return { absent: true, message: `missing: ${path}`, fix: MANIFEST_FIX };
+}
+function loadJsonManifest(path, name) {
+  const problem = manifestFileProblem(path);
+  if (problem !== null) {
+    return {
+      result: { name, ok: false, message: problem.message, fix: problem.fix },
       data: null
     };
   }
@@ -1909,13 +2073,18 @@ function loadJsonManifest(path, name) {
     data = JSON.parse(readFileSync2(path, "utf8"));
   } catch (exc) {
     return {
-      result: { name, ok: false, message: `invalid JSON: ${path} (${exc.message})` },
+      result: {
+        name,
+        ok: false,
+        message: `invalid JSON: ${path} (${exc.message})`,
+        fix: MANIFEST_FIX
+      },
       data: null
     };
   }
   if (!data || typeof data !== "object" || Array.isArray(data)) {
     return {
-      result: { name, ok: false, message: `invalid manifest object: ${path}` },
+      result: { name, ok: false, message: `invalid manifest object: ${path}`, fix: MANIFEST_FIX },
       data: null
     };
   }
@@ -1974,7 +2143,8 @@ function checkCodexManifest(path) {
     return {
       name: "codex_manifest",
       ok: false,
-      message: `schema invalid: ${path} (${problems.join("; ")})`
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX
     };
   }
   return { name: "codex_manifest", ok: true, message: `valid Codex manifest: ${path}` };
@@ -2013,14 +2183,16 @@ function checkClaudeManifest(path) {
     return {
       name: "claude_manifest",
       ok: false,
-      message: `schema invalid: ${path} (${problems.join("; ")})`
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX
     };
   }
   return { name: "claude_manifest", ok: true, message: `valid Claude manifest: ${path}` };
 }
 function checkHermesManifest(path) {
-  if (!isFile(path)) {
-    return { name: "hermes_manifest", ok: false, message: `missing: ${path}` };
+  const problem = manifestFileProblem(path);
+  if (problem !== null) {
+    return { name: "hermes_manifest", ok: false, message: problem.message, fix: problem.fix };
   }
   let text;
   try {
@@ -2029,7 +2201,8 @@ function checkHermesManifest(path) {
     return {
       name: "hermes_manifest",
       ok: false,
-      message: `invalid text: ${path} (${exc.message ?? exc})`
+      message: `invalid text: ${path} (${exc.message ?? exc})`,
+      fix: MANIFEST_FIX
     };
   }
   const required = ["name", "version", "description"];
@@ -2042,7 +2215,8 @@ function checkHermesManifest(path) {
     return {
       name: "hermes_manifest",
       ok: false,
-      message: `schema invalid: ${path} (missing ${missing.join(", ")})`
+      message: `schema invalid: ${path} (missing ${missing.join(", ")})`,
+      fix: MANIFEST_FIX
     };
   }
   return { name: "hermes_manifest", ok: true, message: `readable Hermes manifest: ${path}` };
@@ -2063,7 +2237,8 @@ function checkOpenclawManifest(path) {
     return {
       name: "openclaw_manifest",
       ok: false,
-      message: `schema invalid: ${path} (${problems.join("; ")})`
+      message: `schema invalid: ${path} (${problems.join("; ")})`,
+      fix: MANIFEST_FIX
     };
   }
   return { name: "openclaw_manifest", ok: true, message: `valid OpenClaw manifest: ${path}` };
@@ -2081,7 +2256,8 @@ function checkOpenclawInstallability(repoRoot) {
     results.push({
       name: "openclaw_package_json_extensions",
       ok: false,
-      message: "package.json missing or empty openclaw.extensions array"
+      message: "package.json missing or empty openclaw.extensions array",
+      fix: MANIFEST_FIX
     });
     return results;
   }
@@ -2095,12 +2271,14 @@ function checkOpenclawInstallability(repoRoot) {
       results.push({
         name: `openclaw_entry_invalid_${typeof entry}`,
         ok: false,
-        message: `extension entry must be a string, got: ${typeof entry}`
+        message: `extension entry must be a string, got: ${typeof entry}`,
+        fix: MANIFEST_FIX
       });
       continue;
     }
     const entryPath = join3(repoRoot, entry);
-    if (isFile(entryPath)) {
+    const problem = manifestFileProblem(entryPath);
+    if (problem === null) {
       results.push({
         name: `openclaw_entry_${entry}`,
         ok: true,
@@ -2110,7 +2288,8 @@ function checkOpenclawInstallability(repoRoot) {
       results.push({
         name: `openclaw_entry_${entry}`,
         ok: false,
-        message: `missing extension entry: ${entry}`
+        message: problem.absent ? `missing extension entry: ${entry}` : `extension entry ${entry} ${problem.message}`,
+        fix: problem.fix
       });
     }
   }
@@ -2142,9 +2321,9 @@ function doctor(opts) {
 
 // src/core/identity-reminder.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname4, resolve as resolve2 } from "node:path";
+import { dirname as dirname4, resolve as resolve3 } from "node:path";
 import { fileURLToPath } from "node:url";
-var TEMPLATE_PATH = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve3(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"];
 function isRuntimeTarget(value) {
   return typeof value === "string" && KNOWN_RUNTIME_TARGETS.includes(value);
@@ -2163,8 +2342,8 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve2(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve2(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
+var TEMPLATES_DIR = resolve3(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve3(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);
@@ -2208,8 +2387,56 @@ function buildReminder(agent, target) {
 // src/core/vault.ts
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync2, writeFileSync } from "node:fs";
 import { dirname as dirname5, join as join4, relative } from "node:path";
+
+// src/core/integrity/degradation.ts
+var DEGRADATION_CODE = Object.freeze({
+  frontmatterLineDropped: "frontmatter-line-dropped",
+  frontmatterUnreadable: "frontmatter-unreadable",
+  vaultWalkEntrySkipped: "vault-walk-entry-skipped",
+  sessionLinkAbstained: "session-link-abstained",
+  lineageObservationDropped: "lineage-observation-dropped",
+  lineageChainBroken: "lineage-chain-broken",
+  vaultMarkerAbsent: "vault-marker-absent",
+  vaultMarkerMismatch: "vault-marker-mismatch"
+});
+
+class DegradationNoticeError extends Error {
+  field;
+  constructor(field, message) {
+    super(`degradation notice: ${field}: ${message}`);
+    this.name = "DegradationNoticeError";
+    this.field = field;
+  }
+}
+function requireNonBlank(field, value) {
+  if (value.trim().length === 0) {
+    throw new DegradationNoticeError(field, "must be a non-blank string");
+  }
+  return value;
+}
+function degradationNotice(input) {
+  const site = requireNonBlank("site", input.site);
+  const detail = requireNonBlank("detail", input.detail);
+  const path = input.path === undefined ? undefined : requireNonBlank("path", input.path);
+  return Object.freeze({
+    code: input.code,
+    site,
+    ...path !== undefined ? { path } : {},
+    detail
+  });
+}
+function emitDegradationNotice(sink, input) {
+  const notice = degradationNotice(input);
+  sink.push(notice);
+  return notice;
+}
+
+// src/core/vault.ts
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
-var KEY_VALUE_RE = /^([a-zA-Z_][a-zA-Z0-9_-]*)\s*:\s*(.*?)\s*$/;
+var FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*";
+var FRONTMATTER_KEY_RE = new RegExp(`^${FRONTMATTER_KEY_PATTERN}$`);
+var KEY_VALUE_RE = new RegExp(`^(${FRONTMATTER_KEY_PATTERN})\\s*:\\s*(.*?)\\s*$`);
+var DASH_ITEM_RE = /^-(?:\s+(.*))?$/;
 var MEDIA_EXTENSIONS = new Set([
   ".png",
   ".jpg",
@@ -2235,33 +2462,83 @@ var MEDIA_EXTENSIONS = new Set([
 ]);
 var DEFAULT_SKIP_DIRS = [".git", ".obsidian", ".trash", ".stversions"];
 var DEFAULT_SKIP_FILES = ["index.md", "log.md"];
-function parseFrontmatter(path) {
+var FRONTMATTER_SITE = "vault.parseFrontmatter";
+var NOTICE_LINE_MAX = 120;
+var NOTICE_LINE_ELLIPSIS = "…";
+function parseFrontmatterWithNotices(path, opts = {}) {
+  const site = opts.site ?? FRONTMATTER_SITE;
   let text;
   try {
     text = readFileSync4(path, "utf8");
-  } catch {
-    return [{}, ""];
+  } catch (err) {
+    const notices = [];
+    emitDegradationNotice(notices, {
+      code: DEGRADATION_CODE.frontmatterUnreadable,
+      site,
+      path,
+      detail: `frontmatter read failed: ${err instanceof Error ? err.message : String(err)}`
+    });
+    return [{}, "", notices];
   }
-  return parseFrontmatterText(text);
+  return parseFrontmatterTextWithNotices(text, { site, path });
 }
-function parseFrontmatterText(text) {
+function parseFrontmatterTextWithNotices(text, opts = {}) {
+  const notices = [];
+  const site = opts.site ?? FRONTMATTER_SITE;
   const match = FRONTMATTER_RE.exec(text);
   if (!match) {
-    return [{}, text.trim()];
+    return [{}, text.trim(), notices];
   }
   const fmBlock = match[1];
   const body = text.slice(match[0].length).trim();
   const metadata = {};
-  for (const rawLine of fmBlock.split(`
-`)) {
-    const line = rawLine.trim();
+  const lines = fmBlock.split(`
+`);
+  let blockKey = null;
+  for (let i = 0;i < lines.length; i++) {
+    const line = lines[i].trim();
     if (!line || line.startsWith("#"))
       continue;
-    const kv = KEY_VALUE_RE.exec(line);
-    if (!kv)
+    const dash = DASH_ITEM_RE.exec(line);
+    if (dash && blockKey !== null) {
+      const arr = metadata[blockKey] ?? [];
+      arr.push(stripQuotes(dash[1] ?? ""));
+      metadata[blockKey] = arr;
       continue;
+    }
+    blockKey = null;
+    const kv = KEY_VALUE_RE.exec(line);
+    if (!kv) {
+      emitDegradationNotice(notices, {
+        code: DEGRADATION_CODE.frontmatterLineDropped,
+        site,
+        ...opts.path !== undefined ? { path: opts.path } : {},
+        detail: `frontmatter line ${i + 1} is not a supported key/value or list item: ${clipNoticeLine(line)}`
+      });
+      continue;
+    }
     const key = kv[1];
     let value = kv[2].trim();
+    if (value === "") {
+      let j = i + 1;
+      let nextMeaningful = null;
+      while (j < lines.length) {
+        const cand = lines[j].trim();
+        if (!cand || cand.startsWith("#")) {
+          j++;
+          continue;
+        }
+        nextMeaningful = cand;
+        break;
+      }
+      if (nextMeaningful !== null && DASH_ITEM_RE.test(nextMeaningful)) {
+        metadata[key] = [];
+        blockKey = key;
+      } else {
+        metadata[key] = "";
+      }
+      continue;
+    }
     if (value.startsWith("[") && value.endsWith("]")) {
       const inner = value.slice(1, -1).trim();
       metadata[key] = inner ? splitInlineArray(inner) : [];
@@ -2269,21 +2546,36 @@ function parseFrontmatterText(text) {
     }
     metadata[key] = stripQuotes(value);
   }
-  return [metadata, body];
+  return [metadata, body, notices];
 }
+function clipNoticeLine(line) {
+  return line.length <= NOTICE_LINE_MAX ? line : line.slice(0, NOTICE_LINE_MAX) + NOTICE_LINE_ELLIPSIS;
+}
+var LIST_VAULT_PAGES_SITE = "vault.listVaultPages";
 function listVaultPages(vaultDir, opts = {}) {
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
   const pages = [];
-  walk(vaultDir, vaultDir, skipDirs, skipFiles, pages);
+  walk(vaultDir, vaultDir, skipDirs, skipFiles, pages, {
+    sink: opts.notices,
+    site: opts.site ?? LIST_VAULT_PAGES_SITE
+  });
   pages.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
   return pages;
 }
-function walk(root, dir, skipDirs, skipFiles, out) {
+function walk(root, dir, skipDirs, skipFiles, out, notices) {
   let entries;
   try {
     entries = readdirSync2(dir, { withFileTypes: true });
-  } catch {
+  } catch (err) {
+    if (notices.sink !== undefined) {
+      emitDegradationNotice(notices.sink, {
+        code: DEGRADATION_CODE.vaultWalkEntrySkipped,
+        site: notices.site,
+        path: dir,
+        detail: `directory listing failed: ${err instanceof Error ? err.message : String(err)}`
+      });
+    }
     return;
   }
   for (const entry of entries) {
@@ -2291,7 +2583,7 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
-      walk(root, full, skipDirs, skipFiles, out);
+      walk(root, full, skipDirs, skipFiles, out, notices);
       continue;
     }
     if (!entry.isFile())
@@ -2304,12 +2596,9 @@ function walk(root, dir, skipDirs, skipFiles, out) {
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p)))
       continue;
-    let meta;
-    try {
-      [meta] = parseFrontmatter(full);
-    } catch {
-      continue;
-    }
+    const [meta, , pageNotices] = parseFrontmatterWithNotices(full, { site: notices.site });
+    if (notices.sink !== undefined)
+      notices.sink.push(...pageNotices);
     const titleVal = meta["title"];
     const title = typeof titleVal === "string" && titleVal ? titleVal : stem(entry.name);
     out.push({ title, path: full, metadata: meta });
@@ -2369,6 +2658,41 @@ function splitInlineArray(inner) {
   return out;
 }
 
+// src/core/brain/entities/types.ts
+var BRAIN_ENTITY_STATUS = {
+  active: "active",
+  archived: "archived",
+  quarantine: "quarantine"
+};
+var BRAIN_ENTITY_STATUS_VALUES = Object.freeze(Object.values(BRAIN_ENTITY_STATUS));
+var BRAIN_ENTITY_KIND = "brain-entity";
+
+// src/core/brain/entities/status-scope.ts
+var ENTITY_STATUS_SCOPE = {
+  canonical: "canonical",
+  readable: "readable"
+};
+var SCOPES_ADMITTING = Object.freeze({
+  [BRAIN_ENTITY_STATUS.active]: Object.freeze([
+    ENTITY_STATUS_SCOPE.canonical,
+    ENTITY_STATUS_SCOPE.readable
+  ]),
+  [BRAIN_ENTITY_STATUS.archived]: Object.freeze([ENTITY_STATUS_SCOPE.readable]),
+  [BRAIN_ENTITY_STATUS.quarantine]: Object.freeze([])
+});
+var SCOPES_BY_STATUS = new Map(Object.entries(SCOPES_ADMITTING));
+function entityStatusInScope(status, scope) {
+  return SCOPES_BY_STATUS.get(status)?.includes(scope) ?? false;
+}
+
+// src/core/brain/entities/page-scope.ts
+function vaultPageInStatusScope(metadata, scope) {
+  if (metadata["kind"] !== BRAIN_ENTITY_KIND)
+    return true;
+  const status = metadata["status"];
+  return typeof status === "string" && entityStatusInScope(status, scope);
+}
+
 // src/core/agent-identity.ts
 var PLACEHOLDER_AGENT_VALUES = new Set([
   "agent",
@@ -2417,9 +2741,9 @@ function deriveRuntimeAgentName(runtimeId, operatorName) {
 }
 
 // src/core/path-safety.ts
-import { dirname as dirname6, posix, relative as relative2, resolve as resolve3, sep } from "node:path";
+import { dirname as dirname6, posix, relative as relative2, resolve as resolve4, sep } from "node:path";
 function vaultRelative(target, vault) {
-  const rel = relative2(resolve3(vault), resolve3(target));
+  const rel = relative2(resolve4(vault), resolve4(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
@@ -2449,13 +2773,14 @@ var openclaw_default = definePluginEntry({
       async execute() {
         const vault = resolveVaultPath(api);
         const discovery = discoverConfig();
+        const presence = probeVaultDirectory(vault);
         const result = {
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
           config: redactMapping(discovery.data),
           vault_path: vault,
-          vault_exists: existsSync4(vault)
+          vault_exists: presence.unexaminable ?? presence.present
         };
         return {
           content: [{ type: "text", text: JSON.stringify(result, null, 2) }]
@@ -2483,13 +2808,16 @@ var openclaw_default = definePluginEntry({
       },
       async execute(_id, params) {
         const vault = resolveVaultPath(api);
-        if (!existsSync4(vault))
+        const presence = probeVaultDirectory(vault);
+        if (presence.unexaminable)
+          throw new Error(presence.unexaminable.error);
+        if (!presence.present)
           throw new Error(`vault directory missing: ${vault}`);
         const pattern = params["pattern"] ?? null;
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
         if (limit < 1 || limit > 500)
           throw new Error("argument 'limit' must be between 1 and 500");
-        const pages = listVaultPages(vault);
+        const pages = listVaultPages(vault).filter((p) => vaultPageInStatusScope(p.metadata, ENTITY_STATUS_SCOPE.readable));
         const needle = pattern ? pattern.toLowerCase() : null;
         const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({
           title: p.title,
@@ -2532,7 +2860,8 @@ var openclaw_default = definePluginEntry({
           checks: results.map((r) => ({
             name: r.name,
             ok: r.ok,
-            message: r.message
+            message: r.message,
+            ...r.fix !== undefined ? { fix: r.fix } : {}
           }))
         };
         return {
