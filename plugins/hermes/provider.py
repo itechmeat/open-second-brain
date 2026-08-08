@@ -554,8 +554,8 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         text = "\n\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
         args: dict[str, Any] = {
             "session_id": self._session_id or "hermes",
-            "turn_start": 0,
-            "turn_end": len(turns),
+            "turn_start": "0",
+            "turn_end": str(len(turns)),
             "text": text,
         }
         if interrupted:
