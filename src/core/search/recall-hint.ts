@@ -48,13 +48,15 @@ export function deriveRecallHint(
     .join(", ");
 
   const top = results[0]!;
-  // `total` is the ranked pool the window was sliced from (a lower bound
-  // on the corpus matches) and should be >= the returned slice; guard
-  // against a caller passing a smaller total so the string never reads
-  // "Recalled 10 of 3".
+  // `total` is the ranked candidate pool the window was sliced from, NOT a
+  // count of corpus matches: it is capped at roughly three times the
+  // requested limit and link traversal can add a document that matched no
+  // term. Calling it "matches" would state a corpus fact the number
+  // cannot carry. It should be >= the returned slice; guard against a
+  // caller passing a smaller total so the string never reads "10 of 3".
   const denom = Math.max(total, results.length);
   return (
-    `Recalled ${results.length} of ${denom} matches (${breakdown}). ` +
+    `Recalled ${results.length} of ${denom} ranked candidates (${breakdown}). ` +
     `Top hit "${trimTitle(top.title)}" (${top.searchType}, score ${top.score.toFixed(2)}). ` +
     `See each result's reasons[] for why it surfaced.`
   );

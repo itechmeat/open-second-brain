@@ -185,6 +185,12 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                     'false (expired memories are '
                                                                     'silently dropped from the '
                                                                     'result).'},
+                                    'at': {'type': 'string',
+                                           'description': 'Topic mode only: evaluate '
+                                                          '`expiration_date` as of this instant, '
+                                                          'so a memory that lapsed after it '
+                                                          'comes back. ISO-8601 instant or '
+                                                          'YYYY-MM-DD. Default now.'},
                                     'since': {'type': 'string',
                                               'description': 'ISO-8601 timestamp; returns every '
                                                              'Brain log event with timestamp >= '
@@ -241,15 +247,17 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                           'false.'},
                                     'since': {'type': 'string',
                                               'maxLength': 64,
-                                              'description': 'Time-aware recall: only documents '
-                                                             'modified at/after this point. ISO '
-                                                             "date/datetime, 'today', 'yesterday', "
-                                                             "'last week', 'last month', or "
+                                              'description': 'Hard filter on event time '
+                                                             '(validity, body anchor, mtime '
+                                                             'last): at/after this point. ISO '
+                                                             'date/datetime, today, yesterday, '
+                                                             'last week, last month, '
                                                              '<n>h/<n>d/<n>w.'},
                                     'until': {'type': 'string',
                                               'maxLength': 64,
-                                              'description': 'Time-aware recall: only documents '
-                                                             'modified at/before this point. Same '
+                                              'description': 'Hard filter on event time '
+                                                             '(validity, body anchor, mtime '
+                                                             'last): at/before this point. Same '
                                                              "forms as 'since'."},
                                     'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50},
                                     'semantic': {'type': 'boolean'},
@@ -262,10 +270,11 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                'persisted self-tuning. Absent '
                                                                'leaves ranking unchanged.'},
                                     'explain': {'type': 'boolean',
-                                                'description': 'Include a structured '
-                                                               'score_breakdown (per-layer numeric '
-                                                               'components) on each result. '
-                                                               'Default false.'},
+                                                'description': 'Add a per-result '
+                                                               'score_breakdown plus the '
+                                                               'retrieval_decision_trace and '
+                                                               'memory_trust_assessment '
+                                                               'receipts. Default false.'},
                                     'trust': {'type': 'boolean',
                                               'description': 'Stamp each result with inline trust '
                                                              'metadata (age_days, superseded, '
@@ -319,6 +328,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                   'keys is AND.',
                                                    'additionalProperties': {'type': 'array',
                                                                             'items': {'type': 'string'}}},
+                                    'degree': {'type': 'array',
+                                               'description': 'Graph-degree predicates over '
+                                                              'backlink/outlink counts, e.g. '
+                                                              "'backlinks=0' (orphans) or "
+                                                              "'outlinks>=5' (hubs); ANDed. "
+                                                              'Absent = no filter.',
+                                               'items': {'type': 'string'}},
                                     'visibility': {'type': 'array',
                                                    'description': 'Optional content-visibility '
                                                                   'scope; untagged pages always '
@@ -333,6 +349,20 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'owner-tagged pages only their '
                                                                    'owner. Absent = no ownership '
                                                                    'filtering.'},
+                                    'session_scope': {'type': 'string',
+                                                      'description': 'Optional session-scope '
+                                                                     'filter; pages with no '
+                                                                     'session always match, '
+                                                                     'session-tagged pages only '
+                                                                     'this session. Absent = no '
+                                                                     'session filtering.'},
+                                    'project_scope': {'type': 'string',
+                                                      'description': 'Optional project-scope '
+                                                                     'filter; pages with no '
+                                                                     'project always match, '
+                                                                     'project-tagged pages only '
+                                                                     'this project. Absent = no '
+                                                                     'project filtering.'},
                                     'disclosure': {'type': 'string',
                                                    'enum': ['full', 'cards'],
                                                    'description': "Result depth: 'full' "
@@ -458,7 +488,14 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                   'emitted telemetry.'},
                                     'turn_id': {'type': 'string',
                                                 'description': 'Optional turn id recorded on '
-                                                               'emitted telemetry.'}},
+                                                               'emitted telemetry.'},
+                                    'agent_scope': {'type': 'string',
+                                                    'description': 'Optional agent-ownership '
+                                                                   'scope; shared (ownerless) '
+                                                                   'memories always match, '
+                                                                   'owner-tagged memories only '
+                                                                   'their owner. Absent = no '
+                                                                   'ownership filtering.'}},
                      'required': ['max_tokens'],
                      'additionalProperties': False}},
     {'name': 'brain_pre_compact_extract',

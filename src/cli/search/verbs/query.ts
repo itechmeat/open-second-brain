@@ -154,7 +154,11 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
   // appends the decision trace and the trust assessment the search
   // already built. Omitted, both projections are byte-identical to the
   // pre-flag ones.
-  const explainOptions = { explain: flagBoolean(flags, "explain"), crossVault: isGlobal };
+  const explainOptions = {
+    explain: flagBoolean(flags, "explain"),
+    crossVault: isGlobal,
+    trustGateEnabled: cfg.recall.retrievalTrustGateEnabled,
+  };
 
   if (flagBoolean(flags, "json")) {
     process.stdout.write(JSON.stringify(jsonForOutcome(outcome, explainOptions)) + "\n");

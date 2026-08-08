@@ -167,10 +167,16 @@ const QUICK_CHECK_MAX_ERRORS = 5;
 
 /**
  * How long a completed full check stands for. The scan is linear in the
- * size of the index - measured at roughly 22 ms per megabyte, so ~0.9 s
- * for a 38 MB index and ~30 s for a 1.3 GB one - which is why it can never
- * run on the read path (that is per query) and why even the write path
- * runs it at most once a day rather than on every open.
+ * size of the index and I/O bound, so its rate is a property of the
+ * machine, not of this code: between roughly 8 and 22 ms per megabyte on
+ * the hosts it has been measured on, which is seconds to tens of seconds
+ * for a gigabyte-scale index. That is why it can never run on the read
+ * path (that is per query) and why even the write path runs it at most
+ * once a day rather than on every open.
+ *
+ * This interval governs how often the SCAN runs. It says nothing about
+ * whether an already-recorded fault is honoured - see
+ * {@link runWriteOpenIntegrityGate}.
  */
 const INTEGRITY_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -210,15 +216,18 @@ function integrityFaultMessage(dbPath: string, fault: string): string {
 }
 
 /**
- * The read open's integrity gate: consult the verdict a previous FULL
- * check recorded, and refuse while it stands.
+ * The refusal every open owes a condemned file: consult the verdict a
+ * previous FULL check recorded, and refuse while it stands.
  *
- * A read open cannot run the scan itself - it happens on every single
- * query and the scan costs seconds - so what it can honestly do is refuse
- * to answer from a file that a completed check found malformed. The
- * absence of a fault is NOT a pass and is never reported as one: it means
- * either that the last check passed or that no check has run here yet, and
- * `integrity_checked_at` is the only thing that distinguishes those two.
+ * No open can afford to run the scan unconditionally - a read open happens
+ * on every single query and the scan costs seconds - so what every open
+ * can honestly do is refuse to touch a file that a completed check found
+ * malformed. That costs one key lookup and is therefore affordable
+ * everywhere, which is why it is applied everywhere rather than only on
+ * the read path. The absence of a fault is NOT a pass and is never
+ * reported as one: it means either that the last check passed or that no
+ * check has run here yet, and `integrity_checked_at` is the only thing
+ * that distinguishes those two.
  */
 function assertNoRecordedIntegrityFault(db: Database, dbPath: string): void {
   const fault = getState(db, INTEGRITY_FAULT_STATE_KEY);
@@ -227,33 +236,71 @@ function assertNoRecordedIntegrityFault(db: Database, dbPath: string): void {
 }
 
 /**
- * The write open's integrity gate: where the scan actually runs.
+ * Whether a fresh full scan is due: true unless a completed scan is
+ * recorded within {@link INTEGRITY_CHECK_INTERVAL_MS}.
  *
- * This is the one seam where a multi-second scan is already noise - an
- * index run reads, chunks and often embeds the whole vault - and it is
- * also the moment it matters most, because everything after it WRITES into
- * the file. The verdict is recorded in `index_state`, which needs no
- * migration, so the read path can act on it for the price of one key
- * lookup.
+ * A stamp that is absent, unparseable, or in the FUTURE (a clock that
+ * moved backwards) all mean the same thing: nothing here can be relied on
+ * to say when the last scan happened, so scan.
+ */
+function fullScanIsDue(db: Database): boolean {
+  const stamp = getState(db, INTEGRITY_CHECKED_AT_STATE_KEY);
+  const ageMs = stamp === null ? Number.NaN : Date.now() - Date.parse(stamp);
+  return !(Number.isFinite(ageMs) && ageMs >= 0 && ageMs < INTEGRITY_CHECK_INTERVAL_MS);
+}
+
+/**
+ * The write open's integrity gate: run the scan when one is due, and
+ * otherwise honour the verdict the last one recorded - BOTH of its arms.
  *
- * The interval gate is the cost control: a burst of index runs pays for
- * one scan, not one per open. The price of that gate is stated plainly -
- * corruption arising inside the window is not noticed until the window
- * closes. Paying it on every write open instead would put up to half a
- * minute in front of every `o2b brain tiers` invocation, and paying it on
- * the read path would put it in front of every query.
+ * That second clause is the whole point, and it used to be missing. The
+ * recorded fault is a cached verdict and the interval is its lifetime; the
+ * bug was applying that lifetime to the PASSING arm only. A completed scan
+ * that condemns the file stamps `integrity_checked_at` exactly as a
+ * passing one does, so an interval that short-circuited before anything
+ * consulted `integrity_fault` skipped the gate entirely for the next 24
+ * hours on precisely the files that had just been condemned - and
+ * `o2b search check --integrity` produces that state on demand, so running
+ * the diagnostic on a damaged index opened the window rather than closing
+ * it. Within the interval the verdict now stands as a whole: a pass means
+ * skip the scan, a fault means refuse, as it always has on the read path.
+ *
+ * A DUE scan still re-derives the verdict rather than trusting the cached
+ * one, which is what lets a fault the operator has since repaired be
+ * cleared instead of becoming permanent.
+ *
+ * The scan itself runs here and nowhere else. This is the one seam
+ * where a multi-second scan is already noise - an index run reads, chunks
+ * and often embeds the whole vault - and it is also the moment it matters
+ * most, because everything after it WRITES into the file. The verdict is
+ * recorded in `index_state`, which needs no migration, so the read path
+ * can act on it for the price of one key lookup.
+ *
+ * The interval is the cost control for the scan alone: a burst of index
+ * runs pays for one scan, not one per open. The price of that is stated
+ * plainly - corruption arising inside the window is not noticed until the
+ * window closes. Paying for a scan on every write open instead would put
+ * tens of seconds in front of every `o2b brain tiers` invocation, and
+ * paying it on the read path would put it in front of every query.
+ *
+ * The refusal leaves exactly one exit, and it is not blocked by this gate:
+ * `reindexVault` builds into a `.new` staging file and swaps it in, so it
+ * never opens the condemned file for writing. A condemned index therefore
+ * stays repairable by `o2b search reindex` - and by the `openReadOrSelfHeal`
+ * rebuild the query path performs for itself - which is what makes
+ * refusing every other write open safe.
  *
  * Recording is best effort - a file damaged badly enough may refuse the
  * write - but the REFUSAL is not: the fault is thrown either way, naming
  * its cause and its exit.
  */
 function runWriteOpenIntegrityGate(db: Database, dbPath: string): void {
-  const stamp = getState(db, INTEGRITY_CHECKED_AT_STATE_KEY);
-  // A stamp that is absent, unparseable, or in the FUTURE (a clock that
-  // moved backwards) all mean the same thing: nothing here can be relied on
-  // to say when the last scan happened, so scan.
-  const ageMs = stamp === null ? Number.NaN : Date.now() - Date.parse(stamp);
-  if (Number.isFinite(ageMs) && ageMs >= 0 && ageMs < INTEGRITY_CHECK_INTERVAL_MS) return;
+  if (!fullScanIsDue(db)) {
+    // No scan this open - so the last one's verdict is what stands, and a
+    // condemning verdict must refuse here just as it does on a read open.
+    assertNoRecordedIntegrityFault(db, dbPath);
+    return;
+  }
 
   const verdict = runIntegrityCheck(db);
   try {

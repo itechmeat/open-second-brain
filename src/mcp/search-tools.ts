@@ -51,9 +51,10 @@ import { deriveRecallHint } from "../core/search/recall-hint.ts";
 import {
   ELLIPSIS,
   HEAD_WINDOW_START,
+  alignToCodePointStart,
   markWindow,
   matchOffset,
-  windowStart,
+  windowStartWithin,
 } from "../core/search/snippet-window.ts";
 import { projectScoreBreakdown } from "../core/search/enrich.ts";
 import { recordReinforce } from "../core/search/reinforce.ts";
@@ -323,6 +324,13 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
           document_id: { type: "integer" },
           chunk_id: { type: "integer" },
           origin: { type: "string" },
+          // Exact-duplicate merge: the `path:Lstart-Lend` pointers this
+          // card was folded from. Declared deliberately for the same
+          // reason `duplicates` is on the full row above - this output
+          // schema does not set `additionalProperties: false`, so an
+          // undeclared field would validate silently and stay invisible
+          // to a caller reading the contract.
+          duplicate_pointers: { type: "array", items: { type: "string" } },
         },
       },
     },
@@ -531,10 +539,24 @@ function parseReinforceArgument(raw: unknown): string[] | undefined {
  * are exactly what the pre-anchoring head truncation produced: content
  * at or under the cap passes through untouched, and content over it is
  * cut one character short to make room for the trailing marker.
+ *
+ * Content at or under the cap is a case of the general rule rather than an
+ * early return of its own: {@link windowStartWithin} opens it at the head,
+ * the budget is the whole cap, `hasMore` is false, and the slice is the
+ * string itself. Stating it once means the "never truncate text the cap
+ * had room for" invariant cannot drift between this surface and the two
+ * that measure their caps in other units.
+ *
+ * The start is aligned to a code-point boundary because this surface
+ * slices UTF-16 units: an anchored start can land on the low half of a
+ * surrogate pair, and a body opening with a lone surrogate becomes U+FFFD
+ * as soon as the JSON-RPC frame is encoded as UTF-8. The TRAILING cut is
+ * deliberately left as it is - it has always cut on a raw offset, its
+ * bytes are the pre-anchoring contract this wave must not move, and
+ * unlike the head it is not a hazard anchoring introduced.
  */
 function windowContent(c: string, query: string, max: number): string {
-  if (c.length <= max) return c;
-  const start = windowStart(matchOffset(c, query), max);
+  const start = alignToCodePointStart(c, windowStartWithin(matchOffset(c, query), max, c.length));
   const budget = max - (start > HEAD_WINDOW_START ? ELLIPSIS.length : 0);
   const hasMore = start + budget < c.length;
   const body = c.slice(start, start + budget - (hasMore ? ELLIPSIS.length : 0));
@@ -823,7 +845,11 @@ async function toolBrainSearch(
     // built and no surface serialized. Under `explain` only, absent -
     // never null - otherwise; when the gate is off, one line naming the
     // switch that produces them rather than an unexplained silence.
-    ...explainEnvelope(outcome, { explain, crossVault: globalSearch }),
+    ...explainEnvelope(outcome, {
+      explain,
+      crossVault: globalSearch,
+      trustGateEnabled: config.recall.retrievalTrustGateEnabled,
+    }),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
   };
 }

@@ -15,6 +15,8 @@
  * width, useful when setting `embedding_dimension` up front.
  */
 
+import type { EmbeddingProviderName } from "../types.ts";
+
 /**
  * Instruction prefix an e5-family model expects before a search query
  * (memory-write-path-integrity B2). Trailing space is intentional: the model
@@ -178,6 +180,39 @@ export function declaredInputWindowTokens(model: string | null): number | null {
 export function isE5FamilyModel(model: string | null): boolean {
   if (!model) return false;
   return /(^|[/-])e5([/-]|$)/i.test(model);
+}
+
+/**
+ * The passage prefix the CONFIGURED BACKEND will actually prepend to an
+ * indexed chunk before the provider counts a token.
+ *
+ * Not the same question as {@link resolveEmbeddingPrefixes}, which
+ * answers what the configuration asks for. Only `openai-compat`
+ * implements the instruction-prefix contract (`prefixFor` in
+ * `openai-compat.ts`); ZeroEntropy's `embed` takes no kind and sends the
+ * raw text, the local embedder hashes n-grams over it, and the null
+ * provider sends nothing at all. A census that subtracted a configured
+ * prefix from a backend that never sends one would report an overflow
+ * nobody can hit.
+ *
+ * The switch is exhaustive over {@link EmbeddingProviderName} with no
+ * default arm, so adding a backend fails to compile here rather than
+ * silently inheriting "sends no prefix".
+ */
+export function passagePrefixSentByProvider(
+  provider: EmbeddingProviderName,
+  configuredPassagePrefix: string | undefined,
+): string {
+  switch (provider) {
+    case "openai-compat":
+      // Exactly `OpenAICompatProvider.prefixFor("passage")`: an absent
+      // configured prefix is no prefix, an empty one is disabled.
+      return configuredPassagePrefix ?? "";
+    case "zeroentropy":
+    case "local":
+    case "disabled":
+      return "";
+  }
 }
 
 /** The prefix pair active for an embed run, after preset + config resolution. */

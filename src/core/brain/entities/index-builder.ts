@@ -44,6 +44,54 @@ export interface EntityIndex {
   readonly conflicts: ReadonlyArray<EntityConflict>;
 }
 
+/**
+ * The two ways one key can be claimed twice, named once. The literals
+ * were spelled at the two `claim` sites below, at the doctor's message,
+ * and at every consumer that had to ask which kind it was holding.
+ */
+export const ENTITY_CONFLICT_KIND = Object.freeze({
+  duplicateName: "duplicate-name",
+  duplicateAlias: "duplicate-alias",
+} as const satisfies Record<string, EntityConflictKind>);
+
+/**
+ * The conflict of `kind` claiming `key`, or `null` when the key is held
+ * once (the ordinary case) or not at all.
+ *
+ * Published so the WRITE seam and the DOCTOR ask one question rather than
+ * two: `upsertEntity` must refuse the identity keys the doctor reports as
+ * contested, and a second re-derivation of "contested" here would be free
+ * to disagree with this one.
+ */
+export function findEntityConflict(
+  index: EntityIndex,
+  kind: EntityConflictKind,
+  key: string,
+): EntityConflict | null {
+  return index.conflicts.find((c) => c.kind === kind && c.key === key) ?? null;
+}
+
+/**
+ * The records a conflict names, in the walk order it recorded them.
+ *
+ * `EntityConflict` carries paths and not records - deliberately, so the
+ * doctor's finding stays a statement about files - and every consumer
+ * that needs the ids or the raw labels behind those paths resolves them
+ * here instead of widening the shared record type.
+ */
+export function conflictClaimants(
+  index: EntityIndex,
+  conflict: EntityConflict,
+): ReadonlyArray<BrainEntity> {
+  const byPath = new Map(index.entities.map((e) => [e.path, e]));
+  const out: BrainEntity[] = [];
+  for (const path of conflict.paths) {
+    const entity = byPath.get(path);
+    if (entity !== undefined) out.push(entity);
+  }
+  return out;
+}
+
 /** Parse one entity file; `null` when it is not a valid entity. */
 export function parseEntityFile(path: string): BrainEntity | null {
   const [meta, body] = parseFrontmatter(path);
@@ -199,11 +247,11 @@ function buildEntityIndexUncached(files: string[]): EntityIndex {
     } catch {
       continue; // malformed category - doctor reports through conflicts elsewhere
     }
-    claim("duplicate-name", key, entity, byKey);
+    claim(ENTITY_CONFLICT_KIND.duplicateName, key, entity, byKey);
     for (const alias of entity.aliases) {
       const normalized = normalizeEntityName(alias);
       if (!normalized) continue;
-      claim("duplicate-alias", normalized, entity, byAlias);
+      claim(ENTITY_CONFLICT_KIND.duplicateAlias, normalized, entity, byAlias);
     }
   }
 

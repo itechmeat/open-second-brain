@@ -20,7 +20,7 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
-import { indexVault } from "../../../src/core/search/indexer.ts";
+import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { openReadOrSelfHeal } from "../../../src/core/search/pipeline/store-open.ts";
 import { search } from "../../../src/core/search/search.ts";
 import {
@@ -323,6 +323,99 @@ test("a self-heal that fails reports why, instead of only the symptom", async ()
   // Both halves: what is wrong now, and why the repair did not happen.
   expect(failure?.message).toMatch(/the automatic rebuild of/);
   expect(failure?.message).toMatch(/also failed/);
+});
+
+// ─── The recorded fault must be honoured wherever the store is opened ────────
+
+/** One `index_state` cell, read without opening a `Store`. */
+function readCell(path: string, key: string): string | null {
+  const db = new Database(path);
+  try {
+    return (
+      db.query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ?").get(key)
+        ?.value ?? null
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * The state a COMPLETED condemning scan leaves behind, whatever produced
+ * it: a fault, and a fresh `integrity_checked_at` stamping when that scan
+ * finished. Both `runWriteOpenIntegrityGate` and `o2b search check
+ * --integrity` write exactly this pair.
+ */
+function recordCondemningScan(path: string, fault: string): void {
+  const db = new Database(path);
+  const now = new Date().toISOString();
+  for (const [key, value] of [
+    [INTEGRITY_FAULT_STATE_KEY, fault],
+    [INTEGRITY_CHECKED_AT_STATE_KEY, now],
+  ] as ReadonlyArray<readonly [string, string]>) {
+    db.run(
+      "INSERT INTO index_state(key, value, updated_at) VALUES (?,?,?) " +
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+      [key, value, now],
+    );
+  }
+  db.close();
+}
+
+test("a write-open refuses a store carrying a recorded integrity fault", async () => {
+  const config = makeConfig({ vault, dbPath });
+  seedVault(4);
+  await indexVault(config);
+  recordCondemningScan(dbPath, "Tree 38 page 478: btreeInitPage() returns error code 11");
+
+  // The read open already refuses this file...
+  await expect(Store.open(config, { mode: "read" })).rejects.toMatchObject({
+    code: "INDEX_UNREADABLE",
+  });
+  // ...and the write open is the one that matters more, because everything
+  // after it WRITES into the condemned file.
+  await expect(Store.open(config, { mode: "write" })).rejects.toMatchObject({
+    code: "INDEX_UNREADABLE",
+  });
+  await expect(Store.open(config, { mode: "write" })).rejects.toThrow(/btreeInitPage/);
+  await expect(Store.open(config, { mode: "write" })).rejects.toThrow(/o2b search reindex/);
+});
+
+test("the write open that condemned the file refuses the NEXT write open too", async () => {
+  const config = makeConfig({ vault, dbPath });
+  seedVault(60);
+  await indexVault(config);
+  expireIntegrityStamp(dbPath);
+  corruptMiddlePages(dbPath, 4);
+
+  // The scan runs, condemns the file, and records BOTH the fault and a
+  // fresh `integrity_checked_at` naming when it finished.
+  await expect(Store.open(config, { mode: "write" })).rejects.toMatchObject({
+    code: "INDEX_UNREADABLE",
+  });
+  expect(readCell(dbPath, INTEGRITY_FAULT_STATE_KEY)).toBeTruthy();
+
+  // The next write open falls INSIDE the interval that scan just re-stamped.
+  // Skipping the expensive scan is correct; skipping the recorded fault is
+  // not - the file is still condemned and still must not be written into.
+  await expect(Store.open(config, { mode: "write" })).rejects.toMatchObject({
+    code: "INDEX_UNREADABLE",
+  });
+});
+
+test("a condemned index can still be rebuilt: reindexVault is not blocked by the fault", async () => {
+  const config = makeConfig({ vault, dbPath });
+  writeMd(vault, "Notes/foo.md", "# Foo\n\nThe quick brown fox jumps over the lazy dog.");
+  await indexVault(config);
+  recordCondemningScan(dbPath, "*** in database main *** Tree 38 page 478 malformed");
+
+  // The one legitimate escape from the refusal must stay open, or the gate
+  // would refuse the repair as well.
+  await reindexVault(config);
+  expect(readCell(dbPath, INTEGRITY_FAULT_STATE_KEY)).toBeNull();
+
+  const store = await Store.open(config, { mode: "write" });
+  await store.close();
 });
 
 test("the interval gate really skips the scan: corruption after a pass is not re-detected", async () => {

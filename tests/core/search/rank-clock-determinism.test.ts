@@ -22,8 +22,21 @@
  *
  * A fourth covers the companion defect one layer down: the keyword,
  * trigram and vector candidate queries all truncate on a score column
- * that is not a total order, so the surviving rows were an artefact of
- * the scan until each query ended its sort on `chunks.id`.
+ * that is not a total order, so each ends its sort on `chunks.id`.
+ *
+ * What that fourth test can and cannot witness, stated rather than
+ * implied. It DOES witness the vector lane, where the fix is load-bearing
+ * for a reason no ORDER BY can supply: the k-nearest selection happens
+ * before SQL sees the rows, so the clause needs an over-fetch beside it
+ * and removing either is caught here. For the keyword and trigram lanes
+ * it witnesses only that a WRONG tiebreak is caught - removing the clause
+ * entirely leaves this test green, because FTS5 scans a MATCH in rowid
+ * order and SQLite's sorter is stable, so the natural order for a fixture
+ * of this shape already equals `chunks.id ASC`. Those two clauses are
+ * therefore defensive: they pin an order the engine currently gives for
+ * free and is under no contract to keep. No fixture in this shape can
+ * discriminate them, and claiming otherwise would be evidence this file
+ * does not have.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";

@@ -105,6 +105,117 @@ export function charLengthOverTokenBudget(tokens: number): number {
   return tokens * CHARS_PER_ESTIMATED_TOKEN;
 }
 
+/**
+ * The most tokens the census charges a single NON-ASCII code point.
+ *
+ * Characters-over-four is a Latin-script rule of thumb and nothing more.
+ * A BERT-family tokenizer is close to character-level on Han text, so a
+ * Chinese passage costs roughly one token per character - four times what
+ * {@link estimateTokens} predicts. One token per non-ASCII code point is
+ * the widest per-character cost this census models, and it is what makes
+ * the ceiling below an upper bound for the scripts these presets target
+ * rather than another Latin-only guess.
+ */
+export const MAX_TOKENS_PER_NON_ASCII_CODE_POINT = 1;
+
+/**
+ * The two quantities SQLite can measure over a TEXT column without
+ * materialising it: `length()` (Unicode CODE POINTS) and
+ * `octet_length()` (UTF-8 BYTES).
+ *
+ * They are the census's whole input, and between them they carry a
+ * structural script signal: a code point outside ASCII costs at least one
+ * extra UTF-8 byte, so `utf8Bytes - codePoints` is an exact upper bound on
+ * how many of a text's code points are non-ASCII. That is a property of
+ * the UTF-8 encoding, not a language list, and it holds for every script.
+ */
+export interface TextExtent {
+  readonly codePoints: number;
+  readonly utf8Bytes: number;
+}
+
+const UTF8 = new TextEncoder();
+
+/** Measure a JavaScript string the way SQLite measures a TEXT value. */
+export function textExtent(text: string): TextExtent {
+  return Object.freeze({
+    codePoints: [...text].length,
+    utf8Bytes: UTF8.encode(text).length,
+  });
+}
+
+/** Non-ASCII code points in a text, at most - see {@link TextExtent}. */
+function maxNonAsciiCodePoints(extent: TextExtent): number {
+  return Math.min(extent.codePoints, extent.utf8Bytes - extent.codePoints);
+}
+
+/**
+ * Fewest tokens the text can plausibly cost: every code point at a
+ * quarter token, which is {@link estimateTokens} generalised from UTF-16
+ * code units to code points.
+ *
+ * Code points rather than code units because that is the unit SQLite
+ * counts, and because it is the SMALLER of the two - a supplementary-plane
+ * character is one code point and two code units - so the floor stays a
+ * floor on both sides of the seam.
+ */
+export function tokenEstimateFloor(extent: TextExtent): number {
+  return Math.ceil(extent.codePoints / CHARS_PER_ESTIMATED_TOKEN);
+}
+
+/**
+ * Most tokens the text can plausibly cost: every non-ASCII code point at
+ * {@link MAX_TOKENS_PER_NON_ASCII_CODE_POINT}, the rest at a quarter
+ * token each.
+ *
+ * Equal to {@link tokenEstimateFloor} for pure ASCII, which is what keeps
+ * an all-Latin index reporting exactly what it reported before this
+ * two-sided bound existed.
+ */
+export function tokenEstimateCeiling(extent: TextExtent): number {
+  const nonAscii = maxNonAsciiCodePoints(extent);
+  const rest = extent.codePoints - nonAscii;
+  return (
+    nonAscii * MAX_TOKENS_PER_NON_ASCII_CODE_POINT + Math.ceil(rest / CHARS_PER_ESTIMATED_TOKEN)
+  );
+}
+
+/**
+ * Coefficient on the non-ASCII code-point count in the integer form of
+ * `tokenEstimateCeiling(e) > W`.
+ *
+ * `n * M + ceil((C - n) / 4) > W` is equivalent, over integers, to
+ * `C + (4M - 1) * n > 4W`. Exported because the census evaluates that
+ * comparison in SQL, where the division cannot be rounded, and a second
+ * literal there would be the drift this constant exists to prevent.
+ */
+export const NON_ASCII_CEILING_COEFFICIENT =
+  CHARS_PER_ESTIMATED_TOKEN * MAX_TOKENS_PER_NON_ASCII_CODE_POINT - 1;
+
+/**
+ * The UTF-8 byte length a text must EXCEED before
+ * {@link tokenEstimateCeiling} can possibly exceed `tokens` - a test on
+ * the one measurement that is free.
+ *
+ * Write `k` for {@link NON_ASCII_CEILING_COEFFICIENT}, `C` for code
+ * points and `B` for bytes. The ceiling's integer form is `C + k*n` with
+ * `n = min(C, B - C)`, and over the admissible range of `C` for a given
+ * `B` that expression peaks at `C = B/2`, where it equals `(1 + k)*B/2`.
+ * So a text can only be over budget `4W` when `(1 + k)*B/2 > 4W`, which
+ * is `B > 8W / (1 + k)`.
+ *
+ * Worth stating as its own predicate because SQLite answers it without
+ * decoding anything: `octet_length()` reads a stored byte count, while
+ * `length()` walks the whole UTF-8 string. On a model with a wide window
+ * this skips the walk for the entire chunk table.
+ */
+export function utf8ByteFloorUnderTokenBudget(tokens: number): number {
+  return Math.floor(
+    (2 * charLengthOverTokenBudget(tokens)) /
+      (CHARS_PER_ESTIMATED_TOKEN * MAX_TOKENS_PER_NON_ASCII_CODE_POINT),
+  );
+}
+
 /** Estimated spend in USD for `tokens` against `model`'s rate. */
 export function estimateCostUsd(tokens: number, model: string | null): number {
   const rate = pricePerMillionTokens(model);

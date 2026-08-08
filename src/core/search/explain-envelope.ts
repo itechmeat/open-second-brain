@@ -55,6 +55,17 @@ export const RETRIEVAL_TRACE_NOT_MERGED =
   `per-origin receipts reference ids that are local to their own store. ` +
   `Run the query against a single vault to see its trace.`;
 
+/**
+ * Both situations at once. The gate is named first because it is the one
+ * that has to change either way, and the union is named because changing
+ * it alone still yields nothing - reporting only one of the two would
+ * send the operator to an exit that does not produce a trace.
+ */
+export const RETRIEVAL_TRACE_UNAVAILABLE_AND_NOT_MERGED =
+  `no retrieval decision trace: the retrieval trust gate is off, and a cross-vault union ` +
+  `would not merge the per-origin receipts even with it on. ` +
+  `Enable ${TRUST_GATE_CONFIG_KEY}: true (or ${TRUST_GATE_ENV_KEY}=1) and query a single vault.`;
+
 /** Response key carrying the retrieval decision trace. */
 export const RETRIEVAL_DECISION_TRACE_KEY = "retrieval_decision_trace";
 
@@ -74,17 +85,33 @@ export interface ExplainRequest {
   readonly explain: boolean;
   /** True when this outcome came from a cross-vault union. */
   readonly crossVault: boolean;
+  /**
+   * The resolved `recall.retrievalTrustGateEnabled`. Neither this nor
+   * `crossVault` is derivable from a receipt-less outcome, and naming the
+   * wrong one of the two sends the operator to an exit that produces
+   * nothing - so the caller, which knows both, states both.
+   */
+  readonly trustGateEnabled: boolean;
 }
 
 /** The default for every surface: opt-in, single vault. */
-export const EXPLAIN_OFF: ExplainRequest = Object.freeze({ explain: false, crossVault: false });
+export const EXPLAIN_OFF: ExplainRequest = Object.freeze({
+  explain: false,
+  crossVault: false,
+  trustGateEnabled: false,
+});
 
 /**
  * Why this outcome carries no receipts, as the caller's own situation
  * explains it.
  */
-export function retrievalTraceUnavailableReason(crossVault: boolean): string {
-  return crossVault ? RETRIEVAL_TRACE_NOT_MERGED : RETRIEVAL_TRACE_UNAVAILABLE;
+export function retrievalTraceUnavailableReason(
+  crossVault: boolean,
+  trustGateEnabled: boolean,
+): string {
+  if (crossVault && !trustGateEnabled) return RETRIEVAL_TRACE_UNAVAILABLE_AND_NOT_MERGED;
+  if (crossVault) return RETRIEVAL_TRACE_NOT_MERGED;
+  return RETRIEVAL_TRACE_UNAVAILABLE;
 }
 
 /**
@@ -101,7 +128,10 @@ export function explainEnvelope(
   const assessment = outcome.memoryTrustAssessment;
   if (trace === undefined || assessment === undefined) {
     return {
-      [RETRIEVAL_TRACE_UNAVAILABLE_KEY]: retrievalTraceUnavailableReason(request.crossVault),
+      [RETRIEVAL_TRACE_UNAVAILABLE_KEY]: retrievalTraceUnavailableReason(
+        request.crossVault,
+        request.trustGateEnabled,
+      ),
     };
   }
   return {

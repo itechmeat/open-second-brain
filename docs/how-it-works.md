@@ -856,7 +856,10 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   vectors.
 
 The MCP `brain_search` tool returns at most 50 results with each
-chunk's `content` truncated to 600 characters; diagnostic score
+chunk's `content` capped at 600 characters - a window centred on the
+first significant query term the chunk contains, marked with an ellipsis
+on whichever side was cut, and the head of the chunk when it contains
+none; diagnostic score
 components (`keywordScore`, `semanticScore`, `linkBoost`,
 `recencyBoost`) are intentionally absent from the MCP shape — they
 live in the CLI's `--verbose` output only, to keep the agent context

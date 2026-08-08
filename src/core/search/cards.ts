@@ -7,7 +7,7 @@
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
 import { isPathOwnerVisible } from "./result-filters.ts";
-import { markWindow, matchOffset, toCodePointOffset, windowStart } from "./snippet-window.ts";
+import { markWindow, matchOffset, toCodePointOffset, windowStartWithin } from "./snippet-window.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -29,6 +29,22 @@ const CARD_SNIPPET_CHARS = 240;
 const CARD_ELLIPSIS = "...";
 /** Default layer-3 raw-chunk page size for `expandHit`. */
 const DEFAULT_EXPAND_RAW_LIMIT = 10;
+
+/**
+ * The merged-away duplicate locations, as `path:Lstart-Lend` pointers.
+ *
+ * A card carries POINTERS rather than the full location records the
+ * ranked row holds: the folded passage is byte-identical to the surviving
+ * one by construction, so a caller never needs to expand a copy - it needs
+ * to know where else the same bytes live, which is exactly what the card's
+ * own `pointer` grammar says. That keeps the token-cheap layer cheap and
+ * reuses the rendering the full transcript already uses.
+ */
+function duplicatePointers(result: BrainSearchResult): ReadonlyArray<string> {
+  return Object.freeze(
+    (result.duplicates ?? []).map((d) => formatLinePointer(d.path, d.startLine, d.endLine)),
+  );
+}
 
 /**
  * Project a ranked result into a layer-1 card (progressive disclosure):
@@ -53,6 +69,13 @@ export function toSearchCard(result: BrainSearchResult, query: string): SearchCa
     snippet: cardSnippet(result.content, query),
     pointer: formatLinePointer(result.path, result.startLine, result.endLine),
     ...(result.origin !== undefined ? { origin: result.origin } : {}),
+    // Exact-duplicate merge (task D): the locations this row was folded
+    // from, so cards mode reports them instead of silently dropping a
+    // value the pipeline already computed. Absent, never null and never
+    // empty, when nothing was merged.
+    ...(result.duplicates !== undefined && result.duplicates.length > 0
+      ? { duplicatePointers: duplicatePointers(result) }
+      : {}),
   });
 }
 
@@ -66,17 +89,27 @@ export function toSearchCard(result: BrainSearchResult, query: string): SearchCa
  * byte-identical to the pre-anchoring snippet. That default exists for
  * callers that hold content without a query at all; the ranked path
  * always passes one through {@link toSearchCard}.
+ *
+ * The cap bounds the BODY; each {@link CARD_ELLIPSIS} sits outside it, so
+ * a window cut at both ends reaches `CARD_SNIPPET_CHARS + 2 *
+ * CARD_ELLIPSIS.length` code points. Shrinking the body to hold a fixed
+ * total would make an anchored card show LESS evidence than a
+ * head-anchored one, which is the opposite of what anchoring is for; the
+ * markers are continuation decoration, not content.
  */
 export function cardSnippet(content: string, query = ""): string {
   const collapsed = content.replace(/\s+/g, " ").trim();
   // Window and truncate on code points, not UTF-16 units: a raw `.slice`
   // can cut an astral character (emoji, rare CJK) mid-surrogate-pair,
   // shipping a lone surrogate that renders as U+FFFD. Spreading into an
-  // array iterates by code point, so neither edge splits a character.
+  // array iterates by code point, so neither edge splits a character —
+  // and an index into that array is always a code-point boundary, which
+  // is why this surface needs no start alignment.
   const points = [...collapsed];
-  const start = windowStart(
+  const start = windowStartWithin(
     toCodePointOffset(collapsed, matchOffset(collapsed, query)),
     CARD_SNIPPET_CHARS,
+    points.length,
   );
   const end = start + CARD_SNIPPET_CHARS;
   return markWindow(points.slice(start, end).join(""), start, end < points.length, CARD_ELLIPSIS);

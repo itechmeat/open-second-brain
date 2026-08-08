@@ -76,14 +76,33 @@ export function normalizeEntityName(raw: string): string {
  * `DIAGNOSTIC_SIGNALS` entry in `diagnostics.ts` is built from them, so
  * the string still has exactly one definition. The usual arrangement -
  * the consumer resolving `requireNextStep(code)` at module scope - is not
- * available here: `next-step.ts` reads `diagnostics.ts`, which reaches
- * the entity registry through the doctor's entity checks, so a registry
- * import of `next-step.ts` closes an import cycle the architecture
- * ratchet refuses (`tests/core/architecture/import-cycles.test.ts`).
- * This module imports nothing, so both consumers can read it.
+ * available to the REGISTRY: `next-step.ts` reads `diagnostics.ts`, which
+ * reaches the entity registry through the doctor's entity checks and the
+ * search query-expansion module, so a registry import of `next-step.ts`
+ * closes an import cycle the architecture ratchet refuses
+ * (`tests/core/architecture/import-cycles.test.ts`). This module imports
+ * nothing, so both consumers can read it.
+ *
+ * The code's PRODUCER is `doctor/entity-checks.ts`, which spells it on the
+ * finding for a collision the fold created; every doctor surface resolves
+ * a finding's code through the rail (`nextCommandField` / `emitNextStep`),
+ * which is how the other registered doctor codes reach an operator. The
+ * registry's own refusals are thrown synchronously out of core and name
+ * the command from {@link ENTITY_QUOTE_VARIANT_COLLISION_COMMAND} - the
+ * same constant the registration is built from, so the two cannot drift.
  */
 export const ENTITY_QUOTE_VARIANT_COLLISION_CODE = "entity-quote-variant-collision";
 export const ENTITY_QUOTE_VARIANT_COLLISION_COMMAND = "o2b brain entity archive <name>";
+
+/**
+ * The one sentence naming WHY two labels that coexisted before the fold
+ * cannot coexist after it. Written once here because three surfaces say
+ * it - the registry's write refusal, the registry's ambiguity error, and
+ * the doctor's finding - and an operator who meets it twice must read the
+ * same words, or the two readings become two conditions.
+ */
+export const ENTITY_QUOTE_VARIANT_CAUSE =
+  "the two differ only in typographic quote form and now resolve to one identity key";
 
 /**
  * True when `a` and `b` are two spellings of one identity that ONLY the
@@ -99,6 +118,41 @@ export function differsOnlyByQuoteVariant(a: string, b: string): boolean {
   const shapeA = normalizeEntityShape(a);
   const shapeB = normalizeEntityShape(b);
   return shapeA !== shapeB && foldQuoteVariants(shapeA) === foldQuoteVariants(shapeB);
+}
+
+/**
+ * True when ANY two of `labels` are one identity only the fold unifies.
+ *
+ * The n-ary form because a collision is a set of claimants, not a pair:
+ * three files can claim one key, and a message that only ever compared
+ * the first two would omit the cause on exactly the messiest vault.
+ */
+export function anyDiffersOnlyByQuoteVariant(labels: ReadonlyArray<string>): boolean {
+  for (let i = 0; i < labels.length; i++) {
+    for (let j = i + 1; j < labels.length; j++) {
+      if (differsOnlyByQuoteVariant(labels[i]!, labels[j]!)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The tail a collision message carries when, and only when, the labels
+ * were distinct identities before the quote fold and are one after it.
+ * Empty for every other collision, so the messages an operator already
+ * knows are unchanged and the new sentence means exactly what it says:
+ * this refusal is new, and here is why.
+ *
+ * Lives beside the predicate rather than at the registry because the
+ * doctor's finding needs the same words - see
+ * {@link ENTITY_QUOTE_VARIANT_CAUSE}.
+ */
+export function quoteVariantCollisionTail(...labels: ReadonlyArray<string>): string {
+  if (!anyDiffersOnlyByQuoteVariant(labels)) return "";
+  return (
+    ` - ${ENTITY_QUOTE_VARIANT_CAUSE}; ` +
+    `run ${ENTITY_QUOTE_VARIANT_COLLISION_COMMAND} on the record you do not keep`
+  );
 }
 
 /**

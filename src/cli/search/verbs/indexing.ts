@@ -215,9 +215,18 @@ function describeChunkWindow(census: ChunkWindowCensus): string {
     const model = census.model === null ? "(none configured)" : census.model;
     return `not checked - no input window is declared for ${model}`;
   }
+  const against = `the ${census.windowTokens}-token window declared for ${census.model}`;
+  if (census.verdict === "estimate-undecided") {
+    return (
+      `${census.chunksUndecided} of ${census.chunksMeasured} chunk(s) undecided against ` +
+      `${against} - the character-count estimate does not bound non-Latin text`
+    );
+  }
+  const undecided =
+    census.chunksUndecided === undefined ? "" : `, ${census.chunksUndecided} undecided`;
   return (
-    `${census.chunksOverWindow} of ${census.chunksMeasured} chunk(s) estimate above the ` +
-    `${census.windowTokens}-token window declared for ${census.model}`
+    `${census.chunksOverWindow} of ${census.chunksMeasured} chunk(s) estimate above ` +
+    `${against}${undecided}`
   );
 }
 

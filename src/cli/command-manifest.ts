@@ -446,7 +446,39 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       "Search the vault index",
       [],
       [
-        command("query", "Search the vault index"),
+        // Declared in the order `cmdSearchQuery` parses them. There is no
+        // per-verb `--help` for the search verbs, so `o2b help` is the only
+        // place these are discoverable; a partial list here reads as
+        // complete, so the whole `parseFlags` schema is modelled and
+        // `tests/cli/search-query-flag-manifest.test.ts` holds it to that.
+        command("query", "Search the vault index", [
+          flag("vault", "string"),
+          flag("config", "string"),
+          flag("db", "string"),
+          flag("limit", "string"),
+          flag("semantic", "boolean"),
+          flag("keyword-only", "boolean"),
+          flag("path", "string"),
+          flag("keyword-weight", "string"),
+          flag("semantic-weight", "string"),
+          flag("auto-refresh", "boolean"),
+          flag("property", "string-array"),
+          flag("degree", "string-array"),
+          flag("visibility", "string-array"),
+          flag("agent-scope", "string"),
+          flag("query-doc", "string"),
+          flag("expand", "boolean"),
+          flag("disclosure", "string"),
+          flag("profile", "string"),
+          flag("evidence-pack", "boolean"),
+          flag("include-superseded", "boolean"),
+          flag("since", "string"),
+          flag("until", "string"),
+          flag("global", "boolean"),
+          flag("no-record-access", "boolean"),
+          flag("verbose", "boolean"),
+          flag("explain", "boolean"),
+        ]),
         command("index", "Incrementally update the search index"),
         command("reindex", "Rebuild the search index"),
         command("watch", "Watch the vault and incrementally sync the index on .md edits"),
@@ -526,6 +558,12 @@ export function commandNames(manifest: CliRootManifest = CLI_COMMAND_MANIFEST): 
 export function nestedCommandNames(parent: string): string[] {
   const node = CLI_COMMAND_MANIFEST.commands.find((item) => item.name === parent);
   return node?.commands?.map((item) => item.name) ?? [];
+}
+
+/** One modelled subcommand, e.g. `nestedCommand("search", "query")`. */
+export function nestedCommand(parent: string, child: string): CliCommandManifest | undefined {
+  const node = CLI_COMMAND_MANIFEST.commands.find((item) => item.name === parent);
+  return node?.commands?.find((item) => item.name === child);
 }
 
 export function allFlagNames(manifest: CliRootManifest = manifestForJson()): string[] {

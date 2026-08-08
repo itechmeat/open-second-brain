@@ -16,7 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -250,13 +250,31 @@ describe("refused recall signals census", () => {
     return REFUSED.filter((name) => text.includes(name));
   }
 
+  /**
+   * The population this census is only as good as. A glob that matched
+   * nothing would report a clean sweep over an empty set, which is the
+   * failure mode this whole wave is about, so the walk states its own
+   * size before it states its verdict.
+   */
+  const MIN_SCANNED_SOURCES = 700;
+
   test("no shipped source file names a refused signal", () => {
     const root = join(import.meta.dir, "..", "..", "..", "src");
     const offenders: string[] = [];
+    let scanned = 0;
     for (const file of new Bun.Glob("**/*.ts").scanSync({ cwd: root, absolute: true })) {
+      scanned++;
       const found = violations(readFileSync(file, "utf8"));
       if (found.length > 0) offenders.push(`${file}: ${found.join(", ")}`);
     }
+    // Non-vacuity first: a narrowed pattern or a moved tree makes the
+    // sweep below meaningless, and it would pass.
+    expect(`scanned ${scanned >= MIN_SCANNED_SOURCES}`).toBe("scanned true");
+    // And the walk really reaches the module the signals live in, so a
+    // count alone cannot stand in for coverage of the relevant tree.
+    expect(
+      offenders.length === 0 && existsSync(join(root, "core", "brain", "recall-telemetry.ts")),
+    ).toBe(true);
     expect(offenders).toEqual([]);
   });
 

@@ -16,9 +16,10 @@ import { formatLinePointer } from "../../core/search/line-numbering.ts";
 import type { DuplicatePassageLocation } from "../../core/search/search-result.ts";
 import {
   ELLIPSIS,
+  alignToCodePointStart,
   markWindow,
   matchOffset,
-  windowStart,
+  windowStartWithin,
 } from "../../core/search/snippet-window.ts";
 
 /** Field separator in the human transcript's header lines. */
@@ -53,13 +54,23 @@ function jsonDuplicates(
  * occurrence the window is the head of the chunk — the same bytes this
  * line has always carried.
  *
- * The trailing marker stays keyed on the RAW content length, which is the
- * condition this transcript has always used: it answers "there is more
- * chunk than is shown", which remains true for an anchored window.
+ * The trailing marker is keyed on the COLLAPSED length, which is a
+ * deliberate change from what this transcript used to do: keyed on the raw
+ * length it claimed a cut whenever whitespace collapse alone had already
+ * brought the chunk under the cap, promising more text than existed.
+ *
+ * A chunk that already fits under the cap is shown whole:
+ * {@link windowStartWithin} opens it at the head rather than sliding the
+ * window past text there was room to print. The start is then aligned to a
+ * code-point boundary, because this surface slices UTF-16 units and an
+ * anchored start can otherwise land inside a surrogate pair.
  */
 function hitSnippet(content: string, query: string): string {
   const collapsed = content.trim().replace(/\s+/g, " ");
-  const start = windowStart(matchOffset(collapsed, query), SNIPPET_MAX_CHARS);
+  const start = alignToCodePointStart(
+    collapsed,
+    windowStartWithin(matchOffset(collapsed, query), SNIPPET_MAX_CHARS, collapsed.length),
+  );
   // The trailing marker asks about the text the window is cut from, which
   // is the COLLAPSED string - keying it on the raw length claimed a cut
   // whenever whitespace collapse alone brought the chunk under the cap.
@@ -69,6 +80,16 @@ function hitSnippet(content: string, query: string): string {
     collapsed.length > start + SNIPPET_MAX_CHARS,
     ELLIPSIS,
   );
+}
+
+/**
+ * The transcript's merged-away-duplicates line, or no line at all when
+ * nothing was folded. One builder for both disclosure modes: the full row
+ * holds location records and the card holds ready-made pointers, but the
+ * line the reader sees must not differ between them.
+ */
+function duplicatesLine(pointers: ReadonlyArray<string>): ReadonlyArray<string> {
+  return pointers.length > 0 ? [`    duplicates: ${pointers.join(", ")}`] : [];
 }
 
 /** Cross-vault origin label, appended only when the hit carries one. */
@@ -138,7 +159,8 @@ function explainLines(o: SearchOutcome, request: ExplainRequest): ReadonlyArray<
   // The trailing empty entry terminates the block with a newline, the way
   // a result entry does - `joinLines` adds no separator of its own.
   if (trace === undefined || assessment === undefined) {
-    return [`explain: ${retrievalTraceUnavailableReason(request.crossVault)}`, ""];
+    const why = retrievalTraceUnavailableReason(request.crossVault, request.trustGateEnabled);
+    return [`explain: ${why}`, ""];
   }
   const lines = [
     `explain: evaluated ${trace.evaluated}${BULLET}surfaced ${trace.surfaced}${BULLET}excluded ${trace.excluded}`,
@@ -172,6 +194,9 @@ export function renderOutcomeHuman(
       lines.push(`    ${c.snippet}`);
       lines.push(`    expand: o2b search expand --chunk ${c.chunkId}`);
       if (verbose && c.reasons.length > 0) lines.push(`    why: ${c.reasons.join(", ")}`);
+      // Exact-duplicate merge (task D): the same bytes live at these other
+      // locations. The card carries them as pointers already.
+      lines.push(...duplicatesLine(c.duplicatePointers ?? []));
       lines.push("");
     });
     for (const w of o.warnings) lines.push(`warning: ${w}`);
@@ -207,12 +232,11 @@ export function renderOutcomeHuman(
     }
     // Exact-duplicate merge (task D): the same bytes live at these other
     // locations. Rendered only when the merge actually folded something.
-    if (r.duplicates && r.duplicates.length > 0) {
-      const dup = r.duplicates
-        .map((d) => formatLinePointer(d.path, d.startLine, d.endLine))
-        .join(", ");
-      lines.push(`    duplicates: ${dup}`);
-    }
+    lines.push(
+      ...duplicatesLine(
+        (r.duplicates ?? []).map((d) => formatLinePointer(d.path, d.startLine, d.endLine)),
+      ),
+    );
     lines.push("");
   });
   for (const w of o.warnings) lines.push(`warning: ${w}`);

@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.44.0] - 2026-08-08
+
+Thirteen units on the retrieval path and the store beneath it. A reconnaissance pass ran before any design and falsified the load-bearing premise of nine of the eleven tasks in scope, and what survived had a shape none of the task descriptions predicted: with two exceptions these were not missing capabilities but values the system already computed and discarded before anything could see them, and checks that were never run at all. A structure recording which candidates were evaluated, surfaced and excluded was built on every gated search and serialized by nothing. A content hash had been on every chunk since the first schema version and was never read back. A match-centred snippet function was written, tested, and mounted on the wrong surface. An expiry filter took an as-of date as a parameter and no caller ever passed one. A ranker accepted an injected clock and the stage above it did not inject.
+
+Some of what was asked for is not here, and its absence is a decision rather than an omission. There is no runtime probe of an embedding model's input window, because no provider in this system exposes model metadata, no local model file exists, and the provider contract has no window field - the only implementations are a network round trip or a hardcoded table over an open set of endpoints. There is no second index-health counter surface, because `o2b search status` is already the eighth and the stall reasons the request described belong to a background drain loop this project does not run. There is no column type-drift check, because SQLite accepts a text value into an integer column and still reports the column as integer. There is no daily snapshot of the derived store, because `o2b brain snapshot` and `o2b brain rollback` already ship the checksum sidecar, the verification, the pre-restore diff, the confirmation and the retention that request called its differentiating pieces. And two of seven proposed recall-quality signals - acquisition risk and expected regret - are refused outright, with a census proving their names appear nowhere in the source, because there is no data behind either and an invented number is worse than an absent one.
+
+Five reviewers were then given the finished branch and the claims made for it, with no knowledge of how the work was done, one told to treat every test as guilty until proven innocent. They found defects this wave had introduced, including one that turned a harmless refusal into silent data loss, one mechanism sealed by another unit in the same branch, and three claims in the branch's own comments and design document that were not true. Every one is fixed or named below.
+
+### Added
+
+- Exact-duplicate passages merge into one result naming the locations they were folded from, on the full and card surfaces alike. The identity is the pair of whole-file bytes and passage bytes, not the passage alone: frontmatter is stripped before chunking, so two records with the same prose but different dates, tiers or titles hash their chunks identically and are not duplicates.
+- Every snippet surface anchors its window on the match instead of the head of the chunk, through one function with four callers. A passage that fits its cap is shown whole rather than slid past.
+- The retrieval decision trace and the memory trust assessment - built by the trust gate and serialized by neither surface - are returned under the existing `explain` flag, absent rather than null when it is off, and naming the switch that produces them when the gate is not engaged.
+- `o2b search check --integrity` runs the full structural scan on demand and records its verdict where the write-open gate reads it, so an index that only ever gets read can still be condemned.
+- An oversize-chunk census compares the configured chunk size against the configured model's declared input window, which the curated presets now carry. The shipped default chunk size overflows the shipped default model by roughly two to three times, and nothing had noticed. The estimate is two-sided - a floor charging every code point a quarter token and a ceiling charging every non-ASCII code point a whole one - because a quarter-token-per-character proxy under-reports Han text roughly fourfold, and a census that stayed silent there would be claiming a pass it had not earned. Between the two bounds the verdict is `estimate-undecided`, which is reported rather than rounded to clean. The instruction prefix the provider prepends is measured into both, and which backends send one is an exhaustive switch, so a new backend fails to compile rather than silently inheriting a zero.
+- A gated search records four computable recall-quality signals on the telemetry record it already writes, one record per query.
+- `o2b brain query` gains `--at` and `--show-expired`, threading the as-of instant the expiry filter has accepted as a parameter all along.
+- The paired holdout harness a release note has described since 1.36.0 now gates `o2b brain repair-lane --apply`, which is what makes that claim true. It had no production caller at all.
+
+### Fixed
+
+- A transient failure while opening the store for reading was classified as an unreadable index, which is self-healable, so a locked pragma triggered a silent rebuild that dropped every embedding. The busy timeout is now set before the statement that needs it, and an unrecognised failure is no longer grounds for a rebuild.
+- A recorded integrity fault was honoured on read and ignored on write, and a completed scan refreshed the interval stamp, so a condemned index kept accepting writes for a day while every query refused it.
+- The ranker read the wall clock itself because the stage above never passed the instant the request had already resolved. One instant now governs a whole search. The vector lane returned an arbitrary member of a tie band - and its two branches disagreed about which - because a `k` nearest selection happens before any SQL ordering; three candidate queries now end their ordering in a unique column.
+- Reciprocal-rank fusion discarded the per-query intent profile, so a quoted phrase expressed a preference the opt-in fusion mode silently ignored, and the learned weights from operator feedback went with it.
+- The entity identity kernel treated a typographic apostrophe and an ASCII one as different entities. The fold that joins them is derived from Unicode categories, not a character list, and the collision it creates between two records that already existed is refused with the command that resolves it rather than silently rewriting one label.
+- Learned recall weights were validated for finiteness but not range, so a hand-edited file could inject a zero or negative lane multiplier - which under rank fusion deletes a lane or inverts its order.
+- `show_expired` was silently ignored outside topic mode while its own schema text said topic mode only.
+- The store verified its schema version integer and nothing else, so an index missing a table opened cleanly and failed later inside a query with a raw SQL error. The expected objects are derived by running the migrations, not by a second hand-maintained list.
+- A corrupt-but-parseable index passed every check and served wrong results indefinitely; there was no integrity check anywhere in the codebase.
+- The CLI truncation marker was keyed on the raw chunk length, so a chunk that fitted after whitespace collapse still claimed there was more.
+- `total` echoed the number of rows returned, which is no information at all. It is the ranked pool the limit sliced from.
+- The MCP tool descriptions still told every agent that `since` and `until` filter on when a document was modified. They have filtered on event time since 1.43.0.
+- Entity extraction backtracked catastrophically on any unbroken run of letters carrying no digits - which is what an ordinary Han, Thai or Lao paragraph is. Measured at 11.7 seconds and zero matches for a single 2160-character chunk, growing cubically, so a Chinese vault of any size could not be indexed at all. The two mixed-script alternatives now consume their leading run atomically: 20 milliseconds on the same input, with identical output on every mixed-script sample.
+- The explain surface named a cross-vault union as the reason there was no trace even when the trust gate was also off, sending the operator to a single-vault query that produces nothing either. When both hold, both are named.
+
+### Changed
+
+- The vendored Hermes tool schemas were re-vendored; three properties added in earlier releases had never reached them.
+- `o2b search query`'s flags are declared in the command manifest, which generates the help and the completions. None of them had been.
+
 ## [1.43.0] - 2026-08-02
 
 Ten units on one seam: the boundary where content, authority and claims enter the vault. Open Second Brain could say a great deal about what it holds and almost nothing about where any of it came from, who was entitled to put it there, or what backs a claim made about it. An entity extracted from a scraped page became a first-class Brain entity on the same terms as one the operator typed. A write named any path it liked. A note was created with whatever frontmatter the caller assembled. A record was ranked by when its file was touched rather than by what it is about. An agent posted its own success and nothing recomputed it.
@@ -6845,6 +6886,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.44.0]: https://github.com/itechmeat/open-second-brain/compare/v1.43.0...v1.44.0
 [1.43.0]: https://github.com/itechmeat/open-second-brain/compare/v1.42.0...v1.43.0
 [1.42.0]: https://github.com/itechmeat/open-second-brain/compare/v1.41.0...v1.42.0
 [1.41.0]: https://github.com/itechmeat/open-second-brain/compare/v1.40.0...v1.41.0

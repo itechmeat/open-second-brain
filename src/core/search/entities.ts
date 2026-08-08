@@ -29,7 +29,17 @@ const CAP_RUN_RE = /\p{Lu}[\p{L}\p{N}]*(?:[ \t]+\p{Lu}[\p{L}\p{N}]*)*/gu;
 // Single tokens that are notable regardless of position: CamelCase,
 // ALLCAPS, or letter+digit mixes.
 const CAMEL_RE = /\p{Ll}+\p{Lu}[\p{L}\p{N}]*/gu;
-const ALLCAPS_OR_DIGIT_RE = /[\p{Lu}\p{N}]*\p{Lu}[\p{Lu}\p{N}]+|\p{L}+\p{N}+|\p{N}+\p{L}+/gu;
+// The two mixed-script alternatives consume their leading run ATOMICALLY,
+// through the `(?=(x+))\1` idiom JavaScript has instead of atomic groups.
+// Written as a plain `\p{L}+\p{N}+`, a letter run carrying no digit makes
+// the engine retry every shorter prefix at every start position, which is
+// quadratic per run and cubic over a document - and an unbroken letter run
+// with no digits is what an ordinary Han, Thai or Lao paragraph IS. Measured
+// on 2160 Han characters: 11.7 s and zero matches before, 20 ms after, with
+// identical output on every mixed-script sample. Indexing such a vault was
+// effectively impossible.
+const ALLCAPS_OR_DIGIT_RE =
+  /[\p{Lu}\p{N}]*\p{Lu}[\p{Lu}\p{N}]+|(?=(\p{L}+))\1\p{N}+|(?=(\p{N}+))\2\p{L}+/gu;
 
 /** Lowercase + collapse internal whitespace. */
 function normalize(raw: string): string {

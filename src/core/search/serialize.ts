@@ -36,6 +36,10 @@ export function serializeSearchCard(c: SearchCard): Record<string, unknown> {
     document_id: c.documentId,
     chunk_id: c.chunkId,
     ...(c.origin !== undefined ? { origin: c.origin } : {}),
+    // Exact-duplicate merge (task D): the `path:Lstart-Lend` pointers the
+    // surviving card was folded from. Absent, never null, when nothing
+    // was merged - the card carries the key only in that case.
+    ...(c.duplicatePointers !== undefined ? { duplicate_pointers: c.duplicatePointers } : {}),
   };
 }
 
@@ -57,11 +61,25 @@ export function serializeChunkWindowCensus(census: ChunkWindowCensus): Record<st
       chunks_measured: census.chunksMeasured,
     };
   }
+  if (census.verdict === "estimate-undecided") {
+    // No `chunks_over_window` here on the same terms the undeclared
+    // verdict carries no window: nothing was proved over it.
+    return {
+      verdict: census.verdict,
+      model: census.model,
+      window_tokens: census.windowTokens,
+      chunks_undecided: census.chunksUndecided,
+      chunks_measured: census.chunksMeasured,
+    };
+  }
   return {
     verdict: census.verdict,
     model: census.model,
     window_tokens: census.windowTokens,
     chunks_over_window: census.chunksOverWindow,
+    // Absent, never zero - an index the estimate decided in full emits
+    // the record it emitted before the undecided band existed.
+    ...(census.chunksUndecided === undefined ? {} : { chunks_undecided: census.chunksUndecided }),
     chunks_measured: census.chunksMeasured,
   };
 }
@@ -97,8 +115,9 @@ export function serializeIndexStatus(s: IndexStatusSnapshot): Record<string, unk
     // Emitted only when the oversize-chunk census could NOT run, on the
     // same terms and for the same reason: a status over a model with a
     // declared window is byte-identical to the pre-census output. The
-    // measured-overflow verdict is not here - it is a warning, because
-    // it names a command.
+    // two verdicts the census reaches by measuring - overflow, and the
+    // band its estimate cannot decide - are not here; both are warnings,
+    // because both name a command.
     ...(s.chunkWindowUndeclared === undefined
       ? {}
       : { chunk_window_undeclared: serializeChunkWindowCensus(s.chunkWindowUndeclared) }),

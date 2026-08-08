@@ -58,8 +58,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { DIAGNOSTIC_SIGNALS } from "../../../src/core/brain/diagnostics.ts";
 import {
@@ -84,10 +84,41 @@ function checkModules(dir: string): string[] {
   return out;
 }
 
+/**
+ * An import statement that pulls a `*_CODE` identifier in from another
+ * module, capturing that module's relative path so the scan can follow it.
+ */
+const IMPORTED_CODE_RE = /import \{[^}]*[A-Z0-9_]*CODE[A-Z0-9_]*[^}]*\} from "(\.[^"]+)";/gs;
+
+/**
+ * A check module may emit a code whose constant is declared elsewhere -
+ * an import cycle can force the declaration into a leaf module the check
+ * imports from. Those declaring modules are FOLLOWED from the check's own
+ * import statements rather than listed here, for the same reason the
+ * check directory is enumerated: a hand-maintained second list drifts,
+ * and a code the census cannot read is a code it cannot account for.
+ */
+function codeConstantSources(paths: ReadonlyArray<string>): ReadonlyArray<string> {
+  const followed = new Set<string>();
+  for (const path of paths) {
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(IMPORTED_CODE_RE)) {
+      const resolved = join(dirname(path), match[1]!);
+      if (existsSync(resolved)) followed.add(resolved);
+    }
+  }
+  return [...followed].toSorted();
+}
+
 /** The registry plus every check module it runs, enumerated from disk. */
-const DOCTOR_SOURCE_PATHS: ReadonlyArray<string> = [
+const DOCTOR_CHECK_PATHS: ReadonlyArray<string> = [
   join(BRAIN_DIR, "doctor.ts"),
   ...checkModules(CHECKS_DIR),
+];
+
+const DOCTOR_SOURCE_PATHS: ReadonlyArray<string> = [
+  ...DOCTOR_CHECK_PATHS,
+  ...codeConstantSources(DOCTOR_CHECK_PATHS),
 ];
 
 const DOCTOR_SOURCE = DOCTOR_SOURCE_PATHS.map((path) => readFileSync(path, "utf8")).join("\n");
@@ -96,7 +127,7 @@ const DOCTOR_SOURCE = DOCTOR_SOURCE_PATHS.map((path) => readFileSync(path, "utf8
 const LITERAL_CODE_RE = /\bcode: "([^"]+)"/g;
 
 /** `const <NAME>_CODE = "<literal>";` - a code hoisted to a constant. */
-const CONSTANT_CODE_RE = /^const [A-Z0-9_]*CODE[A-Z0-9_]* = "([^"]+)";$/gm;
+const CONSTANT_CODE_RE = /^(?:export )?const [A-Z0-9_]*CODE[A-Z0-9_]* = "([^"]+)";$/gm;
 
 /** Any `code:` property, for the shape guard below. */
 const CODE_SITE_RE = /^\s*code: (.+?),?$/gm;
@@ -154,6 +185,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "dangling-workrun",
   "duplicate-preferences",
   "entity-label-malformed",
+  "entity-quote-variant-collision",
   "low-evidence-confirmed",
   "orphan-evidence",
   "principle-corrupted",
@@ -272,7 +304,9 @@ describe("every code site is readable from the source", () => {
     const unresolved = codeSiteValues()
       .filter((value) => CODE_IDENTIFIER_RE.test(value))
       .filter((value) => {
-        const declared = DOCTOR_SOURCE.match(new RegExp(`^const ${value} = "([^"]+)";$`, "m"))?.[1];
+        const declared = DOCTOR_SOURCE.match(
+          new RegExp(`^(?:export )?const ${value} = "([^"]+)";$`, "m"),
+        )?.[1];
         return declared === undefined || !constants.has(declared);
       });
     expect([...new Set(unresolved)].toSorted().join("\n")).toBe("");

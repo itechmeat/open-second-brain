@@ -581,7 +581,8 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               --query-doc '<lanes>' separates intent/lex/vec/hyde recall lanes
                               --evidence-pack adds matched/missing term diagnostics, abstention text,
                               IDF-weighted coverage, per-token union records, and a completeness verdict
-                              --since/--until scope recall by document mtime (ISO date/datetime,
+                              --since/--until scope recall by event time - frontmatter validity,
+                              else the body-derived anchor, else mtime (ISO date/datetime,
                               today / yesterday / last week / last month, or 24h / 7d / 2w shorthand)
                               --include-superseded keeps superseded predecessors undemoted (history mode)
                               --verbose adds per-result why_retrieved reasons

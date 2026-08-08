@@ -36,7 +36,7 @@ import {
 } from "./capability-tier.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
-import { declaredInputWindowTokens } from "./embeddings/presets.ts";
+import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
 import { makeProvider } from "./embeddings/provider.ts";
 import {
   embeddingSignature,
@@ -670,9 +670,11 @@ const CHUNK_SIZE_CONFIG_KEY = "search_chunk_size";
  *     nothing to truncate. A provably absent window, not an unknown one;
  *   - the census ran against a declared window and every chunk fits.
  *
- * The one silence it does NOT produce is a model with no declared
- * window: that is reported as `window-undeclared`, because a check that
- * could not run and a check that passed are not the same statement.
+ * The silences it does NOT produce are the two states the estimate
+ * cannot back: a model with no declared window (`window-undeclared`),
+ * and chunks the estimate cannot place on either side of a declared one
+ * (`estimate-undecided`). A check that could not run and a check that
+ * passed are not the same statement.
  */
 function censusChunkWindow(
   store: Store,
@@ -689,38 +691,79 @@ function censusChunkWindow(
   if (model === null || windowTokens === null) {
     return Object.freeze({ verdict: "window-undeclared" as const, model, chunksMeasured });
   }
-  const chunksOverWindow = store.chunksOverTokenWindow(windowTokens);
-  if (chunksOverWindow === 0) return null;
-  return Object.freeze({
-    verdict: "over-window" as const,
-    model,
+  // The prefix the CONFIGURED backend prepends, not the one the config
+  // asks for: only `openai-compat` implements the instruction-prefix
+  // contract, and subtracting a prefix a backend never sends would
+  // report an overflow nobody can hit.
+  const tally = store.chunkWindowTally(
     windowTokens,
-    chunksOverWindow,
-    chunksMeasured,
-  });
+    passagePrefixSentByProvider(config.semantic.provider, config.semantic.passagePrefix),
+  );
+  if (tally.overWindow > 0) {
+    return Object.freeze({
+      verdict: "over-window" as const,
+      model,
+      windowTokens,
+      chunksOverWindow: tally.overWindow,
+      // Absent, never zero: an all-ASCII index has no undecided band and
+      // carries the record it carried before this field existed.
+      ...(tally.undecided > 0 ? { chunksUndecided: tally.undecided } : {}),
+      chunksMeasured,
+    });
+  }
+  if (tally.undecided > 0) {
+    return Object.freeze({
+      verdict: "estimate-undecided" as const,
+      model,
+      windowTokens,
+      chunksUndecided: tally.undecided,
+      chunksMeasured,
+    });
+  }
+  return null;
 }
 
 /**
- * The operator-facing warning line for measured overflow, ending in the
- * command its REGISTERED diagnostic names. The command is resolved from
- * the registry rather than written here, so this sentence cannot name an
- * exit the registry does not hold; an unregistered code throws at the
- * point the sentence is built rather than shipping a dead end.
+ * The operator-facing warning line for a census that MEASURED something
+ * - chunks proved over the window, or chunks its estimate cannot place
+ * inside one - ending in the command its REGISTERED diagnostic names.
+ * The command is resolved from the registry rather than written here, so
+ * this sentence cannot name an exit the registry does not hold; an
+ * unregistered code throws at the point the sentence is built rather
+ * than shipping a dead end.
  *
- * Typed to the overflow member alone, so the undeclared verdict cannot
+ * Typed to the two measured members, so the undeclared verdict cannot
  * reach the warning channel by accident - it is a snapshot field, and
  * the type is what enforces that rather than a branch nobody calls.
+ *
+ * The undecided line says in words that it is not a pass, because that
+ * is the whole content of the state: the operator is being told the
+ * check ran and could not clear these chunks, not that they are broken.
  */
-async function formatChunkWindowOverflow(
-  census: Extract<ChunkWindowCensus, { verdict: "over-window" }>,
+async function formatChunkWindowMeasured(
+  census: Extract<ChunkWindowCensus, { verdict: "over-window" | "estimate-undecided" }>,
 ): Promise<string> {
   const { requireNextStep } = await import("../brain/next-step.ts");
   const step = requireNextStep(chunkWindowDiagnosticCode(census));
+  const remedy =
+    `whatever does not fit is truncated by the provider, silently. ` +
+    `Lower ${CHUNK_SIZE_CONFIG_KEY}, then run: ${step.nextCommand}`;
+  if (census.verdict === "estimate-undecided") {
+    return (
+      `${census.chunksUndecided} of ${census.chunksMeasured} indexed chunk(s) cannot be ` +
+      `placed inside the ${census.windowTokens}-token input window declared for ` +
+      `${census.model}: the census estimates tokens from character counts, which does not ` +
+      `bound a token window for non-Latin scripts, so this is not a pass - ${remedy}`
+    );
+  }
+  const undecided =
+    census.chunksUndecided === undefined
+      ? ""
+      : ` A further ${census.chunksUndecided} chunk(s) the estimate cannot place either way.`;
   return (
     `${census.chunksOverWindow} of ${census.chunksMeasured} indexed chunk(s) estimate above ` +
-    `the ${census.windowTokens}-token input window declared for ${census.model}; whatever ` +
-    `does not fit is truncated by the provider, silently. Lower ${CHUNK_SIZE_CONFIG_KEY}, ` +
-    `then run: ${step.nextCommand}`
+    `the ${census.windowTokens}-token input window declared for ${census.model}; ` +
+    `${remedy}${undecided}`
   );
 }
 
@@ -1104,7 +1147,11 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     // for what is simply true.
     //
     //   - chunks past a DECLARED window is a measured fault with a
-    //     command behind it, so it is a warning;
+    //     command behind it, so it is a warning. So is the undecided
+    //     band beside it: the census cannot rule the truncation out, the
+    //     remedy is the same lever, and it fires only for chunks that
+    //     actually carry non-ASCII text near the window - never on the
+    //     all-Latin index, which is what keeps it from becoming noise;
     //   - a model with no declared window is a check that could not run.
     //     It has no command - nobody can declare a window for someone
     //     else's model - and it is the COMMON case, so a warning here
@@ -1113,12 +1160,15 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
     //     its own field instead, which still distinguishes it from a
     //     pass.
     //
-    // A clean census is neither, so a status that had no warning before
-    // this feature still has none.
+    // A census that cleared BOTH bounds is neither, so a status that had
+    // no warning before this feature still has none.
     const chunkWindow = censusChunkWindow(store, config, model);
     const chunkWindowUndeclared = chunkWindow?.verdict === "window-undeclared" ? chunkWindow : null;
-    if (chunkWindow !== null && chunkWindow.verdict === "over-window") {
-      warnings.push(await formatChunkWindowOverflow(chunkWindow));
+    if (
+      chunkWindow !== null &&
+      (chunkWindow.verdict === "over-window" || chunkWindow.verdict === "estimate-undecided")
+    ) {
+      warnings.push(await formatChunkWindowMeasured(chunkWindow));
     }
 
     // Best-effort spend estimate to bring stale/missing embeddings current.

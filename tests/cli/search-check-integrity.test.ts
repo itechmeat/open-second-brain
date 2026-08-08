@@ -257,6 +257,27 @@ test("a corrupt-but-parseable store is condemned and names its registered exit",
   });
 });
 
+test("a store this verb condemned is refused by a WRITE open, not only by a read", async () => {
+  await writeConfig();
+  seedVault(60);
+  await indexVault(makeConfig({ vault, dbPath }));
+  corruptMiddlePages(dbPath, 4);
+
+  const integrity = integrityOf(await checkJson("--integrity"));
+  expect(integrity["verdict"]).toBe("faulty");
+  expect(readState(dbPath, INTEGRITY_FAULT_STATE_KEY)).toBeTruthy();
+
+  // A completed scan stamps `integrity_checked_at` whether it passed or
+  // failed, so the write path's 24-hour interval now covers the whole next
+  // day. The recorded fault must be honoured regardless of that interval:
+  // running this diagnostic on a damaged index must not open a window in
+  // which the indexer writes into the file the verb just condemned.
+  expect(readState(dbPath, INTEGRITY_CHECKED_AT_STATE_KEY)).toBe(integrity["checked_at"] as string);
+  await expect(Store.open(makeConfig({ vault, dbPath }), { mode: "write" })).rejects.toMatchObject({
+    code: "INDEX_UNREADABLE",
+  });
+});
+
 test("the registered exit exists and names a rebuild, not an incremental update", () => {
   const signal = DIAGNOSTIC_SIGNALS.get(INDEX_CORRUPT_CODE);
   expect(signal).toBeDefined();
@@ -295,20 +316,23 @@ test("without --integrity the verb spends nothing and emits the bytes it always 
   );
   expect(plainBefore.returncode).toBe(0);
   const payload = JSON.parse(plainBefore.stdout) as Record<string, unknown>;
-  // Byte-identity when absent, asserted as the exact key set the report
-  // carried before this flag existed.
-  expect(Object.keys(payload).toSorted()).toEqual([
-    "embedding_key_resolved",
-    "fatal",
-    "fts5_ok",
+  // Byte-identity when absent, asserted as the exact key sequence the
+  // report carried before this flag existed - NOT a sorted set. Sorting
+  // the keys discards the one property the bytes actually have: a
+  // reordered emission would serialize different bytes and a set
+  // comparison would call it identical.
+  expect(Object.keys(payload)).toEqual([
+    "vault_readable",
     "index_dir_writable",
+    "sqlite_ok",
+    "fts5_ok",
+    "vec_extension",
+    "embedding_key_resolved",
     "provider_reachable",
     "provider_reason",
-    "recommendations",
-    "sqlite_ok",
-    "vault_readable",
-    "vec_extension",
     "warnings",
+    "fatal",
+    "recommendations",
   ]);
   // The flag-less run touched no `index_state` cell: a store nobody
   // checked stays a store nobody checked.

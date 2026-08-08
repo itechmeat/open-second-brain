@@ -101,7 +101,9 @@ alias-to-replacement table lives in `docs/updating.md`.
 `vec:`, and `hyde:` lanes; `focus_query` / `focus_path_prefix` to steer a
 single call; `since` / `until` time ranges (ISO date/datetime, `today`,
 `yesterday`, `last week`, `last month`, or `<n>h`/`<n>d`/`<n>w` shorthand,
-filtered on document mtime); `include_superseded: true` to keep superseded
+filtered on event time - frontmatter validity first, then the
+body-derived anchor, with document mtime only as the last rung);
+`include_superseded: true` to keep superseded
 predecessors undemoted (history mode); and `evidence_pack: true` to return
 significant/matched/missing terms, abstention text, terminal-state downrank
 reasons, per-result `why_retrieved`, IDF-weighted coverage with rare-term
@@ -119,9 +121,11 @@ retrieval trust gate; with the gate off the response carries
 (`search_trust_gate_enabled`) instead of going quiet. Without `explain` no
 key appears at all. In the same release `total` stopped echoing the row
 count: it is the ranked candidate pool the `limit` sliced the returned rows
-from - a lower bound on the matches, never an over-count - so
-`total > results.length` now means the vault held more than you were
-handed.
+from, so `total > results.length` means the ranker had more candidates
+than it handed you. Read it as candidates ranked, not as a corpus
+statistic: the pool is capped at roughly three times the requested
+`limit`, so it moves with `limit` and saturates on a large vault, and
+link traversal can add a document that matched no term at all.
 A deterministic summary-search router (t_7b96f242) inspects each query for
 structural summary signals - a source-targeted `source:<path>` token, or a
 `kind:<t>`/`type:<t>` token whose value is a declared artifact kind in the

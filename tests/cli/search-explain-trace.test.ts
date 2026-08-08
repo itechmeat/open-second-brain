@@ -17,6 +17,7 @@ import { jsonForOutcome, renderOutcomeHuman } from "../../src/cli/search/outcome
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import {
   RETRIEVAL_TRACE_NOT_MERGED,
+  RETRIEVAL_TRACE_UNAVAILABLE_AND_NOT_MERGED,
   RETRIEVAL_TRACE_UNAVAILABLE,
   type ExplainRequest,
 } from "../../src/core/search/explain-envelope.ts";
@@ -25,11 +26,19 @@ import { runCli } from "../helpers/run-cli.ts";
 
 const QUERY = "widget calibration";
 
-/** Single-vault explain: the flag on, no cross-vault union. */
-const EXPLAIN_ON: ExplainRequest = Object.freeze({ explain: true, crossVault: false });
+/** Single-vault explain: the flag on, no cross-vault union, gate engaged. */
+const EXPLAIN_ON: ExplainRequest = Object.freeze({
+  explain: true,
+  crossVault: false,
+  trustGateEnabled: true,
+});
 
 /** The same flag over a cross-vault union, whose receipts are not merged. */
-const EXPLAIN_ON_GLOBAL: ExplainRequest = Object.freeze({ explain: true, crossVault: true });
+const EXPLAIN_ON_GLOBAL: ExplainRequest = Object.freeze({
+  explain: true,
+  crossVault: true,
+  trustGateEnabled: true,
+});
 
 const RESULT: BrainSearchResult = Object.freeze({
   documentId: 1,
@@ -118,6 +127,27 @@ describe("o2b search --explain: retrieval receipts", () => {
 
     expect(payload["retrieval_trace_unavailable"]).toBe(RETRIEVAL_TRACE_NOT_MERGED);
     expect(payload["retrieval_trace_unavailable"]).not.toBe(RETRIEVAL_TRACE_UNAVAILABLE);
+  });
+
+  test("json: when the gate is off AND the search is global, both are named", () => {
+    // Naming only the union would send the operator to a single-vault
+    // query that still produces nothing, because the gate is off there
+    // too. Naming only the gate would promise a trace a union cannot
+    // merge. The exit has to carry both or it is a dead end either way.
+    const both: ExplainRequest = Object.freeze({
+      explain: true,
+      crossVault: true,
+      trustGateEnabled: false,
+    });
+    const payload = jsonForOutcome(outcome(false), both) as Record<string, unknown>;
+    const why = payload["retrieval_trace_unavailable"];
+
+    expect(why).toBe(RETRIEVAL_TRACE_UNAVAILABLE_AND_NOT_MERGED);
+    expect(why).not.toBe(RETRIEVAL_TRACE_NOT_MERGED);
+    expect(why).not.toBe(RETRIEVAL_TRACE_UNAVAILABLE);
+    // Both exits are actually spelled, not merely alluded to.
+    expect(String(why)).toContain("search_trust_gate_enabled");
+    expect(String(why)).toContain("single vault");
   });
 
   test("human: the transcript is byte-identical until --explain asks", () => {

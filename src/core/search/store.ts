@@ -781,9 +781,21 @@ export class Store {
   }
 
   /**
-   * Indexed chunks whose estimated embedding-request size exceeds a
-   * model's declared input window. One aggregate, no chunk bodies read;
-   * see `store/counts.ts` for the unit and its stated bound.
+   * Indexed chunks split by what the oversize-chunk census can decide
+   * about them against a model's declared input window: provably over,
+   * and undecided by the estimate. One aggregate pass, no chunk bodies
+   * read; see `store/counts.ts` for the unit and both bounds.
+   *
+   * `requestPrefix` is the instruction prefix the configured backend
+   * prepends to every passage, because the provider counts it too.
+   */
+  chunkWindowTally(windowTokens: number, requestPrefix: string): census.ChunkWindowTally {
+    return census.chunkWindowTally(this.db, windowTokens, requestPrefix);
+  }
+
+  /**
+   * The provable half of {@link chunkWindowTally} for a backend that
+   * prepends nothing.
    */
   chunksOverTokenWindow(windowTokens: number): number {
     return census.chunksOverTokenWindow(this.db, windowTokens);

@@ -556,6 +556,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // `duplicate-entity` - so the command names the one mechanical
         // step that ends the collision and leaves the choice with the
         // operator.
+        //
+        // PRODUCER: `doctor/entity-checks.ts`, which splits the duplicate
+        // report by cause and spells this code on the half the fold
+        // created. That is what makes the registration live: the doctor's
+        // surfaces resolve a finding's code through the rail, so the
+        // command below is what an operator is shown. The registry's own
+        // write-time and read-time refusals are thrown synchronously out
+        // of core - too early for the rail, and unable to import it
+        // without closing a module cycle - so they interpolate
+        // `ENTITY_QUOTE_VARIANT_COLLISION_COMMAND`, the same constant this
+        // entry is built from.
         code: ENTITY_QUOTE_VARIANT_COLLISION_CODE,
         issueClass: "entity labels differing only in typographic quote form",
         nextCommand: ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,

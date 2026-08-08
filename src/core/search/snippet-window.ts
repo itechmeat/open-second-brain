@@ -108,6 +108,12 @@ export function matchOffset(text: string, query: string): number {
  * short window rather than one slid backwards to stay full width. That is
  * the behaviour session recall has always had, and sliding would move the
  * match away from the centre the caller is looking at.
+ *
+ * This is the raw centring rule, and it knows nothing about how long the
+ * text is. A capped preview surface must call {@link windowStartWithin}
+ * instead: this function alone will open a window past the head of a
+ * passage that fitted inside the cap whole, discarding text the surface
+ * had room to show.
  */
 export function windowStart(matchAt: number, maxChars: number): number {
   if (matchAt <= NO_MATCH_OFFSET) return HEAD_WINDOW_START;
@@ -115,12 +121,78 @@ export function windowStart(matchAt: number, maxChars: number): number {
 }
 
 /**
+ * Start of a `maxChars` window centred on `matchAt` in a text of
+ * `textLength`: {@link windowStart}, plus the one bound that needs to know
+ * how much text there is.
+ *
+ * A text that fits inside the cap whole opens at {@link HEAD_WINDOW_START}
+ * and is therefore shown in full. Without this, a match past the
+ * half-window slid the start forward and the surface truncated the HEAD of
+ * a passage it had room to show entirely — and stamped a leading
+ * continuation marker on the loss.
+ *
+ * `maxChars` and `textLength` must be measured in the SAME unit; which
+ * unit that is stays the caller's decision, which is why this module
+ * anchors windows and does not own caps. The card snippet counts code
+ * points, the CLI transcript and the MCP window count UTF-16 units, and
+ * each passes its own pair.
+ *
+ * Over-cap text is left to {@link windowStart} untouched, so a match near
+ * the tail still produces a SHORT window rather than one slid backwards to
+ * stay full width. Clamping the start to `textLength - maxChars` would
+ * widen those windows, but it would also reverse the deliberate
+ * short-window behaviour documented above and change every session-recall
+ * snippet whose match sits near the end.
+ */
+export function windowStartWithin(matchAt: number, maxChars: number, textLength: number): number {
+  if (textLength <= maxChars) return HEAD_WINDOW_START;
+  return windowStart(matchAt, maxChars);
+}
+
+/** UTF-16 code units reserved for the high half of a surrogate pair. */
+const HIGH_SURROGATE_MIN = 0xd800;
+const HIGH_SURROGATE_MAX = 0xdbff;
+/** UTF-16 code units reserved for the low half of a surrogate pair. */
+const LOW_SURROGATE_MIN = 0xdc00;
+const LOW_SURROGATE_MAX = 0xdfff;
+
+/**
+ * `utf16Offset`, moved back onto a code-point boundary when it lands on
+ * the LOW half of a surrogate pair.
+ *
+ * A surface that slices UTF-16 units at an anchored start can open a
+ * window inside an astral character (emoji, rare CJK), and the body then
+ * begins with a lone low surrogate that becomes U+FFFD the moment the
+ * payload is encoded as UTF-8. Backing up by one unit re-includes the high
+ * half, so the character opens the window whole. The window's width is
+ * measured from the returned start, so no cap is exceeded.
+ *
+ * An offset already on a boundary is returned unchanged, and so is a lone
+ * low surrogate with no high half in front of it: the source text is
+ * already ill-formed there, and inventing a pair would misrepresent it.
+ * Callers that slice a code-point array (the card snippet) never need
+ * this — every index into such an array is already a boundary.
+ */
+export function alignToCodePointStart(text: string, utf16Offset: number): number {
+  if (utf16Offset <= HEAD_WINDOW_START) return utf16Offset;
+  const unit = text.charCodeAt(utf16Offset);
+  if (unit < LOW_SURROGATE_MIN || unit > LOW_SURROGATE_MAX) return utf16Offset;
+  const previous = text.charCodeAt(utf16Offset - 1);
+  if (previous < HIGH_SURROGATE_MIN || previous > HIGH_SURROGATE_MAX) return utf16Offset;
+  return utf16Offset - 1;
+}
+
+/**
  * A `maxChars` window of `text` centred on the match at `index`. The
- * session-recall snippet, unchanged: this is the function the three
- * preview surfaces were missing.
+ * session-recall snippet: this is the function the three preview surfaces
+ * were missing.
+ *
+ * Bounded by {@link windowStartWithin}, so a record shorter than
+ * `maxChars` is returned whole instead of losing its head to a window
+ * there was no room to move.
  */
 export function snippetAround(text: string, index: number, maxChars: number): string {
-  const start = windowStart(index, maxChars);
+  const start = windowStartWithin(index, maxChars, text.length);
   return text.slice(start, start + maxChars);
 }
 
