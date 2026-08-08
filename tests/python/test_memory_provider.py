@@ -560,6 +560,8 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertEqual(len(extract_calls), 1)
         self.assertIn("u1", extract_calls[0]["text"])
         self.assertIn("a2", extract_calls[0]["text"])
+        self.assertEqual(extract_calls[0]["turn_start"], "0")
+        self.assertEqual(extract_calls[0]["turn_end"], "2")
         # Buffer cleared: a second flush makes no further extract call.
         provider.on_session_end([])
         self.assertEqual(
@@ -791,7 +793,7 @@ class InPlaceCompactionLifecycleTests(unittest.TestCase):
         self.assertNotIn("u-t1", extract_calls[2]["text"])
         # turn_end reflects the per-boundary buffer size (1), not a cumulative
         # count — no unbounded growth across in-place compaction cycles.
-        self.assertTrue(all(c["turn_end"] == 1 for c in extract_calls))
+        self.assertTrue(all(c["turn_end"] == "1" for c in extract_calls))
 
 
 class _ScriptedReader:
