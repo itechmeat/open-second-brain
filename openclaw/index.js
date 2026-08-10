@@ -1749,6 +1749,7 @@ var GRAPH_HEALTH_CODES = Object.freeze({
   selfLoops: "self-loops",
   cacheRootMismatch: "cache-root-mismatch"
 });
+var GRAPH_HEALTH_CODE_LIST = Object.freeze(Object.values(GRAPH_HEALTH_CODES));
 function stripTrailingSlash(p) {
   return p.replace(/\/+$/, "");
 }
