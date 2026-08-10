@@ -35,7 +35,11 @@
 
 export { BrainConfigError, type BrainConfigLoadWarning } from "./policy/errors.ts";
 export { type BrainConfigKeyIndex } from "./policy/key-index.ts";
-export { BRAIN_CONFIG_SUPPORTED_VERSIONS, DEFAULT_BRAIN_CONFIG } from "./policy/defaults.ts";
+export {
+  BRAIN_CONFIG_SUPPORTED_VERSIONS,
+  DEFAULT_BRAIN_CONFIG,
+  DERIVED_STORE_MAX_BYTES_DEFAULT,
+} from "./policy/defaults.ts";
 export { formatPrimaryAgentYamlValue } from "./policy/primary-agent.ts";
 export {
   brainConfigKnownKeys,
@@ -53,8 +57,10 @@ export {
   loadGuardrailsConfigSafe,
   loadIntegrityConfigSafe,
   loadNotesConfigSafe,
+  loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
   loadTemporalConfigSafe,
+  type BrainDerivedStorePolicy,
   type LoadBrainConfigResult,
 } from "./policy/load.ts";
 

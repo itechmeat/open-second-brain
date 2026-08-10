@@ -19,6 +19,19 @@ import { DEFAULT_VAULT_IGNORE_PATHS } from "../../vault-scope/defaults.ts";
 export const BRAIN_CONFIG_SUPPORTED_VERSIONS: ReadonlyArray<number> = [1];
 
 /**
+ * Default ceiling on the derived store a snapshot will archive: 256 MiB.
+ *
+ * Chosen against the two numbers that actually bound the cost. Retention
+ * keeps ten archives, and `.snapshots/` is replicated peer-to-peer, so
+ * the default ceiling admits at most ten compressed copies of a 256 MiB
+ * database on every device. Larger stores are a deliberate decision the
+ * operator makes by raising this number, which is why the ceiling
+ * refuses and names the measured size instead of silently truncating or
+ * silently skipping.
+ */
+export const DERIVED_STORE_MAX_BYTES_DEFAULT = 256 * 1024 * 1024;
+
+/**
  * Default `_brain.yaml` content. Mirrors §10 of the design doc. Used by
  * `brain init` and as the fallback inside `loadBrainConfig` when callers
  * opt into permissive mode (the current API is strict — absent file
@@ -43,6 +56,8 @@ export const DEFAULT_BRAIN_CONFIG: BrainConfig = Object.freeze({
   }),
   snapshots: Object.freeze({
     retention_count: 10,
+    include_derived_store: false,
+    derived_store_max_bytes: DERIVED_STORE_MAX_BYTES_DEFAULT,
   }),
   vault: Object.freeze({
     ignore_paths: DEFAULT_VAULT_IGNORE_PATHS,

@@ -1,11 +1,16 @@
 /**
  * Help text for `o2b brain` and each of its verbs.
  *
- * Pure data: no runtime imports beyond what the dispatcher needs.
+ * Pure data plus one imported constant: the release the sidecar manifest
+ * shipped in. That version used to be a literal here, a second literal
+ * in the rollback warning and a third in the operating manual, so it is
+ * imported from the module that owns the format rather than re-typed.
  * Split out of `./helpers.ts` so the verb-handler bundle does not
  * have to load this ~200-line string table when it only needs
  * `parse` / `resolveBrainVault`.
  */
+
+import { BRAIN_MANIFEST_SIDECAR_SINCE_VERSION } from "../../core/brain/manifest.ts";
 
 export const BRAIN_HELP = `usage: o2b brain <verb> [args...]
 
@@ -284,15 +289,20 @@ export const VERB_HELP: Record<string, string> = {
     "Restore Brain/ from a snapshot. Interactive prompt unless --yes.\n" +
     "--dry-run prints the would-be restore plan as live → snapshot\n" +
     "diff and exits 0 without writing.\n" +
-    "From v0.10.6 each snapshot carries a sidecar sha256 manifest of\n" +
+    `From ${BRAIN_MANIFEST_SIDECAR_SINCE_VERSION} each snapshot carries a sidecar sha256 manifest of\n` +
     "the Brain/ tree captured at snapshot time. rollback compares it\n" +
     "against the current Brain/ and aborts with exit 2 if they\n" +
     "differ — typically because another device (Syncthing) edited the\n" +
     "vault between snapshot and rollback. Pass --force-rollback to\n" +
     "overwrite anyway; the log entry records `drift_overridden: true`.\n" +
-    "Snapshots produced before v0.10.6 have no sidecar; rollback emits\n" +
+    `Snapshots produced before ${BRAIN_MANIFEST_SIDECAR_SINCE_VERSION} have no sidecar; rollback emits\n` +
     "a stderr warning and falls through to the legacy direct-restore\n" +
-    "path.\n",
+    "path.\n" +
+    "The derived SQLite store is covered only when\n" +
+    "snapshots.include_derived_store is on (off by default). Every\n" +
+    "rollback reports what it did about it: replaced, not restored with\n" +
+    "the manifest's named reason, or unknown for a snapshot taken before\n" +
+    "coverage existed. --list carries the same answer per snapshot.\n",
   snapshot:
     "usage: o2b brain snapshot diff <run_id_a> [<run_id_b>]\n" +
     "                              [--vault <path>] [--json]\n" +

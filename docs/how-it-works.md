@@ -567,8 +567,11 @@ flowchart TD
 ```
 
 A snapshot captures every file under `Brain/` **except** `.snapshots/`
-itself — otherwise rollback would erase any snapshots taken after
-this one. Retention defaults to ten newest archives.
+and `.artifacts/` — the first because rollback would otherwise erase
+any snapshots taken after this one, the second because it is TTL'd MCP
+tool output documented as never backed up (archiving and hashing it
+made unrelated cache churn trip the drift gate). Retention defaults to
+ten newest archives.
 
 From v0.10.6 every snapshot ships with a SHA-256 sidecar manifest
 (`Brain/.snapshots/<run_id>.manifest.json`) listing every regular
@@ -586,6 +589,68 @@ archives still recover cleanly. The same sidecar primitive backs
 `o2b brain upgrade --dry-run`'s per-file diff: both features share
 `src/core/brain/manifest.ts` as the single source of truth for
 "what does `Brain/` look like right now".
+
+### Derived-store coverage
+
+The derived SQLite store (`<vault>/.open-second-brain/brain.sqlite`)
+is a sibling of `Brain/`, not a member of it, and it used to be in no
+snapshot, no manifest and no rollback — with nothing saying so, so a
+pre-restore diff rendered a complete-looking picture while the
+embeddings silently stayed at whatever the live store held.
+
+What coverage protects is **spend, not information**. Feedback,
+activation and tuning are replayable JSON folds inside `Brain/`; only
+the embeddings and a tier baseline are database-only, so a lost store
+costs an embedding bill and a reindex, never a fact. Against that:
+retention keeps ten archives and `.snapshots/` rides the same
+peer-to-peer replication as the rest of the vault, so every retained
+copy lands on every device. Hence the three-part answer:
+
+- **Opt-in.** `snapshots.include_derived_store` defaults to `false`.
+- **A ceiling that refuses.** `snapshots.derived_store_max_bytes`
+  (256 MiB by default) is compared against the live store and the
+  snapshot **throws** when it is exceeded, naming the measured size.
+  Half a database is not a recovery point, so it is never truncated.
+- **The live store size in every manifest**, included or not, so an
+  operator who has never enabled coverage still sees what it would
+  cost.
+
+When coverage is on, `createSnapshot` resolves the store path through
+the search layer's resolver, refuses when the file is absent, takes the
+**same writer lock** every indexer serialises on, runs the structural
+integrity scanner and refuses a condemned store rather than archiving
+it over a good snapshot, checks the ceiling, then `VACUUM INTO`s a
+temporary file and compresses it to
+`Brain/.snapshots/<run_id>.store.sqlite.zst`. `VACUUM INTO` rather than
+a file copy because the store runs in WAL mode and the runtime exposes
+no online-backup API. The archive sits **beside** the tar rather than
+inside it: the extractor requires a `Brain/` root and the restore is
+defined as "live `Brain/` equals archive `Brain/` minus the excluded
+entries", so a second top-level tar member would break both contracts.
+Keeping it in the same directory keeps listing and retention one
+family with one loop.
+
+Any of those steps failing is a **refusal**, not a skip: `createSnapshot`
+throws and leaves no tar behind, so the destructive-snapshot gate —
+which already aborts before the operation when the snapshot throws —
+simply does not run the mutation it could not fully protect.
+
+The manifest records what happened under an additive `derived_store`
+key **at the existing schema version** (bumping it would make every
+older peer silently lose drift detection on new snapshots): whether it
+was included, the resolved source path, the archive name, the digest
+over the archived bytes, the compressed size, the live store size
+always, and one of four named exclusion reasons —
+`not-requested`, `absent`, `integrity-fault`, `over-size-ceiling`.
+A sidecar with **no** `derived_store` key predates the feature and
+renders as `unknown`, never as excluded.
+
+Retention deletes the store archive alongside the tar and the sidecar.
+`rollback` replaces the store only when the manifest says it was
+included, decompressing to a sibling temp file and renaming it into
+place under the writer lock — the same swap discipline the indexer
+uses — and prints which of replaced / not restored / unknown applied
+in every case.
 
 ### Read-only inspectors over the snapshot family
 

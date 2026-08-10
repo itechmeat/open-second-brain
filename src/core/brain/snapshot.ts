@@ -5,9 +5,11 @@
  *
  *   - Before any state-changing operation in a `dream` run we write
  *     `Brain/.snapshots/<run_id>.tar.zst` containing the entire
- *     `Brain/` tree **excluding** `Brain/.snapshots/` itself.
+ *     `Brain/` tree **excluding** {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}.
  *     Including the snapshots dir would either explode the archive or
- *     racy-clobber an in-progress write.
+ *     racy-clobber an in-progress write; including the artifact cache
+ *     would hash TTL'd tool output into a drift gate that no rollback
+ *     would ever act on.
  *
  *   - Retention is enforced by `pruneSnapshots`: keep the
  *     `snapshots.retention_count` newest files, delete the rest.
@@ -30,8 +32,32 @@
  *
  * No external dependencies. Everything is `node:child_process` +
  * `node:fs` so the cost is one subprocess per archive operation.
+ *
+ * ## Derived-store coverage, and why it is off by default
+ *
+ * The derived SQLite store (`<vault>/.open-second-brain/brain.sqlite`)
+ * is a sibling of `Brain/`, and until now it was in no snapshot, no
+ * manifest and no rollback - with nothing saying so, which made a
+ * complete-looking pre-restore diff while the embeddings stayed at
+ * whatever the live store happened to hold.
+ *
+ * What coverage buys is SPEND, not information. Feedback, activation and
+ * tuning are replayable JSON folds inside `Brain/`; only the embeddings
+ * and a tier baseline are database-only, so a lost store costs an
+ * embedding bill and a reindex, never a fact. Against that: retention
+ * keeps ten archives, and `.snapshots/` sits inside a vault replicated
+ * peer-to-peer, so every retained copy is pushed to every device. Ten
+ * multiples of a store on every peer is a real cost to pay for a
+ * regenerable artifact.
+ *
+ * Hence the three-part answer. Coverage is opt-in. The ceiling REFUSES
+ * rather than truncating, because half a database is not a recovery
+ * point. And the live store size is recorded in every manifest whether
+ * or not it was included, so an operator who has never enabled coverage
+ * can still read what enabling it would cost.
  */
 
+import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
 import {
   closeSync,
@@ -40,23 +66,42 @@ import {
   mkdirSync,
   mkdtempSync,
   openSync,
+  readFileSync,
   readSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 
-import { buildManifest, manifestSidecarPath, writeManifestSidecar } from "./manifest.ts";
+import { sha256Hex } from "../integrity/digest.ts";
+import { resolveIndexPath } from "../search/paths.ts";
+import { runIntegrityCheck } from "../search/store/lifecycle.ts";
+import { acquireWriterLockSync } from "../search/store/writer-lock.ts";
+import {
+  buildManifest,
+  manifestSidecarPath,
+  readManifestSidecar,
+  SNAPSHOT_STORE_EXCLUSION,
+  writeManifestSidecar,
+  type BrainManifestDerivedStore,
+  type SnapshotStoreExclusionReason,
+} from "./manifest.ts";
 import {
   BRAIN_ROOT_REL,
+  BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
   brainDirs,
   brainDirsForWrite,
+  SNAPSHOT_ARCHIVE_SUFFIX,
   snapshotPath,
+  snapshotStorePath,
   validateRunId,
 } from "./paths.ts";
+import { loadSnapshotDerivedStorePolicySafe, type BrainDerivedStorePolicy } from "./policy.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Errors ---------------------------------------------------------------
@@ -87,11 +132,51 @@ export class BrainSnapshotError extends Error {
   }
 }
 
+/**
+ * Thrown when derived-store coverage was REQUESTED and could not be
+ * honoured. Carries the reason from the same closed vocabulary a
+ * manifest records, so the caller that reports the refusal and the
+ * manifest that records an omission speak one language.
+ *
+ * It is a `BrainSnapshotError` because it is a snapshot failure in every
+ * sense that matters to a caller: `createSnapshot` throws, nothing is
+ * left on disk, and the destructive-snapshot gate consequently never
+ * runs the operation it was protecting. That last property needs no
+ * plumbing - it follows from refusing here rather than downgrading to a
+ * partial snapshot that reports success.
+ */
+export class BrainSnapshotStoreError extends BrainSnapshotError {
+  readonly reason: SnapshotStoreExclusionReason;
+  constructor(message: string, runId: string, reason: SnapshotStoreExclusionReason) {
+    super(`derived store not archived (${reason}): ${message}`, runId);
+    this.name = "BrainSnapshotStoreError";
+    this.reason = reason;
+  }
+}
+
 // ----- Types ---------------------------------------------------------------
 
 export interface CreateSnapshotResult {
   /** Absolute path of the resulting archive. */
   readonly path: string;
+  /** What this snapshot did about the derived store. */
+  readonly derived_store: BrainManifestDerivedStore;
+}
+
+export interface CreateSnapshotOptions {
+  /**
+   * Derived-store coverage policy. Defaults to the vault's
+   * `snapshots:` block, so every existing call site picks the operator's
+   * setting up without threading it through.
+   */
+  readonly derivedStore?: BrainDerivedStorePolicy;
+  /**
+   * Absolute path of the live derived store. Defaults to
+   * `resolveIndexPath(vault, null)` - the search layer's resolver, never
+   * a re-derivation of it. A caller holding a resolved search config
+   * (with a `search_db_path` override in force) passes its own answer.
+   */
+  readonly derivedStorePath?: string;
 }
 
 export interface SnapshotInfo {
@@ -106,6 +191,19 @@ export interface SnapshotInfo {
    * similar). Rollback gracefully degrades on `null`.
    */
   readonly manifest_path: string | null;
+  /**
+   * Absolute path of the sibling derived-store archive when one is on
+   * disk, `null` otherwise. Probed rather than believed: the manifest
+   * says what the snapshot INTENDED, this says what retention has to
+   * delete.
+   */
+  readonly store_archive_path: string | null;
+  /**
+   * The sidecar's derived-store record, or `null` when there is no
+   * sidecar or the sidecar predates the feature. `null` is UNKNOWN
+   * coverage and must never be rendered as "excluded".
+   */
+  readonly derived_store: BrainManifestDerivedStore | null;
 }
 
 export interface PruneSnapshotsResult {
@@ -113,9 +211,31 @@ export interface PruneSnapshotsResult {
   readonly deleted: ReadonlyArray<string>;
 }
 
+/**
+ * What a restore did about the derived store. Four fields rather than a
+ * single verdict string, because "not replaced" splits into two answers
+ * an operator must be able to tell apart: the snapshot recorded that it
+ * did not include the store, or the snapshot is too old to have recorded
+ * anything at all.
+ */
+export interface RestoreDerivedStoreResult {
+  /** True when the archived store replaced the live one. */
+  readonly replaced: boolean;
+  /**
+   * False when the snapshot carries no derived-store record: coverage is
+   * unknown, and the live store was deliberately left untouched.
+   */
+  readonly coverage_known: boolean;
+  /** Absolute path of the store that was replaced; null when none was. */
+  readonly path: string | null;
+  /** The manifest's named reason; null when included or unknown. */
+  readonly exclusion_reason: SnapshotStoreExclusionReason | null;
+}
+
 export interface RestoreSnapshotResult {
-  /** Number of regular files restored under `Brain/` (excluding `.snapshots/`). */
+  /** Number of regular files restored under `Brain/` (excluding the excluded entries). */
   readonly restored_files: number;
+  readonly derived_store: RestoreDerivedStoreResult;
 }
 
 // ----- Tooling detection ---------------------------------------------------
@@ -164,14 +284,16 @@ function detectTooling(): ToolAvailability {
 // ----- createSnapshot ------------------------------------------------------
 
 /**
- * Archive `Brain/` (except `.snapshots/`) into
- * `Brain/.snapshots/<run_id>.tar.zst`.
+ * Archive `Brain/` (minus {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}) into
+ * `Brain/.snapshots/<run_id>.tar.zst`, optionally beside a compressed
+ * copy of the derived store.
  *
  * Implementation:
  *
  *   1. Detect available tools. If `tar` is absent we throw.
- *   2. List the top-level entries under `Brain/`, drop `.snapshots/`.
- *   3. `tar -c -C <vault> Brain/<entry> ...` streamed into `zstd -19`
+ *   2. Cover the derived store FIRST, so a refusal leaves no tar behind.
+ *   3. List the top-level entries under `Brain/`, drop the excluded ones.
+ *   4. `tar -c -C <vault> Brain/<entry> ...` streamed into `zstd -19`
  *      (or `gzip -9` fallback) → output file.
  *
  * Using `--exclude=Brain/.snapshots` is tempting, but tar's exclude
@@ -179,7 +301,11 @@ function detectTooling(): ToolAvailability {
  * on filenames containing whitespace. Enumerating the kept entries
  * explicitly is byte-stable and easy to reason about.
  */
-export function createSnapshot(vault: string, runId: string): CreateSnapshotResult {
+export function createSnapshot(
+  vault: string,
+  runId: string,
+  opts: CreateSnapshotOptions = {},
+): CreateSnapshotResult {
   validateRunId(runId);
   const dirs = brainDirsForWrite(vault);
   mkdirSync(dirs.snapshots, { recursive: true });
@@ -193,47 +319,52 @@ export function createSnapshot(vault: string, runId: string): CreateSnapshotResu
     );
   }
 
+  // The derived store goes first. It is the step that can REFUSE, and a
+  // refusal must leave nothing behind - running it before the tar is
+  // written is what makes "no partial archive" a property of the order
+  // rather than of a cleanup path that could be forgotten.
+  const derivedStore = coverDerivedStore(vault, runId, tools, opts);
+
   // List top-level entries of Brain/ that we want to capture. Sort the
   // result so the resulting archive's contents are deterministic
   // across filesystems (readdirSync's order is FS-dependent).
   let topEntries: string[];
   try {
-    topEntries = readdirSync(dirs.brain).filter((e) => e !== ".snapshots");
+    topEntries = readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e));
   } catch (err) {
+    discardStoreArchive(derivedStore, vault, runId);
     throw new BrainSnapshotError(
       `failed to list Brain/: ${(err as Error).message ?? String(err)}`,
       runId,
     );
   }
   topEntries.sort();
-  if (topEntries.length === 0) {
-    // No content to archive. Tar would still produce an empty archive,
-    // which is fine — `restoreSnapshot` on an empty archive is a no-op
-    // that doesn't delete anything (because the exclude-`.snapshots`
-    // rule keeps the dir intact).
-  }
 
   // Build `tar -c -C <vault> Brain/<entry> Brain/<entry>...` so paths
   // inside the archive start at `Brain/` — matching the rollback
   // contract that the archive is "the Brain/ tree".
   const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `${BRAIN_ROOT_REL}/${e}`)];
 
-  if (tools.zstd) {
-    runArchivePipeline(["tar", tarArgs], ["zstd", ["-19", "-q", "-o", outPath, "-"]], runId);
-  } else if (tools.gzip) {
-    // Same on-disk extension keeps the snapshot listing logic
-    // homogeneous. The contents are gzip-compressed regardless; the
-    // restore probes both compressors so this is safe.
-    runArchivePipeline(["tar", tarArgs], ["gzip", ["-9", "-c"]], runId, outPath);
-  } else {
-    throw new BrainSnapshotToolingMissingError(
-      "zstd or gzip",
-      "install zstd (preferred) or gzip; we use the first available.",
+  try {
+    compressInto(
+      { kind: "buffer", bytes: runArchiveProducer("tar", tarArgs, runId) },
+      outPath,
+      tools,
+      runId,
     );
-  }
-
-  if (!existsSync(outPath)) {
-    throw new BrainSnapshotError(`archive write reported success but ${outPath} is absent`, runId);
+    if (!existsSync(outPath)) {
+      throw new BrainSnapshotError(
+        `archive write reported success but ${outPath} is absent`,
+        runId,
+      );
+    }
+  } catch (err) {
+    // The store archive we just wrote belongs to a snapshot that does
+    // not exist. Leaving it would make the run id look taken to the
+    // collision resolver and would survive retention, which only prunes
+    // archives it can list.
+    discardStoreArchive(derivedStore, vault, runId);
+    throw err;
   }
 
   // Sidecar manifest. Failure is non-fatal: the archive is the
@@ -244,7 +375,7 @@ export function createSnapshot(vault: string, runId: string): CreateSnapshotResu
   // would block dream from making any progress on a read-only
   // `.snapshots/` directory.
   try {
-    writeManifestSidecar(vault, runId, buildManifest(dirs.brain));
+    writeManifestSidecar(vault, runId, buildManifest(dirs.brain, derivedStore));
   } catch (err) {
     process.stderr.write(
       `warning: manifest sidecar write failed for snapshot ` +
@@ -252,96 +383,387 @@ export function createSnapshot(vault: string, runId: string): CreateSnapshotResu
         `rollback drift detection will be skipped for this snapshot.\n`,
     );
   }
-  return { path: outPath };
+  return { path: outPath, derived_store: derivedStore };
+}
+
+/** True for a top-level `Brain/` entry the snapshot family never touches. */
+function isSnapshotExcludedEntry(name: string): boolean {
+  return BRAIN_SNAPSHOT_EXCLUDED_ENTRIES.includes(name);
+}
+
+// ----- Derived-store coverage ----------------------------------------------
+
+/**
+ * Byte length of `path`, or `null` when it is not there to measure.
+ * Never zero-as-absent: a freshly created SQLite file is legitimately
+ * small, and an operator reading "0" needs it to mean zero bytes.
+ */
+function fileSizeOrNull(path: string): number | null {
+  try {
+    const st = statSync(path);
+    return st.isFile() ? st.size : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Run `producer | consumer` synchronously. On Linux `spawnSync`
- * supports a `stdio` pipe between two processes via the `input` field
- * — but we want a streaming pipe, not a full-buffer round-trip, since
- * the Brain tree could in principle exceed available memory. Use
- * `sh -c '<cmd1> | <cmd2>'` so the shell wires the pipe directly.
+ * Decide and, when asked, perform derived-store coverage for one
+ * snapshot. Returns the record the manifest will carry; THROWS
+ * {@link BrainSnapshotStoreError} when coverage was requested and any
+ * step could not be completed.
  *
- * Argument quoting: we deliberately do NOT shell-escape paths because
- * `tar -C <vault>` already roots everything relative to the vault,
- * and the only user-supplied bytes in `tarArgs` are the run id (which
- * `validateRunId` constrains to `[A-Za-z0-9._-]`) and the top-level
- * Brain/ entries (`inbox`, `preferences`, …) which are themselves
- * filesystem names produced by our own writers.
- *
- * For full safety against any future caller pattern, callers can
- * audit `tarArgs` to confirm no unconstrained user input lands here.
+ * The refusal is the point. A snapshot that quietly dropped the store it
+ * was asked to protect would report success, and the destructive
+ * operation it guards would then run against a recovery point that is
+ * not the one the operator configured.
  */
-function runArchivePipeline(
-  producer: readonly [string, ReadonlyArray<string>],
-  consumer: readonly [string, ReadonlyArray<string>],
+function coverDerivedStore(
+  vault: string,
   runId: string,
-  outPath?: string,
-): void {
-  // We avoid shell pipe entirely: spawn the producer, capture its
-  // stdout into a Buffer (acceptable: Brain trees are small —
-  // typical compressed output is well under 1 MB per the design
-  // doc), then feed it to the consumer's stdin synchronously.
-  //
-  // The previous approach used `sh -c "tar ... | zstd ..."` and broke
-  // on quoting of paths with whitespace. Buffering through Node is
-  // simpler and verifiably correct.
-  const [prodCmd, prodArgs] = producer;
-  const tarResult = spawnSync(prodCmd, [...prodArgs], {
-    maxBuffer: 256 * 1024 * 1024, // 256 MB hard ceiling matches the design's "small" guarantee.
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  if (tarResult.error) {
-    throw new BrainSnapshotError(`${prodCmd} failed to start: ${tarResult.error.message}`, runId);
+  tools: ToolAvailability,
+  opts: CreateSnapshotOptions,
+): BrainManifestDerivedStore {
+  const policy = opts.derivedStore ?? loadSnapshotDerivedStorePolicySafe(vault);
+  // Resolved through the search layer's resolver, never re-derived here.
+  const sourcePath = opts.derivedStorePath ?? resolveIndexPath(vault, null);
+  const liveSize = fileSizeOrNull(sourcePath);
+
+  const excluded = (reason: SnapshotStoreExclusionReason): BrainManifestDerivedStore =>
+    Object.freeze({
+      included: false,
+      source_path: sourcePath,
+      archive_name: null,
+      archive_sha256: null,
+      archive_size: null,
+      live_size: liveSize,
+      exclusion_reason: reason,
+    });
+
+  if (!policy.include) return excluded(SNAPSHOT_STORE_EXCLUSION.not_requested);
+
+  if (liveSize === null) {
+    throw new BrainSnapshotStoreError(
+      `no store file at ${sourcePath}`,
+      runId,
+      SNAPSHOT_STORE_EXCLUSION.absent,
+    );
   }
-  if (tarResult.status !== 0) {
-    const stderr = (tarResult.stderr ?? Buffer.from("")).toString("utf8").trim();
+
+  const archivePath = snapshotStorePath(vault, runId);
+  if (existsSync(archivePath)) {
     throw new BrainSnapshotError(
-      `${prodCmd} exited with status ${tarResult.status}: ${stderr}`,
+      `refusing to overwrite an existing archive: ${archivePath}`,
       runId,
     );
   }
-  const tarPayload = tarResult.stdout;
-  if (!tarPayload) {
-    throw new BrainSnapshotError(`${prodCmd} produced no stdout`, runId);
+
+  // The writer lock on the LIVE store path, held across the integrity
+  // scan and the copy, so an index run cannot mutate the file underneath
+  // the snapshot. It is the same lock every other writer serialises on,
+  // taken synchronously because this whole module is synchronous.
+  const release = acquireWriterLockSync(sourcePath);
+  try {
+    assertStoreIsSound(sourcePath, runId);
+
+    // Measured against the LIVE size, which is what the operator's
+    // ceiling is expressed in and what they can check with `ls`. The
+    // compressed archive is smaller, but refusing on a number nobody can
+    // predict before the work is done would be a worse contract.
+    if (liveSize > policy.maxBytes) {
+      throw new BrainSnapshotStoreError(
+        `store is ${liveSize} bytes, over the ${policy.maxBytes}-byte ceiling ` +
+          `(snapshots.derived_store_max_bytes)`,
+        runId,
+        SNAPSHOT_STORE_EXCLUSION.over_size_ceiling,
+      );
+    }
+
+    writeStoreArchive(sourcePath, archivePath, tools, runId);
+  } finally {
+    release();
   }
 
-  const [consCmd, consArgs] = consumer;
-  // `zstd -o <out>` opens the file itself; gzip writes to stdout and
-  // we pipe to file via `outPath`.
-  if (outPath === undefined) {
-    const r = spawnSync(consCmd, [...consArgs], {
-      input: tarPayload,
-      stdio: ["pipe", "inherit", "pipe"],
-    });
-    if (r.error) {
-      throw new BrainSnapshotError(`${consCmd} failed to start: ${r.error.message}`, runId);
-    }
-    if (r.status !== 0) {
-      const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
-      throw new BrainSnapshotError(`${consCmd} exited with status ${r.status}: ${stderr}`, runId);
-    }
-  } else {
-    // gzip pipeline → capture stdout, write to file.
-    const r = spawnSync(consCmd, [...consArgs], {
-      input: tarPayload,
-      stdio: ["pipe", "pipe", "pipe"],
-      maxBuffer: 256 * 1024 * 1024,
-    });
-    if (r.error) {
-      throw new BrainSnapshotError(`${consCmd} failed to start: ${r.error.message}`, runId);
-    }
-    if (r.status !== 0) {
-      const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
-      throw new BrainSnapshotError(`${consCmd} exited with status ${r.status}: ${stderr}`, runId);
-    }
-    // Write the compressed payload to the snapshot file atomically.
-    // Use writeFileSync since the file is binary and lives inside
-    // `.snapshots/` (no Markdown parser cares about torn writes here;
-    // worst case is a corrupt archive that fails on restore — same
-    // outcome as any other interrupted snapshot).
-    writeFileSync(outPath, r.stdout ?? Buffer.from(""));
+  const archiveSize = fileSizeOrNull(archivePath);
+  if (archiveSize === null) {
+    throw new BrainSnapshotError(
+      `store archive write reported success but ${archivePath} is absent`,
+      runId,
+    );
   }
+  return Object.freeze({
+    included: true,
+    source_path: sourcePath,
+    archive_name: basename(archivePath),
+    archive_sha256: sha256Hex(readFileSync(archivePath)),
+    archive_size: archiveSize,
+    live_size: liveSize,
+    exclusion_reason: null,
+  });
+}
+
+/**
+ * Refuse a condemned store rather than archiving it over a good
+ * snapshot.
+ *
+ * This runs the integrity scanner the previous release already shipped -
+ * `PRAGMA quick_check`, classified by {@link runIntegrityCheck} - rather
+ * than inventing a second gate with its own opinion. A file that is not
+ * a SQLite database at all fails here too: `new Database` is lazy, so
+ * the first statement raises and the scanner classifies the raise as a
+ * fault, which is the honest answer.
+ */
+function assertStoreIsSound(sourcePath: string, runId: string): void {
+  let db: Database;
+  try {
+    db = new Database(sourcePath, { readonly: true });
+  } catch (err) {
+    throw new BrainSnapshotStoreError(
+      `cannot open ${sourcePath}: ${(err as Error).message ?? String(err)}`,
+      runId,
+      SNAPSHOT_STORE_EXCLUSION.integrity_fault,
+    );
+  }
+  try {
+    const verdict = runIntegrityCheck(db);
+    if (!verdict.ok) {
+      throw new BrainSnapshotStoreError(
+        `${sourcePath} failed a structural integrity check: ${verdict.fault}`,
+        runId,
+        SNAPSHOT_STORE_EXCLUSION.integrity_fault,
+      );
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * `VACUUM INTO` a private temp file, then compress that into
+ * `archivePath`.
+ *
+ * `VACUUM INTO` rather than a file copy because the store runs in WAL
+ * mode: the main file alone is not a consistent database, and the
+ * runtime exposes no online-backup API. `VACUUM INTO` is read-only with
+ * respect to the source, produces a single self-contained and compacted
+ * file, and is the native answer to exactly this question.
+ *
+ * The temp file lives in the OS temp directory rather than beside the
+ * store, so a crash between the vacuum and the compression leaves
+ * nothing in the vault for the next reader to find.
+ */
+function writeStoreArchive(
+  sourcePath: string,
+  archivePath: string,
+  tools: ToolAvailability,
+  runId: string,
+): void {
+  const tmp = mkdtempSync(join(tmpdir(), `o2b-store-vacuum-${runId}-`));
+  const vacuumed = join(tmp, DERIVED_STORE_VACUUM_FILE);
+  // Whether the destination was ALREADY taken when this call began. It
+  // decides whether the cleanup below may touch it: an archive a racing
+  // process wrote is the very thing the overwrite refusal protects, and
+  // removing it in the name of cleaning up after that refusal would
+  // reintroduce the data-loss path by the back door.
+  const preexisting = existsSync(archivePath);
+  try {
+    const db = new Database(sourcePath, { readonly: true });
+    try {
+      db.query("VACUUM INTO ?").run(vacuumed);
+    } finally {
+      db.close();
+    }
+    compressInto({ kind: "file", path: vacuumed }, archivePath, tools, runId);
+  } catch (err) {
+    // A failed compression may have left a partial archive of OUR making;
+    // the snapshot is about to be refused, so nothing may survive that a
+    // later read could mistake for a recovery point.
+    if (!preexisting) {
+      try {
+        unlinkSync(archivePath);
+      } catch {
+        // Nothing was written, or it is already gone. Either is fine.
+      }
+    }
+    if (err instanceof BrainSnapshotError) throw err;
+    throw new BrainSnapshotError(
+      `failed to archive the derived store: ${(err as Error).message ?? String(err)}`,
+      runId,
+    );
+  } finally {
+    try {
+      rmSync(tmp, { recursive: true, force: true });
+    } catch {
+      // tmp cleanup is best-effort; the OS will reclaim it eventually.
+    }
+  }
+}
+
+/** Filename of the vacuumed copy inside its private temp directory. */
+const DERIVED_STORE_VACUUM_FILE = "store.sqlite";
+
+/** Remove a store archive whose snapshot is being abandoned. */
+function discardStoreArchive(
+  record: BrainManifestDerivedStore,
+  vault: string,
+  runId: string,
+): void {
+  if (!record.included) return;
+  try {
+    rmSync(snapshotStorePath(vault, runId), { force: true });
+  } catch (err) {
+    process.stderr.write(
+      `warning: could not remove the orphaned derived-store archive for ` +
+        `'${runId}': ${(err as Error).message ?? String(err)}\n`,
+    );
+  }
+}
+
+/**
+ * Compress the producer's stdout into `outPath`, choosing zstd when the
+ * host has it and gzip otherwise.
+ *
+ * ## Both compressors refuse an existing target, and that is load-bearing
+ *
+ * `zstd -o` has always refused to overwrite. The gzip fallback wrote
+ * through `writeFileSync`, which does not - so on a host without zstd
+ * two concurrent destructive operations that landed on the same run id
+ * would silently destroy each other's recovery point. That was not a
+ * cosmetic asymmetry: `createUniqueSnapshot` in `snapshot-gate.ts`
+ * resolves a run-id collision by RETRYING when the create fails and the
+ * archive now exists, so on a gzip-only host the collision path had no
+ * failure to retry on and the whole mechanism was inert.
+ *
+ * The refusal is therefore made explicit here, before either compressor
+ * runs, so both paths fail with the same typed error and the same
+ * message. The gzip write additionally opens with `wx` (exclusive
+ * create), which closes the window between the check and the write that
+ * a probe alone would leave open.
+ *
+ * The on-disk extension stays `.tar.zst` under gzip. The restore probes
+ * the magic bytes rather than the name, and one suffix keeps listing and
+ * retention a single comparison.
+ */
+function compressInto(
+  payload: CompressionSource,
+  outPath: string,
+  tools: ToolAvailability,
+  runId: string,
+): void {
+  if (existsSync(outPath)) {
+    throw new BrainSnapshotError(`refusing to overwrite an existing archive: ${outPath}`, runId);
+  }
+  if (tools.zstd) {
+    // `zstd -o` opens the destination itself and refuses an existing one.
+    const args =
+      payload.kind === "file"
+        ? ["-19", "-q", "-o", outPath, payload.path]
+        : ["-19", "-q", "-o", outPath, "-"];
+    runCompressor("zstd", args, payload, runId, null);
+    return;
+  }
+  if (tools.gzip) {
+    // gzip only writes to stdout, so the destination is ours to open.
+    const args = payload.kind === "file" ? ["-9", "-c", payload.path] : ["-9", "-c"];
+    runCompressor("gzip", args, payload, runId, outPath);
+    return;
+  }
+  throw new BrainSnapshotToolingMissingError(
+    "zstd or gzip",
+    "install zstd (preferred) or gzip; we use the first available.",
+  );
+}
+
+/**
+ * What a compressor reads. A `buffer` is the tar stream we already hold;
+ * a `file` is the vacuumed store copy, handed over by path so a
+ * multi-hundred-megabyte database never round-trips through memory.
+ */
+type CompressionSource =
+  | { readonly kind: "buffer"; readonly bytes: Buffer }
+  | { readonly kind: "file"; readonly path: string };
+
+/** Hard ceiling on any single captured subprocess stream. */
+const SUBPROCESS_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
+
+/**
+ * Run one compressor over `payload`. When `outPath` is non-null the
+ * compressor writes to stdout and we own the destination file; when it
+ * is null the compressor was given the destination itself.
+ */
+function runCompressor(
+  cmd: string,
+  args: ReadonlyArray<string>,
+  payload: CompressionSource,
+  runId: string,
+  outPath: string | null,
+): void {
+  const r = spawnSync(cmd, [...args], {
+    ...(payload.kind === "buffer" ? { input: payload.bytes } : {}),
+    stdio: [
+      payload.kind === "buffer" ? "pipe" : "ignore",
+      outPath === null ? "inherit" : "pipe",
+      "pipe",
+    ],
+    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
+  });
+  if (r.error) {
+    throw new BrainSnapshotError(`${cmd} failed to start: ${r.error.message}`, runId);
+  }
+  if (r.status !== 0) {
+    const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
+    throw new BrainSnapshotError(`${cmd} exited with status ${r.status}: ${stderr}`, runId);
+  }
+  if (outPath === null) return;
+  // Exclusive create. `wx` is what makes the gzip path refuse an
+  // existing archive the way `zstd -o` always has; see
+  // {@link compressInto} for why that refusal is load-bearing rather
+  // than tidy. A torn write remains possible (worst case: a corrupt
+  // archive that fails on restore, the same outcome as any other
+  // interrupted snapshot) - what is no longer possible is silently
+  // replacing someone else's recovery point.
+  try {
+    writeFileSync(outPath, r.stdout ?? Buffer.from(""), { flag: "wx" });
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
+      runId,
+    );
+  }
+}
+
+/**
+ * Run the archive producer and capture its stdout.
+ *
+ * We avoid a shell pipe entirely: spawn `tar`, capture its stdout into a
+ * Buffer (acceptable: Brain trees are Markdown and stay small), then
+ * feed the compressor synchronously. The previous approach used
+ * `sh -c "tar ... | zstd ..."` and broke on quoting of paths with
+ * whitespace; buffering through Node is simpler and verifiably correct.
+ *
+ * Argument quoting: we deliberately do NOT shell-escape paths, because
+ * `tar -C <vault>` already roots everything relative to the vault, and
+ * the only user-supplied bytes in `tarArgs` are the run id (which
+ * `validateRunId` constrains to `[A-Za-z0-9._-]`) and the top-level
+ * `Brain/` entries (`inbox`, `preferences`, …) which are themselves
+ * filesystem names produced by our own writers.
+ */
+function runArchiveProducer(cmd: string, args: ReadonlyArray<string>, runId: string): Buffer {
+  const r = spawnSync(cmd, [...args], {
+    maxBuffer: SUBPROCESS_MAX_BUFFER_BYTES,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (r.error) {
+    throw new BrainSnapshotError(`${cmd} failed to start: ${r.error.message}`, runId);
+  }
+  if (r.status !== 0) {
+    const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
+    throw new BrainSnapshotError(`${cmd} exited with status ${r.status}: ${stderr}`, runId);
+  }
+  if (!r.stdout) {
+    throw new BrainSnapshotError(`${cmd} produced no stdout`, runId);
+  }
+  return r.stdout;
 }
 
 // ----- listSnapshots / pruneSnapshots --------------------------------------
@@ -362,8 +784,8 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
   }
   const infos: SnapshotInfo[] = [];
   for (const name of entries) {
-    if (!name.endsWith(".tar.zst")) continue;
-    const runId = name.slice(0, -".tar.zst".length);
+    if (!name.endsWith(SNAPSHOT_ARCHIVE_SUFFIX)) continue;
+    const runId = name.slice(0, -SNAPSHOT_ARCHIVE_SUFFIX.length);
     // The `.snapshots/` dir is ours, so a malformed run_id here would
     // indicate manual tampering — we keep the listing tolerant and
     // skip rather than throw.
@@ -380,12 +802,19 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
       continue;
     }
     const sidecar = manifestSidecarPath(vault, runId);
+    const storeArchive = snapshotStorePath(vault, runId);
     infos.push({
       run_id: runId,
       path: full,
       created_at: new Date(st.mtimeMs).toISOString(),
       size_bytes: st.size,
       manifest_path: existsSync(sidecar) ? sidecar : null,
+      store_archive_path: existsSync(storeArchive) ? storeArchive : null,
+      // `?? null` collapses "no sidecar", "unreadable sidecar" and
+      // "sidecar predating the feature" into one answer, which is
+      // correct: all three mean the coverage is UNKNOWN, and none of
+      // them is evidence that the store was excluded.
+      derived_store: readManifestSidecar(vault, runId)?.derived_store ?? null,
     });
   }
   // Sort newest-first by mtime. We deliberately avoid lexicographic
@@ -426,13 +855,15 @@ export function pruneSnapshots(vault: string, retentionCount: number): PruneSnap
       // Best-effort: a snapshot we can't delete (permission error)
       // stays put. The next dream run will try again.
     }
-    // Remove the matching sidecar manifest if present. Independent
-    // try/catch so a missing sidecar (snapshot whose sidecar write
-    // failed at creation time) must not abort the prune of
-    // subsequent victims.
-    if (v.manifest_path !== null) {
+    // Remove the matching sidecar manifest and derived-store archive if
+    // present. Independent try/catch per companion so a missing one (a
+    // snapshot whose sidecar write failed at creation time, or one taken
+    // without store coverage) must not abort the prune of subsequent
+    // victims.
+    for (const companion of [v.manifest_path, v.store_archive_path]) {
+      if (companion === null) continue;
       try {
-        rmSync(v.manifest_path, { force: true });
+        rmSync(companion, { force: true });
       } catch {
         // Same rationale as above — best-effort.
       }
@@ -443,22 +874,6 @@ export function pruneSnapshots(vault: string, retentionCount: number): PruneSnap
 
 // ----- restoreSnapshot -----------------------------------------------------
 
-/**
- * Restore the archive identified by `runId` over `Brain/`. The current
- * `.snapshots/` directory is preserved verbatim so older rollbacks
- * still have a path back.
- *
- * Steps:
- *
- *   1. Locate the archive.
- *   2. Extract into a sibling temp dir.
- *   3. Verify the extracted tree contains a `Brain/` root.
- *   4. For each top-level entry under the extracted `Brain/` (which
- *      excludes `.snapshots/` by virtue of how the archive was
- *      written), remove the corresponding live entry and copy the
- *      extracted one into place.
- *   5. Clean up the temp dir.
- */
 /**
  * Result of {@link extractSnapshotToTemp}. `brainRoot` is the
  * extracted `Brain/` directory (sibling to the live tree, inside a
@@ -572,27 +987,50 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
   }
 }
 
+/**
+ * Restore the archive identified by `runId` over `Brain/`, and the
+ * derived store alongside it when the snapshot recorded one. The current
+ * `.snapshots/` directory is preserved verbatim so older rollbacks still
+ * have a path back.
+ *
+ * Steps:
+ *
+ *   1. Locate the archive.
+ *   2. Extract into a sibling temp dir.
+ *   3. Verify the extracted tree contains a `Brain/` root.
+ *   4. For each top-level entry under the extracted `Brain/` (which
+ *      excludes {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES} by virtue of how
+ *      the archive was written), remove the corresponding live entry and
+ *      copy the extracted one into place.
+ *   5. Swap the derived store, when and only when the manifest says the
+ *      snapshot included one.
+ *   6. Clean up the temp dir.
+ */
 export function restoreSnapshot(
   vault: string,
   runId: string,
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- reserved for future log emission
-  _opts: { now?: Date } = {},
+  opts: CreateSnapshotOptions = {},
 ): RestoreSnapshotResult {
   const dirs = brainDirsForWrite(vault);
   const ext = extractSnapshotToTemp(vault, runId);
   try {
-    // Replace every top-level entry under Brain/, EXCEPT `.snapshots/`.
-    // The exclusion is the load-bearing safety guarantee: rolling back
-    // an older state must not erase newer snapshots, otherwise the
-    // operator is one click away from losing their forward path.
-    const replacementEntries = readdirSync(ext.brainRoot).filter((e) => e !== ".snapshots");
+    // Replace every top-level entry under Brain/, except the entries the
+    // snapshot family never touches. The `.snapshots/` exclusion is the
+    // load-bearing safety guarantee: rolling back an older state must
+    // not erase newer snapshots, otherwise the operator is one click
+    // away from losing their forward path. `.artifacts/` is excluded for
+    // the opposite reason - it is not in the archive at all, so deleting
+    // the live copy would restore nothing over it.
+    const replacementEntries = readdirSync(ext.brainRoot).filter(
+      (e) => !isSnapshotExcludedEntry(e),
+    );
 
-    // The correct semantics are "live tree == snapshot tree minus
-    // `.snapshots/`". Delete every live top-level entry except
-    // `.snapshots/`, then copy in from the extracted Brain/. This
-    // makes restore deterministic.
+    // The correct semantics are "live tree == snapshot tree minus the
+    // excluded entries". Delete every live top-level entry except those,
+    // then copy in from the extracted Brain/. This makes restore
+    // deterministic.
     const liveEntries = existsSync(dirs.brain)
-      ? readdirSync(dirs.brain).filter((e) => e !== ".snapshots")
+      ? readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e))
       : [];
     for (const name of liveEntries) {
       const target = join(dirs.brain, name);
@@ -615,10 +1053,161 @@ export function restoreSnapshot(
       cpSync(from, to, { recursive: true });
       restoredFiles += countFiles(to);
     }
-    return { restored_files: restoredFiles };
+    return {
+      restored_files: restoredFiles,
+      derived_store: restoreDerivedStore(vault, runId, opts),
+    };
   } finally {
     ext.cleanup();
   }
+}
+
+/**
+ * Put the archived derived store back, but ONLY when the manifest says
+ * this snapshot carried one.
+ *
+ * Three answers, and the caller reports whichever it gets rather than
+ * leaving any of them implicit:
+ *
+ *   - the manifest records inclusion: decompress and swap;
+ *   - the manifest records an exclusion: nothing is touched, and the
+ *     named reason travels back;
+ *   - there is no record at all: the snapshot predates coverage, so
+ *     coverage is UNKNOWN. A restore must not guess in either direction
+ *     here - replacing a live store on a hunch destroys embeddings the
+ *     archive never held, and reporting "excluded" would claim a check
+ *     that never ran.
+ */
+function restoreDerivedStore(
+  vault: string,
+  runId: string,
+  opts: CreateSnapshotOptions,
+): RestoreDerivedStoreResult {
+  const record = readManifestSidecar(vault, runId)?.derived_store ?? null;
+  if (record === null) {
+    return Object.freeze({
+      replaced: false,
+      coverage_known: false,
+      path: null,
+      exclusion_reason: null,
+    });
+  }
+  if (!record.included) {
+    return Object.freeze({
+      replaced: false,
+      coverage_known: true,
+      path: null,
+      exclusion_reason: record.exclusion_reason,
+    });
+  }
+
+  const archive = snapshotStorePath(vault, runId);
+  if (!existsSync(archive)) {
+    throw new BrainSnapshotError(
+      `manifest records a derived-store archive but ${archive} is absent`,
+      runId,
+    );
+  }
+  // The manifest's `source_path` is where the store WAS; the live target
+  // is where it is now. They differ when the operator moved the vault or
+  // set a `search_db_path` override after the snapshot, and the live
+  // answer is the one a restore must write to.
+  const target = opts.derivedStorePath ?? resolveIndexPath(vault, null);
+  swapDerivedStore(archive, target, runId);
+  return Object.freeze({
+    replaced: true,
+    coverage_known: true,
+    path: target,
+    exclusion_reason: null,
+  });
+}
+
+/**
+ * Decompress `archive` beside the live store and rename it into place
+ * under the writer lock.
+ *
+ * The same swap discipline `reindexVault` already uses: build the
+ * replacement at a sibling path on the same filesystem, keep the
+ * outgoing file as `.bak`, then a single atomic rename. Holding the
+ * writer lock across it is what stops an index run from writing into the
+ * file being replaced.
+ *
+ * The WAL siblings of the OUTGOING file are removed after the swap. The
+ * decompressed archive came from `VACUUM INTO` and is a complete
+ * database on its own; an orphan `-wal` from the file it replaced would
+ * make the next open fail with SQLITE_IOERR_SHORT_READ, which is the
+ * exact failure `consolidateWal` exists to prevent on the reindex path.
+ */
+function swapDerivedStore(archive: string, target: string, runId: string): void {
+  mkdirSync(dirname(target), { recursive: true });
+  const incoming = `${target}${RESTORE_STAGING_SUFFIX}`;
+  const outgoing = `${target}${RESTORE_BACKUP_SUFFIX}`;
+  const release = acquireWriterLockSync(target);
+  try {
+    rmSync(incoming, { force: true });
+    decompressArchiveTo(archive, incoming, runId);
+    rmSync(outgoing, { force: true });
+    if (existsSync(target)) renameSync(target, outgoing);
+    renameSync(incoming, target);
+    for (const sidecar of WAL_SIBLING_SUFFIXES) {
+      rmSync(`${target}${sidecar}`, { force: true });
+    }
+  } catch (err) {
+    rmSync(incoming, { force: true });
+    if (err instanceof BrainSnapshotError || err instanceof BrainSnapshotToolingMissingError) {
+      throw err;
+    }
+    throw new BrainSnapshotError(
+      `failed to restore the derived store to ${target}: ${(err as Error).message ?? String(err)}`,
+      runId,
+    );
+  } finally {
+    release();
+  }
+}
+
+/** Staging name of the store being restored, beside its destination. */
+const RESTORE_STAGING_SUFFIX = ".restore";
+/**
+ * The outgoing store, kept under the SAME `.bak` name the reindex swap
+ * uses - so the crash-recovery preamble every `Store.open` runs restores
+ * it if a rollback dies between the two renames.
+ */
+const RESTORE_BACKUP_SUFFIX = ".bak";
+/** SQLite's write-ahead-log siblings of a database file. */
+const WAL_SIBLING_SUFFIXES: ReadonlyArray<string> = Object.freeze(["-wal", "-shm"]);
+
+/** Decompress a snapshot archive to `outPath`, probing the magic bytes. */
+function decompressArchiveTo(archive: string, outPath: string, runId: string): void {
+  const tools = detectTooling();
+  const compressor = detectArchiveCompression(archive);
+  if (compressor === "zstd" && !tools.zstd) {
+    throw new BrainSnapshotToolingMissingError(
+      "zstd",
+      "archive is zstd-compressed; install zstd to restore it.",
+    );
+  }
+  if (compressor === "gzip" && !tools.gzip) {
+    throw new BrainSnapshotToolingMissingError(
+      "gzip",
+      "archive is gzip-compressed; install gzip to restore it.",
+    );
+  }
+  if (compressor === "zstd") {
+    // `zstd -o` opens the destination itself and refuses an existing one.
+    runCompressor(
+      "zstd",
+      ["-d", "-q", "-o", outPath, archive],
+      { kind: "file", path: archive },
+      runId,
+      null,
+    );
+    return;
+  }
+  // gzip only writes to stdout; `wx` keeps the destination exclusive.
+  writeFileSync(outPath, runArchiveProducer("gzip", ["-d", "-c", archive], runId), {
+    flag: "wx",
+  });
 }
 
 // ----- Helpers -------------------------------------------------------------
@@ -663,6 +1252,3 @@ function countFiles(path: string): number {
   }
   return count;
 }
-
-// Silence unused-symbol lints for helpers exported only via re-export.
-void basename;

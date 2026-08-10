@@ -1189,6 +1189,19 @@ export interface BrainConfidenceConfig {
 export interface BrainSnapshotsConfig {
   /** Keep this many newest `.snapshots/*.tar.zst`. Positive integer. */
   readonly retention_count: number;
+  /**
+   * Cover the derived SQLite store as well as the Markdown tree.
+   * Default OFF: what coverage protects is the embedding spend, not
+   * information, and every retained archive is replicated to every peer.
+   * See the `snapshot.ts` module header for the full cost argument.
+   */
+  readonly include_derived_store: boolean;
+  /**
+   * Refuse - never truncate - when the live derived store exceeds this
+   * many bytes. Positive integer. Read together with `retention_count`:
+   * the worst case on every peer is the two multiplied.
+   */
+  readonly derived_store_max_bytes: number;
 }
 
 /**

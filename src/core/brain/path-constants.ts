@@ -1,6 +1,7 @@
 /**
  * Canonical vault-relative layout of the Brain tree: every directory and
- * artefact filename under `<vault>/Brain/`, and nothing else.
+ * artefact filename under `<vault>/Brain/`, plus the two names of the
+ * sibling derived-store directory that the snapshot family has to reach.
  *
  * Single source of truth. Every module that builds a path inside the
  * Brain layer imports these instead of repeating the literal. A future
@@ -77,13 +78,56 @@ export const BRAIN_SOURCES_REL = posix.join(BRAIN_ROOT_REL, "sources");
 export const BRAIN_REPORTS_REL = posix.join(BRAIN_ROOT_REL, "reports");
 /** Source-distillation pages: `Brain/distillations/dist-<slug>.md` (t_2e2e959f). */
 export const BRAIN_DISTILLATIONS_REL = posix.join(BRAIN_ROOT_REL, "distillations");
-export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, ".snapshots");
+/** Directory NAME of the snapshot archive home, as a top-level `Brain/` entry. */
+export const BRAIN_SNAPSHOTS_DIR = ".snapshots";
+export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_SNAPSHOTS_DIR);
 /**
  * Ephemeral MCP tool-result artifacts (v0.18.0). Dot-directory so the
  * vault walker excludes it from search/indexing exactly like
  * `.snapshots`; never backed up, pruned by TTL on server startup.
  */
-export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, ".artifacts");
+export const BRAIN_ARTIFACTS_DIR = ".artifacts";
+export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
+
+/**
+ * The top-level `Brain/` entries the snapshot family never touches:
+ * never archived, never hashed into a manifest, and never removed by a
+ * restore.
+ *
+ * `.snapshots` is excluded because archiving the archive home would
+ * either explode the tar or let a rollback to an older state erase the
+ * newer recovery points that are the operator's way forward.
+ *
+ * `.artifacts` is excluded because it is ephemeral tool output with a
+ * TTL, documented above as never backed up. It was nevertheless archived
+ * in every snapshot and hashed into every manifest, so churn in a cache
+ * nobody wants restored tripped the rollback drift gate. One list, read
+ * by the archiver, the manifest walker and the restore, is what keeps the
+ * three from disagreeing again.
+ */
+export const BRAIN_SNAPSHOT_EXCLUDED_ENTRIES: ReadonlyArray<string> = Object.freeze([
+  BRAIN_SNAPSHOTS_DIR,
+  BRAIN_ARTIFACTS_DIR,
+]);
+
+/**
+ * The DERIVED store: `<vault>/.open-second-brain/brain.sqlite`.
+ *
+ * A sibling of `Brain/`, not a member of it, and the only file in that
+ * directory the snapshot family may ever touch. The directory also holds
+ * encrypted secrets, the install and protect lockfiles, a second SQLite
+ * lease database and the ingest checkpoints - none of which belongs in a
+ * recovery archive of the Markdown tree, which is why the constant names
+ * the FILE and every caller joins the two rather than archiving the
+ * directory.
+ *
+ * The literal used to be repeated at roughly a dozen sites behind four
+ * private per-module constants. Naming it here does not make this module
+ * know what a search index is: it knows a name, exactly as it does for
+ * every `Brain/` entry above.
+ */
+export const DERIVED_STORE_DIR = ".open-second-brain";
+export const DERIVED_STORE_FILE = "brain.sqlite";
 
 /** Brain-internal artefact filenames at the root of `Brain/`. */
 export const BRAIN_CONFIG_FILE = "_brain.yaml";

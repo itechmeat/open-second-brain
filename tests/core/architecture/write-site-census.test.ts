@@ -641,11 +641,16 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/snapshot.ts": {
     categories: [C.archiveTransfer, C.retentionDelete],
-    calls: ["cpSync", "rmSync", "writeFileSync"],
+    calls: ["cpSync", "renameSync", "rmSync", "unlinkSync", "writeFileSync"],
     reason:
       "writes the compressed archive BYTES into `.snapshots/`, prunes archives past " +
       "the retention count, and restores by recursive copy. A torn archive fails on " +
-      "restore exactly as any interrupted snapshot does; no Markdown parser reads it.",
+      "restore exactly as any interrupted snapshot does; no Markdown parser reads it. " +
+      "The derived-store restore adds the rename pair: it stages the decompressed " +
+      "database beside its destination and swaps it in under the search writer lock, " +
+      "which IS the atomic write for a SQLite file - the same discipline `reindexVault` " +
+      "uses, and the reason a partial decompression can never be observed as the live " +
+      "store. The unlink removes a partial store archive whose snapshot was refused.",
   },
 
   // --- Concurrency primitives --------------------------------------------

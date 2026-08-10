@@ -52,6 +52,11 @@ import {
   STALE_DEPENDENCY_STATE,
   STALE_DEPENDENCY_STATES,
 } from "../../../src/core/brain/doctor/stale-dependency-check.ts";
+import {
+  isSnapshotStoreExclusionReason,
+  SNAPSHOT_STORE_EXCLUSION,
+  SNAPSHOT_STORE_EXCLUSION_REASONS,
+} from "../../../src/core/brain/manifest.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
 import {
   isTriggerStatus,
@@ -183,6 +188,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: STALE_DEPENDENCY_STATE,
     members: STALE_DEPENDENCY_STATES,
     guard: isStaleDependencyStateKind,
+  },
+  {
+    // U6. Persisted into a replicated sidecar, so the guard is what
+    // stands between a peer's hand-edited manifest and a restore acting
+    // on a reason this build does not understand.
+    name: "SNAPSHOT_STORE_EXCLUSION",
+    values: SNAPSHOT_STORE_EXCLUSION,
+    members: SNAPSHOT_STORE_EXCLUSION_REASONS,
+    guard: isSnapshotStoreExclusionReason,
   },
 ]);
 

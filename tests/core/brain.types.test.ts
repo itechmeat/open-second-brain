@@ -237,7 +237,11 @@ describe("interface shape smoke (compile-time)", () => {
         medium_min: 0.4,
         high_min: 0.75,
       },
-      snapshots: { retention_count: 10 },
+      snapshots: {
+        retention_count: 10,
+        include_derived_store: false,
+        derived_store_max_bytes: 268_435_456,
+      },
     } as const satisfies BrainConfig;
     expect(cfg.schema_version).toBe(1);
     expect(cfg.primary_agent).toBeNull();

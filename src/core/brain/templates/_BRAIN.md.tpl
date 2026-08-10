@@ -137,9 +137,11 @@ them as part of normal agent work.
   preference requires `--yes` and prints a warning.
 - `o2b brain rollback <run_id>` — restore Brain from a snapshot.
   Interactive by default; `--list` enumerates available snapshots.
-  From v0.10.6 a snapshot ships with a sha256 sidecar manifest so
+  From {{manifest_sidecar_since}} a snapshot ships with a sha256 sidecar manifest so
   rollback aborts when the live tree drifted from the snapshot moment;
-  pass `--force-rollback` to override.
+  pass `--force-rollback` to override. The derived SQLite store is
+  covered only when `snapshots.include_derived_store` is on; every
+  rollback says which of replaced / not restored / unknown applied.
 - `o2b brain pin <pref-id>` / `unpin <pref-id>` — protect a preference
   from automatic retirement (still subject to explicit reject).
 - `o2b brain upgrade` — migrate the release-owned files (`_brain.yaml`,

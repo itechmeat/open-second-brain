@@ -20,7 +20,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { withDestructiveSnapshot } from "../../../src/core/brain/snapshot-gate.ts";
-import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { BrainSnapshotStoreError, listSnapshots } from "../../../src/core/brain/snapshot.ts";
 import { brainDirs, validateRunId } from "../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
@@ -96,6 +96,27 @@ describe("withDestructiveSnapshot", () => {
       process.env["PATH"] = savedPath;
       rmSync(emptyDir, { recursive: true, force: true });
     }
+  });
+
+  test("aborts the operation when derived-store coverage cannot be honoured", () => {
+    // Coverage on, and no derived store in this vault. `createSnapshot`
+    // refuses rather than downgrading to a snapshot that omits what it
+    // was asked to protect - and because the gate snapshots FIRST, the
+    // destructive operation simply never runs. No new plumbing: the
+    // property follows from refusing in the right place.
+    const brainYaml = join(brainDirs(vault).brain, "_brain.yaml");
+    atomicWriteFileSync(
+      brainYaml,
+      "schema_version: 1\nsnapshots:\n  include_derived_store: true\n",
+    );
+    let opRan = false;
+    expect(() =>
+      withDestructiveSnapshot(vault, "delete-by-source", () => {
+        opRan = true;
+      }),
+    ).toThrow(BrainSnapshotStoreError);
+    expect(opRan).toBe(false);
+    expect(listSnapshots(vault)).toHaveLength(0);
   });
 
   test("op error propagates but the snapshot is retained as recovery point", () => {

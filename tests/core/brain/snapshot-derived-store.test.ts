@@ -1,0 +1,440 @@
+/**
+ * U6: derived-store coverage in the snapshot archive.
+ *
+ * The unit under test is a refusal discipline as much as a feature, so
+ * the cases below are weighted towards what must NOT happen: no partial
+ * archive after a refusal, no store touched by a restore that has no
+ * record of one, no silent overwrite of an existing archive on a host
+ * without zstd, and no `unknown` rendered as `excluded`.
+ *
+ * The fixture is a REAL index built by `indexVault` over a seeded vault,
+ * through the same search-fixture helpers the search tests use. A
+ * hand-written sqlite file would pass `PRAGMA quick_check` just as well,
+ * but it would not exercise the writer lock the archiver takes on the
+ * live store path, and that lock is the whole reason the copy is
+ * consistent.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Database } from "bun:sqlite";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
+import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { bootstrapBrain } from "../../../src/core/brain/init.ts";
+import {
+  BrainSnapshotError,
+  BrainSnapshotStoreError,
+  createSnapshot,
+  listSnapshots,
+  pruneSnapshots,
+  restoreSnapshot,
+} from "../../../src/core/brain/snapshot.ts";
+import {
+  manifestSidecarPath,
+  readManifestSidecar,
+  SNAPSHOT_STORE_EXCLUSION,
+} from "../../../src/core/brain/manifest.ts";
+import { brainDirs, snapshotPath, snapshotStorePath } from "../../../src/core/brain/paths.ts";
+import { BRAIN_ARTIFACTS_DIR } from "../../../src/core/brain/path-constants.ts";
+import { sha256Hex } from "../../../src/core/integrity/digest.ts";
+import { indexVault } from "../../../src/core/search/indexer.ts";
+import { resolveIndexPath } from "../../../src/core/search/paths.ts";
+import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+
+let vault: string;
+let configHome: string;
+let configPath: string;
+
+/** Coverage on, ceiling high enough that only the explicit cases trip it. */
+const COVERED = { include: true, maxBytes: 1024 * 1024 * 1024 } as const;
+
+beforeEach(() => {
+  vault = mkdtempSync(join(tmpdir(), "o2b-snap-store-vault-"));
+  configHome = mkdtempSync(join(tmpdir(), "o2b-snap-store-cfg-"));
+  configPath = join(configHome, "config.yaml");
+  atomicWriteFileSync(configPath, `vault: ${vault}\n`);
+  bootstrapBrain(vault, { configPath });
+
+  const dirs = brainDirs(vault);
+  writeFileSync(
+    join(dirs.preferences, "pref-foo.md"),
+    "---\nkind: brain-preference\n---\n\n## Principle\n\nseed\n",
+  );
+});
+
+afterEach(() => {
+  rmSync(vault, { recursive: true, force: true });
+  rmSync(configHome, { recursive: true, force: true });
+});
+
+/** Build a real derived store for `vault` and return its path. */
+async function seedDerivedStore(): Promise<string> {
+  const dbPath = resolveIndexPath(vault, null);
+  const notes = join(vault, "Notes");
+  mkdirSync(notes, { recursive: true });
+  writeFileSync(
+    join(notes, "seed.md"),
+    "# Seed\n\nA paragraph long enough to be chunked and indexed by the walker.\n",
+  );
+  await indexVault(makeConfig({ vault, dbPath }));
+  return dbPath;
+}
+
+describe("createSnapshot — derived-store coverage off (the default)", () => {
+  test("writes no store archive and records not-requested with a live size", async () => {
+    const dbPath = await seedDerivedStore();
+    const runId = "dream-store-off";
+
+    const res = createSnapshot(vault, runId);
+
+    expect(existsSync(snapshotStorePath(vault, runId))).toBe(false);
+    expect(res.derived_store.included).toBe(false);
+    expect(res.derived_store.exclusion_reason).toBe(SNAPSHOT_STORE_EXCLUSION.not_requested);
+    // The whole point of measuring it even when nothing is archived: an
+    // operator who has never enabled coverage still sees the cost.
+    expect(res.derived_store.live_size).toBe(statSync(dbPath).size);
+    expect(res.derived_store.live_size).not.toBeNull();
+
+    const manifest = readManifestSidecar(vault, runId);
+    expect(manifest?.derived_store).toEqual(res.derived_store);
+  });
+
+  test("records a null live size when there is no store to measure", () => {
+    const res = createSnapshot(vault, "dream-store-off-absent");
+    expect(res.derived_store.live_size).toBeNull();
+    expect(res.derived_store.exclusion_reason).toBe(SNAPSHOT_STORE_EXCLUSION.not_requested);
+  });
+});
+
+describe("createSnapshot — derived-store coverage on", () => {
+  test("writes the archive and the manifest digest matches its bytes", async () => {
+    const dbPath = await seedDerivedStore();
+    const runId = "dream-store-on";
+
+    const res = createSnapshot(vault, runId, { derivedStore: COVERED });
+
+    const archive = snapshotStorePath(vault, runId);
+    expect(existsSync(archive)).toBe(true);
+    expect(res.derived_store.included).toBe(true);
+    expect(res.derived_store.exclusion_reason).toBeNull();
+    expect(res.derived_store.source_path).toBe(dbPath);
+    expect(res.derived_store.archive_sha256).toBe(sha256Hex(readFileSync(archive)));
+    expect(res.derived_store.archive_size).toBe(statSync(archive).size);
+    expect(res.derived_store.live_size).toBe(statSync(dbPath).size);
+
+    const manifest = readManifestSidecar(vault, runId);
+    expect(manifest?.derived_store).toEqual(res.derived_store);
+  });
+
+  test("the archive is a sibling of the tar, never a member of it", async () => {
+    await seedDerivedStore();
+    const runId = "dream-store-sibling";
+    createSnapshot(vault, runId, { derivedStore: COVERED });
+
+    const listing = execFileSync("tar", ["-tf", snapshotPath(vault, runId)], {
+      encoding: "utf8",
+    });
+    // Every member starts at `Brain/`; the extractor and the restore
+    // both depend on that being the only top-level name in the tar.
+    for (const line of listing.split("\n").filter((l) => l.trim() !== "")) {
+      expect(line.startsWith("Brain/")).toBe(true);
+    }
+  });
+
+  test("refuses an absent store and leaves no tar behind", () => {
+    const runId = "dream-store-absent";
+    try {
+      createSnapshot(vault, runId, { derivedStore: COVERED });
+      throw new Error("expected a refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BrainSnapshotStoreError);
+      expect((err as BrainSnapshotStoreError).reason).toBe(SNAPSHOT_STORE_EXCLUSION.absent);
+    }
+    expect(existsSync(snapshotPath(vault, runId))).toBe(false);
+    expect(existsSync(snapshotStorePath(vault, runId))).toBe(false);
+    expect(existsSync(manifestSidecarPath(vault, runId))).toBe(false);
+  });
+
+  test("refuses a condemned store and leaves no tar behind", async () => {
+    const dbPath = await seedDerivedStore();
+    // Not a SQLite database any more. `new Database` is lazy, so this is
+    // caught by the integrity scanner rather than by the open.
+    writeFileSync(dbPath, "this is not a database");
+
+    const runId = "dream-store-faulted";
+    try {
+      createSnapshot(vault, runId, { derivedStore: COVERED });
+      throw new Error("expected a refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BrainSnapshotStoreError);
+      expect((err as BrainSnapshotStoreError).reason).toBe(
+        SNAPSHOT_STORE_EXCLUSION.integrity_fault,
+      );
+    }
+    expect(existsSync(snapshotPath(vault, runId))).toBe(false);
+    expect(existsSync(snapshotStorePath(vault, runId))).toBe(false);
+  });
+
+  test("refuses a store over the ceiling, naming the measured size", async () => {
+    const dbPath = await seedDerivedStore();
+    const liveSize = statSync(dbPath).size;
+    const runId = "dream-store-too-big";
+
+    try {
+      createSnapshot(vault, runId, { derivedStore: { include: true, maxBytes: 1 } });
+      throw new Error("expected a refusal");
+    } catch (err) {
+      expect(err).toBeInstanceOf(BrainSnapshotStoreError);
+      expect((err as BrainSnapshotStoreError).reason).toBe(
+        SNAPSHOT_STORE_EXCLUSION.over_size_ceiling,
+      );
+      // The measured size, not a vague "too large": it is the number the
+      // operator sets the ceiling against.
+      expect((err as Error).message).toContain(String(liveSize));
+    }
+    expect(existsSync(snapshotPath(vault, runId))).toBe(false);
+    expect(existsSync(snapshotStorePath(vault, runId))).toBe(false);
+  });
+
+  test("refuses an existing store archive rather than overwriting it", async () => {
+    await seedDerivedStore();
+    const runId = "dream-store-collide";
+    createSnapshot(vault, runId, { derivedStore: COVERED });
+    // Remove only the tar, so the second attempt reaches the store step
+    // with the store archive already in place.
+    rmSync(snapshotPath(vault, runId), { force: true });
+    const archive = snapshotStorePath(vault, runId);
+    const before = readFileSync(archive);
+
+    expect(() => createSnapshot(vault, runId, { derivedStore: COVERED })).toThrow(
+      /refusing to overwrite/,
+    );
+    // And the refusal does not then clean up the file it refused to
+    // overwrite. That archive belongs to another snapshot; removing it
+    // while tidying after our own failure would reintroduce the
+    // data-loss path through the back door.
+    expect(readFileSync(archive).equals(before)).toBe(true);
+  });
+});
+
+describe("listSnapshots and pruneSnapshots over a covered snapshot", () => {
+  test("the listing carries the sidecar's derived-store record", async () => {
+    await seedDerivedStore();
+    createSnapshot(vault, "dream-list-covered", { derivedStore: COVERED });
+
+    const [info] = listSnapshots(vault);
+    expect(info?.derived_store?.included).toBe(true);
+    expect(info?.store_archive_path).toBe(snapshotStorePath(vault, "dream-list-covered"));
+  });
+
+  test("a sidecar written before this feature renders as unknown, not excluded", () => {
+    const runId = "dream-legacy-sidecar";
+    createSnapshot(vault, runId);
+    // Exactly the shape a pre-feature peer wrote: schema version 1, no
+    // derived-store key at all.
+    const sidecar = manifestSidecarPath(vault, runId);
+    const parsed = JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, unknown>;
+    delete parsed["derived_store"];
+    writeFileSync(sidecar, JSON.stringify(parsed, null, 2) + "\n");
+
+    const [info] = listSnapshots(vault);
+    // `null` is UNKNOWN. An `excluded` record would claim a check ran.
+    expect(info?.derived_store).toBeNull();
+    expect(readManifestSidecar(vault, runId)).not.toBeNull();
+  });
+
+  test("retention removes the store archive alongside the tar and the sidecar", async () => {
+    await seedDerivedStore();
+    const old = "dream-prune-covered-old";
+    const fresh = "dream-prune-covered-new";
+    createSnapshot(vault, old, { derivedStore: COVERED });
+    const t = new Date("2026-05-09T00:00:00Z");
+    utimesSync(snapshotPath(vault, old), t, t);
+    createSnapshot(vault, fresh, { derivedStore: COVERED });
+
+    pruneSnapshots(vault, 1);
+
+    expect(existsSync(snapshotPath(vault, old))).toBe(false);
+    expect(existsSync(snapshotStorePath(vault, old))).toBe(false);
+    expect(existsSync(manifestSidecarPath(vault, old))).toBe(false);
+    expect(existsSync(snapshotStorePath(vault, fresh))).toBe(true);
+  });
+
+  test("a snapshot without a store archive still prunes cleanly", () => {
+    const old = "dream-prune-bare-old";
+    createSnapshot(vault, old);
+    const t = new Date("2026-05-09T00:00:00Z");
+    utimesSync(snapshotPath(vault, old), t, t);
+    createSnapshot(vault, "dream-prune-bare-new");
+
+    const res = pruneSnapshots(vault, 1);
+    expect(res.deleted).toContain(snapshotPath(vault, old));
+    expect(existsSync(snapshotPath(vault, old))).toBe(false);
+  });
+});
+
+describe("restoreSnapshot — the derived store", () => {
+  test("swaps the store and says so when the manifest recorded one", async () => {
+    const dbPath = await seedDerivedStore();
+    const runId = "dream-restore-covered";
+    createSnapshot(vault, runId, { derivedStore: COVERED });
+
+    // Move the live store on: a row nothing in the archive knows about.
+    const live = new Database(dbPath);
+    live.exec("CREATE TABLE post_snapshot_marker (id INTEGER PRIMARY KEY)");
+    live.close();
+    expect(markerTableExists(dbPath)).toBe(true);
+
+    const result = restoreSnapshot(vault, runId);
+
+    expect(result.derived_store.replaced).toBe(true);
+    expect(result.derived_store.coverage_known).toBe(true);
+    expect(result.derived_store.path).toBe(dbPath);
+    expect(result.derived_store.exclusion_reason).toBeNull();
+    // The swap really happened: the post-snapshot table is gone.
+    expect(markerTableExists(dbPath)).toBe(false);
+    // No orphan WAL siblings of the file that was replaced.
+    expect(existsSync(`${dbPath}-wal`)).toBe(false);
+    expect(existsSync(`${dbPath}-shm`)).toBe(false);
+  });
+
+  test("reports a non-included snapshot and leaves the live store alone", async () => {
+    const dbPath = await seedDerivedStore();
+    const runId = "dream-restore-uncovered";
+    createSnapshot(vault, runId);
+
+    const live = new Database(dbPath);
+    live.exec("CREATE TABLE post_snapshot_marker (id INTEGER PRIMARY KEY)");
+    live.close();
+
+    const result = restoreSnapshot(vault, runId);
+
+    expect(result.derived_store.replaced).toBe(false);
+    expect(result.derived_store.coverage_known).toBe(true);
+    expect(result.derived_store.exclusion_reason).toBe(SNAPSHOT_STORE_EXCLUSION.not_requested);
+    expect(markerTableExists(dbPath)).toBe(true);
+  });
+
+  test("reports unknown for a snapshot taken before coverage existed", async () => {
+    const dbPath = await seedDerivedStore();
+    const runId = "dream-restore-unknown";
+    createSnapshot(vault, runId);
+    rmSync(manifestSidecarPath(vault, runId), { force: true });
+
+    const result = restoreSnapshot(vault, runId);
+
+    expect(result.derived_store.coverage_known).toBe(false);
+    expect(result.derived_store.replaced).toBe(false);
+    // Unknown must never be reported as an exclusion.
+    expect(result.derived_store.exclusion_reason).toBeNull();
+    expect(existsSync(dbPath)).toBe(true);
+  });
+});
+
+describe("the artifact directory documented as never backed up", () => {
+  test("is neither archived nor hashed into the manifest", () => {
+    const dirs = brainDirs(vault);
+    const artifacts = join(dirs.brain, BRAIN_ARTIFACTS_DIR);
+    mkdirSync(artifacts, { recursive: true });
+    writeFileSync(join(artifacts, "run-1.json"), '{"ephemeral":true}');
+
+    const runId = "dream-artifacts-excluded";
+    createSnapshot(vault, runId);
+
+    const listing = execFileSync("tar", ["-tf", snapshotPath(vault, runId)], {
+      encoding: "utf8",
+    });
+    expect(listing).not.toContain(BRAIN_ARTIFACTS_DIR);
+
+    const manifest = readManifestSidecar(vault, runId);
+    const hashed = Object.keys(manifest?.files ?? {});
+    expect(hashed.some((p) => p.startsWith(`${BRAIN_ARTIFACTS_DIR}/`))).toBe(false);
+  });
+
+  test("survives a restore rather than being deleted by it", () => {
+    const dirs = brainDirs(vault);
+    const runId = "dream-artifacts-survive";
+    createSnapshot(vault, runId);
+
+    const artifacts = join(dirs.brain, BRAIN_ARTIFACTS_DIR);
+    mkdirSync(artifacts, { recursive: true });
+    const cached = join(artifacts, "run-2.json");
+    writeFileSync(cached, '{"ephemeral":true}');
+
+    restoreSnapshot(vault, runId);
+
+    // The archive holds no `.artifacts/`, so deleting the live copy
+    // would restore nothing over it - a net loss for no benefit.
+    expect(existsSync(cached)).toBe(true);
+  });
+});
+
+describe("a host with gzip but no zstd", () => {
+  test("refuses an existing archive exactly as the zstd path does", () => {
+    const runId = "dream-gzip-collision";
+    const originalPath = process.env["PATH"];
+    const bin = gzipOnlyPath();
+    process.env["PATH"] = bin.dir;
+    try {
+      createSnapshot(vault, runId);
+      const archive = snapshotPath(vault, runId);
+      expect(existsSync(archive)).toBe(true);
+      // Proves the fallback really was gzip: gzip's magic, not zstd's.
+      const magic = readFileSync(archive).subarray(0, 2);
+      expect([magic[0], magic[1]]).toEqual([0x1f, 0x8b]);
+      const before = readFileSync(archive);
+
+      // The run-id collision resolution in `snapshot-gate.ts` RETRIES on
+      // exactly this failure. Without it, two concurrent destructive
+      // operations on a gzip-only host destroy each other's recovery
+      // point with no error at all.
+      expect(() => createSnapshot(vault, runId)).toThrow(BrainSnapshotError);
+      expect(readFileSync(archive).equals(before)).toBe(true);
+    } finally {
+      process.env["PATH"] = originalPath;
+      bin.cleanup();
+    }
+  });
+});
+
+/** A PATH directory holding `tar` and `gzip` but deliberately not `zstd`. */
+function gzipOnlyPath(): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(join(tmpdir(), "o2b-gzip-only-bin-"));
+  for (const tool of ["tar", "gzip"]) {
+    symlinkSync(which(tool), join(dir, tool));
+  }
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+function which(tool: string): string {
+  return execFileSync("which", [tool], { encoding: "utf8" }).trim();
+}
+
+/** Whether the post-snapshot marker table is present in the store. */
+function markerTableExists(dbPath: string): boolean {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return (
+      db
+        .query<{ name: string }, [string]>(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        )
+        .get("post_snapshot_marker") !== null
+    );
+  } finally {
+    db.close();
+  }
+}

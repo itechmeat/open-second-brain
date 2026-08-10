@@ -1132,6 +1132,52 @@ describe("brain rollback", () => {
     expect(r.returncode).toBe(0);
     expect(r.stderr).toContain("no manifest sidecar");
     expect(r.stderr).toContain("predates v0.10.6");
+    // Coverage is unknown for a snapshot with no sidecar at all, and the
+    // restore says so rather than leaving it implicit.
+    expect(r.stdout).toContain("derived store: unknown");
+  });
+
+  test("reports derived-store coverage on --list and on a restore", async () => {
+    await bootstrap();
+    await runCli(
+      [
+        "brain",
+        "feedback",
+        "--vault",
+        vault,
+        "--topic",
+        "store-coverage",
+        "--signal",
+        "positive",
+        "--principle",
+        "p",
+        "--force-confirmed",
+        "--agent",
+        "claude",
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    const dr = await runCli(["brain", "dream", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    const dpayload = JSON.parse(dr.stdout) as { run_id: string; changed: boolean };
+    if (!dpayload.changed) return;
+
+    const listed = await runCli(["brain", "rollback", "--vault", vault, "--list"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(listed.returncode).toBe(0);
+    expect(listed.stdout).toContain("derived_store");
+    // Default configuration: nothing was requested, and the listing
+    // names that rather than showing a blank column.
+    expect(listed.stdout).toContain("excluded (not-requested)");
+
+    const restored = await runCli(
+      ["brain", "rollback", "--vault", vault, dpayload.run_id, "--yes", "--force-rollback"],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(restored.returncode).toBe(0);
+    expect(restored.stdout).toContain("derived store: not restored (not-requested)");
   });
 });
 

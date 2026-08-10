@@ -38,6 +38,7 @@ import {
   loadGuardrailsConfigSafe,
   loadIntegrityConfigSafe,
   loadNotesConfigSafe,
+  loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
   loadTemporalConfigSafe,
 } from "../../../src/core/brain/policy.ts";
@@ -81,6 +82,17 @@ const SAFE_LOADERS = [
     name: "loadActiveMostAppliedSafe",
     load: loadActiveMostAppliedSafe as (vault: string) => unknown,
     absentValue: BRAIN_MOST_APPLIED_DEFAULTS as unknown,
+  },
+  {
+    // Coverage is what an operator turned ON, so answering `false` from
+    // the defaults on a config that merely has a typo would silently
+    // strip the derived store out of every recovery point.
+    name: "loadSnapshotDerivedStorePolicySafe",
+    load: loadSnapshotDerivedStorePolicySafe as (vault: string) => unknown,
+    absentValue: {
+      include: DEFAULT_BRAIN_CONFIG.snapshots.include_derived_store,
+      maxBytes: DEFAULT_BRAIN_CONFIG.snapshots.derived_store_max_bytes,
+    } as unknown,
   },
 ] as const;
 

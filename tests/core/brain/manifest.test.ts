@@ -24,6 +24,7 @@ import {
   manifestDiffHasDrift,
   manifestSidecarPath,
   readManifestSidecar,
+  SNAPSHOT_STORE_EXCLUSION,
   writeManifestSidecar,
   type BrainManifest,
 } from "../../../src/core/brain/manifest.ts";
@@ -69,6 +70,18 @@ describe("buildManifest", () => {
   test(".snapshots/ is excluded from the walk", () => {
     writeFileSync(join(brain, ".snapshots", "phantom.tar.zst"), "binary");
     writeFileSync(join(brain, ".snapshots", "phantom.manifest.json"), "{}");
+    mkdirSync(join(brain, "preferences"));
+    writeFileSync(join(brain, "preferences", "pref-x.md"), "x");
+    const m = buildManifest(brain);
+    expect(Object.keys(m.files)).toEqual(["preferences/pref-x.md"]);
+  });
+
+  test(".artifacts/ is excluded from the walk", () => {
+    // Documented as never backed up, yet hashed into every manifest -
+    // so TTL'd tool output churning between a snapshot and a rollback
+    // tripped the drift gate on a directory no restore ever touches.
+    mkdirSync(join(brain, ".artifacts", "run-1"), { recursive: true });
+    writeFileSync(join(brain, ".artifacts", "run-1", "a.json"), "{}");
     mkdirSync(join(brain, "preferences"));
     writeFileSync(join(brain, "preferences", "pref-x.md"), "x");
     const m = buildManifest(brain);
@@ -258,5 +271,129 @@ describe("sidecar I/O", () => {
     expect(back!.files["preferences/pref-rt.md"]!.sha256).toBe(
       original.files["preferences/pref-rt.md"]!.sha256,
     );
+  });
+});
+
+/**
+ * The derived-store record travels on the same distribution channel as
+ * the rest of the sidecar - Syncthing, a manual copy, an operator who
+ * lost their nerves - so every field is validated on read and a single
+ * malformation fails the WHOLE manifest closed, exactly as one bad file
+ * entry already does. Anything looser would let a half-written record
+ * claim a coverage the archive does not have, and the restore acts on
+ * that claim.
+ */
+describe("the derived-store field on the sidecar", () => {
+  /** A sidecar carrying `derived_store` verbatim, written to disk. */
+  function writeSidecarWithStore(runId: string, derivedStore: unknown): void {
+    writeFileSync(
+      manifestSidecarPath(vault, runId),
+      JSON.stringify({
+        schema_version: 1,
+        generated_at: "2026-05-18T00:00:00Z",
+        brain_root: "Brain",
+        files: {},
+        derived_store: derivedStore,
+      }),
+    );
+  }
+
+  const INCLUDED = Object.freeze({
+    included: true,
+    source_path: "/vault/.open-second-brain/brain.sqlite",
+    archive_name: "run.store.sqlite.zst",
+    archive_sha256: "a".repeat(64),
+    archive_size: 4096,
+    live_size: 8192,
+    exclusion_reason: null,
+  });
+
+  const EXCLUDED = Object.freeze({
+    included: false,
+    source_path: "/vault/.open-second-brain/brain.sqlite",
+    archive_name: null,
+    archive_sha256: null,
+    archive_size: null,
+    live_size: 8192,
+    exclusion_reason: SNAPSHOT_STORE_EXCLUSION.not_requested,
+  });
+
+  test("an absent key parses and reads as unknown, never as excluded", () => {
+    writeFileSync(
+      manifestSidecarPath(vault, "pre-feature"),
+      JSON.stringify({
+        schema_version: 1,
+        generated_at: "2026-05-18T00:00:00Z",
+        brain_root: "Brain",
+        files: {},
+      }),
+    );
+    const back = readManifestSidecar(vault, "pre-feature");
+    // The manifest itself is valid - an older peer's sidecar must keep
+    // its drift guarantee, which is why the schema version was not
+    // bumped for this field.
+    expect(back).not.toBeNull();
+    expect(back!.derived_store).toBeUndefined();
+  });
+
+  test("a well-formed inclusion record roundtrips", () => {
+    writeSidecarWithStore("included", INCLUDED);
+    expect(readManifestSidecar(vault, "included")!.derived_store).toEqual(INCLUDED);
+  });
+
+  test("a well-formed exclusion record roundtrips", () => {
+    writeSidecarWithStore("excluded", EXCLUDED);
+    expect(readManifestSidecar(vault, "excluded")!.derived_store).toEqual(EXCLUDED);
+  });
+
+  test("a live size of zero is kept, because zero is a real size", () => {
+    writeSidecarWithStore("zero-size", { ...EXCLUDED, live_size: 0 });
+    expect(readManifestSidecar(vault, "zero-size")!.derived_store!.live_size).toBe(0);
+  });
+
+  test("an explicit null record fails the manifest closed", () => {
+    writeSidecarWithStore("null-record", null);
+    expect(readManifestSidecar(vault, "null-record")).toBeNull();
+  });
+
+  test("a non-object record fails the manifest closed", () => {
+    writeSidecarWithStore("scalar-record", "included");
+    expect(readManifestSidecar(vault, "scalar-record")).toBeNull();
+  });
+
+  test("a missing `included` flag fails the manifest closed", () => {
+    const { included: _drop, ...rest } = INCLUDED;
+    writeSidecarWithStore("no-flag", rest);
+    expect(readManifestSidecar(vault, "no-flag")).toBeNull();
+  });
+
+  test("a non-integer archive size fails the manifest closed", () => {
+    writeSidecarWithStore("fractional", { ...INCLUDED, archive_size: 4096.5 });
+    expect(readManifestSidecar(vault, "fractional")).toBeNull();
+  });
+
+  test("an unregistered exclusion reason fails the manifest closed", () => {
+    writeSidecarWithStore("unknown-reason", { ...EXCLUDED, exclusion_reason: "ran-out-of-disk" });
+    expect(readManifestSidecar(vault, "unknown-reason")).toBeNull();
+  });
+
+  test("inclusion without a digest fails the manifest closed", () => {
+    // Not a weaker record - a false one. Nothing could verify the
+    // archive it claims to have written.
+    writeSidecarWithStore("no-digest", { ...INCLUDED, archive_sha256: null });
+    expect(readManifestSidecar(vault, "no-digest")).toBeNull();
+  });
+
+  test("inclusion that also names an exclusion reason fails the manifest closed", () => {
+    writeSidecarWithStore("both", {
+      ...INCLUDED,
+      exclusion_reason: SNAPSHOT_STORE_EXCLUSION.absent,
+    });
+    expect(readManifestSidecar(vault, "both")).toBeNull();
+  });
+
+  test("an exclusion that names no reason fails the manifest closed", () => {
+    writeSidecarWithStore("reasonless", { ...EXCLUDED, exclusion_reason: null });
+    expect(readManifestSidecar(vault, "reasonless")).toBeNull();
   });
 });

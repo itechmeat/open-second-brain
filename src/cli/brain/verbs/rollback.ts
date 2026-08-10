@@ -3,14 +3,17 @@ import {
   extractSnapshotToTemp,
   restoreSnapshot,
   type ExtractSnapshotResult,
+  type RestoreDerivedStoreResult,
 } from "../../../core/brain/snapshot.ts";
 import {
+  BRAIN_MANIFEST_SIDECAR_SINCE_VERSION,
   buildManifest,
   diffManifests,
   manifestDiffHasDrift,
   readManifestSidecar,
   renderManifestDriftJson,
   renderManifestDriftMarkdown,
+  type BrainManifestDerivedStore,
 } from "../../../core/brain/manifest.ts";
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
@@ -50,8 +53,13 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
       ok("no snapshots available");
       return 0;
     }
-    ok("run_id\tcreated_at\tsize_bytes");
-    for (const s of snaps) ok(`${s.run_id}\t${s.created_at}\t${s.size_bytes}`);
+    ok("run_id\tcreated_at\tsize_bytes\tderived_store");
+    for (const s of snaps) {
+      ok(
+        `${s.run_id}\t${s.created_at}\t${s.size_bytes}\t` +
+          renderDerivedStoreCoverage(s.derived_store),
+      );
+    }
     return 0;
   }
 
@@ -73,7 +81,8 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
         const stored = readManifestSidecar(vault, runId);
         if (stored === null) {
           process.stderr.write(
-            `warning: no manifest sidecar for snapshot '${runId}'; drift detection skipped (snapshot predates v0.10.6).\n`,
+            `warning: no manifest sidecar for snapshot '${runId}'; drift detection ` +
+              `skipped (snapshot predates ${BRAIN_MANIFEST_SIDECAR_SINCE_VERSION}).\n`,
           );
           return null;
         }
@@ -152,9 +161,36 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   }
 
   if (flags["json"]) {
-    okJson({ run_id: runId, restored_files: result.restored_files });
+    okJson({
+      run_id: runId,
+      restored_files: result.restored_files,
+      derived_store: result.derived_store,
+    });
   } else {
     ok(`restored: ${runId} (${result.restored_files} files)`);
+    // Always printed, in all three shapes. A restore that silently says
+    // nothing about the derived store is exactly the silence this
+    // feature exists to remove: the operator cannot tell a store that
+    // was put back from one that was never in the archive.
+    ok(`derived store: ${renderDerivedStoreRestore(result.derived_store)}`);
   }
   return 0;
+}
+
+/** One-column coverage answer for `--list`. */
+function renderDerivedStoreCoverage(record: BrainManifestDerivedStore | null): string {
+  // A snapshot with no record predates the feature. `unknown`, never
+  // `excluded`: nothing checked, so nothing may be claimed.
+  if (record === null) return "unknown";
+  if (record.included) return `included (${record.archive_size ?? 0} bytes)`;
+  return `excluded (${record.exclusion_reason ?? "unspecified"})`;
+}
+
+/** One-line outcome for a completed restore. */
+function renderDerivedStoreRestore(outcome: RestoreDerivedStoreResult): string {
+  if (outcome.replaced) return `replaced ${outcome.path ?? ""}`.trimEnd();
+  if (!outcome.coverage_known) {
+    return `unknown (snapshot predates derived-store coverage); live store left untouched`;
+  }
+  return `not restored (${outcome.exclusion_reason ?? "unspecified"}); live store left untouched`;
 }

@@ -208,6 +208,43 @@ export const loadSnapshotRetentionSafe = makeAbsentTolerantLoader(
 );
 
 /**
+ * Derived-store coverage as the archiver consumes it: whether to include
+ * the store, and the ceiling above which inclusion is refused.
+ *
+ * A pair rather than two loaders because the two are never useful apart
+ * - the ceiling only means anything when inclusion is on, and reading
+ * them from two config loads would let one call see a file the other
+ * did not.
+ */
+export interface BrainDerivedStorePolicy {
+  readonly include: boolean;
+  readonly maxBytes: number;
+}
+
+/**
+ * Load `snapshots.include_derived_store` and
+ * `snapshots.derived_store_max_bytes`, falling back to the defaults when
+ * the config file is absent so a vault that has never run `brain init`
+ * still snapshots its Markdown tree (with coverage off, which is what
+ * the defaults say).
+ *
+ * An unreadable config raises, exactly as it does for the retention
+ * count beside it: coverage is what an operator turned ON, and answering
+ * with the default `false` would silently strip the store out of every
+ * recovery point on a vault whose `_brain.yaml` merely has a typo.
+ */
+export const loadSnapshotDerivedStorePolicySafe = makeAbsentTolerantLoader<BrainDerivedStorePolicy>(
+  (config: BrainConfig) => ({
+    include: config.snapshots.include_derived_store,
+    maxBytes: config.snapshots.derived_store_max_bytes,
+  }),
+  Object.freeze({
+    include: DEFAULT_BRAIN_CONFIG.snapshots.include_derived_store,
+    maxBytes: DEFAULT_BRAIN_CONFIG.snapshots.derived_store_max_bytes,
+  }),
+);
+
+/**
  * Load + resolve `active.most_applied`, falling back to
  * `BRAIN_MOST_APPLIED_DEFAULTS` when the config file is absent, so a vault
  * that has never run `brain init` still renders its most-applied section

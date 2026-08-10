@@ -14,6 +14,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { escapeRegex } from "../strings.ts";
+import { BRAIN_MANIFEST_SIDECAR_SINCE_VERSION } from "./manifest.ts";
 import { DEFAULT_BRAIN_CONFIG } from "./policy.ts";
 import type { BrainConfig } from "./types.ts";
 
@@ -79,6 +80,11 @@ export function buildSubstitutions(
   return new Map<string, string>([
     ["vault_name", vaultDisplayName(vault)],
     ["schema_version", String(config.schema_version)],
+    // The release the sidecar manifest shipped in. A substitution rather
+    // than a literal in the template, because the same version is stated
+    // in the rollback warning and in the verb help; one owner, three
+    // readers.
+    ["manifest_sidecar_since", BRAIN_MANIFEST_SIDECAR_SINCE_VERSION],
   ]);
 }
 

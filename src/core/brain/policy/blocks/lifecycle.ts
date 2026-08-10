@@ -124,5 +124,18 @@ export function parseConfidenceBlock(ctx: BlockParseContext): BrainConfidenceCon
 export function parseSnapshotsBlock(ctx: BlockParseContext): BrainSnapshotsConfig {
   const snapshots = merge(ctx, "snapshots", DEFAULT_BRAIN_CONFIG.snapshots);
   requirePositiveInteger("snapshots.retention_count", snapshots.retention_count, ctx.source);
-  return { retention_count: snapshots.retention_count as number };
+  requirePositiveInteger(
+    "snapshots.derived_store_max_bytes",
+    snapshots.derived_store_max_bytes,
+    ctx.source,
+  );
+  return {
+    retention_count: snapshots.retention_count as number,
+    // Derived-store coverage is opt-in, so anything that is not
+    // literally `true` leaves it off. Same rule as
+    // `dream.heal_enrich_enabled`: a typo in a switch that costs disk on
+    // every replicated peer must fail closed, not open.
+    include_derived_store: snapshots.include_derived_store === true,
+    derived_store_max_bytes: snapshots.derived_store_max_bytes as number,
+  };
 }

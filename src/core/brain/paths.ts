@@ -553,10 +553,49 @@ export function snapshotsDir(vault: string): string {
   return brainDirs(vault).snapshots;
 }
 
+/**
+ * Filename suffix of the Markdown-tree archive. The extension stays
+ * `.zst` even when the host only has gzip: the restore probes the magic
+ * bytes rather than the name, and one suffix keeps the listing filter a
+ * single comparison.
+ */
+export const SNAPSHOT_ARCHIVE_SUFFIX = ".tar.zst";
+
+/**
+ * Filename suffix of the derived-store archive that may sit BESIDE the
+ * tar for the same run id.
+ *
+ * Beside, not inside: the extractor requires a `Brain/` root and the
+ * restore is defined as "live `Brain/` equals archive `Brain/` minus the
+ * excluded entries", so a second top-level member in the tar would break
+ * both invariants. Keeping the file in the SAME `.snapshots/` directory
+ * keeps listing and retention one family with one loop.
+ */
+export const SNAPSHOT_STORE_ARCHIVE_SUFFIX = ".store.sqlite.zst";
+
 /** Snapshot archive path: `Brain/.snapshots/<run_id>.tar.zst`. */
 export function snapshotPath(vault: string, runId: string): string {
   const id = validateRunId(runId);
-  return ensureInsideVault(join(brainDirs(vault).snapshots, `${id}.tar.zst`), vault);
+  return ensureInsideVault(
+    join(brainDirs(vault).snapshots, `${id}${SNAPSHOT_ARCHIVE_SUFFIX}`),
+    vault,
+  );
+}
+
+/**
+ * Derived-store archive path:
+ * `Brain/.snapshots/<run_id>.store.sqlite.zst`.
+ *
+ * Built through the same run-id validation and vault containment as
+ * {@link snapshotPath}, because it is written into the same directory
+ * from the same caller-supplied id and deserves no weaker guard.
+ */
+export function snapshotStorePath(vault: string, runId: string): string {
+  const id = validateRunId(runId);
+  return ensureInsideVault(
+    join(brainDirs(vault).snapshots, `${id}${SNAPSHOT_STORE_ARCHIVE_SUFFIX}`),
+    vault,
+  );
 }
 
 /** Artifacts root: `Brain/.artifacts/`. */
