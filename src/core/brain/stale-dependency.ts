@@ -131,6 +131,18 @@ export interface StaleDependencyOptions {
 export interface StaleDependencyReport {
   readonly recorded: boolean;
   readonly rows: ReadonlyArray<StaleDependencyRow>;
+  /**
+   * How many states changed inside the window.
+   *
+   * It is what separates the two shapes of `recorded: false`. A store
+   * where nothing was retired, tombstoned or superseded has nothing whose
+   * consumers could have gone stale, so an unmeasured audit costs it
+   * nothing and there is no honest warning to raise. A store where states
+   * DID change and nothing recorded what consumed them is the case worth
+   * saying out loud, and this is how a caller tells the two apart without
+   * re-walking the vault.
+   */
+  readonly states_changed: number;
   /** Inclusive lower bound of the consumer window, as a UTC instant. */
   readonly window_since: string;
   readonly lookback_days: number;
@@ -141,10 +153,12 @@ export interface StaleDependencyReport {
 /**
  * Audit which consumers rest on a state that has since changed.
  *
- * Read-only. The receipt reads come first and short-circuit the rest:
- * with no receipts in the window there is nothing to join, so a vault
- * with the telemetry gate off never pays for the artifact walk or the
- * backlink index.
+ * Read-only. With no receipts in the window there is nothing to join,
+ * so the citation collection and the join are skipped - but the state
+ * walk is not. An unmeasured audit still has to report whether anything
+ * changed, because "nobody measured, and nothing changed either" and
+ * "nobody measured, and eleven states moved" are different answers and
+ * only the second is worth an operator's attention.
  *
  * @throws {@link StaleDependencyReadError} when a store that exists
  *   cannot be read.
@@ -156,19 +170,20 @@ export function auditStaleDependencies(
   const now = opts.now ?? new Date();
   const lookbackDays = Math.max(1, Math.floor(opts.lookbackDays ?? STALE_DEPENDENCY_LOOKBACK_DAYS));
   const windowSince = new Date(now.getTime() - lookbackDays * MS_PER_DAY).toISOString();
-  const empty: StaleDependencyReport = Object.freeze({
-    recorded: false,
-    rows: Object.freeze([]),
-    window_since: windowSince,
-    lookback_days: lookbackDays,
-  });
-
   const contextReceipts = readContextReceipts(vault, windowSince);
   const decisionReceipts = readDecisionCitations(vault, windowSince);
-  if (contextReceipts.length === 0 && decisionReceipts.length === 0) return empty;
-
   const artifacts = walkBrainArtifacts(vault);
   const states = collectStates(vault, artifacts, now.getTime());
+  if (contextReceipts.length === 0 && decisionReceipts.length === 0) {
+    return Object.freeze({
+      recorded: false,
+      rows: Object.freeze([]),
+      window_since: windowSince,
+      lookback_days: lookbackDays,
+      states_changed: states.length,
+    });
+  }
+
   const stateKeys = new Set(states.map((state) => state.key));
   const citations: StaleDependencyCitation[] = [
     ...contextReceipts,
@@ -185,6 +200,7 @@ export function auditStaleDependencies(
     }),
     window_since: windowSince,
     lookback_days: lookbackDays,
+    states_changed: states.length,
   });
 }
 

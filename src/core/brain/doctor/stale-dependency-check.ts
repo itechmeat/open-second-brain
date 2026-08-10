@@ -76,6 +76,22 @@ export const STALE_DEPENDENCY_CODE = "stale-dependency";
 const STALE_DEPENDENCY_SITE = "brain.doctor.staleDependency";
 
 /**
+ * What an operator reads when states changed and nothing recorded what
+ * consumed them. It names the mechanism rather than the absence, because
+ * the honest statement is about the measurement and not about the store,
+ * and it carries the count so the sentence says how much is unaccounted
+ * for rather than merely that something is.
+ */
+function STALE_DEPENDENCY_UNMEASURED(statesChanged: number): string {
+  const states = statesChanged === 1 ? "1 state" : `${statesChanged} states`;
+  return (
+    `downstream staleness was not measured: ${states} changed in the audit window and ` +
+    "no context receipts or decision-change receipts were recorded, so nothing is known " +
+    "about what still rests on them"
+  );
+}
+
+/**
  * How far back the consumer scan reaches, in days.
  *
  * A window rather than the whole history, because a receipt from two
@@ -379,9 +395,9 @@ const STALE_DEPENDENCY_CONSEQUENCE =
 /**
  * The collector, as the check consumes it.
  *
- * Structural rather than imported: the check reads exactly two fields
- * off the report, and declaring that here is what keeps this module a
- * leaf. `StaleDependencyReport` satisfies it by shape.
+ * Structural rather than imported: the check reads three fields off the
+ * report, and declaring them here is what keeps this module a leaf.
+ * `StaleDependencyReport` satisfies it by shape.
  */
 export type StaleDependencyAudit = (
   vault: string,
@@ -389,6 +405,7 @@ export type StaleDependencyAudit = (
 ) => {
   readonly recorded: boolean;
   readonly rows: ReadonlyArray<StaleDependencyRow>;
+  readonly states_changed: number;
 };
 
 /**
@@ -403,11 +420,16 @@ export type StaleDependencyAudit = (
  * throw is the same false clean bill of health the wave exists to
  * remove.
  *
- * A vault that recorded no receipts at all produces no issue and no
- * uncertainty. That is not a silent pass: `recorded: false` is the
- * report's own statement that the mechanism did not run, and a caller
- * that needs to know reads the flag rather than inferring it from an
- * empty issue list.
+ * A vault that recorded no receipts produces no issue, and an
+ * uncertainty entry only when states actually changed in the window. The
+ * report has always carried `recorded: false`, but a flag nothing
+ * renders is not a statement anybody reads: through the doctor an
+ * unmeasured store looked exactly like a clean one, because both
+ * produced an empty issue list. The uncertainty channel is where this
+ * codebase already says "the check did not run", so that is where it
+ * says it - and it stays quiet when nothing was retired, tombstoned or
+ * superseded, because then there is nothing whose consumers could have
+ * gone stale and the unmeasured audit cost the operator nothing.
  */
 export function makeStaleDependencyCheck(audit: StaleDependencyAudit): DoctorCheck {
   return {
@@ -431,7 +453,15 @@ export function makeStaleDependencyCheck(audit: StaleDependencyAudit): DoctorChe
         );
         return;
       }
-      if (!report.recorded) return;
+      if (!report.recorded) {
+        if (report.states_changed > 0) {
+          uncertain.push({
+            code: STALE_DEPENDENCY_CODE,
+            message: STALE_DEPENDENCY_UNMEASURED(report.states_changed),
+          });
+        }
+        return;
+      }
       for (const row of report.rows) {
         issues.push({
           severity: "warning",

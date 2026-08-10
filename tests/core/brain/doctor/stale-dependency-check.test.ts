@@ -23,8 +23,12 @@ import {
 } from "../../../../src/core/brain/decisions/receipts.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../../../src/core/brain/diagnostics.ts";
 import { runDoctor } from "../../../../src/core/brain/doctor.ts";
+import type { DoctorCheckContext } from "../../../../src/core/brain/doctor/check.ts";
+import type { DoctorUncertainEntry } from "../../../../src/core/brain/doctor/report.ts";
+import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
 import {
   joinStaleDependencies,
+  makeStaleDependencyCheck,
   STALE_DEPENDENCY_CODE,
   STALE_DEPENDENCY_CONSUMER,
   STALE_DEPENDENCY_STATE,
@@ -313,6 +317,43 @@ describe("auditStaleDependencies", () => {
     expect(report.rows).toEqual([]);
     expect(report.lookback_days).toBe(WIDE_LOOKBACK_DAYS);
     expect(report.window_since < NOW.toISOString()).toBe(true);
+  });
+
+  test("an unmeasured vault reaches the operator as uncertainty, not as silence", () => {
+    // The report has always distinguished not-measured from nothing-found.
+    // The doctor did not: it returned early, so an operator saw the same
+    // empty issue list either way - which reads as a clean bill of health
+    // for a store whose consumers nobody looked at.
+    seedPreference("alpha", "2026-01-01T00:00:00Z");
+    seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
+    retire("alpha", "2026-03-01T00:00:00Z");
+    setWriteInstant(preferencePath(vault, "beta"), "2026-01-05T00:00:00Z");
+
+    const issues: DoctorIssue[] = [];
+    const uncertain: DoctorUncertainEntry[] = [];
+    makeStaleDependencyCheck((v, opts) =>
+      auditStaleDependencies(v, { ...opts, lookbackDays: WIDE_LOOKBACK_DAYS }),
+    ).run({ vault, now: NOW } as unknown as DoctorCheckContext, { issues, uncertain });
+
+    expect(issues).toEqual([]);
+    const entry = uncertain.find((item) => item.code === STALE_DEPENDENCY_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("not measured");
+  });
+
+  test("a measured vault records no uncertainty", () => {
+    seedPreference("alpha", "2026-01-01T00:00:00Z");
+    seedReceipt("2026-02-01T00:00:00Z", ["pref-alpha"]);
+    retire("alpha", "2026-03-01T00:00:00Z");
+
+    const issues: DoctorIssue[] = [];
+    const uncertain: DoctorUncertainEntry[] = [];
+    makeStaleDependencyCheck((v, opts) =>
+      auditStaleDependencies(v, { ...opts, lookbackDays: WIDE_LOOKBACK_DAYS }),
+    ).run({ vault, now: NOW } as unknown as DoctorCheckContext, { issues, uncertain });
+
+    expect(uncertain.filter((item) => item.code === STALE_DEPENDENCY_CODE)).toEqual([]);
+    expect(issues.length).toBeGreaterThan(0);
   });
 
   test("the per-state cap reports the true total rather than a silent prefix", () => {
