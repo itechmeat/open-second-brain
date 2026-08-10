@@ -11,7 +11,12 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import { aggregateUnmetRecall } from "../../src/core/brain/query-demand.ts";
+import {
+  NEGATIVE_RECALL_STATE,
+  NEGATIVE_RECALL_STATES,
+} from "../../src/core/brain/negative-recall.ts";
 import { assertOutputContract } from "../../src/mcp/output-contract.ts";
+import { RECALL_GATE_NEGATIVE_STATES } from "../../src/mcp/search-tools.ts";
 import { resolveSearchConfig } from "../../src/core/search/index.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
@@ -140,7 +145,7 @@ async function buildIndex(): Promise<void> {
   await indexVault(resolveSearchConfig({ vault, configPath }));
 }
 
-test("over a healthy index a zero-result attempt is a complete not_found with a digest", async () => {
+test("over a keyword-only index a zero-result attempt is a not_found the receipt qualifies", async () => {
   writeMd("notes/coolant.md", "# Coolant\n\nThe reactor coolant loop was replaced in March.\n");
   await buildIndex();
   const gate = tool("brain_recall_gate");
@@ -150,13 +155,39 @@ test("over a healthy index a zero-result attempt is a complete not_found with a 
   })) as { negative: Record<string, unknown> };
   // The populated-receipt shape has to clear the contract too.
   assertOutputContract(gate.name, gate.outputSchema, out);
+  // No embedding provider is configured here, so the run built chunks and
+  // recorded no model. That is a supported way to run this system, not an
+  // unfinished job, so the negative is admitted rather than refused - a
+  // vault without an embedding key would otherwise never be able to
+  // receive this answer at all.
   expect(out.negative["state"]).toBe("not_found");
   expect(out.negative["complete"]).toBe(true);
-  expect(out.negative["unknown_reason"]).toBeUndefined();
+  // What makes admitting it honest: the receipt says the search was
+  // keyword-only, and the digest binds that, so the narrower claim is
+  // visible to whoever reads the negative rather than implied by silence.
   const coverage = out.negative["coverage"] as Record<string, unknown>;
   expect(coverage["digest"]).toMatch(/^[0-9a-f]{64}$/);
   expect(coverage["documents"]).toBe(1);
+  expect(coverage["embeddings"]).toBe(0);
+  expect(coverage["embedding_signature"]).toBeNull();
+  expect(coverage["chunks"]).toBeGreaterThan(0);
   expect(coverage["unindexed_roots"]).toEqual([]);
+});
+
+test("the gate declares only the negative states its handler can produce", async () => {
+  // The gate reads no claim graph, so it supplies neither retraction
+  // evidence nor the assertion, so `did_not_happen` is unreachable here.
+  // Advertising it would leave a client unable to tell "this surface
+  // cannot say that" from "it did not happen this time".
+  const gate = tool("brain_recall_gate");
+  const negative = gate.outputSchema?.properties?.["negative"];
+  const declared = negative?.properties?.["state"]?.enum;
+  expect(declared).toEqual([...RECALL_GATE_NEGATIVE_STATES]);
+  expect(declared).not.toContain(NEGATIVE_RECALL_STATE.didNotHappen);
+  // Not merely documentary: the server validates every response against
+  // this schema, so a future producer of the third state fails loudly
+  // here rather than emitting an undeclared value.
+  expect([...NEGATIVE_RECALL_STATES]).toContain(NEGATIVE_RECALL_STATE.didNotHappen);
 });
 
 test("an authorized note root the index never reached forces unknown and names it", async () => {

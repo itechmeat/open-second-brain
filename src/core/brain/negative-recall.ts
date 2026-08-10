@@ -10,14 +10,36 @@
  *
  * This module supplies the corpus statement:
  *
- *   - `not_found`      - the searched corpus was verifiably complete and
- *                        held nothing matching.
+ *   - `not_found`      - the searched corpus was ADMISSIBLE (defined
+ *                        below) and held nothing matching.
  *   - `unknown`        - no honest claim about the corpus could be made,
- *                        with a named reason saying which of the four
- *                        ways that happened.
+ *                        with a named reason saying which way that
+ *                        happened.
  *   - `did_not_happen` - stored evidence positively attests the thing did
- *                        not occur, and the searched corpus already
- *                        reflected that evidence.
+ *                        not occur, the caller asserted non-occurrence,
+ *                        and the searched corpus already reflected that
+ *                        evidence.
+ *
+ * ## What "admissible" means, precisely
+ *
+ * The word does real work, so it is spelled out rather than implied. An
+ * index is admissible when all four hold, each of them a fact the index
+ * reports about itself:
+ *
+ *   1. it exists and its facts could be read;
+ *   2. it recorded a completed run, stamped with a readable instant;
+ *   3. it carries at least one document under every authorized note root;
+ *   4. it holds a current embedding for every chunk it holds.
+ *
+ * That is narrower than "the vault was searched exhaustively", and the
+ * gap is named rather than hidden: (3) is satisfied by ONE document under
+ * a root, so a folder of a thousand notes with one indexed note passes
+ * it. The index cannot tell that case from a folder holding exactly one
+ * note - it knows what it was given, never what it was not - so the
+ * receipt reports the document count beside the root list and a reader
+ * judging weight reads that. Closing the gap needs a filesystem census
+ * against `resolveNoteRoots`, which this pure module deliberately does
+ * not do.
  *
  * ## Why this is not part of `recall-adequacy.ts`
  *
@@ -39,15 +61,18 @@
  * the searched set, because that is the only universe a negative can
  * honestly attest to; a receipt over the authorized set would claim
  * coverage that was never achieved. The divergence is not swallowed:
- * every authorized root the index does not cover lands in
+ * every authorized root the index holds no document under lands in
  * {@link CoverageReceipt.unindexed_roots} and forces `unknown` with
  * {@link NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent}, so a receipt
  * over the index alone cannot hide the gap either.
  *
- * A root the index carries no document under is reported as uncovered
- * even when the folder is genuinely empty. From the index alone those two
+ * A root the index carries no document under is reported that way even
+ * when the folder is genuinely empty. From the index alone those two
  * cases are indistinguishable, and the conservative reading - refuse to
- * claim completeness - is the one this wave exists to install.
+ * claim completeness - is the one this wave exists to install. The
+ * reverse asymmetry is condition (3) above: presence of one document is
+ * not proof the root was read out, which is why the receipt reports the
+ * document count and this module never calls a root exhausted.
  *
  * ## `did_not_happen` is never inferred from absence
  *
@@ -57,8 +82,22 @@
  * which the claim graph already projects. It additionally requires that
  * the searched index is at least as new as that evidence - an index built
  * before the retraction was recorded has not seen it, and a negative from
- * it says nothing about the retraction. See
- * {@link retractionEvidenceFromClaim} for the one projection limit.
+ * it says nothing about the retraction - and that the caller ASSERTED
+ * non-occurrence, so evidence handed over for context is never turned
+ * into a verdict nobody asked for. See {@link retractionEvidenceFromClaim}
+ * for the one projection limit.
+ *
+ * ### Deferred on the shipped surface
+ *
+ * No caller in `src/` supplies either half of that pair yet: the recall
+ * gate in `src/mcp/search-tools.ts` passes neither evidence nor an
+ * assertion, and nothing there reads the claim graph. So
+ * `did_not_happen` is currently reachable through this function only, not
+ * through `brain_recall_gate`, and that surface declares the narrower
+ * subset it can actually produce rather than advertising a state its
+ * handler cannot emit. Reading the claim graph on the gate's zero-result
+ * path is a design decision with its own cost, taken separately; the arm
+ * and its tests stay so that decision remains a wiring change.
  *
  * ## Pure by construction
  *
@@ -74,11 +113,14 @@ import type { IndexStatusSnapshot } from "../search/types.ts";
 
 /** The three answers a negative recall can honestly give. */
 export const NEGATIVE_RECALL_STATE = Object.freeze({
-  /** The searched corpus was verifiably complete and held no match. */
+  /** The searched index was admissible (module docblock) and held no match. */
   notFound: "not_found",
   /** No claim about the corpus could be made; `unknown_reason` says why. */
   unknown: "unknown",
-  /** Stored evidence attests non-occurrence; never inferred from absence. */
+  /**
+   * Stored evidence attests non-occurrence and the caller claimed it;
+   * never inferred from absence and never from evidence alone.
+   */
   didNotHappen: "did_not_happen",
 } as const);
 
@@ -127,6 +169,31 @@ export const NEGATIVE_RECALL_UNKNOWN_REASON = Object.freeze({
    * `index-absent` - an unreadable index is not a missing one.
    */
   coverageUnavailable: "coverage-unavailable",
+  /**
+   * The index recorded a completed run but stamped it with an instant no
+   * calendar can read. Deliberately NOT `index-stale`: that reason means
+   * the index is measurably behind, whereas this one means the
+   * measurement is impossible, and every comparison this module makes
+   * against the index instant is unsatisfiable while it holds.
+   */
+  indexInstantUnusable: "index-instant-unusable",
+  /**
+   * The index records an embedding model and holds fewer vectors than
+   * chunks, so that model's run did not finish and part of the corpus is
+   * reachable only by keyword while the rest is reachable both ways. No
+   * negative over a half-converted index is well-founded.
+   *
+   * Deliberately NOT raised when no model was recorded at all: running
+   * without embeddings is a supported configuration rather than an
+   * unfinished job, and refusing it would leave such a vault permanently
+   * unable to receive a `not_found`. The vector count and the signature
+   * are in the receipt and in its digest either way, so the narrower
+   * keyword-only negative is visible to whoever reads it.
+   *
+   * `staleEmbeddings` cannot report this case: a chunk with no embedding
+   * row at all has no stored vector to be stale against.
+   */
+  embeddingsIncomplete: "embeddings-incomplete",
 } as const);
 
 /** Closed union over {@link NEGATIVE_RECALL_UNKNOWN_REASON}. */
@@ -140,6 +207,8 @@ export const NEGATIVE_RECALL_UNKNOWN_REASONS: ReadonlyArray<NegativeRecallUnknow
     NEGATIVE_RECALL_UNKNOWN_REASON.indexStale,
     NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent,
     NEGATIVE_RECALL_UNKNOWN_REASON.coverageUnavailable,
+    NEGATIVE_RECALL_UNKNOWN_REASON.indexInstantUnusable,
+    NEGATIVE_RECALL_UNKNOWN_REASON.embeddingsIncomplete,
   ]);
 
 /** Narrow a string read back off disk or across a tool boundary. */
@@ -198,12 +267,20 @@ export function isRetractionEvidenceKind(value: unknown): value is RetractionEvi
  * WAS searched; the gap is reported beside it and forces `unknown`
  * anyway, so folding it in would make two receipts over the same searched
  * corpus disagree.
+ *
+ * `embeddings` was appended after the first draft of this tuple, which
+ * changed every digest computed by it. That is deliberate and harmless
+ * here because no release has carried a coverage receipt yet, so there is
+ * no stored digest for the new encoding to contradict. Any later addition
+ * does not get the same freedom: it would have to be introduced as a
+ * second encoding rather than a silent recomputation of the first.
  */
 export const COVERAGE_DIGEST_FIELDS = Object.freeze([
   "index_path",
   "schema_version",
   "documents",
   "chunks",
+  "embeddings",
   "embedding_signature",
   "last_indexed_at",
   "scope",
@@ -224,6 +301,7 @@ export type CoverageIndexSnapshot = Pick<
   | "schemaVersion"
   | "documents"
   | "chunks"
+  | "embeddings"
   | "embeddingSignature"
   | "lastIndexedAt"
   | "staleEmbeddings"
@@ -248,13 +326,29 @@ export interface CoverageReceipt {
   readonly digest: string;
   readonly documents: number;
   readonly chunks: number;
+  /**
+   * Stored embedding rows. Reported beside `chunks` because the two
+   * together, and only together, say how much of the index a semantic
+   * query could reach: `embeddings` below `chunks` is a keyword-only or
+   * half-embedded corpus, which supports a narrower negative.
+   */
+  readonly embeddings: number;
   readonly index_path: string;
   readonly schema_version: number | null;
   readonly embedding_signature: string | null;
   readonly last_indexed_at: string | null;
-  /** The searched note roots, sorted and deduplicated. */
+  /**
+   * Authorized note roots the index carries AT LEAST ONE document under,
+   * sorted and deduplicated. Presence, never exhaustiveness: the index
+   * cannot know how many documents the folder holds on disk, so a root
+   * listed here is one the index reached, not one it read out. `documents`
+   * above is what a reader weighs that against.
+   */
   readonly scope: ReadonlyArray<string>;
-  /** Authorized roots the index does not cover, sorted and deduplicated. */
+  /**
+   * Authorized roots the index holds no document under at all, sorted and
+   * deduplicated - the complement of `scope` over the authorized set.
+   */
   readonly unindexed_roots: ReadonlyArray<string>;
 }
 
@@ -273,9 +367,10 @@ export interface RetractionEvidence {
 export interface NegativeRecallVerdict {
   readonly state: NegativeRecallState;
   /**
-   * True only when the verdict rests on a receipt over an index that
-   * exists, is current, and covers every authorized root. Never true
-   * alongside `unknown`.
+   * True only when the verdict rests on a receipt over an ADMISSIBLE
+   * index, in the sense the module docblock spells out - which is a
+   * statement about what the index reports about itself, never a promise
+   * that every authored note reached it. Never true alongside `unknown`.
    */
   readonly complete: boolean;
   /** Present whenever a receipt could be built - absent, never null. */
@@ -295,9 +390,16 @@ export interface NegativeRecallInput {
   readonly retraction?: RetractionEvidence | null;
   /**
    * True when the caller CLAIMS non-occurrence rather than merely asking
-   * what the corpus supports. Asserting it without evidence is a
-   * programming error and throws; a caller that merely cannot verify
-   * leaves this off and gets the honest `unknown`.
+   * what the corpus supports.
+   *
+   * This flag GOVERNS the escalation to `did_not_happen`: evidence alone
+   * never produces that state, because passing evidence for context is not
+   * the same act as claiming the thing did not happen. Both are required.
+   *
+   * Asserting it without evidence is a programming error and throws. A
+   * caller that leaves it off is asking the weaker question and gets the
+   * weaker answer - `not_found` over an admissible index, or a named
+   * refusal - even when its evidence would have supported more.
    */
   readonly assertDidNotHappen?: boolean;
 }
@@ -349,6 +451,7 @@ export function buildCoverageReceipt(
     schema_version: snapshot.schemaVersion,
     documents: snapshot.documents,
     chunks: snapshot.chunks,
+    embeddings: snapshot.embeddings,
     embedding_signature: snapshot.embeddingSignature,
     last_indexed_at: snapshot.lastIndexedAt,
     scope: searched,
@@ -357,6 +460,7 @@ export function buildCoverageReceipt(
     digest: sha256Hex(canonicalJson(COVERAGE_DIGEST_FIELDS.map((f) => [f, digested[f]]))),
     documents: snapshot.documents,
     chunks: snapshot.chunks,
+    embeddings: snapshot.embeddings,
     index_path: snapshot.indexPath,
     schema_version: snapshot.schemaVersion,
     embedding_signature: snapshot.embeddingSignature,
@@ -377,9 +481,17 @@ export function buildCoverageReceipt(
  * One projection limit, stated rather than papered over: {@link ClaimNode}
  * exposes `tombstoned` as a BOOLEAN and does not carry `tombstoned_at`,
  * so a tombstone whose file declares no `valid_until` exposes no instant
- * to compare against the receipt. Such a node returns `null` here and the
- * caller gets `unknown` - a tombstone whose age is unknown cannot prove
- * that the searched index had already seen it.
+ * to compare against the receipt. Such a node returns `null` here, which
+ * leaves the caller with NO evidence: over an admissible corpus the
+ * verdict is then the ordinary `not_found` (absence of a match, which is
+ * all a search actually observed), and an attempt to assert non-occurrence
+ * on it is refused by {@link classifyNegativeRecall}. What the null never
+ * does is prove non-occurrence - a tombstone whose age is unknown cannot
+ * show that the searched index had already seen it.
+ *
+ * No shipped surface calls this yet; see the deferral in the module
+ * docblock. It is the unit-level half of the evidence arm, kept and tested
+ * so that wiring it later is a call-site change rather than a design one.
  */
 export function retractionEvidenceFromClaim(claim: ClaimNode): RetractionEvidence | null {
   const recordedAt = claim.valid_until;
@@ -405,15 +517,32 @@ export function retractionEvidenceFromClaim(claim: ClaimNode): RetractionEvidenc
  * Decide what a negative from this corpus is entitled to claim.
  *
  * The admissibility rule in one sentence: `not_found` and
- * `did_not_happen` both require a receipt over an index that exists, is
- * current, and covers every authorized root; anything short of that is
- * `unknown` with the reason named, never a silent `not_found`.
+ * `did_not_happen` both require a receipt over an ADMISSIBLE index -
+ * one that exists, carries a datable completed run, reaches every
+ * authorized root, and holds a current embedding for every chunk it
+ * holds - and anything short of that is `unknown` with the reason named,
+ * never a silent `not_found`.
+ *
+ * The admissibility checks run widest gap first: nothing searched, then
+ * nothing datable, then a root never reached, then vectors that are out
+ * of date or do not cover what was reached. A doubly-short index
+ * therefore reports the outermost of its shortfalls, which is the one an
+ * operator fixes first, and the narrower ones surface on the next pass.
+ *
+ * Beyond admissibility, the escalation to `did_not_happen` is governed by
+ * `assertDidNotHappen`, not by the mere presence of evidence: see
+ * {@link NegativeRecallInput.assertDidNotHappen}.
  */
 export function classifyNegativeRecall(input: NegativeRecallInput): NegativeRecallVerdict {
   const evidence = input.retraction ?? null;
   if (input.assertDidNotHappen === true && evidence === null) {
+    // The advice names `not_found` because that is what the advised input
+    // actually yields over an admissible corpus: a search that found
+    // nothing observed absence, which is the definition of that state.
+    // Promising `unknown` here would send a caller after a WEAKER answer
+    // than the one it is about to receive.
     throw new NegativeRecallError(
-      `negative recall: cannot assert ${NEGATIVE_RECALL_STATE.didNotHappen} with no retraction evidence; omit the assertion to receive an honest ${NEGATIVE_RECALL_STATE.unknown}`,
+      `negative recall: cannot assert ${NEGATIVE_RECALL_STATE.didNotHappen} with no retraction evidence; omit the assertion to receive the corpus statement the search supports (${NEGATIVE_RECALL_STATE.notFound} over an admissible index, otherwise a named refusal)`,
     );
   }
 
@@ -444,6 +573,29 @@ export function classifyNegativeRecall(input: NegativeRecallInput): NegativeReca
       coverage,
     );
   }
+  // `lastIndexedAt` is a raw text cell in the index's own state table and
+  // this function is exported, so the value reaching here is not
+  // guaranteed to be a calendar instant. It is not treated as a caller
+  // error, unlike the evidence instant below: it is the STORE's value, so
+  // the honest report is a refusal about this vault's index. Validated
+  // BEFORE any comparison, because `Date.parse` yields NaN and every
+  // comparison against NaN is false - an unguarded fall-through would let
+  // an undatable index admit the strongest claim in the module.
+  const indexedMs = Date.parse(snapshot.lastIndexedAt);
+  if (!Number.isFinite(indexedMs)) {
+    return unknownVerdict(
+      NEGATIVE_RECALL_UNKNOWN_REASON.indexInstantUnusable,
+      "the index stamped its last completed run with an instant that cannot be read as a date, so nothing can be dated against it",
+      coverage,
+    );
+  }
+  if (coverage.unindexed_roots.length > 0) {
+    return unknownVerdict(
+      NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent,
+      `the index reaches ${coverage.scope.length} of ${coverage.scope.length + coverage.unindexed_roots.length} authorized note root(s); not reached: ${coverage.unindexed_roots.join(", ")}`,
+      coverage,
+    );
+  }
   if (snapshot.staleEmbeddings > 0) {
     return unknownVerdict(
       NEGATIVE_RECALL_UNKNOWN_REASON.indexStale,
@@ -451,10 +603,27 @@ export function classifyNegativeRecall(input: NegativeRecallInput): NegativeReca
       coverage,
     );
   }
-  if (coverage.unindexed_roots.length > 0) {
+  // Vectors that do not cover the chunks are the narrowest admissibility
+  // gap and the easiest to mistake for a pass: a chunk with no embedding
+  // row is counted by NEITHER `staleEmbeddings` nor the document census,
+  // so an index with no embeddings at all clears every check above.
+  //
+  // But "fewer vectors than chunks" is two different situations, and only
+  // one of them is indeterminate. A model was recorded for this index and
+  // its run did not finish - so part of the corpus is reachable one way
+  // and part another, and no negative over it is well-founded. Versus: no
+  // model was ever recorded, which is a supported way to run this system
+  // (semantic search needs a key the operator may not have) and a
+  // deliberate, coherent configuration. Refusing the latter would leave a
+  // keyword-only vault permanently unable to receive this module's main
+  // answer, which is how a verdict stops being read. The receipt carries
+  // the vector count and the signature and the digest binds both, so a
+  // consumer can see the negative was keyword-only and judge for itself.
+  const embeddingModelRecorded = snapshot.embeddingSignature !== null;
+  if (embeddingModelRecorded && snapshot.embeddings < snapshot.chunks) {
     return unknownVerdict(
-      NEGATIVE_RECALL_UNKNOWN_REASON.coverageDivergent,
-      `the index covers ${coverage.scope.length} of ${coverage.scope.length + coverage.unindexed_roots.length} authorized note root(s); not covered: ${coverage.unindexed_roots.join(", ")}`,
+      NEGATIVE_RECALL_UNKNOWN_REASON.embeddingsIncomplete,
+      `the index records embedding model '${snapshot.embeddingSignature}' and holds ${snapshot.embeddings} embedding(s) for ${snapshot.chunks} chunk(s), so its run is unfinished and part of the corpus is unreachable by a semantic query`,
       coverage,
     );
   }
@@ -469,19 +638,33 @@ export function classifyNegativeRecall(input: NegativeRecallInput): NegativeReca
     // The instant comparison is what makes the evidence load-bearing: an
     // index built before the retraction was recorded never saw it, so a
     // negative drawn from it attests to nothing about the retraction.
-    if (recordedMs > Date.parse(snapshot.lastIndexedAt)) {
+    // Checked whether or not the caller asserted anything, because an
+    // index that predates known evidence is stale as a matter of fact and
+    // its `not_found` would be no better founded than its
+    // `did_not_happen`.
+    if (recordedMs > indexedMs) {
       return unknownVerdict(
         NEGATIVE_RECALL_UNKNOWN_REASON.indexStale,
         `the retraction of ${evidence.subject} was recorded at ${evidence.recorded_at}, after the index was last built at ${snapshot.lastIndexedAt}`,
         coverage,
       );
     }
-    return Object.freeze({
-      state: NEGATIVE_RECALL_STATE.didNotHappen,
-      complete: true,
-      coverage,
-      reason: `${evidence.subject} carries a ${evidence.kind} edge recorded at ${evidence.recorded_at}, which the index at ${snapshot.lastIndexedAt} already reflects`,
-    });
+    // The assertion, not the evidence, is what escalates. A caller may
+    // hand over retraction evidence while merely asking what the corpus
+    // supports - the recall gate does exactly that with the adequacy
+    // verdict - and answering it with the strongest state in the
+    // vocabulary would be a claim it never made. Without the assertion
+    // the evidence has still done work: it gated the staleness check
+    // above, and the `not_found` below is now known to come from an index
+    // that had already seen the retraction.
+    if (input.assertDidNotHappen === true) {
+      return Object.freeze({
+        state: NEGATIVE_RECALL_STATE.didNotHappen,
+        complete: true,
+        coverage,
+        reason: `${evidence.subject} carries a ${evidence.kind} edge recorded at ${evidence.recorded_at}, which the index at ${snapshot.lastIndexedAt} already reflects`,
+      });
+    }
   }
 
   return Object.freeze({

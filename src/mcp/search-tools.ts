@@ -39,10 +39,11 @@ import {
 import { assessRecallAdequacy } from "../core/brain/recall-adequacy.ts";
 import {
   classifyNegativeRecall,
-  NEGATIVE_RECALL_STATES,
+  NEGATIVE_RECALL_STATE,
   NEGATIVE_RECALL_UNKNOWN_REASONS,
   type CoverageIndexSnapshot,
   type CoverageScope,
+  type NegativeRecallState,
   type NegativeRecallVerdict,
 } from "../core/brain/negative-recall.ts";
 import { resolveNoteRoots } from "../core/brain/notes/note-walk.ts";
@@ -415,6 +416,29 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
   additionalProperties: false,
 };
 
+/**
+ * The negative-recall states `brain_recall_gate` can actually produce.
+ *
+ * The vocabulary is three states wide (`NEGATIVE_RECALL_STATES` in
+ * `core/brain/negative-recall.ts`); this surface reaches two of them. `did_not_happen` is missing because
+ * {@link assessNegativeRecall} supplies neither of the two things that
+ * state requires - stored retraction evidence and the caller's assertion
+ * of non-occurrence - and it reads no claim graph to find any. Declaring
+ * the full vocabulary here would leave a client unable to tell "this
+ * surface cannot say that" from "it did not happen this time", which is
+ * the same conflation between an unanswerable check and a passing one
+ * that the negative-recall unit exists to remove.
+ *
+ * Enforced, not documentary: the server validates every response against
+ * this schema, so wiring an evidence read into the gate without widening
+ * this list fails the contract loudly instead of emitting an undeclared
+ * value. Order follows the vocabulary's weakest-to-strongest ordering.
+ */
+export const RECALL_GATE_NEGATIVE_STATES: ReadonlyArray<NegativeRecallState> = Object.freeze([
+  NEGATIVE_RECALL_STATE.notFound,
+  NEGATIVE_RECALL_STATE.unknown,
+]);
+
 const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
   required: ["retrieve", "reason"],
@@ -449,17 +473,21 @@ const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
       type: "object",
       required: ["state", "complete", "reason"],
       properties: {
-        state: { type: "string", enum: [...NEGATIVE_RECALL_STATES] },
+        state: { type: "string", enum: [...RECALL_GATE_NEGATIVE_STATES] },
         complete: { type: "boolean" },
         reason: { type: "string" },
         unknown_reason: { type: "string", enum: [...NEGATIVE_RECALL_UNKNOWN_REASONS] },
         coverage: {
           type: "object",
-          required: ["digest", "documents", "chunks", "scope", "unindexed_roots"],
+          required: ["digest", "documents", "chunks", "embeddings", "scope", "unindexed_roots"],
           properties: {
             digest: { type: "string" },
             documents: { type: "integer" },
             chunks: { type: "integer" },
+            // Declared beside `chunks` because the pair is the claim: a
+            // count below the chunk count is an index a semantic query
+            // could not read out in full.
+            embeddings: { type: "integer" },
             index_path: { type: "string" },
             // Three fields whose value is an integer/string OR null.
             // The output-schema vocabulary declares one type per node
@@ -1027,6 +1055,12 @@ const UNRESOLVED_COVERAGE_SCOPE: CoverageScope = Object.freeze({
  * reached (`indexRootCoverage` over `resolveNoteRoots`) - and hands them
  * to the pure classifier.
  *
+ * It supplies no retraction evidence and asserts nothing, which is why
+ * this surface declares only {@link RECALL_GATE_NEGATIVE_STATES}: a gate
+ * that reads no claim graph has no grounds for `did_not_happen`, and
+ * inventing grounds on the zero-result path is a design decision taken
+ * separately from this wiring.
+ *
  * Every read is attempted before anything is committed to, so a failure
  * anywhere leaves BOTH inputs unresolved rather than half-resolved: a
  * partially gathered picture is exactly the material a misleading
@@ -1048,7 +1082,7 @@ async function assessNegativeRecall(ctx: ServerContext): Promise<NegativeRecallV
     // index to read, or no note root the operator authorized.
     const indexedRoots =
       status.exists && authorizedRoots.length > 0
-        ? (await indexRootCoverage(config, authorizedRoots)).covered
+        ? (await indexRootCoverage(config, authorizedRoots)).rootsWithDocuments
         : [];
     snapshot = status;
     scope = { authorizedRoots, indexedRoots };

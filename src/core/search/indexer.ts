@@ -1212,27 +1212,45 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
 // indexRootCoverage
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Which authorized note roots the index actually searched. */
+/**
+ * Which authorized note roots the index REACHED, and how far.
+ *
+ * The field names say presence rather than coverage on purpose. "Covered"
+ * would claim the root was read out; what the index can show is that at
+ * least one document under it was indexed, which is a strictly weaker
+ * statement - see {@link indexRootCoverage}.
+ */
 export interface IndexRootCoverage {
   /** Roots carrying at least one indexed document. */
-  readonly covered: ReadonlyArray<string>;
-  /** Roots the index holds nothing under. */
-  readonly uncovered: ReadonlyArray<string>;
+  readonly rootsWithDocuments: ReadonlyArray<string>;
+  /** Roots the index holds no document under at all. */
+  readonly rootsWithoutDocuments: ReadonlyArray<string>;
 }
 
 /**
  * Partition note roots by whether the index carries any document under
  * them (silence-is-not-an-answer, U2).
  *
- * `indexStatus` says how much was indexed; this says WHICH of the
- * folders the operator authorized were reached. A negative recall needs
- * both: the counts make the receipt, and the partition is the difference
- * between a corpus statement and an overclaim.
+ * `indexStatus` says how much was indexed in total; this says WHICH of
+ * the folders the operator authorized were reached at all. A negative
+ * recall needs both: the totals make the receipt, and the partition names
+ * the roots that were never touched.
+ *
+ * The guarantee is deliberately named as presence, not coverage, and the
+ * field names say so: a root lands in `rootsWithDocuments` on the
+ * strength of ONE indexed document, so one note out of a thousand puts it
+ * there. The index knows what it was given and never what it was not, so
+ * it cannot tell that case from a folder that holds exactly one note;
+ * deciding between them needs a filesystem census of the root, which is a
+ * different measurement with a different cost. Until something needs that
+ * census, the honest move is to promise only what this scan sees - the
+ * document TOTAL rides on the receipt beside the root list, so a reader
+ * weighing a negative is never left with the root list alone.
  *
  * Throws `SearchError` `INDEX_MISSING` when there is no index, rather
- * than reporting every root uncovered. The caller must establish that
- * the index exists first, and an all-uncovered answer over a missing
- * index would read like a coverage measurement.
+ * than reporting every root absent. The caller must establish that the
+ * index exists first, and an all-absent answer over a missing index would
+ * read like a measurement.
  *
  * Cost: one read-mode open and one full document-path scan. It runs only
  * on the recall gate's zero-result path, where a search has already
@@ -1246,13 +1264,16 @@ export async function indexRootCoverage(
   const store = await Store.open(config, { mode: "read" });
   try {
     const paths = [...store.listDocuments().keys()];
-    const covered: string[] = [];
-    const uncovered: string[] = [];
+    const withDocuments: string[] = [];
+    const withoutDocuments: string[] = [];
     for (const root of roots) {
       const reached = paths.some((path) => path === root || path.startsWith(`${root}/`));
-      (reached ? covered : uncovered).push(root);
+      (reached ? withDocuments : withoutDocuments).push(root);
     }
-    return Object.freeze({ covered: Object.freeze(covered), uncovered: Object.freeze(uncovered) });
+    return Object.freeze({
+      rootsWithDocuments: Object.freeze(withDocuments),
+      rootsWithoutDocuments: Object.freeze(withoutDocuments),
+    });
   } finally {
     await store.close();
   }
