@@ -598,6 +598,38 @@ export function nestedCommandNames(parent: string): string[] {
   return node?.commands?.map((item) => item.name) ?? [];
 }
 
+/**
+ * Every root command that models nested subcommands, paired with them.
+ *
+ * The completion renderer used to hand-list the three roots it knew about,
+ * so a fourth that grew subcommands was offered by no shell and nothing
+ * anywhere said so. Deriving the groups from the manifest is what makes
+ * the completion surface follow the manifest rather than trail it.
+ */
+export function nestedCommandGroups(
+  manifest: CliRootManifest = CLI_COMMAND_MANIFEST,
+): Array<{ parent: string; children: string[] }> {
+  // Every depth, not only the first. Shell completion keys off the word
+  // immediately before the cursor, so a verb two levels down is reachable
+  // by its own parent's name and needs no path context - which is what
+  // makes a flat, recursively-collected map the right shape here.
+  const byParent = new Map<string, string[]>();
+  const visit = (items: ReadonlyArray<CliCommandManifest>): void => {
+    for (const item of items) {
+      const children = item.commands ?? [];
+      if (children.length === 0) continue;
+      const merged = byParent.get(item.name) ?? [];
+      for (const child of children) {
+        if (!merged.includes(child.name)) merged.push(child.name);
+      }
+      byParent.set(item.name, merged);
+      visit(children);
+    }
+  };
+  visit(manifest.commands);
+  return [...byParent].map(([parent, children]) => ({ parent, children }));
+}
+
 /** One modelled subcommand, e.g. `nestedCommand("search", "query")`. */
 export function nestedCommand(parent: string, child: string): CliCommandManifest | undefined {
   const node = CLI_COMMAND_MANIFEST.commands.find((item) => item.name === parent);

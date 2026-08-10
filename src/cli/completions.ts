@@ -1,7 +1,7 @@
 import {
   allFlagNames,
   commandNames,
-  nestedCommandNames,
+  nestedCommandGroups,
   type CliRootManifest,
 } from "./command-manifest.ts";
 
@@ -22,9 +22,8 @@ export function isCompletionShell(value: string): value is CompletionShell {
 
 export function renderCompletions(shell: CompletionShell, manifest: CliRootManifest): string {
   const roots = commandNames(manifest);
-  const brain = nestedCommandNames("brain");
-  const search = nestedCommandNames("search");
-  const vault = nestedCommandNames("vault");
+  const groups = nestedCommandGroups(manifest);
+  const nested = groups.flatMap((group) => group.children);
   const flags = allFlagNames(manifest).map((flag) => `--${flag}`);
   const words = [...roots, ...flags];
   const header = `# o2b completions for ${shell}\n# commands: ${roots.join(" ")}\n# flags: ${flags.join(" ")}\n`;
@@ -36,10 +35,14 @@ _o2b_completions() {
   COMPREPLY=()
   cur="\${COMP_WORDS[COMP_CWORD]}"
   prev="\${COMP_WORDS[COMP_CWORD-1]}"
-  if [[ "$prev" == "brain" ]]; then
-    COMPREPLY=( $(compgen -W "${brain.join(" ")}" -- "$cur") )
+${groups
+  .map(
+    (group) => `  if [[ "$prev" == "${group.parent}" ]]; then
+    COMPREPLY=( $(compgen -W "${group.children.join(" ")}" -- "$cur") )
     return 0
-  fi
+  fi`,
+  )
+  .join("\n")}
   COMPREPLY=( $(compgen -W "${words.join(" ")}" -- "$cur") )
 }
 complete -F _o2b_completions o2b
@@ -49,12 +52,19 @@ complete -F _o2b_completions o2b
 #compdef o2b
 _arguments \\
   '1:command:(${roots.join(" ")})' \\
-  '2:subcommand:(${[...brain, ...search, ...vault].join(" ")})' \\
+  '2:subcommand:(${nested.join(" ")})' \\
   '*:flags:(${flags.join(" ")})'
 `;
     case "fish":
       return `${header}${roots.map((root) => `complete -c o2b -f -a ${quoteFish(root)}`).join("\n")}
-${brain.map((verb) => `complete -c o2b -n '__fish_seen_subcommand_from brain' -f -a ${quoteFish(verb)}`).join("\n")}
+${groups
+  .flatMap((group) =>
+    group.children.map(
+      (verb) =>
+        `complete -c o2b -n '__fish_seen_subcommand_from ${group.parent}' -f -a ${quoteFish(verb)}`,
+    ),
+  )
+  .join("\n")}
 ${flags.map((flag) => `complete -c o2b -l ${flag.slice(2)}`).join("\n")}
 `;
     case "elvish":
