@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -12,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  BrainSnapshotListingError,
   BrainSnapshotToolingMissingError,
   createSnapshot,
   listSnapshots,
@@ -162,6 +164,31 @@ describe("listSnapshots", () => {
   test("returns [] when .snapshots/ is empty", () => {
     expect(listSnapshots(vault)).toEqual([]);
   });
+
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "a snapshots directory it cannot read throws instead of reading as empty",
+    () => {
+      // An empty history and a history nobody could enumerate are
+      // different answers, and `[]` for both is what let `snapshot log`
+      // print "no snapshots available" over a directory it never read.
+      createSnapshot(vault, "dream-unreadable-dir", { reason: DREAM });
+      const snapshots = brainDirs(vault).snapshots;
+      chmodSync(snapshots, 0o000);
+      try {
+        expect(() => listSnapshots(vault)).toThrow(BrainSnapshotListingError);
+        try {
+          listSnapshots(vault);
+        } catch (err) {
+          expect((err as Error).message).toContain(snapshots);
+        }
+      } finally {
+        chmodSync(snapshots, 0o755);
+      }
+      // And the same directory, readable again, still lists its archive:
+      // the throw is about the read, not about the snapshot.
+      expect(listSnapshots(vault)).toHaveLength(1);
+    },
+  );
 
   test("manifest_path populated when sidecar present, null otherwise", () => {
     createSnapshot(vault, "dream-with-sidecar", { reason: DREAM });

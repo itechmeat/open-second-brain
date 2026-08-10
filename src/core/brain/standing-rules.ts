@@ -10,19 +10,29 @@
  * memory-layer failure because it is read outside that boundary, and no
  * tool can rewrite it.
  *
- * UNEDITABILITY IS INHERITED, NOT IMPLEMENTED, and the honest scope of
- * that claim belongs here rather than in a release note. `Brain/` is the
- * machinery root that `resolveNoteTarget` refuses outright, so
- * `Brain/standing-rules.md` is already un-writable through every
- * CALLER-NAMED write tool - `brain_create_note`, `brain_update_note`,
- * `brain_append_note` and `brain_write_batch`, which all resolve their
- * target through that one envelope. That class is the boundary the
- * write-site census maintains, and it is the class an agent can address
- * by naming a path. It is NOT a claim that no code in this process can
- * open the file for writing; a module reaching `node:fs` directly is a
- * different population, counted by that same census. Choosing the
- * directory is the entire mechanism, and this module adds the assertion
- * rather than the enforcement.
+ * UNEDITABILITY IS MOSTLY INHERITED, AND THE REST IS ONE NAMED GUARD.
+ * The honest scope of that claim belongs here rather than in a release
+ * note. `Brain/` is the machinery root that `resolveNoteTarget` refuses
+ * outright, so `Brain/standing-rules.md` is un-writable through the four
+ * CALLER-NAMED note-write tools - `brain_create_note`,
+ * `brain_update_note`, `brain_append_note` and `brain_write_batch` - which
+ * all resolve their target through that one envelope. That class is the
+ * boundary the write-site census maintains, and it is the class an agent
+ * can address by naming a path.
+ *
+ * It is not the whole class, which is why {@link
+ * assertStandingRulesNotTargeted} exists. `brain_labels` also takes a
+ * caller-named path, and it reaches the file through the weaker
+ * `resolveNotePath`, which checks containment and symlinks only - so the
+ * inherited refusal did not cover it and a label write could rewrite the
+ * operator's frontmatter. The guard is deliberately NOT the Brain-root
+ * refusal moved down a layer: several legitimate callers write inside
+ * `Brain/` through that same resolver (marker write-back, tombstones,
+ * temporal replace), so what the guard names is one file.
+ *
+ * Neither mechanism is a claim that no code in this process can open the
+ * file for writing; a module reaching `node:fs` directly is a different
+ * population, counted by that same census.
  *
  * OPERATOR BYTES ARE OPAQUE. The reader performs exactly three
  * operations on them: read, trim, and line-boundary trimming at a
@@ -41,7 +51,8 @@
  * without a word is worse than one that was never written.
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { resolve } from "node:path";
 
 import { brainStandingRulesPath } from "./paths.ts";
 import { applySectionBudget } from "./text/text-budget.ts";
@@ -156,6 +167,67 @@ export function readStandingRules(
   );
   const text = capped.body;
   return freeze(path, text, true, countLines(text), text.length, totalLines, totalChars);
+}
+
+/** Refusal raised by {@link assertStandingRulesNotTargeted}. */
+export class StandingRulesWriteRefusedError extends Error {
+  /** Absolute path the guard protects. */
+  readonly path: string;
+  /** The write path that was refused, as its caller named itself. */
+  readonly surface: string;
+  constructor(path: string, surface: string) {
+    // Scoped to this surface deliberately: the guard speaks for the write
+    // path that called it, not for every write path in the process.
+    super(
+      `${surface} refused: ${path} is the operator's standing-rules file, which this ` +
+        "surface does not rewrite",
+    );
+    this.name = "StandingRulesWriteRefusedError";
+    this.path = path;
+    this.surface = surface;
+  }
+}
+
+/**
+ * Refuse a write whose target is `Brain/standing-rules.md`.
+ *
+ * Narrow on purpose: it names ONE file, and it is called from the write
+ * paths that resolve a caller-named path without going through the
+ * note-target envelope that already refuses the whole `Brain/` root. It
+ * runs before any I/O in its callers, so a refused call also performs no
+ * read and no validation side effect.
+ *
+ * `notePath` is the caller's own vault-relative (or absolute) argument,
+ * resolved here rather than taken pre-resolved, so the guard can run
+ * ahead of its caller's path resolution and vocabulary checks. Both sides
+ * are compared lexically and then canonically: a symlink pointing at the
+ * rules file is the same target, and a symlinked vault root must not make
+ * two spellings of one path look like two paths.
+ */
+export function assertStandingRulesNotTargeted(
+  vault: string,
+  notePath: string,
+  surface: string,
+): void {
+  const target = brainStandingRulesPath(vault);
+  const candidate = resolve(vault, notePath);
+  if (candidate === target || canonicalPath(candidate) === canonicalPath(target)) {
+    throw new StandingRulesWriteRefusedError(target, surface);
+  }
+}
+
+/**
+ * Canonical form of `path`, or the path itself when it cannot be
+ * canonicalized. A missing file has nothing to resolve, and falling back
+ * to the lexical form keeps the comparison total - the guard must never
+ * fail open because one side does not exist yet.
+ */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /**

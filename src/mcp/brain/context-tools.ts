@@ -307,7 +307,11 @@ const EMPTY_CONTEXT_COUNTS: BrainContextCounts = {
  * automatically.
  *
  * Behaviour matrix:
- *   - Brain/ absent           → present:false, content:"", zero counts.
+ *   - Brain/ absent           → present:false, zero counts, and content
+ *                               carrying the standing-rules block or the
+ *                               statement that it could not be read (empty
+ *                               for the ordinary case, where there is no
+ *                               such file either).
  *   - Brain/ present, active.md absent → call regenerateActive (idempotent)
  *                                        and read the regenerated file.
  *   - Brain/ present, active.md fresh  → idempotent regenerate is a no-op
@@ -318,26 +322,33 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
+
+  // The operator's standing rules, resolved before anything else this
+  // surface assembles - INCLUDING the no-Brain return below. `brain_context`
+  // is the pull-mode twin of the SessionStart hook, so the constitution has
+  // to lead the content here for exactly the reason it leads the injected
+  // payload: on the error branch further down, which zeroes `content` and
+  // would otherwise hand a runtime the memory layer's failure and none of
+  // the rules that still govern it, and equally on the branch that reports
+  // `Brain/` as absent. That probe answers false for a directory it cannot
+  // TRAVERSE as well as one that is not there, and it was the one return
+  // path that said nothing at all about the rules - the last silent answer
+  // on a surface where every other path either carries the block or states
+  // why it could not be read.
+  const standing = readStandingBlock(ctx.vault);
+
   if (!existsSync(dirs.brain)) {
     return {
       vault_path: ctx.vault,
       present: false,
       active_path: activePath,
-      content: "",
+      content: prependStandingBlock(standing, ""),
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
       pinned: serializePinnedContext(ctx, pinned),
+      ...standingRulesField(ctx, standing),
     };
   }
-
-  // The operator's standing rules, resolved before anything else this
-  // surface assembles. `brain_context` is the pull-mode twin of the
-  // SessionStart hook, so the constitution has to lead the content here
-  // for exactly the reason it leads the injected payload - including on
-  // the error branch below, which zeroes `content` and would otherwise
-  // hand a runtime the memory layer's failure and none of the rules that
-  // still govern it.
-  const standing = readStandingBlock(ctx.vault);
 
   let counts: BrainContextCounts = EMPTY_CONTEXT_COUNTS;
   let error: string | undefined;
@@ -424,15 +435,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     generated_at: generatedAt,
     pinned: serializePinnedContext(ctx, pinned),
     ...(error ? { error } : {}),
-    ...(standing.rules
-      ? {
-          standing_rules: {
-            path: vaultRelativeSafe(ctx.vault, standing.rules.path),
-            content: standing.rules.text,
-            truncated: standing.rules.truncated,
-          },
-        }
-      : {}),
+    ...standingRulesField(ctx, standing),
     ...(vaultInstruction
       ? {
           vault_instruction: {
@@ -482,6 +485,26 @@ function readStandingBlock(vault: string): StandingBlock {
   } catch (err) {
     return Object.freeze({ text: renderStandingRulesFailure(path, err), rules: null });
   }
+}
+
+/**
+ * The optional `standing_rules` key, or nothing.
+ *
+ * Both return shapes spread it from here so the two cannot disagree about
+ * when the key appears. It is omitted for a vault whose operator wrote no
+ * rules AND for a read that failed - the failure has no path/content/
+ * truncated triple to report, and the block inside `content` is what says
+ * so in words.
+ */
+function standingRulesField(ctx: ServerContext, standing: StandingBlock): Record<string, unknown> {
+  if (standing.rules === null) return {};
+  return {
+    standing_rules: {
+      path: vaultRelativeSafe(ctx.vault, standing.rules.path),
+      content: standing.rules.text,
+      truncated: standing.rules.truncated,
+    },
+  };
 }
 
 /** Put the standing block at the head of the content, or leave it alone. */

@@ -150,6 +150,32 @@ export class BrainSnapshotError extends Error {
 }
 
 /**
+ * Thrown when `.snapshots/` is present and cannot be enumerated.
+ *
+ * {@link listSnapshots} used to answer an unreadable directory with `[]`,
+ * which put "this vault has taken no recovery points" and "nobody could
+ * read the recovery points" on one wire - and every surface above it then
+ * printed the first sentence over the second. It is not a
+ * {@link BrainSnapshotError} because it belongs to no run id: the failure
+ * is the directory, and naming an arbitrary archive in the message would
+ * imply the read got as far as one.
+ */
+export class BrainSnapshotListingError extends Error {
+  /** Absolute path of the directory that could not be read. */
+  readonly path: string;
+  constructor(path: string, cause: unknown) {
+    super(
+      `snapshots directory ${path} could not be read: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause },
+    );
+    this.name = "BrainSnapshotListingError";
+    this.path = path;
+  }
+}
+
+/**
  * Thrown when derived-store coverage was REQUESTED and could not be
  * honoured. Carries the reason from the same closed vocabulary a
  * manifest records, so the caller that reports the refusal and the
@@ -264,11 +290,10 @@ export interface PruneSnapshotsResult {
 }
 
 /**
- * What a restore did about the derived store. Four fields rather than a
- * single verdict string, because "not replaced" splits into two answers
- * an operator must be able to tell apart: the snapshot recorded that it
- * did not include the store, or the snapshot is too old to have recorded
- * anything at all.
+ * What a restore did about the derived store. Separate fields rather than
+ * a single verdict string, because "not replaced" splits into answers an
+ * operator must be able to tell apart: the snapshot recorded that it did
+ * not include the store, or the snapshot carries no record at all.
  */
 export interface RestoreDerivedStoreResult {
   /** True when the archived store replaced the live one. */
@@ -282,6 +307,19 @@ export interface RestoreDerivedStoreResult {
   readonly path: string | null;
   /** The manifest's named reason; null when included or unknown. */
   readonly exclusion_reason: SnapshotStoreExclusionReason | null;
+  /**
+   * Whether a sibling store archive is on disk for this snapshot, probed
+   * rather than believed.
+   *
+   * Load-bearing exactly when {@link coverage_known} is false. The sidecar
+   * write is non-fatal in `createSnapshot`, so coverage can run to
+   * completion and leave no record of itself - and an archive sitting
+   * beside the tar proves that happened. Without this field the reporting
+   * surface had one sentence for two facts and chose the wrong one: it
+   * called a lost RECORD a snapshot older than the FEATURE, while the
+   * evidence to the contrary was in the same directory.
+   */
+  readonly store_archive_present: boolean;
 }
 
 export interface RestoreSnapshotResult {
@@ -886,6 +924,13 @@ function runArchiveProducer(cmd: string, args: ReadonlyArray<string>, runId: str
  * Enumerate `.snapshots/*.tar.zst` in newest-first order (by mtime).
  * Files outside the canonical naming pattern are silently skipped so
  * a stray text file in the dir doesn't poison the listing.
+ *
+ * A directory that is not there is an empty history and returns `[]`: no
+ * snapshot has ever been taken, which is a real answer. A directory that
+ * IS there and cannot be enumerated throws
+ * {@link BrainSnapshotListingError} instead, because the two are
+ * different facts and `[]` for both is what let the listing surfaces
+ * print "no snapshots available" over a read that never happened.
  */
 export function listSnapshots(vault: string): SnapshotInfo[] {
   const dirs = brainDirs(vault);
@@ -893,8 +938,8 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
   let entries: string[];
   try {
     entries = readdirSync(dirs.snapshots);
-  } catch {
-    return [];
+  } catch (err) {
+    throw new BrainSnapshotListingError(dirs.snapshots, err);
   }
   const infos: SnapshotInfo[] = [];
   for (const name of entries) {
@@ -1206,11 +1251,13 @@ export function restoreSnapshot(
  *   - the manifest records inclusion: decompress and swap;
  *   - the manifest records an exclusion: nothing is touched, and the
  *     named reason travels back;
- *   - there is no record at all: the snapshot predates coverage, so
- *     coverage is UNKNOWN. A restore must not guess in either direction
- *     here - replacing a live store on a hunch destroys embeddings the
- *     archive never held, and reporting "excluded" would claim a check
- *     that never ran.
+ *   - there is no record at all: coverage is UNKNOWN, and whether a
+ *     sibling archive is on disk travels back with it. A restore must not
+ *     guess in either direction here - replacing a live store on a hunch
+ *     destroys embeddings the archive never held, and reporting
+ *     "excluded" would claim a check that never ran. The archive probe is
+ *     what lets the caller say WHY the record is missing instead of
+ *     asserting the snapshot is older than the feature.
  */
 /**
  * Refuse a restore that cannot be completed, before it starts.
@@ -1251,12 +1298,17 @@ function restoreDerivedStore(
   opts: SnapshotStoreOptions,
 ): RestoreDerivedStoreResult {
   const record = readManifestSidecar(vault, runId)?.derived_store ?? null;
+  // Probed once, for every branch, and deliberately independent of the
+  // record: it is the only evidence that separates a snapshot with no
+  // record from a snapshot whose record was lost after the archive landed.
+  const storeArchivePresent = existsSync(snapshotStorePath(vault, runId));
   if (record === null) {
     return Object.freeze({
       replaced: false,
       coverage_known: false,
       path: null,
       exclusion_reason: null,
+      store_archive_present: storeArchivePresent,
     });
   }
   if (!record.included) {
@@ -1265,6 +1317,7 @@ function restoreDerivedStore(
       coverage_known: true,
       path: null,
       exclusion_reason: record.exclusion_reason,
+      store_archive_present: storeArchivePresent,
     });
   }
 
@@ -1290,6 +1343,7 @@ function restoreDerivedStore(
     coverage_known: true,
     path: target,
     exclusion_reason: null,
+    store_archive_present: true,
   });
 }
 

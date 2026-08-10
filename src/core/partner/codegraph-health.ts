@@ -42,6 +42,34 @@ export const GRAPH_HEALTH_CODES = Object.freeze({
 
 export type GraphHealthCode = (typeof GRAPH_HEALTH_CODES)[keyof typeof GRAPH_HEALTH_CODES];
 
+/**
+ * Membership list, in declaration (severity) order.
+ *
+ * Named `_LIST` rather than pluralized because the frozen object above
+ * already carries the plural name and is quoted by callers outside this
+ * module; renaming it to free the plural would move a value the emitted
+ * shell script selects on.
+ */
+export const GRAPH_HEALTH_CODE_LIST: ReadonlyArray<GraphHealthCode> = Object.freeze(
+  Object.values(GRAPH_HEALTH_CODES),
+);
+
+/**
+ * Narrow a string that arrives from outside TypeScript.
+ *
+ * The codes leave this process: the resync cron recipe interpolates one
+ * into a shell gate that selects it out of `--json` output, and a caller
+ * filtering the report by code may equally read one from a config file or
+ * an operator's argument. A guard is what keeps "no finding with that
+ * code" distinguishable from "that is not a code" - the same reason the
+ * snapshot-reason filter has one.
+ */
+export function isGraphHealthCode(value: unknown): value is GraphHealthCode {
+  return (
+    typeof value === "string" && (GRAPH_HEALTH_CODE_LIST as ReadonlyArray<string>).includes(value)
+  );
+}
+
 /** One non-blocking graph-health finding. */
 export interface GraphHealthWarning {
   readonly code: GraphHealthCode;

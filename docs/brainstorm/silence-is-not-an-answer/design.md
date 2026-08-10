@@ -33,7 +33,7 @@ One shared kernel, eight units, and the defects found in their blast radius.
 
 **Kernel, before the units**
 
-- One digest module. Ten byte-identical private SHA-256 helpers and two
+- One digest module. Ten byte-identical private SHA-256 helpers and three
   independent reimplementations of canonical JSON serialization collapse into one
   module. Two units in this wave persist a digest into a replicated vault, and
   under the additive-only rule two divergent encodings shipped together could
@@ -72,8 +72,10 @@ One shared kernel, eight units, and the defects found in their blast radius.
   it has been missing since `rollback` was added, and `snapshot log` completes
   log / diff / revert.
 - **U8** An operator-authored standing-rules block is injected first, is exempt
-  from the adaptive budget, survives a memory-layer failure, cannot be rewritten
-  by any tool, and names what it dropped when it is capped.
+  from the adaptive budget, survives a memory-layer failure, is refused by the
+  two write paths that can address it by name (inherited for the four
+  caller-named note-write tools, an explicit named guard for the label writer),
+  and names what it dropped when it is capped.
 
 **Defects fixed in the same wave**
 
@@ -108,8 +110,13 @@ the wave itself:
 Named here and in the release notes, because a deferral that is not written down
 reads as an omission.
 
-- **The full digest sweep.** The ten identical private helpers and the two
-  canonical-JSON copies are absorbed. The sixteen further sites that inline a
+- **The full digest sweep.** The ten identical private helpers and all three
+  canonical-JSON copies are absorbed - the third is the external-fetch cache
+  key, which differed only in rendering an `undefined` object entry as
+  `"key":null` instead of omitting it; nothing persists that key and the request
+  it identifies goes out through `JSON.stringify`, which omits the entry, so the
+  copy was distinguishing requests that are identical on the wire. The sixteen
+  further sites that inline a
   hash with an ad-hoc truncation are not: they are correct today, they persist
   nothing this wave reads, and folding twenty-six call sites into a diff that
   also carries eight features trades a real regression risk for tidiness.
@@ -118,11 +125,16 @@ reads as an omission.
   outside the vault, and it would amend a module invariant that is currently
   absolute. The cron recipe delivers the capability without any of that. The lane
   entry is a separate decision.
-- **Snapshots at session, plan and decision boundaries.** U7 types the history
-  and gives it a log surface; making snapshots *happen* at three new seams
-  changes their frequency, which interacts with retention and, if the derived
-  store is included, with disk in a way that should be measured before it is
-  shipped.
+- **Snapshots at session, plan and decision boundaries, and on demand.** U7 types
+  the history and gives it a log surface; making snapshots *happen* at three new
+  seams changes their frequency, which interacts with retention and, if the
+  derived store is included, with disk in a way that should be measured before it
+  is shipped. The `manual` reason is deferred with them and for the same reason
+  it is declared at all - a peer running a later release may write it, and this
+  build must read it - so no verb and no tool in this wave takes a recovery point
+  on demand. Four of the nine members therefore have no producer here, which the
+  vocabulary's own documentation states so `snapshot log --reason manual`
+  listing nothing reads as the deferral it is.
 - **Retention ordering under replication.** Snapshot listing and pruning both
   order by mtime, and a replicated archive arriving from another device carries
   its origin mtime, so pruning can evict a locally newer recovery point. This is
@@ -156,8 +168,9 @@ precisely because it is well-typed. The reason codes are also disjoint in
 meaning across the eight, and a union of disjoint sets is a namespace rather than
 an abstraction. So the reason axis is shared as a shape and a census: each unit
 owns the frozen-object / `Set` / guard trio the project already uses, and one
-test asserts that the trio is complete, that no member is unregistered, and that
-no two units claim the same code string.
+test asserts that the trio is complete and that no member is unregistered.
+Uniqueness ACROSS vocabularies is deliberately not asserted, for the reason
+given under Scope.
 
 ## Design decisions
 
@@ -189,11 +202,18 @@ no two units claim the same code string.
   set as a named reason that forces `unknown`. A receipt over the authorized set
   would overclaim; one over the index alone would hide the gap.
 
-- **Uneditability is inherited, not implemented.** U8's standing-rules file lives
-  under the tree whose first path segment the note-target resolver already
-  refuses for every caller-named write tool. Choosing the directory is the whole
-  enforcement mechanism; the new code is the test that asserts it, plus the
-  assertion that no tool description mentions the path.
+- **Uneditability is mostly inherited, and the rest is one named guard.** U8's
+  standing-rules file lives under the tree whose first path segment the
+  note-target resolver already refuses for the four caller-named note-write
+  tools, so for that class choosing the directory is the whole enforcement
+  mechanism and the new code is the test that asserts it, plus the assertion
+  that no tool description mentions the path. It is not the whole class:
+  `brain_labels` also takes a caller-named path and reaches the file through the
+  containment-only resolver, so it gets an explicit guard that refuses this one
+  file by name. The guard is not the Brain-root refusal moved down a layer -
+  several legitimate callers write inside `Brain/` through that resolver (marker
+  write-back, tombstones, temporal replace) - and every claim in the docs is
+  scoped to these two mechanisms rather than to "any tool".
 
 - **Operator bytes are opaque.** The standing-rules reader performs exactly three
   operations on the operator's text: read, trim, and truncate at a line boundary.

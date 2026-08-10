@@ -11,8 +11,10 @@
 import { describe, expect, test } from "bun:test";
 
 import type { BrainManifestDerivedStore } from "../../src/core/brain/manifest.ts";
+import type { RestoreDerivedStoreResult } from "../../src/core/brain/snapshot.ts";
 import {
   renderDerivedStoreCoverage,
+  renderDerivedStoreRestore,
   renderSnapshotReason,
   SNAPSHOT_UNKNOWN_LABEL,
 } from "../../src/cli/brain/snapshot-render.ts";
@@ -66,6 +68,66 @@ describe("renderDerivedStoreCoverage", () => {
     expect(renderDerivedStoreCoverage(included)).toBe("included");
     expect(renderDerivedStoreCoverage(included, { withArchiveSize: true })).toBe(
       "included (4096 bytes)",
+    );
+  });
+});
+
+/** A restore outcome with the no-record defaults, overridden per case. */
+function outcome(over: Partial<RestoreDerivedStoreResult>): RestoreDerivedStoreResult {
+  return {
+    replaced: false,
+    coverage_known: false,
+    path: null,
+    exclusion_reason: null,
+    store_archive_present: false,
+    ...over,
+  };
+}
+
+describe("renderDerivedStoreRestore", () => {
+  test("a replaced store names where it was written", () => {
+    const rendered = renderDerivedStoreRestore(
+      outcome({
+        replaced: true,
+        coverage_known: true,
+        path: "/vault/.open-second-brain/brain.sqlite",
+        store_archive_present: true,
+      }),
+    );
+    expect(rendered).toContain("replaced");
+    expect(rendered).toContain("/vault/.open-second-brain/brain.sqlite");
+  });
+
+  test("a recorded exclusion names the reason it recorded", () => {
+    const rendered = renderDerivedStoreRestore(
+      outcome({ coverage_known: true, exclusion_reason: "not-requested" }),
+    );
+    expect(rendered).toContain("not-requested");
+    expect(rendered).toContain("live store left untouched");
+  });
+
+  test("no record and no archive does not claim the feature is younger than the snapshot", () => {
+    // Nothing was archived either way, so the honest answer is that no
+    // record exists - not that the archive is older than the feature,
+    // which this surface cannot know.
+    const rendered = renderDerivedStoreRestore(outcome({}));
+    expect(rendered).toContain(SNAPSHOT_UNKNOWN_LABEL);
+    expect(rendered).toContain("no store archive");
+    expect(rendered).toContain("live store left untouched");
+  });
+
+  test("no record WITH an archive on disk says the record is missing", () => {
+    // The rollback surface used to render this as "snapshot predates
+    // derived-store coverage" while the store archive sat next to the tar.
+    const rendered = renderDerivedStoreRestore(outcome({ store_archive_present: true }));
+    expect(rendered).toContain("record");
+    expect(rendered).not.toContain("predates");
+    expect(rendered).toContain("live store left untouched");
+  });
+
+  test("the two no-record answers are different sentences", () => {
+    expect(renderDerivedStoreRestore(outcome({}))).not.toBe(
+      renderDerivedStoreRestore(outcome({ store_archive_present: true })),
     );
   });
 });

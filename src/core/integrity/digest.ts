@@ -2,7 +2,7 @@
  * The one digest encoding.
  *
  * Ten modules across the brain, search and bench trees each carried a
- * private SHA-256 helper with the same body, and two reimplemented
+ * private SHA-256 helper with the same body, and three reimplemented
  * canonical JSON serialization independently. That was survivable while
  * every digest stayed inside the process that computed it.
  *
@@ -52,6 +52,11 @@ export function sha256Hex(input: string | Uint8Array): string {
  * it is what the persisted-ledger copy already did. Inside an array
  * `undefined` renders as `null`, again matching `JSON.stringify`, because
  * dropping it would change the array's length and therefore its meaning.
+ *
+ * The third absorbed copy - the external-fetch cache key - rendered such
+ * an entry as `"key":null` instead. Nothing persisted it, and the request
+ * it keys goes out through `JSON.stringify`, which drops the entry: the
+ * copy was distinguishing two requests that are identical on the wire.
  */
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) {

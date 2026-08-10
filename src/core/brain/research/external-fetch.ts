@@ -24,6 +24,7 @@
  * error string that happens to embed the key is scrubbed before it surfaces.
  */
 
+import { canonicalJson } from "../../integrity/digest.ts";
 import { redactRawOutput } from "../../redactor.ts";
 
 /** Distinct failure kinds a keyed fetch can produce. */
@@ -106,17 +107,6 @@ export interface KeyedFetchConfig {
   readonly cache?: ResponseCache;
 }
 
-/** Stable stringify with sorted object keys, for deterministic cache keys. */
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(",")}]`;
-  const record = value as Record<string, unknown>;
-  const parts = Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`);
-  return `{${parts.join(",")}}`;
-}
-
 /** Query string in deterministic (sorted-key) order. */
 function sortedQuery(query: Readonly<Record<string, string>> | undefined): string {
   if (query === undefined) return "";
@@ -132,12 +122,21 @@ function sortedQuery(query: Readonly<Record<string, string>> | undefined): strin
  * - so no credential can leak into a cache key or the paths derived from one.
  * The accept type is part of the key so a shared cache can never serve a JSON
  * value where text was expected (or vice versa).
+ *
+ * The body is serialized by the shared {@link canonicalJson}. This module
+ * carried its own sorted-key stringifier with the same key ordering and one
+ * difference: an object entry whose value is `undefined` rendered as
+ * `"key":null` instead of being omitted. Omitting it is what the body
+ * actually sent does - `JSON.stringify` drops those entries - so the shared
+ * encoding keys two requests that go out as identical bytes to one entry
+ * rather than two, and no value the module persists changes, because the key
+ * is only ever an in-memory cache key.
  */
 export function normalizeRequestKey(req: ExternalFetchRequest): string {
   const accept = req.accept ?? "json";
   const method = req.method ?? "GET";
   const query = sortedQuery(req.query);
-  const body = req.body === undefined ? "" : stableStringify(req.body);
+  const body = req.body === undefined ? "" : canonicalJson(req.body);
   return `${accept} ${method} ${req.url}?${query}#${body}`;
 }
 

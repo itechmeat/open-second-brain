@@ -1,4 +1,5 @@
 import {
+  BrainSnapshotListingError,
   listSnapshots,
   extractSnapshotToTemp,
   type ExtractSnapshotResult,
@@ -13,7 +14,11 @@ import {
   type BrainSnapshotReason,
 } from "../../../core/brain/types.ts";
 import { brainVerbContext, fail, ok, parse, usageError } from "../helpers.ts";
-import { renderDerivedStoreCoverage, SNAPSHOT_UNKNOWN_LABEL } from "../snapshot-render.ts";
+import {
+  renderDerivedStoreCoverage,
+  renderSnapshotListingFailure,
+  SNAPSHOT_UNKNOWN_LABEL,
+} from "../snapshot-render.ts";
 
 /** Verbs this dispatcher routes, named once for the help and the error. */
 const SNAPSHOT_VERBS = Object.freeze({ log: "log", diff: "diff" } as const);
@@ -75,10 +80,22 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
 
   const { vault } = brainVerbContext(flags);
 
+  // A snapshots directory that exists and cannot be enumerated is a
+  // failure of the listing, not a listing of nothing - so it is reported
+  // before either output shape, and neither the empty-history line below
+  // nor an empty `--json` array can stand in for it.
+  let all: SnapshotInfo[];
+  try {
+    all = listSnapshots(vault);
+  } catch (exc) {
+    if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
+    throw exc;
+  }
+
   // The reason filter compares against what the SIDECAR recorded, so a
   // snapshot whose reason is unknown is never swept into a named bucket by
   // its run-id prefix.
-  const matching = listSnapshots(vault).filter((s) => reason === undefined || s.reason === reason);
+  const matching = all.filter((s) => reason === undefined || s.reason === reason);
   const snaps = limit === undefined ? matching : matching.slice(0, limit);
 
   if (flags["json"]) {
@@ -89,9 +106,9 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
   }
 
   if (snaps.length === 0) {
-    // Zero, not an error: the question was answerable and the answer is
-    // none. The filter is echoed so an operator who mistyped a valid
-    // reason can see which one was applied.
+    // Zero, not an error: the directory was read (an unreadable one was
+    // reported above) and the answer is none. The filter is echoed so an
+    // operator who mistyped a valid reason can see which one was applied.
     ok(reason === undefined ? "no snapshots available" : `no snapshots with reason '${reason}'`);
     return 0;
   }
@@ -157,7 +174,15 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
     );
   }
   const [a, b] = positional;
-  const snaps = listSnapshots(vault);
+  // Same reason as the log verb: "snapshot not found" over a directory
+  // nobody could read names the wrong cause.
+  let snaps: SnapshotInfo[];
+  try {
+    snaps = listSnapshots(vault);
+  } catch (exc) {
+    if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
+    throw exc;
+  }
   if (!snaps.some((s) => s.run_id === a)) {
     process.stderr.write(
       `snapshot not found: ${a}; run \`o2b brain snapshot log\` to enumerate.\n`,

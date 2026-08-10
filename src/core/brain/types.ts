@@ -537,19 +537,25 @@ export function isBrainLogEventKind(value: string): value is BrainLogEventKind {
  *
  * ## Why members nothing writes yet are not dead code
  *
- * `session-boundary`, `plan-boundary` and `decision-boundary` have no
- * producer in this release. Taking snapshots at those three seams is
- * DEFERRED on purpose: it changes how often snapshots happen, which
- * interacts with retention and with the optional derived-store archive,
- * and that is a frequency change worth measuring before it ships. They
- * are declared here anyway because `.snapshots/` rides the same
+ * FOUR MEMBERS HAVE NO PRODUCER IN THIS RELEASE: `session-boundary`,
+ * `plan-boundary`, `decision-boundary` and `manual`. Snapshots at those
+ * three seams are DEFERRED on purpose - it changes how often snapshots
+ * happen, which interacts with retention and with the optional
+ * derived-store archive, and that is a frequency change worth measuring
+ * before it ships. `manual` is deferred for a different reason: nothing
+ * takes a recovery point on demand. No CLI verb and no MCP tool does, and
+ * `takeSnapshot` is reached only by the destructive-operation gate, so
+ * `manual` is a reason a later release (or a peer already running one)
+ * may write, not one this build can produce.
+ *
+ * All four are declared here anyway because `.snapshots/` rides the same
  * peer-to-peer replication as the rest of the vault: a later release
  * writing one of these reasons produces sidecars that THIS build must
  * still read, and a guard that rejected them would fail the manifest
- * closed and lose drift detection on exactly those snapshots.
- *
- * `manual` is the operator asking for a recovery point directly, with no
- * destructive operation behind it.
+ * closed and lose drift detection on exactly those snapshots. The read
+ * side is the whole point, and it is why `snapshot log --reason` accepts
+ * a producer-less member and honestly lists nothing for it rather than
+ * rejecting the filter.
  *
  * The strings are the run-id prefixes already on disk, deliberately: an
  * operator reading `.snapshots/` and an operator reading the log see one
@@ -572,7 +578,11 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
   planBoundary: "plan-boundary",
   /** Deferred: a decision boundary. No producer in this release. */
   decisionBoundary: "decision-boundary",
-  /** An operator asked for a recovery point with no operation behind it. */
+  /**
+   * Deferred: an operator asking for a recovery point with no operation
+   * behind it. No producer in this release - nothing takes a snapshot on
+   * demand.
+   */
   manual: "manual",
 } as const);
 

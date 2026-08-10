@@ -16,7 +16,9 @@
  * literal into a tool schema with nothing asserting the two agree.
  *
  * This file is the assertion that they agree. Every vocabulary the wave
- * introduces registers below.
+ * introduces registers below, and so does any closed vocabulary whose
+ * values the wave copies OUT of TypeScript - a code interpolated into an
+ * emitted shell script is the same drift risk by another route.
  *
  * It deliberately does NOT require values to be unique across
  * vocabularies. An absent config file and an absent store file are both
@@ -68,6 +70,11 @@ import {
   BRAIN_SNAPSHOT_REASONS,
   isBrainSnapshotReason,
 } from "../../../src/core/brain/types.ts";
+import {
+  GRAPH_HEALTH_CODE_LIST,
+  GRAPH_HEALTH_CODES,
+  isGraphHealthCode,
+} from "../../../src/core/partner/codegraph-health.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -204,15 +211,27 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isSnapshotStoreExclusionReason,
   },
   {
-    // U7. Three of its nine members have no producer in this release
-    // (snapshots at a session, plan or decision boundary are deferred),
-    // and the census does not care: what it asserts is that the guard
-    // accepts every member, which is precisely what lets this build read
-    // a sidecar a later release wrote and replicated back.
+    // U7. Four of its nine members have no producer in this release
+    // (snapshots at a session, plan or decision boundary are deferred, and
+    // nothing takes one on demand), and the census does not care: what it
+    // asserts is that the guard accepts every member, which is precisely
+    // what lets this build read a sidecar a later release wrote and
+    // replicated back.
     name: "BRAIN_SNAPSHOT_REASON",
     values: BRAIN_SNAPSHOT_REASON,
     members: BRAIN_SNAPSHOT_REASONS,
     guard: isBrainSnapshotReason,
+  },
+  {
+    // U4. Registered because the values leave TypeScript: the resync cron
+    // recipe interpolates one of them into the shell gate it emits, which
+    // is the copy-drift class this census exists for - a code renamed here
+    // and left as a literal there would silently stop matching, and the
+    // emitted gate would pass every report.
+    name: "GRAPH_HEALTH_CODES",
+    values: GRAPH_HEALTH_CODES,
+    members: GRAPH_HEALTH_CODE_LIST,
+    guard: isGraphHealthCode,
   },
 ]);
 

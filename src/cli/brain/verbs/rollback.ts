@@ -1,9 +1,10 @@
 import {
+  BrainSnapshotListingError,
   listSnapshots,
   extractSnapshotToTemp,
   restoreSnapshot,
   type ExtractSnapshotResult,
-  type RestoreDerivedStoreResult,
+  type SnapshotInfo,
 } from "../../../core/brain/snapshot.ts";
 import {
   BRAIN_MANIFEST_SIDECAR_SINCE_VERSION,
@@ -19,7 +20,7 @@ import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
-import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "../../../core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import {
   brainVerbContext,
@@ -30,7 +31,12 @@ import {
   parse,
   readSingleLine,
 } from "../helpers.ts";
-import { renderDerivedStoreCoverage } from "../snapshot-render.ts";
+import {
+  renderDerivedStoreCoverage,
+  renderDerivedStoreRestore,
+  renderSnapshotListingFailure,
+  renderSnapshotReason,
+} from "../snapshot-render.ts";
 
 export async function cmdBrainRollback(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -44,8 +50,24 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   const { vault } = brainVerbContext(flags);
   const forceRollback = Boolean(flags["force-rollback"]);
 
+  // The usage check precedes the listing so a missing argument is still a
+  // usage error rather than a filesystem report, and the listing is then
+  // read ONCE for both surfaces below.
+  if (!flags["list"] && positional.length < 1)
+    return fail("brain rollback requires a <run_id> argument (or --list to enumerate snapshots)");
+
+  let snaps: SnapshotInfo[];
+  try {
+    snaps = listSnapshots(vault);
+  } catch (exc) {
+    // A directory nobody could read must never be rendered as a vault
+    // with no recovery points: that is the answer an operator would act
+    // on by taking a fresh snapshot over a history that is still there.
+    if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
+    throw exc;
+  }
+
   if (flags["list"]) {
-    const snaps = listSnapshots(vault);
     if (flags["json"]) {
       process.stdout.write(JSON.stringify(snaps, null, 2) + "\n");
       return 0;
@@ -57,19 +79,15 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     ok("run_id\tcreated_at\treason\tsize_bytes\tderived_store");
     for (const s of snaps) {
       ok(
-        `${s.run_id}\t${s.created_at}\t${renderReason(s.reason)}\t${s.size_bytes}\t` +
+        `${s.run_id}\t${s.created_at}\t${renderSnapshotReason(s.reason)}\t${s.size_bytes}\t` +
           renderDerivedStoreCoverage(s.derived_store, { withArchiveSize: true }),
       );
     }
     return 0;
   }
 
-  if (positional.length < 1)
-    return fail("brain rollback requires a <run_id> argument (or --list to enumerate snapshots)");
   const runId = positional[0]!;
-
-  const allSnaps = listSnapshots(vault);
-  const target = allSnaps.find((s) => s.run_id === runId);
+  const target = snaps.find((s) => s.run_id === runId);
   if (target === undefined) {
     process.stderr.write(
       `snapshot not found: ${runId}; run \`o2b brain rollback --list\` to enumerate.\n`,
@@ -134,7 +152,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     // timestamp, not an explanation.
     process.stderr.write(
       `About to restore snapshot '${runId}' over Brain/.\n` +
-        `Snapshot reason: ${renderReason(target.reason)}.\n` +
+        `Snapshot reason: ${renderSnapshotReason(target.reason)}.\n` +
         `Current state: ${summary.preferences} preferences, ${summary.retired} retired, ${summary.signals} signals.\n` +
         `This will OVERWRITE the live Brain/ tree (.snapshots/ is preserved).\nProceed? [y/N] `,
     );
@@ -179,7 +197,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     });
   } else {
     ok(
-      `restored: ${runId} (${result.restored_files} files, reason ${renderReason(target.reason)})`,
+      `restored: ${runId} (${result.restored_files} files, reason ${renderSnapshotReason(target.reason)})`,
     );
     // Always printed, in all three shapes. A restore that silently says
     // nothing about the derived store is exactly the silence this
@@ -188,25 +206,4 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     ok(`derived store: ${renderDerivedStoreRestore(result.derived_store)}`);
   }
   return 0;
-}
-
-/**
- * One-column provenance answer. `unknown` for a snapshot whose sidecar is
- * absent, unreadable, or predates the reason — and never the run-id
- * prefix, even though every run id this project mints begins with the
- * reason. Substituting the prefix would make an unstamped archive
- * indistinguishable from a stamped one at exactly the moment an operator
- * is deciding whether to overwrite their live tree with it.
- */
-function renderReason(reason: BrainSnapshotReason | null): string {
-  return reason ?? "unknown";
-}
-
-/** One-line outcome for a completed restore. */
-function renderDerivedStoreRestore(outcome: RestoreDerivedStoreResult): string {
-  if (outcome.replaced) return `replaced ${outcome.path ?? ""}`.trimEnd();
-  if (!outcome.coverage_known) {
-    return `unknown (snapshot predates derived-store coverage); live store left untouched`;
-  }
-  return `not restored (${outcome.exclusion_reason ?? "unspecified"}); live store left untouched`;
 }

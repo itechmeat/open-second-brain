@@ -69,6 +69,36 @@ describe("parseInterval", () => {
     expect(() => parseInterval("30s")).toThrow(CronTemplateError);
   });
 
+  test("a day step below the shortest month still renders", () => {
+    // Inside a month the step is the cadence it claims to be, which is the
+    // same bargain the minute and hour fields already make.
+    expect(parseInterval("27d").cron).toBe("0 0 */27 * *");
+  });
+
+  test("28d rejected: the day-of-month field restarts before the step lands", () => {
+    // `*/28` in the day-of-month field means "the 1st, then every 28th day
+    // WITHIN each month", and no month is long enough for a second firing
+    // - so the expression is a monthly schedule wearing a 28-day label.
+    expect(() => parseInterval("28d")).toThrow(CronTemplateError);
+    try {
+      parseInterval("28d");
+    } catch (e) {
+      expect((e as Error).message).toContain("day-of-month");
+    }
+  });
+
+  test("90d rejected rather than silently rendered as a monthly schedule", () => {
+    // The defect this closes: `0 0 */90 * *` fires on the 1st of every
+    // month. Refusing is the same discipline the m and h units already
+    // apply, rather than reinterpreting the operator's cadence.
+    expect(() => parseInterval("90d")).toThrow(CronTemplateError);
+    try {
+      parseInterval("90d");
+    } catch (e) {
+      expect((e as Error).message).toContain("90");
+    }
+  });
+
   test("zero rejected", () => {
     expect(() => parseInterval("0m")).toThrow(CronTemplateError);
   });

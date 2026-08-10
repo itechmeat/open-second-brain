@@ -30,6 +30,10 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { CreateNoteError, resolveNoteTarget } from "../../src/core/brain/notes/create-note.ts";
+import {
+  assertStandingRulesNotTargeted,
+  StandingRulesWriteRefusedError,
+} from "../../src/core/brain/standing-rules.ts";
 import { BRAIN_STANDING_RULES_FILE } from "../../src/core/brain/path-constants.ts";
 
 let tmp: string;
@@ -161,6 +165,55 @@ describe("Brain/standing-rules.md is uneditable through every caller-named write
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The one caller-named write surface that does NOT go through
+ * `resolveNoteTarget`: `brain_labels` resolves its path with
+ * `resolveNotePath`, which checks containment and symlinks and nothing
+ * else, and `assignNoteLabel` then rewrites frontmatter with overwrite -
+ * so the inherited refusal did not cover it and an agent could mint the
+ * dimension it needed itself. The guard below is named and narrow: it
+ * refuses this one path, and it says which file it is protecting.
+ */
+describe("brain_labels cannot rewrite the standing-rules file", () => {
+  const LABEL_ATTEMPTS: ReadonlyArray<Record<string, unknown>> = Object.freeze([
+    { operation: "assign", path: RULES_REL, dimension: "status", value: "draft" },
+    { operation: "remove", path: RULES_REL, dimension: "status" },
+  ]);
+
+  for (const args of LABEL_ATTEMPTS) {
+    test(`${String(args["operation"])} is refused and the bytes survive`, async () => {
+      const out = await callTool("brain_labels", args);
+      // An ERROR, not a result: `remove` used to succeed vacuously on a
+      // file with no labels, which reported the path back as if the tool
+      // had operated on it. And the message has to NAME the file, so a
+      // vocabulary complaint cannot pass for this refusal.
+      expect(out.result).toBeUndefined();
+      expect(out.error?.message ?? "").toContain(BRAIN_STANDING_RULES_FILE);
+      expect(onDiskBytes()).toBe(RULES_BYTES);
+    });
+  }
+
+  test("the guard refuses the path directly and names the file", () => {
+    let thrown: unknown;
+    try {
+      assertStandingRulesNotTargeted(vault, RULES_REL, "test surface");
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(StandingRulesWriteRefusedError);
+    expect((thrown as Error).message).toContain(BRAIN_STANDING_RULES_FILE);
+  });
+
+  test("the guard lets every other note through", () => {
+    // Narrow by construction: several legitimate callers write into
+    // `Brain/` through the same resolver (marker write-back, tombstones,
+    // temporal replace), so this guard names one file and no directory.
+    expect(() =>
+      assertStandingRulesNotTargeted(vault, "Brain/preferences/pref-x.md", "test surface"),
+    ).not.toThrow();
   });
 });
 

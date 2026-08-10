@@ -21,12 +21,21 @@
  * Duration parser accepts <N>s|m|h|d. Mapping to a cron expression
  * covers the common cadences:
  *   - minutes:  every N (N less than 60)   maps to N-step minutes
- *   - hours:    every N hours              maps to N-step hours
- *   - days:     every N days               maps to N-step days
+ *   - hours:    every N (N less than 24)   maps to N-step hours
+ *   - days:     every N (N less than 28)   maps to N-step days
  *   - seconds:  rejected (cron's finest grain is one minute)
  *
- * Inputs outside those bounds raise a CronTemplateError with a
- * concrete suggestion (use the next unit up).
+ * Every cron step field restarts at the head of its enclosing period, and
+ * each unit is bounded so the rendered expression means what the operator
+ * asked for INSIDE that period. The day bound is the strictest of the
+ * three because its enclosing period varies: `*​/N` in the day-of-month
+ * field means "the 1st, then every Nth day within each month", so at 28 -
+ * the shortest month - and above it collapses to the 1st of every month.
+ * `--interval 90d` used to render exactly that and call it 90 days.
+ *
+ * Inputs outside those bounds raise a CronTemplateError naming what the
+ * field can express, rather than a schedule that quietly means something
+ * else.
  */
 
 export class CronTemplateError extends Error {
@@ -35,6 +44,26 @@ export class CronTemplateError extends Error {
     this.name = "CronTemplateError";
   }
 }
+
+/** Cron's minute field restarts every hour, so a step must stay under it. */
+const MINUTES_PER_HOUR = 60;
+
+/** Cron's hour field restarts every day. */
+const HOURS_PER_DAY = 24;
+
+/**
+ * The shortest month, and therefore the ceiling on a day-of-month step.
+ *
+ * A `*​/N` day step fires on the 1st and every Nth day after it WITHIN the
+ * month; at 28 no month is long enough for a second firing, so the
+ * expression is a monthly schedule whatever N says. Refusing at that
+ * boundary is what keeps the rendered cadence and the requested cadence
+ * the same claim.
+ */
+const SHORTEST_MONTH_DAYS = 28;
+
+/** The expression an operator wanting a monthly cadence installs by hand. */
+const MONTHLY_CRON_EXPRESSION = "0 0 1 * *";
 
 export interface ParsedInterval {
   /** Cron expression for the chosen interval. */
@@ -64,26 +93,48 @@ export function parseInterval(raw: string): ParsedInterval {
     );
   }
   if (unit === "m") {
-    if (n >= 60) {
-      const hours = Math.round(n / 60);
+    if (n >= MINUTES_PER_HOUR) {
+      const hours = Math.round(n / MINUTES_PER_HOUR);
       throw new CronTemplateError(
-        "intervals of 60 minutes or more must use the h unit (e.g. " + hours + "h)",
+        "intervals of " +
+          MINUTES_PER_HOUR +
+          " minutes or more must use the h unit (e.g. " +
+          hours +
+          "h)",
       );
     }
     const cron = "*/" + n + " * * * *";
     return { cron, human: n + " minutes", hermesSchedule: cron };
   }
   if (unit === "h") {
-    if (n >= 24) {
-      const days = Math.round(n / 24);
+    if (n >= HOURS_PER_DAY) {
+      const days = Math.round(n / HOURS_PER_DAY);
       throw new CronTemplateError(
-        "intervals of 24 hours or more must use the d unit (e.g. " + days + "d)",
+        "intervals of " + HOURS_PER_DAY + " hours or more must use the d unit (e.g. " + days + "d)",
       );
     }
     const cron = "0 */" + n + " * * *";
     return { cron, human: n + " hours", hermesSchedule: cron };
   }
-  // unit === "d"
+  // unit === "d". The day-of-month field is the one that cannot be widened
+  // by moving to a larger unit, because there is none - so the refusal
+  // states what the field means and hands over the monthly expression
+  // instead of rendering a step that silently becomes it.
+  if (n >= SHORTEST_MONTH_DAYS) {
+    throw new CronTemplateError(
+      "cron's day-of-month field restarts every month, so an interval of " +
+        n +
+        " days cannot be expressed: '0 0 */" +
+        n +
+        " * *' fires on the 1st of every month, not every " +
+        n +
+        " days. Use an interval below " +
+        SHORTEST_MONTH_DAYS +
+        "d, or install a monthly job with '" +
+        MONTHLY_CRON_EXPRESSION +
+        "' yourself.",
+    );
+  }
   const cron = "0 0 */" + n + " * *";
   return { cron, human: n + " days", hermesSchedule: cron };
 }

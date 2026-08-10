@@ -16,6 +16,7 @@ import {
   readLabels,
   removeNoteLabel,
 } from "../../core/brain/labels.ts";
+import { StandingRulesWriteRefusedError } from "../../core/brain/standing-rules.ts";
 import { loadSchemaPack } from "../../core/brain/schema-pack.ts";
 import { listSecrets } from "../../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/exec.ts";
@@ -83,6 +84,12 @@ function toolBrainLabels(
     };
   } catch (exc) {
     if (exc instanceof LabelVocabularyError) {
+      throw new MCPError(INVALID_PARAMS, `brain_labels ${op}: ${exc.message}`);
+    }
+    // A refused target is a bad argument, not a server fault: the caller
+    // named a file this surface will not rewrite, and the message says
+    // which one so the agent stops trying rather than retrying blind.
+    if (exc instanceof StandingRulesWriteRefusedError) {
       throw new MCPError(INVALID_PARAMS, `brain_labels ${op}: ${exc.message}`);
     }
     throw exc;

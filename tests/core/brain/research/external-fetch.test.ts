@@ -167,6 +167,26 @@ describe("keyedFetch cache", () => {
     expect(a).toBe(b);
   });
 
+  test("the body is keyed by the shared canonical encoding, sorted and undefined-free", () => {
+    // This module used to carry its own sorted-key stringifier. The shared
+    // one differs in exactly one place - an object entry whose value is
+    // `undefined` is omitted rather than rendered as null - and omitting it
+    // is what the body actually sent does, so two requests that go out as
+    // identical bytes now share one cache entry instead of two.
+    const withUndefined = normalizeRequestKey({
+      url: "https://x/y",
+      method: "POST",
+      body: { b: 2, a: 1, absent: undefined },
+    });
+    const without = normalizeRequestKey({
+      url: "https://x/y",
+      method: "POST",
+      body: { a: 1, b: 2 },
+    });
+    expect(withUndefined).toBe(without);
+    expect(withUndefined).toContain('{"a":1,"b":2}');
+  });
+
   test("the accept type is part of the cache key so json and text never collide", () => {
     const base = { url: "https://x/y", query: { q: "z" } } as const;
     const asJson = normalizeRequestKey({ ...base, accept: "json" });

@@ -16,7 +16,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -177,6 +177,25 @@ describe("brain snapshot log", () => {
     expect(JSON.parse(r.stdout)).toEqual({ total: 0, snapshots: [] });
   });
 
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "a snapshots directory it cannot read is a failure, not an empty history",
+    async () => {
+      seedSnapshots();
+      const snapshots = brainDirs(vault).snapshots;
+      chmodSync(snapshots, 0o000);
+      try {
+        const r = await snapshotLog();
+        // "no snapshots available" over a directory nobody could read is
+        // the exact confusion this release exists to remove.
+        expect(r.returncode).not.toBe(0);
+        expect(r.stdout).not.toContain("no snapshots");
+        expect(r.stderr).toContain(snapshots);
+      } finally {
+        chmodSync(snapshots, 0o755);
+      }
+    },
+  );
+
   test("a snapshot with no sidecar reports an unknown reason, not its run-id prefix", async () => {
     createSnapshot(vault, "dream-unstamped", { reason: BRAIN_SNAPSHOT_REASON.dream });
     rmSync(manifestSidecarPath(vault, "dream-unstamped"), { force: true });
@@ -234,6 +253,25 @@ describe("brain rollback --list carries the reason", () => {
       BRAIN_SNAPSHOT_REASON.dream,
     ]);
   });
+
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "an unreadable snapshots directory is reported, not listed as empty",
+    async () => {
+      seedSnapshots();
+      const snapshots = brainDirs(vault).snapshots;
+      chmodSync(snapshots, 0o000);
+      try {
+        const r = await runCli(["brain", "rollback", "--list", "--vault", vault], {
+          env: { OPEN_SECOND_BRAIN_CONFIG: config },
+        });
+        expect(r.returncode).not.toBe(0);
+        expect(r.stdout).not.toContain("no snapshots available");
+        expect(r.stderr).toContain(snapshots);
+      } finally {
+        chmodSync(snapshots, 0o755);
+      }
+    },
+  );
 
   test("an unstamped snapshot lists as unknown rather than as its prefix", async () => {
     createSnapshot(vault, "dream-unstamped", { reason: BRAIN_SNAPSHOT_REASON.dream });

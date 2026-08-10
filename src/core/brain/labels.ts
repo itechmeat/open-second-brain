@@ -10,16 +10,32 @@
  * array (filterable through the existing `--property` post-rank
  * filter) plus a canonical `label` entity in the registry so related
  * notes cluster without free-form tag drift.
+ *
+ * Both writes take a caller-named path and resolve it through
+ * `resolveNotePath`, which guarantees containment and nothing about which
+ * file is being rewritten. One file needs more than that:
+ * `Brain/standing-rules.md` is the operator's own text, and
+ * `assertStandingRulesNotTargeted` refuses it by name here because the
+ * Brain-root refusal that covers the note-write tools is not on this path.
  */
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveNotePath } from "./note-path.ts";
+import { assertStandingRulesNotTargeted } from "./standing-rules.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import { upsertEntity } from "./entities/registry.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import type { SchemaPack } from "./schema-pack.ts";
 
 export const LABEL_ENTITY_CATEGORY = "label";
+
+/**
+ * How the two label writes name themselves in a refusal. Named constants
+ * rather than inline strings because the words appear in an operator- and
+ * agent-facing error and must not drift between the two paths.
+ */
+const LABEL_ASSIGN_SURFACE = "label assignment";
+const LABEL_REMOVE_SURFACE = "label removal";
 
 export class LabelVocabularyError extends Error {
   readonly dimension: string;
@@ -130,6 +146,14 @@ export function assignNoteLabel(
 ): NoteLabelResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // The operator's standing rules are refused by NAME here. This surface
+  // takes a caller-named path and reaches the file through
+  // `resolveNotePath`, which enforces containment and symlinks and nothing
+  // about which file is being written, so the Brain-root refusal that
+  // protects the note-write tools does not reach it. Placed before the
+  // vocabulary check so the refusal is about the target rather than about
+  // whichever dimension the caller happened to invent.
+  assertStandingRulesNotTargeted(vault, relPath, LABEL_ASSIGN_SURFACE);
   const assignment = validateLabelAssignment(opts.pack, opts.dimension, opts.value);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);
@@ -162,6 +186,9 @@ export function removeNoteLabel(
 ): RemoveNoteLabelResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // Removal rewrites the same frontmatter with the same overwrite, so it
+  // is the same write and takes the same refusal.
+  assertStandingRulesNotTargeted(vault, relPath, LABEL_REMOVE_SURFACE);
   const dimension = normalizeSchemaToken(opts.dimension);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);

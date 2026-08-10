@@ -146,12 +146,14 @@ export const BRAIN_LESSONS_FILE = "lessons.md";
  * Operator-authored standing rules injected at the head of every session
  * preamble (silence-is-not-an-answer, U8).
  *
- * The DIRECTORY is the enforcement mechanism and the reason the name is a
- * constant rather than a config key. Living under `Brain/` means the
- * note-target resolver already refuses it for every caller-named write
- * tool, so no agent can rewrite the rules it is governed by. A
- * configurable filename would be a second thing to keep protected and
- * would buy nothing the operator cannot get by editing this file.
+ * The DIRECTORY is most of the enforcement mechanism, and the reason the
+ * name is a constant rather than a config key. Living under `Brain/` means
+ * the note-target resolver already refuses it for the four caller-named
+ * note-write tools; the label writer, which reaches a caller-named path
+ * through the containment-only resolver, is refused by name in
+ * `standing-rules.ts` instead. A configurable filename would be a second
+ * thing to keep protected on both of those paths and would buy nothing the
+ * operator cannot get by editing this file.
  */
 export const BRAIN_STANDING_RULES_FILE = "standing-rules.md";
 export const BRAIN_PINNED_FILE = "pinned.md";

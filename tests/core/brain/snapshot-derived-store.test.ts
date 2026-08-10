@@ -389,7 +389,34 @@ describe("restoreSnapshot — the derived store", () => {
     expect(result.derived_store.replaced).toBe(false);
     // Unknown must never be reported as an exclusion.
     expect(result.derived_store.exclusion_reason).toBeNull();
+    // Nothing was archived, so there is no archive to contradict the
+    // "no record" reading.
+    expect(result.derived_store.store_archive_present).toBe(false);
     expect(existsSync(dbPath)).toBe(true);
+  });
+
+  test("a lost record with the archive still on disk is a missing record, not a missing feature", async () => {
+    // The sidecar write is non-fatal in `createSnapshot`, so coverage can
+    // run to completion and leave no record of itself. The archive sitting
+    // beside the tar is the proof, and reporting this as "the snapshot
+    // predates derived-store coverage" states something the disk refutes.
+    await seedDerivedStore();
+    const runId = "dream-restore-record-lost";
+    createSnapshot(vault, runId, { reason: DREAM, derivedStore: COVERED });
+    expect(existsSync(snapshotStorePath(vault, runId))).toBe(true);
+
+    const sidecar = manifestSidecarPath(vault, runId);
+    const parsed = JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, unknown>;
+    delete parsed["derived_store"];
+    writeFileSync(sidecar, JSON.stringify(parsed, null, 2) + "\n");
+
+    const result = restoreSnapshot(vault, runId);
+
+    expect(result.derived_store.coverage_known).toBe(false);
+    expect(result.derived_store.replaced).toBe(false);
+    expect(result.derived_store.exclusion_reason).toBeNull();
+    // The one fact that separates this from a pre-feature snapshot.
+    expect(result.derived_store.store_archive_present).toBe(true);
   });
 });
 

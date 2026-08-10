@@ -142,6 +142,30 @@ describe("brain_context standing_rules field", () => {
     expect(out["content"]).toContain("Standing rules truncated");
   });
 
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "the branch that reports Brain/ as absent still says why the rules are unavailable",
+    async () => {
+      // A vault directory the process cannot traverse makes `existsSync`
+      // answer false for `Brain/`, which is the one return path that used
+      // to fire before the standing-rules read: it handed back
+      // `present: false` and an empty body with nothing saying that the
+      // constitution had not been consulted.
+      writeRules(RULES);
+      chmodSync(vault, 0o000);
+      try {
+        const out = await callContext();
+        expect(out["present"]).toBe(false);
+        const content = out["content"] as string;
+        expect(content).toContain(STANDING_RULES_HEADER);
+        expect(content).toContain("UNAVAILABLE");
+        // No record to report for bytes nobody could read.
+        expect("standing_rules" in out).toBe(false);
+      } finally {
+        chmodSync(vault, 0o755);
+      }
+    },
+  );
+
   test("the prefix survives the branch that zeroes the content", async () => {
     // A directory where active.md belongs makes the regenerate/read arm
     // fail, which is the branch that used to hand back an empty body.

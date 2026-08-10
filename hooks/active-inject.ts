@@ -23,16 +23,26 @@
  *     {
  *       "hookSpecificOutput": {
  *         "hookEventName": "SessionStart" | "PostCompact",
- *         "additionalContext": "<rendered Brain/active.md body>"
+ *         "additionalContext": "<standing-rules block, then the budgeted
+ *                               memory context: runtime notices, the
+ *                               rendered Brain/active.md body, lessons>"
  *       }
  *     }
  *
- * Quiet on every failure mode (no config, no vault, no `Brain/active.md`,
- * malformed payload, missing file): the hook exits 0 with no output and
- * the runtime proceeds as if the hook never ran. A SessionStart that
- * silently fails is far less harmful than one that aborts the session
- * with a stderr trace. The agent simply does not get the per-session
- * preferences nudge — exactly the v0.9.0 behaviour.
+ * Quiet on the failure modes that leave it with nothing to say (no config,
+ * no vault, malformed payload): the hook exits 0 with no output and the
+ * runtime proceeds as if it never ran. A SessionStart that silently fails
+ * is far less harmful than one that aborts the session with a stderr
+ * trace. The agent simply does not get the per-session preferences nudge —
+ * exactly the v0.9.0 behaviour.
+ *
+ * A missing `Brain/active.md` is NOT one of those modes any more, and
+ * neither is a memory layer that threw. The standing-rules lane is read
+ * outside the fail-open boundary, so a vault whose operator wrote rules
+ * still emits them with an empty memory context behind them; a rules file
+ * that exists and cannot be read emits the block that says so. The empty
+ * exit is reached only when there are NEITHER standing rules NOR memory,
+ * and `tests/hooks/active-inject.test.ts` asserts it.
  */
 
 import { existsSync, readFileSync } from "node:fs";

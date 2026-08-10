@@ -159,7 +159,7 @@ o2b brain source              add <vault> --alias <name> | list | remove <alias>
 o2b brain links               normalize [path-prefix] [--mode preserve|full|short] [--write] [--json] - wikilink path format rewrite; dry-run by default; config key wiki_link_format
 o2b brain profile             [--stale-seconds N] [--force] [--json] - materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
 o2b brain sgrep               <query> [path-prefix] [--limit N] [--keyword-only] [--json] - grep-shaped semantic search; path:line: lines; exit 1 on no matches
-o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | suppress <id> | unsuppress <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7); suppress silences a finding indefinitely and unsuppress restores the status it interrupted; list reports the suppressed count
+o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | suppress <id> | unsuppress <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7); suppress silences a finding indefinitely and unsuppress restores the status it interrupted; list reports the suppressed count; scan, list and history all print `unreadable: <n>` followed by one line per record the store could not parse - printed at zero too, so an omitted line can never read as a clean queue, and printed BEFORE "no open triggers" so that line is never the only thing said about a queue holding something unparseable
 o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps, plus a strongest-objection steelman
 o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
 o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)
@@ -613,6 +613,12 @@ o2b search focus clear        Clear the persisted focus file next to the search 
 o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               (required after upgrading to v0.13.0 recall schema or v0.26.0 CJK FTS content)
                               --force-cost bypasses the embedding cost gate for this run (since v0.36.0)
+                              --embeddings computes vectors; --concurrency N, --db PATH, --verbose
+                              --cron-template prints a periodic-reindex cron recipe on stdout and
+                              writes nothing at all (no index run, no file, no scheduler entry)
+                              --interval <N>m|h|d sets that recipe's cadence, default 30m; an interval
+                              cron cannot express (seconds, 60m+, 24h+, 28d+) is refused with the
+                              reason rather than rendered as a schedule that means something else
 o2b search index              Incrementally update the index; --embeddings computes vectors
                               --force-cost bypasses the embedding cost gate (since v0.36.0)
 o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that have no vector -

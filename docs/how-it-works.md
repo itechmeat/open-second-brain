@@ -451,10 +451,15 @@ flowchart LR
   memory load it survives a memory-layer failure and is never written to
   the inject cache, so a stale copy can never be served in its place. If
   the file cannot be read, the block says so and states that no standing
-  rules are in force - it never degrades to silence. It is **not**
-  writable by any agent: the file sits under `Brain/`, whose first path
-  segment the note-target resolver refuses for every caller-named write
-  tool. Nothing generates or rewrites it.
+  rules are in force - it never degrades to silence. Two mechanisms, not
+  one, keep it out of an agent's reach, and the claim is exactly as wide
+  as they are: the file sits under `Brain/`, whose first path segment the
+  note-target resolver refuses for the four caller-named note-write tools
+  (`brain_create_note`, `brain_update_note`, `brain_append_note`,
+  `brain_write_batch`), and `brain_labels` - which takes a caller-named
+  path but resolves it through the weaker containment-only resolver - is
+  refused by a named guard that knows this one file. Nothing generates or
+  rewrites it.
 - **SessionStart hook** (`startup | resume | clear | compact`) injects
   the body as `additionalContext` so the agent sees current rules at
   the start of every session and again after `/compact` - the
@@ -466,8 +471,14 @@ flowchart LR
   sections that were dropped, how many characters survived out of how
   many, and points the agent at `brain_context` for the full set. When `Brain/lessons.md`
   exists, its (separately budgeted) body is appended so the unified
-  lessons corpus loads on the same surface. Fails closed - any error
-  path exits 0 with no output so the runtime proceeds unaffected.
+  lessons corpus loads on the same surface. Fails soft - every error
+  path in the memory lane exits 0 and the runtime proceeds unaffected,
+  emitting no memory context. The standing-rules block is the one
+  exception, by design: it is read outside that boundary, so a vault
+  with an operator rules file still speaks even when the memory layer
+  is down, and a rules file that cannot be read is stated rather than
+  skipped. The hook emits nothing at all only when there are NEITHER
+  standing rules NOR memory.
 - **MCP Resources** expose the same content for hosts that prefer
   pull access (`osb://preferences/active` and friends in the table
   above). The MCP `initialize` reply advertises the `resources`
@@ -575,7 +586,10 @@ ten newest archives.
 
 From v0.10.6 every snapshot ships with a SHA-256 sidecar manifest
 (`Brain/.snapshots/<run_id>.manifest.json`) listing every regular
-file under `Brain/` and its hash. `o2b brain rollback` reads the
+file the snapshot **covers** — the same tree, minus the two excluded
+entries named above — and its hash. Hashing a file the archive does
+not contain and the restore does not replace would fire the drift
+gate on churn no rollback could ever undo. `o2b brain rollback` reads the
 sidecar back, rebuilds a fresh manifest from the live tree, and
 compares: any added / removed / changed entry aborts the rollback
 with exit code 2 and a compact drift report on stderr. The intent
@@ -649,8 +663,13 @@ Retention deletes the store archive alongside the tar and the sidecar.
 `rollback` replaces the store only when the manifest says it was
 included, decompressing to a sibling temp file and renaming it into
 place under the writer lock — the same swap discipline the indexer
-uses — and prints which of replaced / not restored / unknown applied
-in every case.
+uses — and prints in every case which answer applied: **replaced**,
+**not restored** with the recorded reason, **record missing** when there
+is no record but a store archive is sitting beside the tar (the sidecar
+write is non-fatal, so coverage can run and leave nothing behind saying
+so), or **unknown** when there is neither a record nor an archive. The
+third and fourth used to share one sentence that named the feature as
+absent while the feature's own archive was on disk.
 
 ### Why a recovery point was taken
 
@@ -667,8 +686,12 @@ event to the archive that would undo it.
 Every snapshot now carries a typed reason from one closed vocabulary
 (`BRAIN_SNAPSHOT_REASON`): `dream`, `upgrade`, `import-claude-memory`,
 `delete-by-source`, `entity-prune` for the five destructive call sites,
+plus four members with **no producer in this release** —
 `session-boundary`, `plan-boundary`, `decision-boundary` for boundaries a
-later release may snapshot at, and `manual`. The reason is required by
+later release may snapshot at, and `manual`, because nothing takes a
+recovery point on demand: no CLI verb and no MCP tool does, and the
+take-snapshot entry point is reached only by the destructive-operation
+gate. The reason is required by
 `createSnapshot`, doubles as the run-id prefix so the filename and the
 recorded provenance can never disagree, and is stamped into the manifest
 sidecar as an additive `snapshot_reason` key **at the existing schema
@@ -694,8 +717,15 @@ line into a refused mutation.
 Taking snapshots **at** session, plan and decision boundaries is
 deliberately **not** shipped. That changes how often snapshots happen,
 which interacts with retention and with the optional derived-store
-archive; the vocabulary carries those members anyway so this build can
-read a sidecar a later release writes and replicates back.
+archive. An **on-demand** snapshot verb is not shipped either, for its
+own reasons: every recovery point this build takes exists to protect a
+specific mutation that is about to run, and an operator-triggered
+snapshot is a separate decision about retention pressure and about what
+an operator does with a point nothing was going to overwrite. The
+vocabulary carries all four members anyway so this build can read a
+sidecar a later release writes and replicates back — which also means
+`snapshot log --reason manual` is a valid filter over a history that,
+in this release, no local operation can add to.
 
 ### Read-only inspectors over the snapshot family
 
@@ -709,7 +739,10 @@ With `snapshot log` the family is complete: **log / diff / revert**.
   unregistered value with a usage exit (2) rather than an empty listing,
   which would say "you have no such snapshots" when the truth is "that is
   not a reason". `--limit <n>` caps the listing, `--json` yields the
-  structured rows. An empty snapshots directory exits 0.
+  structured rows. An empty snapshots directory exits 0; a snapshots
+  directory that exists and **cannot be read** exits non-zero naming the
+  path, because "no snapshots available" over an unenumerable directory is
+  the same substitution one line up.
 
 Two further surfaces share the same diff renderer over the snapshot
 extraction primitive (`extractSnapshotToTemp`), so previewing and

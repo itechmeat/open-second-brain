@@ -327,8 +327,8 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   }
 
   // The operator's declared write binding (provenance-at-the-boundary,
-  // unit B). This function is the ONE envelope every caller-named write
-  // shares - `createNote` and the batch core's create / update / append
+  // unit B). This function is the ONE envelope every caller-named NOTE
+  // write shares - `createNote` and the batch core's create / update / append
   // arms all resolve their target here - so the boundary is checked
   // exactly once, before any directory is created or byte written. The
   // refusal is composed in the binding module, never here; absent
