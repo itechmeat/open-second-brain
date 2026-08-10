@@ -7,6 +7,13 @@ import { withFileLock } from "../reliability/lock.ts";
 import { brainConfigPath, brainDirsForWrite } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import {
+  computeSchemaPackDigest,
+  SCHEMA_MUTATION_AUDIT_ACTION,
+  SCHEMA_MUTATION_AUDIT_DIR,
+  SCHEMA_PACK_DIGEST_FIELD,
+} from "./schema-integrity.ts";
+import {
+  ABSENT_SCHEMA_CONFIG_TEXT,
   loadSchemaPack,
   parseSchemaPack,
   renderSchemaBlock,
@@ -108,6 +115,14 @@ export interface ApplySchemaMutationsResult {
   readonly applied: number;
   readonly audit_path: string;
   readonly pack: SchemaPack;
+  /**
+   * Digest of the pack this batch produced, identical to the value written
+   * into the audit record. Returned so a caller can seal a downstream
+   * artifact against the same expectation a later
+   * `assessSchemaPackIntegrity` will compare with, without re-reading the
+   * audit trail it just wrote.
+   */
+  readonly pack_digest: string;
 }
 
 /**
@@ -182,7 +197,7 @@ export async function applySchemaMutations(
   return await withFileLock(configPath, { staleMs: opts.lockStaleMs ?? 30_000, retries: 3 }, () => {
     const before = existsSync(configPath)
       ? readFileSync(configPath, "utf8")
-      : "schema_version: 1\n";
+      : ABSENT_SCHEMA_CONFIG_TEXT;
     const nextPack = applyMutationsToPack(parseSchemaPack(before), mutations);
     const nextText = replaceSchemaBlock(before, renderSchemaBlock(nextPack));
     atomicWriteText(configPath, nextText, {
@@ -190,22 +205,32 @@ export async function applySchemaMutations(
         parseSchemaPack(candidate);
       },
     });
-    const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "schema-mutations"), {
-      timestamp: now.toISOString(),
-      actor: opts.actor,
-      action: "schema_apply_mutations",
-      target: "Brain/_brain.yaml",
-      ok: true,
-      details: {
-        applied: mutations.length,
-        mutations,
-        ...(opts.reason ? { reason: opts.reason } : {}),
+    // The audit record has always said WHICH mutations were requested. The
+    // digest is what it was missing: an expectation a later read can hold
+    // the file against, so a hand-edit after this apply is detectable
+    // rather than indistinguishable from the pack this batch produced.
+    const packDigest = computeSchemaPackDigest(nextPack);
+    const auditPath = appendAuditRecord(
+      join(brainDirsForWrite(vault).log, SCHEMA_MUTATION_AUDIT_DIR),
+      {
+        timestamp: now.toISOString(),
+        actor: opts.actor,
+        action: SCHEMA_MUTATION_AUDIT_ACTION,
+        target: "Brain/_brain.yaml",
+        ok: true,
+        details: {
+          applied: mutations.length,
+          mutations,
+          [SCHEMA_PACK_DIGEST_FIELD]: packDigest,
+          ...(opts.reason ? { reason: opts.reason } : {}),
+        },
       },
-    });
+    );
     return {
       applied: mutations.length,
       audit_path: auditPath,
       pack: nextPack,
+      pack_digest: packDigest,
     };
   });
 }

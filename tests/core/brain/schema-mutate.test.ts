@@ -13,6 +13,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  computeSchemaPackDigest,
+  SCHEMA_MUTATION_AUDIT_ACTION,
+  SCHEMA_MUTATION_AUDIT_DIR,
+  SCHEMA_PACK_DIGEST_FIELD,
+} from "../../../src/core/brain/schema-integrity.ts";
+import {
   applySchemaMutations,
   previewSchemaMutations,
   type SchemaMutation,
@@ -176,6 +182,38 @@ describe("applySchemaMutations", () => {
     expect(audit).toContain("schema_apply_mutations");
     expect(audit).toContain("***REDACTED***");
     expect(audit).not.toContain("secret-value");
+  });
+
+  test("records the resulting pack digest into the audit record it writes", async () => {
+    const result = await applySchemaMutations(
+      vault,
+      [{ op: "add_type", category: "preference_types", token: "decision" }],
+      { actor: "tester", now: new Date("2026-05-30T12:00:00.000Z") },
+    );
+
+    // The record said which mutations were requested and nothing about the
+    // pack they produced, so no later read had an expectation to compare
+    // the file against.
+    const record = JSON.parse(readFileSync(result.audit_path, "utf8").trim()) as {
+      action: string;
+      details: Record<string, unknown>;
+    };
+    expect(record.action).toBe(SCHEMA_MUTATION_AUDIT_ACTION);
+    expect(record.details[SCHEMA_PACK_DIGEST_FIELD]).toBe(result.pack_digest);
+    expect(result.pack_digest).toBe(computeSchemaPackDigest(result.pack));
+    expect(result.pack_digest).toBe(computeSchemaPackDigest(loadSchemaPack(vault)));
+  });
+
+  test("writes its audit shard under the shared audit-directory constant", async () => {
+    const result = await applySchemaMutations(
+      vault,
+      [{ op: "add_type", category: "preference_types", token: "decision" }],
+      { actor: "tester" },
+    );
+
+    expect(
+      result.audit_path.startsWith(join(vault, "Brain", "log", SCHEMA_MUTATION_AUDIT_DIR)),
+    ).toBe(true);
   });
 });
 

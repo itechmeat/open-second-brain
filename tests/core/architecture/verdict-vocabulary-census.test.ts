@@ -25,6 +25,14 @@
 
 import { describe, expect, test } from "bun:test";
 
+import {
+  isSchemaPackIntegrityStatus,
+  isSchemaPackUnverifiedReason,
+  SCHEMA_PACK_INTEGRITY,
+  SCHEMA_PACK_INTEGRITY_STATUSES,
+  SCHEMA_PACK_UNVERIFIED_REASON,
+  SCHEMA_PACK_UNVERIFIED_REASONS,
+} from "../../../src/core/brain/schema-integrity.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
 
 interface VocabularyUnderCensus {
@@ -93,6 +101,18 @@ function auditVocabulary(vocabulary: VocabularyUnderCensus): ReadonlyArray<strin
  */
 const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
   { name: "GATE_MODE", values: GATE_MODE, members: GATE_MODES, guard: isGateMode },
+  {
+    name: "SCHEMA_PACK_INTEGRITY",
+    values: SCHEMA_PACK_INTEGRITY,
+    members: SCHEMA_PACK_INTEGRITY_STATUSES,
+    guard: isSchemaPackIntegrityStatus,
+  },
+  {
+    name: "SCHEMA_PACK_UNVERIFIED_REASON",
+    values: SCHEMA_PACK_UNVERIFIED_REASON,
+    members: SCHEMA_PACK_UNVERIFIED_REASONS,
+    guard: isSchemaPackUnverifiedReason,
+  },
 ]);
 
 describe("verdict vocabulary census", () => {

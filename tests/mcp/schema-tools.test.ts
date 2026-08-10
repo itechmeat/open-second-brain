@@ -190,6 +190,62 @@ describe("schema MCP tools", () => {
     );
   });
 
+  test("active_pack and packs forward the integrity verdict unchanged", async () => {
+    const server = makeServer();
+    await initialize(server);
+
+    // A freshly bootstrapped vault has no audited apply behind it, so the
+    // pack it reports is unverified rather than intact.
+    const fresh = await call(server, "schema_inspect", { view: "active_pack" });
+    expect((fresh as any).result.structuredContent.exists).toBe(true);
+    expect((fresh as any).result.structuredContent.integrity.status).toBe("unverified");
+    expect((fresh as any).result.structuredContent.integrity.unverified_reason).toBe(
+      "no-apply-recorded",
+    );
+
+    const applied = await call(server, "schema_apply_mutations", {
+      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+    });
+    const digest = (applied as any).result.structuredContent.pack_digest;
+    expect(typeof digest).toBe("string");
+
+    const sealed = await call(server, "schema_inspect", { view: "active_pack" });
+    expect((sealed as any).result.structuredContent.integrity.status).toBe("ok");
+    expect((sealed as any).result.structuredContent.integrity.digest).toBe(digest);
+
+    const packs = await call(server, "schema_inspect", { view: "packs" });
+    const listed = (packs as any).result.structuredContent.packs as ReadonlyArray<{
+      exists: boolean;
+      integrity: { status: string; digest: string };
+    }>;
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.exists).toBe(true);
+    expect(listed[0]?.integrity.status).toBe("ok");
+    expect(listed[0]?.integrity.digest).toBe(digest);
+  });
+
+  test("active_pack reports a hand-edited pack as modified", async () => {
+    const server = makeServer();
+    await initialize(server);
+    await call(server, "schema_apply_mutations", {
+      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+    });
+
+    const brainConfig = join(vault, "Brain", "_brain.yaml");
+    atomicWriteFileSync(
+      brainConfig,
+      readFileSync(brainConfig, "utf8").replace("    - decision", "    - decision\n    - tactic"),
+    );
+
+    const pack = await call(server, "schema_inspect", { view: "active_pack" });
+    const integrity = (pack as any).result.structuredContent.integrity;
+
+    expect(integrity.status).toBe("modified");
+    expect(integrity.mismatches).toHaveLength(1);
+    expect(integrity.mismatches[0].field).toBe("pack_digest");
+    expect(integrity.mismatches[0].expected).not.toBe(integrity.mismatches[0].actual);
+  });
+
   test("a rejected preview returns the same error envelope the apply returns", async () => {
     const server = makeServer();
     await initialize(server);

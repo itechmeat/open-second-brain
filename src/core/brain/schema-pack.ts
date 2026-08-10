@@ -40,10 +40,50 @@ export const FRONTMATTER_TIERS = Object.freeze(["identity", "system", "business"
 
 export type FrontmatterTier = (typeof FRONTMATTER_TIERS)[number];
 
-export function loadSchemaPack(vault: string): SchemaPack {
+/**
+ * The config text parsed in place of an absent `Brain/_brain.yaml`.
+ *
+ * It declares a schema version and nothing else, so it yields a pack with
+ * an empty vocabulary - which is a legitimate default for the many callers
+ * that only want to know what the ontology permits. It is named rather
+ * than inlined because the substitution used to be an anonymous literal in
+ * two modules, and because a caller that needs to tell "no ontology" from
+ * "an ontology that declares nothing" must be able to see that the
+ * substitution happened at all. {@link readSchemaPackSource} is how it
+ * sees that; {@link loadSchemaPack} deliberately keeps the defaulting
+ * behaviour for everyone else.
+ */
+export const ABSENT_SCHEMA_CONFIG_TEXT = "schema_version: 1\n";
+
+/**
+ * The schema pack together with the provenance a caller needs to judge it:
+ * where it came from, and whether that file was actually there.
+ *
+ * `present === false` means the config file does not exist and
+ * {@link ABSENT_SCHEMA_CONFIG_TEXT} was parsed instead. A caller that only
+ * wants the ontology can keep calling {@link loadSchemaPack} and ignore
+ * this entirely.
+ */
+export interface SchemaPackSource {
+  /** Absolute path of `Brain/_brain.yaml`, whether or not it exists. */
+  readonly path: string;
+  /** False when the file is absent and the default text was substituted. */
+  readonly present: boolean;
+  /** The text that was parsed - the file's bytes, or the default. */
+  readonly text: string;
+  readonly pack: SchemaPack;
+}
+
+/** Read the schema pack and report whether its config file was there. */
+export function readSchemaPackSource(vault: string): SchemaPackSource {
   const path = brainConfigPath(vault);
-  const text = existsSync(path) ? readFileSync(path, "utf8") : "schema_version: 1\n";
-  return parseSchemaPack(text);
+  const present = existsSync(path);
+  const text = present ? readFileSync(path, "utf8") : ABSENT_SCHEMA_CONFIG_TEXT;
+  return Object.freeze({ path, present, text, pack: parseSchemaPack(text) });
+}
+
+export function loadSchemaPack(vault: string): SchemaPack {
+  return readSchemaPackSource(vault).pack;
 }
 
 export function parseSchemaPack(configText: string): SchemaPack {

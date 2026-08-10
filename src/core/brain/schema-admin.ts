@@ -1,13 +1,14 @@
-import { brainConfigPath } from "./paths.ts";
 import { linkConstraintAllows, readBlockedRelationRows } from "../search/link-constraints.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
   type SchemaReportFinding,
 } from "./schema-report.ts";
+import { assessSchemaPackIntegrity, type SchemaPackIntegrity } from "./schema-integrity.ts";
 import {
   FRONTMATTER_TIERS,
   loadSchemaPack,
+  readSchemaPackSource,
   type FrontmatterTier,
   type SchemaPack,
 } from "./schema-pack.ts";
@@ -79,27 +80,62 @@ export interface SchemaOrphanReport {
   readonly orphans: ReadonlyArray<SchemaReportFinding>;
 }
 
-export interface SchemaSyncResult {
-  readonly dry_run: boolean;
-  readonly batch_size: number;
-  readonly updated: number;
-  readonly skipped: number;
-  readonly note: string;
+/**
+ * The one schema pack this vault has, described honestly: where it is,
+ * whether that file is actually on disk, what it declares, and whether it
+ * is still the pack the last audited apply produced.
+ *
+ * `exists` is not redundant with `integrity`. A reader that only renders
+ * the path needs to know the path names a real file; a reader that cares
+ * about tampering needs the verdict. Reporting a path nothing checked was
+ * the defect this field closes.
+ */
+export interface ActiveSchemaPack {
+  readonly path: string;
+  readonly exists: boolean;
+  readonly pack: SchemaPack;
+  readonly integrity: SchemaPackIntegrity;
 }
 
-export function getActiveSchemaPack(vault: string): {
-  path: string;
-  pack: SchemaPack;
-} {
-  return { path: brainConfigPath(vault), pack: loadSchemaPack(vault) };
+/** One entry of {@link listSchemaPacks}. */
+export interface SchemaPackListing {
+  readonly name: string;
+  readonly path: string;
+  readonly active: boolean;
+  readonly exists: boolean;
+  readonly integrity: SchemaPackIntegrity;
+}
+
+/** Name of the single pack; there is no registry and no second entry. */
+const ACTIVE_SCHEMA_PACK_NAME = "active";
+
+export function getActiveSchemaPack(vault: string): ActiveSchemaPack {
+  const source = readSchemaPackSource(vault);
+  return {
+    path: source.path,
+    exists: source.present,
+    pack: source.pack,
+    integrity: assessSchemaPackIntegrity(vault),
+  };
 }
 
 export function listSchemaPacks(vault: string): {
   active: string;
-  packs: ReadonlyArray<{ name: string; path: string; active: boolean }>;
+  packs: ReadonlyArray<SchemaPackListing>;
 } {
-  const active = brainConfigPath(vault);
-  return { active, packs: [{ name: "active", path: active, active: true }] };
+  const source = readSchemaPackSource(vault);
+  return {
+    active: source.path,
+    packs: [
+      {
+        name: ACTIVE_SCHEMA_PACK_NAME,
+        path: source.path,
+        active: true,
+        exists: source.present,
+        integrity: assessSchemaPackIntegrity(vault),
+      },
+    ],
+  };
 }
 
 export function buildSchemaStats(vault: string): SchemaStats {
@@ -256,16 +292,44 @@ export async function applySchemaAdminMutations(
   return await applySchemaMutations(vault, mutations, opts);
 }
 
-export function buildSchemaSyncResult(
-  opts: { dryRun?: boolean; batchSize?: number } = {},
-): SchemaSyncResult {
-  return {
-    dry_run: opts.dryRun ?? true,
-    batch_size: opts.batchSize ?? 100,
-    updated: 0,
-    skipped: 0,
-    note: "schema_type metadata is already stored in vault files; no backfill was required",
-  };
+/**
+ * `o2b brain schema sync` asked for a backfill that was never written.
+ *
+ * The verb returned `{updated: 0, skipped: 0, note: "no backfill was
+ * required"}` unconditionally - it did not read the vault, and it did not
+ * even take one: a caller could not tell "nothing needed doing" from
+ * "nothing was done". A success report from a function that performed no
+ * work is the exact failure this wave exists to remove, so the verb now
+ * refuses.
+ *
+ * Refusing rather than implementing the backfill is deliberate. What
+ * `sync` should write is undefined: no design says which frontmatter
+ * fields a schema change is supposed to propagate into existing notes,
+ * and inventing one inside an integrity unit would ship a vault-wide
+ * rewrite nobody specified. An explicit refusal costs an operator one
+ * error message; a guessed backfill costs them their notes.
+ */
+export class SchemaSyncUnavailableError extends Error {
+  /** The vault the caller asked to sync, echoed so a log names the store. */
+  readonly vault: string;
+
+  constructor(vault: string) {
+    super(
+      `schema sync is not implemented: no schema backfill is defined for ${vault}, ` +
+        "and the verb will not report success for work it did not do",
+    );
+    this.name = "SchemaSyncUnavailableError";
+    this.vault = vault;
+  }
+}
+
+/**
+ * Refuse the schema sync, naming the vault it would have operated on. The
+ * parameter is what the previous signature was missing: an implementation
+ * can land behind this entry point without every caller changing.
+ */
+export function buildSchemaSyncResult(vault: string): never {
+  throw new SchemaSyncUnavailableError(vault);
 }
 
 export function parseSchemaMutationPayloads(payloads: ReadonlyArray<string>): SchemaMutation[] {

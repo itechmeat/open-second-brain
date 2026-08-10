@@ -120,7 +120,7 @@ describe("o2b brain schema", () => {
     expect(r.stdout).toContain("[unused-declaration] preference_types decision");
   });
 
-  test("management subcommands expose stats, lint, graph, explain, orphans, and sync", async () => {
+  test("management subcommands expose stats, lint, graph, explain, and orphans", async () => {
     seedSchemaVault();
 
     const stats = await runCli(["brain", "schema", "stats", "--json"], {
@@ -154,10 +154,76 @@ describe("o2b brain schema", () => {
     });
     expect(orphans.returncode).toBe(0);
     expect(JSON.parse(orphans.stdout).orphans.length).toBeGreaterThan(0);
+  });
 
+  test("sync refuses instead of reporting a backfill it never ran", async () => {
     const sync = await runCli(["brain", "schema", "sync", "--dry-run", "--json"], { env: env() });
-    expect(sync.returncode).toBe(0);
-    expect(JSON.parse(sync.stdout).dry_run).toBe(true);
+
+    expect(sync.returncode).not.toBe(0);
+    expect(sync.stderr).toContain("schema sync is not implemented");
+    // The old stub printed a success report on stdout; nothing may now.
+    expect(sync.stdout).toBe("");
+  });
+
+  test("sync still validates its flags before refusing", async () => {
+    const sync = await runCli(["brain", "schema", "sync", "--batch-size", "0"], { env: env() });
+
+    expect(sync.returncode).not.toBe(0);
+    expect(sync.stderr).toContain("--batch-size must be a positive integer");
+  });
+
+  test("the report names the integrity of the pack it describes", async () => {
+    seedSchemaVault();
+
+    // No audited apply has happened in this vault, so the pack carries no
+    // recorded expectation - which must not read as an intact one.
+    const before = await runCli(["brain", "schema", "--json"], { env: env() });
+    expect(before.returncode).toBe(0);
+    const unsealed = JSON.parse(before.stdout) as {
+      integrity: { status: string; unverified_reason?: string };
+    };
+    expect(unsealed.integrity.status).toBe("unverified");
+    expect(unsealed.integrity.unverified_reason).toBe("no-apply-recorded");
+
+    const mutation = JSON.stringify({
+      op: "add_type",
+      category: "preference_types",
+      token: "strategy",
+    });
+    const applied = await runCli(["brain", "schema", "apply", "--mutation", mutation, "--json"], {
+      env: env(),
+    });
+    expect(applied.returncode).toBe(0);
+
+    const after = await runCli(["brain", "schema"], { env: env() });
+    expect(after.returncode).toBe(0);
+    expect(after.stdout).toContain("integrity: ok");
+  });
+
+  test("the report reports a hand-edited pack as modified with both digests", async () => {
+    const mutation = JSON.stringify({
+      op: "add_type",
+      category: "preference_types",
+      token: "strategy",
+    });
+    const applied = await runCli(["brain", "schema", "apply", "--mutation", mutation, "--json"], {
+      env: env(),
+    });
+    expect(applied.returncode).toBe(0);
+    const sealed = JSON.parse(applied.stdout) as { pack_digest: string };
+
+    const brainConfig = join(vault, "Brain", "_brain.yaml");
+    writeFileSync(
+      brainConfig,
+      readFileSync(brainConfig, "utf8").replace("    - strategy", "    - strategy\n    - tactic"),
+      "utf8",
+    );
+
+    const report = await runCli(["brain", "schema"], { env: env() });
+
+    expect(report.returncode).toBe(0);
+    expect(report.stdout).toContain("integrity: modified");
+    expect(report.stdout).toContain(`expected "${sealed.pack_digest}"`);
   });
 
   test("apply subcommand mutates the schema pack", async () => {

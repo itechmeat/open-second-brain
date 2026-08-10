@@ -504,7 +504,9 @@ export const VERB_HELP: Record<string, string> = {
     "with active/processed and distinct-topic counts.\n",
   schema:
     "usage: o2b brain schema [report|stats|lint|graph|explain|orphans|apply|sync] [--vault <path>] [--json]\n" +
-    "Inspect and mutate the active runtime schema vocabulary through locked, audited writes.\n",
+    "Inspect and mutate the active runtime schema vocabulary through locked, audited writes.\n" +
+    "report names the pack's integrity: ok, modified, or unverified with the reason.\n" +
+    "sync is not implemented and refuses; it never reported real work.\n",
   "session-hook":
     "usage: o2b brain session-hook [--vault <path>] [--agent <name>] [--dry-run] [--json]\n" +
     "Read one runtime hook JSON payload from stdin, capture inline @osb markers / brain_feedback tool calls,\n" +

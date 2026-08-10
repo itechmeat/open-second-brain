@@ -207,7 +207,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
               flag("actor", "string"),
               flag("reason", "string"),
             ]),
-            command("sync", "Preview Brain schema sync", [
+            command("sync", "Brain schema sync (not implemented; refuses)", [
               flag("vault", "string"),
               flag("dry-run", "boolean"),
               flag("batch-size", "string"),

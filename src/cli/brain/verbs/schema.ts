@@ -10,7 +10,13 @@ import {
   parseSchemaMutationPayloads,
   reviewSchemaOrphans,
 } from "../../../core/brain/schema-admin.ts";
+import {
+  assessSchemaPackIntegrity,
+  SCHEMA_PACK_INTEGRITY,
+  type SchemaPackIntegrity,
+} from "../../../core/brain/schema-integrity.ts";
 import { previewSchemaMutations } from "../../../core/brain/schema-mutate.ts";
+import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
 import {
   buildSchemaReport,
   type BrainSchemaReport,
@@ -60,8 +66,12 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
     switch (subcommand) {
       case "report": {
         const report = buildSchemaReport(vault);
-        if (flags["json"]) return writeJson(report);
-        process.stdout.write(renderSchemaReportText(report));
+        // The report used to describe the ontology without saying whether
+        // it is still the ontology that was applied. An intact pack, a
+        // hand-edited one, and one nothing ever sealed rendered the same.
+        const integrity = assessSchemaPackIntegrity(vault);
+        if (flags["json"]) return writeJson({ ...report, integrity });
+        process.stdout.write(renderSchemaReportText(report, integrity));
         return 0;
       }
       case "stats":
@@ -112,14 +122,10 @@ export async function cmdBrainSchema(argv: string[]): Promise<number> {
         if (!Number.isInteger(batchSize) || batchSize <= 0) {
           throw new Error("--batch-size must be a positive integer");
         }
-        return writeResult(
-          buildSchemaSyncResult({
-            dryRun: Boolean(flags["dry-run"]),
-            batchSize,
-          }),
-          Boolean(flags["json"]),
-          renderGenericText,
-        );
+        // Refuses and exits non-zero: see `SchemaSyncUnavailableError`. The
+        // flags above are still validated so an operator learns about a bad
+        // `--batch-size` from the same message they always did.
+        return writeResult(buildSchemaSyncResult(vault), Boolean(flags["json"]), renderGenericText);
       }
     }
   } catch (exc) {
@@ -144,8 +150,28 @@ function renderGenericText(value: unknown): string {
   return JSON.stringify(value, null, 2) + "\n";
 }
 
-function renderSchemaReportText(report: BrainSchemaReport): string {
-  const lines = ["brain schema", "", "vocabulary:"];
+/**
+ * One line naming the integrity verdict, plus the evidence behind it.
+ *
+ * `unverified` carries its reason on the same line: the status alone would
+ * tell an operator that something could not be checked without telling
+ * them which of the three ways it happened, which is the silence this unit
+ * removes rather than relocates. `modified` is followed by the shared
+ * mismatch rendering, so it reads the same here as on every other
+ * integrity surface.
+ */
+function renderIntegrityLines(integrity: SchemaPackIntegrity): ReadonlyArray<string> {
+  const reason =
+    integrity.unverified_reason === undefined ? "" : ` (${integrity.unverified_reason})`;
+  const lines = [`integrity: ${integrity.status}${reason}`];
+  if (integrity.status === SCHEMA_PACK_INTEGRITY.modified) {
+    for (const mismatch of integrity.mismatches) lines.push(`  ${formatStampMismatch(mismatch)}`);
+  }
+  return lines;
+}
+
+function renderSchemaReportText(report: BrainSchemaReport, integrity: SchemaPackIntegrity): string {
+  const lines = ["brain schema", "", ...renderIntegrityLines(integrity), "", "vocabulary:"];
   for (const category of SCHEMA_VOCAB_CATEGORIES) {
     lines.push(`  ${category}: ${report.vocabulary[category].join(", ") || "(none)"}`);
   }
