@@ -79,7 +79,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
-import { resolveIndexPath } from "../search/paths.ts";
+import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
 import { acquireWriterLockSync } from "../search/store/writer-lock.ts";
 import {
@@ -172,9 +172,10 @@ export interface CreateSnapshotOptions {
   readonly derivedStore?: BrainDerivedStorePolicy;
   /**
    * Absolute path of the live derived store. Defaults to
-   * `resolveIndexPath(vault, null)` - the search layer's resolver, never
-   * a re-derivation of it. A caller holding a resolved search config
-   * (with a `search_db_path` override in force) passes its own answer.
+   * {@link liveDerivedStorePath}, which resolves it the way the search
+   * layer does - honouring both the `OPEN_SECOND_BRAIN_SEARCH_DB`
+   * environment variable and the `search_db_path` config key. A caller
+   * that already holds a resolved search config passes its own answer.
    */
   readonly derivedStorePath?: string;
 }
@@ -408,6 +409,22 @@ function fileSizeOrNull(path: string): number | null {
 }
 
 /**
+ * The live derived store, resolved the way the search layer resolves it.
+ *
+ * The resolver honours the `search_db_path` override; the bare path
+ * helper answers only the default location. That distinction is the whole
+ * point: on a vault carrying the override, an archive built from the
+ * default would describe a file the search layer never reads, and if a
+ * stale database happened to sit there it would have been archived and
+ * reported as a success. It is imported from the resolver leaf rather
+ * than the search barrel because the barrel is reachable from this module
+ * and importing it back closes a cycle the architecture ratchet refuses.
+ */
+function liveDerivedStorePath(vault: string): string {
+  return resolveConfiguredIndexPath(vault);
+}
+
+/**
  * Decide and, when asked, perform derived-store coverage for one
  * snapshot. Returns the record the manifest will carry; THROWS
  * {@link BrainSnapshotStoreError} when coverage was requested and any
@@ -426,7 +443,7 @@ function coverDerivedStore(
 ): BrainManifestDerivedStore {
   const policy = opts.derivedStore ?? loadSnapshotDerivedStorePolicySafe(vault);
   // Resolved through the search layer's resolver, never re-derived here.
-  const sourcePath = opts.derivedStorePath ?? resolveIndexPath(vault, null);
+  const sourcePath = opts.derivedStorePath ?? liveDerivedStorePath(vault);
   const liveSize = fileSizeOrNull(sourcePath);
 
   const excluded = (reason: SnapshotStoreExclusionReason): BrainManifestDerivedStore =>
@@ -1112,7 +1129,7 @@ function restoreDerivedStore(
   // is where it is now. They differ when the operator moved the vault or
   // set a `search_db_path` override after the snapshot, and the live
   // answer is the one a restore must write to.
-  const target = opts.derivedStorePath ?? resolveIndexPath(vault, null);
+  const target = opts.derivedStorePath ?? liveDerivedStorePath(vault);
   swapDerivedStore(archive, target, runId);
   return Object.freeze({
     replaced: true,

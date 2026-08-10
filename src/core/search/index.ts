@@ -11,7 +11,7 @@ import {
   parseInteger as parseIntegerShared,
 } from "../validate.ts";
 import { resolveVaultScope } from "../vault-scope/index.ts";
-import { resolveIndexPath } from "./paths.ts";
+import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
 import {
@@ -117,7 +117,7 @@ export {
   type RerankEvalGateResult,
 } from "./rerank-eval-gate.ts";
 
-export { resolveIndexPath } from "./paths.ts";
+export { resolveConfiguredIndexPath, resolveIndexPath } from "./paths.ts";
 export {
   indexVault,
   reindexVault,
@@ -404,7 +404,7 @@ export function resolveSearchConfig(opts: {
 
   const dbPath = resolveIndexPath(
     opts.vault,
-    envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_DB", "search_db_path"),
+    envOrConfig(env, config, SEARCH_DB_ENV, SEARCH_DB_CONFIG_KEY),
   );
 
   const chunkSize = parseInteger(

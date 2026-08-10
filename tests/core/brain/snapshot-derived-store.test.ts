@@ -438,3 +438,52 @@ function markerTableExists(dbPath: string): boolean {
     db.close();
   }
 }
+
+describe("createSnapshot — which file is the store", () => {
+  // The archiver used to answer this question with the default location
+  // alone. On a vault that moved its store, that names a file the search
+  // layer never reads: absent, if nothing is there, and - worse - a stale
+  // database archived and reported as a success if something is. The pack
+  // stamp shipped the same bug against the same config key.
+  test("honours a search_db_path override and ignores a decoy at the default location", async () => {
+    const moved = join(configHome, "moved-store.sqlite");
+    const notes = join(vault, "Notes");
+    mkdirSync(notes, { recursive: true });
+    writeFileSync(join(notes, "seed.md"), "# Seed\n\nA paragraph long enough to be chunked.\n");
+    await indexVault(makeConfig({ vault, dbPath: moved }));
+
+    // A decoy where the archiver used to look. If it wins, the archive
+    // describes a database nothing queries.
+    const decoyPath = resolveIndexPath(vault, null);
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    const decoy = new Database(decoyPath);
+    decoy.run("CREATE TABLE decoy (id INTEGER PRIMARY KEY)");
+    decoy.close();
+
+    atomicWriteFileSync(configPath, `vault: ${vault}\nsearch_db_path: ${moved}\n`);
+    const savedConfigEnv = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    const savedDbEnv = process.env["OPEN_SECOND_BRAIN_SEARCH_DB"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    delete process.env["OPEN_SECOND_BRAIN_SEARCH_DB"];
+    try {
+      const res = createSnapshot(vault, "dream-store-moved", { derivedStore: COVERED });
+      expect(res.derived_store.included).toBe(true);
+      expect(res.derived_store.source_path).toBe(moved);
+      expect(res.derived_store.source_path).not.toBe(decoyPath);
+      expect(res.derived_store.live_size).toBe(statSync(moved).size);
+    } finally {
+      if (savedConfigEnv === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = savedConfigEnv;
+      if (savedDbEnv !== undefined) process.env["OPEN_SECOND_BRAIN_SEARCH_DB"] = savedDbEnv;
+    }
+  });
+
+  test("an explicit derivedStorePath still wins over the resolved one", async () => {
+    const dbPath = await seedDerivedStore();
+    const res = createSnapshot(vault, "dream-store-explicit", {
+      derivedStore: COVERED,
+      derivedStorePath: dbPath,
+    });
+    expect(res.derived_store.source_path).toBe(dbPath);
+  });
+});
