@@ -1244,6 +1244,15 @@ export interface BrainActiveConfig {
    * policy.ts applies.
    */
   readonly inject_budget_chars?: number;
+  /**
+   * Character cap for the operator-authored `Brain/standing-rules.md`
+   * block. Separate from `inject_budget_chars` because the standing
+   * block is EXEMPT from that budget: it is injected ahead of the memory
+   * layer and never passes through the section budgeter, so the two
+   * numbers govern different lanes. Absent means the
+   * STANDING_RULES_MAX_CHARS_DEFAULT from standing-rules.ts applies.
+   */
+  readonly standing_rules_max_chars?: number;
 }
 
 /**

@@ -56,6 +56,7 @@ import {
   LESSONS_LIMIT_DEFAULT,
   MOST_APPLIED_LIMIT_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+  STANDING_RULES_MAX_CHARS_DEFAULT,
 } from "./policy.ts";
 import {
   DEFAULT_ANTICIPATORY_MAX_TOKENS,
@@ -245,12 +246,18 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
 
   {
     key: "active",
-    doc: ["Tuning for the active.md body injected at SessionStart."],
+    doc: [
+      "Tuning for the active.md body injected at SessionStart.",
+      "standing_rules_max_chars caps the operator-authored",
+      "Brain/standing-rules.md block, which is injected first and is",
+      "exempt from inject_budget_chars - hence its own number.",
+    ],
     emit: "commented-default",
     keys: [
       def("most_applied_window_days", MOST_APPLIED_WINDOW_DAYS_DEFAULT),
       def("most_applied_limit", MOST_APPLIED_LIMIT_DEFAULT),
       def("inject_budget_chars", INJECT_BUDGET_CHARS_DEFAULT),
+      def("standing_rules_max_chars", STANDING_RULES_MAX_CHARS_DEFAULT),
     ],
   },
   {

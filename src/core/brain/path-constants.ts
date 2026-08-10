@@ -90,6 +90,18 @@ export const BRAIN_CONFIG_FILE = "_brain.yaml";
 export const BRAIN_MANUAL_FILE = "_BRAIN.md";
 export const BRAIN_ACTIVE_FILE = "active.md";
 export const BRAIN_LESSONS_FILE = "lessons.md";
+/**
+ * Operator-authored standing rules injected at the head of every session
+ * preamble (silence-is-not-an-answer, U8).
+ *
+ * The DIRECTORY is the enforcement mechanism and the reason the name is a
+ * constant rather than a config key. Living under `Brain/` means the
+ * note-target resolver already refuses it for every caller-named write
+ * tool, so no agent can rewrite the rules it is governed by. A
+ * configurable filename would be a second thing to keep protected and
+ * would buy nothing the operator cannot get by editing this file.
+ */
+export const BRAIN_STANDING_RULES_FILE = "standing-rules.md";
 export const BRAIN_PINNED_FILE = "pinned.md";
 export const BRAIN_INDEX_FILE = "_INDEX.md";
 /** Persisted claim-graph projection artifact (Belief lifecycle suite, A3). */

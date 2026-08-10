@@ -8,7 +8,15 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { resolveAgentName } from "../../core/config.ts";
-import { brainActivePath, brainDirs } from "../../core/brain/paths.ts";
+import { brainActivePath, brainDirs, brainStandingRulesPath } from "../../core/brain/paths.ts";
+import {
+  readStandingRules,
+  renderStandingRules,
+  renderStandingRulesFailure,
+  type StandingRules,
+} from "../../core/brain/standing-rules.ts";
+import { loadBrainConfig, resolveStandingRulesMaxChars } from "../../core/brain/policy.ts";
+import type { BrainConfig } from "../../core/brain/types.ts";
 import {
   regenerateActive,
   renderActive,
@@ -322,6 +330,15 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     };
   }
 
+  // The operator's standing rules, resolved before anything else this
+  // surface assembles. `brain_context` is the pull-mode twin of the
+  // SessionStart hook, so the constitution has to lead the content here
+  // for exactly the reason it leads the injected payload - including on
+  // the error branch below, which zeroes `content` and would otherwise
+  // hand a runtime the memory layer's failure and none of the rules that
+  // still govern it.
+  const standing = readStandingBlock(ctx.vault);
+
   let counts: BrainContextCounts = EMPTY_CONTEXT_COUNTS;
   let error: string | undefined;
   try {
@@ -377,17 +394,25 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     }
   }
 
+  content = prependStandingBlock(standing, content);
   content = appendPinnedToContextContent(content, pinned.content);
 
   // Optional vault-root instruction file (v0.10.17). Absent file =
   // field omitted so hosts that strip unknown fields stay
-  // byte-identical. Read errors are silently swallowed - this is a
-  // best-effort enrichment, not a hard contract.
+  // byte-identical.
+  //
+  // A THROW IS NOT AN ABSENCE. This used to be `catch { null }`, which
+  // put an operator configuration error - an absolute path, a `..`
+  // segment, an empty name - and an unreadable file on the same wire as
+  // a vault that simply has no instruction file: the field vanished and
+  // nothing said why. The reason now rides its own key, so the
+  // enrichment stays best-effort without being silent.
   let vaultInstruction: ReturnType<typeof readVaultInstructionFile> = null;
+  let vaultInstructionError: string | undefined;
   try {
     vaultInstruction = readVaultInstructionFile(ctx.vault);
-  } catch {
-    vaultInstruction = null;
+  } catch (err) {
+    vaultInstructionError = (err as Error)?.message ?? String(err);
   }
 
   return {
@@ -399,6 +424,15 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     generated_at: generatedAt,
     pinned: serializePinnedContext(ctx, pinned),
     ...(error ? { error } : {}),
+    ...(standing.rules
+      ? {
+          standing_rules: {
+            path: vaultRelativeSafe(ctx.vault, standing.rules.path),
+            content: standing.rules.text,
+            truncated: standing.rules.truncated,
+          },
+        }
+      : {}),
     ...(vaultInstruction
       ? {
           vault_instruction: {
@@ -408,7 +442,53 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
           },
         }
       : {}),
+    ...(vaultInstructionError !== undefined
+      ? { vault_instruction_error: vaultInstructionError }
+      : {}),
   };
+}
+
+/**
+ * The standing-rules block and the record behind it, or neither.
+ *
+ * The two travel together because the response reports them in two
+ * different places - the block is prepended to `content`, the record
+ * becomes the `standing_rules` key - and a read that FAILED produces a
+ * block but no record: there is no path/content/truncated triple to
+ * report for bytes nobody could read, and the block itself is what says
+ * so in words the agent will read.
+ */
+interface StandingBlock {
+  readonly text: string;
+  readonly rules: StandingRules | null;
+}
+
+const NO_STANDING_BLOCK: StandingBlock = Object.freeze({ text: "", rules: null });
+
+function readStandingBlock(vault: string): StandingBlock {
+  const path = brainStandingRulesPath(vault);
+  let cfg: BrainConfig | null = null;
+  try {
+    cfg = loadBrainConfig(vault);
+  } catch {
+    // A `_brain.yaml` this surface cannot read resolves the cap to its
+    // default; the config failure itself surfaces through the `error`
+    // slot that the regenerate arm above already populates.
+  }
+  try {
+    const rules = readStandingRules(vault, { maxChars: resolveStandingRulesMaxChars(cfg) });
+    if (rules === null) return NO_STANDING_BLOCK;
+    return Object.freeze({ text: renderStandingRules(rules), rules });
+  } catch (err) {
+    return Object.freeze({ text: renderStandingRulesFailure(path, err), rules: null });
+  }
+}
+
+/** Put the standing block at the head of the content, or leave it alone. */
+function prependStandingBlock(standing: StandingBlock, content: string): string {
+  if (standing.text.length === 0) return content;
+  const trimmed = content.trimStart();
+  return trimmed.length === 0 ? `${standing.text}\n` : `${standing.text}\n\n${trimmed}`;
 }
 
 // ----- brain_digest --------------------------------------------------------
@@ -449,6 +529,23 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
     },
     generated_at: {},
     pinned: PINNED_CONTEXT_OUTPUT_SCHEMA,
+    // Declared but deliberately NOT required: a vault whose operator has
+    // written no standing rules omits the key entirely, exactly as the
+    // vault-instruction field does, so hosts that strip unknown fields
+    // stay byte-identical on the common path.
+    standing_rules: {
+      type: "object",
+      required: ["path", "content", "truncated"],
+      properties: {
+        path: { type: "string" },
+        content: { type: "string" },
+        truncated: { type: "boolean" },
+      },
+      additionalProperties: false,
+    },
+    // Present only when the instruction-file read failed; see the
+    // "a throw is not an absence" note on the handler.
+    vault_instruction_error: { type: "string" },
   },
 };
 

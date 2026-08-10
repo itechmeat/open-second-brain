@@ -116,3 +116,41 @@ describe("active.inject_budget_chars (token-diet, t_40eb1de7)", () => {
     );
   });
 });
+
+describe("active.standing_rules_max_chars (silence-is-not-an-answer, U8)", () => {
+  test("absent → undefined; the reader falls back to its own default", () => {
+    const { config } = validate(HEAD + `active:\n  inject_budget_chars: 4000\n`);
+    expect(config.active?.standing_rules_max_chars).toBeUndefined();
+  });
+
+  test("present → loaded, and independent of the injection budget", () => {
+    const { config } = validate(
+      HEAD + `active:\n  inject_budget_chars: 500\n  standing_rules_max_chars: 12000\n`,
+    );
+    expect(config.active?.standing_rules_max_chars).toBe(12_000);
+    expect(config.active?.inject_budget_chars).toBe(500);
+  });
+
+  test("below minimum rejected", () => {
+    expect(() => validate(HEAD + `active:\n  standing_rules_max_chars: 10\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("above maximum rejected", () => {
+    expect(() => validate(HEAD + `active:\n  standing_rules_max_chars: 1000000\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("non-integer rejected", () => {
+    expect(() => validate(HEAD + `active:\n  standing_rules_max_chars: lots\n`)).toThrow(
+      BrainConfigError,
+    );
+  });
+
+  test("the key is known: it does not warn as unrecognised", () => {
+    const { warnings } = validate(HEAD + `active:\n  standing_rules_max_chars: 4000\n`);
+    expect(warnings.find((w) => w.message.includes("standing_rules_max_chars"))).toBeUndefined();
+  });
+});

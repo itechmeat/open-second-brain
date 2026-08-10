@@ -8,16 +8,66 @@
  * section-aware truncation core: sections drop in fixed priority
  * order - recently retired first, then quarantine, then most-applied,
  * with the confirmed rules (and the document preamble) surviving
- * longest - and a one-line notice points the agent at `brain_context`
- * for the full view.
+ * longest - and a one-line notice names the sections that went, says
+ * how many characters survived out of how many, and points the agent at
+ * `brain_context` for the full view.
  *
  * Pure and deterministic; the hook stays a thin IO shell.
  */
 
-import { applySectionBudget, type BudgetSection } from "./text/text-budget.ts";
+import {
+  applySectionBudget,
+  type BudgetSection,
+  type SectionTruncationReport,
+} from "./text/text-budget.ts";
 
-export const ACTIVE_TRUNCATION_NOTICE =
-  "_Injection truncated to budget. Call `brain_context` (or read `Brain/active.md`) for the full preference set._";
+/**
+ * Separator between a section's ordinal and its heading inside a budget
+ * key. The ordinal keeps keys unique when a vault renders two sections
+ * with the same heading; the notice strips it back off, so the two sides
+ * share the character rather than each spelling it.
+ */
+const SECTION_KEY_SEPARATOR = ":";
+
+/** The Markdown level every active.md section heading is rendered at. */
+const HEADING_PREFIX = "## ";
+
+/** Key of the slice holding everything before the first heading. */
+const PREAMBLE_KEY = "preamble";
+
+/**
+ * The truncation notice, built from the budgeter's own report.
+ *
+ * It used to be a fixed sentence. The budgeter has always returned the
+ * list of keys it dropped, and the caller has always discarded it, so an
+ * agent whose quarantine rules had just been evicted was told only that
+ * "the injection was truncated" - the exact silence this release exists
+ * to close. Naming the sections is safe because they are headings THIS
+ * project renders, never operator or user text: no content crosses into
+ * the notice, only keys and two integers.
+ */
+export function activeTruncationNotice(report: SectionTruncationReport): string {
+  const dropped =
+    report.droppedKeys.length > 0
+      ? ` Dropped: ${report.droppedKeys.map(sectionLabel).join(", ")}.`
+      : "";
+  return (
+    `_Injection truncated to budget: kept ${report.keptChars} of ${report.totalChars} ` +
+    `characters.${dropped} Call \`brain_context\` (or read \`Brain/active.md\`) ` +
+    "for the full preference set._"
+  );
+}
+
+/**
+ * Human-readable name of a dropped section: the ordinal prefix and the
+ * Markdown heading marker removed, leaving the heading as the operator
+ * reads it in `Brain/active.md`.
+ */
+function sectionLabel(key: string): string {
+  const at = key.indexOf(SECTION_KEY_SEPARATOR);
+  const heading = at === -1 ? key : key.slice(at + SECTION_KEY_SEPARATOR.length);
+  return heading.startsWith(HEADING_PREFIX) ? heading.slice(HEADING_PREFIX.length) : heading;
+}
 
 /**
  * Drop priority per known section heading; lower survives longer.
@@ -34,10 +84,10 @@ export const SECTION_PRIORITIES: ReadonlyArray<{
   readonly prefix: string;
   readonly priority: number;
 }> = [
-  { prefix: "## Confirmed", priority: 0 },
-  { prefix: "## Most-applied", priority: 1 },
-  { prefix: "## Quarantine", priority: 3 },
-  { prefix: "## Recently retired", priority: 4 },
+  { prefix: `${HEADING_PREFIX}Confirmed`, priority: 0 },
+  { prefix: `${HEADING_PREFIX}Most-applied`, priority: 1 },
+  { prefix: `${HEADING_PREFIX}Quarantine`, priority: 3 },
+  { prefix: `${HEADING_PREFIX}Recently retired`, priority: 4 },
 ];
 
 /**
@@ -66,7 +116,7 @@ export function priorityFor(heading: string): number {
 export function splitSections(body: string): BudgetSection[] {
   const lines = body.split("\n");
   const sections: BudgetSection[] = [];
-  let currentKey = "preamble";
+  let currentKey = PREAMBLE_KEY;
   let currentPriority = 0;
   let buffer: string[] = [];
 
@@ -76,7 +126,7 @@ export function splitSections(body: string): BudgetSection[] {
     while (buffer.length > 0 && buffer[buffer.length - 1] === "") buffer.pop();
     if (buffer.length === 0) return;
     sections.push({
-      key: `${sections.length}:${currentKey}`,
+      key: `${sections.length}${SECTION_KEY_SEPARATOR}${currentKey}`,
       priority: currentPriority,
       text: buffer.join("\n"),
     });
@@ -84,11 +134,11 @@ export function splitSections(body: string): BudgetSection[] {
   };
 
   for (const line of lines) {
-    if (line.startsWith("## ")) {
+    if (line.startsWith(HEADING_PREFIX)) {
       // The preamble merges into the first heading's section so the
       // document title can never be dropped ahead of its content.
-      if (currentKey !== "preamble" || priorityFor(line) !== 0) flush();
-      if (currentKey === "preamble" && priorityFor(line) === 0) {
+      if (currentKey !== PREAMBLE_KEY || priorityFor(line) !== 0) flush();
+      if (currentKey === PREAMBLE_KEY && priorityFor(line) === 0) {
         currentKey = line;
         currentPriority = 0;
         buffer.push(line);
@@ -111,7 +161,7 @@ export function splitSections(body: string): BudgetSection[] {
 export function budgetActiveBody(body: string, budgetChars: number): string {
   if (body.length <= budgetChars) return body;
   const result = applySectionBudget(splitSections(body), budgetChars, {
-    notice: ACTIVE_TRUNCATION_NOTICE,
+    notice: activeTruncationNotice,
   });
   return result.body;
 }

@@ -62,6 +62,7 @@ import {
   BRAIN_SKILL_PROPOSALS_REJECTED_REL,
   BRAIN_SNAPSHOTS_REL,
   BRAIN_SOURCES_REL,
+  BRAIN_STANDING_RULES_FILE,
   BRAIN_STATE_REL,
   BRAIN_TENSIONS_REL,
   BRAIN_THESES_REL,
@@ -205,6 +206,21 @@ export function brainActivePath(vault: string): string {
  */
 export function brainLessonsPath(vault: string): string {
   return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_LESSONS_FILE), vault);
+}
+
+/**
+ * Path of the operator-authored standing-rules file
+ * (`Brain/standing-rules.md`, silence-is-not-an-answer U8).
+ *
+ * Unlike every other artefact at this level it is written by hand and
+ * never by this system: `dream` does not generate it, no CLI verb
+ * rewrites it, and the note-target resolver refuses it to every
+ * caller-named write tool because its first path segment is `Brain`.
+ * Read by the `SessionStart` hook ahead of the memory layer and by
+ * `brain_context`.
+ */
+export function brainStandingRulesPath(vault: string): string {
+  return ensureInsideVault(join(brainDirs(vault).brain, BRAIN_STANDING_RULES_FILE), vault);
 }
 
 /** Path of the transient current-task scratchpad read by `brain_context`. */

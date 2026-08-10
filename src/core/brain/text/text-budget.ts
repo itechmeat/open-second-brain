@@ -12,7 +12,9 @@
  *      never mid-line, so the output is always well-formed Markdown;
  *   3. appending an optional one-line truncation notice that rides
  *      on top of the budget (it is the pointer to the full view, so
- *      it must survive even a zero budget).
+ *      it must survive even a zero budget). The notice may be a fixed
+ *      sentence or a function of the truncation report, so a caller can
+ *      say WHICH sections went instead of only that something did.
  *
  * Pure and deterministic: no I/O, clock, or randomness. Identical
  * inputs produce identical outputs - the property the active.md
@@ -31,13 +33,47 @@ export interface BudgetSection {
   readonly text: string;
 }
 
+/**
+ * What a notice function is told about the truncation it is announcing.
+ *
+ * Keys and integers ONLY, deliberately. A caller that wants to name what
+ * went can do so from `droppedKeys`, which are the caller's own stable
+ * identifiers, and can quantify it from the character pair - without this
+ * module ever handing back a slice of section TEXT. That matters because
+ * one consumer of this budgeter caps operator-authored bytes in an
+ * unknown language, and a notice assembled from integers reads the same
+ * whatever those bytes are.
+ */
+export interface SectionTruncationReport {
+  /** Keys of fully dropped sections, in drop order. */
+  readonly droppedKeys: ReadonlyArray<string>;
+  /** Characters of section content in the budgeted body, notice excluded. */
+  readonly keptChars: number;
+  /** Characters the untruncated join of every section would have had. */
+  readonly totalChars: number;
+  /** True when the last kept section was tail-trimmed at a line boundary. */
+  readonly trimmed: boolean;
+}
+
+/**
+ * A fixed sentence, or a sentence built from the truncation report.
+ *
+ * The fixed form is right when there is only one thing the notice can
+ * say. The function form exists because "something was dropped" and
+ * "these three sections were dropped, keeping 7,980 of 30,412
+ * characters" are different messages, and the second one was already
+ * computed here and then thrown away by every caller.
+ */
+export type SectionBudgetNotice = string | ((report: SectionTruncationReport) => string);
+
 export interface SectionBudgetOptions {
   /**
    * One-line notice appended (after a blank-line separator when any
    * content is kept) whenever truncation occurred. Not counted
-   * against the budget.
+   * against the budget. Resolved once, only when truncation actually
+   * happened, so the function form is never called on the common path.
    */
-  readonly notice?: string;
+  readonly notice?: SectionBudgetNotice;
 }
 
 export interface SectionBudgetResult {
@@ -109,6 +145,7 @@ export function applySectionBudget(
   opts: SectionBudgetOptions = {},
 ): SectionBudgetResult {
   const budget = Number.isFinite(budgetChars) ? Math.max(0, Math.floor(budgetChars)) : 0;
+  const totalChars = joinedLength(sections);
   const kept: KeptSection[] = sections.map((s, index) => ({ ...s, index }));
   const droppedKeys: string[] = [];
   let trimmedAny = false;
@@ -143,14 +180,32 @@ export function applySectionBudget(
     .map((s) => s.text)
     .join(SEPARATOR);
 
+  const frozenDroppedKeys = Object.freeze(droppedKeys);
+
   let body = content;
-  if (truncated && opts.notice !== undefined && opts.notice.length > 0) {
-    body = content.length > 0 ? content + SEPARATOR + opts.notice : opts.notice;
+  if (truncated && opts.notice !== undefined) {
+    // The single place a notice is appended, and therefore the single
+    // place the report is materialized. `keptChars` describes the
+    // content alone: the notice rides on top of the budget, so counting
+    // it would make the pair the notice reports disagree with itself.
+    const notice = resolveNotice(opts.notice, {
+      droppedKeys: frozenDroppedKeys,
+      keptChars: content.length,
+      totalChars,
+      trimmed: trimmedAny,
+    });
+    if (notice.length > 0) {
+      body = content.length > 0 ? content + SEPARATOR + notice : notice;
+    }
   }
 
   return Object.freeze({
     body,
     truncated,
-    droppedKeys: Object.freeze(droppedKeys),
+    droppedKeys: frozenDroppedKeys,
   });
+}
+
+function resolveNotice(notice: SectionBudgetNotice, report: SectionTruncationReport): string {
+  return typeof notice === "string" ? notice : notice(report);
 }

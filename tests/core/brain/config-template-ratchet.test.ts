@@ -46,6 +46,7 @@ import {
   LESSONS_LIMIT_DEFAULT,
   MOST_APPLIED_LIMIT_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
+  STANDING_RULES_MAX_CHARS_DEFAULT,
 } from "../../../src/core/brain/policy.ts";
 import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
 import { DEFAULT_VAULT_IGNORE_PATHS } from "../../../src/core/vault-scope/defaults.ts";
@@ -141,6 +142,8 @@ function resolvedView(cfg: BrainConfig): Record<string, unknown> {
       limit: MOST_APPLIED_LIMIT_DEFAULT,
     },
     active_inject_budget_chars: cfg.active?.inject_budget_chars ?? INJECT_BUDGET_CHARS_DEFAULT,
+    active_standing_rules_max_chars:
+      cfg.active?.standing_rules_max_chars ?? STANDING_RULES_MAX_CHARS_DEFAULT,
     lessons: {
       half_life_days: cfg.lessons?.half_life_days ?? LESSONS_HALF_LIFE_DAYS_DEFAULT,
       corroboration_min: cfg.lessons?.corroboration_min ?? LESSONS_CORROBORATION_MIN_DEFAULT,

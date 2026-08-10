@@ -68,7 +68,56 @@ describe("budgetActiveBody", () => {
   test("unsectioned body still respects the budget", () => {
     const flat = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
     const out = budgetActiveBody(flat, 120);
-    expect(out.length).toBeLessThanOrEqual(120 + 200); // content budget + notice overhead
+    expect(out.length).toBeLessThanOrEqual(120 + 300); // content budget + notice overhead
     expect(out).toContain("line 0");
+  });
+});
+
+/**
+ * The truncation notice used to be a fixed sentence that named nothing,
+ * while the budgeter one line above it returned the exact list of keys
+ * it had dropped. The agent was told a rule had gone and not which one -
+ * the same silence this release is about. Section headings are text this
+ * project authors, never operator text, so naming them is safe.
+ */
+describe("budgetActiveBody: the truncation notice names what it dropped", () => {
+  test("an over-budget body names the dropped headings", () => {
+    const input = body();
+    const out = budgetActiveBody(input, input.length - 20);
+    expect(out).toContain("Recently retired");
+    // Named as dropped, not merely present: the heading itself is gone.
+    expect(out).not.toContain("## Recently retired");
+    expect(out).not.toContain("pref-r");
+  });
+
+  test("a tighter budget names every dropped heading in drop order", () => {
+    const out = budgetActiveBody(body(), 250);
+    const notice = out.slice(out.lastIndexOf("_Injection truncated"));
+    const retired = notice.indexOf("Recently retired");
+    const quarantine = notice.indexOf("Quarantine");
+    const mostApplied = notice.indexOf("Most-applied");
+    expect(retired).toBeGreaterThanOrEqual(0);
+    expect(quarantine).toBeGreaterThan(retired);
+    expect(mostApplied).toBeGreaterThan(quarantine);
+  });
+
+  test("the notice quantifies the cut in characters", () => {
+    const input = body();
+    const out = budgetActiveBody(input, 250);
+    expect(out).toContain(String(input.length));
+  });
+
+  test("a within-budget body is byte-identical to its input", () => {
+    // The idempotent-write comparison upstream depends on this, so the
+    // richer notice must stay strictly on the truncated path.
+    const input = body();
+    expect(budgetActiveBody(input, input.length)).toBe(input);
+    expect(budgetActiveBody(input, 10_000)).toBe(input);
+  });
+
+  test("a body with no dropped sections still points at the full view", () => {
+    const flat = Array.from({ length: 50 }, (_, i) => `line ${i}`).join("\n");
+    const out = budgetActiveBody(flat, 120);
+    expect(out).toContain("brain_context");
   });
 });

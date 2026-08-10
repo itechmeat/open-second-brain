@@ -2,13 +2,21 @@
  * The `active:` block — what `Brain/active.md` renders and how much of it
  * is injected at SessionStart.
  *
- * One reason to change: the size of the agent's always-on preamble.
+ * One reason to change: the size of the agent's always-on preamble -
+ * which is why the cap on the operator's standing-rules block lives here
+ * too, even though that block is exempt from the injection budget and
+ * charged against its own number.
  * Out-of-range values are hard errors: an operator-tunable knob that
  * silently reverted to its default would be indistinguishable from never
  * having been set.
  */
 
 import type { BrainActiveConfig, BrainConfig, BrainMostAppliedConfig } from "../../types.ts";
+import {
+  STANDING_RULES_MAX_CHARS_DEFAULT,
+  STANDING_RULES_MAX_CHARS_MAX,
+  STANDING_RULES_MAX_CHARS_MIN,
+} from "../../standing-rules.ts";
 import { requireIntegerInRange } from "../field-checks.ts";
 import { openBlock, warnUnknownKeys, type BlockParseContext } from "../key-index.ts";
 
@@ -55,6 +63,7 @@ const KNOWN_KEYS = [
   "most_applied_window_days",
   "most_applied_limit",
   "inject_budget_chars",
+  "standing_rules_max_chars",
 ] as const;
 
 /**
@@ -69,23 +78,48 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
 
   const mostApplied = parseMostApplied(activeMap, ctx.source);
 
-  let injectBudgetChars: number | undefined;
-  if ("inject_budget_chars" in activeMap) {
-    requireIntegerInRange(
-      "active.inject_budget_chars",
-      activeMap["inject_budget_chars"],
-      INJECT_BUDGET_CHARS_MIN,
-      INJECT_BUDGET_CHARS_MAX,
-      ctx.source,
-    );
-    injectBudgetChars = activeMap["inject_budget_chars"] as number;
-  }
+  const injectBudgetChars = optionalCharCount(
+    activeMap,
+    "inject_budget_chars",
+    INJECT_BUDGET_CHARS_MIN,
+    INJECT_BUDGET_CHARS_MAX,
+    ctx.source,
+  );
+  const standingRulesMaxChars = optionalCharCount(
+    activeMap,
+    "standing_rules_max_chars",
+    STANDING_RULES_MAX_CHARS_MIN,
+    STANDING_RULES_MAX_CHARS_MAX,
+    ctx.source,
+  );
 
   warnUnknownKeys(ctx, activeMap, KNOWN_KEYS, BLOCK);
   return {
     ...(mostApplied !== undefined ? { most_applied: mostApplied } : {}),
     ...(injectBudgetChars !== undefined ? { inject_budget_chars: injectBudgetChars } : {}),
+    ...(standingRulesMaxChars !== undefined
+      ? { standing_rules_max_chars: standingRulesMaxChars }
+      : {}),
   };
+}
+
+/**
+ * Read one optional character-count knob: absent stays absent so the
+ * consumer's own default applies, present is range-checked as a hard
+ * error. Both knobs in this block are the same shape, and writing the
+ * `in`-check plus the range call twice is how the second one eventually
+ * gets a clamped bound the first does not have.
+ */
+function optionalCharCount(
+  activeMap: Readonly<Record<string, unknown>>,
+  key: string,
+  min: number,
+  max: number,
+  source: string | null,
+): number | undefined {
+  if (!(key in activeMap)) return undefined;
+  requireIntegerInRange(`${BLOCK}.${key}`, activeMap[key], min, max, source);
+  return activeMap[key] as number;
 }
 
 /**
@@ -96,6 +130,17 @@ export function parseActiveBlock(ctx: BlockParseContext): BrainActiveConfig | un
  */
 export function resolveMostApplied(cfg: BrainConfig): BrainMostAppliedConfig {
   return cfg.active?.most_applied ?? BRAIN_MOST_APPLIED_DEFAULTS;
+}
+
+/**
+ * Read side of `active.standing_rules_max_chars`: the configured cap, or
+ * the reader's default. Takes a nullable config so the two callers - the
+ * SessionStart hook, which absorbs an unreadable `_brain.yaml` into the
+ * defaults, and `brain_context`, which does the same - resolve the
+ * number through one function instead of each spelling the fallback.
+ */
+export function resolveStandingRulesMaxChars(cfg: BrainConfig | null): number {
+  return cfg?.active?.standing_rules_max_chars ?? STANDING_RULES_MAX_CHARS_DEFAULT;
 }
 
 /**

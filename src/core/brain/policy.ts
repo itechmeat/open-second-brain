@@ -69,7 +69,18 @@ export {
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_MAX,
   MOST_APPLIED_WINDOW_DAYS_MIN,
+  resolveStandingRulesMaxChars,
 } from "./policy/blocks/active.ts";
+/**
+ * The standing-rules cap is declared beside the reader it governs
+ * (`standing-rules.ts`) and re-exported here so every `active:` knob is
+ * reachable from the one policy surface its neighbours already use.
+ */
+export {
+  STANDING_RULES_MAX_CHARS_DEFAULT,
+  STANDING_RULES_MAX_CHARS_MAX,
+  STANDING_RULES_MAX_CHARS_MIN,
+} from "./standing-rules.ts";
 export {
   LESSONS_CORROBORATION_MIN_DEFAULT,
   LESSONS_CORROBORATION_MIN_MAX,

@@ -11,6 +11,7 @@ import { describe, expect, test } from "bun:test";
 import {
   applySectionBudget,
   type BudgetSection,
+  type SectionTruncationReport,
 } from "../../../src/core/brain/text/text-budget.ts";
 
 const NOTICE = "_Truncated to fit the injection budget. Call `brain_context` for the full view._";
@@ -101,5 +102,76 @@ describe("applySectionBudget", () => {
     expect(out.truncated).toBe(true);
     expect(out.body.length).toBeLessThanOrEqual(50);
     expect(out.body).toContain("## Confirmed");
+  });
+});
+
+/**
+ * The notice may be a function of the truncation report, which is what
+ * lets a caller say WHICH sections went and by how much rather than
+ * emitting a fixed sentence that names nothing. The report carries
+ * integers and section keys only - no text of the sections themselves -
+ * so a notice built from it is safe to show whatever the sections hold.
+ */
+describe("applySectionBudget: the notice as a function of the truncation report", () => {
+  function reportFor(budget: number): SectionTruncationReport {
+    let seen: SectionTruncationReport | null = null;
+    applySectionBudget(sections(), budget, {
+      notice: (report) => {
+        seen = report;
+        return "";
+      },
+    });
+    if (seen === null) throw new Error("the notice function was never called");
+    return seen;
+  }
+
+  test("the function receives droppedKeys in drop order", () => {
+    const full = applySectionBudget(sections(), 10_000).body.length;
+    expect(reportFor(full - 20).droppedKeys).toEqual(["retired"]);
+    expect(reportFor(30).droppedKeys).toEqual(["retired", "quarantine", "most-applied"]);
+  });
+
+  test("the function receives kept and total characters and the trimmed flag", () => {
+    const full = applySectionBudget(sections(), 10_000).body.length;
+    // A whole-section drop with no tail trim.
+    const dropped = reportFor(full - 20);
+    expect(dropped.totalChars).toBe(full);
+    expect(dropped.keptChars).toBeLessThan(full);
+    expect(dropped.trimmed).toBe(false);
+    // A budget tight enough that the last kept section is tail-trimmed.
+    expect(reportFor(30).trimmed).toBe(true);
+  });
+
+  test("the returned string is appended verbatim", () => {
+    const out = applySectionBudget(sections(), 30, {
+      notice: (report) => `dropped ${report.droppedKeys.length}`,
+    });
+    expect(out.body.endsWith("\n\ndropped 3")).toBe(true);
+  });
+
+  test("a function returning the empty string appends nothing", () => {
+    const out = applySectionBudget(sections(), 30, { notice: () => "" });
+    expect(out.truncated).toBe(true);
+    expect(out.body.length).toBeLessThanOrEqual(30);
+  });
+
+  test("the function is not called when nothing was truncated", () => {
+    let calls = 0;
+    const out = applySectionBudget(sections(), 10_000, {
+      notice: () => {
+        calls++;
+        return NOTICE;
+      },
+    });
+    expect(calls).toBe(0);
+    expect(out.body).not.toContain(NOTICE);
+  });
+
+  test("the string form still behaves identically to a function returning it", () => {
+    for (const budget of [0, 30, 90, 200, 10_000]) {
+      const asString = applySectionBudget(sections(), budget, { notice: NOTICE });
+      const asFunction = applySectionBudget(sections(), budget, { notice: () => NOTICE });
+      expect(asFunction).toEqual(asString);
+    }
   });
 });

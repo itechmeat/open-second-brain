@@ -441,6 +441,20 @@ flowchart LR
   net-negative). Rendered top-N (`lessons.limit`, default 20), ranked
   by decayed salience. Regenerated at the tail of every `dream` pass
   alongside `active.md`, with the same idempotent write.
+- **`Brain/standing-rules.md`** is the one preamble lane the operator
+  writes by hand. It is injected **first**, ahead of the runtime
+  notices and every recalled body, under a header stating that it takes
+  precedence over them. It is **exempt** from the injection budget and
+  capped by its own `active.standing_rules_max_chars` (default 4,000);
+  a capped block says how many lines and characters survived out of how
+  many, and names the file. Because it is read outside the fail-open
+  memory load it survives a memory-layer failure and is never written to
+  the inject cache, so a stale copy can never be served in its place. If
+  the file cannot be read, the block says so and states that no standing
+  rules are in force - it never degrades to silence. It is **not**
+  writable by any agent: the file sits under `Brain/`, whose first path
+  segment the note-target resolver refuses for every caller-named write
+  tool. Nothing generates or rewrites it.
 - **SessionStart hook** (`startup | resume | clear | compact`) injects
   the body as `additionalContext` so the agent sees current rules at
   the start of every session and again after `/compact` - the
@@ -448,8 +462,9 @@ flowchart LR
   event no longer exists in current Claude Code. The injected body is
   budgeted (`active.inject_budget_chars`, default 8,000 chars):
   sections drop deterministically (recently retired first, then
-  quarantine, then most-applied) and a one-line notice points the
-  agent at `brain_context` for the full set. When `Brain/lessons.md`
+  quarantine, then most-applied) and a one-line notice names the
+  sections that were dropped, how many characters survived out of how
+  many, and points the agent at `brain_context` for the full set. When `Brain/lessons.md`
   exists, its (separately budgeted) body is appended so the unified
   lessons corpus loads on the same surface. Fails closed - any error
   path exits 0 with no output so the runtime proceeds unaffected.
@@ -461,7 +476,9 @@ flowchart LR
   writer-scope MCP server. Runtimes that lack a `SessionStart` hook
   _and_ do not auto-load MCP resources (Cursor, Aider, raw Claude
   API) can fetch the same `active.md` body, pinned current-task context,
-  and active-preference counts with a single tool call.
+  and active-preference counts with a single tool call. The standing-rules
+  block leads that content too, and rides an optional `standing_rules`
+  key (path, content, truncated) omitted when the file is absent.
 - **`Brain/pinned.md`** is a transient scratchpad for current-task facts.
   Agents update it through `brain_pinned_context` when a fact should survive
   context rotation but should not become a durable preference. Clearing it

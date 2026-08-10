@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -21,6 +21,35 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
+});
+
+/**
+ * An instruction file that EXISTS and cannot be read used to answer
+ * `null`, which is the same answer a vault with no instruction file
+ * gives - so `brain_context` dropped the field and the operator was told
+ * nothing. Absence and failure are different answers.
+ */
+describe("readVaultInstructionFile - an unreadable file is a failure, not an absence", () => {
+  const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
+
+  test.skipIf(RUNNING_AS_ROOT)("throws naming the path and the reason", () => {
+    const path = join(vault, "VAULT.md");
+    writeFileSync(path, "# Vault\n");
+    chmodSync(path, 0o000);
+    try {
+      let thrown: unknown;
+      try {
+        readVaultInstructionFile(vault);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(Error);
+      expect((thrown as Error).message).toContain(path);
+      expect((thrown as Error).message.toLowerCase()).toContain("permission denied");
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
 });
 
 describe("readVaultInstructionFile - default name", () => {

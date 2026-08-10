@@ -67,6 +67,12 @@ function writeLessons(body: string): void {
   writeFileSync(join(vault, "Brain", "lessons.md"), body, "utf8");
 }
 
+function writeStandingRules(body: string): string {
+  const path = join(vault, "Brain", "standing-rules.md");
+  writeFileSync(path, body, "utf8");
+  return path;
+}
+
 describe("active-inject hook", () => {
   test("injects active.md content as SessionStart additionalContext", async () => {
     writeActive(
@@ -398,4 +404,149 @@ describe("active-inject hook: _brain.yaml absent vs. unreadable", () => {
     expect(injected).toContain("pref-foo");
     expect(injected).not.toContain(CONFIG_NOTICE);
   });
+});
+
+/**
+ * Operator standing rules at the head of the preamble
+ * (silence-is-not-an-answer, U8).
+ *
+ * The block is read OUTSIDE the fail-open memory load and before it, and
+ * that one placement is what gives it every property asserted here: it
+ * leads the payload, it is never charged against the injection budget, a
+ * memory-layer failure cannot take it down, and - because it never
+ * enters the inject cache - a stale constitution can never be served
+ * from disk in place of the live one.
+ */
+describe("active-inject hook: operator standing rules", () => {
+  const ACTIVE_DOC =
+    "---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n" +
+    "# Active Brain Preferences\n\n## Confirmed (1)\n\n- `pref-foo` — Rule body\n";
+  const RULES = "Never force-push to main.\nAsk before deleting anything under Archive/.";
+  const HEADER = "## Operator standing rules";
+  const CAP_NOTICE = "Standing rules truncated";
+
+  async function inject(env: Record<string, string> = {}): Promise<string> {
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault, ...env });
+    expect(r.exit).toBe(0);
+    expect(r.stderr).toBe("");
+    return JSON.parse(r.stdout).hookSpecificOutput.additionalContext as string;
+  }
+
+  test("the preamble starts with the standing-rules header and the operator text", async () => {
+    writeActive(ACTIVE_DOC);
+    writeStandingRules(RULES);
+    const injected = await inject();
+    expect(injected.startsWith(HEADER)).toBe(true);
+    expect(injected).toContain(RULES);
+    expect(injected.indexOf(RULES)).toBeLessThan(injected.indexOf("pref-foo"));
+  });
+
+  test("absent rules file leaves the payload exactly as it was", async () => {
+    writeActive(ACTIVE_DOC);
+    const injected = await inject();
+    expect(injected).not.toContain(HEADER);
+    expect(injected).toContain("pref-foo");
+  });
+
+  test("with no active memory file the block is still emitted", async () => {
+    writeStandingRules(RULES);
+    const injected = await inject();
+    expect(injected.startsWith(HEADER)).toBe(true);
+    expect(injected.endsWith(RULES)).toBe(true);
+  });
+
+  test("memory assembly throwing with no cache still emits the block, exit zero", async () => {
+    // A directory where active.md belongs makes the assembly throw, and
+    // this vault has never injected successfully, so the fail-open loader
+    // has nothing to degrade to. The constitution must survive that.
+    mkdirSync(join(vault, "Brain", "active.md"));
+    writeStandingRules(RULES);
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    const injected: string = JSON.parse(r.stdout).hookSpecificOutput.additionalContext;
+    expect(injected.startsWith(HEADER)).toBe(true);
+    expect(injected.endsWith(RULES)).toBe(true);
+    expect(injected).not.toContain("pref-foo");
+  });
+
+  test("neither standing rules nor memory keeps the hook silent", async () => {
+    const r = await runHook({ hook_event_name: "SessionStart" }, { VAULT_DIR: vault });
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+  });
+
+  test("the block is exempt from the injection budget at its minimum", async () => {
+    // Budget pinned at its floor and a rules file far larger than it: the
+    // operator's block is emitted whole and only the memory body carries
+    // a truncation notice.
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  inject_budget_chars: 500\n  standing_rules_max_chars: 100000\n",
+      "utf8",
+    );
+    const bigRules = Array.from({ length: 200 }, (_, i) => `Standing rule number ${i}.`).join("\n");
+    writeStandingRules(bigRules);
+    const rules = Array.from(
+      { length: 60 },
+      (_, i) => `- \`pref-rule-${i}\` — Rule ${i} body`,
+    ).join("\n");
+    writeActive(
+      `---\nkind: brain-active\ngenerated_at: 2026-05-15T10:00:00Z\n---\n\n# Active Brain Preferences\n\n## Confirmed (60)\n\n${rules}\n`,
+    );
+
+    const injected = await inject();
+    // Whole, byte for byte, despite being far over the 500-char budget.
+    expect(injected).toContain(bigRules);
+    expect(injected).not.toContain(CAP_NOTICE);
+    // The memory body is the only thing that was cut.
+    expect(injected).toContain("Injection truncated to budget");
+    const memory = injected.slice(injected.indexOf("# Active Brain Preferences"));
+    expect(memory.length).toBeLessThanOrEqual(800);
+  });
+
+  test("an over-cap rules file is capped loudly and still leads the payload", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nactive:\n  standing_rules_max_chars: 200\n",
+      "utf8",
+    );
+    const path = writeStandingRules(
+      Array.from({ length: 100 }, (_, i) => `Standing rule number ${i}.`).join("\n"),
+    );
+    writeActive(ACTIVE_DOC);
+    const injected = await inject();
+    expect(injected.startsWith(HEADER)).toBe(true);
+    expect(injected).toContain(CAP_NOTICE);
+    expect(injected).toContain(path);
+    expect(injected).toContain("pref-foo");
+  });
+
+  test("standing rules precede the runtime notices", async () => {
+    writeActive(ACTIVE_DOC);
+    writeStandingRules(RULES);
+    const injected = await inject({ OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "true" });
+    expect(injected.startsWith(HEADER)).toBe(true);
+    expect(injected).toContain("Runtime notices:");
+    expect(injected.indexOf(HEADER)).toBeLessThan(injected.indexOf("Runtime notices:"));
+    expect(injected.indexOf("Runtime notices:")).toBeLessThan(injected.indexOf("pref-foo"));
+  });
+
+  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+    "an unreadable rules file is announced, never silently dropped",
+    async () => {
+      writeActive(ACTIVE_DOC);
+      const path = writeStandingRules(RULES);
+      chmodSync(path, 0o000);
+      try {
+        const injected = await inject();
+        expect(injected.startsWith(HEADER)).toBe(true);
+        expect(injected).toContain(path);
+        expect(injected).toContain("No standing rules are in force this session");
+        // Not fatal: the memory layer still reaches the session.
+        expect(injected).toContain("pref-foo");
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 });

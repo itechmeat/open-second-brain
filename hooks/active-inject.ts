@@ -5,6 +5,14 @@
  * confirmed and quarantined preferences without explicitly calling
  * `brain_query` first.
  *
+ * Two lanes share the surface, and the order between them is the point.
+ * `Brain/standing-rules.md` is operator-authored and goes FIRST, read
+ * outside the fail-open memory load so it survives a memory-layer
+ * failure and never enters the inject cache. Everything after it -
+ * runtime notices, `active.md`, `lessons.md` - is what the agent learned
+ * about itself, assembled inside the fail-open boundary and charged
+ * against the configured injection budget.
+ *
  * Contract (identical for Claude Code and Codex):
  *   stdin: hook payload JSON. The vault path is resolved from the
  *     persisted Open Second Brain config (env `VAULT_DIR` → config
@@ -32,9 +40,22 @@ import { join } from "node:path";
 
 import { resolveVault } from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
-import { brainActivePath, brainLessonsPath } from "../src/core/brain/paths.ts";
+import {
+  brainActivePath,
+  brainLessonsPath,
+  brainStandingRulesPath,
+} from "../src/core/brain/paths.ts";
 import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
-import { INJECT_BUDGET_CHARS_DEFAULT, loadBrainConfig } from "../src/core/brain/policy.ts";
+import {
+  INJECT_BUDGET_CHARS_DEFAULT,
+  loadBrainConfig,
+  resolveStandingRulesMaxChars,
+} from "../src/core/brain/policy.ts";
+import {
+  readStandingRules,
+  renderStandingRules,
+  renderStandingRulesFailure,
+} from "../src/core/brain/standing-rules.ts";
 import { healCliSymlinks } from "../src/cli/install-cli.ts";
 import { ensureVaultCurrent } from "../src/core/maintenance/ensure-current.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -46,6 +67,7 @@ import { isContextEventName } from "./lib/context-events.ts";
 import { emitContextReceipt } from "../src/core/brain/context-receipts.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import type { InjectContextSource } from "../src/core/brain/inject-failopen.ts";
+import type { BrainConfig } from "../src/core/brain/types.ts";
 
 /**
  * Best-effort hook audit line. Never throws: a failure to record must never
@@ -131,21 +153,35 @@ async function main(): Promise<void> {
       });
     }
 
+    const meter: InjectionMeter = { sources: [], budgetChars: null };
+    const limits = resolveInjectionLimits(vault);
+
+    // The operator's standing rules, read BEFORE and OUTSIDE the fail-open
+    // load below. That single placement buys three properties at once:
+    // the block never reaches the budgeter, so the configured injection
+    // budget cannot shrink it; a throw inside memory assembly cannot take
+    // it down with it; and it is never written to the inject cache, so a
+    // stale constitution can never be served from disk while the live one
+    // is unreadable.
+    const standingBlock = renderStandingBlock(vault, limits.standingRulesMaxChars, meter);
+
     // Fail-open context load: assemble the injected body inside a guard that
     // degrades to the last-good cache (or empty) on any error, never emitting
     // a partial or poisoned payload. A successful non-empty body refreshes the
     // last-good snapshot.
-    const meter: InjectionMeter = { sources: [], budgetChars: null };
-    const { context, source } = await loadInjectContextFailOpen({
+    const { context: memoryContext, source } = await loadInjectContextFailOpen({
       vault,
       key: "active",
-      assemble: () => assembleActiveContext(vault, meter),
+      assemble: () => assembleActiveContext(vault, limits.injectBudgetChars, meter),
       audit: (degradedSource) =>
         auditHook(vault, "inject_failopen_degraded", {
           hook: "active-inject",
           source: degradedSource,
         }),
     });
+    // The early return now fires only when there are NEITHER standing rules
+    // NOR memory - a vault with rules and a broken memory layer still speaks.
+    const context = joinBlocks([standingBlock, memoryContext]);
     if (context.length === 0) return;
 
     const out = {
@@ -167,15 +203,37 @@ async function main(): Promise<void> {
 // ----- injection-size meter (context-integrity-gates, Unit H) --------------
 
 /**
+ * Which ceiling a sub-body was charged against, and whether it was
+ * emitted at all when the memory assembly failed.
+ *
+ *   - EXEMPT: produced outside the fail-open boundary. Charged against
+ *     its own cap, not `inject_budget_chars`, and emitted whatever the
+ *     memory layer does - so it is the one lane still real in a
+ *     degraded injection.
+ *   - BUDGETED: charged against `inject_budget_chars`. Two of these
+ *     exist today and each is charged against the FULL configured
+ *     ceiling, which is why the receipt records their count.
+ *   - UNBUDGETED: assembled inside the boundary but not charged (the
+ *     runtime notices, which are bounded by the number of conditions
+ *     that can hold rather than by a character count).
+ */
+const LANE_EXEMPT = "exempt";
+const LANE_BUDGETED = "budgeted";
+const LANE_UNBUDGETED = "unbudgeted";
+
+type InjectionLane = typeof LANE_EXEMPT | typeof LANE_BUDGETED | typeof LANE_UNBUDGETED;
+
+/**
  * One injected sub-body, captured while it is still a separate string.
  *
- * `assembleActiveContext` joins its parts and returns one string, so this
- * is the only point at which per-source attribution exists at all. The
- * name is a stable structural identifier, never derived from content.
+ * The parts are joined into one string before emission, so this is the
+ * only point at which per-source attribution exists at all. The name is
+ * a stable structural identifier, never derived from content.
  */
 interface InjectionSource {
   readonly name: string;
   readonly text: string;
+  readonly lane: InjectionLane;
 }
 
 /** Mutable accumulator threaded through the assembly, read after it returns. */
@@ -186,9 +244,18 @@ interface InjectionMeter {
 }
 
 /** Sub-body identifiers recorded per injection. Structural, not content-derived. */
+const SOURCE_STANDING_RULES = "standing-rules";
 const SOURCE_RUNTIME_NOTICES = "runtime-notices";
 const SOURCE_ACTIVE_BODY = "active-body";
 const SOURCE_LESSONS_BODY = "lessons-body";
+
+/** Blank line between two injected blocks. */
+const BLOCK_SEPARATOR = "\n\n";
+
+/** Join the non-empty blocks in order; an all-empty list yields "". */
+function joinBlocks(blocks: ReadonlyArray<string>): string {
+  return blocks.filter((block) => block.length > 0).join(BLOCK_SEPARATOR);
+}
 
 const UTF8 = new TextEncoder();
 
@@ -214,10 +281,13 @@ interface RecordInjectionSizeInput {
  *
  * ATTRIBUTION. The measurement is taken after the fail-open loader
  * returns, so it describes the emitted bytes rather than the attempted
- * ones. When the loader degraded to its last-good cache the sub-bodies in
- * `meter` were never emitted (assembly threw), so the record says
- * `sources_measured: false` and carries no items - a per-source breakdown
- * of zeros would be a finding that never happened.
+ * ones. When the loader degraded to its last-good cache the ASSEMBLED
+ * sub-bodies in `meter` were never emitted (assembly threw), so the
+ * record says `sources_measured: false` and drops them - a per-source
+ * breakdown of a body that was replaced by a cached one would be a
+ * finding that never happened. The exempt lane is kept in that case,
+ * because it is produced outside the boundary and did reach the payload;
+ * omitting it would understate an injection that really happened.
  *
  * FAIL-SOFT. The whole body sits in one try/catch. The receipt sink takes
  * a continuity-store lock and writes to disk; contention, a read-only
@@ -232,13 +302,13 @@ function recordInjectionSize(vault: string, input: RecordInjectionSizeInput): vo
     const totalBytes = byteLength(input.context);
     emitContextReceipt(vault, {
       options: { host: "hook", trigger: "session_inject" },
-      items: measured
-        ? input.meter.sources.map((source) => ({
-            id: source.name,
-            bytes: byteLength(source.text),
-            tokens: estimateTokens(source.text),
-          }))
-        : [],
+      items: input.meter.sources
+        .filter((source) => measured || source.lane === LANE_EXEMPT)
+        .map((source) => ({
+          id: source.name,
+          bytes: byteLength(source.text),
+          tokens: estimateTokens(source.text),
+        })),
       finalText: input.context,
       ...(input.meter.budgetChars !== null && measured
         ? {
@@ -270,9 +340,80 @@ function recordInjectionSize(vault: string, input: RecordInjectionSizeInput): vo
 
 /** How many recorded sources were charged against `inject_budget_chars`. */
 function budgetedSourceCount(meter: InjectionMeter): number {
-  return meter.sources.filter(
-    (source) => source.name === SOURCE_ACTIVE_BODY || source.name === SOURCE_LESSONS_BODY,
-  ).length;
+  return meter.sources.filter((source) => source.lane === LANE_BUDGETED).length;
+}
+
+/**
+ * The two character ceilings this hook applies, resolved once.
+ *
+ * They are separate numbers because they govern separate lanes: the
+ * injection budget rations what the agent recalled about itself, the
+ * standing-rules cap bounds what the operator wrote. Reading them
+ * together is only an efficiency - one config open instead of two.
+ */
+interface InjectionLimits {
+  readonly injectBudgetChars: number;
+  readonly standingRulesMaxChars: number;
+}
+
+/**
+ * Resolve both ceilings, falling back to their documented defaults when
+ * `_brain.yaml` cannot be read.
+ *
+ * Both `_brain.yaml` failures - ABSENT and PRESENT BUT UNREADABLE -
+ * resolve to the defaults here, and the unreadable one is not silent for
+ * it: the runtime-notice channel runs inside the assembly below and puts
+ * `brain_config_unreadable` immediately after the standing-rules block
+ * and ahead of every budgeted body, naming the file and the parse
+ * failure. It no longer heads the payload - the operator's own rules do -
+ * but it still precedes everything these ceilings are applied to, which
+ * is the property the argument rests on. The split the `load*ConfigSafe`
+ * readers make is already made on this surface; making it a second time
+ * here would be a second channel saying the same thing.
+ *
+ * Raising instead would report less, not more. A throw on this line
+ * would escape the hook entirely and emit nothing at all, so the
+ * condition would go from stated to invisible.
+ *
+ * The one quiet path left is `OPEN_SECOND_BRAIN_RUNTIME_NOTICES=false`,
+ * which is the operator switching the channel off by name.
+ */
+function resolveInjectionLimits(vault: string): InjectionLimits {
+  let cfg: BrainConfig | null = null;
+  try {
+    cfg = loadBrainConfig(vault);
+  } catch {
+    // absorbed deliberately - see the note above
+  }
+  return {
+    injectBudgetChars: cfg?.active?.inject_budget_chars ?? INJECT_BUDGET_CHARS_DEFAULT,
+    standingRulesMaxChars: resolveStandingRulesMaxChars(cfg),
+  };
+}
+
+/**
+ * Render the operator's standing-rules block, or the explicit statement
+ * that it is unavailable.
+ *
+ * An absent or empty file yields "" and the lane simply does not appear.
+ * A read that FAILED yields a block naming the path and the reason: the
+ * agent must never be able to mistake "the operator wrote no rules" for
+ * "the rules could not be read", and this is the surface where that
+ * distinction has to be made, because there is no second channel the
+ * operator would see.
+ */
+function renderStandingBlock(vault: string, maxChars: number, meter: InjectionMeter): string {
+  const path = brainStandingRulesPath(vault);
+  let block: string;
+  try {
+    const rules = readStandingRules(vault, { maxChars });
+    if (rules === null) return "";
+    block = renderStandingRules(rules);
+  } catch (err) {
+    block = renderStandingRulesFailure(path, err);
+  }
+  meter.sources.push({ name: SOURCE_STANDING_RULES, text: block, lane: LANE_EXEMPT });
+  return block;
 }
 
 /**
@@ -283,7 +424,7 @@ function budgetedSourceCount(meter: InjectionMeter): number {
  * Every non-empty sub-body is recorded into `meter` as it is produced -
  * the join below is where per-source attribution stops existing.
  */
-function assembleActiveContext(vault: string, meter: InjectionMeter): string {
+function assembleActiveContext(vault: string, budget: number, meter: InjectionMeter): string {
   // Runtime-state notices ride the same injection surface as active.md so the
   // agent is proactively aware of a degraded/transient condition (semantic
   // search fell back to lexical, index missing/rebuilding, read-only vault)
@@ -291,14 +432,17 @@ function assembleActiveContext(vault: string, meter: InjectionMeter): string {
   // an empty list keeps the injected body byte-identical to before.
   const noticesBlock = renderRuntimeNotices(collectRuntimeNotices(vault));
   if (noticesBlock.length > 0) {
-    meter.sources.push({ name: SOURCE_RUNTIME_NOTICES, text: noticesBlock });
+    meter.sources.push({
+      name: SOURCE_RUNTIME_NOTICES,
+      text: noticesBlock,
+      lane: LANE_UNBUDGETED,
+    });
   }
 
   const activePath = brainActivePath(vault);
-  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, meter) : "";
+  const activeBody = existsSync(activePath) ? readActiveBody(vault, activePath, budget, meter) : "";
 
-  const parts = [noticesBlock, activeBody].filter((p) => p.length > 0);
-  return parts.join("\n\n");
+  return joinBlocks([noticesBlock, activeBody]);
 }
 
 /**
@@ -306,7 +450,12 @@ function assembleActiveContext(vault: string, meter: InjectionMeter): string {
  * the body is empty; throws on a genuine read error (permissions, fs stall) so
  * the fail-open loader degrades to the last-good cache.
  */
-function readActiveBody(vault: string, activePath: string, meter: InjectionMeter): string {
+function readActiveBody(
+  vault: string,
+  activePath: string,
+  budget: number,
+  meter: InjectionMeter,
+): string {
   const body = readFileSync(activePath, "utf8");
 
   // Drop the `kind: brain-active / generated_at` frontmatter - it
@@ -315,36 +464,13 @@ function readActiveBody(vault: string, activePath: string, meter: InjectionMeter
   const trimmed = fmBody.trim();
   if (trimmed.length === 0) return "";
 
-  // Injection budget (token-diet): a large preference set must not
-  // flood the session preamble.
-  //
-  // Both `_brain.yaml` failures - ABSENT and PRESENT BUT UNREADABLE -
-  // resolve to the default budget here, and the unreadable one is not
-  // silent for it: `assembleActiveContext` runs the runtime-notice
-  // channel BEFORE this read, so a config the operator broke puts
-  // `brain_config_unreadable` at the head of the very payload this
-  // budget is applied to, naming the file and the parse failure. The
-  // split the `load*ConfigSafe` readers make is already made on this
-  // surface; making it a second time here would be a second channel
-  // saying the same thing.
-  //
-  // Raising instead would report less, not more. This function is the
-  // `assemble` callback of the fail-open loader, so a throw degrades the
-  // whole injection to the last-good cache - a body captured while the
-  // config still read, and therefore carrying no word of the breakage.
-  // The condition would go from stated to invisible.
-  //
-  // The one quiet path left is `OPEN_SECOND_BRAIN_RUNTIME_NOTICES=false`,
-  // which is the operator switching the channel off by name.
-  let budget = INJECT_BUDGET_CHARS_DEFAULT;
-  try {
-    const cfg = loadBrainConfig(vault);
-    if (cfg.active?.inject_budget_chars !== undefined) {
-      budget = cfg.active.inject_budget_chars;
-    }
-  } catch {
-    // absorbed deliberately - see the budget note above
-  }
+  // Injection budget (token-diet): a large preference set must not flood
+  // the session preamble. Resolved once in `resolveInjectionLimits`,
+  // which also carries the reasoning for why a config failure lands on
+  // the default here rather than raising. Recorded on the meter only at
+  // this point, because a vault with no `active.md` charged nothing
+  // against it and a receipt naming a budget nothing was measured under
+  // would be a number with no measurement behind it.
   meter.budgetChars = budget;
 
   // Auto-load the lessons digest alongside active.md so the agent gets
@@ -355,12 +481,12 @@ function readActiveBody(vault: string, activePath: string, meter: InjectionMeter
   const lessonsBody = readLessonsBody(brainLessonsPath(vault), budget);
 
   const budgetedActive = budgetActiveBody(trimmed, budget);
-  meter.sources.push({ name: SOURCE_ACTIVE_BODY, text: budgetedActive });
+  meter.sources.push({ name: SOURCE_ACTIVE_BODY, text: budgetedActive, lane: LANE_BUDGETED });
   if (lessonsBody !== null) {
-    meter.sources.push({ name: SOURCE_LESSONS_BODY, text: lessonsBody });
+    meter.sources.push({ name: SOURCE_LESSONS_BODY, text: lessonsBody, lane: LANE_BUDGETED });
   }
 
-  return lessonsBody === null ? budgetedActive : `${budgetedActive}\n\n${lessonsBody}`;
+  return lessonsBody === null ? budgetedActive : joinBlocks([budgetedActive, lessonsBody]);
 }
 
 /**

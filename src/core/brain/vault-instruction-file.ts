@@ -32,9 +32,17 @@ export interface VaultInstructionEntry {
  * `link_graph.vault_instruction_file` config slot (or `VAULT.md`
  * when not configured). Caller may override by passing `name`.
  *
- * Returns `null` when the file is absent. Throws on a relative
- * path that escapes the vault or an absolute-path name (we never
- * resolve outside the vault root).
+ * Returns `null` when the file is absent, or when it is present but
+ * refused by one of the boundary guards below (a symlink, a path that
+ * resolves outside the vault, something that is not a regular file) -
+ * in each of those cases the operator named something this reader will
+ * not treat as an instruction file.
+ *
+ * Throws on a relative path that escapes the vault, an absolute-path
+ * name, an empty name, and on a file that EXISTS but cannot be read.
+ * The last one used to return `null` as well, which made an unreadable
+ * instruction file indistinguishable from a vault that has none: the
+ * field vanished from `brain_context` and the operator was told nothing.
  */
 export function readVaultInstructionFile(
   vault: string,
@@ -72,8 +80,14 @@ export function readVaultInstructionFile(
     const st = statSync(fullReal);
     if (!st.isFile()) return null;
     content = readFileSync(fullReal, "utf8");
-  } catch {
-    return null;
+  } catch (err) {
+    // `existsSync` already said the file is there, so this is a failure
+    // to read it rather than an absence. Reporting it as `null` would
+    // put a permission error and an empty vault on the same wire.
+    throw new Error(
+      `vault instruction file ${full} could not be read: ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    );
   }
   const lines = countLines(content);
   return Object.freeze({
