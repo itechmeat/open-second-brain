@@ -4,7 +4,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -160,6 +160,49 @@ test("brain_trigger unsuppress on a trigger that is not suppressed is an invalid
 
 test("brain_trigger names every operation when it rejects one", async () => {
   expect(() => tool("brain_trigger").handler(ctx, { operation: "explode" })).toThrow("unsuppress");
+});
+
+// ── One corrupt record must not silence the whole surface ───────────────────
+
+/** Seed one record and make a field of it unreadable, as a hand-edit would. */
+function seedUnreadable(overrides: Partial<InsightCandidate> = {}): string {
+  const { created } = createTriggers(vault, [{ ...CANDIDATE, ...overrides }], { now: NOW });
+  const { path } = created[0]!;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^occurrences: .*$/mu, "occurrences: many"),
+    "utf8",
+  );
+  return path;
+}
+
+test("brain_trigger list names an unreadable record beside the readable ones", async () => {
+  const { created } = createTriggers(vault, [CANDIDATE], { now: NOW });
+  const brokenPath = seedUnreadable({ cooldownKey: "contradiction:pref-c:pref-d" });
+
+  const listed = (await tool("brain_trigger").handler(ctx, { operation: "list" })) as {
+    triggers: Array<{ id: string }>;
+    unreadable: Array<{ path: string; key: string | null; error: string }>;
+  };
+  expect(listed.triggers.map((t) => t.id)).toEqual([created[0]!.id]);
+  expect(listed.unreadable).toHaveLength(1);
+  expect(listed.unreadable[0]!.path).toBe(brokenPath);
+  expect(listed.unreadable[0]!.key).toBe("occurrences");
+});
+
+test("brain_brief view=morning reports an unreadable queue rather than an empty one", async () => {
+  // The bare catch this replaces turned a refusal into an absent trigger
+  // section, which reads exactly like a queue with nothing in it.
+  seedUnreadable();
+  const brief = (await tool("brain_brief").handler(ctx, { view: "morning" })) as {
+    text: string;
+    triggers?: unknown[];
+    triggers_unreadable?: Array<{ key: string | null }>;
+  };
+  expect(brief.triggers).toBeUndefined();
+  expect(brief.triggers_unreadable).toHaveLength(1);
+  expect(brief.triggers_unreadable![0]!.key).toBe("occurrences");
+  expect(brief.text).toContain("Unreadable triggers");
 });
 
 test("brain_brief view=morning without triggers keeps the legacy shape", async () => {

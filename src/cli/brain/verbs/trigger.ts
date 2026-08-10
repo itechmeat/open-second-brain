@@ -7,9 +7,11 @@
 import { defaultConfigPath, resolveTriggerCooldownDays } from "../../../core/config.ts";
 import { scanTriggers } from "../../../core/brain/triggers/scan.ts";
 import {
-  listTriggers,
+  readTriggers,
   transitionTrigger,
+  unreadableTriggerJson,
   type TriggerAction,
+  type UnreadableTrigger,
 } from "../../../core/brain/triggers/store.ts";
 import {
   isTriggerStatus,
@@ -75,6 +77,18 @@ function printTrigger(record: TriggerRecord): void {
   ok(`${record.id} [${record.effectiveStatus}] (${record.urgency}) ${record.reason}`);
 }
 
+/**
+ * Report the records the store could not read.
+ *
+ * The count prints whether or not any exist, exactly like the suppressed
+ * total: "unreadable: 0" is the surface stating that it looked, which is
+ * what stops an omitted line from reading as a clean queue.
+ */
+function printUnreadable(unreadable: ReadonlyArray<UnreadableTrigger>): void {
+  ok(`unreadable: ${unreadable.length}`);
+  for (const entry of unreadable) ok(entry.error.message);
+}
+
 export async function cmdBrainTrigger(argv: string[]): Promise<number> {
   const action = argv[0];
   if (!action || !TRIGGER_VERBS.includes(action)) return fail(USAGE);
@@ -99,6 +113,7 @@ export async function cmdBrainTrigger(argv: string[]): Promise<number> {
           candidates: result.candidates,
           created: result.created.map(triggerJson),
           skipped: result.skipped.map((s) => ({ cooldown_key: s.cooldownKey, reason: s.reason })),
+          unreadable: result.unreadable.map(unreadableTriggerJson),
         });
         return 0;
       }
@@ -106,6 +121,8 @@ export async function cmdBrainTrigger(argv: string[]): Promise<number> {
         `candidates: ${result.candidates}, created: ${result.created.length}, skipped: ${result.skipped.length}`,
       );
       for (const record of result.created) printTrigger(record);
+      // A scan that walked around a broken record is not a clean scan.
+      printUnreadable(result.unreadable);
       return 0;
     }
 
@@ -117,7 +134,8 @@ export async function cmdBrainTrigger(argv: string[]): Promise<number> {
       // One unfiltered pass: `list` reports the suppressed total from it
       // so the operator sees what is silenced without having to ask, and
       // the status filter is then applied to the same records.
-      const all = listTriggers(vault, { now });
+      const scan = readTriggers(vault, { now });
+      const all = scan.records;
       const suppressed = all.filter((r) => r.effectiveStatus === TRIGGER_STATUS.suppressed).length;
       let records = statusFlag !== null ? all.filter((r) => r.effectiveStatus === statusFlag) : all;
       if (action === "history") {
@@ -130,11 +148,16 @@ export async function cmdBrainTrigger(argv: string[]): Promise<number> {
           ok: true,
           triggers: records.map(triggerJson),
           ...(action === "list" ? { suppressed } : {}),
+          unreadable: scan.unreadable.map(unreadableTriggerJson),
         });
         return 0;
       }
       if (action === "list") ok(`suppressed: ${suppressed}`);
+      printUnreadable(scan.unreadable);
       if (records.length === 0) {
+        // Said AFTER the unreadable report, so "no open triggers" can
+        // never be the only thing an operator reads about a queue that
+        // held something nobody could parse.
         ok(action === "history" ? "no trigger history" : "no open triggers");
         return 0;
       }

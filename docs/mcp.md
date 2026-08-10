@@ -411,9 +411,25 @@ triggers and marks them delivered (once per `trigger_cooldown_days`).
 status and carries no clock, so the finding never re-nags - and
 `unsuppress` restores the status suppression interrupted along with its
 original cooldown arithmetic. Suppressed triggers are terminal: hidden
-from `list`, present in `history`, never in the brief. Every blocked
-candidate increments `occurrences` and stamps `last_seen_at` on the
-record that blocked it, so silence is auditable.
+from `list`, present in `history`, never in the brief. A candidate an
+existing record silenced increments `occurrences` and stamps
+`last_seen_at` on that record, whatever silenced it - suppression, an
+open twin, a cooldown window, or the per-kind cap - so silence is
+auditable. Two limits are exact rather than implied: one scan seeing the
+same finding twice counts once, so `occurrences` counts scans and not
+candidates, and a candidate silenced before any record for its cooldown
+key existed has no ledger to write to and is reported only in `skipped`.
+
+One unreadable record never costs the operator the rest of the queue.
+`scan`, `list` and `history` each return an additive `unreadable` array -
+`path`, the frontmatter `key` at fault (`null` when the file itself could
+not be read), and the refusal text - so a hand-edited record is named
+instead of omitted, and the readable records stay listable and
+transitionable while it is broken. `brain_brief` `view="morning"` carries
+the same information as `triggers_unreadable` plus a
+`trigger_queue_error` when the queue could not be read at all, and
+renders both into the brief text: an absent pending-trigger section now
+means the queue was read and held nothing.
 
 `brain_deep_synthesis` assembles a deterministic topic dossier
 (matched notes, agreements, contradictions, stale claims, knowledge

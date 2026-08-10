@@ -12,6 +12,12 @@ import {
   deliverBriefTriggers,
   renderTriggerBriefSection,
 } from "../../core/brain/triggers/brief.ts";
+import {
+  readTriggerQueueFailures,
+  renderTriggerQueueFailures,
+  unreadableTriggerJson,
+  type TriggerQueueFailures,
+} from "../../core/brain/triggers/store.ts";
 import { buildTimelineIndex } from "../../core/brain/temporal/build-index.ts";
 import { buildTodayDashboard } from "../../core/brain/today-dashboard.ts";
 import { buildDailyBrief } from "../../core/brain/temporal/daily-brief.ts";
@@ -73,24 +79,38 @@ async function toolBrainMorningBrief(
   });
   // Pending-trigger section (t_cd1fee79): renders only when a trigger
   // scan persisted surfaceable triggers; included triggers are marked
-  // delivered so a prompt shows once per cooldown window. Fail-soft -
-  // a broken queue never breaks the brief.
+  // delivered so a prompt shows once per cooldown window.
+  //
+  // Still fail-soft - a broken queue must not cost the operator the rest
+  // of the brief - but no longer silent. The bare catch this replaces set
+  // the section to null, so a refusal rendered exactly like an empty
+  // queue: the one outcome the anti-nag ledger exists to rule out. The
+  // records that could not be read are collected first and reported
+  // alongside whatever did render.
+  const triggerFailures: TriggerQueueFailures = readTriggerQueueFailures(ctx.vault, now);
   let triggerSection: ReturnType<typeof renderTriggerBriefSection> | null = null;
+  let triggerQueueError = triggerFailures.queueError;
   try {
     triggerSection = renderTriggerBriefSection(ctx.vault, {
       now,
       cooldownDays: resolveTriggerCooldownDays(ctx.configPath ?? undefined),
     });
     if (triggerSection.triggers.length > 0) deliverBriefTriggers(ctx.vault, triggerSection, now);
-  } catch {
+  } catch (err) {
     triggerSection = null;
+    triggerQueueError = (err as Error).message ?? String(err);
   }
-  const text =
-    triggerSection !== null && triggerSection.text !== ""
-      ? `${brief.text}${brief.text.length > 0 ? "\n\n" : ""}${triggerSection.text}`
-      : brief.text;
+  const failureText = renderTriggerQueueFailures({
+    unreadable: triggerFailures.unreadable,
+    queueError: triggerQueueError,
+  });
+  const sections = [
+    brief.text,
+    triggerSection !== null ? triggerSection.text : "",
+    failureText,
+  ].filter((section) => section !== "");
   return {
-    text,
+    text: sections.join("\n\n"),
     preferences: brief.preferences,
     open_questions: brief.openQuestions,
     recent_notes: brief.recentNotes,
@@ -105,6 +125,10 @@ async function toolBrainMorningBrief(
           })),
         }
       : {}),
+    ...(triggerFailures.unreadable.length > 0
+      ? { triggers_unreadable: triggerFailures.unreadable.map(unreadableTriggerJson) }
+      : {}),
+    ...(triggerQueueError !== null ? { trigger_queue_error: triggerQueueError } : {}),
   };
 }
 

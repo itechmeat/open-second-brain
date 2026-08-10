@@ -207,10 +207,17 @@ no two units claim the same code string.
   cooldown arithmetic without any bookkeeping. A missing prior status on a
   hand-edited file throws naming the field rather than defaulting to pending.
 
-- **The recurrence ledger is written on every blocked candidate, not only
-  suppressed ones.** One code path, no special case, and it is precisely the
-  event worth recording: the finding fired again and the system stayed silent.
-  The write happens inside the directory lock the store already holds.
+- **The recurrence ledger is written for every candidate an existing record
+  silenced, not only suppressed ones.** One code path, no special case, and it
+  is precisely the event worth recording: the finding fired again and the
+  system stayed silent. What silenced it - suppression, an open twin, a
+  cooldown window, the per-kind cap - changes nothing about that. Two limits
+  are stated rather than implied: the count is per scan, so one scan seeing the
+  same finding twice counts once, and a candidate silenced before any record
+  for its cooldown key existed has no ledger to write to and is reported in the
+  skipped list alone. Every writer in the store - creation, the transitions and
+  brief delivery - takes the trigger-directory lock, because each persists the
+  whole record and two of them interleaving would otherwise lose an increment.
 
 - **U4 writes nothing.** The resync recipe is text on stdout; every write in it is
   a shell command run by the operator's own crontab on the operator's own host.

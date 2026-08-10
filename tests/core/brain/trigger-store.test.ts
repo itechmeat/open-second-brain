@@ -10,15 +10,20 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import lockfile from "proper-lockfile";
+
 import {
   briefTriggers,
   createTriggers,
   listTriggers,
   markTriggersDelivered,
+  readTriggers,
   recordRecurrence,
   transitionTrigger,
+  triggersDir,
   TriggerSourceArtifactsError,
   TriggerFieldError,
+  TRIGGER_LOCK_STALE_MS,
   TRIGGER_TTL_DAYS,
 } from "../../../src/core/brain/triggers/store.ts";
 import {
@@ -424,6 +429,152 @@ test("an unreadable last-seen instant refuses instead of reading as the creation
   );
   expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
   expect(() => listTriggers(vault, { now: NOW })).toThrow("last_seen_at");
+});
+
+// ── Defect: one corrupt record must not take the whole queue down ────────────
+//
+// The field refusals above are right, but they used to leave `listTriggers` -
+// which every surface reads through - and so one hand-edited file made
+// `list`, `history`, the brief, delivery, creation AND every transition fail
+// together. The operator could not even dismiss or suppress a healthy record
+// to get out of it. A refusal now names the record it belongs to and stops
+// there, and the surfaces report the naming instead of omitting the record.
+
+const SECOND_KEY = "contradiction:pref-c:pref-d";
+
+/** Overwrite one frontmatter line of a stored trigger. */
+function rewriteLine(path: string, line: RegExp, replacement: string): void {
+  writeFileSync(path, readFileSync(path, "utf8").replace(line, replacement), "utf8");
+}
+
+/** A two-record vault in which only the SECOND record is unreadable. */
+function vaultWithOneCorruptSibling(): { healthyId: string; brokenPath: string } {
+  const { created } = createTriggers(vault, [candidate(), candidate({ cooldownKey: SECOND_KEY })], {
+    now: NOW,
+  });
+  expect(created).toHaveLength(2);
+  const brokenPath = created[1]!.path;
+  rewriteLine(brokenPath, /^occurrences: .*$/mu, "occurrences: many");
+  return { healthyId: created[0]!.id, brokenPath };
+}
+
+test("a corrupt record is named and reported next to its readable siblings", () => {
+  const { healthyId, brokenPath } = vaultWithOneCorruptSibling();
+  const scan = readTriggers(vault, { now: NOW });
+  expect(scan.records.map((r) => r.id)).toEqual([healthyId]);
+  expect(scan.unreadable).toHaveLength(1);
+  expect(scan.unreadable[0]!.path).toBe(brokenPath);
+  expect(scan.unreadable[0]!.key).toBe("occurrences");
+  expect(scan.unreadable[0]!.error.message).toContain(brokenPath);
+});
+
+test("a corrupt record leaves its healthy sibling transitionable", () => {
+  const { healthyId } = vaultWithOneCorruptSibling();
+  const suppressed = transitionTrigger(vault, healthyId, "suppress", { now: NOW });
+  expect(suppressed.status).toBe("suppressed");
+});
+
+test("a corrupt record neither hides the brief nor blocks its delivery", () => {
+  const { healthyId } = vaultWithOneCorruptSibling();
+  expect(briefTriggers(vault, { now: NOW, cap: 5, cooldownDays: 7 }).map((t) => t.id)).toEqual([
+    healthyId,
+  ]);
+  markTriggersDelivered(vault, [healthyId], { now: NOW });
+  const delivered = readTriggers(vault, { now: NOW }).records.find((r) => r.id === healthyId)!;
+  expect(delivered.status).toBe("delivered");
+});
+
+test("a corrupt record does not stop a scan from recording new findings", () => {
+  const { brokenPath } = vaultWithOneCorruptSibling();
+  const result = createTriggers(
+    vault,
+    [candidate({ cooldownKey: "contradiction:pref-e:pref-f" })],
+    {
+      now: NOW,
+    },
+  );
+  expect(result.created).toHaveLength(1);
+  expect(result.unreadable.map((u) => u.path)).toEqual([brokenPath]);
+});
+
+test("an unknown id names the records that could not be read", () => {
+  vaultWithOneCorruptSibling();
+  // The id may well belong to the record nobody could parse, so "unknown"
+  // on its own would be a claim the store cannot support.
+  expect(() => transitionTrigger(vault, "tr-nope", "dismiss", { now: NOW })).toThrow("occurrences");
+});
+
+test("the strict reader still refuses a partial view of the queue", () => {
+  vaultWithOneCorruptSibling();
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+});
+
+// ── Defect: a missing creation instant must be refused where it originates ──
+
+test("a record with no creation instant is refused rather than corrupted", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  rewriteLine(path, /^created_at: .*$\n/mu, "");
+
+  const first = readTriggers(vault, { now: NOW });
+  expect(first.records).toHaveLength(0);
+  expect(first.unreadable.map((u) => u.key)).toEqual(["created_at"]);
+
+  // The old reading substituted "" and wrote it straight back as an empty
+  // `last_seen_at` on the first recurrence; the next read refused THAT
+  // field, so the record blamed a line the operator never touched.
+  createTriggers(vault, [candidate()], { now: new Date(NOW.getTime() + DAY_MS) });
+  expect(readTriggers(vault, { now: NOW }).unreadable.map((u) => u.key)).toEqual(["created_at"]);
+  expect(readFileSync(path, "utf8")).toContain(`last_seen_at: ${NOW.toISOString()}`);
+});
+
+// ── Defect: the ledger must count exactly what the documentation claims ─────
+
+test("a candidate the per-kind cap drops records a recurrence on its own record", () => {
+  createTriggers(vault, [candidate()], { now: NOW });
+  const later = new Date(NOW.getTime() + (TRIGGER_TTL_DAYS + 1) * DAY_MS);
+  // The twin has expired, so nothing blocks recreation: the cap is what
+  // silenced this candidate, and the finding did fire again.
+  const result = createTriggers(
+    vault,
+    [candidate({ cooldownKey: "contradiction:fresh" }), candidate()],
+    { now: later, maxPerKind: 1 },
+  );
+  expect(result.created).toHaveLength(1);
+  expect(result.skipped.map((s) => s.reason)).toEqual(["kind-cap"]);
+  const record = readTriggers(vault, { now: later }).records.find(
+    (r) => r.cooldownKey === candidate().cooldownKey,
+  )!;
+  expect(record.occurrences).toBe(2);
+  expect(record.lastSeenAt).toBe(later.toISOString());
+});
+
+test("one scan seeing the same finding twice is one occurrence, not two", () => {
+  createTriggers(vault, [candidate()], { now: NOW });
+  const later = new Date(NOW.getTime() + DAY_MS);
+  const blocked = createTriggers(vault, [candidate(), candidate()], { now: later });
+  expect(blocked.created).toHaveLength(0);
+  expect(blocked.skipped.map((s) => s.reason)).toEqual(["active", "duplicate"]);
+  expect(readTriggers(vault, { now: later }).records[0]!.occurrences).toBe(2);
+});
+
+test("the transition and delivery writers serialize on the trigger-directory lock", () => {
+  // The counter used to be race-free against scans only: both of these
+  // write the full record - occurrences included - from a snapshot read
+  // earlier, so a scan interleaving with a suppress lost one of the two.
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  const release = lockfile.lockSync(triggersDir(vault), {
+    stale: TRIGGER_LOCK_STALE_MS,
+    realpath: false,
+  });
+  try {
+    expect(() => transitionTrigger(vault, id, "dismiss", { now: NOW })).toThrow();
+    expect(() => markTriggersDelivered(vault, [id], { now: NOW })).toThrow();
+  } finally {
+    release();
+  }
+  expect(readTriggers(vault, { now: NOW }).records[0]!.status).toBe("pending");
 });
 
 test("a recorded occurrence count survives a read whatever the frontmatter yields", () => {

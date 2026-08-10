@@ -1065,11 +1065,24 @@ cooldown arithmetic rather than reconstructing them. A suppressed
 trigger is terminal, so it is hidden from `list`, shown in `history`,
 and never reaches the morning brief; `list` prints how many triggers
 are currently suppressed so silence is always accounted for. Silence
-is also audited: every scan whose candidate was blocked - suppressed
-or merely cooling down - increments `occurrences` and stamps
-`last_seen_at` on the record it was blocked by, so a suppressed
-finding that keeps firing is distinguishable from one that never fired
-again.
+is also audited: a scan whose candidate an existing record silenced -
+suppressed, cooling down, still open, or dropped by the per-kind cap -
+increments `occurrences` and stamps `last_seen_at` on that record, so a
+suppressed finding that keeps firing is distinguishable from one that
+never fired again. The count is per scan, not per candidate: one scan
+seeing the same finding twice counts once, and a candidate silenced
+before any record for its cooldown key existed has no ledger to write to
+and is reported in the scan's skipped list instead.
+
+A record nobody can parse is confined to itself. A hand-edited field is
+still refused rather than degraded, but the refusal now names the file
+and the field and stops there, so `list`, `history`, the brief, delivery,
+a new scan and the transitions all keep working on the records that read
+cleanly - the operator can still dismiss or suppress a healthy trigger
+while a sibling is broken. Every read reports the records it could not
+read next to the ones it could, and the morning brief says the queue is
+unreadable rather than rendering the pending-trigger section as absent,
+which used to be indistinguishable from an empty queue.
 
 `o2b brain deep-synthesis <topic>` builds a deterministic topic
 dossier (agreements, contradictions, stale claims, knowledge gaps)

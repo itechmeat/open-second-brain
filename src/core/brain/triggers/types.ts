@@ -139,11 +139,14 @@ export interface TriggerRecord extends InsightCandidate {
    */
   readonly suppressedFrom: TriggerStatus | null;
   /**
-   * How many times this finding has been observed: once when the
-   * trigger was created, plus once for every later scan the anti-nag
-   * logic silenced. A record written before the ledger existed carries
-   * no count and reads as `1`, which is the true number of occurrences
-   * anyone recorded for it - not a default standing in for an unknown.
+   * How many times this finding has been observed: once when the trigger
+   * was created, plus once for every later SCAN in which the finding
+   * fired and this record is why nothing surfaced. One scan seeing the
+   * same finding twice counts once, so this is a count of scans rather
+   * than of candidates. A record written before the ledger existed
+   * carries no count and reads as `1`, which is the true number of
+   * occurrences anyone recorded for it - not a default standing in for
+   * an unknown.
    */
   readonly occurrences: number;
   /**

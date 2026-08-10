@@ -9,12 +9,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
-import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
+import type { InsightCandidate, TriggerRecord } from "../../src/core/brain/triggers/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -54,15 +54,44 @@ afterEach(() => {
 
 const env = () => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
-function seed(overrides: Partial<InsightCandidate> = {}): string {
+function seedRecord(overrides: Partial<InsightCandidate> = {}): TriggerRecord {
   const { created } = createTriggers(vault, [{ ...CANDIDATE, ...overrides }], { now: new Date() });
-  return created[0]!.id;
+  return created[0]!;
 }
 
-async function listJson(): Promise<{ triggers: TriggerJson[]; suppressed: number }> {
+function seed(overrides: Partial<InsightCandidate> = {}): string {
+  return seedRecord(overrides).id;
+}
+
+/** Seed one record and make a field of it unreadable, as a hand-edit would. */
+function seedUnreadable(overrides: Partial<InsightCandidate> = {}): string {
+  const { path } = seedRecord(overrides);
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^occurrences: .*$/mu, "occurrences: many"),
+    "utf8",
+  );
+  return path;
+}
+
+interface UnreadableJson {
+  readonly path: string;
+  readonly key: string | null;
+  readonly error: string;
+}
+
+async function listJson(): Promise<{
+  triggers: TriggerJson[];
+  suppressed: number;
+  unreadable: UnreadableJson[];
+}> {
   const out = await runCli(["brain", "trigger", "list", "--json"], { env: env() });
   expect(out.returncode).toBe(0);
-  return JSON.parse(out.stdout) as { triggers: TriggerJson[]; suppressed: number };
+  return JSON.parse(out.stdout) as {
+    triggers: TriggerJson[];
+    suppressed: number;
+    unreadable: UnreadableJson[];
+  };
 }
 
 describe("o2b brain trigger", () => {
@@ -173,6 +202,50 @@ describe("o2b brain trigger", () => {
     const out = await runCli(["brain", "trigger", "list", "--status", "nope"], { env: env() });
     expect(out.returncode).not.toBe(0);
     expect(out.stdout + out.stderr).toContain("unknown trigger status");
+  });
+
+  test("list reports an empty unreadable set on a healthy queue", async () => {
+    seed();
+    // Always present, so "none could not be read" is a statement the
+    // output makes rather than something a caller has to assume.
+    expect((await listJson()).unreadable).toEqual([]);
+  });
+
+  test("list names a record it could not read and still shows the healthy one", async () => {
+    const healthy = seed();
+    const brokenPath = seedUnreadable({ cooldownKey: "contradiction:pref-c:pref-d" });
+
+    const listed = await listJson();
+    expect(listed.triggers.map((t) => t.id)).toEqual([healthy]);
+    expect(listed.unreadable).toHaveLength(1);
+    expect(listed.unreadable[0]!.path).toBe(brokenPath);
+    expect(listed.unreadable[0]!.key).toBe("occurrences");
+
+    const text = await runCli(["brain", "trigger", "list"], { env: env() });
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("unreadable: 1");
+    expect(text.stdout).toContain(brokenPath);
+  });
+
+  test("a corrupt record still leaves the healthy one suppressible", async () => {
+    const healthy = seed();
+    seedUnreadable({ cooldownKey: "contradiction:pref-c:pref-d" });
+    const out = await runCli(["brain", "trigger", "suppress", healthy], { env: env() });
+    expect(out.returncode).toBe(0);
+    expect(out.stdout).toContain("[suppressed]");
+  });
+
+  test("the morning brief says the queue is unreadable instead of falling silent", async () => {
+    seedUnreadable();
+    const json = await runCli(["brain", "morning-brief", "--json"], { env: env() });
+    expect(json.returncode).toBe(0);
+    const parsed = JSON.parse(json.stdout) as { triggers_unreadable?: UnreadableJson[] };
+    expect(parsed.triggers_unreadable).toHaveLength(1);
+    expect(parsed.triggers_unreadable![0]!.key).toBe("occurrences");
+
+    const text = await runCli(["brain", "morning-brief"], { env: env() });
+    expect(text.returncode).toBe(0);
+    expect(text.stdout).toContain("Unreadable triggers");
   });
 
   test("--status suppressed lists exactly the silenced triggers", async () => {

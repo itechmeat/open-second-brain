@@ -9,8 +9,9 @@
 import { resolveAgentName, resolveTriggerCooldownDays } from "../../core/config.ts";
 import { scanTriggers } from "../../core/brain/triggers/scan.ts";
 import {
-  listTriggers,
+  readTriggers,
   transitionTrigger,
+  unreadableTriggerJson,
   type TriggerAction,
 } from "../../core/brain/triggers/store.ts";
 import {
@@ -144,6 +145,8 @@ function toolBrainTrigger(
         cooldown_key: skip.cooldownKey,
         reason: skip.reason,
       })),
+      // A scan that walked around a broken record is not a clean scan.
+      unreadable: result.unreadable.map(unreadableTriggerJson),
     };
   }
   if (operation === "list" || operation === "history") {
@@ -151,16 +154,23 @@ function toolBrainTrigger(
     if (statusRaw !== null && statusRaw !== undefined && !isTriggerStatus(statusRaw)) {
       throw new MCPError(INVALID_PARAMS, `brain_trigger: unknown status '${statusRaw}'`);
     }
-    let records = listTriggers(ctx.vault, {
+    const scan = readTriggers(ctx.vault, {
       now,
       ...(statusRaw ? { status: statusRaw } : {}),
     });
+    let records = scan.records;
     if (operation === "history") {
       records = records.filter((record) => TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus));
     } else if (!statusRaw) {
       records = records.filter((record) => !TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus));
     }
-    return { operation, triggers: records.map(triggerToJson) };
+    // Always present, so an empty `triggers` list means the queue was
+    // read and held nothing rather than that part of it was skipped.
+    return {
+      operation,
+      triggers: records.map(triggerToJson),
+      unreadable: scan.unreadable.map(unreadableTriggerJson),
+    };
   }
   if (isTriggerTransition(operation)) {
     const id = coerceStr(args, "id", true)!;
@@ -216,7 +226,11 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_trigger",
     description:
-      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers, list/history read by status, acknowledge/dismiss/act transition one. suppress silences a finding indefinitely; unsuppress restores the status it interrupted. Recurrences stay counted while silenced.",
+      // Within the registry guard's tool-description ceiling, which is why
+      // the wording is this tight: the unreadable partition has to be in
+      // here, because a caller that does not know to look at it will read
+      // an empty `triggers` list as an empty queue.
+      "Proactive trigger queue in Brain/triggers/: scan makes deduped triggers, list/history read by status, acknowledge/dismiss/act transition one. suppress silences a finding indefinitely; unsuppress restores the status it interrupted. Recurrences stay counted; unreadable records are named, not omitted.",
     inputSchema: {
       type: "object",
       properties: {

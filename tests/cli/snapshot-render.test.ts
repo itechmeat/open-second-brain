@@ -60,7 +60,7 @@ describe("renderDerivedStoreCoverage", () => {
   test("the size is the only difference between the two surfaces", () => {
     const included = record({
       included: true,
-      archive: "run.store.sqlite.zst",
+      archive_name: "run.store.sqlite.zst",
       archive_size: 4096,
     });
     expect(renderDerivedStoreCoverage(included)).toBe("included");
