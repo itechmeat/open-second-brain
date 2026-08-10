@@ -84,6 +84,24 @@ describe("the resync recipe renders", () => {
     expect(body).not.toContain("grep -Eq");
   });
 
+  test("an unparseable health report aborts rather than reading as no mismatch", () => {
+    // The gate used to be a bare `if`, which collapses every non-zero exit
+    // into one answer: jq exits 5 on a parse error, `if` reads that as
+    // false, and the recipe re-indexed over a root nobody verified. The
+    // status is now read explicitly and only a literal 1 is a pass.
+    const body = renderCodegraphResyncTemplate("/srv/projects/demo", "6h");
+    expect(body).toContain("mismatch_status=$?");
+    expect(body).toContain(`if [ "$mismatch_status" -eq 0 ]; then`);
+    expect(body).toContain(`elif [ "$mismatch_status" -ne 1 ]; then`);
+    // Both arms abort; neither falls through to the indexer.
+    const gate = body.slice(
+      body.indexOf("mismatch_status=0"),
+      body.indexOf("# 2. Change detection"),
+    );
+    expect(gate.match(/exit 1/gu)?.length).toBe(2);
+    expect(gate).toContain("aborting rather than re-indexing blind");
+  });
+
   test("the stamp is written only after the post-index health gate passes", () => {
     const body = renderCodegraphResyncTemplate("/srv/projects/demo", "6h");
     const gate = body.indexOf("--fail-on-health");

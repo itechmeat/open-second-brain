@@ -81,6 +81,23 @@ function resolveEnv(callerEnv: Record<string, string>): {
   return { env, cleanupDir };
 }
 
+/**
+ * The current directory, or null when the process no longer has one.
+ *
+ * `process.cwd()` throws ENOENT once the directory it names is deleted,
+ * which happens routinely in a suite that chdirs into temp vaults and
+ * removes them. A run does not need to know where it started to work; only
+ * the restore does, and it can honestly do nothing when there is nowhere
+ * to return to.
+ */
+function currentDirectoryOrNull(): string | null {
+  try {
+    return process.cwd();
+  } catch {
+    return null;
+  }
+}
+
 /** A `process.stdout.write`-shaped sink that appends decoded chunks to `sink`. */
 function captureWrite(sink: (s: string) => void) {
   return (chunk: unknown, ...rest: unknown[]): boolean => {
@@ -162,40 +179,61 @@ async function runCliInProcess(
 ): Promise<RunResult> {
   if (inProcessRunActive) throw new ConcurrentInProcessRunError(args);
   inProcessRunActive = true;
-  const { env, cleanupDir } = resolveEnv(opts.env ?? {});
-  const savedEnv = process.env;
-  const savedCwd = process.cwd();
+  // Everything from here to the outer `finally` runs under the flag,
+  // setup included. An earlier version claimed the flag only while the CLI
+  // itself ran, which left `resolveEnv` and `process.cwd()` outside it -
+  // and `process.cwd()` throws ENOENT when the directory a test removed is
+  // still the process's own, which is routine in a suite that builds and
+  // deletes temp vaults. A throw there left the flag raised for the rest of
+  // the process and every later run failed blaming a concurrency that never
+  // happened, which is the same misdirected report this guard exists to
+  // stop.
+  let savedEnv: NodeJS.ProcessEnv | null = null;
+  let savedCwd: string | null = null;
+  let realOut: typeof process.stdout.write | null = null;
+  let realErr: typeof process.stderr.write | null = null;
+  let cleanupDir: string | null = null;
   let stdout = "";
   let stderr = "";
-  const realOut = process.stdout.write.bind(process.stdout);
-  const realErr = process.stderr.write.bind(process.stderr);
-  process.env = env;
   try {
-    process.chdir(opts.cwd ?? ROOT);
-  } catch {
-    // A caller cwd that does not exist would also fail a subprocess spawn.
-  }
-  process.stdout.write = captureWrite((s) => (stdout += s)) as typeof process.stdout.write;
-  process.stderr.write = captureWrite((s) => (stderr += s)) as typeof process.stderr.write;
-  let returncode: number;
-  try {
-    returncode = await main(args);
-  } catch (err) {
-    stderr += `${(err as Error)?.stack ?? String(err)}\n`;
-    returncode = 1;
-  } finally {
-    process.stdout.write = realOut;
-    process.stderr.write = realErr;
-    process.env = savedEnv;
+    const resolved = resolveEnv(opts.env ?? {});
+    cleanupDir = resolved.cleanupDir;
+    savedEnv = process.env;
+    // A cwd that no longer exists is not an error here: the run is about to
+    // chdir anyway, and only the restore needs somewhere to go back to.
+    savedCwd = currentDirectoryOrNull();
+    realOut = process.stdout.write.bind(process.stdout);
+    realErr = process.stderr.write.bind(process.stderr);
+    process.env = resolved.env;
     try {
-      process.chdir(savedCwd);
+      process.chdir(opts.cwd ?? ROOT);
     } catch {
-      /* restore best-effort */
+      // A caller cwd that does not exist would also fail a subprocess spawn.
+    }
+    process.stdout.write = captureWrite((s) => (stdout += s)) as typeof process.stdout.write;
+    process.stderr.write = captureWrite((s) => (stderr += s)) as typeof process.stderr.write;
+    let returncode: number;
+    try {
+      returncode = await main(args);
+    } catch (err) {
+      stderr += `${(err as Error)?.stack ?? String(err)}\n`;
+      returncode = 1;
+    }
+    return { stdout, stderr, returncode };
+  } finally {
+    if (realOut !== null) process.stdout.write = realOut;
+    if (realErr !== null) process.stderr.write = realErr;
+    if (savedEnv !== null) process.env = savedEnv;
+    if (savedCwd !== null) {
+      try {
+        process.chdir(savedCwd);
+      } catch {
+        /* restore best-effort */
+      }
     }
     if (cleanupDir !== null) rmSync(cleanupDir, { recursive: true, force: true });
     inProcessRunActive = false;
   }
-  return { stdout, stderr, returncode };
 }
 
 export async function runCli(

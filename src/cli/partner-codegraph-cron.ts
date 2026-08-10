@@ -120,16 +120,31 @@ function renderResyncBody(o2bBin: string, projectPath: string): string {
     "# An index built for another root must be reconciled by a human before",
     "# a re-index writes over it; every other finding is what re-indexing is",
     "# for, so only this one blocks.",
-    'if printf "%s" "$health" | ' +
+    // The exit status is read explicitly rather than through `if`, because
+    // `if` collapses every non-zero status into one answer. This parser
+    // exits 0 when the selection is truthy, 1 when it is falsy, and
+    // something larger when it could not read its input at all - and a
+    // bare `if` reads that last case as "no mismatch" and re-indexes over
+    // a root nobody verified. Only a literal 1 is a pass.
+    "mismatch_status=0",
+    'printf "%s" "$health" | ' +
       JSON_PARSER +
       " -e '[.index.health.warnings[]? | select(.code == \"" +
       GRAPH_HEALTH_CODES.cacheRootMismatch +
-      "\")] | length > 0' >/dev/null; then",
+      "\")] | length > 0' >/dev/null || mismatch_status=$?",
+    'if [ "$mismatch_status" -eq 0 ]; then',
     '  printf "%s\\n" "' +
       CODEGRAPH_RESYNC_CRON_NAME +
       ": index was built for a different root (" +
       GRAPH_HEALTH_CODES.cacheRootMismatch +
       '); reconcile it before re-indexing" >&2',
+    "  exit 1",
+    'elif [ "$mismatch_status" -ne 1 ]; then',
+    '  printf "%s\\n" "' +
+      CODEGRAPH_RESYNC_CRON_NAME +
+      ": could not read the health report (" +
+      JSON_PARSER +
+      ' exit $mismatch_status); aborting rather than re-indexing blind" >&2',
     "  exit 1",
     "fi",
     "",

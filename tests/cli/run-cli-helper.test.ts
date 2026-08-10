@@ -9,6 +9,9 @@
  */
 
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { ConcurrentInProcessRunError, runCli } from "../helpers/run-cli.ts";
 
@@ -43,4 +46,26 @@ test("concurrency is available through the subprocess path", async () => {
     runCli(["--help"], { subprocess: true }),
   ]);
   for (const result of results) expect(result.returncode).toBe(0);
+});
+
+test("a throw during setup clears the guard instead of wedging the process", async () => {
+  // The flag used to be raised before the setup that resolves the
+  // environment and reads the working directory, and process.cwd() throws
+  // once the directory it names is deleted - routine in a suite that
+  // chdirs into temp vaults and removes them. A throw in that window left
+  // the flag raised for the rest of the process, and every later run
+  // failed blaming a concurrency that never happened.
+  const scratch = mkdtempSync(join(tmpdir(), "o2b-cwd-gone-"));
+  const restore = process.cwd();
+  process.chdir(scratch);
+  rmSync(scratch, { recursive: true, force: true });
+  try {
+    const gone = await runCli(["--help"]);
+    expect(gone.returncode).toBe(0);
+  } finally {
+    process.chdir(restore);
+  }
+  // The guard is clear, so the next run is not misdiagnosed as an overlap.
+  const after = await runCli(["--help"]);
+  expect(after.returncode).toBe(0);
 });
