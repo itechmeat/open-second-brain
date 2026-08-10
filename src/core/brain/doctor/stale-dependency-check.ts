@@ -85,9 +85,10 @@ const STALE_DEPENDENCY_SITE = "brain.doctor.staleDependency";
 function STALE_DEPENDENCY_UNMEASURED(statesChanged: number): string {
   const states = statesChanged === 1 ? "1 state" : `${statesChanged} states`;
   return (
-    `downstream staleness was not measured: ${states} changed in the audit window and ` +
-    "no context receipts or decision-change receipts were recorded, so nothing is known " +
-    "about what still rests on them"
+    `context and decision consumers were not measured: ${states} stopped being current and ` +
+    "no context receipts or decision-change receipts were recorded in the audit window, so " +
+    "packs and decisions built on them cannot be checked; live records citing them are " +
+    "reported above"
   );
 }
 
@@ -403,7 +404,7 @@ export type StaleDependencyAudit = (
   vault: string,
   opts: { readonly now: Date },
 ) => {
-  readonly recorded: boolean;
+  readonly receipts_recorded: boolean;
   readonly rows: ReadonlyArray<StaleDependencyRow>;
   readonly states_changed: number;
 };
@@ -453,14 +454,14 @@ export function makeStaleDependencyCheck(audit: StaleDependencyAudit): DoctorChe
         );
         return;
       }
-      if (!report.recorded) {
-        if (report.states_changed > 0) {
-          uncertain.push({
-            code: STALE_DEPENDENCY_CODE,
-            message: STALE_DEPENDENCY_UNMEASURED(report.states_changed),
-          });
-        }
-        return;
+      // The receipt-borne half is what an absent telemetry trail costs;
+      // the artifact half was computed either way, so its rows are reported
+      // regardless and the notice below scopes itself to what was missed.
+      if (!report.receipts_recorded && report.states_changed > 0) {
+        uncertain.push({
+          code: STALE_DEPENDENCY_CODE,
+          message: STALE_DEPENDENCY_UNMEASURED(report.states_changed),
+        });
       }
       for (const row of report.rows) {
         issues.push({

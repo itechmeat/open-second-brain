@@ -129,18 +129,30 @@ export interface StaleDependencyOptions {
  * are empty in both cases, and only this flag tells them apart.
  */
 export interface StaleDependencyReport {
-  readonly recorded: boolean;
+  /**
+   * Whether either receipt store held anything in the window.
+   *
+   * It is NOT "whether the audit found anything", and it no longer gates
+   * the rows: the artifact arm reads the backlink graph and always runs,
+   * so a vault with the receipt gates off still gets every finding that
+   * evidence supports. What this flag scopes is the part that was not
+   * measured - the packs and decisions whose consumption is only visible
+   * through a receipt - so a caller can say which half of the answer is
+   * missing instead of implying the whole of it is.
+   */
+  readonly receipts_recorded: boolean;
   readonly rows: ReadonlyArray<StaleDependencyRow>;
   /**
-   * How many states changed inside the window.
+   * How many states this vault has that stopped being current - retired,
+   * tombstoned, or with a closed validity interval.
    *
-   * It is what separates the two shapes of `recorded: false`. A store
-   * where nothing was retired, tombstoned or superseded has nothing whose
-   * consumers could have gone stale, so an unmeasured audit costs it
-   * nothing and there is no honest warning to raise. A store where states
-   * DID change and nothing recorded what consumed them is the case worth
-   * saying out loud, and this is how a caller tells the two apart without
-   * re-walking the vault.
+   * Deliberately over all of vault history rather than the window: the
+   * question it answers is whether anything was at stake at all. A store
+   * where nothing ever changed has nothing whose consumers could have gone
+   * stale, so an unmeasured receipt trail costs it nothing and there is no
+   * honest warning to raise. A store where states did change and nothing
+   * recorded what consumed them is the case worth saying out loud, and
+   * this is how a caller tells the two apart without re-walking the vault.
    */
   readonly states_changed: number;
   /** Inclusive lower bound of the consumer window, as a UTC instant. */
@@ -174,17 +186,15 @@ export function auditStaleDependencies(
   const decisionReceipts = readDecisionCitations(vault, windowSince);
   const artifacts = walkBrainArtifacts(vault);
   const states = collectStates(vault, artifacts, now.getTime());
-  if (contextReceipts.length === 0 && decisionReceipts.length === 0) {
-    return Object.freeze({
-      recorded: false,
-      rows: Object.freeze([]),
-      window_since: windowSince,
-      lookback_days: lookbackDays,
-      states_changed: states.length,
-    });
-  }
-
   const stateKeys = new Set(states.map((state) => state.key));
+
+  // The artifact arm runs unconditionally, and that is the point. It reads
+  // the backlink universe on disk and needs no telemetry, so a vault with
+  // the receipt gates off can still be told which live records cite a rule
+  // that was retired under them. An earlier shape returned empty here the
+  // moment both receipt stores were quiet, which threw away a computable
+  // answer and then reported that nothing was knowable - the exact trade
+  // this release exists to stop making.
   const citations: StaleDependencyCitation[] = [
     ...contextReceipts,
     ...decisionReceipts,
@@ -192,7 +202,7 @@ export function auditStaleDependencies(
   ];
 
   return Object.freeze({
-    recorded: true,
+    receipts_recorded: contextReceipts.length > 0 || decisionReceipts.length > 0,
     rows: joinStaleDependencies({
       states,
       citations,

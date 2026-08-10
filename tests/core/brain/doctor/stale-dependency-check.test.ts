@@ -216,7 +216,7 @@ describe("auditStaleDependencies", () => {
     retire("alpha", "2026-03-01T00:00:00Z");
 
     const report = audit();
-    expect(report.recorded).toBe(true);
+    expect(report.receipts_recorded).toBe(true);
     expect(report.rows.length).toBe(1);
     const row = report.rows[0]!;
     expect(row.state).toBe("alpha");
@@ -254,7 +254,7 @@ describe("auditStaleDependencies", () => {
     retire("alpha", "2026-03-01T00:00:00Z");
 
     const report = audit();
-    expect(report.recorded).toBe(true);
+    expect(report.receipts_recorded).toBe(true);
     expect(report.rows.length).toBe(1);
     const consumer = report.rows[0]!.consumers[0]!;
     expect(consumer.kind).toBe(STALE_DEPENDENCY_CONSUMER.decisionChange);
@@ -303,27 +303,47 @@ describe("auditStaleDependencies", () => {
     expect(audit().rows).toEqual([]);
   });
 
-  test("a vault with retired states and no receipts reports not-recorded, not clean", () => {
+  test("a receipt-less vault still reports the citations that need no receipts", () => {
     seedPreference("alpha", "2026-01-01T00:00:00Z");
     seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
     retire("alpha", "2026-03-01T00:00:00Z");
     setWriteInstant(preferencePath(vault, "beta"), "2026-01-05T00:00:00Z");
 
     const report = audit();
-    // A citing artifact that predates the retirement EXISTS; what does
-    // not exist is any measurement of what this store's consumers rest
-    // on, and that is what the report says.
-    expect(report.recorded).toBe(false);
-    expect(report.rows).toEqual([]);
+    // The backlink evidence is on disk and costs no telemetry, so the live
+    // record citing a rule retired under it is a finding either way. What
+    // the absent receipt trail costs is the OTHER half - packs and
+    // decisions - and that is all the flag claims.
+    expect(report.receipts_recorded).toBe(false);
+    expect(report.rows.length).toBe(1);
+    expect(report.rows[0]!.state).toBe("alpha");
+    expect(report.rows[0]!.consumers.map((consumer) => consumer.kind)).toEqual([
+      STALE_DEPENDENCY_CONSUMER.brainArtifact,
+    ]);
     expect(report.lookback_days).toBe(WIDE_LOOKBACK_DAYS);
     expect(report.window_since < NOW.toISOString()).toBe(true);
   });
 
-  test("an unmeasured vault reaches the operator as uncertainty, not as silence", () => {
-    // The report has always distinguished not-measured from nothing-found.
-    // The doctor did not: it returned early, so an operator saw the same
-    // empty issue list either way - which reads as a clean bill of health
-    // for a store whose consumers nobody looked at.
+  test("a vault where nothing ever changed reports no rows and nothing unmeasured", () => {
+    // The other shape of a quiet answer, and the one that must stay quiet:
+    // no state stopped being current, so no consumer of one can be stale
+    // and an absent receipt trail costs this vault nothing.
+    seedPreference("alpha", "2026-01-01T00:00:00Z");
+    seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
+
+    const report = audit();
+    expect(report.receipts_recorded).toBe(false);
+    expect(report.rows).toEqual([]);
+    expect(report.states_changed).toBe(0);
+  });
+
+  test("an unmeasured receipt trail is named without suppressing what was computed", () => {
+    // Two things have to be true at once here. The half that needed a
+    // receipt is named as unmeasured, because an empty issue list would
+    // read as a clean bill of health for consumers nobody looked at - and
+    // the half that needed nothing but the backlink graph is still
+    // reported, because withholding a computed finding to say "nothing is
+    // known" would be the same false silence pointed the other way.
     seedPreference("alpha", "2026-01-01T00:00:00Z");
     seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
     retire("alpha", "2026-03-01T00:00:00Z");
@@ -335,10 +355,14 @@ describe("auditStaleDependencies", () => {
       auditStaleDependencies(v, { ...opts, lookbackDays: WIDE_LOOKBACK_DAYS }),
     ).run({ vault, now: NOW } as unknown as DoctorCheckContext, { issues, uncertain });
 
-    expect(issues).toEqual([]);
+    // The computed half reaches the issue stream...
+    expect(issues.map((issue) => issue.target)).toEqual(["alpha"]);
+    // ...and the unmeasured half is named rather than implied by silence,
+    // scoped to the consumers a receipt would have carried.
     const entry = uncertain.find((item) => item.code === STALE_DEPENDENCY_CODE);
     expect(entry).toBeDefined();
-    expect(entry!.message).toContain("not measured");
+    expect(entry!.message).toContain("were not measured");
+    expect(entry!.message).toContain("reported above");
   });
 
   test("a measured vault records no uncertainty", () => {
@@ -372,14 +396,28 @@ describe("auditStaleDependencies", () => {
 // ----- the doctor check -----------------------------------------------------
 
 describe("staleDependencyCheck inside the doctor pass", () => {
-  test("an unmeasured vault pushes no issue", () => {
+  test("a receipt-less vault still warns about the citation it could compute", () => {
     seedPreference("alpha", "2026-01-01T00:00:00Z");
     seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
     retire("alpha", "2026-03-01T00:00:00Z");
     setWriteInstant(preferencePath(vault, "beta"), "2026-01-05T00:00:00Z");
 
     const result = runDoctor(vault, { now: NOW });
+    const found = result.warnings.filter((w) => w.code === STALE_DEPENDENCY_CODE);
+    expect(found.length).toBe(1);
+    expect(found[0]!.target).toBe("alpha");
+  });
+
+  test("a vault where nothing ever changed stays silent on both channels", () => {
+    // The permanent-notice trap: warning whenever a receipt trail is absent
+    // would put this line on every clean vault, which is how a real signal
+    // stops being read.
+    seedPreference("alpha", "2026-01-01T00:00:00Z");
+    seedPreference("beta", "2026-01-01T00:00:00Z", ["pref-alpha"]);
+
+    const result = runDoctor(vault, { now: NOW });
     expect(result.warnings.filter((w) => w.code === STALE_DEPENDENCY_CODE)).toEqual([]);
+    expect((result.uncertain ?? []).filter((u) => u.code === STALE_DEPENDENCY_CODE)).toEqual([]);
   });
 
   test("a measured vault surfaces one warning naming the true consumer total", () => {
