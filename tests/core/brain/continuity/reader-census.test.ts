@@ -106,6 +106,8 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
     "reads the WHOLE store for `session_turn` / `session_summary_node`, plus a " +
     "dedupe-key lookup.",
   "src/core/brain/session-summary.ts": "reads `session_summary_digest` for listing and dedupe.",
+  "src/core/brain/stale-dependency.ts":
+    "reads `context_receipt` to find which consumers cited a state that has since changed.",
   "src/core/brain/skill-proposals.ts":
     "reads the WHOLE store forward from a watermark to derive skill proposals.",
   "src/core/brain/temporal/foresight.ts":
@@ -129,7 +131,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * measurement.
  */
 const MIN_READ_MODEL_READERS = 4;
-const MIN_DIRECT_STORE_READERS = 19;
+const MIN_DIRECT_STORE_READERS = 20;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 
