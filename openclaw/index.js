@@ -1742,6 +1742,13 @@ import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
 
 // src/core/partner/codegraph-health.ts
+var GRAPH_HEALTH_CODES = Object.freeze({
+  emptyGraph: "empty-graph",
+  collapsedEdges: "collapsed-edges",
+  danglingReferences: "dangling-references",
+  selfLoops: "self-loops",
+  cacheRootMismatch: "cache-root-mismatch"
+});
 function stripTrailingSlash(p) {
   return p.replace(/\/+$/, "");
 }
@@ -1754,30 +1761,30 @@ function assessGraphHealth(input) {
   const edges = Number.isFinite(input.edgeCount) ? input.edgeCount : 0;
   if (nodes <= 0) {
     warnings.push({
-      code: "empty-graph",
+      code: GRAPH_HEALTH_CODES.emptyGraph,
       message: "index is initialized but holds 0 nodes; extraction produced an empty graph - " + "labeling and recall will find nothing until it is re-indexed"
     });
   } else if (edges <= 0) {
     warnings.push({
-      code: "collapsed-edges",
+      code: GRAPH_HEALTH_CODES.collapsedEdges,
       message: `graph has ${nodes} node(s) but 0 edges; relationship extraction collapsed - ` + "callers/callees/impact traversal will be empty"
     });
   }
   if (input.danglingRefs !== undefined && input.danglingRefs > 0) {
     warnings.push({
-      code: "dangling-references",
+      code: GRAPH_HEALTH_CODES.danglingReferences,
       message: `${input.danglingRefs} dangling reference(s): edges point at nodes absent from the ` + "index; derived labels/imports built from them would reference missing symbols"
     });
   }
   if (input.selfLoops !== undefined && input.selfLoops > 0) {
     warnings.push({
-      code: "self-loops",
+      code: GRAPH_HEALTH_CODES.selfLoops,
       message: `${input.selfLoops} self-loop edge(s): a node references itself; ` + "impact and traversal surfaces may double-count or cycle"
     });
   }
   if (input.indexRoot && input.worktreeRoot && !samePath(input.indexRoot, input.worktreeRoot)) {
     warnings.push({
-      code: "cache-root-mismatch",
+      code: GRAPH_HEALTH_CODES.cacheRootMismatch,
       message: `index was built for '${input.indexRoot}' but is being read from ` + `'${input.worktreeRoot}'; file and line references may be stale for this tree - ` + "re-index the current root before trusting graph-derived artifacts"
     });
   }
@@ -1803,6 +1810,15 @@ var CODE_MANIFESTS = [
   "pom.xml"
 ];
 var DEFAULT_LIMIT = 50;
+var CODEGRAPH_CLI = Object.freeze({
+  bin: "codegraph",
+  statusSubcommand: "status",
+  statusJsonFlag: "-j",
+  initSubcommand: "init"
+});
+function codegraphInitCommand(projectPath) {
+  return `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.initSubcommand} ${projectPath}`;
+}
 function isCodeProject(dir) {
   try {
     if (!existsSync(dir))
@@ -1857,16 +1873,17 @@ function findCodeProjects(opts) {
 }
 function defaultWhichCodegraph() {
   if (typeof Bun !== "undefined" && typeof Bun.which === "function") {
-    const found = Bun.which("codegraph");
+    const found = Bun.which(CODEGRAPH_CLI.bin);
     return found ?? null;
   }
   return null;
 }
 var CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
+var HELP_FLAG = "--help";
 function defaultDetectProjectPathSupport() {
   try {
     const proc = Bun.spawnSync({
-      cmd: ["codegraph", "status", "--help"],
+      cmd: [CODEGRAPH_CLI.bin, CODEGRAPH_CLI.statusSubcommand, HELP_FLAG],
       stdout: "pipe",
       stderr: "pipe"
     });
@@ -1879,7 +1896,12 @@ function defaultDetectProjectPathSupport() {
 function defaultRunStatusJson(projectPath) {
   try {
     const proc = Bun.spawnSync({
-      cmd: ["codegraph", "status", "-j", projectPath],
+      cmd: [
+        CODEGRAPH_CLI.bin,
+        CODEGRAPH_CLI.statusSubcommand,
+        CODEGRAPH_CLI.statusJsonFlag,
+        projectPath
+      ],
       stdout: "pipe",
       stderr: "pipe"
     });
@@ -1892,7 +1914,10 @@ function defaultRunStatusJson(projectPath) {
           return { ok: true, data: parsed2 };
         } catch {}
       }
-      return { ok: false, error: stderr || `codegraph status exited ${proc.exitCode}` };
+      return {
+        ok: false,
+        error: stderr || `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.statusSubcommand} exited ${proc.exitCode}`
+      };
     }
     if (!stdout) {
       return { ok: false, error: stderr || "empty status output" };
@@ -1952,7 +1977,7 @@ function evaluateProjectStatus(project, deps) {
     return {
       name: "code_graph",
       ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+      message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`
     };
   }
   const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
@@ -1968,7 +1993,7 @@ function evaluateProjectStatus(project, deps) {
     return {
       name: "code_graph",
       ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`
+      message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`
     };
   }
   const nodes = status.data.nodeCount ?? 0;
