@@ -8,8 +8,17 @@
 
 import { resolveAgentName, resolveTriggerCooldownDays } from "../../core/config.ts";
 import { scanTriggers } from "../../core/brain/triggers/scan.ts";
-import { listTriggers, transitionTrigger } from "../../core/brain/triggers/store.ts";
-import { isTriggerStatus, type TriggerRecord } from "../../core/brain/triggers/types.ts";
+import {
+  listTriggers,
+  transitionTrigger,
+  type TriggerAction,
+} from "../../core/brain/triggers/store.ts";
+import {
+  isTriggerStatus,
+  TRIGGER_STATUSES,
+  TRIGGER_TERMINAL_STATUSES,
+  type TriggerRecord,
+} from "../../core/brain/triggers/types.ts";
 import {
   listIntentions,
   moveIntentionToHistory,
@@ -86,10 +95,37 @@ function triggerToJson(record: TriggerRecord): Record<string, unknown> {
     expires_at: record.expiresAt,
     delivered_at: record.deliveredAt,
     resolved_at: record.resolvedAt,
+    suppressed_at: record.suppressedAt,
+    suppressed_from: record.suppressedFrom,
+    occurrences: record.occurrences,
+    last_seen_at: record.lastSeenAt,
   };
 }
 
-const TRIGGER_TERMINAL = new Set(["acted", "dismissed", "expired"]);
+/** Operations that move one trigger through the lifecycle. */
+const TRIGGER_TRANSITIONS: ReadonlyArray<TriggerAction> = Object.freeze([
+  "acknowledge",
+  "dismiss",
+  "act",
+  "suppress",
+  "unsuppress",
+]);
+
+/**
+ * Every accepted operation, in the order the schema enum lists them.
+ * The read operations and {@link TRIGGER_TRANSITIONS} are the only
+ * source: the enum, the guard and the error text are all this one list.
+ */
+const TRIGGER_OPERATIONS: ReadonlyArray<string> = Object.freeze([
+  "scan",
+  "list",
+  "history",
+  ...TRIGGER_TRANSITIONS,
+]);
+
+function isTriggerTransition(operation: string): operation is TriggerAction {
+  return (TRIGGER_TRANSITIONS as ReadonlyArray<string>).includes(operation);
+}
 
 function toolBrainTrigger(
   ctx: ServerContext,
@@ -120,13 +156,13 @@ function toolBrainTrigger(
       ...(statusRaw ? { status: statusRaw } : {}),
     });
     if (operation === "history") {
-      records = records.filter((record) => TRIGGER_TERMINAL.has(record.effectiveStatus));
+      records = records.filter((record) => TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus));
     } else if (!statusRaw) {
-      records = records.filter((record) => !TRIGGER_TERMINAL.has(record.effectiveStatus));
+      records = records.filter((record) => !TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus));
     }
     return { operation, triggers: records.map(triggerToJson) };
   }
-  if (operation === "acknowledge" || operation === "dismiss" || operation === "act") {
+  if (isTriggerTransition(operation)) {
     const id = coerceStr(args, "id", true)!;
     try {
       return {
@@ -139,7 +175,7 @@ function toolBrainTrigger(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_trigger operation must be one of: scan, list, history, acknowledge, dismiss, act",
+    `brain_trigger operation must be one of: ${TRIGGER_OPERATIONS.join(", ")}`,
   );
 }
 
@@ -180,24 +216,27 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_trigger",
     description:
-      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers from health/retention data, list/history read by lifecycle status, acknowledge/dismiss/act transition one trigger. Anti-nag: cooldown keys keep the same issue from reappearing every run.",
+      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers from health/retention data, list/history read by lifecycle status, acknowledge/dismiss/act transition one trigger. suppress silences a finding indefinitely (no cooldown clock) and unsuppress restores the status it interrupted. Anti-nag: cooldown keys keep the same issue from reappearing every run, and every silenced recurrence is counted on the record.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["scan", "list", "history", "acknowledge", "dismiss", "act"],
+          enum: [...TRIGGER_OPERATIONS],
           description: "Operation to perform.",
         },
         id: {
           type: "string",
           minLength: 1,
           maxLength: 128,
-          description: "Trigger id for acknowledge/dismiss/act.",
+          description: "Trigger id for acknowledge/dismiss/act/suppress/unsuppress.",
         },
         status: {
+          // Sourced from the shared list, never copied: a literal copy
+          // here would let a new status pass the handler's guard and be
+          // rejected by this schema with nothing reporting the gap.
           type: "string",
-          enum: ["pending", "delivered", "acknowledged", "acted", "dismissed", "expired"],
+          enum: [...TRIGGER_STATUSES],
           description: "Effective-status filter for list.",
         },
       },

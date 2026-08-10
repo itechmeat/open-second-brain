@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { createTriggers } from "../../src/core/brain/triggers/store.ts";
-import type { InsightCandidate } from "../../src/core/brain/triggers/types.ts";
+import { TRIGGER_STATUSES, type InsightCandidate } from "../../src/core/brain/triggers/types.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -104,6 +104,62 @@ test("brain_brief view=morning surfaces pending triggers once per cooldown", asy
   };
   expect(second.triggers).toBeUndefined();
   expect(second.text).not.toContain("Pending triggers");
+});
+
+test("the tool's status enum is the shared status list, not a copy of it", () => {
+  // The literal copy this replaces let a new status be accepted by the
+  // handler's guard and rejected by the schema, with nothing failing.
+  const schema = tool("brain_trigger").inputSchema as {
+    properties: {
+      status: { enum: string[] };
+      operation: { enum: string[] };
+    };
+  };
+  expect(schema.properties.status.enum).toEqual([...TRIGGER_STATUSES]);
+  expect(schema.properties.operation.enum).toContain("suppress");
+  expect(schema.properties.operation.enum).toContain("unsuppress");
+});
+
+test("brain_trigger suppress hides the trigger from list and shows it in history", async () => {
+  const { created } = createTriggers(vault, [CANDIDATE], { now: NOW });
+  const id = created[0]!.id;
+
+  const suppressed = (await tool("brain_trigger").handler(ctx, {
+    operation: "suppress",
+    id,
+  })) as { trigger: Record<string, unknown> };
+  expect(suppressed.trigger["status"]).toBe("suppressed");
+  expect(suppressed.trigger["suppressed_from"]).toBe("pending");
+  expect(suppressed.trigger["occurrences"]).toBe(1);
+  expect(suppressed.trigger["last_seen_at"]).toEqual(expect.any(String));
+
+  const listed = (await tool("brain_trigger").handler(ctx, { operation: "list" })) as {
+    triggers: Array<{ id: string }>;
+  };
+  expect(listed.triggers).toHaveLength(0);
+
+  const history = (await tool("brain_trigger").handler(ctx, { operation: "history" })) as {
+    triggers: Array<{ id: string }>;
+  };
+  expect(history.triggers.map((t) => t.id)).toEqual([id]);
+
+  const restored = (await tool("brain_trigger").handler(ctx, {
+    operation: "unsuppress",
+    id,
+  })) as { trigger: Record<string, unknown> };
+  expect(restored.trigger["status"]).toBe("pending");
+  expect(restored.trigger["suppressed_at"]).toBeNull();
+});
+
+test("brain_trigger unsuppress on a trigger that is not suppressed is an invalid request", async () => {
+  const { created } = createTriggers(vault, [CANDIDATE], { now: NOW });
+  expect(() =>
+    tool("brain_trigger").handler(ctx, { operation: "unsuppress", id: created[0]!.id }),
+  ).toThrow("not suppressed");
+});
+
+test("brain_trigger names every operation when it rejects one", async () => {
+  expect(() => tool("brain_trigger").handler(ctx, { operation: "explode" })).toThrow("unsuppress");
 });
 
 test("brain_brief view=morning without triggers keeps the legacy shape", async () => {

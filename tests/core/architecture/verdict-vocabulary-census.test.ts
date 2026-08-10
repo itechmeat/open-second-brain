@@ -34,6 +34,11 @@ import {
   SCHEMA_PACK_UNVERIFIED_REASONS,
 } from "../../../src/core/brain/schema-integrity.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
+import {
+  isTriggerStatus,
+  TRIGGER_STATUS,
+  TRIGGER_STATUSES,
+} from "../../../src/core/brain/triggers/types.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -112,6 +117,15 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SCHEMA_PACK_UNVERIFIED_REASON,
     members: SCHEMA_PACK_UNVERIFIED_REASONS,
     guard: isSchemaPackUnverifiedReason,
+  },
+  {
+    // U5. The trio was incomplete when the wave started: the list and
+    // the guard shipped, the frozen object did not, and the MCP tool
+    // schema carried a fourth hand-written copy of the list.
+    name: "TRIGGER_STATUS",
+    values: TRIGGER_STATUS,
+    members: TRIGGER_STATUSES,
+    guard: isTriggerStatus,
   },
 ]);
 

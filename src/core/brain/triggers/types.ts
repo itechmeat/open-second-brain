@@ -7,19 +7,70 @@
  * trigger store is its single consumer (Kernel B of the suite).
  */
 
-export const TRIGGER_STATUSES = [
-  "pending",
-  "delivered",
-  "acknowledged",
-  "acted",
-  "dismissed",
-  "expired",
-] as const;
-export type TriggerStatus = (typeof TRIGGER_STATUSES)[number];
+/**
+ * Lifecycle states of one trigger.
+ *
+ * `suppressed` is the operator's judgement that a finding is
+ * structurally benign: unlike `dismissed` and `acted` it carries no
+ * clock, so the cooldown key stays silent until somebody unsuppresses
+ * it. It is a member of {@link TRIGGER_TERMINAL_STATUSES}, and that
+ * membership - not a branch anywhere - is what hides it from `list` and
+ * shows it in `history`.
+ */
+export const TRIGGER_STATUS = Object.freeze({
+  pending: "pending",
+  delivered: "delivered",
+  acknowledged: "acknowledged",
+  acted: "acted",
+  dismissed: "dismissed",
+  expired: "expired",
+  suppressed: "suppressed",
+} as const);
 
-export function isTriggerStatus(value: string): value is TriggerStatus {
-  return (TRIGGER_STATUSES as ReadonlyArray<string>).includes(value);
+export type TriggerStatus = (typeof TRIGGER_STATUS)[keyof typeof TRIGGER_STATUS];
+
+/**
+ * The statuses in lifecycle order. The single source every schema, enum
+ * and filter reads from - a literal copy of this list in a tool schema
+ * is exactly the drift the vocabulary census exists to catch.
+ */
+export const TRIGGER_STATUSES: ReadonlyArray<TriggerStatus> = Object.freeze([
+  TRIGGER_STATUS.pending,
+  TRIGGER_STATUS.delivered,
+  TRIGGER_STATUS.acknowledged,
+  TRIGGER_STATUS.acted,
+  TRIGGER_STATUS.dismissed,
+  TRIGGER_STATUS.expired,
+  TRIGGER_STATUS.suppressed,
+]);
+
+export function isTriggerStatus(value: unknown): value is TriggerStatus {
+  return typeof value === "string" && (TRIGGER_STATUSES as ReadonlyArray<string>).includes(value);
 }
+
+/**
+ * Statuses a trigger can still move out of on its own. Expiry is applied
+ * to these and only these, which is what makes `suppressed` indefinite
+ * without any code saying so.
+ */
+export const TRIGGER_OPEN_STATUSES: ReadonlySet<TriggerStatus> = new Set([
+  TRIGGER_STATUS.pending,
+  TRIGGER_STATUS.delivered,
+  TRIGGER_STATUS.acknowledged,
+]);
+
+/**
+ * Statuses that end the trigger's own lifecycle. Every reader that hides
+ * finished work from `list` and shows it in `history` partitions on this
+ * set; the three hand-maintained copies it replaced (core, CLI, MCP)
+ * could each drift from the others without a single test noticing.
+ */
+export const TRIGGER_TERMINAL_STATUSES: ReadonlySet<TriggerStatus> = new Set([
+  TRIGGER_STATUS.acted,
+  TRIGGER_STATUS.dismissed,
+  TRIGGER_STATUS.expired,
+  TRIGGER_STATUS.suppressed,
+]);
 
 export const TRIGGER_URGENCIES = ["low", "medium", "high"] as const;
 export type TriggerUrgency = (typeof TRIGGER_URGENCIES)[number];
@@ -78,5 +129,28 @@ export interface TriggerRecord extends InsightCandidate {
   readonly deliveredAt: string | null;
   /** Timestamp of the terminal transition (acknowledge counts as open). */
   readonly resolvedAt: string | null;
+  /** When the trigger was suppressed, or `null` while it is not. */
+  readonly suppressedAt: string | null;
+  /**
+   * The status suppression interrupted, restored verbatim by
+   * `unsuppress`. `null` while the trigger is not suppressed. A
+   * suppressed record that lacks it has been hand-edited, and the
+   * restore refuses rather than guessing a prior state.
+   */
+  readonly suppressedFrom: TriggerStatus | null;
+  /**
+   * How many times this finding has been observed: once when the
+   * trigger was created, plus once for every later scan the anti-nag
+   * logic silenced. A record written before the ledger existed carries
+   * no count and reads as `1`, which is the true number of occurrences
+   * anyone recorded for it - not a default standing in for an unknown.
+   */
+  readonly occurrences: number;
+  /**
+   * When the finding last fired, whether or not anything was surfaced.
+   * A record written before the ledger existed reads as its creation
+   * instant, which is the last occurrence anyone recorded.
+   */
+  readonly lastSeenAt: string;
   readonly path: string;
 }

@@ -6,7 +6,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -15,10 +15,18 @@ import {
   createTriggers,
   listTriggers,
   markTriggersDelivered,
+  recordRecurrence,
   transitionTrigger,
+  TriggerSourceArtifactsError,
   TRIGGER_TTL_DAYS,
 } from "../../../src/core/brain/triggers/store.ts";
-import type { InsightCandidate } from "../../../src/core/brain/triggers/types.ts";
+import {
+  TRIGGER_OPEN_STATUSES,
+  TRIGGER_STATUS,
+  TRIGGER_STATUSES,
+  TRIGGER_TERMINAL_STATUSES,
+  type InsightCandidate,
+} from "../../../src/core/brain/triggers/types.ts";
 
 let vault: string;
 const NOW = new Date("2026-06-03T10:00:00Z");
@@ -152,4 +160,223 @@ test("briefTriggers ranks by urgency then recency and respects the cap", () => {
   const listed = briefTriggers(vault, { now: NOW, cap: 2, cooldownDays: 7 });
   expect(listed).toHaveLength(2);
   expect(listed.map((t) => t.urgency)).toEqual(["high", "medium"]);
+});
+
+// ── Suppression (silence-is-not-an-answer, U5) ──────────────────────────────
+
+test("the two status partitions exactly cover the status vocabulary", () => {
+  const union = [...TRIGGER_OPEN_STATUSES, ...TRIGGER_TERMINAL_STATUSES].toSorted();
+  expect(union).toEqual([...TRIGGER_STATUSES].toSorted());
+  // Disjoint: a status in both partitions would make the terminal
+  // rejection and the open-status expiry rule contradict each other.
+  for (const status of TRIGGER_OPEN_STATUSES) {
+    expect(TRIGGER_TERMINAL_STATUSES.has(status)).toBe(false);
+  }
+});
+
+test("a suppressed twin blocks recreation indefinitely with the suppressed reason", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+
+  const aYearLater = new Date(NOW.getTime() + 365 * DAY_MS);
+  const again = createTriggers(vault, [candidate()], { now: aYearLater, cooldownDays: 7 });
+  expect(again.created).toHaveLength(0);
+  expect(again.skipped[0]!.reason).toBe("suppressed");
+  expect(listTriggers(vault, { now: aYearLater })).toHaveLength(1);
+});
+
+test("every blocked scan records one recurrence and the instant it fired", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  expect(listTriggers(vault, { now: NOW })[0]!.occurrences).toBe(1);
+
+  let last = NOW;
+  for (const day of [1, 2, 3]) {
+    last = new Date(NOW.getTime() + day * DAY_MS);
+    createTriggers(vault, [candidate()], { now: last });
+  }
+  const record = listTriggers(vault, { now: last })[0]!;
+  expect(record.occurrences).toBe(4);
+  expect(record.lastSeenAt).toBe(last.toISOString());
+});
+
+test("a cooldown-blocked twin records a recurrence too, not only a suppressed one", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "dismiss", { now: NOW });
+  const during = new Date(NOW.getTime() + 3 * DAY_MS);
+  const blocked = createTriggers(vault, [candidate()], { now: during, cooldownDays: 7 });
+  expect(blocked.skipped[0]!.reason).toBe("cooldown");
+  expect(listTriggers(vault, { now: during })[0]!.occurrences).toBe(2);
+});
+
+test("a materially different cooldown key is created while the twin is suppressed", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  const other = createTriggers(vault, [candidate({ cooldownKey: "contradiction:pref-c:pref-d" })], {
+    now: NOW,
+  });
+  expect(other.created).toHaveLength(1);
+  expect(other.created[0]!.status).toBe("pending");
+});
+
+test("dismiss then suppress then unsuppress restores the state and its cooldown", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  const dismissed = transitionTrigger(vault, id, "dismiss", { now: NOW });
+  const resolvedAt = dismissed.resolvedAt;
+  expect(resolvedAt).toBe(NOW.toISOString());
+
+  const suppressed = transitionTrigger(vault, id, "suppress", {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(suppressed.status).toBe("suppressed");
+  expect(suppressed.suppressedFrom).toBe("dismissed");
+  // The resolution instant is untouched, which is what makes the restore
+  // exact rather than reconstructed.
+  expect(suppressed.resolvedAt).toBe(resolvedAt);
+
+  const restored = transitionTrigger(vault, id, "unsuppress", {
+    now: new Date(NOW.getTime() + 2 * DAY_MS),
+  });
+  expect(restored.status).toBe("dismissed");
+  expect(restored.resolvedAt).toBe(resolvedAt);
+  expect(restored.suppressedAt).toBeNull();
+  expect(restored.suppressedFrom).toBeNull();
+
+  // The original seven-day cooldown still measures from the original
+  // resolution instant, not from the unsuppress.
+  const during = createTriggers(vault, [candidate()], {
+    now: new Date(NOW.getTime() + 3 * DAY_MS),
+    cooldownDays: 7,
+  });
+  expect(during.created).toHaveLength(0);
+  expect(during.skipped[0]!.reason).toBe("cooldown");
+  const after = createTriggers(vault, [candidate()], {
+    now: new Date(NOW.getTime() + 8 * DAY_MS),
+    cooldownDays: 7,
+  });
+  expect(after.created).toHaveLength(1);
+});
+
+test("suppress is legal from a terminal state and is idempotent", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  transitionTrigger(vault, id, "act", { now: NOW });
+  const first = transitionTrigger(vault, id, "suppress", { now: NOW });
+  expect(first.suppressedFrom).toBe("acted");
+  const second = transitionTrigger(vault, id, "suppress", {
+    now: new Date(NOW.getTime() + DAY_MS),
+  });
+  expect(second.status).toBe("suppressed");
+  expect(second.suppressedAt).toBe(first.suppressedAt);
+  expect(second.suppressedFrom).toBe("acted");
+});
+
+test("suppress is legal from an expired trigger and unsuppress restores the stored status", () => {
+  createTriggers(vault, [candidate()], { now: NOW });
+  const later = new Date(NOW.getTime() + (TRIGGER_TTL_DAYS + 1) * DAY_MS);
+  const expired = listTriggers(vault, { now: later })[0]!;
+  expect(expired.effectiveStatus).toBe("expired");
+
+  const suppressed = transitionTrigger(vault, expired.id, "suppress", { now: later });
+  expect(suppressed.effectiveStatus).toBe("suppressed");
+  // The stored status was still pending; that is what is restored, and
+  // expiry is re-applied on read exactly as before.
+  expect(suppressed.suppressedFrom).toBe("pending");
+  const restored = transitionTrigger(vault, expired.id, "unsuppress", { now: later });
+  expect(restored.status).toBe("pending");
+  expect(restored.effectiveStatus).toBe("expired");
+});
+
+test("unsuppressing something that is not suppressed throws naming its status", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  expect(() => transitionTrigger(vault, id, "unsuppress", { now: NOW })).toThrow("pending");
+  transitionTrigger(vault, id, "dismiss", { now: NOW });
+  expect(() => transitionTrigger(vault, id, "unsuppress", { now: NOW })).toThrow("dismissed");
+});
+
+test("unsuppressing an unknown id throws", () => {
+  expect(() => transitionTrigger(vault, "tr-nope", "unsuppress", { now: NOW })).toThrow("unknown");
+  expect(() => transitionTrigger(vault, "tr-nope", "suppress", { now: NOW })).toThrow("unknown");
+});
+
+test("a hand-edited suppressed record with no prior status throws naming the field", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  const path = created[0]!.path;
+  transitionTrigger(vault, id, "suppress", { now: NOW });
+  writeFileSync(path, readFileSync(path, "utf8").replace(/^suppressed_from: .*$\n/mu, ""), "utf8");
+  expect(() => transitionTrigger(vault, id, "unsuppress", { now: NOW })).toThrow("suppressed_from");
+});
+
+test("a suppressed trigger is hidden from the brief and stays out of it forever", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  expect(briefTriggers(vault, { now: NOW, cap: 5, cooldownDays: 7 })).toHaveLength(0);
+  const aYearLater = new Date(NOW.getTime() + 365 * DAY_MS);
+  expect(briefTriggers(vault, { now: aYearLater, cap: 5, cooldownDays: 7 })).toHaveLength(0);
+});
+
+test("markTriggersDelivered never revives a suppressed trigger", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const id = created[0]!.id;
+  transitionTrigger(vault, id, "suppress", { now: NOW });
+  markTriggersDelivered(vault, [id], { now: NOW });
+  expect(listTriggers(vault, { now: NOW })[0]!.status).toBe("suppressed");
+});
+
+test("suppression state round-trips through the Markdown file", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const suppressed = transitionTrigger(vault, created[0]!.id, "suppress", { now: NOW });
+  const raw = readFileSync(suppressed.path, "utf8");
+  expect(raw).toContain(`status: ${TRIGGER_STATUS.suppressed}`);
+  expect(raw).toContain(`suppressed_at: ${NOW.toISOString()}`);
+  expect(raw).toContain("suppressed_from: pending");
+  expect(raw).toContain("occurrences: 1");
+  expect(raw).toContain(`last_seen_at: ${NOW.toISOString()}`);
+});
+
+test("a record written before this change reads as one recorded occurrence", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8")
+      .replace(/^occurrences: .*$\n/mu, "")
+      .replace(/^last_seen_at: .*$\n/mu, ""),
+    "utf8",
+  );
+  const record = listTriggers(vault, { now: NOW })[0]!;
+  expect(record.occurrences).toBe(1);
+  expect(record.lastSeenAt).toBe(record.createdAt);
+});
+
+test("recordRecurrence increments the ledger and persists it", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const later = new Date(NOW.getTime() + DAY_MS);
+  const next = recordRecurrence(created[0]!, later);
+  expect(next.occurrences).toBe(2);
+  expect(next.lastSeenAt).toBe(later.toISOString());
+  expect(listTriggers(vault, { now: later })[0]!.occurrences).toBe(2);
+});
+
+// ── Defect: a malformed grounding list must not read as an ungrounded one ───
+
+test("an unparseable source-artifact list refuses instead of reading as empty", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^source_artifacts: .*$/mu, 'source_artifacts: "[[pref-a"'),
+    "utf8",
+  );
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerSourceArtifactsError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("source_artifacts");
+});
+
+test("a record naming no grounding artifacts still reads as an empty list", () => {
+  const result = createTriggers(vault, [candidate({ sourceArtifacts: [] })], { now: NOW });
+  expect(result.created[0]!.sourceArtifacts).toEqual([]);
+  expect(listTriggers(vault, { now: NOW })[0]!.sourceArtifacts).toEqual([]);
 });

@@ -407,6 +407,13 @@ generates deduped triggers from semantic-health and retention data,
 keep the same issue from reappearing while an earlier trigger is open
 or cooling down; `brain_brief` `view="morning"` surfaces capped pending
 triggers and marks them delivered (once per `trigger_cooldown_days`).
+`suppress` silences a cooldown key indefinitely - it is legal from any
+status and carries no clock, so the finding never re-nags - and
+`unsuppress` restores the status suppression interrupted along with its
+original cooldown arithmetic. Suppressed triggers are terminal: hidden
+from `list`, present in `history`, never in the brief. Every blocked
+candidate increments `occurrences` and stamps `last_seen_at` on the
+record that blocked it, so silence is auditable.
 
 `brain_deep_synthesis` assembles a deterministic topic dossier
 (matched notes, agreements, contradictions, stale claims, knowledge

@@ -5,17 +5,25 @@
  * Each trigger is one Markdown file under `Brain/triggers/` - operator
  * readable without tooling, frontmatter carries the machine state.
  * History is a status change, not a file move: terminal triggers
- * (acted / dismissed / expired) stay in place so `history` is just a
- * status filter and the cooldown logic can see them.
+ * (acted / dismissed / expired / suppressed) stay in place so `history`
+ * is just a status filter and the cooldown logic can see them.
  *
  * Anti-nag invariants live here and only here:
  *   - cooldown-key dedup across ALL statuses makes repeated scans
- *     idempotent (an open twin always blocks; a terminal twin blocks
- *     for `cooldownDays` after its resolution; an expired twin allows);
+ *     idempotent (a suppressed twin always blocks; an open twin always
+ *     blocks; a dismissed or acted twin blocks for `cooldownDays` after
+ *     its resolution; an expired twin allows);
  *   - lifecycle transitions: acknowledge / act / dismiss are allowed
  *     from ANY open state (an operator may act on a trigger they found
  *     via `list` before the brief ever delivered it - delivery is a
  *     surfacing step, not a gate), terminal states reject everything;
+ *   - suppression is the one edge OUT of a terminal state: it is legal
+ *     from any status, it carries no clock, and {@link transitionTrigger}
+ *     restores the interrupted status verbatim on `unsuppress` because
+ *     suppressing leaves the delivery and resolution instants untouched;
+ *   - the recurrence ledger records every candidate the anti-nag logic
+ *     silenced, so a suppressed finding that keeps firing is auditable
+ *     rather than invisible ({@link recordRecurrence});
  *   - brief delivery happens at most once per cooldown window
  *     ({@link briefTriggers} + {@link markTriggersDelivered}).
  */
@@ -33,6 +41,9 @@ import {
   isTriggerKind,
   isTriggerStatus,
   isTriggerUrgency,
+  TRIGGER_OPEN_STATUSES,
+  TRIGGER_STATUS,
+  TRIGGER_TERMINAL_STATUSES,
   TRIGGER_URGENCIES,
   type InsightCandidate,
   type TriggerRecord,
@@ -44,7 +55,19 @@ export const TRIGGER_COOLDOWN_DAYS = 7;
 export const TRIGGER_MAX_PER_KIND = 10;
 
 const DAY_MS = 24 * 3600 * 1000;
-const OPEN_STATUSES: ReadonlySet<TriggerStatus> = new Set(["pending", "delivered", "acknowledged"]);
+
+/**
+ * Occurrences credited to a record that predates the recurrence ledger.
+ * It is the count of occurrences anyone actually recorded for such a
+ * record - the creation - and not a placeholder for an unknown number.
+ */
+const OCCURRENCES_WHEN_UNRECORDED = 1;
+
+/** Frontmatter key holding the JSON-encoded grounding artifact list. */
+const SOURCE_ARTIFACTS_KEY = "source_artifacts";
+
+/** Longest run of an unparseable artifact list reproduced in an error. */
+const ARTIFACTS_EXCERPT_MAX = 120;
 
 export function triggersDir(vault: string): string {
   return join(vault, "Brain", "triggers");
@@ -68,7 +91,11 @@ function renderTrigger(record: StoredTrigger): string {
     `expires_at: ${record.expiresAt}`,
     ...(record.deliveredAt !== null ? [`delivered_at: ${record.deliveredAt}`] : []),
     ...(record.resolvedAt !== null ? [`resolved_at: ${record.resolvedAt}`] : []),
-    `source_artifacts: ${JSON.stringify(record.sourceArtifacts)}`,
+    ...(record.suppressedAt !== null ? [`suppressed_at: ${record.suppressedAt}`] : []),
+    ...(record.suppressedFrom !== null ? [`suppressed_from: ${record.suppressedFrom}`] : []),
+    `occurrences: ${record.occurrences}`,
+    `last_seen_at: ${record.lastSeenAt}`,
+    `${SOURCE_ARTIFACTS_KEY}: ${JSON.stringify(record.sourceArtifacts)}`,
     "---",
     "",
     "## Reason",
@@ -98,26 +125,84 @@ function sectionText(body: string, heading: string): string {
   return body.slice(start, end).trim();
 }
 
-function parseJsonArray(raw: unknown): ReadonlyArray<string> {
+/**
+ * A `source_artifacts` value that is present and cannot be read as a
+ * list of strings.
+ *
+ * It is a refusal rather than an empty list on purpose. The grounding
+ * artifacts are the evidence a finding rests on, so a trigger reporting
+ * none is a materially different claim from a trigger whose evidence
+ * could not be read - and the earlier behaviour, which degraded a
+ * hand-edited list to `[]`, made an unparseable finding present as an
+ * ungrounded one with nothing anywhere saying so.
+ */
+export class TriggerSourceArtifactsError extends Error {
+  /** The trigger file carrying the unreadable list. */
+  readonly path: string;
+  constructor(path: string, raw: unknown) {
+    super(
+      `trigger ${path}: ${SOURCE_ARTIFACTS_KEY} is present but is not a list of strings: ` +
+        excerptArtifacts(raw),
+    );
+    this.name = "TriggerSourceArtifactsError";
+    this.path = path;
+  }
+}
+
+/**
+ * Operator bytes bounded to one line, so an error message stays one
+ * line whatever the file contains. The value is reproduced verbatim and
+ * never inspected - it is opaque content, quoted back so the operator
+ * can find the line they broke.
+ */
+function excerptArtifacts(raw: unknown): string {
+  const text = typeof raw === "string" ? raw : String(raw);
+  return text.length <= ARTIFACTS_EXCERPT_MAX ? text : `${text.slice(0, ARTIFACTS_EXCERPT_MAX)}…`;
+}
+
+/**
+ * Read the grounding artifact list. An absent key names no artifacts and
+ * yields an empty list; a present but unreadable one throws - see
+ * {@link TriggerSourceArtifactsError}.
+ */
+function parseArtifactList(raw: unknown, path: string): ReadonlyArray<string> {
+  if (raw === undefined) return Object.freeze([]);
   // Defensive: a frontmatter parser that materializes the value as a
   // real array round-trips too.
   if (Array.isArray(raw) && raw.every((x) => typeof x === "string")) {
     return Object.freeze([...raw]);
   }
-  if (typeof raw !== "string" || raw.trim() === "") return Object.freeze([]);
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
-      return Object.freeze(parsed);
+  if (typeof raw === "string") {
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed) && parsed.every((x) => typeof x === "string")) {
+        return Object.freeze(parsed);
+      }
+    } catch {
+      // fall through to the refusal below
     }
-  } catch {
-    // fall through - a hand-edited list degrades to empty, never throws
   }
-  return Object.freeze([]);
+  throw new TriggerSourceArtifactsError(path, raw);
+}
+
+/**
+ * The recorded occurrence count, or {@link OCCURRENCES_WHEN_UNRECORDED}
+ * for a record written before the ledger existed. A present but
+ * non-numeric value is a hand-edit and reads the same way: the record
+ * has one occurrence anybody can vouch for, its creation.
+ */
+function parseOccurrences(raw: unknown): number {
+  if (typeof raw !== "string") return OCCURRENCES_WHEN_UNRECORDED;
+  const parsed = Number.parseInt(raw.trim(), 10);
+  return Number.isSafeInteger(parsed) && parsed >= OCCURRENCES_WHEN_UNRECORDED
+    ? parsed
+    : OCCURRENCES_WHEN_UNRECORDED;
 }
 
 function effectiveStatus(status: TriggerStatus, expiresAt: string, now: Date): TriggerStatus {
-  if (!OPEN_STATUSES.has(status)) return status;
+  // Expiry applies to open statuses only, which is precisely what makes
+  // `suppressed` indefinite: it is terminal, so no clock reaches it.
+  if (!TRIGGER_OPEN_STATUSES.has(status)) return status;
   const expiry = Date.parse(expiresAt);
   if (Number.isFinite(expiry) && now.getTime() > expiry) return "expired";
   return status;
@@ -142,6 +227,7 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
   if (typeof urgency !== "string" || !isTriggerUrgency(urgency)) return null;
   const createdAt = typeof meta["created_at"] === "string" ? meta["created_at"] : "";
   const expiresAt = typeof meta["expires_at"] === "string" ? meta["expires_at"] : "";
+  const suppressedFrom = meta["suppressed_from"];
   return Object.freeze({
     id,
     kind,
@@ -150,7 +236,7 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     urgency,
     reason: sectionText(body, "Reason"),
     suggestedAction: sectionText(body, "Suggested action"),
-    sourceArtifacts: parseJsonArray(meta["source_artifacts"]),
+    sourceArtifacts: parseArtifactList(meta[SOURCE_ARTIFACTS_KEY], path),
     contextSnippets: Object.freeze(
       sectionText(body, "Context")
         .split("\n")
@@ -163,6 +249,11 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     expiresAt,
     deliveredAt: typeof meta["delivered_at"] === "string" ? meta["delivered_at"] : null,
     resolvedAt: typeof meta["resolved_at"] === "string" ? meta["resolved_at"] : null,
+    suppressedAt: typeof meta["suppressed_at"] === "string" ? meta["suppressed_at"] : null,
+    suppressedFrom: isTriggerStatus(suppressedFrom) ? suppressedFrom : null,
+    occurrences: parseOccurrences(meta["occurrences"]),
+    // A record predating the ledger last fired when it was created.
+    lastSeenAt: typeof meta["last_seen_at"] === "string" ? meta["last_seen_at"] : createdAt,
     path,
   });
 }
@@ -216,7 +307,7 @@ export interface CreateTriggersOptions {
 
 export interface SkippedCandidate {
   readonly cooldownKey: string;
-  readonly reason: "active" | "cooldown" | "kind-cap" | "invalid";
+  readonly reason: "active" | "cooldown" | "kind-cap" | "invalid" | "suppressed";
 }
 
 export interface CreateTriggersResult {
@@ -228,13 +319,38 @@ function blockReason(
   twin: TriggerRecord,
   now: Date,
   cooldownDays: number,
-): "active" | "cooldown" | null {
-  if (OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
-  if (twin.effectiveStatus === "expired") return null;
+): SkippedCandidate["reason"] | null {
+  // Suppression comes first and carries no clock: the operator judged
+  // this cooldown key structurally benign, so no arithmetic below can
+  // ever let it back through.
+  if (twin.effectiveStatus === TRIGGER_STATUS.suppressed) return "suppressed";
+  if (TRIGGER_OPEN_STATUSES.has(twin.effectiveStatus)) return "active";
+  if (twin.effectiveStatus === TRIGGER_STATUS.expired) return null;
   // dismissed / acted: silent for the cooldown window after resolution.
   const resolved = twin.resolvedAt !== null ? Date.parse(twin.resolvedAt) : Number.NaN;
   if (!Number.isFinite(resolved)) return null;
   return now.getTime() < resolved + cooldownDays * DAY_MS ? "cooldown" : null;
+}
+
+/**
+ * Record that a finding fired again while the queue stayed silent.
+ *
+ * Written for EVERY blocked twin, not only suppressed ones: one code
+ * path with no special case, and it is exactly the event worth keeping
+ * - without it a suppressed finding that recurs daily is
+ * indistinguishable from one that never fired again.
+ *
+ * Callers must hold the trigger-directory lock; {@link createTriggers}
+ * already does, which is what makes the counter race-free.
+ */
+export function recordRecurrence(record: TriggerRecord, now: Date): TriggerRecord {
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    occurrences: record.occurrences + 1,
+    lastSeenAt: now.toISOString(),
+  });
+  writeRecord(next);
+  return next;
 }
 
 /** Persist candidates as triggers, skipping cooldown-blocked twins. */
@@ -294,6 +410,10 @@ function createTriggersLocked(
     if (twin !== undefined) {
       const reason = blockReason(twin, opts.now, cooldownDays);
       if (reason !== null) {
+        // The twin stays in the map in its updated form so a second
+        // candidate on the same key in this scan counts once more
+        // rather than overwriting the first count.
+        byKey.set(candidate.cooldownKey, recordRecurrence(twin, opts.now));
         skipped.push({ cooldownKey: candidate.cooldownKey, reason });
         continue;
       }
@@ -316,12 +436,17 @@ function createTriggersLocked(
     const record: TriggerRecord = Object.freeze({
       ...candidate,
       id,
-      status: "pending" as const,
-      effectiveStatus: "pending" as const,
+      status: TRIGGER_STATUS.pending,
+      effectiveStatus: TRIGGER_STATUS.pending,
       createdAt,
       expiresAt,
       deliveredAt: null,
       resolvedAt: null,
+      suppressedAt: null,
+      suppressedFrom: null,
+      // Creating the record IS the first recorded occurrence.
+      occurrences: OCCURRENCES_WHEN_UNRECORDED,
+      lastSeenAt: createdAt,
       path: join(dir, `${id}.md`),
     });
     writeRecord(record);
@@ -333,19 +458,29 @@ function createTriggersLocked(
 
 // ── Transitions ─────────────────────────────────────────────────────────────
 
-export type TriggerAction = "acknowledge" | "dismiss" | "act";
+export type TriggerAction = "acknowledge" | "dismiss" | "act" | "suppress" | "unsuppress";
 
 export interface TransitionOptions {
   readonly now: Date;
 }
 
-const ACTION_TO_STATUS: Record<TriggerAction, TriggerStatus> = {
-  acknowledge: "acknowledged",
-  dismiss: "dismissed",
-  act: "acted",
+/**
+ * Actions whose target status is fixed. `unsuppress` is absent because
+ * its target is whatever status suppression interrupted, which is read
+ * off the record rather than looked up here.
+ */
+const ACTION_TO_STATUS: Record<Exclude<TriggerAction, "unsuppress">, TriggerStatus> = {
+  acknowledge: TRIGGER_STATUS.acknowledged,
+  dismiss: TRIGGER_STATUS.dismissed,
+  act: TRIGGER_STATUS.acted,
+  suppress: TRIGGER_STATUS.suppressed,
 };
 
-/** Apply one lifecycle transition. Throws on unknown id or terminal state. */
+/**
+ * Apply one lifecycle transition. Throws on an unknown id, on a terminal
+ * state for acknowledge / dismiss / act, and on `unsuppress` against
+ * anything that is not suppressed.
+ */
 export function transitionTrigger(
   vault: string,
   id: string,
@@ -356,18 +491,76 @@ export function transitionTrigger(
   assertVaultIdentityForWrite(vault);
   const record = listTriggers(vault, { now: opts.now }).find((r) => r.id === id);
   if (record === undefined) throw new Error(`unknown trigger: ${id}`);
-  if (!OPEN_STATUSES.has(record.effectiveStatus)) {
+  const nowIso = opts.now.toISOString();
+
+  if (action === "suppress") return suppress(record, nowIso);
+  if (action === "unsuppress") return unsuppress(record, opts.now);
+
+  if (TRIGGER_TERMINAL_STATUSES.has(record.effectiveStatus)) {
     throw new Error(`trigger ${id} is terminal (${record.effectiveStatus})`);
   }
-  if (action === "acknowledge" && record.effectiveStatus === "acknowledged") {
+  if (action === "acknowledge" && record.effectiveStatus === TRIGGER_STATUS.acknowledged) {
     return record; // idempotent
   }
-  const nowIso = opts.now.toISOString();
   const next: TriggerRecord = Object.freeze({
     ...record,
     status: ACTION_TO_STATUS[action],
     effectiveStatus: ACTION_TO_STATUS[action],
     resolvedAt: action === "acknowledge" ? record.resolvedAt : nowIso,
+  });
+  writeRecord(next);
+  return next;
+}
+
+/**
+ * Silence a cooldown key indefinitely.
+ *
+ * Legal from ANY status - "never surface this again" is a meaningful
+ * judgement about an expired or already-acted finding too, because what
+ * it silences is the key, not the record. The delivery and resolution
+ * instants are deliberately left untouched: that is what makes
+ * {@link unsuppress} an exact restore rather than a reconstruction.
+ */
+function suppress(record: TriggerRecord, nowIso: string): TriggerRecord {
+  if (record.effectiveStatus === TRIGGER_STATUS.suppressed) return record; // idempotent
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    status: TRIGGER_STATUS.suppressed,
+    effectiveStatus: TRIGGER_STATUS.suppressed,
+    suppressedAt: nowIso,
+    suppressedFrom: record.status,
+  });
+  writeRecord(next);
+  return next;
+}
+
+/**
+ * Undo a suppression, restoring the status it interrupted.
+ *
+ * The stored status is restored, not the effective one, so a trigger
+ * suppressed while its TTL had already lapsed goes back to reading as
+ * expired on the next read exactly as it did before.
+ */
+function unsuppress(record: TriggerRecord, now: Date): TriggerRecord {
+  if (record.effectiveStatus !== TRIGGER_STATUS.suppressed) {
+    throw new Error(`trigger ${record.id} is not suppressed (${record.effectiveStatus})`);
+  }
+  if (record.suppressedFrom === null) {
+    // Never default to pending: that would invent a lifecycle position
+    // and, for a formerly dismissed finding, silently restart its
+    // cooldown from nothing.
+    throw new Error(
+      `trigger ${record.id} is suppressed but carries no suppressed_from; ` +
+        "restore the field or dismiss the trigger instead",
+    );
+  }
+  const restored = record.suppressedFrom;
+  const next: TriggerRecord = Object.freeze({
+    ...record,
+    status: restored,
+    effectiveStatus: effectiveStatus(restored, record.expiresAt, now),
+    suppressedAt: null,
+    suppressedFrom: null,
   });
   writeRecord(next);
   return next;
@@ -386,12 +579,17 @@ export function markTriggersDelivered(
   const nowIso = opts.now.toISOString();
   for (const record of listTriggers(vault, { now: opts.now })) {
     if (!wanted.has(record.id)) continue;
-    if (record.effectiveStatus !== "pending" && record.effectiveStatus !== "delivered") continue;
+    if (
+      record.effectiveStatus !== TRIGGER_STATUS.pending &&
+      record.effectiveStatus !== TRIGGER_STATUS.delivered
+    ) {
+      continue;
+    }
     writeRecord(
       Object.freeze({
         ...record,
-        status: "delivered" as const,
-        effectiveStatus: "delivered" as const,
+        status: TRIGGER_STATUS.delivered,
+        effectiveStatus: TRIGGER_STATUS.delivered,
         deliveredAt: nowIso,
       }),
     );
@@ -414,14 +612,18 @@ const URGENCY_RANK: Record<string, number> = Object.fromEntries(
  * Triggers the morning brief may surface NOW: pending ones, plus
  * delivered-but-still-open ones whose last delivery is older than the
  * cooldown window. Ranked urgency desc, then newest first, capped.
+ *
+ * Eligibility is an allow-list of two statuses, so a suppressed trigger
+ * is excluded by the same rule that excludes a dismissed one - no
+ * suppression-specific branch exists or is needed here.
  */
 export function briefTriggers(
   vault: string,
   opts: BriefTriggersOptions,
 ): ReadonlyArray<TriggerRecord> {
   const eligible = listTriggers(vault, { now: opts.now }).filter((record) => {
-    if (record.effectiveStatus === "pending") return true;
-    if (record.effectiveStatus !== "delivered") return false;
+    if (record.effectiveStatus === TRIGGER_STATUS.pending) return true;
+    if (record.effectiveStatus !== TRIGGER_STATUS.delivered) return false;
     const delivered = record.deliveredAt !== null ? Date.parse(record.deliveredAt) : Number.NaN;
     if (!Number.isFinite(delivered)) return true;
     return opts.now.getTime() >= delivered + opts.cooldownDays * DAY_MS;

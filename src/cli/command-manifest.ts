@@ -281,7 +281,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Agent write sessions: open, submit, approve, abandon, status, list, sweep",
         ),
         command("panel", "Multi-persona decision panel riding the write-session kernel"),
-        command("trigger", "Grounded proactive trigger queue (scan/list/ack/dismiss/act/history)"),
+        command(
+          "trigger",
+          "Grounded proactive trigger queue (scan/list/ack/dismiss/act/suppress/unsuppress/history)",
+        ),
         command("deep-synthesis", "Topic dossier: agreements, contradictions, stale claims, gaps"),
         command("ideas", "Ranked next-direction candidates from open loops"),
         command("entity", "Canonical entity registry: set, get, list, relate, archive"),

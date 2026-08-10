@@ -893,11 +893,31 @@ a compact `Brain/profile.md` digest plus a `.o2bfs` root marker, and
 Proactive insight: `o2b brain trigger scan` converts semantic-health
 and retention findings into Markdown trigger records under
 `Brain/triggers/` with a strict lifecycle (pending, delivered,
-acknowledged, acted, dismissed, expired). Stable cooldown keys make
-scans idempotent, and the morning brief delivers pending triggers at
-most once per cooldown window - the Brain remembers what the operator
-already saw, dismissed, or acted on instead of rediscovering it every
-run. `o2b brain deep-synthesis <topic>` builds a deterministic topic
+acknowledged, acted, dismissed, expired, suppressed). Stable cooldown
+keys make scans idempotent, and the morning brief delivers pending
+triggers at most once per cooldown window - the Brain remembers what
+the operator already saw, dismissed, or acted on instead of
+rediscovering it every run.
+
+`dismissed` and `acted` carry a clock: after `trigger_cooldown_days`
+the same finding may return. `suppressed` carries none, and it is the
+answer for a finding the operator has judged structurally benign -
+`o2b brain trigger suppress <id>` silences that cooldown key
+indefinitely, from any state including an expired or already-acted
+one. It is reversible: suppressing stamps the status it interrupted
+and leaves the delivery and resolution instants untouched, so
+`unsuppress` restores the original state together with its original
+cooldown arithmetic rather than reconstructing them. A suppressed
+trigger is terminal, so it is hidden from `list`, shown in `history`,
+and never reaches the morning brief; `list` prints how many triggers
+are currently suppressed so silence is always accounted for. Silence
+is also audited: every scan whose candidate was blocked - suppressed
+or merely cooling down - increments `occurrences` and stamps
+`last_seen_at` on the record it was blocked by, so a suppressed
+finding that keeps firing is distinguishable from one that never fired
+again.
+
+`o2b brain deep-synthesis <topic>` builds a deterministic topic
 dossier (agreements, contradictions, stale claims, knowledge gaps)
 and `o2b brain ideas` ranks next directions from open loops; both can
 enqueue their findings as triggers. Opt-in recall-gate telemetry

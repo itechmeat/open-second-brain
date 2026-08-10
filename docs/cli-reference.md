@@ -158,7 +158,7 @@ o2b brain source              add <vault> --alias <name> | list | remove <alias>
 o2b brain links               normalize [path-prefix] [--mode preserve|full|short] [--write] [--json] - wikilink path format rewrite; dry-run by default; config key wiki_link_format
 o2b brain profile             [--stale-seconds N] [--force] [--json] - materialize Brain/profile.md digest + .o2bfs root marker (age-gated)
 o2b brain sgrep               <query> [path-prefix] [--limit N] [--keyword-only] [--json] - grep-shaped semantic search; path:line: lines; exit 1 on no matches
-o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7)
+o2b brain trigger             scan | list [--status S] | ack <id> | dismiss <id> | act <id> | suppress <id> | unsuppress <id> | history [--json] - grounded trigger queue; cooldown via trigger_cooldown_days (default 7); suppress silences a finding indefinitely and unsuppress restores the status it interrupted; list reports the suppressed count
 o2b brain deep-synthesis      <topic> [--limit N] [--triggers] [--json] - deterministic topic dossier: agreements, contradictions, stale claims, knowledge gaps, plus a strongest-objection steelman
 o2b brain ideas               [--cap N] [--triggers] [--json] - ranked next-direction candidates from open questions, orphan notes, aging signals
 o2b brain recall-telemetry    gate-list | gate-summary [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - recall-gate decision telemetry (recall_gate_telemetry, default off)
