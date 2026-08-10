@@ -15,10 +15,17 @@
  * the reverse. A manifest cannot vouch for its own completeness.
  *
  * Scope is one level below each dispatcher - the switch in `main.ts`,
- * the switch in `brain.ts`, and `KNOWN_VERBS` in `search.ts`. Deeper
- * nesting (`brain schema report`, `brain git ingest`) is parsed by each
- * verb from its own positionals, with no shared table to enumerate from,
- * so it is out of this ratchet's reach and stays modelled by hand.
+ * the switch in `brain.ts`, `KNOWN_VERBS` in `search.ts`, and the verb
+ * table in `partner.ts`. Deeper nesting (`brain schema report`, `brain
+ * git ingest`) is parsed by each verb from its own positionals, with no
+ * shared table to enumerate from, so it is out of this ratchet's reach
+ * and stays modelled by hand.
+ *
+ * `partner codegraph` sits two levels deep but IS enumerable, because its
+ * dispatcher is a frozen verb table rather than a chain of comparisons.
+ * That is why it was written as a table: a verb the manifest never heard
+ * of is a verb no completion offers, and `resync --cron-template` is the
+ * only way to reach the codegraph resync recipe at all.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -48,6 +55,9 @@ const BRAIN_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
 /** `search` verbs with no manifest entry, and why. */
 const SEARCH_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
 
+/** `partner codegraph` verbs with no manifest entry, and why. */
+const PARTNER_CODEGRAPH_UNLISTED: Readonly<Record<string, string>> = Object.freeze({});
+
 /** An exclusion reason has to say something; ten characters is the floor. */
 const MIN_REASON_LENGTH = 10;
 
@@ -68,6 +78,31 @@ function switchCaseLabels(file: string, marker: string): string[] {
   const end = text.indexOf("default:", start);
   expect(`${file} switch is terminated: ${end > start}`).toBe(`${file} switch is terminated: true`);
   return [...text.slice(start, end).matchAll(/case "([^"]+)":/g)].map((m) => m[1]!);
+}
+
+/** The keys of the `CODEGRAPH_VERBS` table literal in `partner.ts`. */
+function partnerCodegraphVerbs(): string[] {
+  const text = cliSource("partner.ts");
+  const start = text.indexOf("const CODEGRAPH_VERBS");
+  expect(`partner.ts declares CODEGRAPH_VERBS: ${start >= 0}`).toBe(
+    "partner.ts declares CODEGRAPH_VERBS: true",
+  );
+  const open = text.indexOf("Object.freeze({", start);
+  const end = text.indexOf("});", open);
+  expect(`the partner verb table is terminated: ${end > open}`).toBe(
+    "the partner verb table is terminated: true",
+  );
+  return [...text.slice(open, end).matchAll(/^\s{4}([A-Za-z][\w-]*):/gm)].map((m) => m[1]!);
+}
+
+/** Manifest children of `o2b partner codegraph`. */
+function manifestPartnerCodegraphVerbs(): string[] {
+  const partner = CLI_COMMAND_MANIFEST.commands.find((c) => c.name === "partner");
+  const codegraph = partner?.commands?.find((c) => c.name === "codegraph");
+  expect(`the manifest models partner codegraph: ${codegraph !== undefined}`).toBe(
+    "the manifest models partner codegraph: true",
+  );
+  return (codegraph?.commands ?? []).map((c) => c.name);
 }
 
 /** The `KNOWN_VERBS` set literal in `search.ts`. */
@@ -122,6 +157,12 @@ function levels(): ReadonlyArray<Level> {
       manifestVerbs: nestedCommandNames("search"),
       unlisted: SEARCH_UNLISTED,
     },
+    {
+      label: "o2b partner codegraph",
+      dispatcherVerbs: partnerCodegraphVerbs(),
+      manifestVerbs: manifestPartnerCodegraphVerbs(),
+      unlisted: PARTNER_CODEGRAPH_UNLISTED,
+    },
   ];
 }
 
@@ -170,10 +211,11 @@ describe("command manifest completeness", () => {
   test("the ratchet is not vacuous", () => {
     // A parser that silently stopped matching would report a clean sweep
     // over an empty set. Pin the measurement, not only its verdict.
-    const [top, brain, search] = levels();
+    const [top, brain, search, partner] = levels();
     expect(top!.dispatcherVerbs.length).toBeGreaterThan(15);
     expect(brain!.dispatcherVerbs.length).toBeGreaterThan(130);
     expect(search!.dispatcherVerbs.length).toBeGreaterThan(10);
+    expect(partner!.dispatcherVerbs.toSorted()).toEqual(["report", "resync"]);
   });
 
   test("the search dispatcher and its verb gate agree", () => {
@@ -223,6 +265,34 @@ describe("the repaired manifest reaches its two consumers", () => {
     for (const verb of REPAIRED.search) {
       expect(`search ${verb}: ${searchNames.has(verb)}`).toBe(`search ${verb}: true`);
     }
+  });
+
+  test("completions offer the flags that reach the cron recipes", () => {
+    // `search reindex` declared no flags at all, so `--cron-template` -
+    // the only entry point to the reindex recipe - completed nowhere.
+    // Completion flag lists are built by walking the whole manifest, so a
+    // declared flag at any depth reaches every shell.
+    const zsh = renderCompletions("zsh", CLI_COMMAND_MANIFEST);
+    for (const token of ["--cron-template", "--interval", "--fail-on-health", "--project"]) {
+      expect(`${token}: ${zsh.includes(token)}`).toBe(`${token}: true`);
+    }
+  });
+
+  test("help --json carries the partner codegraph verbs", async () => {
+    // `partner` is the one modelled parent whose verbs live two levels
+    // down, so the top-level census above cannot see them.
+    const r = await runCli(["help", "--json"]);
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout) as {
+      commands: ReadonlyArray<{
+        name: string;
+        commands?: ReadonlyArray<{ name: string; commands?: ReadonlyArray<{ name: string }> }>;
+      }>;
+    };
+    const codegraph = payload.commands
+      .find((c) => c.name === "partner")
+      ?.commands?.find((c) => c.name === "codegraph");
+    expect((codegraph?.commands ?? []).map((c) => c.name).toSorted()).toEqual(["report", "resync"]);
   });
 
   test("every modelled command carries a non-empty summary", () => {

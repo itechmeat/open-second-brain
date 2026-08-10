@@ -6,126 +6,53 @@
  * nothing. The operator (or agent in the user's name) copies what
  * fits their host into the cron infrastructure of choice.
  *
- * Duration parser accepts <N>s|m|h|d. Mapping to a cron expression
- * covers the common cadences:
- *   - minutes:  every N (N less than 60)   maps to N-step minutes
- *   - hours:    every N hours              maps to N-step hours
- *   - days:     every N days               maps to N-step days
- *   - seconds:  rejected (cron's finest grain is one minute)
+ * The layout, the interval parser and the heredoc mechanics live in
+ * `cron-recipe.ts`, shared with every other recipe this CLI prints.
+ * What stays here is what is specific to the reindex recipe: its name,
+ * its command and its change-detection expression, gathered into
+ * {@link SEARCH_REINDEX_RECIPE}. The extraction is required to be
+ * output-preserving to the byte - `tests/cli/search-cron-template.test.ts`
+ * pins the rendered text against a fixture - because operators already
+ * have this script installed and a diff here is a diff in their crontab.
  *
- * Inputs outside those bounds raise a CronTemplateError with a
- * concrete suggestion (use the next unit up).
+ * Every name this module exported before the extraction is still
+ * exported from it, so existing importers are untouched.
  */
 
-export class CronTemplateError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "CronTemplateError";
-  }
-}
+import {
+  CronTemplateError,
+  operatorScriptPath,
+  renderCronRecipe,
+  parseInterval,
+  type CronRecipeOptions,
+  type CronRecipeSpec,
+  type ParsedInterval,
+} from "./cron-recipe.ts";
 
-interface ParsedInterval {
-  /** Cron expression for the chosen interval. */
-  readonly cron: string;
-  /** Human-readable label (e.g. "30 minutes"). */
-  readonly human: string;
-  /** Schedule string for 'hermes cron create --schedule ...'. */
-  readonly hermesSchedule: string;
-}
+export { CronTemplateError, parseInterval };
+export type { ParsedInterval };
 
-export function parseInterval(raw: string): ParsedInterval {
-  const trimmed = raw.trim();
-  const m = /^(\d+)\s*(s|m|h|d)$/.exec(trimmed);
-  if (!m) {
-    throw new CronTemplateError(
-      "cannot parse interval " + JSON.stringify(raw) + ": expected <N>s|m|h|d (e.g. 30m, 6h, 1d)",
-    );
-  }
-  const n = parseInt(m[1]!, 10);
-  const unit = m[2]!;
-  if (n <= 0) {
-    throw new CronTemplateError("interval must be positive; got " + JSON.stringify(raw));
-  }
-  if (unit === "s") {
-    throw new CronTemplateError(
-      "cron grain is one minute -- second-level intervals are not supported",
-    );
-  }
-  if (unit === "m") {
-    if (n >= 60) {
-      const hours = Math.round(n / 60);
-      throw new CronTemplateError(
-        "intervals of 60 minutes or more must use the h unit (e.g. " + hours + "h)",
-      );
-    }
-    const cron = "*/" + n + " * * * *";
-    return { cron, human: n + " minutes", hermesSchedule: cron };
-  }
-  if (unit === "h") {
-    if (n >= 24) {
-      const days = Math.round(n / 24);
-      throw new CronTemplateError(
-        "intervals of 24 hours or more must use the d unit (e.g. " + days + "d)",
-      );
-    }
-    const cron = "0 */" + n + " * * *";
-    return { cron, human: n + " hours", hermesSchedule: cron };
-  }
-  // unit === "d"
-  const cron = "0 0 */" + n + " * *";
-  return { cron, human: n + " days", hermesSchedule: cron };
-}
+export type RenderCronTemplateOptions = CronRecipeOptions;
 
-export interface RenderCronTemplateOptions {
-  /** Override the resolved o2b binary path (test seam). */
-  readonly o2bBin?: string;
-}
+/** Cron job name, and the stem of the script path derived from it. */
+const SEARCH_REINDEX_CRON_NAME = "osb-reindex";
+
+/** The reindex recipe: the reindex-specific half of the shared layout. */
+export const SEARCH_REINDEX_RECIPE: CronRecipeSpec = Object.freeze<CronRecipeSpec>({
+  title: "Open Second Brain - periodic reindex template",
+  cronName: SEARCH_REINDEX_CRON_NAME,
+  scriptPath: operatorScriptPath(SEARCH_REINDEX_CRON_NAME),
+  scriptNotes: Object.freeze([
+    "(then chmod +x). Sources ~/.hermes/.env if present so the",
+    "embedding API key lands in the environment.",
+  ]),
+  schedulerNote: "(preferred when Hermes is the embedding owner)",
+  buildScriptBody: ({ o2bBin }) => renderWatchdogBody(o2bBin),
+  buildVerifyCommand: ({ o2bBin }) => o2bBin + " search status",
+});
 
 export function renderCronTemplate(interval: string, opts: RenderCronTemplateOptions = {}): string {
-  const parsed = parseInterval(interval);
-  const o2bBin = opts.o2bBin ?? "o2b";
-  const watchdogBody = renderWatchdogBody(o2bBin);
-  const header =
-    "# ----------------------------------------------------------------------\n" +
-    "# Open Second Brain - periodic reindex template\n" +
-    "# interval: " +
-    parsed.human +
-    "\n" +
-    "#\n" +
-    "# Pick ONE of the three paths below. The watchdog script is the\n" +
-    "# common piece; both crontab and Hermes-cron rely on it.\n" +
-    "# ----------------------------------------------------------------------\n";
-  const watchdog =
-    "## 1. Watchdog script - save to ~/.local/bin/osb-reindex.sh\n" +
-    "##    (then chmod +x). Sources ~/.hermes/.env if present so the\n" +
-    "##    embedding API key lands in the environment.\n" +
-    "\n" +
-    "cat >~/.local/bin/osb-reindex.sh <<'OSBEOF'\n" +
-    watchdogBody +
-    "OSBEOF\n" +
-    "chmod +x ~/.local/bin/osb-reindex.sh\n";
-  const nativeCron =
-    "## 2. Native crontab - open 'crontab -e' and append:\n" +
-    "\n" +
-    parsed.cron +
-    "    ~/.local/bin/osb-reindex.sh\n";
-  const hermesCron =
-    "## 3. Hermes cron (preferred when Hermes is the embedding owner):\n" +
-    "\n" +
-    "hermes cron create \\\n" +
-    "  --name osb-reindex \\\n" +
-    "  --schedule '" +
-    parsed.hermesSchedule +
-    "' \\\n" +
-    '  --command "$HOME/.local/bin/osb-reindex.sh" \\\n' +
-    "  --no-agent\n";
-  const footer =
-    "# ----------------------------------------------------------------------\n" +
-    "# After install, verify with: " +
-    o2bBin +
-    " search status\n" +
-    "# ----------------------------------------------------------------------\n";
-  return [header, "", watchdog, "", nativeCron, "", hermesCron, "", footer].join("\n");
+  return renderCronRecipe(SEARCH_REINDEX_RECIPE, interval, opts);
 }
 
 function renderWatchdogBody(o2bBin: string): string {

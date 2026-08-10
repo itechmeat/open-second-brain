@@ -482,8 +482,32 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("verbose", "boolean"),
           flag("explain", "boolean"),
         ]),
-        command("index", "Incrementally update the search index"),
-        command("reindex", "Rebuild the search index"),
+        // Both builders declare their whole `parseFlags` schema for the
+        // same reason `query` does, and `tests/cli/search-query-flag-manifest.test.ts`
+        // holds all three to it: `--cron-template` and `--interval` were
+        // parsed by `reindex` and advertised nowhere, so neither help nor
+        // completions could offer the recipe this CLI knows how to print.
+        command("index", "Incrementally update the search index", [
+          flag("vault", "string"),
+          flag("config", "string"),
+          flag("db", "string"),
+          flag("embeddings", "boolean"),
+          flag("force", "boolean"),
+          flag("force-cost", "boolean"),
+          flag("concurrency", "string"),
+          flag("verbose", "boolean"),
+        ]),
+        command("reindex", "Rebuild the search index", [
+          flag("vault", "string"),
+          flag("config", "string"),
+          flag("db", "string"),
+          flag("embeddings", "boolean"),
+          flag("force-cost", "boolean"),
+          flag("concurrency", "string"),
+          flag("verbose", "boolean"),
+          flag("cron-template", "boolean"),
+          flag("interval", "string"),
+        ]),
         command("watch", "Watch the vault and incrementally sync the index on .md edits"),
         command("status", "Print search index status"),
         command(
@@ -542,7 +566,18 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           [
             command("report", "Report codegraph index status and workspace members", [
               flag("vault", "string"),
+              flag("fail-on-health", "boolean"),
             ]),
+            command(
+              "resync",
+              "Print a cron recipe that re-indexes the code project when its commit moves (requires --cron-template; writes nothing)",
+              [
+                flag("cron-template", "boolean"),
+                flag("interval", "string"),
+                flag("project", "string"),
+                flag("vault", "string"),
+              ],
+            ),
           ],
         ),
       ],

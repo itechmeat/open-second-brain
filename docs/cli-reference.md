@@ -569,8 +569,15 @@ See [`hermes-cron.md`](hermes-cron.md) for the cron envelope and Telegram delive
 Reports on external code-project partners. Strictly read-only: never installs, initializes, extracts, or mutates a partner index or the vault.
 
 ```text
-o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. When indexed, runs a read-only, non-blocking graph-health gate (index.health) that flags empty-graph, collapsed-edges, dangling-references, self-loops, and cache-root-mismatch before labeling/import/recall trust the graph. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report
+o2b partner codegraph report  Resolve the in-scope code project and report the codegraph index state (no_project | absent | not_indexed | indexed with node/file/edge counts | error) plus a structural Cargo.toml workspace-member list. When indexed, runs a read-only, non-blocking graph-health gate (index.health) that flags empty-graph, collapsed-edges, dangling-references, self-loops, and cache-root-mismatch before labeling/import/recall trust the graph. Non-Rust projects report cargo_workspace: null with a reason. --vault sharpens the scan scope; --json emits the schema-versioned report; --fail-on-health exits 1 unless the index is present AND its health gate is clean, so a scheduled job can branch on it (without the flag the exit stays 0 whatever the report says)
+o2b partner codegraph resync  Print a cron recipe that re-indexes the in-scope code project whenever its commit moves. --cron-template is REQUIRED (there is nothing else this verb does, and it never runs an indexer); --interval accepts <N>m|h|d and defaults to 6h; --project names the repository instead of resolving it from the scan; --vault sharpens that scan. Output is text on stdout and nothing else: the emitted script aborts on a cache-root-mismatch health warning, aborts when jq is missing rather than matching the report loosely, skips quietly when the commit is unchanged, invokes codegraph itself, and records the commit in a stamp under ${XDG_STATE_HOME:-$HOME/.local/state}/open-second-brain only after a --fail-on-health check passes
 ```
+
+Every write in the resync recipe is a shell command the operator's own
+crontab runs on the operator's own host. Open Second Brain never installs,
+initializes, or writes data for codegraph, and rendering the recipe creates
+nothing - which is also why there is no maintenance-lane task that re-indexes
+on its own.
 
 ## Search
 

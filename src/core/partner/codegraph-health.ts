@@ -24,13 +24,23 @@
  * gate stays forward-compatible with a richer status surface.
  */
 
-/** Stable code per health finding so callers can filter without parsing text. */
-export type GraphHealthCode =
-  | "empty-graph"
-  | "collapsed-edges"
-  | "dangling-references"
-  | "self-loops"
-  | "cache-root-mismatch";
+/**
+ * Stable code per health finding so callers can filter without parsing text.
+ *
+ * Frozen rather than a bare union because the codes are consumed outside
+ * TypeScript: the codegraph resync cron recipe emits a shell gate that
+ * selects one of them out of `--json` output, so the string has to be
+ * reachable as a value, not only as a type.
+ */
+export const GRAPH_HEALTH_CODES = Object.freeze({
+  emptyGraph: "empty-graph",
+  collapsedEdges: "collapsed-edges",
+  danglingReferences: "dangling-references",
+  selfLoops: "self-loops",
+  cacheRootMismatch: "cache-root-mismatch",
+} as const);
+
+export type GraphHealthCode = (typeof GRAPH_HEALTH_CODES)[keyof typeof GRAPH_HEALTH_CODES];
 
 /** One non-blocking graph-health finding. */
 export interface GraphHealthWarning {
@@ -98,7 +108,7 @@ export function assessGraphHealth(input: GraphHealthInput): GraphHealthReport {
 
   if (nodes <= 0) {
     warnings.push({
-      code: "empty-graph",
+      code: GRAPH_HEALTH_CODES.emptyGraph,
       message:
         "index is initialized but holds 0 nodes; extraction produced an empty graph - " +
         "labeling and recall will find nothing until it is re-indexed",
@@ -108,7 +118,7 @@ export function assessGraphHealth(input: GraphHealthInput): GraphHealthReport {
     // meaningful when there is at least one node (an empty graph is reported
     // above and should not double-warn).
     warnings.push({
-      code: "collapsed-edges",
+      code: GRAPH_HEALTH_CODES.collapsedEdges,
       message:
         `graph has ${nodes} node(s) but 0 edges; relationship extraction collapsed - ` +
         "callers/callees/impact traversal will be empty",
@@ -117,7 +127,7 @@ export function assessGraphHealth(input: GraphHealthInput): GraphHealthReport {
 
   if (input.danglingRefs !== undefined && input.danglingRefs > 0) {
     warnings.push({
-      code: "dangling-references",
+      code: GRAPH_HEALTH_CODES.danglingReferences,
       message:
         `${input.danglingRefs} dangling reference(s): edges point at nodes absent from the ` +
         "index; derived labels/imports built from them would reference missing symbols",
@@ -126,7 +136,7 @@ export function assessGraphHealth(input: GraphHealthInput): GraphHealthReport {
 
   if (input.selfLoops !== undefined && input.selfLoops > 0) {
     warnings.push({
-      code: "self-loops",
+      code: GRAPH_HEALTH_CODES.selfLoops,
       message:
         `${input.selfLoops} self-loop edge(s): a node references itself; ` +
         "impact and traversal surfaces may double-count or cycle",
@@ -135,7 +145,7 @@ export function assessGraphHealth(input: GraphHealthInput): GraphHealthReport {
 
   if (input.indexRoot && input.worktreeRoot && !samePath(input.indexRoot, input.worktreeRoot)) {
     warnings.push({
-      code: "cache-root-mismatch",
+      code: GRAPH_HEALTH_CODES.cacheRootMismatch,
       message:
         `index was built for '${input.indexRoot}' but is being read from ` +
         `'${input.worktreeRoot}'; file and line references may be stale for this tree - ` +

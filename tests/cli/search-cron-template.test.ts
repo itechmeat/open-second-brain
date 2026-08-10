@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -16,8 +16,25 @@ import {
   CronTemplateError,
   parseInterval,
   renderCronTemplate,
+  SEARCH_REINDEX_RECIPE,
 } from "../../src/cli/search-cron-template.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+/**
+ * The rendered template, captured BEFORE the shared cron-recipe kernel was
+ * extracted out of this module. Operators already have this script saved and
+ * scheduled, so a byte of drift here is a byte of drift in their crontab: the
+ * extraction is only correct if it changed nothing at all, and a fixture is
+ * the only assertion that can say so. Anchor assertions cannot - they pass
+ * over any output that still happens to contain the anchors.
+ */
+const PINNED_FIXTURE = join(
+  import.meta.dir,
+  "..",
+  "fixtures",
+  "cron-recipe",
+  "search-reindex-30m.txt",
+);
 
 describe("parseInterval", () => {
   test("30m → */30 * * * *", () => {
@@ -66,6 +83,18 @@ describe("parseInterval", () => {
 });
 
 describe("renderCronTemplate", () => {
+  test("the rendered template is byte-identical to the pinned fixture", () => {
+    expect(renderCronTemplate("30m")).toBe(readFileSync(PINNED_FIXTURE, "utf8"));
+  });
+
+  test("the recipe spec is the one this module still owns", () => {
+    // The fixture would also pass if the module delegated to some OTHER
+    // recipe that happened to render the same text, so pin the identity of
+    // the spec the delegation goes through as well.
+    expect(SEARCH_REINDEX_RECIPE.cronName).toBe("osb-reindex");
+    expect(SEARCH_REINDEX_RECIPE.scriptPath).toBe("~/.local/bin/osb-reindex.sh");
+  });
+
   test("body contains every expected anchor", () => {
     const body = renderCronTemplate("30m");
     expect(body).toContain("Open Second Brain");

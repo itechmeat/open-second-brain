@@ -18,6 +18,8 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
 import {
+  CODEGRAPH_CLI,
+  codegraphInitCommand,
   defaultRunStatusJson,
   defaultWhichCodegraph,
   findCodeProjects,
@@ -270,10 +272,10 @@ function resolveIndexState(
   deps?: CodegraphReportDeps,
 ): CodegraphReport["index"] {
   if (cliPath === null) {
-    return { state: "absent", reason: "codegraph CLI not on PATH (optional partner)" };
+    return { state: "absent", reason: `${CODEGRAPH_CLI.bin} CLI not on PATH (optional partner)` };
   }
   if (!existsSync(join(project, ".codegraph"))) {
-    return { state: "not_indexed", reason: `run: codegraph init ${project}` };
+    return { state: "not_indexed", reason: `run: ${codegraphInitCommand(project)}` };
   }
   const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
   const status = runFn(project);
@@ -281,7 +283,7 @@ function resolveIndexState(
     return { state: "error", reason: status.error };
   }
   if (!status.data.initialized) {
-    return { state: "not_indexed", reason: `run: codegraph init ${project}` };
+    return { state: "not_indexed", reason: `run: ${codegraphInitCommand(project)}` };
   }
   const nodeCount = status.data.nodeCount ?? 0;
   const edgeCount = status.data.edgeCount ?? 0;

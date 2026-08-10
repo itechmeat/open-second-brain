@@ -1,0 +1,57 @@
+# ----------------------------------------------------------------------
+# Open Second Brain - periodic reindex template
+# interval: 30 minutes
+#
+# Pick ONE of the three paths below. The watchdog script is the
+# common piece; both crontab and Hermes-cron rely on it.
+# ----------------------------------------------------------------------
+
+
+## 1. Watchdog script - save to ~/.local/bin/osb-reindex.sh
+##    (then chmod +x). Sources ~/.hermes/.env if present so the
+##    embedding API key lands in the environment.
+
+cat >~/.local/bin/osb-reindex.sh <<'OSBEOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Pick up OPEN_SECOND_BRAIN_EMBEDDING_* from the Hermes env file
+# if it exists. Other env files can be appended below.
+if [[ -f "$HOME/.hermes/.env" ]]; then
+  set -a; . "$HOME/.hermes/.env"; set +a
+fi
+
+out=$(o2b search reindex --embeddings --json)
+# Emit the JSON line only when the reindex actually changed
+# something. jq is preferred; fall back to grep when missing.
+if command -v jq >/dev/null 2>&1; then
+  changed=$(printf "%s" "$out" | jq -r ".stats.added + .stats.updated + .stats.deleted")
+  if [ "$changed" != "0" ] && [ -n "$changed" ]; then
+    printf "%s\n" "$out"
+  fi
+else
+  if printf "%s" "$out" | grep -Eq '"(added|updated|deleted)"[[:space:]]*:[[:space:]]*[1-9]'; then
+    printf "%s\n" "$out"
+  fi
+fi
+OSBEOF
+chmod +x ~/.local/bin/osb-reindex.sh
+
+
+## 2. Native crontab - open 'crontab -e' and append:
+
+*/30 * * * *    ~/.local/bin/osb-reindex.sh
+
+
+## 3. Hermes cron (preferred when Hermes is the embedding owner):
+
+hermes cron create \
+  --name osb-reindex \
+  --schedule '*/30 * * * *' \
+  --command "$HOME/.local/bin/osb-reindex.sh" \
+  --no-agent
+
+
+# ----------------------------------------------------------------------
+# After install, verify with: o2b search status
+# ----------------------------------------------------------------------

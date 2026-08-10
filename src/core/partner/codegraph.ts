@@ -34,6 +34,41 @@ const CODE_MANIFESTS: ReadonlyArray<string> = [
 const DEFAULT_LIMIT = 50;
 
 /**
+ * The partner CLI's own vocabulary, in one place.
+ *
+ * These four tokens are the entire surface OSB knows about codegraph, and
+ * they were previously written out five times across two modules - the
+ * spawn arguments here, and the remediation sentence `run: codegraph init
+ * <path>` in two separately worded messages. A partner that renames a
+ * subcommand would have had to be chased through every copy, and the two
+ * copies of the remediation could drift into saying different things about
+ * the same repair.
+ *
+ * The invariant this constant serves is unchanged and absolute: OSB never
+ * installs, initializes, or writes data for codegraph. `initSubcommand`
+ * exists so OSB can *quote* the command an operator (or their crontab) runs
+ * themselves, never so OSB can run it.
+ */
+export const CODEGRAPH_CLI = Object.freeze({
+  /** Executable name looked up on PATH. */
+  bin: "codegraph",
+  /** Subcommand that reports index state. */
+  statusSubcommand: "status",
+  /** Flag making the status subcommand emit JSON. */
+  statusJsonFlag: "-j",
+  /** Subcommand that builds an index for a project root. */
+  initSubcommand: "init",
+} as const);
+
+/**
+ * The `codegraph init <path>` command line, as text. Quoted in operator-facing
+ * remediation and in the resync cron recipe; never spawned by this project.
+ */
+export function codegraphInitCommand(projectPath: string): string {
+  return `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.initSubcommand} ${projectPath}`;
+}
+
+/**
  * Heuristic check: does `dir` look like a code project root?
  * Requires BOTH a `.git/` directory AND at least one recognised
  * manifest file (the two-signal rule rejects a stray `package.json`
@@ -160,7 +195,9 @@ export interface CodegraphCheckOptions {
 
 export function defaultWhichCodegraph(): string | null {
   if (typeof Bun !== "undefined" && typeof (Bun as { which?: unknown }).which === "function") {
-    const found = (Bun as unknown as { which: (cmd: string) => string | null }).which("codegraph");
+    const found = (Bun as unknown as { which: (cmd: string) => string | null }).which(
+      CODEGRAPH_CLI.bin,
+    );
     return found ?? null;
   }
   return null;
@@ -177,10 +214,13 @@ export function defaultWhichCodegraph(): string | null {
  */
 const CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
 
+/** The universal flag that makes a CLI print its own usage. */
+const HELP_FLAG = "--help";
+
 export function defaultDetectProjectPathSupport(): boolean {
   try {
     const proc = Bun.spawnSync({
-      cmd: ["codegraph", "status", "--help"],
+      cmd: [CODEGRAPH_CLI.bin, CODEGRAPH_CLI.statusSubcommand, HELP_FLAG],
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -194,7 +234,12 @@ export function defaultDetectProjectPathSupport(): boolean {
 export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
   try {
     const proc = Bun.spawnSync({
-      cmd: ["codegraph", "status", "-j", projectPath],
+      cmd: [
+        CODEGRAPH_CLI.bin,
+        CODEGRAPH_CLI.statusSubcommand,
+        CODEGRAPH_CLI.statusJsonFlag,
+        projectPath,
+      ],
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -207,7 +252,12 @@ export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult
           return { ok: true, data: parsed };
         } catch {}
       }
-      return { ok: false, error: stderr || `codegraph status exited ${proc.exitCode}` };
+      return {
+        ok: false,
+        error:
+          stderr ||
+          `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.statusSubcommand} exited ${proc.exitCode}`,
+      };
     }
     if (!stdout) {
       return { ok: false, error: stderr || "empty status output" };
@@ -307,7 +357,7 @@ function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): Chec
     return {
       name: "code_graph",
       ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`,
+      message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`,
     };
   }
 
@@ -325,7 +375,7 @@ function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): Chec
     return {
       name: "code_graph",
       ok: false,
-      message: `code project at ${project}: not indexed (run: codegraph init ${project})`,
+      message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`,
     };
   }
 
