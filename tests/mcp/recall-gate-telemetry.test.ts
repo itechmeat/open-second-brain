@@ -8,6 +8,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { listContinuityRecords } from "../../src/core/brain/continuity/store.ts";
 import { listGateTelemetry } from "../../src/core/brain/gate-telemetry.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -99,4 +100,53 @@ test("fail-open: a broken continuity store never breaks the gate decision", asyn
   })) as { retrieve: boolean; reason: string };
   expect(typeof decision.retrieve).toBe("boolean");
   expect(typeof decision.reason).toBe("string");
+
+  // The same contract on the negative-recall path, whose record is the
+  // third write this one handler makes.
+  const negative = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "what did we decide about the index?",
+    scores: [],
+  })) as { retrieve: boolean; negative?: Record<string, unknown> };
+  expect(typeof negative.retrieve).toBe("boolean");
+  expect(negative.negative?.["state"]).toBe("unknown");
+});
+
+// ----- typed negative recall (U2) -------------------------------------------
+//
+// Persisted behind the SAME `recall_gate_telemetry` opt-in as the gate
+// record and the unmet-demand stamp: one config decision per feature, not
+// one per surface.
+
+function negativeRecallRecords() {
+  return listContinuityRecords(vault, { kind: "negative_recall" });
+}
+
+test("default off: a negative verdict writes no continuity record", async () => {
+  const out = (await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [],
+  })) as { negative?: unknown };
+  expect(out.negative).toBeDefined();
+  expect(negativeRecallRecords()).toHaveLength(0);
+});
+
+test("with the opt-in on, a negative verdict lands as a continuity record", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  const records = negativeRecallRecords();
+  expect(records).toHaveLength(1);
+  expect(records[0]!.payload["state"]).toBe("unknown");
+  expect(records[0]!.payload["unknown_reason"]).toBe("index-absent");
+  expect(records[0]!.payload["complete"]).toBe(false);
+  // The prompt privacy invariant holds here too: only a hash lands.
+  expect(JSON.stringify(records[0]!.payload)).not.toContain("reactor coolant");
+  expect(typeof records[0]!.payload["prompt_hash"]).toBe("string");
+  // A host filesystem path is not vault content and must not replicate.
+  expect(JSON.stringify(records[0]!.payload)).not.toContain(tmp);
+});
+
+test("a usable-score call writes no negative record even with the opt-in on", async () => {
+  writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
+  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [0.9] });
+  expect(negativeRecallRecords()).toHaveLength(0);
 });

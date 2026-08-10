@@ -47,7 +47,14 @@ export type ContinuityRecordKind =
   | "host_memory_write"
   | "recall_observed_use"
   | "skill_invoked"
-  | "source_invalidation";
+  | "source_invalidation"
+  /**
+   * One typed negative-recall verdict and the coverage receipt behind it
+   * (silence-is-not-an-answer, U2). Written by the recall gate under the
+   * `recall_gate_telemetry` opt-in so the corpus statement a "no" rested
+   * on stays auditable after the answer has been given.
+   */
+  | "negative_recall";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 

@@ -123,6 +123,8 @@ export {
   reindexVault,
   indexStatus,
   indexCheck,
+  indexRootCoverage,
+  type IndexRootCoverage,
   type IndexVaultOptions,
   type IndexProgressEvent,
 } from "./indexer.ts";

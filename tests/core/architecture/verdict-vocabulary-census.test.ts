@@ -33,6 +33,17 @@ import {
   SCHEMA_PACK_UNVERIFIED_REASON,
   SCHEMA_PACK_UNVERIFIED_REASONS,
 } from "../../../src/core/brain/schema-integrity.ts";
+import {
+  isNegativeRecallState,
+  isNegativeRecallUnknownReason,
+  isRetractionEvidenceKind,
+  NEGATIVE_RECALL_STATE,
+  NEGATIVE_RECALL_STATES,
+  NEGATIVE_RECALL_UNKNOWN_REASON,
+  NEGATIVE_RECALL_UNKNOWN_REASONS,
+  RETRACTION_EVIDENCE_KIND,
+  RETRACTION_EVIDENCE_KINDS,
+} from "../../../src/core/brain/negative-recall.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
 import {
   isTriggerStatus,
@@ -126,6 +137,28 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: TRIGGER_STATUS,
     members: TRIGGER_STATUSES,
     guard: isTriggerStatus,
+  },
+  {
+    // U2. Three vocabularies, because a corpus verdict, the reason it
+    // could not be reached, and the stored edge that grounds a
+    // non-occurrence are three types - the wave's rule that a union of
+    // disjoint sets is a namespace rather than an abstraction.
+    name: "NEGATIVE_RECALL_STATE",
+    values: NEGATIVE_RECALL_STATE,
+    members: NEGATIVE_RECALL_STATES,
+    guard: isNegativeRecallState,
+  },
+  {
+    name: "NEGATIVE_RECALL_UNKNOWN_REASON",
+    values: NEGATIVE_RECALL_UNKNOWN_REASON,
+    members: NEGATIVE_RECALL_UNKNOWN_REASONS,
+    guard: isNegativeRecallUnknownReason,
+  },
+  {
+    name: "RETRACTION_EVIDENCE_KIND",
+    values: RETRACTION_EVIDENCE_KIND,
+    members: RETRACTION_EVIDENCE_KINDS,
+    guard: isRetractionEvidenceKind,
   },
 ]);
 

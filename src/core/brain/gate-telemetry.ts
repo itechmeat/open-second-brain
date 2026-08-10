@@ -11,12 +11,19 @@
  * `recall_gate_telemetry` config key is on, keeping the gate's
  * pure-diagnostic contract byte-identical otherwise. Reuses the
  * continuity-record kernel rather than inventing a new sink.
+ *
+ * The same handler's second observation lives here too: the typed
+ * negative-recall verdict (silence-is-not-an-answer, U2), written as a
+ * `negative_recall` record under the SAME opt-in. It is the same
+ * surface's telemetry and shares the prompt-hashing invariant, so a
+ * separate module would have duplicated both.
  */
 
 import { createHash } from "node:crypto";
 
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord } from "./continuity/types.ts";
+import type { NegativeRecallVerdict } from "./negative-recall.ts";
 
 export interface GateTelemetryInput {
   readonly host: string;
@@ -56,6 +63,61 @@ export function emitGateTelemetry(vault: string, input: GateTelemetryInput): Con
       ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
       decision: input.retrieve ? "retrieve" : "skip",
       reason: input.reason,
+      prompt_hash: hashPrompt(input.prompt),
+      prompt_chars: input.prompt.length,
+    },
+  });
+}
+
+/** One typed negative-recall verdict, as the gate observed it. */
+export interface NegativeRecallTelemetryInput {
+  readonly prompt: string;
+  readonly verdict: NegativeRecallVerdict;
+  readonly sessionId?: string;
+  readonly createdAt?: string;
+}
+
+/**
+ * Record one negative-recall verdict (silence-is-not-an-answer, U2).
+ *
+ * Same sink, same privacy invariant and the same `recall_gate_telemetry`
+ * opt-in as {@link emitGateTelemetry} - one config decision governs the
+ * whole feature rather than one per surface.
+ *
+ * The coverage receipt rides along in the reduced form that is safe to
+ * replicate: the digest, the counts, the searched roots and the gap.
+ * `index_path` is deliberately dropped. It is a host filesystem path,
+ * not vault content, and continuity records sync between devices; the
+ * digest already binds it, so nothing is lost that an audit needs.
+ */
+export function emitNegativeRecallTelemetry(
+  vault: string,
+  input: NegativeRecallTelemetryInput,
+): ContinuityRecord {
+  const { verdict } = input;
+  const coverage = verdict.coverage;
+  return appendContinuityRecord(vault, {
+    kind: "negative_recall",
+    createdAt: input.createdAt ?? new Date().toISOString(),
+    sourceRefs: [],
+    payload: {
+      ...(input.sessionId !== undefined ? { session_id: input.sessionId } : {}),
+      state: verdict.state,
+      complete: verdict.complete,
+      ...(verdict.unknown_reason !== undefined ? { unknown_reason: verdict.unknown_reason } : {}),
+      reason: verdict.reason,
+      ...(coverage !== undefined
+        ? {
+            coverage_digest: coverage.digest,
+            documents: coverage.documents,
+            chunks: coverage.chunks,
+            schema_version: coverage.schema_version,
+            embedding_signature: coverage.embedding_signature,
+            last_indexed_at: coverage.last_indexed_at,
+            scope: coverage.scope,
+            unindexed_roots: coverage.unindexed_roots,
+          }
+        : {}),
       prompt_hash: hashPrompt(input.prompt),
       prompt_chars: input.prompt.length,
     },

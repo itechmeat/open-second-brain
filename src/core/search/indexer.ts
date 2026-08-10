@@ -6,8 +6,9 @@
  * rebuild: write to `brain.sqlite.new`, then a same-file rename swap
  * with `.bak` retention.
  *
- * `indexStatus` and `indexCheck` are the read-side diagnostics that
- * power `o2b search status|check` and the MCP status enrichment.
+ * `indexStatus`, `indexCheck` and `indexRootCoverage` are the read-side
+ * diagnostics that power `o2b search status|check`, the MCP status
+ * enrichment and the recall gate's coverage receipt.
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §6, §8,
  * §13, §15.
@@ -1202,6 +1203,56 @@ export async function indexStatus(config: ResolvedSearchConfig): Promise<IndexSt
       ...(chunkWindowUndeclared === null ? {} : { chunkWindowUndeclared }),
       warnings: Object.freeze(warnings),
     });
+  } finally {
+    await store.close();
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// indexRootCoverage
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Which authorized note roots the index actually searched. */
+export interface IndexRootCoverage {
+  /** Roots carrying at least one indexed document. */
+  readonly covered: ReadonlyArray<string>;
+  /** Roots the index holds nothing under. */
+  readonly uncovered: ReadonlyArray<string>;
+}
+
+/**
+ * Partition note roots by whether the index carries any document under
+ * them (silence-is-not-an-answer, U2).
+ *
+ * `indexStatus` says how much was indexed; this says WHICH of the
+ * folders the operator authorized were reached. A negative recall needs
+ * both: the counts make the receipt, and the partition is the difference
+ * between a corpus statement and an overclaim.
+ *
+ * Throws `SearchError` `INDEX_MISSING` when there is no index, rather
+ * than reporting every root uncovered. The caller must establish that
+ * the index exists first, and an all-uncovered answer over a missing
+ * index would read like a coverage measurement.
+ *
+ * Cost: one read-mode open and one full document-path scan. It runs only
+ * on the recall gate's zero-result path, where a search has already
+ * failed to produce anything, and the alternative - a per-root prefix
+ * query - would buy microseconds for a new store surface.
+ */
+export async function indexRootCoverage(
+  config: ResolvedSearchConfig,
+  roots: ReadonlyArray<string>,
+): Promise<IndexRootCoverage> {
+  const store = await Store.open(config, { mode: "read" });
+  try {
+    const paths = [...store.listDocuments().keys()];
+    const covered: string[] = [];
+    const uncovered: string[] = [];
+    for (const root of roots) {
+      const reached = paths.some((path) => path === root || path.startsWith(`${root}/`));
+      (reached ? covered : uncovered).push(root);
+    }
+    return Object.freeze({ covered: Object.freeze(covered), uncovered: Object.freeze(uncovered) });
   } finally {
     await store.close();
   }
