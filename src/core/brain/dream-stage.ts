@@ -31,9 +31,9 @@
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
 import { dream, type DreamOptions, type DreamRunSummary } from "./dream.ts";
@@ -162,10 +162,6 @@ function appliedRoot(vault: string): string {
   return join(vault, "Brain", "dream", "applied");
 }
 
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 /** Active inbox signals (not processed/) with content hashes. */
 function scanSources(vault: string): DreamStageSource[] {
   const inbox = brainDirs(vault).inbox;
@@ -175,7 +171,7 @@ function scanSources(vault: string): DreamStageSource[] {
     if (!entry.isFile() || !entry.name.endsWith(".md")) continue;
     const abs = join(inbox, entry.name);
     try {
-      out.push({ path: `Brain/inbox/${entry.name}`, sha256: sha256(readFileSync(abs, "utf8")) });
+      out.push({ path: `Brain/inbox/${entry.name}`, sha256: sha256Hex(readFileSync(abs, "utf8")) });
     } catch {
       // A torn read shows up as plan drift later, not as a stage crash.
     }
@@ -279,8 +275,8 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
         proposals: proposals.length,
         sources: sources.length,
         plan,
-        plan_hash: sha256(JSON.stringify(plan)),
-        sources_hash: sha256(sourcesBody),
+        plan_hash: sha256Hex(JSON.stringify(plan)),
+        sources_hash: sha256Hex(sourcesBody),
       },
       null,
       2,

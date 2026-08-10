@@ -7,11 +7,11 @@
  * identical bytes produce byte-identical JSON on disk.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -113,7 +113,7 @@ function hashFile(abs: string): BrainManifestEntry {
   // the stat-based size could disagree with the hash and confuse a
   // future drift comparison.
   const buf = readFileSync(abs);
-  const sha256 = createHash("sha256").update(buf).digest("hex");
+  const sha256 = sha256Hex(buf);
   return Object.freeze({ sha256, size: buf.byteLength });
 }
 

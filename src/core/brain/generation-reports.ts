@@ -25,8 +25,7 @@
  * never fails the primary operation.
  */
 
-import { createHash } from "node:crypto";
-
+import { sha256Hex } from "../integrity/digest.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
 import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
@@ -98,7 +97,7 @@ export function emitGenerationReport<G>(
       ...(input.model !== undefined ? { model: input.model } : {}),
       ...(input.finishReason !== undefined ? { finish_reason: input.finishReason } : {}),
       ...(input.latencyMs !== undefined ? { latency_ms: input.latencyMs } : {}),
-      prompt_hash: sha256(prompt),
+      prompt_hash: sha256Hex(prompt),
       prompt_chars: [...prompt].length,
       local_estimate: { input_tokens: estimateTokens(prompt) },
       ...(usagePayload(input.usage) !== undefined ? { usage: usagePayload(input.usage) } : {}),
@@ -235,10 +234,6 @@ export function getGenerationReport(vault: string, id: string): ContinuityRecord
       (record) => record.id === id,
     ) ?? null
   );
-}
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 function numberOr0(value: unknown): number {

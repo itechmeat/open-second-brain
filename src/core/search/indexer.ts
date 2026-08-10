@@ -13,7 +13,6 @@
  * §13, §15.
  */
 
-import { createHash } from "node:crypto";
 import {
   accessSync,
   constants,
@@ -34,6 +33,7 @@ import {
   semanticCapabilityLabel,
   SEMANTIC_VECTOR_CODE,
 } from "./capability-tier.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
@@ -214,10 +214,6 @@ async function offlineDeferredReason(config: ResolvedSearchConfig): Promise<stri
   );
 }
 
-function sha256(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 /** Deep-ish equality for frontmatter scalar/array values. */
 function tierValueEquals(left: unknown, right: unknown): boolean {
   if (Array.isArray(left) && Array.isArray(right)) {
@@ -338,7 +334,7 @@ async function indexInto(
         }
 
         const content = readUtf8(file.absPath);
-        const contentHash = sha256(content);
+        const contentHash = sha256Hex(content);
 
         // Fallback: fastpath missed (mtime or size changed). If
         // the content hash still matches, the file is logically
@@ -407,7 +403,7 @@ async function indexInto(
           chunkIndex: c.chunkIndex,
           content: c.content,
           ftsContent: expandTextForCjkFts(c.content),
-          contentHash: sha256(c.content),
+          contentHash: sha256Hex(c.content),
           startLine: c.startLine,
           endLine: c.endLine,
           tokenCount: c.tokenCount,
@@ -891,7 +887,7 @@ export async function runEmbeddingPhase(
     for (let j = 0; j < batch.length; j++) {
       const chunkId = batch[j]!.chunkId;
       const vec = vectors[j]!;
-      const embHash = sha256(vec.map((x) => x.toFixed(8)).join(","));
+      const embHash = sha256Hex(vec.map((x) => x.toFixed(8)).join(","));
       store.vecUpsert(chunkId, vec, model, dim, embHash);
       stats.embeddingsComputed++;
     }

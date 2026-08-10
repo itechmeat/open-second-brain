@@ -94,10 +94,12 @@ concept, and a union of disjoint sets is a namespace, not an abstraction.
 So the reason axis is shared as a **shape and a census**, not as a vocabulary.
 Each unit owns a frozen object plus a companion `Set` plus a type guard, which
 is already the project's convention; one census test imports all of them and
-fails when a member is unregistered, when the trio is incomplete, or when two
-units claim the same code string. That buys the property the consultant valued -
-no unit ships a private unregistered string - at the cost of one test file
-instead of one central type.
+fails when the trio is incomplete, when the `Set` and the object disagree, when
+the guard admits a non-member, or when one vocabulary carries a duplicate value.
+That buys the property the consultant valued - no unit ships a vocabulary whose
+members and guard can drift apart - at the cost of one test file instead of one
+central type. It does not require codes to be unique across vocabularies:
+an absent config file and an absent store file are both honestly named `absent`.
 
 **What this costs if it is wrong:** the digest module has exactly two persisted
 consumers, so a wrong encoding is a two-unit rework, and it is caught by their

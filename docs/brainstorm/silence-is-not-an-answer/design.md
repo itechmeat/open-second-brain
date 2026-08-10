@@ -33,14 +33,20 @@ One shared kernel, eight units, and the defects found in their blast radius.
 
 **Kernel, before the units**
 
-- One digest module. Ten byte-identical private SHA-256 helpers, two independent
-  reimplementations of canonical JSON serialization, and three ad-hoc truncation
-  lengths collapse into one module with named constants. Two units in this wave
-  persist a digest into a replicated vault, and under the additive-only rule two
-  divergent encodings shipped together could never be reconciled.
-- One census test over every verdict vocabulary the wave introduces: frozen
-  object, companion `Set`, type guard, no unregistered member, no code string
-  claimed by two units.
+- One digest module. Ten byte-identical private SHA-256 helpers and two
+  independent reimplementations of canonical JSON serialization collapse into one
+  module. Two units in this wave persist a digest into a replicated vault, and
+  under the additive-only rule two divergent encodings shipped together could
+  never be reconciled. The sixteen further sites that inline a hash with an
+  ad-hoc truncation length are out of scope, for the reason given below, so the
+  module exports no truncation constant it has no caller for.
+- One census test over every verdict vocabulary the wave introduces. It asserts
+  the trio is complete and consistent: the companion `Set` holds exactly the
+  frozen object's values, the guard accepts every member and rejects a
+  non-member, and no vocabulary carries a duplicate value. It deliberately does
+  not require code strings to be unique across vocabularies - an absent config
+  file and an absent store file are both honestly named `absent`, and forcing
+  them apart would buy nothing.
 
 **The eight units**
 

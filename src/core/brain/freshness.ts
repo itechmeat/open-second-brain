@@ -20,10 +20,10 @@
  * mismatch) is reported, never thrown.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 
+import { sha256Hex } from "../integrity/digest.ts";
 import { listVaultPages, parseFrontmatter } from "../vault.ts";
 
 /** Hash value recorded for a source that did not exist at derivation. */
@@ -59,10 +59,6 @@ export interface FreshnessReport {
   readonly invalid_contract: ReadonlyArray<string>;
 }
 
-function sha256(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
-
 function resolveSourcePath(vault: string, source: string): string {
   return isAbsolute(source) ? source : join(vault, source);
 }
@@ -72,7 +68,7 @@ function hashSource(vault: string, source: string): string {
   try {
     if (!existsSync(path)) return MISSING_SOURCE_HASH;
     if ((statSync(path).mode & 0o444) === 0) return UNREADABLE_SOURCE_HASH;
-    return sha256(readFileSync(path, "utf8"));
+    return sha256Hex(readFileSync(path, "utf8"));
   } catch {
     // A transient permission / I/O failure is NOT a deleted source -
     // it must never feed orphan detection (and the cleanup/archive

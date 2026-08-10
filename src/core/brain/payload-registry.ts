@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { sha256Hex } from "../integrity/digest.ts";
 import { ensureInsideVault } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -77,7 +77,7 @@ export class PayloadRegistry {
     // registry externalizes oversized payloads into `Brain/.payloads/`,
     // so this is the class's only byte-producing path.
     assertVaultIdentityForWrite(this.vault);
-    const sha256 = createHash("sha256").update(text, "utf8").digest("hex");
+    const sha256 = sha256Hex(text);
     const ref = `${PAYLOAD_REF_PREFIX}${sha256}`;
     const placeholder = `[payload: ${ref} chars=${text.length}]`;
     mkdirSync(this.payloadDir(), { recursive: true });

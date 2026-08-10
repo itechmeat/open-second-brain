@@ -26,8 +26,7 @@
  * against the file), while the embedded body is the neutralized form.
  */
 
-import { createHash } from "node:crypto";
-
+import { sha256Hex } from "../integrity/digest.ts";
 import { canonicalNotePath } from "../path-safety.ts";
 
 /** The delimiter tag name. Exported so callers and tests share one source. */
@@ -119,7 +118,7 @@ export interface UntrustedProvenance {
  */
 export function wrapUntrustedSource(text: string, provenance: UntrustedProvenance): string {
   const path = canonicalNotePath(provenance.path);
-  const sha256 = createHash("sha256").update(text, "utf8").digest("hex");
+  const sha256 = sha256Hex(text);
   const body = neutralizeUntrustedText(text);
   const open = `<${UNTRUSTED_SOURCE_TAG} path="${escapeAttribute(path)}" sha256="${sha256}">`;
   return `${open}\n${body}\n</${UNTRUSTED_SOURCE_TAG}>`;

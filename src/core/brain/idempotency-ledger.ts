@@ -32,10 +32,10 @@
  * caller-supplied (or defaulted) `createdAt`.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
@@ -118,18 +118,7 @@ export class IdempotencyPayloadMismatchError extends Error {
  * the same content produces the same hash.
  */
 export function computePayloadHash(fields: Readonly<Record<string, unknown>>): string {
-  return createHash("sha256").update(canonicalJson(fields), "utf8").digest("hex");
-}
-
-/** Deterministic JSON: object keys sorted recursively, arrays kept in order,
- * `undefined` object entries omitted. */
-function canonicalJson(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
-  if (Array.isArray(value)) return `[${value.map((v) => canonicalJson(v)).join(",")}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, v]) => v !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+  return sha256Hex(canonicalJson(fields));
 }
 
 export function idempotencyLogPath(vault: string, month: string): string {

@@ -8,10 +8,10 @@
  * against traversal and absolutes at parse time.
  */
 
-import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize } from "node:path";
 
+import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import { appendContinuityRecord } from "../brain/continuity/store.ts";
 import {
   BENCH_CATEGORIES,
@@ -73,9 +73,13 @@ export function loadBenchFixture(path: string): BenchFixture {
   return parseBenchFixture(JSON.parse(readFileSync(path, "utf8")));
 }
 
+/** Hex characters kept from the fixture digest - enough to name a fixture in a
+ * report without carrying a full 64-character hash through every line. */
+const FIXTURE_HASH_HEX_CHARS = 16;
+
 /** Canonical content hash - stable across key order, sensitive to content. */
 export function fixtureHash(fixture: BenchFixture): string {
-  return createHash("sha256").update(canonicalJson(fixture)).digest("hex").slice(0, 16);
+  return sha256Hex(canonicalJson(fixture)).slice(0, FIXTURE_HASH_HEX_CHARS);
 }
 
 /** Write the fixture's notes and continuity records into a disposable vault. */
@@ -212,16 +216,4 @@ function stringArray(value: unknown): ReadonlyArray<string> | undefined {
   if (!Array.isArray(value)) return undefined;
   if (!value.every((item) => typeof item === "string" && item.length > 0)) return undefined;
   return Object.freeze([...value]);
-}
-
-/** JSON with recursively sorted object keys - the canonical hash input. */
-function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
-  if (value !== null && typeof value === "object") {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .toSorted(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, child]) => `${JSON.stringify(key)}:${canonicalJson(child)}`);
-    return `{${entries.join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
 }

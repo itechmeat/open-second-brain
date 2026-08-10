@@ -19,9 +19,9 @@
  * prose stays with the calling agent, never inside core.
  */
 
-import { createHash } from "node:crypto";
 import { posix, relative } from "node:path";
 
+import { sha256Hex } from "../integrity/digest.ts";
 import { decomposeAtomicFacts, type AtomicEntityLike } from "./atomic-facts.ts";
 import { hasEvidenceIdentity, type EvidenceIdentity } from "./deep-synthesis.ts";
 import { getEntity } from "./entities/registry.ts";
@@ -103,11 +103,6 @@ export interface DiarizationReport {
 
 export interface DiarizationOptions {
   readonly now: Date;
-}
-
-/** Lowercase hex sha256; ties evidence identity to content. */
-function sha256Hex(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 function toPosixRel(vault: string, abs: string): string {

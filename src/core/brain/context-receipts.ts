@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "../integrity/digest.ts";
 
 import {
   appendContinuityRecord,
@@ -120,7 +120,7 @@ export function emitContextReceipt(
     ...(item.evidenceRefs && item.evidenceRefs.length > 0
       ? { evidence_refs: [...item.evidenceRefs] }
       : {}),
-    ...(item.text ? { text_hash: sha256(item.text) } : {}),
+    ...(item.text ? { text_hash: sha256Hex(item.text) } : {}),
   }));
   const payload: Record<string, unknown> = {
     host: input.options.host,
@@ -128,7 +128,7 @@ export function emitContextReceipt(
     ...(input.options.sessionId ? { session_id: input.options.sessionId } : {}),
     ...(input.options.turnId ? { turn_id: input.options.turnId } : {}),
     item_count: input.items.length,
-    final_text_hash: sha256(input.finalText),
+    final_text_hash: sha256Hex(input.finalText),
     final_text_chars: [...input.finalText].length,
     items: itemPayloads,
     ...(input.budget ? { budget: input.budget } : {}),
@@ -141,7 +141,7 @@ export function emitContextReceipt(
     sourceRefs: input.items.map((item) => ({
       id: item.id,
       ...(item.path ? { path: item.path } : {}),
-      ...(item.text ? { hash: sha256(item.text) } : {}),
+      ...(item.text ? { hash: sha256Hex(item.text) } : {}),
     })),
     payload,
   });
@@ -461,10 +461,6 @@ export const CONTEXT_RECEIPT_TRIGGERS: ReadonlyArray<ContextReceiptTrigger> = Ob
   "pre_compress",
   "session_inject",
 ]);
-
-function sha256(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
-}
 
 function matchesReceiptFilter(record: ContinuityRecord, filter: ContextReceiptFilter): boolean {
   const payload = record.payload;

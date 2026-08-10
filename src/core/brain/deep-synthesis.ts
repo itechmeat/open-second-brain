@@ -14,10 +14,10 @@
  * (Kernel B) via {@link synthesisCandidates}.
  */
 
-import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
+import { sha256Hex } from "../integrity/digest.ts";
 import { search } from "../search/search.ts";
 import { walkVault } from "../search/walker.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
@@ -273,11 +273,6 @@ function noteNames(path: string): ReadonlySet<string> {
   const page = stripMd(path);
   const slash = page.lastIndexOf("/");
   return new Set(slash >= 0 ? [page, page.slice(slash + 1)] : [page]);
-}
-
-/** Lowercase hex sha256 of a string; ties evidence identity to content. */
-function sha256Hex(text: string): string {
-  return createHash("sha256").update(text, "utf8").digest("hex");
 }
 
 /**
