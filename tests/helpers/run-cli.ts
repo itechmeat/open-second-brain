@@ -128,10 +128,40 @@ async function runCliSubprocess(
  * uncaught throw is mapped to code 1 with the message on stderr, matching how a
  * crashing child process would surface.
  */
+/**
+ * In-process runs mutate process-wide state - the environment, the working
+ * directory, and both output streams - and restore it in a `finally`. Two
+ * overlapping runs therefore capture each other’s swapped state as their
+ * "saved" state and restore the wrong thing, which leaves a test-scoped
+ * config path installed for the rest of the process and misroutes captured
+ * output. The corruption surfaces far away, in an unrelated later file, as
+ * a vault that cannot be found.
+ *
+ * So overlapping is refused rather than survived. A caller that genuinely
+ * needs concurrency passes `subprocess: true`, which owns none of this
+ * state.
+ */
+let inProcessRunActive = false;
+
+/** Thrown when a second in-process CLI run starts while one is still open. */
+export class ConcurrentInProcessRunError extends Error {
+  constructor(args: ReadonlyArray<string>) {
+    super(
+      `runCli(${JSON.stringify(args)}) started while another in-process run was ` +
+        "still open. In-process runs swap process.env, the working directory and " +
+        "both output streams, so they cannot overlap: await each run, or pass " +
+        "{ subprocess: true } for the ones that must run concurrently.",
+    );
+    this.name = "ConcurrentInProcessRunError";
+  }
+}
+
 async function runCliInProcess(
   args: ReadonlyArray<string>,
   opts: RunCliOptions,
 ): Promise<RunResult> {
+  if (inProcessRunActive) throw new ConcurrentInProcessRunError(args);
+  inProcessRunActive = true;
   const { env, cleanupDir } = resolveEnv(opts.env ?? {});
   const savedEnv = process.env;
   const savedCwd = process.cwd();
@@ -163,6 +193,7 @@ async function runCliInProcess(
       /* restore best-effort */
     }
     if (cleanupDir !== null) rmSync(cleanupDir, { recursive: true, force: true });
+    inProcessRunActive = false;
   }
   return { stdout, stderr, returncode };
 }

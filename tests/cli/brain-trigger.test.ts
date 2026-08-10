@@ -145,14 +145,20 @@ describe("o2b brain trigger", () => {
   test("each verb routes to its own transition", async () => {
     // The map this pins used to be a nested ternary whose fallback arm
     // was `act`, so any verb that was not `ack` or `dismiss` acted.
-    const transitioned = await Promise.all(
-      (["ack", "dismiss", "act"] as const).map(async (verb) => {
-        const id = seed({ cooldownKey: `contradiction:${verb}` });
-        const out = await runCli(["brain", "trigger", verb, id, "--json"], { env: env() });
-        expect(out.returncode).toBe(0);
-        return (JSON.parse(out.stdout) as { trigger: TriggerJson }).trigger.status;
-      }),
-    );
+    // Sequential on purpose: an in-process CLI run swaps process.env, the
+    // working directory and both output streams, so overlapping runs
+    // restore each other’s saved state. runCli refuses to overlap now, and
+    // this loop is what that refusal expects.
+    const transitioned: string[] = [];
+    for (const verb of ["ack", "dismiss", "act"] as const) {
+      const id = seed({ cooldownKey: `contradiction:${verb}` });
+      // The rule suggests Promise.all, which is exactly the overlap runCli
+      // now refuses; see the comment above this loop.
+      // eslint-disable-next-line no-await-in-loop
+      const out = await runCli(["brain", "trigger", verb, id, "--json"], { env: env() });
+      expect(out.returncode).toBe(0);
+      transitioned.push((JSON.parse(out.stdout) as { trigger: TriggerJson }).trigger.status);
+    }
     expect(transitioned).toEqual(["acknowledged", "dismissed", "acted"]);
   });
 

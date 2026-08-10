@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { runCli } from "../helpers/run-cli.ts";
+import { runCli, type RunResult } from "../helpers/run-cli.ts";
 
 let tmp: string;
 let vault: string;
@@ -70,13 +70,21 @@ test("without a configured timezone the envelope carries no local fields", async
 test("weekly, monthly, and timeline envelopes localize the same way", async () => {
   enableTimezone("Asia/Tokyo");
   const env = { OPEN_SECOND_BRAIN_CONFIG: configPath };
-  const results = await Promise.all(
-    [
-      ["brain", "weekly", "--week-end", "2026-06-05", "--vault", vault, "--json"],
-      ["brain", "monthly", "--month", "2026-06", "--vault", vault, "--json"],
-      ["brain", "timeline", "--vault", vault, "--json"],
-    ].map((argv) => runCli(argv, { env })),
-  );
+  // Sequential on purpose: an in-process run swaps process.env, the working
+  // directory and both output streams, so overlapping runs restore each
+  // other’s saved state and corrupt both the captured output and the
+  // environment every later test file reads. runCli refuses to overlap.
+  const results: RunResult[] = [];
+  for (const argv of [
+    ["brain", "weekly", "--week-end", "2026-06-05", "--vault", vault, "--json"],
+    ["brain", "monthly", "--month", "2026-06", "--vault", vault, "--json"],
+    ["brain", "timeline", "--vault", vault, "--json"],
+  ]) {
+    // The rule suggests Promise.all, which is exactly the overlap runCli
+    // now refuses; see the comment above this loop.
+    // eslint-disable-next-line no-await-in-loop
+    results.push(await runCli(argv, { env }));
+  }
   for (const r of results) {
     expect(r.returncode).toBe(0);
     const parsed = JSON.parse(r.stdout) as Record<string, unknown>;
