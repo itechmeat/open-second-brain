@@ -1845,12 +1845,19 @@ export interface DoctorIssue {
    * byte-identical to what it was.
    */
   readonly field?: string;
-  /** Wikilink target that resolves to nothing (`broken-wikilink`, `broken-backlinks`). */
+  /**
+   * The artifact a reference points at (`broken-wikilink`,
+   * `broken-backlinks`), or the folded key of the state that changed
+   * under its consumers (`stale-dependency`). In both readings it is
+   * what the sources below name.
+   */
   readonly target?: string;
   /**
-   * Basenames of the artifacts that reference {@link target}
-   * (`broken-backlinks`). The dangling target has no file, so the issue
-   * carries no `path`; these sources are what an operator can act on.
+   * The things that reference {@link target}: artifact basenames for
+   * `broken-backlinks`, where the dangling target has no file so the
+   * issue carries no `path` and these are all an operator can act on;
+   * consumer identities for `stale-dependency`, capped at that check's
+   * per-state limit while the message carries the true total.
    */
   readonly sources?: ReadonlyArray<string>;
 }

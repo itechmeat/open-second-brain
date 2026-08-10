@@ -44,6 +44,14 @@ import {
   RETRACTION_EVIDENCE_KIND,
   RETRACTION_EVIDENCE_KINDS,
 } from "../../../src/core/brain/negative-recall.ts";
+import {
+  isStaleDependencyConsumerKind,
+  isStaleDependencyStateKind,
+  STALE_DEPENDENCY_CONSUMER,
+  STALE_DEPENDENCY_CONSUMERS,
+  STALE_DEPENDENCY_STATE,
+  STALE_DEPENDENCY_STATES,
+} from "../../../src/core/brain/doctor/stale-dependency-check.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
 import {
   isTriggerStatus,
@@ -159,6 +167,22 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: RETRACTION_EVIDENCE_KIND,
     members: RETRACTION_EVIDENCE_KINDS,
     guard: isRetractionEvidenceKind,
+  },
+  {
+    // U3. Two vocabularies for the two sides of one row: what stopped
+    // being current, and what kind of thing is still resting on it. They
+    // are read from different stores and lead to different remedies, so
+    // collapsing them into one axis would name neither.
+    name: "STALE_DEPENDENCY_CONSUMER",
+    values: STALE_DEPENDENCY_CONSUMER,
+    members: STALE_DEPENDENCY_CONSUMERS,
+    guard: isStaleDependencyConsumerKind,
+  },
+  {
+    name: "STALE_DEPENDENCY_STATE",
+    values: STALE_DEPENDENCY_STATE,
+    members: STALE_DEPENDENCY_STATES,
+    guard: isStaleDependencyStateKind,
   },
 ]);
 

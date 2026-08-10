@@ -69,6 +69,8 @@ import {
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
+import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
+import { auditStaleDependencies } from "./stale-dependency.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
   danglingWorkrunCheck,
@@ -135,6 +137,11 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   duplicateIdCheck,
   logShardCheck,
   brokenBacklinkCheck,
+  // The one check whose collector is supplied rather than imported: its
+  // pure kernel is the leaf both halves share, so this registry - which
+  // already reaches every check module and the store beneath them - is
+  // where the two meet without closing a loop.
+  makeStaleDependencyCheck(auditStaleDependencies),
   removedToolReferenceCheck,
   duplicatePreferenceCheck,
   lowEvidenceConfirmedCheck,

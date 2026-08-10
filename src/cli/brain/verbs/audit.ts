@@ -1,4 +1,5 @@
 import { readPrefAudit, renderPrefAudit } from "../../../core/brain/pref-audit.ts";
+import { stripBrainIdPrefix } from "../../../core/brain/wikilink.ts";
 import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 /**
@@ -14,7 +15,7 @@ export async function cmdBrainAudit(argv: string[]): Promise<number> {
   });
   const raw = positional[0];
   if (!raw) return fail("usage: o2b brain audit <pref-id>");
-  const slug = raw.replace(/^(?:pref-|ret-)/, "").trim();
+  const slug = stripBrainIdPrefix(raw);
   if (slug.length === 0) {
     return fail(`audit: empty preference slug after stripping prefix from '${raw}'`);
   }

@@ -4,7 +4,9 @@
  * Built once per pass and handed round on the check context, so the
  * three preference-walking lints do not each re-parse
  * `Brain/preferences/` and the two log-walking lints do not each re-read
- * `Brain/log/`.
+ * `Brain/log/`. The retired snapshot joins them for the same reason: a
+ * check that needs the supersession instants should be handed records,
+ * not a directory to walk on its own terms.
  *
  * Each reader takes an optional sweep sink. WITH one - the doctor pass,
  * which resolves this context before any check runs and therefore before
@@ -19,7 +21,7 @@ import { join } from "node:path";
 
 import { listLogDates, readLogDay } from "../log-jsonl.ts";
 import { brainDirs } from "../paths.ts";
-import { parsePreference } from "../preference.ts";
+import { parsePreference, parseRetired } from "../preference.ts";
 import {
   readSweptDir,
   reportSweptFailure,
@@ -32,10 +34,24 @@ export interface PreferenceRecord {
   readonly pref: import("../types.ts").BrainPreference;
 }
 
+export interface RetiredRecord {
+  readonly path: string;
+  readonly retired: import("../types.ts").BrainRetired;
+}
+
 export interface LogRecord {
   readonly date: string;
   readonly entries: ReadonlyArray<import("../log.ts").BrainLogEntry>;
 }
+
+/** Filename prefix of a preference file; also its id prefix. */
+const PREFERENCE_FILE_PREFIX = "pref-";
+
+/** Filename prefix of a retired file; also its id prefix. */
+const RETIRED_FILE_PREFIX = "ret-";
+
+/** Extension every Brain record file carries. */
+const MARKDOWN_EXT = ".md";
 
 /**
  * The entries of `dir`, or `null` when there are none to read.
@@ -68,12 +84,47 @@ export function readAllPreferenceRecords(
   const out: PreferenceRecord[] = [];
   for (const entry of entries) {
     const name = entry.name;
-    if (!name.endsWith(".md") || !name.startsWith("pref-")) continue;
+    if (!name.endsWith(MARKDOWN_EXT) || !name.startsWith(PREFERENCE_FILE_PREFIX)) continue;
     const path = join(dirs.preferences, name);
     try {
       out.push({ path, pref: parsePreference(path) });
     } catch {
       // schema error — reported by the preference record check
+    }
+  }
+  return out;
+}
+
+/**
+ * The same pre-parsed snapshot for `Brain/retired/`.
+ *
+ * Retirement is the store's supersession event: `moveToRetired` stamps
+ * `retired_at` and the lint that wants to know which consumers predate
+ * that instant needs the records, not the directory. Reading them here
+ * rather than inside the check keeps the parse discipline identical to
+ * the preference snapshot above - one place decides what a record is,
+ * and one sweep sink decides what an unreadable directory means.
+ *
+ * Files that fail to parse are omitted, exactly as above: a retired file
+ * whose frontmatter is wrong is already a finding of the retired record
+ * check, and reporting it twice would say nothing new.
+ */
+export function readAllRetiredRecords(
+  vault: string,
+  swept?: SweptPath,
+): ReadonlyArray<RetiredRecord> {
+  const dirs = brainDirs(vault);
+  const entries = listRecordDir(dirs.retired, swept);
+  if (entries === null) return [];
+  const out: RetiredRecord[] = [];
+  for (const entry of entries) {
+    const name = entry.name;
+    if (!name.endsWith(MARKDOWN_EXT) || !name.startsWith(RETIRED_FILE_PREFIX)) continue;
+    const path = join(dirs.retired, name);
+    try {
+      out.push({ path, retired: parseRetired(path) });
+    } catch {
+      // schema error — reported by the retired record check
     }
   }
   return out;
@@ -143,8 +194,8 @@ export function collectAllBasenames(vault: string, swept?: SweptPath): ReadonlyS
     if (entries === null) continue;
     for (const entry of entries) {
       if (!entry.isFile()) continue;
-      if (!entry.name.endsWith(".md")) continue;
-      out.add(entry.name.slice(0, -".md".length));
+      if (!entry.name.endsWith(MARKDOWN_EXT)) continue;
+      out.add(entry.name.slice(0, -MARKDOWN_EXT.length));
     }
   }
   return out;

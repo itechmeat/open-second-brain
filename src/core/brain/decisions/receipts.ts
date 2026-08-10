@@ -66,6 +66,13 @@ const FIELD_MAX_LEN = 2000;
 /** Default page size for {@link queryDecisionChangeHistory}. */
 export const DECISION_HISTORY_DEFAULT_LIMIT = 50;
 
+/**
+ * The one `errno` that means the receipt store was never created, as
+ * opposed to created and unreachable. See
+ * {@link readDecisionChangeReceipts}.
+ */
+const DIR_ABSENT_ERRNO = "ENOENT";
+
 /** Every failure path in this module raises this typed error. */
 export class ReceiptError extends Error {
   constructor(message: string, options?: ErrorOptions) {
@@ -263,7 +270,10 @@ export function appendDecisionChangeReceipt(
 
   const idempotencyKey = computeIdempotencyKey(subject, before, after);
 
-  // Idempotency: a matching key already on disk makes this a no-op.
+  // Idempotency: a matching key already on disk makes this a no-op. The
+  // read raises rather than reporting an empty store when the directory
+  // exists and cannot be listed, so a replay under a denied read refuses
+  // instead of appending a second copy of the same change.
   const existing = readDecisionChangeReceipts(vault).receipts.find(
     (r) => r.idempotency_key === idempotencyKey,
   );
@@ -329,15 +339,46 @@ export interface ReadReceiptsResult {
 /**
  * Read every receipt merged across device shards, sorted by
  * (ts, shardId, line). Fail-closed per line: a malformed or
- * unknown-version line surfaces as a warning, never throws. Never writes.
+ * unknown-version line surfaces as a warning. Never writes.
+ *
+ * ## An unreadable directory is not an empty one
+ *
+ * The directory read used to be wrapped in a bare `catch` returning no
+ * receipts and no warnings, which gave a vault whose `Brain/truth/` the
+ * process cannot enter exactly the answer a vault that has never
+ * recorded a decision gets. Two consequences, both real:
+ *
+ *   - every read surface - the history query, the audit join - reported
+ *     "no decisions" for a store it had not looked at;
+ *   - the idempotency probe in {@link appendDecisionChangeReceipt} reads
+ *     through this function, so an unreadable directory read as "no
+ *     prior receipt with this key" and the append went ahead. The one
+ *     guard against a duplicated accountability record was disabled by
+ *     precisely the condition under which it mattered most.
+ *
+ * So only ABSENCE is quiet, and it is quiet because a vault that has
+ * never appended a receipt legitimately has no directory. Every other
+ * failure - a permission denial, a file standing where the directory
+ * should be, an I/O error - raises {@link ReceiptError} naming the path.
+ * Per-shard failures below stay warnings: there the reader knows what it
+ * did and did not read, and can say so.
+ *
+ * @throws {@link ReceiptError} when the receipt directory exists and
+ *   cannot be listed.
  */
 export function readDecisionChangeReceipts(vault: string): ReadReceiptsResult {
   const dir = receiptsDir(vault);
   let names: string[];
   try {
     names = readdirSync(dir).toSorted();
-  } catch {
-    return { receipts: [], warnings: [] };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === DIR_ABSENT_ERRNO) {
+      return { receipts: [], warnings: [] };
+    }
+    throw new ReceiptError(
+      `receipt: failed to list ${dir}: ${(err as Error).message ?? String(err)}`,
+      { cause: err },
+    );
   }
 
   interface Tagged {

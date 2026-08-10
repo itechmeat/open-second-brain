@@ -200,6 +200,18 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // U3, silence-is-not-an-answer. The reverse of the backlink
+        // question above: not "this reference points at nothing" but
+        // "this reference points at something that has since changed,
+        // and the thing holding it predates the change". The trail of
+        // the state itself is where an operator starts, because it says
+        // what the rule became and why.
+        code: "stale-dependency",
+        issueClass: "consumer resting on a superseded state",
+        nextCommand: "o2b brain audit <pref-id>",
+        autoRepairable: false,
+      },
+      {
         code: "sync-conflict-log",
         issueClass: "sync-conflict log copy",
         nextCommand: "o2b brain doctor",

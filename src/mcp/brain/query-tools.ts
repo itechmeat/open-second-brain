@@ -10,7 +10,7 @@ import { buildBacklinkIndex } from "../../core/brain/backlinks.ts";
 import { readPrefAudit } from "../../core/brain/pref-audit.ts";
 import { aggregateSources } from "../../core/brain/portability/sources.ts";
 import { findUnlinkedMentions } from "../../core/brain/link-graph/unlinked-mentions.ts";
-import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
+import { brainArtifactSlug, normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
 import {
   BrainNotFoundError,
   queryByLogSince,
@@ -323,13 +323,11 @@ async function toolBrainAudit(
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
   const raw = coerceStr(args, "pref_id", true)!;
-  // The trail is keyed by the original `pref-<slug>` id. Run the input
-  // through the shared wikilink normaliser first (handles `[[id]]`,
-  // `[[id|Alias]]`, and `Brain/.../id.md` forms), then strip the
-  // pref-/ret- prefix so every reference resolves to one trail.
-  const slug = normaliseWikilinkTarget(raw)
-    .replace(/^(?:pref-|ret-)/, "")
-    .trim();
+  // The trail is keyed by the original `pref-<slug>` id, and the shared
+  // fold in `wikilink.ts` is what reduces every spelling of a reference
+  // (`[[id]]`, `[[id|Alias]]`, `Brain/.../id.md`, and the pre- or
+  // post-retirement prefix) onto that one key.
+  const slug = brainArtifactSlug(raw);
   if (slug.length === 0) {
     throw new Error(`brain_audit: empty preference slug after normalising '${raw}'`);
   }

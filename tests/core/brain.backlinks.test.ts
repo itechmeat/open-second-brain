@@ -9,6 +9,7 @@ import { writePreference, moveToRetired } from "../../src/core/brain/preference.
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { appendApplyEvidence } from "../../src/core/brain/apply-evidence.ts";
 import { preferencePath } from "../../src/core/brain/paths.ts";
+import { brainArtifactSlug, stripBrainIdPrefix } from "../../src/core/brain/wikilink.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -148,6 +149,52 @@ describe("buildBacklinkIndex — self-reference skip", () => {
     const idx = buildBacklinkIndex(vault);
     const refs = idx.get("pref-self") ?? [];
     expect(refs.find((r) => r.source === "pref-self")).toBeUndefined();
+  });
+});
+
+describe("brainArtifactSlug — the key both sides of a reverse lookup fold to", () => {
+  test("every spelling of a retired rule folds to one key", () => {
+    writePreference(vault, {
+      slug: "folded",
+      topic: "folded",
+      principle: "test",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-30T00:00:00Z",
+      status: "unconfirmed",
+      evidenced_by: [],
+    });
+    moveToRetired(vault, preferencePath(vault, "folded"), "rebutted", {
+      now: new Date("2026-05-12T00:00:00Z"),
+      retired_by: "[[Brain/log/2026-05-12]]",
+    });
+
+    // The index resolves the pre-rename spelling through the alias the
+    // retirement left behind; the helper folds both names to one key, so
+    // a consumer citing either lands on the same record.
+    const canonical = brainArtifactSlug("ret-folded");
+    expect(canonical).toBe("folded");
+    for (const spelling of [
+      "pref-folded",
+      "ret-folded",
+      "[[pref-folded]]",
+      "[[ret-folded|Folded rule]]",
+      "Brain/retired/ret-folded.md",
+      "[[Brain/preferences/pref-folded.md#Principle]]",
+    ]) {
+      expect(brainArtifactSlug(spelling)).toBe(canonical);
+    }
+  });
+
+  test("a reference that is not a Brain rule keeps its own basename", () => {
+    // `sig-` is a different artifact, not a second spelling of a rule,
+    // so folding it away would merge a signal into a same-slug rule.
+    expect(brainArtifactSlug("[[sig-2026-05-01-alpha]]")).toBe("sig-2026-05-01-alpha");
+    expect(brainArtifactSlug("Notes/Meeting.md")).toBe("Meeting");
+  });
+
+  test("stripBrainIdPrefix trims before it matches, and leaves a bare slug alone", () => {
+    expect(stripBrainIdPrefix("  pref-padded  ")).toBe("padded");
+    expect(stripBrainIdPrefix("padded")).toBe("padded");
   });
 });
 

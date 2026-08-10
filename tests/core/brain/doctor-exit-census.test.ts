@@ -191,6 +191,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "principle-corrupted",
   "schema-version-unknown",
   "stale-claim",
+  "stale-dependency",
   "sync-conflict-log",
   "tier-drift",
   "vault-walk-entry-skipped",

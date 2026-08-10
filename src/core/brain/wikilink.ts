@@ -140,6 +140,52 @@ export function isBrainArtifactId(target: string): boolean {
 }
 
 /**
+ * The prefix a rule wears on each side of its retirement.
+ *
+ * Deliberately narrower than {@link BRAIN_ID_RE}. `sig-` is a different
+ * artifact, not a second spelling of the same one, so folding it away
+ * would merge a signal into whatever rule happens to share its slug.
+ * `pref-<slug>` and `ret-<slug>` are the SAME record before and after
+ * `moveToRetired` renamed it, which is the only reason a strip is
+ * correct here at all.
+ */
+const BRAIN_ID_PREFIX_RE = /^(?:pref-|ret-)/;
+
+/**
+ * Drop the `pref-` / `ret-` prefix from a bare Brain id, leaving the slug
+ * both spellings share.
+ *
+ * Two call sites had grown their own copy of this pattern - the `brain
+ * audit` CLI verb and its MCP twin, both resolving a caller-supplied id
+ * onto the one audit trail that is keyed by the ORIGINAL `pref-<slug>`.
+ * One grammar in two files is one prefix away from disagreeing, and this
+ * module is where the grammar already lives.
+ *
+ * Trims before matching as well as after, so a padded argument yields the
+ * slug rather than falling through the pattern with its prefix intact.
+ */
+export function stripBrainIdPrefix(id: string): string {
+  return id.trim().replace(BRAIN_ID_PREFIX_RE, "").trim();
+}
+
+/**
+ * Fold any spelling of a Brain artifact reference onto one key.
+ *
+ * `[[pref-foo]]`, `pref-foo`, `ret-foo`, `Brain/retired/ret-foo.md` and
+ * `[[Brain/preferences/pref-foo.md|Foo]]` all reduce to `foo`. The
+ * composition is {@link normaliseWikilinkTarget} (brackets, alias,
+ * anchor, folder, `.md`) followed by {@link stripBrainIdPrefix} (the
+ * rename), which is exactly the pair a reverse lookup across a
+ * retirement needs on BOTH sides of the join.
+ *
+ * A reference that names no Brain artifact passes through with only the
+ * wikilink decoration removed, so a note basename stays its own key.
+ */
+export function brainArtifactSlug(value: string): string {
+  return stripBrainIdPrefix(normaliseWikilinkTarget(value));
+}
+
+/**
  * Return the bare target id if `value` is exactly a wikilink form
  * (`^\[\[…\]\]$` modulo surrounding whitespace), otherwise `null`.
  *
