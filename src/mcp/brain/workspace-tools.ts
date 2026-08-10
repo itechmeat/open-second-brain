@@ -216,7 +216,7 @@ export const WORKSPACE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_trigger",
     description:
-      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers from health/retention data, list/history read by lifecycle status, acknowledge/dismiss/act transition one trigger. suppress silences a finding indefinitely (no cooldown clock) and unsuppress restores the status it interrupted. Anti-nag: cooldown keys keep the same issue from reappearing every run, and every silenced recurrence is counted on the record.",
+      "Grounded proactive trigger queue under Brain/triggers/: scan generates deduped triggers, list/history read by status, acknowledge/dismiss/act transition one. suppress silences a finding indefinitely; unsuppress restores the status it interrupted. Recurrences stay counted while silenced.",
     inputSchema: {
       type: "object",
       properties: {
