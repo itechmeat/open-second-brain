@@ -66,8 +66,14 @@ const OCCURRENCES_WHEN_UNRECORDED = 1;
 /** Frontmatter key holding the JSON-encoded grounding artifact list. */
 const SOURCE_ARTIFACTS_KEY = "source_artifacts";
 
-/** Longest run of an unparseable artifact list reproduced in an error. */
-const ARTIFACTS_EXCERPT_MAX = 120;
+/** Longest run of an unreadable field value reproduced in an error. */
+const FIELD_EXCERPT_MAX = 120;
+
+/** Frontmatter key holding the recurrence count. */
+const OCCURRENCES_KEY = "occurrences";
+
+/** Frontmatter key holding the instant the finding was last seen. */
+const LAST_SEEN_AT_KEY = "last_seen_at";
 
 export function triggersDir(vault: string): string {
   return join(vault, "Brain", "triggers");
@@ -93,8 +99,8 @@ function renderTrigger(record: StoredTrigger): string {
     ...(record.resolvedAt !== null ? [`resolved_at: ${record.resolvedAt}`] : []),
     ...(record.suppressedAt !== null ? [`suppressed_at: ${record.suppressedAt}`] : []),
     ...(record.suppressedFrom !== null ? [`suppressed_from: ${record.suppressedFrom}`] : []),
-    `occurrences: ${record.occurrences}`,
-    `last_seen_at: ${record.lastSeenAt}`,
+    `${OCCURRENCES_KEY}: ${record.occurrences}`,
+    `${LAST_SEEN_AT_KEY}: ${record.lastSeenAt}`,
     `${SOURCE_ARTIFACTS_KEY}: ${JSON.stringify(record.sourceArtifacts)}`,
     "---",
     "",
@@ -136,16 +142,36 @@ function sectionText(body: string, heading: string): string {
  * hand-edited list to `[]`, made an unparseable finding present as an
  * ungrounded one with nothing anywhere saying so.
  */
-export class TriggerSourceArtifactsError extends Error {
-  /** The trigger file carrying the unreadable list. */
+/**
+ * A frontmatter field is present and cannot be read.
+ *
+ * Absent and unreadable are different claims and this type is what keeps
+ * them apart. An absent field means nobody ever recorded the thing, which
+ * several fields here have an honest reading for; a present field that
+ * does not parse means a record says something and the store cannot tell
+ * what. Substituting the absent-field reading for the second case would
+ * state a value nothing supports - which is the failure this whole wave
+ * exists to remove - so it refuses, naming the file, the key, and the
+ * operator's own bytes so the broken line can be found.
+ */
+export class TriggerFieldError extends Error {
+  /** The trigger file carrying the unreadable value. */
   readonly path: string;
-  constructor(path: string, raw: unknown) {
-    super(
-      `trigger ${path}: ${SOURCE_ARTIFACTS_KEY} is present but is not a list of strings: ` +
-        excerptArtifacts(raw),
-    );
-    this.name = "TriggerSourceArtifactsError";
+  /** The frontmatter key that could not be read. */
+  readonly key: string;
+
+  constructor(path: string, key: string, raw: unknown, expectation: string) {
+    super(`trigger ${path}: ${key} is present but ${expectation}: ${excerptFieldValue(raw)}`);
+    this.name = "TriggerFieldError";
     this.path = path;
+    this.key = key;
+  }
+}
+
+export class TriggerSourceArtifactsError extends TriggerFieldError {
+  constructor(path: string, raw: unknown) {
+    super(path, SOURCE_ARTIFACTS_KEY, raw, "is not a list of strings");
+    this.name = "TriggerSourceArtifactsError";
   }
 }
 
@@ -155,9 +181,9 @@ export class TriggerSourceArtifactsError extends Error {
  * never inspected - it is opaque content, quoted back so the operator
  * can find the line they broke.
  */
-function excerptArtifacts(raw: unknown): string {
+function excerptFieldValue(raw: unknown): string {
   const text = typeof raw === "string" ? raw : String(raw);
-  return text.length <= ARTIFACTS_EXCERPT_MAX ? text : `${text.slice(0, ARTIFACTS_EXCERPT_MAX)}…`;
+  return text.length <= FIELD_EXCERPT_MAX ? text : `${text.slice(0, FIELD_EXCERPT_MAX)}…`;
 }
 
 /**
@@ -186,17 +212,44 @@ function parseArtifactList(raw: unknown, path: string): ReadonlyArray<string> {
 }
 
 /**
- * The recorded occurrence count, or {@link OCCURRENCES_WHEN_UNRECORDED}
- * for a record written before the ledger existed. A present but
- * non-numeric value is a hand-edit and reads the same way: the record
- * has one occurrence anybody can vouch for, its creation.
+ * The recorded occurrence count.
+ *
+ * An ABSENT key yields {@link OCCURRENCES_WHEN_UNRECORDED}: the record
+ * predates the ledger, and one - its creation - is the count of
+ * occurrences anybody actually recorded for it. A PRESENT key that does
+ * not read as a positive integer refuses, because crediting a corrupt
+ * counter that same one would understate a finding that has fired forty
+ * times and would make a hand-edit indistinguishable from a record
+ * written before the ledger existed.
+ *
+ * The numeric arm is not defensive dressing: the count is written as a
+ * bare integer, so a frontmatter parser that materializes it as a number
+ * must not fall through and quietly discard a real count.
  */
-function parseOccurrences(raw: unknown): number {
-  if (typeof raw !== "string") return OCCURRENCES_WHEN_UNRECORDED;
-  const parsed = Number.parseInt(raw.trim(), 10);
-  return Number.isSafeInteger(parsed) && parsed >= OCCURRENCES_WHEN_UNRECORDED
-    ? parsed
-    : OCCURRENCES_WHEN_UNRECORDED;
+function parseOccurrences(raw: unknown, path: string): number {
+  if (raw === undefined) return OCCURRENCES_WHEN_UNRECORDED;
+  const parsed = typeof raw === "number" ? raw : Number.parseInt(String(raw).trim(), 10);
+  if (!Number.isSafeInteger(parsed) || parsed < OCCURRENCES_WHEN_UNRECORDED) {
+    throw new TriggerFieldError(path, OCCURRENCES_KEY, raw, "not a positive integer");
+  }
+  return parsed;
+}
+
+/**
+ * The instant the finding was last seen.
+ *
+ * An ABSENT key yields the creation instant: a record predating the
+ * ledger last fired when it was created, and that is a true statement
+ * about it. A PRESENT key that is not a readable instant refuses, for
+ * the same reason the occurrence count does.
+ */
+function parseLastSeenAt(raw: unknown, createdAt: string, path: string): string {
+  if (raw === undefined) return createdAt;
+  const text = typeof raw === "string" ? raw : String(raw);
+  if (text.length === 0 || Number.isNaN(Date.parse(text))) {
+    throw new TriggerFieldError(path, LAST_SEEN_AT_KEY, raw, "not a readable instant");
+  }
+  return text;
 }
 
 function effectiveStatus(status: TriggerStatus, expiresAt: string, now: Date): TriggerStatus {
@@ -251,9 +304,8 @@ function parseTrigger(vault: string, fileName: string, now: Date): TriggerRecord
     resolvedAt: typeof meta["resolved_at"] === "string" ? meta["resolved_at"] : null,
     suppressedAt: typeof meta["suppressed_at"] === "string" ? meta["suppressed_at"] : null,
     suppressedFrom: isTriggerStatus(suppressedFrom) ? suppressedFrom : null,
-    occurrences: parseOccurrences(meta["occurrences"]),
-    // A record predating the ledger last fired when it was created.
-    lastSeenAt: typeof meta["last_seen_at"] === "string" ? meta["last_seen_at"] : createdAt,
+    occurrences: parseOccurrences(meta[OCCURRENCES_KEY], path),
+    lastSeenAt: parseLastSeenAt(meta[LAST_SEEN_AT_KEY], createdAt, path),
     path,
   });
 }

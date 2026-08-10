@@ -18,6 +18,7 @@ import {
   recordRecurrence,
   transitionTrigger,
   TriggerSourceArtifactsError,
+  TriggerFieldError,
   TRIGGER_TTL_DAYS,
 } from "../../../src/core/brain/triggers/store.ts";
 import {
@@ -379,4 +380,62 @@ test("a record naming no grounding artifacts still reads as an empty list", () =
   const result = createTriggers(vault, [candidate({ sourceArtifacts: [] })], { now: NOW });
   expect(result.created[0]!.sourceArtifacts).toEqual([]);
   expect(listTriggers(vault, { now: NOW })[0]!.sourceArtifacts).toEqual([]);
+});
+
+// ── Defect: a corrupt recurrence field must not read as a pre-ledger record ──
+//
+// Absent recurrence keys mean the record predates the ledger, and reading
+// them as "one occurrence, last seen when it was created" is the true count
+// of what anybody recorded. A key that is PRESENT and unreadable is a
+// different claim: silently crediting it the same one occurrence would state
+// a number nothing supports, and would understate a finding that has fired
+// forty times. Absent and corrupt are told apart.
+
+test("an unreadable occurrence count refuses instead of reading as a fresh record", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^occurrences: .*$/mu, "occurrences: many"),
+    "utf8",
+  );
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("occurrences");
+});
+
+test("a negative or zero occurrence count refuses", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^occurrences: .*$/mu, "occurrences: 0"),
+    "utf8",
+  );
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("occurrences");
+});
+
+test("an unreadable last-seen instant refuses instead of reading as the creation instant", () => {
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^last_seen_at: .*$/mu, "last_seen_at: whenever"),
+    "utf8",
+  );
+  expect(() => listTriggers(vault, { now: NOW })).toThrow(TriggerFieldError);
+  expect(() => listTriggers(vault, { now: NOW })).toThrow("last_seen_at");
+});
+
+test("a recorded occurrence count survives a read whatever the frontmatter yields", () => {
+  // Guards the number-versus-string trap: the count is written as a bare
+  // integer, so a parser that materializes it as a number must not fall
+  // through to the pre-ledger reading and quietly discard a real count.
+  const { created } = createTriggers(vault, [candidate()], { now: NOW });
+  const path = created[0]!.path;
+  writeFileSync(
+    path,
+    readFileSync(path, "utf8").replace(/^occurrences: .*$/mu, "occurrences: 7"),
+    "utf8",
+  );
+  expect(listTriggers(vault, { now: NOW })[0]!.occurrences).toBe(7);
 });
