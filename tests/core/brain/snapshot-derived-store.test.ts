@@ -295,6 +295,47 @@ describe("listSnapshots and pruneSnapshots over a covered snapshot", () => {
 });
 
 describe("restoreSnapshot — the derived store", () => {
+  test("a missing store archive refuses before the Brain tree is touched", async () => {
+    // The store step used to run after the Markdown tree had been deleted
+    // and re-copied, so this threw over work that had in fact completed:
+    // the caller reported a failed rollback, logged nothing, and the vault
+    // was rolled back anyway. Reachable whenever the sidecar survives
+    // without its companion archive - partial replication, a sync rule
+    // excluding large binaries, an operator reclaiming disk.
+    await seedDerivedStore();
+    const runId = "dream-archive-gone";
+    createSnapshot(vault, runId, { reason: DREAM, derivedStore: COVERED });
+
+    // A marker the restore would have removed, so its survival proves the
+    // tree was never touched rather than merely that the call threw.
+    const marker = join(vault, "Brain", "post-snapshot-marker.md");
+    writeFileSync(marker, "# only in the live tree\n");
+
+    rmSync(snapshotStorePath(vault, runId), { force: true });
+
+    expect(() => restoreSnapshot(vault, runId)).toThrow(/refusing before the Brain tree/u);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test("a derived-store record this build cannot read refuses rather than guessing", async () => {
+    // Coverage is indeterminate here, so neither replacing the live store
+    // nor leaving it can be justified - and the Markdown tree must not be
+    // spent finding that out.
+    await seedDerivedStore();
+    const runId = "dream-record-unreadable";
+    createSnapshot(vault, runId, { reason: DREAM, derivedStore: COVERED });
+
+    const marker = join(vault, "Brain", "post-snapshot-marker.md");
+    writeFileSync(marker, "# only in the live tree\n");
+
+    const sidecar = manifestSidecarPath(vault, runId);
+    const parsed = JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, unknown>;
+    writeFileSync(sidecar, JSON.stringify({ ...parsed, derived_store: "included" }));
+
+    expect(() => restoreSnapshot(vault, runId)).toThrow(/indeterminate/u);
+    expect(existsSync(marker)).toBe(true);
+  });
+
   test("swaps the store and says so when the manifest recorded one", async () => {
     const dbPath = await seedDerivedStore();
     const runId = "dream-restore-covered";

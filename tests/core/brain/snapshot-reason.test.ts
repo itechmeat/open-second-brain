@@ -102,18 +102,25 @@ describe("createSnapshot stamps the reason into the sidecar", () => {
     expect(listed!.manifest_path).toBeNull();
   });
 
-  test("an unregistered reason in a hand-edited sidecar fails the manifest closed", () => {
+  test("an unregistered reason keeps the record that drift detection needs", () => {
     const runId = "dream-tampered";
     createSnapshot(vault, runId, { reason: BRAIN_SNAPSHOT_REASON.dream });
     const sidecar = manifestSidecarPath(vault, runId);
     const parsed = JSON.parse(readFileSync(sidecar, "utf8")) as Record<string, unknown>;
     writeFileSync(sidecar, JSON.stringify({ ...parsed, snapshot_reason: "spring-cleaning" }));
 
-    // Consistent with the existing rule for a malformed file entry or a
-    // malformed derived-store record: the WHOLE manifest is refused, so
-    // rollback degrades to its no-drift-check path rather than acting on
-    // a field this build cannot interpret.
-    expect(readManifestSidecar(vault, runId)).toBeNull();
+    // A reason this build does not register is what a LATER build writes,
+    // and the vault replicates between machines that need not run the same
+    // one. Refusing the whole record would discard the file map with it and
+    // send rollback down its no-drift-check path - the silent-overwrite
+    // route, reached by a different door. The provenance is unusable and
+    // says so; the comparison the rest of the record supports is intact.
+    const manifest = readManifestSidecar(vault, runId);
+    expect(manifest).not.toBeNull();
+    expect(manifest!.snapshot_reason).toBeUndefined();
+    expect(manifest!.snapshot_reason_unreadable).toBe(true);
+    expect(Object.keys(manifest!.files).length).toBeGreaterThan(0);
+    // The listing still refuses to name a provenance it cannot read.
     expect(listSnapshots(vault).find((s) => s.run_id === runId)!.reason).toBeNull();
   });
 });

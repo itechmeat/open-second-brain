@@ -1133,6 +1133,19 @@ export function restoreSnapshot(
   opts: SnapshotStoreOptions = {},
 ): RestoreSnapshotResult {
   const dirs = brainDirsForWrite(vault);
+
+  // Everything a restore needs is checked before anything is replaced.
+  //
+  // The store step used to run after the Markdown tree had already been
+  // deleted and re-copied, so a missing store archive threw over work
+  // that had in fact completed: the caller reported a failed rollback,
+  // logged nothing, and the vault was rolled back anyway. Reachable
+  // whenever the sidecar survives without its companion archive - partial
+  // replication, a sync rule excluding large binaries, or an operator
+  // reclaiming disk. The create path already refuses before it writes;
+  // this is the same ordering on the way back.
+  assertDerivedStoreRestorable(vault, runId);
+
   const ext = extractSnapshotToTemp(vault, runId);
   try {
     // Replace every top-level entry under Brain/, except the entries the
@@ -1199,6 +1212,39 @@ export function restoreSnapshot(
  *     archive never held, and reporting "excluded" would claim a check
  *     that never ran.
  */
+/**
+ * Refuse a restore that cannot be completed, before it starts.
+ *
+ * Two conditions, both of which used to surface only after the Markdown
+ * tree had been replaced. A derived-store record this build cannot read
+ * means coverage is indeterminate, so neither replacing the live store
+ * nor leaving it can be justified; a record that names an archive which
+ * is not on disk means the restore is already incomplete. Either way the
+ * honest answer is to touch nothing and say why.
+ */
+function assertDerivedStoreRestorable(vault: string, runId: string): void {
+  const manifest = readManifestSidecar(vault, runId);
+  if (manifest === null) return;
+  if (manifest.derived_store_unreadable === true) {
+    throw new BrainSnapshotError(
+      "the manifest carries a derived-store record this build cannot read, so whether the " +
+        "snapshot covered the store is indeterminate; refusing to restore rather than " +
+        "guessing at the live store",
+      runId,
+    );
+  }
+  const record = manifest.derived_store ?? null;
+  if (record === null || !record.included) return;
+  const archive = snapshotStorePath(vault, runId);
+  if (!existsSync(archive)) {
+    throw new BrainSnapshotError(
+      `manifest records a derived-store archive but ${archive} is absent; refusing before the ` +
+        "Brain tree is touched, so nothing is half-restored",
+      runId,
+    );
+  }
+}
+
 function restoreDerivedStore(
   vault: string,
   runId: string,
@@ -1224,6 +1270,10 @@ function restoreDerivedStore(
 
   const archive = snapshotStorePath(vault, runId);
   if (!existsSync(archive)) {
+    // Unreachable through `restoreSnapshot`, which refuses this in its
+    // pre-flight. Kept because this function is also the one a future
+    // caller would reach directly, and a store swap must never begin
+    // against an archive that is not there.
     throw new BrainSnapshotError(
       `manifest records a derived-store archive but ${archive} is absent`,
       runId,

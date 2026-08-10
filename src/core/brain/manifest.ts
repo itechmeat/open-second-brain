@@ -138,6 +138,25 @@ export interface BrainManifest {
   /** Keys are vault-relative paths under `Brain/`, sorted lexicographically. */
   readonly files: Readonly<Record<string, BrainManifestEntry>>;
   /**
+   * Set when a `derived_store` record was present and could not be read.
+   *
+   * Distinct from the field's absence, which means the snapshot predates
+   * derived-store coverage. A caller that would restore the store must
+   * refuse on this; a caller that only compares the Markdown tree may
+   * ignore it, which is the whole reason the failure is contained here
+   * rather than discarding the file map.
+   */
+  readonly derived_store_unreadable?: true;
+  /**
+   * Set when a `snapshot_reason` was present and is not a reason this
+   * build registers - typically written by a later build, since the
+   * vault replicates between machines that need not run the same one.
+   *
+   * The provenance is unusable and says so; the drift comparison the rest
+   * of this record supports is unaffected.
+   */
+  readonly snapshot_reason_unreadable?: true;
+  /**
    * Absent on every sidecar written before derived-store coverage
    * shipped. Absent means UNKNOWN - the snapshot predates the feature
    * and nothing can be said about what it covered. It must never be
@@ -447,18 +466,29 @@ export function readManifestSidecar(vault: string, runId: string): BrainManifest
   // half-written record claim a coverage the archive does not have.
   const rawStore = obj["derived_store"];
   let derivedStore: BrainManifestDerivedStore | undefined;
+  // An unreadable OPTIONAL field does not void the mandatory record.
+  //
+  // Failing the whole manifest closed was the first shape of this, and it
+  // reproduced the loss that keeping `schema_version` at 1 exists to
+  // prevent: a peer running a later build writes a value this one does
+  // not know, this one discards the file map with it, and the rollback
+  // gate then reports no sidecar at all and skips drift detection - the
+  // silent-overwrite path, reached by a different route and announced
+  // with a message that is false twice over.
+  //
+  // So each optional field has three states rather than two. Valid,
+  // absent, or present-and-unreadable - and the third is recorded, never
+  // folded into either of the others, because a caller that acts on the
+  // field needs to refuse while a caller that only needs the file map
+  // carries on.
+  let derivedStoreUnreadable = false;
   if (rawStore !== undefined) {
     const parsedStore = parseDerivedStore(rawStore);
-    if (parsedStore === null) return null;
-    derivedStore = parsedStore;
+    if (parsedStore === null) derivedStoreUnreadable = true;
+    else derivedStore = parsedStore;
   }
-  // The snapshot reason follows the same rule once more: absent is a
-  // legal older sidecar, present-but-unregistered fails the whole
-  // manifest closed. Accepting an unknown reason would put a string this
-  // build cannot interpret into a listing column and a reason filter,
-  // where it would read as provenance rather than as corruption.
   const rawReason = obj["snapshot_reason"];
-  if (rawReason !== undefined && !isBrainSnapshotReason(rawReason)) return null;
+  const reasonUnreadable = rawReason !== undefined && !isBrainSnapshotReason(rawReason);
 
   return Object.freeze({
     schema_version: BRAIN_MANIFEST_SCHEMA_VERSION,
@@ -466,7 +496,9 @@ export function readManifestSidecar(vault: string, runId: string): BrainManifest
     brain_root: BRAIN_ROOT_REL,
     files: Object.freeze(entries),
     ...(derivedStore !== undefined ? { derived_store: derivedStore } : {}),
-    ...(rawReason !== undefined ? { snapshot_reason: rawReason } : {}),
+    ...(derivedStoreUnreadable ? { derived_store_unreadable: true as const } : {}),
+    ...(!reasonUnreadable && rawReason !== undefined ? { snapshot_reason: rawReason } : {}),
+    ...(reasonUnreadable ? { snapshot_reason_unreadable: true as const } : {}),
   });
 }
 

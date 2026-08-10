@@ -178,8 +178,19 @@ export function stripBrainIdPrefix(id: string): string {
  * rename), which is exactly the pair a reverse lookup across a
  * retirement needs on BOTH sides of the join.
  *
- * A reference that names no Brain artifact passes through with only the
- * wikilink decoration removed, so a note basename stays its own key.
+ * The prefix strip is unconditional, and that has a consequence worth
+ * naming rather than discovering: a basename that merely begins with one
+ * of the two prefixes is folded like an id, so a note called
+ * `ret-rospective.md` keys as `rospective`, and `pref-foo` shares a key
+ * with a note called `foo.md`. Both collisions are between a preference
+ * slug and an ordinary note basename, which is a namespace this project
+ * does not otherwise keep apart.
+ *
+ * A caller that cannot tolerate that must match on exact ids plus the
+ * `aliases:` a retirement records, rather than on a fold. This function
+ * is for the reverse-lookup join, where the cost of a collision is one
+ * extra advisory row naming a consumer that does not consume - not a
+ * mutation, and visible to whoever reads it.
  */
 export function brainArtifactSlug(value: string): string {
   return stripBrainIdPrefix(normaliseWikilinkTarget(value));
