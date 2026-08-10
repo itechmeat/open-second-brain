@@ -736,6 +736,17 @@ counters (`_status`, `_applied_count`, `_violated_count`,
 adjuncts); other kinds compare by byte equality and surface as
 `(body changed)`.
 
+The `log` kind covers every shape the log path helpers write —
+`<date>.md`, `<date>.jsonl` and their per-device `<date>.<deviceId>.…`
+shards — and it decides that through the recogniser in `log-jsonl.ts`,
+the module whose contract is that the shard layout lives in exactly one
+place. The differ used to carry a pattern of its own, which is how it
+came to predate sharding and classify both the per-device markdown and
+the machine-primary JSONL as `other`, mislabelling the surface a
+`rollback --dry-run` is most likely to be showing. Ledgers and
+subdirectories under `log/` (`capture-decisions.jsonl`, `dream-runs/`,
+`pref-audit/`) are not days of the log and stay in the catch-all class.
+
 ## Primary agent declaration
 
 `Brain/_brain.yaml` carries an optional `primary_agent: <name> | null`

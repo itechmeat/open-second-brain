@@ -53,11 +53,50 @@ const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 // that does not match are NOT log shards.
 const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.([a-z0-9-]{1,32}))?\.(jsonl|md)$/;
 
-export interface LogShardFile {
+/**
+ * A Syncthing conflict copy is named `<stem>.sync-conflict-<stamp>.<ext>`,
+ * so its middle segment can pass the shard-id shape. Named once because
+ * both the recogniser that must REJECT it and the leftover reporter that
+ * must FIND it key on the same marker.
+ */
+const SYNC_CONFLICT_SHARD_PREFIX = "sync-conflict";
+
+/** The shape of one recognised `Brain/log/` daily file name. */
+export interface ParsedLogFileName {
   readonly date: string;
   /** Empty string for the legacy un-sharded pair. */
   readonly shardId: string;
   readonly ext: "jsonl" | "md";
+}
+
+/**
+ * Decide whether `name` is a day of the Brain log, and what day.
+ *
+ * The four shapes are exactly what `logPath`, `logJsonlPath`,
+ * `logShardPath` and `logShardJsonlPath` write, which the shard
+ * round-trip test asserts by feeding those builders' own output back
+ * through here - a recogniser checked only against hand-written names
+ * proves nothing about what the writers produce.
+ *
+ * Exported because a second consumer needs the same answer: the snapshot
+ * diff classifier buckets files under two extracted `Brain/` trees, and
+ * the copy of this shape it used to carry predated per-device sharding, so
+ * both the markdown shard and the machine-primary JSONL fell through to
+ * its catch-all class and `rollback --dry-run` mislabelled the log surface
+ * it is most likely to be showing. One recogniser in the module that owns
+ * the layout, rather than a third copy of the pattern.
+ */
+export function parseLogFileName(name: string): ParsedLogFileName | null {
+  const m = LOG_FILE_RE.exec(name);
+  if (m === null) return null;
+  const shardId = m[2] ?? "";
+  // Defensive: a hand-renamed Syncthing conflict copy could match the
+  // shard-id shape; conflict copies are never log shards.
+  if (shardId.startsWith(SYNC_CONFLICT_SHARD_PREFIX)) return null;
+  return { date: m[1]!, shardId, ext: m[3] as "jsonl" | "md" };
+}
+
+export interface LogShardFile extends ParsedLogFileName {
   readonly path: string;
   readonly name: string;
 }
@@ -76,19 +115,9 @@ export function listLogShardFiles(vault: string): LogShardFile[] {
     a.name.localeCompare(b.name),
   )) {
     if (!entry.isFile()) continue;
-    const m = LOG_FILE_RE.exec(entry.name);
-    if (!m) continue;
-    const shardId = m[2] ?? "";
-    // Defensive: a hand-renamed Syncthing conflict copy could match the
-    // shard-id shape; conflict copies are never log shards.
-    if (shardId.startsWith("sync-conflict")) continue;
-    out.push({
-      date: m[1]!,
-      shardId,
-      ext: m[3] as "jsonl" | "md",
-      path: join(dir, entry.name),
-      name: entry.name,
-    });
+    const parsed = parseLogFileName(entry.name);
+    if (parsed === null) continue;
+    out.push({ ...parsed, path: join(dir, entry.name), name: entry.name });
   }
   return out;
 }
@@ -113,7 +142,7 @@ export function listLogSyncConflicts(vault: string): string[] {
   const dir = brainDirs(vault).log;
   if (!existsSync(dir)) return [];
   return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.includes(".sync-conflict-"))
+    .filter((e) => e.isFile() && e.name.includes(`.${SYNC_CONFLICT_SHARD_PREFIX}-`))
     .map((e) => join(dir, e.name))
     .toSorted();
 }

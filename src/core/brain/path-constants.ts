@@ -51,7 +51,15 @@ export const BRAIN_DECISIONS_REL = posix.join(BRAIN_ROOT_REL, "decisions");
 export const BRAIN_GAP_TASKS_REL = posix.join(BRAIN_ROOT_REL, "gap-tasks");
 /** Persisted contradiction (tension) notes: `Brain/tensions/tension-<slug>.md` (S2). */
 export const BRAIN_TENSIONS_REL = posix.join(BRAIN_ROOT_REL, "tensions");
-export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, "log");
+/**
+ * Directory NAME of the Brain log, as a top-level `Brain/` entry. Named
+ * beside the vault-relative path because a consumer comparing paths that
+ * are relative to `Brain/` itself - the snapshot differ, which walks two
+ * extracted trees with no vault around them - needs the segment rather
+ * than the path.
+ */
+export const BRAIN_LOG_DIR = "log";
+export const BRAIN_LOG_REL = posix.join(BRAIN_ROOT_REL, BRAIN_LOG_DIR);
 /**
  * Inbound-capture staging + archive (Knowledge intake suite, seam 1,
  * t_f8f5ef6a). Mirrors the inbox-versus-processed distinction: a capture

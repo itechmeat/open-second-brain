@@ -11,13 +11,19 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
-import { listLogDates, readLogDay } from "../../../src/core/brain/log-jsonl.ts";
-import { brainDirs } from "../../../src/core/brain/paths.ts";
+import { listLogDates, parseLogFileName, readLogDay } from "../../../src/core/brain/log-jsonl.ts";
+import {
+  brainDirs,
+  logJsonlPath,
+  logPath,
+  logShardJsonlPath,
+  logShardPath,
+} from "../../../src/core/brain/paths.ts";
 import { runDoctor } from "../../../src/core/brain/doctor.ts";
 
 let vault: string;
@@ -126,6 +132,58 @@ describe("listLogDates", () => {
 
   test("empty or absent log dir lists nothing", () => {
     expect(listLogDates(vault)).toEqual([]);
+  });
+});
+
+/**
+ * The log-file recogniser is bound to the builders, not to itself.
+ *
+ * `parseLogFileName` is exported so a second consumer - the snapshot diff
+ * classifier - can decide whether a file is a day of the log without
+ * carrying its own copy of the shape. The copy it did carry predated
+ * per-device sharding and mislabelled both files a current vault writes,
+ * which is exactly what a duplicated pattern costs; a third copy would
+ * have been a third chance to make the same mistake.
+ *
+ * A recogniser tested only against hand-written names proves that it
+ * agrees with the test author. These assertions run the four path builders
+ * and feed their real output back in, so the recogniser is pinned to what
+ * the writers actually produce.
+ */
+describe("parseLogFileName agrees with the log path builders", () => {
+  const DATE = "2026-06-01";
+  const DEVICE = "mac1234";
+
+  test("every builder's output parses back to what built it", () => {
+    const cases: ReadonlyArray<{
+      readonly path: string;
+      readonly shardId: string;
+      readonly ext: "jsonl" | "md";
+    }> = [
+      { path: logPath(vault, DATE), shardId: "", ext: "md" },
+      { path: logJsonlPath(vault, DATE), shardId: "", ext: "jsonl" },
+      { path: logShardPath(vault, DATE, DEVICE), shardId: DEVICE, ext: "md" },
+      { path: logShardJsonlPath(vault, DATE, DEVICE), shardId: DEVICE, ext: "jsonl" },
+    ];
+    for (const expected of cases) {
+      const name = basename(expected.path);
+      expect(`${name} -> ${JSON.stringify(parseLogFileName(name))}`).toBe(
+        `${name} -> ${JSON.stringify({ date: DATE, shardId: expected.shardId, ext: expected.ext })}`,
+      );
+    }
+  });
+
+  test("names no builder produces are not days of the log", () => {
+    for (const name of [
+      "capture-decisions.jsonl",
+      "recurrence-support.jsonl",
+      "not-a-date.md",
+      "2026-06-01.txt",
+      "2026-06-01.sync-conflict-20260601-120000-abcdef.jsonl",
+      "2026-6-1.md",
+    ]) {
+      expect(`${name}: ${parseLogFileName(name) === null}`).toBe(`${name}: true`);
+    }
   });
 });
 
