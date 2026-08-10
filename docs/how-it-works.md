@@ -652,9 +652,66 @@ place under the writer lock — the same swap discipline the indexer
 uses — and prints which of replaced / not restored / unknown applied
 in every case.
 
+### Why a recovery point was taken
+
+Two histories existed here and did not join. The Brain event log is
+richly typed, per-device sharded and machine-primary, and it recorded a
+`rollback`; the snapshot family is the only **revertible** history, and
+every entry in it was an opaque run id plus an mtime. The reasons existed
+de facto — as run-id **prefixes** at five call sites, three of them inline
+string literals — and nothing parsed them back, so an operator could not
+ask which recovery point covers a given boundary, could not filter the
+revertible history by why it happened, and could not walk from a logged
+event to the archive that would undo it.
+
+Every snapshot now carries a typed reason from one closed vocabulary
+(`BRAIN_SNAPSHOT_REASON`): `dream`, `upgrade`, `import-claude-memory`,
+`delete-by-source`, `entity-prune` for the five destructive call sites,
+`session-boundary`, `plan-boundary`, `decision-boundary` for boundaries a
+later release may snapshot at, and `manual`. The reason is required by
+`createSnapshot`, doubles as the run-id prefix so the filename and the
+recorded provenance can never disagree, and is stamped into the manifest
+sidecar as an additive `snapshot_reason` key **at the existing schema
+version** — same reasoning as the derived-store key: bumping it would make
+every older peer silently lose drift detection on new snapshots.
+
+A sidecar with **no** reason reads as `unknown` and the reason is **never**
+reconstructed from the run-id prefix that happens to spell it. That
+inference would look correct on almost every archive this project writes,
+and would manufacture provenance for an unstamped, hand-named or
+third-party archive at exactly the moment an operator is deciding whether
+to overwrite their live tree with it. An unregistered reason fails the
+whole manifest closed, as one malformed file entry already does.
+
+Each created recovery point also emits one `snapshot` log event carrying
+the run id, the reason and the archive size — the counterpart the log has
+been missing since `rollback` shipped, which recorded the restore while
+the point it restores to left no trace but a filename. The append is
+best-effort: `createSnapshot` runs before the mutation the
+destructive-snapshot gate protects, so a throw would turn a lost audit
+line into a refused mutation.
+
+Taking snapshots **at** session, plan and decision boundaries is
+deliberately **not** shipped. That changes how often snapshots happen,
+which interacts with retention and with the optional derived-store
+archive; the vocabulary carries those members anyway so this build can
+read a sidecar a later release writes and replicates back.
+
 ### Read-only inspectors over the snapshot family
 
-Two CLI surfaces share the same diff renderer over the snapshot
+With `snapshot log` the family is complete: **log / diff / revert**.
+
+- **`o2b brain snapshot log`** — newest-first listing of every recovery
+  point (by archive mtime, because a hand-named run id carries no
+  timestamp to sort on): run id, created-at, reason, archive size,
+  whether a drift manifest is present, and the derived-store record.
+  `--reason <reason>` filters by why it happened and rejects an
+  unregistered value with a usage exit (2) rather than an empty listing,
+  which would say "you have no such snapshots" when the truth is "that is
+  not a reason". `--limit <n>` caps the listing, `--json` yields the
+  structured rows. An empty snapshots directory exits 0.
+
+Two further surfaces share the same diff renderer over the snapshot
 extraction primitive (`extractSnapshotToTemp`), so previewing and
 auditing stay byte-equal:
 
@@ -666,6 +723,10 @@ auditing stay byte-equal:
   renderer, but compares snapshot ↔ snapshot when both ids are
   supplied (and snapshot ↔ live when only one is). `--json` yields
   the structured `BrainTreeDiff` payload for scripting.
+
+`rollback --list`, the confirmation prompt and the `--json` result all
+name the reason too — it is the one fact that distinguishes two archives
+minted seconds apart.
 
 The diff classifies every file under each root into six artifact
 kinds (preference, retired, signal, log, config, other). Preference

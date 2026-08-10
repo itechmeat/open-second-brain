@@ -59,10 +59,8 @@ import { manifestPath, readManifest, writeManifestAtomic } from "./ingest/conten
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { isoSecond } from "./time.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
+import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
-
-/** Run-id label for the snapshot taken before a confirmed source cleanup. */
-const DELETE_BY_SOURCE_SNAPSHOT_LABEL = "delete-by-source";
 
 /** How a page was found to trace back to the source. */
 export type SourceCleanupMatch = "source_path" | "session_ref" | "wikilink" | "evidenced_by";
@@ -590,9 +588,12 @@ export function deleteBySource(
   let snapshotRunId: string | null = null;
   let snapshotArchivePath: string | null = null;
   if (hasWork) {
-    const gated = withDestructiveSnapshot(vault, DELETE_BY_SOURCE_SNAPSHOT_LABEL, runDeletion, {
-      now: opts.now,
-    });
+    const gated = withDestructiveSnapshot(
+      vault,
+      BRAIN_SNAPSHOT_REASON.deleteBySource,
+      runDeletion,
+      { now: opts.now },
+    );
     snapshotRunId = gated.snapshot.runId;
     snapshotArchivePath = gated.snapshot.path;
   } else {

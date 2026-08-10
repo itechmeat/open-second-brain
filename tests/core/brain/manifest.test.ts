@@ -28,6 +28,7 @@ import {
   writeManifestSidecar,
   type BrainManifest,
 } from "../../../src/core/brain/manifest.ts";
+import { BRAIN_SNAPSHOT_REASON, BRAIN_SNAPSHOT_REASONS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
 let brain: string;
@@ -395,5 +396,96 @@ describe("the derived-store field on the sidecar", () => {
   test("an exclusion that names no reason fails the manifest closed", () => {
     writeSidecarWithStore("reasonless", { ...EXCLUDED, exclusion_reason: null });
     expect(readManifestSidecar(vault, "reasonless")).toBeNull();
+  });
+});
+
+/**
+ * U7: the snapshot-reason field on the sidecar.
+ *
+ * Additive at the existing schema version for the same reason the
+ * derived-store field is, and validated through the same closed guard.
+ * The load-bearing negative is the last case here: the reason is also a
+ * run-id PREFIX at every call site that writes one, so guessing it from
+ * the run id would look right in almost every test and would manufacture
+ * provenance for a hand-named archive the code never stamped.
+ */
+describe("the snapshot-reason field on the sidecar", () => {
+  /** A sidecar carrying `snapshot_reason` verbatim, written to disk. */
+  function writeSidecarWithReason(runId: string, reason: unknown): void {
+    writeFileSync(
+      manifestSidecarPath(vault, runId),
+      JSON.stringify({
+        schema_version: 1,
+        generated_at: "2026-05-18T00:00:00Z",
+        brain_root: "Brain",
+        files: {},
+        snapshot_reason: reason,
+      }),
+    );
+  }
+
+  test("buildManifest stamps the reason it was given", () => {
+    const m = buildManifest(brain, { snapshotReason: BRAIN_SNAPSHOT_REASON.entityPrune });
+    expect(m.snapshot_reason).toBe(BRAIN_SNAPSHOT_REASON.entityPrune);
+    // Still the same schema version: an older peer ignores the key and
+    // keeps its own drift detection, which is why it was not bumped.
+    expect(m.schema_version).toBe(BRAIN_MANIFEST_SCHEMA_VERSION);
+  });
+
+  test("buildManifest omits the key entirely when given no reason", () => {
+    const m = buildManifest(brain);
+    expect("snapshot_reason" in m).toBe(false);
+  });
+
+  test("every registered reason roundtrips through the sidecar", () => {
+    for (const reason of BRAIN_SNAPSHOT_REASONS) {
+      writeSidecarWithReason(`roundtrip-${reason}`, reason);
+      expect(readManifestSidecar(vault, `roundtrip-${reason}`)?.snapshot_reason).toBe(reason);
+    }
+  });
+
+  test("a sidecar written before the feature reads as no reason at all", () => {
+    writeFileSync(
+      manifestSidecarPath(vault, "dream-2026-05-18-070000"),
+      JSON.stringify({
+        schema_version: 1,
+        generated_at: "2026-05-18T00:00:00Z",
+        brain_root: "Brain",
+        files: {},
+      }),
+    );
+    const back = readManifestSidecar(vault, "dream-2026-05-18-070000");
+    expect(back).not.toBeNull();
+    // The run id begins with a registered reason. It is NOT read back as
+    // one: the archive does not carry that provenance, and inventing it
+    // would make an unstamped snapshot indistinguishable from a stamped
+    // one.
+    expect(back!.snapshot_reason).toBeUndefined();
+  });
+
+  test("an unregistered reason fails the manifest closed", () => {
+    writeSidecarWithReason("bogus", "spring-cleaning");
+    expect(readManifestSidecar(vault, "bogus")).toBeNull();
+  });
+
+  test("an explicit null reason fails the manifest closed", () => {
+    // Absence is spelled by omitting the key. A null is a present field
+    // that names nothing, which no writer here produces.
+    writeSidecarWithReason("null-reason", null);
+    expect(readManifestSidecar(vault, "null-reason")).toBeNull();
+  });
+
+  test("a non-string reason fails the manifest closed", () => {
+    writeSidecarWithReason("numeric", 3);
+    expect(readManifestSidecar(vault, "numeric")).toBeNull();
+  });
+
+  test("write then read roundtrip preserves the reason", () => {
+    writeFileSync(join(brain, "_brain.yaml"), "schema_version: 1\n");
+    const original = buildManifest(brain, { snapshotReason: BRAIN_SNAPSHOT_REASON.manual });
+    writeManifestSidecar(vault, "reason-rt", original);
+    expect(readManifestSidecar(vault, "reason-rt")!.snapshot_reason).toBe(
+      BRAIN_SNAPSHOT_REASON.manual,
+    );
   });
 });

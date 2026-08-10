@@ -63,6 +63,11 @@ import {
   TRIGGER_STATUS,
   TRIGGER_STATUSES,
 } from "../../../src/core/brain/triggers/types.ts";
+import {
+  BRAIN_SNAPSHOT_REASON,
+  BRAIN_SNAPSHOT_REASONS,
+  isBrainSnapshotReason,
+} from "../../../src/core/brain/types.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -197,6 +202,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SNAPSHOT_STORE_EXCLUSION,
     members: SNAPSHOT_STORE_EXCLUSION_REASONS,
     guard: isSnapshotStoreExclusionReason,
+  },
+  {
+    // U7. Three of its nine members have no producer in this release
+    // (snapshots at a session, plan or decision boundary are deferred),
+    // and the census does not care: what it asserts is that the guard
+    // accepts every member, which is precisely what lets this build read
+    // a sidecar a later release wrote and replicated back.
+    name: "BRAIN_SNAPSHOT_REASON",
+    values: BRAIN_SNAPSHOT_REASON,
+    members: BRAIN_SNAPSHOT_REASONS,
+    guard: isBrainSnapshotReason,
   },
 ]);
 

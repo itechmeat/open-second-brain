@@ -147,7 +147,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("set-primary", "Set primary Brain agent"),
         command("protect", "Emit runtime deny rules for Brain"),
         command("unprotect", "Remove managed runtime deny rules"),
-        command("snapshot", "Inspect Brain snapshots"),
+        command(
+          "snapshot",
+          "Inspect Brain snapshots",
+          [],
+          [
+            command("log", "Newest-first listing of every recovery point with its reason", [
+              flag("vault", "string"),
+              flag("reason", "string"),
+              flag("limit", "string"),
+            ]),
+            command("diff", "Read-only diff between two snapshots, or snapshot vs live", [
+              flag("vault", "string"),
+            ]),
+          ],
+        ),
         command("rollback", "Restore Brain from a snapshot"),
         command("upgrade", "Migrate release-owned Brain files"),
         command("export", "Export active preferences"),

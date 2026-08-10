@@ -19,7 +19,7 @@ import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
-import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "../../../core/brain/types.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import {
   brainVerbContext,
@@ -53,10 +53,10 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
       ok("no snapshots available");
       return 0;
     }
-    ok("run_id\tcreated_at\tsize_bytes\tderived_store");
+    ok("run_id\tcreated_at\treason\tsize_bytes\tderived_store");
     for (const s of snaps) {
       ok(
-        `${s.run_id}\t${s.created_at}\t${s.size_bytes}\t` +
+        `${s.run_id}\t${s.created_at}\t${renderReason(s.reason)}\t${s.size_bytes}\t` +
           renderDerivedStoreCoverage(s.derived_store),
       );
     }
@@ -68,7 +68,8 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   const runId = positional[0]!;
 
   const allSnaps = listSnapshots(vault);
-  if (!allSnaps.some((s) => s.run_id === runId)) {
+  const target = allSnaps.find((s) => s.run_id === runId);
+  if (target === undefined) {
     process.stderr.write(
       `snapshot not found: ${runId}; run \`o2b brain rollback --list\` to enumerate.\n`,
     );
@@ -126,8 +127,13 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     if (flags["json"] || !process.stdin.isTTY)
       return fail("rollback requires --yes in non-interactive mode (--json or non-TTY stdin)");
     const summary = diffSummary(vault);
+    // The reason is in the prompt because it is the one fact that tells an
+    // operator WHICH point they are about to restore. Two archives minted
+    // seconds apart differ only in why they were taken, and a run id is a
+    // timestamp, not an explanation.
     process.stderr.write(
       `About to restore snapshot '${runId}' over Brain/.\n` +
+        `Snapshot reason: ${renderReason(target.reason)}.\n` +
         `Current state: ${summary.preferences} preferences, ${summary.retired} retired, ${summary.signals} signals.\n` +
         `This will OVERWRITE the live Brain/ tree (.snapshots/ is preserved).\nProceed? [y/N] `,
     );
@@ -163,11 +169,17 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   if (flags["json"]) {
     okJson({
       run_id: runId,
+      // Null when the snapshot predates the reason or its sidecar is
+      // unreadable: UNKNOWN provenance stays null rather than borrowing a
+      // label from the run id.
+      reason: target.reason,
       restored_files: result.restored_files,
       derived_store: result.derived_store,
     });
   } else {
-    ok(`restored: ${runId} (${result.restored_files} files)`);
+    ok(
+      `restored: ${runId} (${result.restored_files} files, reason ${renderReason(target.reason)})`,
+    );
     // Always printed, in all three shapes. A restore that silently says
     // nothing about the derived store is exactly the silence this
     // feature exists to remove: the operator cannot tell a store that
@@ -175,6 +187,18 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     ok(`derived store: ${renderDerivedStoreRestore(result.derived_store)}`);
   }
   return 0;
+}
+
+/**
+ * One-column provenance answer. `unknown` for a snapshot whose sidecar is
+ * absent, unreadable, or predates the reason — and never the run-id
+ * prefix, even though every run id this project mints begins with the
+ * reason. Substituting the prefix would make an unstamped archive
+ * indistinguishable from a stamped one at exactly the moment an operator
+ * is deciding whether to overwrite their live tree with it.
+ */
+function renderReason(reason: BrainSnapshotReason | null): string {
+  return reason ?? "unknown";
 }
 
 /** One-column coverage answer for `--list`. */

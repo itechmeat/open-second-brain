@@ -12,7 +12,8 @@
  * Preferences and retired files get a typed field-level diff for the
  * canonical set of derived/identity fields; everything else compares
  * by byte equality so the renderer can flag "log file body changed"
- * without listing every byte.
+ * without listing every byte. The log bucket covers every shape a log
+ * file takes — see {@link BRAIN_LOG_SHARD_RE}.
  *
  * Inputs are expected to be Brain/ root directories (not vault
  * roots). Callers feed `extractSnapshotToTemp(...).brainRoot` for
@@ -145,6 +146,24 @@ export function diffBrainTrees(rootA: string, rootB: string): BrainTreeDiff {
   });
 }
 
+/**
+ * Every shape a Brain log file takes: `log/<date>.md`, `log/<date>.jsonl`,
+ * and the per-device shards `log/<date>.<device-id>.{md,jsonl}`.
+ *
+ * The classifier predated per-device sharding and matched only the
+ * unsharded markdown, so on any vault with a `device_id` configured — the
+ * normal case, and the only case where a rollback diff is interesting,
+ * because sharding exists for multi-device replication — every log file
+ * fell through to `other`. The machine-primary `.jsonl` surface, which is
+ * what `readLogDay` actually reads, was misclassified on every vault.
+ *
+ * The device-id alternative mirrors `DEVICE_ID_RE` in `config.ts` without
+ * anchors, and the date is matched structurally rather than validated:
+ * this decides a display bucket, and a file named like a log shard is one
+ * for the purpose of grouping a diff.
+ */
+const BRAIN_LOG_SHARD_RE = /^log\/\d{4}-\d{2}-\d{2}(?:\.[a-z0-9][a-z0-9-]{0,31})?\.(?:md|jsonl)$/;
+
 // ----- Walker + classifier -------------------------------------------------
 
 interface ScannedFile {
@@ -272,7 +291,7 @@ function scanFile(_root: string, abs: string, rel: string): ScannedFile {
       bytes: readFileSafe(abs),
     };
   }
-  if (rel.startsWith("log/") && /^log\/\d{4}-\d{2}-\d{2}\.md$/.test(rel)) {
+  if (BRAIN_LOG_SHARD_RE.test(rel)) {
     return {
       entry: {
         path: `Brain/${rel}`,

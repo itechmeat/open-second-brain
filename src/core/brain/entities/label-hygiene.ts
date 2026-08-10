@@ -26,10 +26,8 @@ import {
 } from "./canonical.ts";
 import { buildEntityIndex, type EntityIndex } from "./index-builder.ts";
 import type { BrainEntity } from "./types.ts";
+import { BRAIN_SNAPSHOT_REASON } from "../types.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-
-/** Snapshot run-id label for a confirmed entity-label prune. */
-export const ENTITY_PRUNE_SNAPSHOT_LABEL = "entity-prune";
 
 /** Config key / env twin for the operator-supplied exact-label denylist. */
 export const ENTITY_LABEL_DENYLIST_CONFIG_KEY = "entities.label_denylist";
@@ -223,7 +221,7 @@ export function pruneEntityLabels(
 
   const gated = withDestructiveSnapshot(
     vault,
-    ENTITY_PRUNE_SNAPSHOT_LABEL,
+    BRAIN_SNAPSHOT_REASON.entityPrune,
     () => {
       for (const path of prunePaths) rmSync(path, { force: true });
       for (const rewrite of rewrites) {

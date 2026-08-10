@@ -4,9 +4,13 @@ import {
   BRAIN_APPLY_RESULT,
   BRAIN_CONFIDENCE,
   BRAIN_LOG_EVENT_KIND,
+  BRAIN_LOG_EVENT_KIND_SET,
   BRAIN_PREFERENCE_STATUS,
   BRAIN_RETIRED_REASON,
   BRAIN_SIGNAL_SIGN,
+  BRAIN_SNAPSHOT_REASON,
+  BRAIN_SNAPSHOT_REASONS,
+  isBrainSnapshotReason,
 } from "../../src/core/brain/types.ts";
 import type {
   BrainApplyEvidenceLogEvent,
@@ -124,9 +128,68 @@ describe("BRAIN_* const enums", () => {
       "vector-backfill",
       // provenance-at-the-boundary (t_ac1c4176) event-anchor-only backfill
       "event-anchor-backfill",
+      // silence-is-not-an-answer U7 (t_9d2a5f11) recovery point created —
+      // the counterpart `rollback` has had since it shipped
+      "snapshot",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);
+  });
+});
+
+/**
+ * U7: the snapshot-reason vocabulary.
+ *
+ * The reason is persisted into a replicated manifest sidecar, so the trio
+ * (frozen object, membership list, guard) is not decoration: the guard is
+ * what stands between a peer's hand-edited sidecar and a listing that
+ * claims a provenance this build does not understand.
+ */
+describe("BRAIN_SNAPSHOT_REASON", () => {
+  test("the membership list covers every declared value", () => {
+    expect([...BRAIN_SNAPSHOT_REASONS].toSorted()).toEqual(
+      Object.values(BRAIN_SNAPSHOT_REASON).toSorted(),
+    );
+  });
+
+  test("the five existing destructive call sites each have a member", () => {
+    // Each of these is a run-id prefix that already exists on disk today
+    // and that nothing parsed back. Pinning the strings keeps a rename
+    // from silently orphaning the archives already in `.snapshots/`.
+    expect(BRAIN_SNAPSHOT_REASON.dream).toBe("dream");
+    expect(BRAIN_SNAPSHOT_REASON.upgrade).toBe("upgrade");
+    expect(BRAIN_SNAPSHOT_REASON.importClaudeMemory).toBe("import-claude-memory");
+    expect(BRAIN_SNAPSHOT_REASON.deleteBySource).toBe("delete-by-source");
+    expect(BRAIN_SNAPSHOT_REASON.entityPrune).toBe("entity-prune");
+  });
+
+  test("the three deferred boundary reasons and the manual one are readable", () => {
+    // Nothing WRITES these yet (taking snapshots at those boundaries is
+    // deferred), and the manifest must still be able to read a reason a
+    // later release writes into a sidecar this build then replicates.
+    expect(BRAIN_SNAPSHOT_REASON.sessionBoundary).toBe("session-boundary");
+    expect(BRAIN_SNAPSHOT_REASON.planBoundary).toBe("plan-boundary");
+    expect(BRAIN_SNAPSHOT_REASON.decisionBoundary).toBe("decision-boundary");
+    expect(BRAIN_SNAPSHOT_REASON.manual).toBe("manual");
+  });
+
+  test("the guard accepts every member and rejects a non-member", () => {
+    for (const reason of BRAIN_SNAPSHOT_REASONS) {
+      expect(`${reason}: ${isBrainSnapshotReason(reason)}`).toBe(`${reason}: true`);
+    }
+    for (const outsider of ["", " ", "Dream", "dream ", "rollback", null, undefined, 7, {}]) {
+      expect(`${JSON.stringify(outsider)}: ${isBrainSnapshotReason(outsider)}`).toBe(
+        `${JSON.stringify(outsider)}: false`,
+      );
+    }
+  });
+
+  test("the snapshot log kind sits in the shared kind set beside rollback", () => {
+    // `appendLogEvent` and the JSONL reader both validate against the set,
+    // so a kind missing from it is a kind no writer can emit.
+    expect(BRAIN_LOG_EVENT_KIND.snapshot).toBe("snapshot");
+    expect(BRAIN_LOG_EVENT_KIND_SET.has(BRAIN_LOG_EVENT_KIND.snapshot)).toBe(true);
+    expect(BRAIN_LOG_EVENT_KIND_SET.has(BRAIN_LOG_EVENT_KIND.rollback)).toBe(true);
   });
 });
 

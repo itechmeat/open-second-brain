@@ -29,7 +29,7 @@ import { DEFAULT_BRAIN_CONFIG_YAML } from "./config-template.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { renderBrainManual } from "./templates.ts";
 import { isoSecond } from "./time.ts";
-import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Public types --------------------------------------------------------
@@ -155,8 +155,9 @@ export function applyUpgrade(
   }
 
   const now = opts.now ?? new Date();
-  const runId = `upgrade-${isoSecondCompact(now)}`;
-  const snap = createSnapshot(vault, runId);
+  // One constant for the run-id prefix and the recorded reason.
+  const runId = `${BRAIN_SNAPSHOT_REASON.upgrade}-${isoSecondCompact(now)}`;
+  const snap = createSnapshot(vault, runId, { reason: BRAIN_SNAPSHOT_REASON.upgrade, now });
 
   const updated: string[] = [];
   for (const file of plan.files) {

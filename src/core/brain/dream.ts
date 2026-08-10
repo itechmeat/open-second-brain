@@ -80,6 +80,7 @@ import {
 } from "./rollup-ladder.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
 import { compactRunStamp, isoDate } from "./time.ts";
+import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import type { BrainConfig } from "./types.ts";
 
 // ----- Public surface ------------------------------------------------------
@@ -192,7 +193,13 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
     if (rollupPlan.fired && runId !== baseRunId) {
       rollupPlan = buildRollupPlan(vault, cfg, scan.preferences.length, runId);
     }
-    snapshotPathStr = createSnapshot(vault, runId).path;
+    // `now` rather than wall clock: the pass is byte-reproducible given
+    // its injected clock, and the snapshot audit line must not be the one
+    // thing that breaks that.
+    snapshotPathStr = createSnapshot(vault, runId, {
+      reason: BRAIN_SNAPSHOT_REASON.dream,
+      now,
+    }).path;
   }
 
   // v0.12.0 Brain Integrity Suite: durable workrun for the dream pass.
@@ -384,8 +391,10 @@ function buildRollupPlan(
 }
 
 function formatRunId(d: Date): string {
-  // dream-YYYY-MM-DD-HHMMSS
-  return `dream-${compactRunStamp(d)}`;
+  // <reason>-YYYY-MM-DD-HHMMSS. The prefix is the snapshot-reason
+  // constant rather than a literal, so the archive's filename and the
+  // provenance stamped into its sidecar are one string.
+  return `${BRAIN_SNAPSHOT_REASON.dream}-${compactRunStamp(d)}`;
 }
 
 function nextAvailableDreamRunId(vault: string, baseRunId: string): string {

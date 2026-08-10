@@ -55,6 +55,20 @@
  * point. And the live store size is recorded in every manifest whether
  * or not it was included, so an operator who has never enabled coverage
  * can still read what enabling it would cost.
+ *
+ * ## Every recovery point says why it exists
+ *
+ * `createSnapshot` requires a {@link BrainSnapshotReason}. It goes into
+ * the manifest sidecar as an additive key at the existing schema version,
+ * and into the Brain event log as one `snapshot` event carrying the run
+ * id, the reason and the archive size — the counterpart the log has been
+ * missing since `rollback` shipped, which recorded the restore while the
+ * point it restores to left no trace but a filename.
+ *
+ * The reason is also the run-id prefix at every call site, which is
+ * exactly why the READ path must not parse it back out: recovering the
+ * field from the filename would look right on almost every archive this
+ * project writes and would invent provenance for one it did not.
  */
 
 import { Database } from "bun:sqlite";
@@ -82,6 +96,7 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
 import { acquireWriterLockSync } from "../search/store/writer-lock.ts";
+import { appendLogEvent } from "./log.ts";
 import {
   buildManifest,
   manifestSidecarPath,
@@ -102,6 +117,8 @@ import {
   validateRunId,
 } from "./paths.ts";
 import { loadSnapshotDerivedStorePolicySafe, type BrainDerivedStorePolicy } from "./policy.ts";
+import { isoSecond } from "./time.ts";
+import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 // ----- Errors ---------------------------------------------------------------
@@ -163,7 +180,12 @@ export interface CreateSnapshotResult {
   readonly derived_store: BrainManifestDerivedStore;
 }
 
-export interface CreateSnapshotOptions {
+/**
+ * The derived-store knobs, shared by the create and the restore path
+ * because both resolve the same live store: one to archive it, one to
+ * write it back.
+ */
+export interface SnapshotStoreOptions {
   /**
    * Derived-store coverage policy. Defaults to the vault's
    * `snapshots:` block, so every existing call site picks the operator's
@@ -178,6 +200,26 @@ export interface CreateSnapshotOptions {
    * that already holds a resolved search config passes its own answer.
    */
   readonly derivedStorePath?: string;
+}
+
+export interface CreateSnapshotOptions extends SnapshotStoreOptions {
+  /**
+   * Why this recovery point is being taken. REQUIRED, and required
+   * precisely because it used to be optional in effect: the reasons
+   * existed only as run-id prefixes, three of them inline literals, and
+   * nothing read them back. A default here would restore that state -
+   * every unnamed call site would silently claim whatever the default
+   * said - so there is none, and the compiler asks each caller instead.
+   */
+  readonly reason: BrainSnapshotReason;
+  /**
+   * Clock for the `snapshot` audit line's timestamp. Defaults to wall
+   * clock. A caller that already has an injected clock passes it, so a
+   * pass whose output is byte-reproducible given `now` - the dream pass
+   * is, and a test asserts it - does not become non-reproducible merely
+   * by recording that it took a recovery point.
+   */
+  readonly now?: Date;
 }
 
 export interface SnapshotInfo {
@@ -205,6 +247,15 @@ export interface SnapshotInfo {
    * coverage and must never be rendered as "excluded".
    */
   readonly derived_store: BrainManifestDerivedStore | null;
+  /**
+   * Why the recovery point was taken, read back off the sidecar, or
+   * `null` when there is no sidecar, the sidecar is unreadable, or it
+   * predates the reason. `null` is UNKNOWN and is NOT recovered from the
+   * run id, even though every run id this project mints begins with the
+   * reason: parsing it back would report provenance for an archive that
+   * never recorded any.
+   */
+  readonly reason: BrainSnapshotReason | null;
 }
 
 export interface PruneSnapshotsResult {
@@ -305,7 +356,7 @@ function detectTooling(): ToolAvailability {
 export function createSnapshot(
   vault: string,
   runId: string,
-  opts: CreateSnapshotOptions = {},
+  opts: CreateSnapshotOptions,
 ): CreateSnapshotResult {
   validateRunId(runId);
   const dirs = brainDirsForWrite(vault);
@@ -376,7 +427,11 @@ export function createSnapshot(
   // would block dream from making any progress on a read-only
   // `.snapshots/` directory.
   try {
-    writeManifestSidecar(vault, runId, buildManifest(dirs.brain, derivedStore));
+    writeManifestSidecar(
+      vault,
+      runId,
+      buildManifest(dirs.brain, { derivedStore, snapshotReason: opts.reason }),
+    );
   } catch (err) {
     process.stderr.write(
       `warning: manifest sidecar write failed for snapshot ` +
@@ -384,7 +439,49 @@ export function createSnapshot(
         `rollback drift detection will be skipped for this snapshot.\n`,
     );
   }
+
+  logSnapshotEvent(vault, runId, opts.reason, outPath, opts.now ?? new Date());
   return { path: outPath, derived_store: derivedStore };
+}
+
+/**
+ * Record the recovery point in the Brain event log — the counterpart the
+ * log has been missing since `rollback` was added, which recorded the
+ * restore while the point it restores to left no trace but a filename.
+ *
+ * Best-effort, in the same shape the `rollback` verb already uses for its
+ * own event, and for a stronger reason here: this function runs AFTER the
+ * archive is on disk, and `createSnapshot` is called by the
+ * destructive-snapshot gate before the mutation it protects. A throw would
+ * therefore abort an operation whose recovery point already exists,
+ * turning a lost audit line into a refused mutation. The archive is the
+ * load-bearing artifact; the event is how it is found later.
+ */
+function logSnapshotEvent(
+  vault: string,
+  runId: string,
+  reason: BrainSnapshotReason,
+  archivePath: string,
+  now: Date,
+): void {
+  try {
+    // Measured off the file rather than carried from the compressor, so
+    // the number describes the archive an operator can `ls`. An
+    // unmeasurable archive raises into the handler below and no event is
+    // written: a `0` here would read as an empty archive, which is a real
+    // and very different state.
+    const sizeBytes = statSync(archivePath).size;
+    appendLogEvent(vault, {
+      timestamp: isoSecond(now),
+      eventType: BRAIN_LOG_EVENT_KIND.snapshot,
+      body: { run_id: runId, reason, size_bytes: String(sizeBytes) },
+    });
+  } catch (err) {
+    process.stderr.write(
+      `warning: append snapshot log event failed for '${runId}': ` +
+        `${(err as Error).message ?? String(err)}; the archive itself is intact.\n`,
+    );
+  }
 }
 
 /** True for a top-level `Brain/` entry the snapshot family never touches. */
@@ -439,7 +536,7 @@ function coverDerivedStore(
   vault: string,
   runId: string,
   tools: ToolAvailability,
-  opts: CreateSnapshotOptions,
+  opts: SnapshotStoreOptions,
 ): BrainManifestDerivedStore {
   const policy = opts.derivedStore ?? loadSnapshotDerivedStorePolicySafe(vault);
   // Resolved through the search layer's resolver, never re-derived here.
@@ -820,6 +917,10 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
     }
     const sidecar = manifestSidecarPath(vault, runId);
     const storeArchive = snapshotStorePath(vault, runId);
+    // One read for both sidecar-derived columns: two calls would parse
+    // the same file twice and could disagree if a peer rewrote it between
+    // them.
+    const manifest = readManifestSidecar(vault, runId);
     infos.push({
       run_id: runId,
       path: full,
@@ -831,7 +932,10 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
       // "sidecar predating the feature" into one answer, which is
       // correct: all three mean the coverage is UNKNOWN, and none of
       // them is evidence that the store was excluded.
-      derived_store: readManifestSidecar(vault, runId)?.derived_store ?? null,
+      derived_store: manifest?.derived_store ?? null,
+      // Same three states, same single answer, and the same refusal to
+      // improve on it: the run id is not evidence of a reason.
+      reason: manifest?.snapshot_reason ?? null,
     });
   }
   // Sort newest-first by mtime. We deliberately avoid lexicographic
@@ -1026,7 +1130,7 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
 export function restoreSnapshot(
   vault: string,
   runId: string,
-  opts: CreateSnapshotOptions = {},
+  opts: SnapshotStoreOptions = {},
 ): RestoreSnapshotResult {
   const dirs = brainDirsForWrite(vault);
   const ext = extractSnapshotToTemp(vault, runId);
@@ -1098,7 +1202,7 @@ export function restoreSnapshot(
 function restoreDerivedStore(
   vault: string,
   runId: string,
-  opts: CreateSnapshotOptions,
+  opts: SnapshotStoreOptions,
 ): RestoreDerivedStoreResult {
   const record = readManifestSidecar(vault, runId)?.derived_store ?? null;
   if (record === null) {

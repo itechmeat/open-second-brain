@@ -44,7 +44,8 @@ Brain verbs (observing memory):
   okf-export       Write a portable Open Knowledge Format bundle (--out <dir> [--force])
   okf-import       Import an OKF bundle (<dir>; staged as review candidates, --trusted writes direct)
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
-  snapshot diff    Read-only diff between two snapshots, or snapshot vs live
+  snapshot         Inspect recovery points: log (newest-first, --reason filter),
+                   diff (two snapshots, or a snapshot vs live)
   rollback         Restore Brain/ from a snapshot (--list or <run_id>; --yes;
                    --dry-run previews via the same diff renderer)
   doctor              Validate Brain invariants (--strict; --remediate/--repair [--apply])
@@ -302,12 +303,24 @@ export const VERB_HELP: Record<string, string> = {
     "snapshots.include_derived_store is on (off by default). Every\n" +
     "rollback reports what it did about it: replaced, not restored with\n" +
     "the manifest's named reason, or unknown for a snapshot taken before\n" +
-    "coverage existed. --list carries the same answer per snapshot.\n",
+    "coverage existed. --list carries the same answer per snapshot.\n" +
+    "--list, the confirmation prompt and the --json result all name the\n" +
+    "reason the snapshot was taken; 'unknown' means the snapshot carries\n" +
+    "no sidecar reason and is never inferred from its run id. Filter the\n" +
+    "history by reason with `o2b brain snapshot log --reason <reason>`.\n",
   snapshot:
-    "usage: o2b brain snapshot diff <run_id_a> [<run_id_b>]\n" +
+    "usage: o2b brain snapshot log  [--reason <reason>] [--limit <n>]\n" +
     "                              [--vault <path>] [--json]\n" +
-    "Read-only diff between two snapshots, or between a snapshot and\n" +
-    "the live Brain/ tree (when <run_id_b> is omitted).\n",
+    "       o2b brain snapshot diff <run_id_a> [<run_id_b>]\n" +
+    "                              [--vault <path>] [--json]\n" +
+    "log lists every recovery point newest first: run id, created_at, the\n" +
+    "reason it was taken, archive size, whether a drift manifest is present,\n" +
+    "and what it did about the derived store. --reason filters by why it\n" +
+    "happened and rejects an unregistered value with exit 2. A snapshot with\n" +
+    "no sidecar reads as reason 'unknown' - never as its run-id prefix.\n" +
+    "diff is a read-only diff between two snapshots, or between a snapshot\n" +
+    "and the live Brain/ tree (when <run_id_b> is omitted).\n" +
+    "Together with rollback, the family is log / diff / revert.\n",
   hygiene:
     "usage: o2b brain hygiene <scan|apply> [--vault <path>] [--json]\n" +
     "                          [--detectors conflicts,dedup,freshness,usefulness]\n" +

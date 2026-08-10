@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { appendLogEvent } from "./log.ts";
-import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { isoSecond } from "./time.ts";
 import { resolveAgentName } from "../config.ts";
@@ -195,8 +195,13 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
 
   let snapshotRunId: string | null = null;
   if (filesToWrite.length > 0) {
-    const runId = `import-claude-memory-${importedAt.replace(/:/g, "-")}`;
-    createSnapshot(opts.vault, runId);
+    // The run-id prefix and the recorded reason are one constant, so the
+    // archive's filename can never disagree with its stamped provenance.
+    const runId = `${BRAIN_SNAPSHOT_REASON.importClaudeMemory}-${importedAt.replace(/:/g, "-")}`;
+    createSnapshot(opts.vault, runId, {
+      reason: BRAIN_SNAPSHOT_REASON.importClaudeMemory,
+      now,
+    });
     snapshotRunId = runId;
   }
 

@@ -1,7 +1,8 @@
 /**
  * SHA-256 file inventory over `Brain/` minus the entries the snapshot
  * family never touches, plus the record of what the snapshot did with
- * the derived SQLite store that lives one directory away.
+ * the derived SQLite store that lives one directory away, plus why the
+ * snapshot was taken at all.
  *
  * Symlinks are dropped via `lstatSync` — a malicious snapshot archive
  * planting a symlink under `Brain/` must not let the walker hash
@@ -16,10 +17,11 @@ import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { BRAIN_ROOT_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, brainDirs } from "./paths.ts";
 import { isoSecond } from "./time.ts";
+import { isBrainSnapshotReason, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
- * NOT bumped by the derived-store field, deliberately.
+ * NOT bumped by the derived-store or snapshot-reason fields, deliberately.
  *
  * {@link readManifestSidecar} rejects any version it does not recognize,
  * and the snapshots directory rides the same peer-to-peer replication as
@@ -142,6 +144,17 @@ export interface BrainManifest {
    * rendered as `excluded`, which is a claim that a check ran.
    */
   readonly derived_store?: BrainManifestDerivedStore;
+  /**
+   * Why the recovery point was taken (U7). Absent on every sidecar
+   * written before the reason existed, and absence is UNKNOWN: the run id
+   * that names the archive begins with a registered reason at every call
+   * site that writes one, so the temptation to recover the field by
+   * parsing that prefix is real - and it would manufacture provenance the
+   * archive does not carry, for a hand-named or third-party archive just
+   * as readily as for one of ours. The key is omitted rather than nulled
+   * so absence has exactly one spelling.
+   */
+  readonly snapshot_reason?: BrainSnapshotReason;
 }
 
 export interface BrainManifestDiffEntry {
@@ -159,6 +172,22 @@ export interface BrainManifestDiff {
 // ---------- buildManifest --------------------------------------------------
 
 /**
+ * The two facts about a snapshot that the walker cannot discover for
+ * itself, so the archiver hands them over.
+ *
+ * Both are omitted by the live-tree rebuild the drift check performs, and
+ * that is correct rather than lax: drift is computed over `files` alone,
+ * so a live manifest carrying neither field stays comparable with a
+ * stored one carrying both.
+ */
+export interface BuildManifestOptions {
+  /** What the snapshot did about the sibling SQLite store. */
+  readonly derivedStore?: BrainManifestDerivedStore;
+  /** Why the recovery point was taken. */
+  readonly snapshotReason?: BrainSnapshotReason;
+}
+
+/**
  * Walk `brainRoot` (the `<vault>/Brain/` directory) and hash every
  * regular file. The caller is responsible for pointing at the
  * `Brain/` directory itself — passing a vault root would silently
@@ -168,21 +197,16 @@ export interface BrainManifestDiff {
  * predictable on deeply-nested vault trees. Files are hashed
  * one-at-a-time; Brain trees in practice stay well under 10 MB.
  *
- * `derivedStore` is the snapshot's record of the sibling SQLite store.
- * It is a parameter rather than something this walker discovers, because
- * only the archiver knows whether an archive was written; the live-tree
- * rebuild the drift check performs passes nothing, and drift is computed
- * over `files` alone, so the two manifests stay comparable.
+ * Only the archiver knows whether a store archive was written and why the
+ * snapshot was taken, so both travel in {@link BuildManifestOptions}
+ * rather than being rediscovered here.
  */
-export function buildManifest(
-  brainRoot: string,
-  derivedStore?: BrainManifestDerivedStore,
-): BrainManifest {
+export function buildManifest(brainRoot: string, opts: BuildManifestOptions = {}): BrainManifest {
   const generated_at = isoSecond();
   const collected = new Map<string, BrainManifestEntry>();
 
   if (!existsSync(brainRoot)) {
-    return freezeManifest(generated_at, collected, derivedStore);
+    return freezeManifest(generated_at, collected, opts);
   }
 
   const stack: string[] = [brainRoot];
@@ -226,7 +250,7 @@ export function buildManifest(
     }
   }
 
-  return freezeManifest(generated_at, collected, derivedStore);
+  return freezeManifest(generated_at, collected, opts);
 }
 
 function hashFile(abs: string): BrainManifestEntry {
@@ -243,7 +267,7 @@ function hashFile(abs: string): BrainManifestEntry {
 function freezeManifest(
   generated_at: string,
   entries: Map<string, BrainManifestEntry>,
-  derivedStore?: BrainManifestDerivedStore,
+  opts: BuildManifestOptions,
 ): BrainManifest {
   // Materialise in sorted key order so JSON.stringify yields stable
   // bytes across runs.
@@ -255,11 +279,13 @@ function freezeManifest(
     generated_at,
     brain_root: BRAIN_ROOT_REL,
     files: Object.freeze(files),
-    // Spread rather than assign: a manifest built without a record must
-    // OMIT the key, because an explicit `undefined` would serialise the
-    // same as absent here but read as present to a structural check, and
-    // absent is a load-bearing state (unknown, not excluded).
-    ...(derivedStore !== undefined ? { derived_store: Object.freeze(derivedStore) } : {}),
+    // Spread rather than assign, for both optional keys: a manifest built
+    // without a record must OMIT the key, because an explicit `undefined`
+    // would serialise the same as absent here but read as present to a
+    // structural check, and absent is a load-bearing state (unknown, not
+    // excluded; unstamped, not reason-less).
+    ...(opts.derivedStore !== undefined ? { derived_store: Object.freeze(opts.derivedStore) } : {}),
+    ...(opts.snapshotReason !== undefined ? { snapshot_reason: opts.snapshotReason } : {}),
   });
 }
 
@@ -426,6 +452,13 @@ export function readManifestSidecar(vault: string, runId: string): BrainManifest
     if (parsedStore === null) return null;
     derivedStore = parsedStore;
   }
+  // The snapshot reason follows the same rule once more: absent is a
+  // legal older sidecar, present-but-unregistered fails the whole
+  // manifest closed. Accepting an unknown reason would put a string this
+  // build cannot interpret into a listing column and a reason filter,
+  // where it would read as provenance rather than as corruption.
+  const rawReason = obj["snapshot_reason"];
+  if (rawReason !== undefined && !isBrainSnapshotReason(rawReason)) return null;
 
   return Object.freeze({
     schema_version: BRAIN_MANIFEST_SCHEMA_VERSION,
@@ -433,6 +466,7 @@ export function readManifestSidecar(vault: string, runId: string): BrainManifest
     brain_root: BRAIN_ROOT_REL,
     files: Object.freeze(entries),
     ...(derivedStore !== undefined ? { derived_store: derivedStore } : {}),
+    ...(rawReason !== undefined ? { snapshot_reason: rawReason } : {}),
   });
 }
 

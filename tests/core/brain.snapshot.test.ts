@@ -26,6 +26,14 @@ import {
   manifestSidecarPath,
   readManifestSidecar,
 } from "../../src/core/brain/manifest.ts";
+import { BRAIN_SNAPSHOT_REASON } from "../../src/core/brain/types.ts";
+
+/**
+ * The reason every fixture here takes its snapshot for. `createSnapshot`
+ * requires one, and these cases are about the archive mechanics rather
+ * than the provenance - which lives in `snapshot-reason.test.ts`.
+ */
+const DREAM = BRAIN_SNAPSHOT_REASON.dream;
 
 let vault: string;
 let configHome: string;
@@ -66,7 +74,7 @@ describe("createSnapshot", () => {
     // into the new archive.
     writeFileSync(join(dirs.snapshots, "sentinel.tar.zst"), "X");
 
-    const res = createSnapshot(vault, "dream-2026-05-14-070000");
+    const res = createSnapshot(vault, "dream-2026-05-14-070000", { reason: DREAM });
     expect(existsSync(res.path)).toBe(true);
 
     // Extract into a fresh tmp and inspect.
@@ -100,11 +108,11 @@ describe("createSnapshot", () => {
   });
 
   test("rejects invalid run_id", () => {
-    expect(() => createSnapshot(vault, "../escape")).toThrow();
+    expect(() => createSnapshot(vault, "../escape", { reason: DREAM })).toThrow();
   });
 
   test("writes sidecar manifest alongside the archive (§22 + §5-tail)", () => {
-    createSnapshot(vault, "dream-with-manifest");
+    createSnapshot(vault, "dream-with-manifest", { reason: DREAM });
     const sidecar = manifestSidecarPath(vault, "dream-with-manifest");
     expect(existsSync(sidecar)).toBe(true);
     const m = readManifestSidecar(vault, "dream-with-manifest");
@@ -123,19 +131,19 @@ describe("createSnapshot", () => {
 
 describe("listSnapshots", () => {
   test("returns archives in newest-first order by mtime", () => {
-    createSnapshot(vault, "dream-2026-05-14-070000");
+    createSnapshot(vault, "dream-2026-05-14-070000", { reason: DREAM });
     // Force an older mtime on the first archive so the ordering is
     // unambiguous regardless of how fast the test runs.
     const a = snapshotPath(vault, "dream-2026-05-14-070000");
     const oldT = new Date("2026-05-13T00:00:00Z");
     utimesSync(a, oldT, oldT);
 
-    createSnapshot(vault, "dream-2026-05-14-080000");
+    createSnapshot(vault, "dream-2026-05-14-080000", { reason: DREAM });
     const b = snapshotPath(vault, "dream-2026-05-14-080000");
     const midT = new Date("2026-05-14T00:00:00Z");
     utimesSync(b, midT, midT);
 
-    createSnapshot(vault, "dream-2026-05-14-090000");
+    createSnapshot(vault, "dream-2026-05-14-090000", { reason: DREAM });
     const c = snapshotPath(vault, "dream-2026-05-14-090000");
     const newT = new Date("2026-05-15T00:00:00Z");
     utimesSync(c, newT, newT);
@@ -156,13 +164,13 @@ describe("listSnapshots", () => {
   });
 
   test("manifest_path populated when sidecar present, null otherwise", () => {
-    createSnapshot(vault, "dream-with-sidecar");
+    createSnapshot(vault, "dream-with-sidecar", { reason: DREAM });
     // Simulate a legacy snapshot: drop the sidecar that
     // createSnapshot just wrote so only the archive remains.
     const sidecar = manifestSidecarPath(vault, "dream-with-sidecar");
     expect(existsSync(sidecar)).toBe(true);
 
-    createSnapshot(vault, "dream-legacy");
+    createSnapshot(vault, "dream-legacy", { reason: DREAM });
     rmSync(manifestSidecarPath(vault, "dream-legacy"), { force: true });
 
     const list = listSnapshots(vault);
@@ -184,7 +192,7 @@ describe("pruneSnapshots", () => {
     ];
     for (let i = 0; i < labels.length; i++) {
       const runId = `dream-${labels[i]}-000000`;
-      createSnapshot(vault, runId);
+      createSnapshot(vault, runId, { reason: DREAM });
       const p = snapshotPath(vault, runId);
       const t = new Date(ts[i]!);
       utimesSync(p, t, t);
@@ -205,7 +213,7 @@ describe("pruneSnapshots", () => {
   });
 
   test("noop when fewer files than retention_count", () => {
-    createSnapshot(vault, "dream-only");
+    createSnapshot(vault, "dream-only", { reason: DREAM });
     const res = pruneSnapshots(vault, 10);
     expect(res.deleted).toEqual([]);
     expect(listSnapshots(vault)).toHaveLength(1);
@@ -216,7 +224,7 @@ describe("pruneSnapshots", () => {
     const ts = ["2026-05-10T00:00:00Z", "2026-05-11T00:00:00Z", "2026-05-12T00:00:00Z"];
     for (let i = 0; i < labels.length; i++) {
       const runId = `dream-prune-${labels[i]}`;
-      createSnapshot(vault, runId);
+      createSnapshot(vault, runId, { reason: DREAM });
       const p = snapshotPath(vault, runId);
       const t = new Date(ts[i]!);
       utimesSync(p, t, t);
@@ -235,13 +243,13 @@ describe("pruneSnapshots", () => {
   });
 
   test("legacy archive without sidecar still prunes cleanly", () => {
-    createSnapshot(vault, "dream-legacy-prune-old");
+    createSnapshot(vault, "dream-legacy-prune-old", { reason: DREAM });
     rmSync(manifestSidecarPath(vault, "dream-legacy-prune-old"), { force: true });
     const old = snapshotPath(vault, "dream-legacy-prune-old");
     const t = new Date("2026-05-09T00:00:00Z");
     utimesSync(old, t, t);
 
-    createSnapshot(vault, "dream-legacy-prune-new");
+    createSnapshot(vault, "dream-legacy-prune-new", { reason: DREAM });
     const res = pruneSnapshots(vault, 1);
     expect(res.deleted).toContain(old);
     expect(existsSync(old)).toBe(false);
@@ -257,7 +265,7 @@ describe("restoreSnapshot — round-trip integrity", () => {
     const stateAPref = readFileSync(prefPath, "utf8");
     const stateASig = readFileSync(sigPath, "utf8");
 
-    const snap = createSnapshot(vault, "dream-stateA");
+    const snap = createSnapshot(vault, "dream-stateA", { reason: DREAM });
     expect(existsSync(snap.path)).toBe(true);
 
     // Mutate to state B: rewrite a pref, delete a signal, add a new
@@ -267,7 +275,7 @@ describe("restoreSnapshot — round-trip integrity", () => {
     rmSync(sigPath);
     writeFileSync(join(dirs.inbox, "sig-newer.md"), "newer-content");
     // Create another snapshot — restoring stateA must NOT erase it.
-    const newer = createSnapshot(vault, "dream-stateB");
+    const newer = createSnapshot(vault, "dream-stateB", { reason: DREAM });
     expect(existsSync(newer.path)).toBe(true);
 
     const res = restoreSnapshot(vault, "dream-stateA");
@@ -294,7 +302,7 @@ describe("snapshot tooling absent", () => {
     const originalPath = process.env["PATH"];
     process.env["PATH"] = "/nonexistent-path-for-test";
     try {
-      expect(() => createSnapshot(vault, "dream-no-tools")).toThrow(
+      expect(() => createSnapshot(vault, "dream-no-tools", { reason: DREAM })).toThrow(
         BrainSnapshotToolingMissingError,
       );
     } finally {

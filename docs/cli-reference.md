@@ -45,8 +45,9 @@ o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (ex
 o2b brain set-primary         (CLI-only) Declare or clear primary_agent in Brain/_brain.yaml (--clear)
 o2b brain protect             (CLI-only) Emit / apply native deny rules for Brain/ (--target {claudecode|codex} [--apply])
 o2b brain unprotect           (CLI-only) Remove the Open-Second-Brain-managed deny rules for the chosen target
+o2b brain snapshot log        (CLI-only) Newest-first listing of every recovery point: run id, created_at, typed reason, size, manifest presence, derived-store coverage; --reason filters (unregistered value exits 2), --limit caps, --json
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
-o2b brain rollback            (CLI-only) Restore Brain/ from a pre-dream snapshot (--dry-run previews; drift abort vs --force-rollback)
+o2b brain rollback            (CLI-only) Restore Brain/ from a snapshot (--dry-run previews; drift abort vs --force-rollback); --list, the prompt and --json name the snapshot reason ('unknown' when the sidecar records none)
 o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
 o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force])
 o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode).

@@ -198,6 +198,43 @@ describe("diffBrainTrees — field-level modifications", () => {
     expect(d.modified[0]!.fields).toEqual([]);
     expect(d.modified[0]!.bodyChanged).toBe(true);
   });
+
+  test("per-device shards and the JSONL surface classify as log, not other", () => {
+    // The classifier predated per-device sharding and matched only
+    // `log/<date>.md`, so on any vault with a `device_id` configured -
+    // which is every vault where a rollback diff is interesting, since
+    // sharding exists for multi-device replication - the log surface fell
+    // through to `other`. The machine-primary `.jsonl` file, the one
+    // `readLogDay` actually reads, was misclassified on every vault.
+    const a = makeRoot("a");
+    const b = makeRoot("b");
+    const shards: ReadonlyArray<string> = [
+      "2026-05-14.md",
+      "2026-05-14.jsonl",
+      "2026-05-14.laptop-1.md",
+      "2026-05-14.laptop-1.jsonl",
+    ];
+    for (const name of shards) {
+      writeFileSync(join(a, "log", name), "before\n", "utf8");
+      writeFileSync(join(b, "log", name), "after\n", "utf8");
+    }
+    const d = diffBrainTrees(a, b);
+    expect(d.modified).toHaveLength(shards.length);
+    expect(d.modified.map((m) => m.entry.kind)).toEqual(shards.map(() => "log"));
+  });
+
+  test("a non-log file under log/ still classifies as other", () => {
+    // The bucket must widen to the real shard shapes, not to everything
+    // that happens to live in the directory - the dream workrun JSONL is
+    // not a log day and must not be grouped with one.
+    const a = makeRoot("a");
+    const b = makeRoot("b");
+    writeFileSync(join(a, "log", "notes.md"), "before\n", "utf8");
+    writeFileSync(join(b, "log", "notes.md"), "after\n", "utf8");
+    const d = diffBrainTrees(a, b);
+    expect(d.modified).toHaveLength(1);
+    expect(d.modified[0]!.entry.kind).toBe("other");
+  });
 });
 
 describe("diffBrainTrees — ignored regions", () => {

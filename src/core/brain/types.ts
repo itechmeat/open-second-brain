@@ -160,8 +160,9 @@ export type BrainApplyOutcome = (typeof BRAIN_APPLY_OUTCOME)[keyof typeof BRAIN_
  * `reject` / `promote` / `retire` record the corresponding state
  * transitions; `noted-redundant` records same-sign signals collapsed onto
  * an active pref; `skip-corrupted-frontmatter` records files dream
- * skipped; `pin` / `unpin` record protected-set changes; `rollback`
- * records a snapshot restore. See §5.5 and §7.4 of the design doc.
+ * skipped; `pin` / `unpin` record protected-set changes; `snapshot` and
+ * `rollback` record the two ends of one recovery: the point being taken
+ * and the restore back to it. See §5.5 and §7.4 of the design doc.
  */
 export const BRAIN_LOG_EVENT_KIND = {
   dream: "dream",
@@ -176,6 +177,19 @@ export const BRAIN_LOG_EVENT_KIND = {
   pin: "pin",
   unpin: "unpin",
   rollback: "rollback",
+  /**
+   * `snapshot` (silence-is-not-an-answer, U7) - a recovery point was
+   * written to `Brain/.snapshots/`. This is the counterpart the log has
+   * been missing since `rollback` shipped: the restore was recorded and
+   * the point it restores to was not, so the only trace a recovery point
+   * left was a file with an opaque name and an mtime. Payload carries the
+   * `run_id`, the {@link BRAIN_SNAPSHOT_REASON} member that explains why
+   * the point was taken, and the archive `size_bytes`. Emitted
+   * best-effort: a log-append failure never fails the snapshot, because
+   * the archive is the load-bearing artifact and the destructive
+   * operation it guards must not be aborted over an audit line.
+   */
+  snapshot: "snapshot",
   /**
    * `signal-suppressed` — a fresh signal landed on a topic that the
    * user explicitly retired via `o2b brain reject <pref> --reason`.
@@ -507,6 +521,79 @@ export const BRAIN_LOG_EVENT_KIND_SET: ReadonlySet<string> = new Set(
  */
 export function isBrainLogEventKind(value: string): value is BrainLogEventKind {
   return BRAIN_LOG_EVENT_KIND_SET.has(value);
+}
+
+/**
+ * Why a recovery point was taken (silence-is-not-an-answer, U7).
+ *
+ * The snapshot family is the only revertible history this project has,
+ * and until now every entry in it was an opaque run id plus an mtime. The
+ * reasons existed de facto - as run-id PREFIXES at five call sites, three
+ * of them inline string literals - and nothing parsed them back, so an
+ * operator could not ask which recovery point covers a given boundary or
+ * filter the revertible history by why it happened. This is that axis,
+ * made first-class: written into the manifest sidecar, read back by the
+ * listing, and never inferred from the run id.
+ *
+ * ## Why members nothing writes yet are not dead code
+ *
+ * `session-boundary`, `plan-boundary` and `decision-boundary` have no
+ * producer in this release. Taking snapshots at those three seams is
+ * DEFERRED on purpose: it changes how often snapshots happen, which
+ * interacts with retention and with the optional derived-store archive,
+ * and that is a frequency change worth measuring before it ships. They
+ * are declared here anyway because `.snapshots/` rides the same
+ * peer-to-peer replication as the rest of the vault: a later release
+ * writing one of these reasons produces sidecars that THIS build must
+ * still read, and a guard that rejected them would fail the manifest
+ * closed and lose drift detection on exactly those snapshots.
+ *
+ * `manual` is the operator asking for a recovery point directly, with no
+ * destructive operation behind it.
+ *
+ * The strings are the run-id prefixes already on disk, deliberately: an
+ * operator reading `.snapshots/` and an operator reading the log see one
+ * vocabulary rather than two spellings of it.
+ */
+export const BRAIN_SNAPSHOT_REASON = Object.freeze({
+  /** Pre-consolidation point taken by the dream pass. */
+  dream: "dream",
+  /** Pre-apply point taken before release-owned files are rewritten. */
+  upgrade: "upgrade",
+  /** Pre-write point taken before Claude Code memory is imported. */
+  importClaudeMemory: "import-claude-memory",
+  /** Pre-deletion point taken before a source's derived material is removed. */
+  deleteBySource: "delete-by-source",
+  /** Pre-prune point taken before malformed entity notes are deleted. */
+  entityPrune: "entity-prune",
+  /** Deferred: a session boundary. No producer in this release. */
+  sessionBoundary: "session-boundary",
+  /** Deferred: a plan boundary. No producer in this release. */
+  planBoundary: "plan-boundary",
+  /** Deferred: a decision boundary. No producer in this release. */
+  decisionBoundary: "decision-boundary",
+  /** An operator asked for a recovery point with no operation behind it. */
+  manual: "manual",
+} as const);
+
+/** Closed union over {@link BRAIN_SNAPSHOT_REASON}. */
+export type BrainSnapshotReason =
+  (typeof BRAIN_SNAPSHOT_REASON)[keyof typeof BRAIN_SNAPSHOT_REASON];
+
+/** Membership list, in declaration order (producers first, deferred after). */
+export const BRAIN_SNAPSHOT_REASONS: ReadonlyArray<BrainSnapshotReason> = Object.freeze(
+  Object.values(BRAIN_SNAPSHOT_REASON),
+);
+
+/**
+ * Narrow a string read back off a manifest sidecar written by any peer, or
+ * supplied as a CLI filter value. `unknown` rather than `string` because
+ * both of those inputs arrive as parsed JSON or an unvalidated flag.
+ */
+export function isBrainSnapshotReason(value: unknown): value is BrainSnapshotReason {
+  return (
+    typeof value === "string" && (BRAIN_SNAPSHOT_REASONS as ReadonlyArray<string>).includes(value)
+  );
 }
 
 /**
@@ -991,6 +1078,19 @@ export interface BrainRollbackLogEvent extends BrainLogEventBase {
 }
 
 /**
+ * `snapshot` entry — a recovery point was written. The counterpart of
+ * {@link BrainRollbackLogEvent}: the two together are what let an
+ * operator walk from a logged event to the archive that would undo it.
+ */
+export interface BrainSnapshotLogEvent extends BrainLogEventBase {
+  readonly kind: typeof BRAIN_LOG_EVENT_KIND.snapshot;
+  readonly run_id: string;
+  readonly reason: BrainSnapshotReason;
+  /** Byte length of the archive as written. */
+  readonly size_bytes: string;
+}
+
+/**
  * `scan-inline` entry — operator ran `o2b brain scan-inline`. Payload
  * keys are counters: `scanned`, `found`, `created`, `deduped`,
  * `malformed`, `facts`, `skills`, `errors`, plus the agent identity.
@@ -1078,6 +1178,7 @@ export type BrainLogEvent =
   | BrainSkipCorruptedLogEvent
   | BrainPinLogEvent
   | BrainRollbackLogEvent
+  | BrainSnapshotLogEvent
   | BrainScanInlineLogEvent
   | BrainImportSessionLogEvent
   | BrainMergeLogEvent

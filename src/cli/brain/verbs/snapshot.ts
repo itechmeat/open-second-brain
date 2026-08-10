@@ -2,11 +2,149 @@ import {
   listSnapshots,
   extractSnapshotToTemp,
   type ExtractSnapshotResult,
+  type SnapshotInfo,
 } from "../../../core/brain/snapshot.ts";
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
 import { brainDirs } from "../../../core/brain/paths.ts";
-import { brainVerbContext, fail, parse } from "../helpers.ts";
+import {
+  BRAIN_SNAPSHOT_REASONS,
+  isBrainSnapshotReason,
+  type BrainSnapshotReason,
+} from "../../../core/brain/types.ts";
+import { brainVerbContext, fail, ok, parse, usageError } from "../helpers.ts";
+
+/** Verbs this dispatcher routes, named once for the help and the error. */
+const SNAPSHOT_VERBS = Object.freeze({ log: "log", diff: "diff" } as const);
+
+/** Rendered for an unstamped or unreadable sidecar. Never a guessed reason. */
+const UNKNOWN_REASON_LABEL = "unknown";
+
+/** Column order of the `log` text table, and its header line. */
+const LOG_COLUMNS: ReadonlyArray<string> = Object.freeze([
+  "run_id",
+  "created_at",
+  "reason",
+  "size_bytes",
+  "manifest",
+  "derived_store",
+]);
+
+/**
+ * `o2b brain snapshot log` — the missing third surface over the snapshot
+ * family.
+ *
+ * `snapshot diff` and `rollback` already gave the family a diff and a
+ * revert; the LIST was the gap, so the only way to ask which recovery
+ * point covers a given boundary was to read filenames out of
+ * `.snapshots/`. With this, log / diff / revert is complete.
+ *
+ * Newest-first, because that is the order an operator looking for "the
+ * point just before the thing I regret" reads in. The ordering comes from
+ * {@link listSnapshots} (by archive mtime) rather than from the run id: a
+ * hand-named recovery point carries no timestamp to sort on.
+ */
+export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    reason: { type: "string" },
+    limit: { type: "string" },
+  });
+
+  // Both flag checks run BEFORE the vault is resolved, and both are usage
+  // errors (exit 2), matching how `brain event-trace` rejects a bad
+  // --kind. An unregistered reason must never degrade into an empty
+  // listing: that would report "your vault has no such snapshots" when
+  // the truth is "that is not a reason".
+  const reasonRaw = trimOrUndefined(flags["reason"]);
+  if (reasonRaw !== undefined && !isBrainSnapshotReason(reasonRaw)) {
+    return usageError(
+      `brain snapshot log: unknown snapshot reason '${reasonRaw}'; ` +
+        `supported: ${BRAIN_SNAPSHOT_REASONS.join(", ")}`,
+    );
+  }
+  const reason: BrainSnapshotReason | undefined = reasonRaw;
+
+  const limitRaw = trimOrUndefined(flags["limit"]);
+  if (limitRaw !== undefined && (!/^[0-9]+$/.test(limitRaw) || Number.parseInt(limitRaw, 10) < 1)) {
+    return usageError("brain snapshot log: --limit must be a positive integer");
+  }
+  const limit = limitRaw !== undefined ? Number.parseInt(limitRaw, 10) : undefined;
+
+  const { vault } = brainVerbContext(flags);
+
+  // The reason filter compares against what the SIDECAR recorded, so a
+  // snapshot whose reason is unknown is never swept into a named bucket by
+  // its run-id prefix.
+  const matching = listSnapshots(vault).filter((s) => reason === undefined || s.reason === reason);
+  const snaps = limit === undefined ? matching : matching.slice(0, limit);
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify({ total: snaps.length, snapshots: snaps.map(renderLogJson) }, null, 2) + "\n",
+    );
+    return 0;
+  }
+
+  if (snaps.length === 0) {
+    // Zero, not an error: the question was answerable and the answer is
+    // none. The filter is echoed so an operator who mistyped a valid
+    // reason can see which one was applied.
+    ok(reason === undefined ? "no snapshots available" : `no snapshots with reason '${reason}'`);
+    return 0;
+  }
+  ok(LOG_COLUMNS.join("\t"));
+  for (const s of snaps) {
+    ok(
+      [
+        s.run_id,
+        s.created_at,
+        s.reason ?? UNKNOWN_REASON_LABEL,
+        String(s.size_bytes),
+        s.manifest_path === null ? "absent" : "present",
+        renderDerivedStore(s),
+      ].join("\t"),
+    );
+  }
+  return 0;
+}
+
+/** Structured row for `--json`, one per listed recovery point. */
+function renderLogJson(s: SnapshotInfo): Record<string, unknown> {
+  return {
+    run_id: s.run_id,
+    created_at: s.created_at,
+    // `null` is UNKNOWN provenance and stays null in the payload: a
+    // consumer must be able to tell an unstamped snapshot from a stamped
+    // one, which a substituted label would hide.
+    reason: s.reason,
+    size_bytes: s.size_bytes,
+    path: s.path,
+    manifest: s.manifest_path !== null,
+    manifest_path: s.manifest_path,
+    derived_store: s.derived_store,
+    store_archive_path: s.store_archive_path,
+  };
+}
+
+/**
+ * One-column derived-store answer, the same three states the rollback
+ * list renders: a snapshot with no record predates coverage and is
+ * `unknown`, never `excluded`.
+ */
+function renderDerivedStore(s: SnapshotInfo): string {
+  const record = s.derived_store;
+  if (record === null) return UNKNOWN_REASON_LABEL;
+  if (record.included) return "included";
+  return `excluded (${record.exclusion_reason ?? "unspecified"})`;
+}
+
+function trimOrUndefined(value: string | boolean | string[] | undefined): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -24,13 +162,13 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   const snaps = listSnapshots(vault);
   if (!snaps.some((s) => s.run_id === a)) {
     process.stderr.write(
-      `snapshot not found: ${a}; run \`o2b brain rollback --list\` to enumerate.\n`,
+      `snapshot not found: ${a}; run \`o2b brain snapshot log\` to enumerate.\n`,
     );
     return 2;
   }
   if (b !== undefined && !snaps.some((s) => s.run_id === b)) {
     process.stderr.write(
-      `snapshot not found: ${b}; run \`o2b brain rollback --list\` to enumerate.\n`,
+      `snapshot not found: ${b}; run \`o2b brain snapshot log\` to enumerate.\n`,
     );
     return 2;
   }
@@ -60,6 +198,9 @@ export async function handleBrainSnapshotSubcommand(argv: ReadonlyArray<string>)
     process.stdout.write(
       "usage: o2b brain snapshot <verb> [args...]\n" +
         "Verbs:\n" +
+        "  log [--reason <r>] [--limit <n>]  Newest-first listing of every recovery\n" +
+        "                                  point: run id, created_at, reason, size,\n" +
+        "                                  manifest presence, derived-store coverage.\n" +
         "  diff <run_id_a> [<run_id_b>]   Read-only diff between two snapshots,\n" +
         "                                  or between a snapshot and live Brain/.\n",
     );
@@ -68,10 +209,15 @@ export async function handleBrainSnapshotSubcommand(argv: ReadonlyArray<string>)
   const sub = argv[0]!;
   const rest = argv.slice(1);
   switch (sub) {
-    case "diff":
+    case SNAPSHOT_VERBS.log:
+      return await cmdBrainSnapshotLog([...rest]);
+    case SNAPSHOT_VERBS.diff:
       return await cmdBrainSnapshotDiff([...rest]);
     default:
-      process.stderr.write(`unknown brain snapshot verb: ${sub}; supported: diff\n`);
+      process.stderr.write(
+        `unknown brain snapshot verb: ${sub}; supported: ` +
+          `${Object.values(SNAPSHOT_VERBS).join(", ")}\n`,
+      );
       return 2;
   }
 }
