@@ -30,6 +30,7 @@ import {
   parse,
   readSingleLine,
 } from "../helpers.ts";
+import { renderDerivedStoreCoverage } from "../snapshot-render.ts";
 
 export async function cmdBrainRollback(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -57,7 +58,7 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     for (const s of snaps) {
       ok(
         `${s.run_id}\t${s.created_at}\t${renderReason(s.reason)}\t${s.size_bytes}\t` +
-          renderDerivedStoreCoverage(s.derived_store),
+          renderDerivedStoreCoverage(s.derived_store, { withArchiveSize: true }),
       );
     }
     return 0;
@@ -199,15 +200,6 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
  */
 function renderReason(reason: BrainSnapshotReason | null): string {
   return reason ?? "unknown";
-}
-
-/** One-column coverage answer for `--list`. */
-function renderDerivedStoreCoverage(record: BrainManifestDerivedStore | null): string {
-  // A snapshot with no record predates the feature. `unknown`, never
-  // `excluded`: nothing checked, so nothing may be claimed.
-  if (record === null) return "unknown";
-  if (record.included) return `included (${record.archive_size ?? 0} bytes)`;
-  return `excluded (${record.exclusion_reason ?? "unspecified"})`;
 }
 
 /** One-line outcome for a completed restore. */

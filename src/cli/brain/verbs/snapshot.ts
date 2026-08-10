@@ -13,12 +13,13 @@ import {
   type BrainSnapshotReason,
 } from "../../../core/brain/types.ts";
 import { brainVerbContext, fail, ok, parse, usageError } from "../helpers.ts";
+import { renderDerivedStoreCoverage, SNAPSHOT_UNKNOWN_LABEL } from "../snapshot-render.ts";
 
 /** Verbs this dispatcher routes, named once for the help and the error. */
 const SNAPSHOT_VERBS = Object.freeze({ log: "log", diff: "diff" } as const);
 
 /** Rendered for an unstamped or unreadable sidecar. Never a guessed reason. */
-const UNKNOWN_REASON_LABEL = "unknown";
+const UNKNOWN_REASON_LABEL = SNAPSHOT_UNKNOWN_LABEL;
 
 /** Column order of the `log` text table, and its header line. */
 const LOG_COLUMNS: ReadonlyArray<string> = Object.freeze([
@@ -129,15 +130,12 @@ function renderLogJson(s: SnapshotInfo): Record<string, unknown> {
 }
 
 /**
- * One-column derived-store answer, the same three states the rollback
- * list renders: a snapshot with no record predates coverage and is
- * `unknown`, never `excluded`.
+ * One-column derived-store answer. The size is omitted here because this
+ * surface already has its own size column; the rollback listing appends
+ * it, and both draw the words from one renderer so they cannot drift.
  */
 function renderDerivedStore(s: SnapshotInfo): string {
-  const record = s.derived_store;
-  if (record === null) return UNKNOWN_REASON_LABEL;
-  if (record.included) return "included";
-  return `excluded (${record.exclusion_reason ?? "unspecified"})`;
+  return renderDerivedStoreCoverage(s.derived_store);
 }
 
 function trimOrUndefined(value: string | boolean | string[] | undefined): string | undefined {
