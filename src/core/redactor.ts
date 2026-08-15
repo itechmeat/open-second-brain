@@ -167,9 +167,33 @@ const ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi")
 
 // `key: value` outside of JSON quoting. Excludes the `"key": ...` JSON
 // shape and the `Authorization: Bearer X` header (handled below).
+//
+// The separator is horizontal whitespace ONLY. With `\s*` it matched
+// across a newline, so `password:\nnext_key: kept` read the FOLLOWING
+// line as this key's value and deleted a key that was never a secret. A
+// value on the next line is not a value; a value indented under the key
+// is a block, and {@link YAML_SECRET_BLOCK_RE} owns that case.
 const COLON_VALUE_RE = new RegExp(
-  `(?<!")\\b(${KEY_PATTERN})(\\s*:\\s*)("[^"]*"|'[^']*'|[^\\r\\n]+)`,
+  `(?<!")\\b(${KEY_PATTERN})([ \\t]*:[ \\t]*)("[^"]*"|'[^']*'|[^\\r\\n]+)`,
   "gi",
+);
+
+/**
+ * A secret key whose value CONTINUES on more-indented lines: a block
+ * scalar (`token: |`), a block list, or a nested mapping. The whole
+ * continuation is replaced as one unit, because replacing the first line
+ * alone orphans the rest - `token: |` became `token: ***REDACTED***`
+ * followed by its still-readable indented block, and
+ * `token:\n  - a\n  - b` became `token:\n  ***REDACTED***\n  - b`.
+ *
+ * The backreference pins the continuation to a deeper indent than the
+ * key, so a following key at the same level is never swallowed. Every
+ * quantifier is bounded to a single line, so the pass stays linear.
+ */
+const YAML_SECRET_BLOCK_RE = new RegExp(
+  `^([ \\t]*)(${KEY_PATTERN})[ \\t]*:[ \\t]*(?:[|>][+-]?\\d{0,2})?[ \\t]*\\r?\\n` +
+    "(?:\\1[ \\t]+[^\\r\\n]*\\r?\\n?)+",
+  "gim",
 );
 
 // `"key": "value"` JSON entries.
@@ -313,8 +337,30 @@ const VENDOR_TOKEN_RE = new RegExp(
 const HIGH_ENTROPY_TOKEN_RE =
   /\b(?=[A-Za-z0-9_-]{24,200}\b)(?=[A-Za-z0-9_-]{0,199}[A-Za-z])(?=[A-Za-z0-9_-]{0,199}\d)[A-Za-z0-9_-]{24,200}\b/g;
 
+/**
+ * A CONTENT ADDRESS: a hexadecimal run, optionally dash-grouped. Digests
+ * (`sha256`, git object ids), canonical uuids and the hashed directory
+ * names they end up in all have this shape, and all three are identifiers
+ * a knowledge bundle has to carry unchanged - a wikilink target
+ * `[[Brain/artifacts/<sha256>.json]]` that comes back as a placeholder is
+ * a corrupted restore on the export/import round trip, not a mangled copy.
+ *
+ * Excluding the shape costs the high-entropy pass any credential that is
+ * pure hexadecimal. That is the narrower risk: credentials in this
+ * ecosystem carry a vendor prefix (caught by {@link VENDOR_TOKEN_RE}
+ * regardless of alphabet) or mix alphabets beyond hexadecimal, while
+ * content addresses are pervasive in every vault this exports.
+ */
+const CONTENT_ADDRESS_RE = /^[0-9a-fA-F]+(?:-[0-9a-fA-F]+)*$/;
+
+function isContentAddress(run: string): boolean {
+  return CONTENT_ADDRESS_RE.test(run);
+}
+
 function redactBareTokens(text: string): string {
-  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, PLACEHOLDER);
+  return text
+    .replace(VENDOR_TOKEN_RE, PLACEHOLDER)
+    .replace(HIGH_ENTROPY_TOKEN_RE, (run: string) => (isContentAddress(run) ? run : PLACEHOLDER));
 }
 
 /**
@@ -344,6 +390,54 @@ function redactInfraTopology(text: string): string {
     isPrivateOrReservedIPv4(match) ? match : PLACEHOLDER,
   );
   return out;
+}
+
+// ----- Keeping a redacted frontmatter block parseable -----------------------
+//
+// The placeholder opens with `*`, which YAML reads as an ALIAS node. A
+// placeholder written unquoted into a mapping value therefore makes the
+// whole block unparseable to Obsidian and to every spec-compliant reader -
+// while this repository's own lenient parser accepts it, which is how the
+// defect shipped. Any pass can put a placeholder there (the key-name rule,
+// the bare-token pass), so the quoting is applied once at the end over the
+// frontmatter block rather than at each producer.
+
+const PLACEHOLDER_PATTERN = PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Leading `---` fenced block of a markdown document, captured in parts. */
+const FRONTMATTER_BLOCK_RE = /^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/;
+
+/** `key: ***REDACTED***…` at the start of a mapping value. */
+const FRONTMATTER_SCALAR_RE = new RegExp(
+  `^([ \\t]*[^\\s#][^:\\r\\n]*:[ \\t]*)(${PLACEHOLDER_PATTERN}[^\\r\\n]*)$`,
+  "gm",
+);
+
+/** `- ***REDACTED***…` at the start of a block-list item. */
+const FRONTMATTER_ITEM_RE = new RegExp(
+  `^([ \\t]*-[ \\t]+)(${PLACEHOLDER_PATTERN}[^\\r\\n]*)$`,
+  "gm",
+);
+
+function quoteYamlScalar(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function quoteRedactedFrontmatter(text: string): string {
+  if (!text.startsWith("---")) return text;
+  return text.replace(
+    FRONTMATTER_BLOCK_RE,
+    (_match, open: string, body: string, close: string) =>
+      open +
+      body
+        .replace(FRONTMATTER_SCALAR_RE, (_m, prefix: string, value: string) =>
+          value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`,
+        )
+        .replace(FRONTMATTER_ITEM_RE, (_m, prefix: string, value: string) =>
+          value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`,
+        ) +
+      close,
+  );
 }
 
 export function stripPrivateRegions(text: string): string {
@@ -494,6 +588,13 @@ export function scanRawOutput(text: string, opts: RedactRawOutputOptions = {}): 
   // Bearer headers BEFORE the generic colon rule.
   out = out.replace(BEARER_RE, (_match, prefix: string) => `${prefix}${PLACEHOLDER}`);
 
+  // Indented continuations BEFORE the single-line rule: `token: |` has a
+  // same-line value the colon rule would consume, leaving its block behind.
+  out = out.replace(
+    YAML_SECRET_BLOCK_RE,
+    (_match, indent: string, key: string) => `${indent}${key}: "${PLACEHOLDER}"\n`,
+  );
+
   out = out.replace(COLON_VALUE_RE, (match, key: string, sep: string, value: string) => {
     if (value.includes(PLACEHOLDER)) return match;
     if (value.startsWith('"') && value.endsWith('"')) {
@@ -502,7 +603,10 @@ export function scanRawOutput(text: string, opts: RedactRawOutputOptions = {}): 
     if (value.startsWith("'") && value.endsWith("'")) {
       return `${key}${sep}'${PLACEHOLDER}'`;
     }
-    return `${key}${sep}${PLACEHOLDER}`;
+    // Quoted even when the source value was bare: the placeholder opens
+    // with `*`, which YAML reads as an alias node, so an unquoted
+    // replacement turns a valid mapping into a parse error.
+    return `${key}${sep}"${PLACEHOLDER}"`;
   });
 
   // Infra-topology pass last: it runs on values the key/value passes
@@ -513,12 +617,87 @@ export function scanRawOutput(text: string, opts: RedactRawOutputOptions = {}): 
   if (opts.redactInfra) out = redactInfraTopology(out);
   else if (opts.redactUrlCredentials) out = redactUrlCredentials(out);
 
+  // Last: a placeholder any pass above put into frontmatter value position
+  // has to be quoted or the block stops parsing.
+  out = quoteRedactedFrontmatter(out);
+
   return { text: out, truncated };
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
   return scanRawOutput(text, opts).text;
 }
+
+// ----- Identifiers, which are checked rather than rewritten ----------------
+//
+// A payload can be replaced: the vault still holds the original and the
+// copy is merely poorer. An IDENTIFIER cannot. Redacting a filename merges
+// the pages it names (three notes collapsed onto `concepts/***REDACTED***`,
+// two bodies destroyed); redacting a mapping key renames a field; redacting
+// a path segment hands a support person a path that does not exist. So an
+// identifier is scanned and REPORTED, never rewritten - and a caller at a
+// trust boundary decides what a report is worth.
+
+/**
+ * Key names whose value NAMES something rather than carrying content.
+ * Matched on the last underscore/dash-separated segment, because
+ * identifier keys compose (`bundle_path`, `session_id`, `config_path`).
+ */
+const IDENTIFIER_KEY_RE =
+  /(^|[_-])(id|ids|uuid|uuids|guid|path|paths|slug|slugs|filename|filenames|basename)$/i;
+
+/** True when a mapping key declares its value to be an identity. */
+export function isIdentifierKeyName(name: unknown): boolean {
+  return typeof name === "string" && IDENTIFIER_KEY_RE.test(name);
+}
+
+/** Rooted path forms, where internal whitespace is still a path. */
+const PATH_ANCHOR_RE = /^(?:[/\\]|~[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\])/;
+
+/**
+ * True when a whole string leaf is a filesystem path. A URL authority is
+ * deliberately excluded (`://`, `@`): `scheme://user:pass@host` is a
+ * credential the url-credential pass must still reach.
+ */
+export function isPathLikeValue(value: string): boolean {
+  if (value.length === 0 || value.length > 4096) return false;
+  if (value.includes("@") || value.includes("://")) return false;
+  if (!value.includes("/") && !value.includes("\\")) return false;
+  return PATH_ANCHOR_RE.test(value) || !/\s/.test(value);
+}
+
+/** Non-global copy: `.test` on a `/g` regex carries `lastIndex` between calls. */
+const VENDOR_TOKEN_TEST_RE = new RegExp(VENDOR_TOKEN_RE.source);
+
+/**
+ * Does an identifier VALUE carry a credential? Vendor prefixes only. A
+ * long mixed run is a guess, which is the right trade for a payload and
+ * the wrong one for an identity: record ids, slugs and build ids are long
+ * mixed runs BY CONSTRUCTION (`ctn_20260815120000_a1b2c3d4e5f6a7b8`), and
+ * refusing every export that contains one would refuse every export.
+ */
+function identifierCarriesSecret(value: string): boolean {
+  return VENDOR_TOKEN_TEST_RE.test(value);
+}
+
+/**
+ * Does a mapping KEY carry a credential? The full detector set, because a
+ * key name is authored vocabulary rather than a generated identity: a
+ * 24-character mixed run in key position is anomalous where the same run
+ * in an id is ordinary. The OKF manifest's `producer_meta` is built from a
+ * page's `x-*` frontmatter keys, which is how a token reaches this
+ * position at all.
+ */
+function keyNameCarriesSecret(name: string): boolean {
+  if (identifierCarriesSecret(name)) return true;
+  for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
+    if (!isContentAddress(match[0])) return true;
+  }
+  return false;
+}
+
+/** Bound on the reported list, so a refusal message stays readable. */
+const MAX_REPORTED_IDENTIFIERS = 12;
 
 // ----- Structured (mapping / tree) redaction --------------------------------
 
@@ -538,6 +717,16 @@ export interface StructuredRedaction {
    * success. {@link wasScanTruncated} is the underlying reader.
    */
   readonly truncated: boolean;
+  /**
+   * Tree locations (`manifest.pages[2].bundle_path`, `producer_meta#0`)
+   * where an IDENTIFIER is secret-shaped. Each one was left verbatim -
+   * rewriting it would merge or rename what it identifies - so a caller
+   * handing these bytes outside must act on this list rather than assume
+   * the value is clean. Locations only: the identifier itself is the
+   * secret, and echoing it into a message would leak what the refusal is
+   * refusing to write.
+   */
+  readonly secretIdentifiers: ReadonlyArray<string>;
 }
 
 /** Walked as data; anything else (Date, Map, class instance) passes through. */
@@ -569,12 +758,27 @@ export function redactStructured(
 ): StructuredRedaction {
   let redacted = false;
   let truncated = false;
+  const secretIdentifiers = new Set<string>();
 
-  const walk = (value: unknown, underSecretKey: boolean): unknown => {
+  const record = (location: string): void => {
+    if (secretIdentifiers.size < MAX_REPORTED_IDENTIFIERS) secretIdentifiers.add(location);
+  };
+
+  const walk = (
+    value: unknown,
+    location: string,
+    underSecretKey: boolean,
+    underIdentifierKey: boolean,
+  ): unknown => {
     if (underSecretKey) {
       if (value === null || value === undefined) return value;
       redacted = true;
       return PLACEHOLDER;
+    }
+    if (typeof value === "string" && (underIdentifierKey || isPathLikeValue(value))) {
+      // Checked, never rewritten: see the identifier section above.
+      if (identifierCarriesSecret(value)) record(location);
+      return value;
     }
     if (typeof value === "string") {
       // Truncation comes from the scan, never from a substring test on the
@@ -586,19 +790,34 @@ export function redactStructured(
       if (scan.truncated) truncated = true;
       return scan.text;
     }
-    if (Array.isArray(value)) return value.map((item) => walk(item, false));
+    if (Array.isArray(value)) {
+      return value.map((item, index) =>
+        walk(item, `${location}[${index}]`, false, underIdentifierKey),
+      );
+    }
     if (typeof value === "object" && value !== null) {
       if (!isPlainContainer(value)) return value;
       const out: Record<string, unknown> = {};
+      let index = 0;
       for (const [key, child] of Object.entries(value)) {
-        out[key] = walk(child, isSecretKeyName(key));
+        // The key is reported by POSITION, never by name: the name is the
+        // secret in this case.
+        if (keyNameCarriesSecret(key)) record(`${location === "" ? "" : location}#${index}`);
+        const childLocation = location === "" ? key : `${location}.${key}`;
+        out[key] = walk(child, childLocation, isSecretKeyName(key), isIdentifierKeyName(key));
+        index += 1;
       }
       return out;
     }
     return value;
   };
 
-  return { value: walk(input, false), redacted, truncated };
+  return {
+    value: walk(input, "", false, false),
+    redacted,
+    truncated,
+    secretIdentifiers: Object.freeze([...secretIdentifiers].toSorted()),
+  };
 }
 
 // ----- Text-field normaliser ------------------------------------------------

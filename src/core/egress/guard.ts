@@ -47,6 +47,22 @@
  * would break the interchange contract for a class of exposure the
  * operator already controls by choosing the destination. That gap is
  * stated here rather than left to be discovered.
+ *
+ * ## Identifiers are refused, never rewritten
+ *
+ * Redaction replaces a value. That is harmless for a payload - the vault
+ * still holds the original - and destructive for an IDENTIFIER: a redacted
+ * filename merges every page whose name matched onto one bundle path, a
+ * redacted mapping key renames the field, and a redacted path segment
+ * hands a support person a path that does not exist. So `redactStructured`
+ * reports secret-shaped identifiers instead of replacing them, and this
+ * guard turns that report into the second refusal
+ * ({@link EGRESS_OUTCOME.refusedSecretIdentifier}), on the same reasoning
+ * as the truncation one: an export that cannot be made safe does not go.
+ *
+ * The cost is a false refusal on a legitimately-named file that begins
+ * with a vendor credential prefix. That is recoverable by renaming; a
+ * merged page is not.
  */
 
 import { MAX_REDACTOR_INPUT, redactStructured, type RedactRawOutputOptions } from "../redactor.ts";
@@ -58,6 +74,12 @@ export const EGRESS_OUTCOME = Object.freeze({
   released: "released",
   /** Some field exceeded the scan window, so the payload is unverified. */
   refusedScanTruncated: "refused_scan_truncated",
+  /**
+   * An identifier - a filename, an id, a mapping key - is secret-shaped.
+   * Redacting it is not available (it would merge the pages a path names,
+   * or rename a field), so the payload is refused instead.
+   */
+  refusedSecretIdentifier: "refused_secret_identifier",
 } as const);
 
 export type EgressOutcome = (typeof EGRESS_OUTCOME)[keyof typeof EGRESS_OUTCOME];
@@ -65,6 +87,7 @@ export type EgressOutcome = (typeof EGRESS_OUTCOME)[keyof typeof EGRESS_OUTCOME]
 export const EGRESS_OUTCOMES: ReadonlyArray<EgressOutcome> = Object.freeze([
   EGRESS_OUTCOME.released,
   EGRESS_OUTCOME.refusedScanTruncated,
+  EGRESS_OUTCOME.refusedSecretIdentifier,
 ]);
 
 /** Takes `unknown`: an outcome may be read back out of a serialised result. */
@@ -81,7 +104,9 @@ export interface EgressReleased<T> {
 }
 
 export interface EgressRefused {
-  readonly outcome: typeof EGRESS_OUTCOME.refusedScanTruncated;
+  readonly outcome:
+    | typeof EGRESS_OUTCOME.refusedScanTruncated
+    | typeof EGRESS_OUTCOME.refusedSecretIdentifier;
   /** Operator-facing sentence naming the verb and what to do about it. */
   readonly detail: string;
 }
@@ -131,6 +156,18 @@ export function redactForEgress<T>(site: EgressSiteId, payload: T): EgressVerdic
         "field or export a narrower selection.",
     };
   }
+  if (scanned.secretIdentifiers.length > 0) {
+    return {
+      outcome: EGRESS_OUTCOME.refusedSecretIdentifier,
+      detail:
+        `${EGRESS_SITES[site].verb} refused to write: an identifier is secret-shaped, and an ` +
+        "identifier is never rewritten - a redacted filename merges the pages it names and a " +
+        "redacted mapping key renames the field, so redacting here would destroy content " +
+        "rather than protect it. Nothing was written. Rename or exclude what these tree " +
+        `locations point at, then re-run: ${scanned.secretIdentifiers.join(", ")}. ` +
+        "(Locations, not values: the identifier is the secret.)",
+    };
+  }
   return {
     outcome: EGRESS_OUTCOME.released,
     payload: scanned.value as T,
@@ -150,7 +187,13 @@ export function redactForEgress<T>(site: EgressSiteId, payload: T): EgressVerdic
  *
  * No refusal arm: a status tool's answer is not a file leaving the
  * machine, and a config value past the scan window carries the marker in
- * place, which is visible rather than silent.
+ * place, which is visible rather than silent. For the same reason it does
+ * not act on `secretIdentifiers`: the resolved PATHS are what this surface
+ * exists to report, they are returned verbatim, and a credential stored as
+ * a directory name is left visible rather than turned into a status call
+ * that refuses to answer. Path values reach the caller unchanged, which is
+ * the point - the previous behaviour replaced any 24-character segment of
+ * the operator's own path with a placeholder.
  */
 export function redactConfigMapping(
   data: Readonly<Record<string, unknown>>,
