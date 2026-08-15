@@ -69,6 +69,7 @@ import {
   readAllLogRecords,
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
+import { embeddingSunsetCheck } from "./doctor/embedding-sunset-check.ts";
 import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
 import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
@@ -165,6 +166,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   staleLockProbe,
   recallChannelCoverageCheck,
   recoveryPointLivenessCheck,
+  embeddingSunsetCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------

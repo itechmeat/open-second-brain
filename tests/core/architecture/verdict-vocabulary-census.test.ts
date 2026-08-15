@@ -198,6 +198,14 @@ import {
   isImportWriteMode,
 } from "../../../src/core/brain/sessions/import.ts";
 import {
+  EMBEDDING_SUNSET,
+  EMBEDDING_SUNSET_STATES,
+  EMBEDDING_SUNSET_UNDETERMINED_REASON,
+  EMBEDDING_SUNSET_UNDETERMINED_REASONS,
+  isEmbeddingSunsetState,
+  isEmbeddingSunsetUndeterminedReason,
+} from "../../../src/core/search/embeddings/sunset.ts";
+import {
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   VAULT_BACKING,
@@ -800,6 +808,27 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: IMPORT_WRITE_MODE,
     members: IMPORT_WRITE_MODES,
     guard: isImportWriteMode,
+  },
+  {
+    // B1. What this build can say about one embedding model's
+    // decommission. `unsurveyed` and `none_announced` are separate
+    // members and that separation IS the unit: `embedding_model` is a
+    // free string with no validation and off-catalog is the normal case,
+    // so reporting "no sunset announced" for a model nobody looked up is
+    // the misleading silence the check exists to remove.
+    name: "EMBEDDING_SUNSET",
+    values: EMBEDDING_SUNSET,
+    members: EMBEDDING_SUNSET_STATES,
+    guard: isEmbeddingSunsetState,
+  },
+  {
+    // B1. Why no sunset verdict was reached. Separate from the state so
+    // `survey_stale` - a fact about this build's own table rather than
+    // about the model - can never be read back where a verdict belongs.
+    name: "EMBEDDING_SUNSET_UNDETERMINED_REASON",
+    values: EMBEDDING_SUNSET_UNDETERMINED_REASON,
+    members: EMBEDDING_SUNSET_UNDETERMINED_REASONS,
+    guard: isEmbeddingSunsetUndeterminedReason,
   },
 ]);
 

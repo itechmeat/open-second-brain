@@ -204,6 +204,24 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "is lost by leaving it reported",
   },
   {
+    code: "embedding-model-sunset-unsurveyed",
+    reason:
+      "the configured model is outside the shipped decommission survey, and the repair is for " +
+      "somebody to look up whether its provider has announced anything - a question about the " +
+      "world, answered by reading a vendor's notice rather than by any edit to this vault. The " +
+      "finding says only that no statement was made, which is deliberately not the same as " +
+      "saying no decommission exists",
+  },
+  {
+    code: "embedding-model-sunset-undetermined",
+    reason:
+      "the check ran and reached no verdict, for one of three reasons it names in the finding: " +
+      "the configuration resolved no model, the survey is older than its horizon so its record " +
+      "of no announcement has expired, or a shipped survey entry carries an unparseable date. " +
+      "The first is an edit to a config file whose intended value only the operator knows, and " +
+      "the other two are defects in this build rather than in the vault being examined",
+  },
+  {
     code: "recovery-point-unmeasured",
     reason:
       "the recovery-point history is there and the walk over it was refused. What repairs that " +

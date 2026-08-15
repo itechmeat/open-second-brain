@@ -184,6 +184,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "contradictory-preferences",
   "dangling-workrun",
   "duplicate-preferences",
+  "embedding-model-sunset-announced",
   "entity-label-malformed",
   "entity-quote-variant-collision",
   "low-evidence-confirmed",

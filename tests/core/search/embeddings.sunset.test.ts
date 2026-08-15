@@ -1,0 +1,203 @@
+/**
+ * The sunset survey, and the three statements it is allowed to make.
+ *
+ * The distinction this file exists to hold is between "no decommission has
+ * been announced for this model" and "this model is outside the survey, so
+ * no statement was made about it". They are different facts and the second
+ * is the NORMAL case - `embedding_model` is a free string with no
+ * validation and this tool's own onboarding text recommends a preview
+ * model that is in no catalog here. Collapsing them into silence is the
+ * misleading-silence defect the codebase has already ruled on twice, for
+ * the input window (`declaredInputWindowTokens`) and for the
+ * `window-undeclared` census verdict.
+ *
+ * The third statement is the one a static catalog owes: a NEGATIVE is a
+ * claim about the world and it expires. Past the horizon, "nothing
+ * announced" becomes `undetermined` with `survey_stale` rather than
+ * staying a confident negative that nobody has re-checked.
+ */
+
+import { describe, expect, test } from "bun:test";
+
+import {
+  classifyEmbeddingSunset,
+  EMBEDDING_SUNSET,
+  EMBEDDING_SUNSET_STATES,
+  EMBEDDING_SUNSET_SURVEY,
+  EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS,
+  EMBEDDING_SUNSET_UNDETERMINED_REASON,
+  EMBEDDING_SUNSET_UNDETERMINED_REASONS,
+  isEmbeddingSunsetState,
+  isEmbeddingSunsetUndeterminedReason,
+  type EmbeddingSunsetSurvey,
+} from "../../../src/core/search/embeddings/sunset.ts";
+import { isValidIsoInstant, parseIsoUtc } from "../../../src/core/brain/health/iso-time.ts";
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+const NOW = Date.parse("2026-06-01T00:00:00.000Z");
+
+/** A survey under this test's control, reviewed the day before `NOW`. */
+function survey(entries: EmbeddingSunsetSurvey["entries"]): EmbeddingSunsetSurvey {
+  return { reviewedAt: "2026-05-31", entries };
+}
+
+describe("a declared decommission date is reported with its date", () => {
+  test("a date in the future yields `announced` and the days remaining", () => {
+    const s = survey([
+      { model: "vendor/model-x", sunsetAt: "2026-07-01", source: "unit fixture", note: "" },
+    ]);
+    const verdict = classifyEmbeddingSunset("vendor/model-x", NOW, s);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.announced);
+    expect(verdict.sunset_at).toBe("2026-07-01");
+    expect(verdict.days_remaining).toBe(30);
+    expect(verdict.reason).toBeNull();
+  });
+
+  test("a date already past is still `announced`, with a negative remainder", () => {
+    const s = survey([
+      { model: "vendor/model-x", sunsetAt: "2026-05-01", source: "unit fixture", note: "" },
+    ]);
+    const verdict = classifyEmbeddingSunset("vendor/model-x", NOW, s);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.announced);
+    expect(verdict.days_remaining).toBeLessThan(0);
+  });
+
+  test("lookup is by exact model string, with no family inference", () => {
+    const s = survey([
+      { model: "vendor/model-x", sunsetAt: "2026-07-01", source: "unit fixture", note: "" },
+    ]);
+    // `vendor/model-x-turbo` is a different checkpoint with a different
+    // lifecycle; inferring a date from a shared prefix would invent one.
+    expect(classifyEmbeddingSunset("vendor/model-x-turbo", NOW, s).state).toBe(
+      EMBEDDING_SUNSET.unsurveyed,
+    );
+  });
+});
+
+describe("`unsurveyed` is never reported as `none_announced`", () => {
+  test("a model outside the survey is its own state", () => {
+    const verdict = classifyEmbeddingSunset("openrouter/whatever", NOW, survey([]));
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.unsurveyed);
+    expect(verdict.state).not.toBe(EMBEDDING_SUNSET.noneAnnounced);
+    expect(verdict.sunset_at).toBeNull();
+  });
+
+  test("a surveyed model with no announcement is the other state", () => {
+    const s = survey([
+      { model: "vendor/model-y", sunsetAt: null, source: "unit fixture", note: "" },
+    ]);
+    expect(classifyEmbeddingSunset("vendor/model-y", NOW, s).state).toBe(
+      EMBEDDING_SUNSET.noneAnnounced,
+    );
+  });
+
+  test("the tool's own recommended onboarding model is unsurveyed, not clean", () => {
+    // `src/cli/main.ts` recommends a preview model that no catalog here
+    // carries. That is the normal case, and it must read as "no statement
+    // was made" rather than as a clean bill of health.
+    const verdict = classifyEmbeddingSunset("google/gemini-embedding-2-preview", NOW);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.unsurveyed);
+  });
+});
+
+describe("a negative expires; the survey's own age bounds what it may claim", () => {
+  test("past the horizon, `none_announced` degrades to undetermined", () => {
+    const s = survey([
+      { model: "vendor/model-y", sunsetAt: null, source: "unit fixture", note: "" },
+    ]);
+    const later =
+      parseIsoUtc(s.reviewedAt) + (EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS + 1) * MS_PER_DAY;
+    const verdict = classifyEmbeddingSunset("vendor/model-y", later, s);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.undetermined);
+    expect(verdict.reason).toBe(EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyStale);
+  });
+
+  test("a declared date survives a stale survey - a shutdown that was announced happened", () => {
+    const s = survey([
+      { model: "vendor/model-x", sunsetAt: "2030-01-01", source: "unit fixture", note: "" },
+    ]);
+    const later =
+      parseIsoUtc(s.reviewedAt) + (EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS + 1) * MS_PER_DAY;
+    expect(classifyEmbeddingSunset("vendor/model-x", later, s).state).toBe(
+      EMBEDDING_SUNSET.announced,
+    );
+  });
+
+  test("every verdict carries the review date it rests on", () => {
+    const s = survey([]);
+    expect(classifyEmbeddingSunset("anything", NOW, s).surveyed_at).toBe(s.reviewedAt);
+  });
+});
+
+describe("what the classifier cannot establish", () => {
+  test("no configured model is undetermined, never `none_announced`", () => {
+    const verdict = classifyEmbeddingSunset(null, NOW, survey([]));
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.undetermined);
+    expect(verdict.reason).toBe(EMBEDDING_SUNSET_UNDETERMINED_REASON.modelUnresolved);
+  });
+
+  test("a malformed date in the survey is refused loudly, never read as absent", () => {
+    const s = survey([
+      { model: "vendor/model-z", sunsetAt: "not-a-date", source: "unit fixture", note: "" },
+    ]);
+    const verdict = classifyEmbeddingSunset("vendor/model-z", NOW, s);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.undetermined);
+    expect(verdict.reason).toBe(EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyEntryMalformed);
+  });
+});
+
+describe("the clock is a parameter", () => {
+  test("two instants over one survey give two verdicts", () => {
+    const s = survey([
+      { model: "vendor/model-y", sunsetAt: null, source: "unit fixture", note: "" },
+    ]);
+    const early = classifyEmbeddingSunset("vendor/model-y", parseIsoUtc(s.reviewedAt), s);
+    const late = classifyEmbeddingSunset(
+      "vendor/model-y",
+      parseIsoUtc(s.reviewedAt) + (EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS + 1) * MS_PER_DAY,
+      s,
+    );
+    expect(early.state).not.toBe(late.state);
+  });
+});
+
+describe("the shipped survey is well formed", () => {
+  test("its review date is a real ISO date", () => {
+    expect(isValidIsoInstant(EMBEDDING_SUNSET_SURVEY.reviewedAt)).toBe(true);
+  });
+
+  test("no model is surveyed twice", () => {
+    const models = EMBEDDING_SUNSET_SURVEY.entries.map((e) => e.model);
+    expect(new Set(models).size).toBe(models.length);
+  });
+
+  test("every declared date parses, and every entry says where it came from", () => {
+    const bad: string[] = [];
+    for (const entry of EMBEDDING_SUNSET_SURVEY.entries) {
+      if (entry.sunsetAt !== null && !isValidIsoInstant(entry.sunsetAt)) {
+        bad.push(`${entry.model}: unparseable sunsetAt ${entry.sunsetAt}`);
+      }
+      if (entry.source.trim().length === 0) bad.push(`${entry.model}: empty source`);
+    }
+    expect(bad.join("\n")).toBe("");
+  });
+});
+
+describe("the vocabularies are closed and carry the could-not-tell member", () => {
+  test("`undetermined` is a member", () => {
+    expect(EMBEDDING_SUNSET_STATES).toContain(EMBEDDING_SUNSET.undetermined);
+  });
+
+  test("a reason is never readable back as a state", () => {
+    for (const reason of EMBEDDING_SUNSET_UNDETERMINED_REASONS) {
+      expect(`${reason} is a state: ${isEmbeddingSunsetState(reason)}`).toBe(
+        `${reason} is a state: false`,
+      );
+    }
+    for (const state of EMBEDDING_SUNSET_STATES) {
+      expect(`${state} is a reason: ${isEmbeddingSunsetUndeterminedReason(state)}`).toBe(
+        `${state} is a reason: false`,
+      );
+    }
+  });
+});

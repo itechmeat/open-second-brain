@@ -475,6 +475,21 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // An announced decommission of the configured embedding model,
+        // inside the warning window. The exit is the curated catalog for
+        // the same reason `search-chunk-window-undeclared` points there:
+        // the act this finding asks for is CHOOSING a replacement model,
+        // and switching models is a config key no verb in this tool
+        // writes. The re-embed that follows the edit is named in the
+        // warning's own prose rather than invented as the command here,
+        // because running it before the key changes would rebuild the
+        // index against the model that is going away.
+        code: "embedding-model-sunset-announced",
+        issueClass: "configured embedding model has an announced decommission date",
+        nextCommand: "o2b search provider presets",
+        autoRepairable: false,
+      },
+      {
         code: "git-history-absent",
         issueClass: "no ingested git history",
         nextCommand: "o2b brain git ingest <repo-path>",
