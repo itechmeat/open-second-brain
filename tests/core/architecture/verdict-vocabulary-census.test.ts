@@ -83,6 +83,17 @@
  *   - Trees other than `src/`. `hooks/`, `scripts/` and `plugins/`
  *     declare no derived-union vocabulary today; if one appears there it
  *     is invisible until this root list grows.
+ *   - Code inside a `${…}` interpolation: a template literal is blanked
+ *     whole, so a vocabulary piece written inside one is not read. A
+ *     template can also legally span lines, which is why the masker's
+ *     "a quote with no partner on this line is not a string" rule - the
+ *     rule that keeps a regex literal such as `/["]/` from blanking the
+ *     rest of a module - applies to `"` and `'` only.
+ *
+ * The progress census next door reads its population the same way, off a
+ * lexed view with offsets preserved, and states its own blind spots in
+ * the same place. Two censuses, one technique; the shared lexer they both
+ * deserve is a consolidation neither owns alone.
  *
  * Each of those is a shape a future contributor could write. The
  * "the scan sees the shapes it claims to" block below pins the ones it
@@ -1064,7 +1075,22 @@ function maskSource(text: string): string {
           continue;
         }
         if (text[k] === char) break;
+        // A `"` or `'` with no partner before the newline is not a string
+        // opener - it is a quote inside a regular expression literal,
+        // `/["']/` being the shape that occurs here. Treating it as an
+        // opener would blank real code from that point to the next quote
+        // ANYWHERE in the file, which is worse than a miss: the scan would
+        // report a fact about a module it never read. Only a template can
+        // legally span lines.
+        if (char !== "`" && text[k] === "\n") {
+          k = i;
+          break;
+        }
         k += 1;
+      }
+      if (k === i) {
+        i += 1;
+        continue;
       }
       blank(i + 1, k);
       i = k + 1;
@@ -1503,6 +1529,14 @@ describe("the scan sees the shapes it claims to", () => {
         GUARD,
     ],
     ["a guard declared before the object it reads", GUARD + OBJECT + DERIVED + FROZEN_LIST],
+    [
+      "a vocabulary behind a regex literal holding an unpaired quote",
+      'const QUOTED = /["]/;\nexport const ok = QUOTED.source;\n' +
+        OBJECT +
+        DERIVED +
+        FROZEN_LIST +
+        GUARD,
+    ],
   ]);
 
   for (const [shape, source] of INTRUDER_SHAPES) {
