@@ -115,6 +115,19 @@ export const PROGRESS_REASON = Object.freeze({
    * completion and then dumped - which reads as though it had worked.
    */
   streamBuffered: "stream-buffered",
+  /**
+   * The operation threw. The stream ends here because the run did; the
+   * error itself is the caller's to read, and naming it on the stream
+   * would put an arbitrary message on a structured surface.
+   *
+   * This member exists because {@link withProgress} promises to
+   * terminate the stream whichever way the run ends, and a crash is a way
+   * a run ends. Without it the promise held only for the two safeguard
+   * stops, and a crashed run's stream simply stopped arriving - which is
+   * the shape of a hung run, and the exact confusion this module exists
+   * to remove.
+   */
+  failed: "failed",
 } as const);
 
 export type ProgressReason = (typeof PROGRESS_REASON)[keyof typeof PROGRESS_REASON];
@@ -125,6 +138,7 @@ export const PROGRESS_REASONS: ReadonlyArray<ProgressReason> = Object.freeze([
   PROGRESS_REASON.timedOut,
   PROGRESS_REASON.transportSingleResponse,
   PROGRESS_REASON.streamBuffered,
+  PROGRESS_REASON.failed,
 ]);
 
 /** Whether `value` is a reason this build understands. */
@@ -216,6 +230,19 @@ export function progressCounter(
   let completed = 0;
   let total: number | undefined;
   let live = sink !== undefined;
+  let terminated = false;
+
+  /**
+   * A run ends once. A second terminator, or an event after one, would
+   * let a reader see two endings for one run - which is worse than no
+   * ending, because it looks well-formed.
+   */
+  const assertTerminal = (call: string, current: string | null): void => {
+    if (!terminated) return;
+    throw new RangeError(
+      `progress: ${call}() after the ${operation} stream ended (last stage "${current ?? "none"}")`,
+    );
+  };
 
   const emit = (kind: ProgressKind, reason?: ProgressReason): void => {
     if (!live || sink === undefined || stage === null) return;
@@ -239,6 +266,7 @@ export function progressCounter(
 
   return {
     start(nextStage: string, nextTotal?: number): void {
+      assertTerminal("start", stage);
       assertTotal(nextTotal);
       stage = nextStage;
       completed = 0;
@@ -246,6 +274,13 @@ export function progressCounter(
       emit(PROGRESS_KIND.started);
     },
     advance(currentStage: string, by = 1): void {
+      assertTerminal("advance", stage);
+      if (!Number.isInteger(by) || by <= 0) {
+        // A stream whose counter can go backwards, or sit still while
+        // claiming to advance, describes a run nobody could follow. The
+        // increment is a defect from inside this process, not input.
+        throw new RangeError(`progress: advance must be a positive integer, got ${String(by)}`);
+      }
       if (stage === null) {
         throw new RangeError(`progress: advance("${currentStage}") before any stage started`);
       }
@@ -256,10 +291,14 @@ export function progressCounter(
       emit(PROGRESS_KIND.advanced);
     },
     finish(): void {
+      assertTerminal("finish", stage);
       emit(PROGRESS_KIND.finished);
+      terminated = true;
     },
     stop(reason: ProgressReason): void {
+      assertTerminal("stop", stage);
       emit(PROGRESS_KIND.stopped, reason);
+      terminated = true;
     },
   };
 }
@@ -285,8 +324,7 @@ export function withProgress<T>(counter: ProgressCounter, body: () => T): T {
     counter.finish();
     return result;
   } catch (error) {
-    const reason = progressReasonForError(error);
-    if (reason !== null) counter.stop(reason);
+    counter.stop(progressReasonForError(error) ?? PROGRESS_REASON.failed);
     throw error;
   }
 }
@@ -301,8 +339,7 @@ export async function withProgressAsync<T>(
     counter.finish();
     return result;
   } catch (error) {
-    const reason = progressReasonForError(error);
-    if (reason !== null) counter.stop(reason);
+    counter.stop(progressReasonForError(error) ?? PROGRESS_REASON.failed);
     throw error;
   }
 }

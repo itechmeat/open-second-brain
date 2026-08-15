@@ -9,9 +9,16 @@ import {
   PROGRESS_REASONS,
   PROGRESS_SCHEMA,
   progressCounter,
+  withProgress,
+  withProgressAsync,
   type ProgressEvent,
 } from "../../../src/core/brain/progress.ts";
-import { OPERATION, OPERATIONS, isOperation } from "../../../src/core/brain/safeguard.ts";
+import {
+  isOperation,
+  OPERATION,
+  OPERATIONS,
+  SafeguardAbortError,
+} from "../../../src/core/brain/safeguard.ts";
 
 describe("progress vocabulary", () => {
   test("kinds are frozen, complete, and guarded", () => {
@@ -131,5 +138,87 @@ describe("progressCounter", () => {
     );
     expect(() => counter.start("close")).not.toThrow();
     expect(failures).toHaveLength(1);
+  });
+});
+
+describe("a run ends once", () => {
+  test("a second terminator is a defect, not a second ending", () => {
+    const counter = progressCounter(OPERATION.dream, () => {});
+    counter.start("close");
+    counter.finish();
+    expect(() => counter.finish()).toThrow(/stream ended/);
+    expect(() => counter.stop(PROGRESS_REASON.aborted)).toThrow(/stream ended/);
+  });
+
+  test("nothing may be emitted after the stream ended", () => {
+    const counter = progressCounter(OPERATION.dream, () => {});
+    counter.start("close");
+    counter.stop(PROGRESS_REASON.aborted);
+    expect(() => counter.advance("close")).toThrow(/stream ended/);
+    expect(() => counter.start("reconcile")).toThrow(/stream ended/);
+  });
+
+  test("the counter only moves forward", () => {
+    // A stream whose counter can go backwards, or sit still while
+    // claiming to advance, describes a run nobody could follow.
+    const counter = progressCounter(OPERATION.dream, () => {});
+    counter.start("close");
+    expect(() => counter.advance("close", 0)).toThrow(/positive integer/);
+    expect(() => counter.advance("close", -3)).toThrow(/positive integer/);
+    expect(() => counter.advance("close", 1.5)).toThrow(/positive integer/);
+  });
+});
+
+describe("withProgress keeps its own promise", () => {
+  test("a normal return terminates the stream", () => {
+    const seen: ProgressEvent[] = [];
+    const counter = progressCounter(OPERATION.bridges, (e) => seen.push(e));
+    counter.start("candidates");
+    expect(withProgress(counter, () => 42)).toBe(42);
+    expect(seen.at(-1)?.kind).toBe(PROGRESS_KIND.finished);
+  });
+
+  test("a crash terminates the stream too, and says so", () => {
+    // The docblock promises termination "whichever way it ends", and a
+    // crash is a way a run ends. Without this the promise held only for
+    // the two safeguard stops, and a crashed run's stream simply stopped
+    // arriving - which is the shape of a hung run.
+    const seen: ProgressEvent[] = [];
+    const counter = progressCounter(OPERATION.bridges, (e) => seen.push(e));
+    counter.start("candidates");
+    expect(() =>
+      withProgress(counter, () => {
+        throw new Error("store closed");
+      }),
+    ).toThrow("store closed");
+    expect(seen.at(-1)).toMatchObject({
+      kind: PROGRESS_KIND.stopped,
+      reason: PROGRESS_REASON.failed,
+    });
+  });
+
+  test("a safeguard stop keeps its own reason rather than reading as a crash", () => {
+    const seen: ProgressEvent[] = [];
+    const counter = progressCounter(OPERATION.dream, (e) => seen.push(e));
+    counter.start("close");
+    expect(() =>
+      withProgress(counter, () => {
+        throw new SafeguardAbortError("dream");
+      }),
+    ).toThrow(SafeguardAbortError);
+    expect(seen.at(-1)?.reason).toBe(PROGRESS_REASON.aborted);
+  });
+
+  test("the async form behaves identically", async () => {
+    const seen: ProgressEvent[] = [];
+    const counter = progressCounter(OPERATION.reindex, (e) => seen.push(e));
+    counter.start("walk");
+    await expect(withProgressAsync(counter, () => Promise.reject(new Error("io")))).rejects.toThrow(
+      "io",
+    );
+    expect(seen.at(-1)).toMatchObject({
+      kind: PROGRESS_KIND.stopped,
+      reason: PROGRESS_REASON.failed,
+    });
   });
 });
