@@ -27,8 +27,11 @@
  * Oversized input FAILS CLOSED: rather than silently dropping the tail
  * past the scan window as if it were clean, {@link redactRawOutput}
  * appends {@link SCAN_TRUNCATED_MARKER}. {@link wasScanTruncated} lets a
- * downstream consumer detect that marker and demote/exclude the artifact
- * instead of trusting a partially-scanned payload.
+ * downstream consumer holding only bytes off disk detect that marker and
+ * demote/exclude the artifact instead of trusting a partially-scanned
+ * payload. A caller that RAN the scan reads truncation from
+ * {@link scanRawOutput} instead - content is free to quote the marker,
+ * so the text is not evidence about the scan that produced it.
  *
  * `redactStructured` is the tree form, used at the export boundary and by
  * every surface that hands a configuration mapping outside the vault. It
@@ -433,8 +436,28 @@ export interface RedactRawOutputOptions {
   readonly redactUrlCredentials?: boolean;
 }
 
-export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
-  if (!text) return text;
+/**
+ * A scan and what it could and could not see. `truncated` is a fact about
+ * the SCAN - the input was longer than the window - and never a fact read
+ * back off the output text. {@link wasScanTruncated} exists for a consumer
+ * holding only bytes off disk; a caller that ran the scan itself must use
+ * this, because a payload is free to quote the marker verbatim and a
+ * substring test on the output would then let an oversized string report
+ * itself as fully scanned.
+ */
+export interface RawScanResult {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
+/**
+ * The scanning form of {@link redactRawOutput}, returning the redacted
+ * text together with whether the scan window was exceeded. Every caller
+ * that has to REFUSE on a partial scan (the egress guard, through
+ * {@link redactStructured}) reads truncation from here.
+ */
+export function scanRawOutput(text: string, opts: RedactRawOutputOptions = {}): RawScanResult {
+  if (!text) return { text, truncated: false };
 
   // Scrub known literals BEFORE the truncation guard: a secret value
   // straddling the cut boundary must not survive as a partial
@@ -449,7 +472,8 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   // drop the unscanned tail, and flag the result so a downstream consumer
   // treats it as unverified rather than trusting it as fully scanned.
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  if (out.length > maxInput) out = out.slice(0, maxInput) + SCAN_TRUNCATED_MARKER;
+  const truncated = out.length > maxInput;
+  if (truncated) out = out.slice(0, maxInput) + SCAN_TRUNCATED_MARKER;
 
   out = stripPrivateRegions(out);
 
@@ -489,7 +513,11 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   if (opts.redactInfra) out = redactInfraTopology(out);
   else if (opts.redactUrlCredentials) out = redactUrlCredentials(out);
 
-  return out;
+  return { text: out, truncated };
+}
+
+export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
+  return scanRawOutput(text, opts).text;
 }
 
 // ----- Structured (mapping / tree) redaction --------------------------------
@@ -549,12 +577,14 @@ export function redactStructured(
       return PLACEHOLDER;
     }
     if (typeof value === "string") {
-      const out = redactRawOutput(value, opts);
-      if (out !== value) redacted = true;
-      // A payload that already quoted the marker is not evidence that
-      // THIS scan fell short.
-      if (wasScanTruncated(out) && !wasScanTruncated(value)) truncated = true;
-      return out;
+      // Truncation comes from the scan, never from a substring test on the
+      // output: a leaf is free to quote the marker verbatim, and reading
+      // the answer back out of the text let such a leaf release at any
+      // size with its unscanned tail silently dropped.
+      const scan = scanRawOutput(value, opts);
+      if (scan.text !== value) redacted = true;
+      if (scan.truncated) truncated = true;
+      return scan.text;
     }
     if (Array.isArray(value)) return value.map((item) => walk(item, false));
     if (typeof value === "object" && value !== null) {
