@@ -19,7 +19,7 @@
  *
  * The basename walk uses the shared note walker
  * ({@link walkMarkdownFiles}): `notes.read_paths` roots,
- * `vault.ignore_paths` exclusion via `matchIgnore`, and a hard skip of
+ * the shared vault scope via `matchScope`, and a hard skip of
  * the `Brain/` machinery root. The per-file size cap `scanInline`
  * applies before reading marker content does not apply here - this
  * resolver only reads directory entries and filenames, never file

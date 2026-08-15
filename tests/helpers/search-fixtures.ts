@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
 import {
-  classifyVaultIgnoreRule,
+  classifyVaultPathRule,
   DEFAULT_VAULT_IGNORE_PATHS,
-  type VaultIgnoreRule,
+  type VaultScopeRules,
 } from "../../src/core/vault-scope/defaults.ts";
 import type {
   ResolvedSearchConfig,
@@ -51,10 +51,18 @@ export function makeConfig(opts: {
   dbPath: string;
   /**
    * Optional terse shortcut: when provided, each string is classified
-   * into a `VaultIgnoreRule` (kind `path` if it contains `/`, else
+   * into a `VaultPathRule` (kind `path` if it contains `/`, else
    * `name`). When omitted, the shared default rule set is used.
    */
   ignorePaths?: ReadonlyArray<string>;
+  /**
+   * The positive allowlist (`vault.include_paths`). OMITTED means no
+   * allowlist is declared, which is the resolver's `null` and the
+   * behaviour every search test had before the key existed. An empty
+   * array is refused at parse time and must not be constructed here
+   * either - pass `undefined` or a non-empty list.
+   */
+  includePaths?: ReadonlyArray<string>;
   semantic?: Partial<ResolvedEmbeddingConfig>;
   /** MMR tradeoff; defaults to 0.7. Pass 1 to disable diversification. */
   mmrLambda?: number;
@@ -111,13 +119,17 @@ export function makeConfig(opts: {
     ...opts.semantic,
   });
   const paths = opts.ignorePaths ?? DEFAULT_VAULT_IGNORE_PATHS;
-  const ignoreRules: ReadonlyArray<VaultIgnoreRule> = Object.freeze(
-    paths.map(classifyVaultIgnoreRule),
-  );
+  const scopeRules: VaultScopeRules = Object.freeze({
+    ignore: Object.freeze(paths.map(classifyVaultPathRule)),
+    include:
+      opts.includePaths === undefined
+        ? null
+        : Object.freeze(opts.includePaths.map(classifyVaultPathRule)),
+  });
   return Object.freeze({
     vault: opts.vault,
     dbPath: opts.dbPath,
-    ignoreRules,
+    scopeRules,
     chunkSize: 800,
     chunkOverlap: 100,
     chunkMinSize: 100,

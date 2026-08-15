@@ -137,6 +137,10 @@ function resolvedView(cfg: BrainConfig): Record<string, unknown> {
     confidence: cfg.confidence,
     snapshots: cfg.snapshots,
     vault_ignore_paths: cfg.vault?.ignore_paths ?? DEFAULT_VAULT_IGNORE_PATHS,
+    // `?? null` mirrors the resolver: no allowlist declared is null, and
+    // an all-defaults-live rendering that wrote one would prove the
+    // template had changed behaviour for every existing vault.
+    vault_include_paths: cfg.vault?.include_paths ?? null,
     active_most_applied: cfg.active?.most_applied ?? {
       window_days: MOST_APPLIED_WINDOW_DAYS_DEFAULT,
       limit: MOST_APPLIED_LIMIT_DEFAULT,

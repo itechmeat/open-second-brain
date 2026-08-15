@@ -247,7 +247,7 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
   {
     key: "vault",
     doc: [
-      "Vault-wide exclusion policy. Single source of truth for every",
+      "Vault-wide scope policy. Single source of truth for every",
       "vault walker (search indexer, scan-inline, future scanners).",
       "Entries without a slash match a directory name anywhere in the",
       "tree; entries with a slash match a vault-relative POSIX path",
@@ -255,7 +255,20 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       "set ignore_paths to an empty list to disable exclusions entirely.",
     ],
     emit: "live",
-    keys: [live("ignore_paths", DEFAULT_BRAIN_CONFIG.vault?.ignore_paths ?? EMPTY_LIST)],
+    keys: [
+      live("ignore_paths", DEFAULT_BRAIN_CONFIG.vault?.ignore_paths ?? EMPTY_LIST),
+      example("include_paths", Object.freeze(["Brain", "Notes/Daily"]), [
+        "Positive allowlist. Unset by default, which indexes everything",
+        "the exclusions above leave. Set it and a path is walked only if",
+        "it is BOTH not excluded and under one of these roots - the two",
+        "keys compose, an allowlist never re-includes an exclusion.",
+        "The values below are an illustration, not defaults: writing them",
+        "would narrow this vault. An empty list is refused - remove the",
+        "key to index the whole vault. A bare name matches at any depth",
+        "here too, so `Brain` also admits a nested projects/Brain;",
+        "name a path when you mean exactly one place.",
+      ]),
+    ],
   },
 
   // ----- Below here: every remaining key the resolver understands. ------

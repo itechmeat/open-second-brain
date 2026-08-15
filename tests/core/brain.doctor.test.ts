@@ -761,6 +761,41 @@ vault:
     const res = runDoctor(tmp);
     expect(res.warnings.find((w) => w.code === "vault-ignore-missing-path")).toBeUndefined();
   });
+
+  test("a dead include root is an ERROR, not a warning", () => {
+    // Severity is the point. A dead exclude entry costs nothing - the
+    // path it names is not there to exclude. A dead include root means
+    // the index is empty, which is a broken vault reported as such.
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  include_paths:
+    - Brain
+    - Notes/does-not-exist
+`,
+    );
+    const res = runDoctor(tmp);
+    const dead = res.errors.find((e) => e.code === "vault-include-missing-path");
+    expect(dead).toBeDefined();
+    expect(dead!.message).toContain("Notes/does-not-exist");
+    expect(res.warnings.find((w) => w.code === "vault-include-missing-path")).toBeUndefined();
+    // `Brain` exists in the scaffolded vault - no finding for it.
+    expect(res.errors.filter((e) => e.code === "vault-include-missing-path")).toHaveLength(1);
+  });
+
+  test("does NOT report when every include root resolves", () => {
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  include_paths:
+    - Brain
+`,
+    );
+    const res = runDoctor(tmp);
+    expect(res.errors.find((e) => e.code === "vault-include-missing-path")).toBeUndefined();
+  });
 });
 
 describe("corrupted principle frontmatter", () => {

@@ -189,7 +189,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
       const walk = walkVaultScope(ctx.vault, scope);
       vault = {
         ignore_source: scope.source,
-        rules: scope.rules.map((r) => ({ raw: r.raw, kind: r.kind })),
+        rules: scope.rules.ignore.map((r) => ({ raw: r.raw, kind: r.kind })),
         included: { files: walk.includedFiles, dirs: walk.includedDirs },
         excluded: {
           dirs: walk.excludedDirs.length,

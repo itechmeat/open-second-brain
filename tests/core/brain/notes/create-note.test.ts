@@ -80,10 +80,31 @@ describe("createNote", () => {
     expect(existsSync(join(vault, "Brain/sneaky.md"))).toBe(false);
   });
 
-  test("refuses a vault-scope excluded path", () => {
+  test("refuses a vault-scope excluded path, naming the key and the entry", () => {
+    expect(() => createNote(vault, { path: ".obsidian/plugins/x.md", content: "x" })).toThrow(
+      /excluded by vault\.ignore_paths \(\.obsidian\)/,
+    );
     expect(() => createNote(vault, { path: ".obsidian/plugins/x.md", content: "x" })).toThrow(
       CreateNoteError,
     );
+  });
+
+  test("refuses a path outside vault.include_paths, naming THAT polarity", () => {
+    // One policy, every consumer. The message has to say which of the two
+    // keys refused, because "excluded by vault scope" sends an operator
+    // to read the wrong list.
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  include_paths:\n    - Notes\n",
+      "utf8",
+    );
+    expect(() => createNote(vault, { path: "Archive/x.md", content: "x" })).toThrow(
+      /outside vault\.include_paths \(Notes\)/,
+    );
+    expect(existsSync(join(vault, "Archive/x.md"))).toBe(false);
+    // Inside the allowlist the same write lands.
+    expect(createNote(vault, { path: "Notes/x.md", content: "x" }).created).toBe(true);
   });
 
   test("refuses to clobber an existing note (no overwrite)", () => {

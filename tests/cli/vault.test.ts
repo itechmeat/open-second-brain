@@ -67,6 +67,30 @@ describe("o2b vault status", () => {
       payload.excluded.dirs.some((d: { rel_path: string }) => d.rel_path === ".obsidian"),
     ).toBe(true);
     expect(Array.isArray(payload.rules)).toBe(true);
+    // Undeclared allowlist: null on the wire, never [] - a machine caller
+    // must be able to tell "no allowlist" from "admits nothing".
+    expect(payload.include_paths).toBeNull();
+  });
+
+  test("reports the declared allowlist and the refusal polarity", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  include_paths:\n    - Brain/preferences\n",
+    );
+    mkdirSync(join(vault, "Archive"), { recursive: true });
+    writeFileSync(join(vault, "Archive", "old.md"), "x");
+    const r = await runCli(["vault", "status", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.include_paths).toEqual(["Brain/preferences"]);
+    const archive = payload.excluded.dirs.find(
+      (d: { rel_path: string }) => d.rel_path === "Archive",
+    );
+    expect(archive.reason).toBe("not-included");
+    expect(archive.rule).toBeNull();
   });
 });
 
@@ -149,6 +173,36 @@ describe("o2b vault inspect", () => {
     expect(payload.status).toBe("included");
     expect(payload.exists_on_disk).toBe(true);
     expect(payload.matched_rule).toBeNull();
+    expect(payload.reason).toBeNull();
+    expect(payload.index_admitted).toBe(true);
+  });
+
+  test("--json reports a lane path as in scope but refused by the index", async () => {
+    // `o2b vault inspect` used to answer "included" for a path the
+    // indexer refuses, which reads as "this file is searchable".
+    await bootstrap();
+    const r = await runCli(["vault", "inspect", "Brain/state/x.md", "--vault", vault, "--json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const payload = JSON.parse(r.stdout);
+    expect(payload.status).toBe("included");
+    expect(payload.index_admitted).toBe(false);
+    expect(payload.index_refusal).toBe("exact-state-lane");
+  });
+
+  test("reports a path outside the allowlist and names that polarity", async () => {
+    await bootstrap();
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nvault:\n  include_paths:\n    - Notes\n",
+    );
+    const r = await runCli(["vault", "inspect", "Archive/old.md", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).toContain("status:       excluded (not found on disk)");
+    expect(r.stdout).toContain("reason:       outside vault.include_paths");
   });
 });
 

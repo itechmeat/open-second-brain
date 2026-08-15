@@ -124,3 +124,60 @@ test("yields the NFC identity for an NFD filename on disk (cross-device stabilit
   const relPaths = collect(cfg);
   expect(relPaths).toContain(nfcName);
 });
+
+// ----- vault.include_paths ---------------------------------------------------
+
+test("absent include_paths yields exactly the files the walker yielded before the key existed", () => {
+  // Recorded against v1.45.1 over this fixture tree: the search walker is
+  // the surface that decides what gets indexed, so its output is where
+  // "byte-identical when the key is absent" has to hold.
+  writeMd(vault, "Brain/preferences/pref-a.md", "x");
+  writeMd(vault, "Brain/.snapshots/2026-01-01.md", "x");
+  writeMd(vault, "Brain/state/live.md", "x");
+  writeMd(vault, "Notes/idea.md", "x");
+  writeMd(vault, "Notes/deep/nested.md", "x");
+  writeMd(vault, "Notes-archive/old.md", "x");
+  writeMd(vault, "Journal/2026/entry.md", "x");
+  writeMd(vault, "top.md", "x");
+  writeMd(vault, ".obsidian/plugin.md", "x");
+  writeMd(vault, "node_modules/pkg/readme.md", "x");
+  const cfg = makeConfig({ vault, dbPath: join(vault, "x.sqlite") });
+  expect(collect(cfg)).toEqual([
+    "Brain/preferences/pref-a.md",
+    "Journal/2026/entry.md",
+    "Notes-archive/old.md",
+    "Notes/deep/nested.md",
+    "Notes/idea.md",
+    "top.md",
+  ]);
+});
+
+test("a declared allowlist yields only the named roots, minus the exclusions", () => {
+  writeMd(vault, "Brain/preferences/pref-a.md", "x");
+  writeMd(vault, "Brain/.snapshots/2026-01-01.md", "x");
+  writeMd(vault, "Notes/idea.md", "x");
+  writeMd(vault, "Notes-archive/old.md", "x");
+  writeMd(vault, "top.md", "x");
+  const cfg = makeConfig({
+    vault,
+    dbPath: join(vault, "x.sqlite"),
+    includePaths: ["Brain"],
+  });
+  // `Brain/.snapshots` stays excluded: the allowlist narrows, it never
+  // re-includes something the exclusion set removed.
+  expect(collect(cfg)).toEqual(["Brain/preferences/pref-a.md"]);
+});
+
+test("an allowlist root nested below an undeclared parent is still reached", () => {
+  // The include side narrows FILES. A walker that refused to descend
+  // `Notes` because no file directly under it is included would never
+  // reach the declared root.
+  writeMd(vault, "Notes/Daily/2026-05-19.md", "x");
+  writeMd(vault, "Notes/idea.md", "x");
+  const cfg = makeConfig({
+    vault,
+    dbPath: join(vault, "x.sqlite"),
+    includePaths: ["Notes/Daily"],
+  });
+  expect(collect(cfg)).toEqual(["Notes/Daily/2026-05-19.md"]);
+});

@@ -1,7 +1,7 @@
 /**
  * Operator-declared configuration that cannot do what it says.
  *
- * `_brain.yaml` itself, the `vault.ignore_paths` block, and the capture
+ * `_brain.yaml` itself, the `vault:` scope block, and the capture
  * boundary's message patterns are all things the operator wrote down and
  * the runtime then has to honour. When one of them is unreadable, names a
  * schema this build does not know, points at nothing, or fails to
@@ -110,11 +110,23 @@ function configAbsence(cfgPath: string): DoctorIssue | null {
 }
 
 /**
- * v0.10.9 hygiene lint: surface path-style entries in
- * `vault.ignore_paths` that do not resolve to anything on disk. Such
- * entries are typically typos — they look like exclusions but cannot
- * fire. Bare-name rules are skipped (a missing `.git` directory is
- * not an error).
+ * v0.10.9 hygiene lint, extended in v1.46.0: surface declared entries
+ * under `vault:` that do not resolve to anything on disk. Such entries
+ * are typically typos — they look like a boundary and cannot fire.
+ *
+ * The two polarities get different severities because their
+ * consequences are not comparable. A dead EXCLUSION costs nothing: the
+ * path it names is not there to exclude, so the vault behaves exactly
+ * as the operator intended, and bare-name rules are skipped entirely
+ * (a missing `.git` directory is not a finding). A dead INCLUDE ROOT
+ * means the allowlist admits nothing under it — with one root declared
+ * and misspelt, the index is empty and every recall returns nothing for
+ * a reason no other check would name.
+ *
+ * The include side therefore checks BOTH kinds against the vault root.
+ * A bare name still matches at any depth when the matcher runs, so the
+ * finding says what was verified — that the root is not there — rather
+ * than claiming the rule can never fire.
  *
  * Only runs when the operator declared the block themselves; the
  * built-in default set may legitimately list paths that do not exist
@@ -132,13 +144,23 @@ export const vaultIgnoreCheck: DoctorCheck = {
       return;
     }
     if (scope.source !== "_brain.yaml") return;
-    for (const rule of scope.rules) {
+    for (const rule of scope.rules.ignore) {
       if (rule.kind !== "path") continue;
       if (existsSync(join(vault, rule.raw))) continue;
       issues.push({
         severity: "warning",
         code: "vault-ignore-missing-path",
         message: `vault.ignore_paths entry '${rule.raw}' does not exist in this vault`,
+      });
+    }
+    for (const rule of scope.rules.include ?? []) {
+      if (existsSync(join(vault, rule.raw))) continue;
+      issues.push({
+        severity: "error",
+        code: "vault-include-missing-path",
+        message:
+          `vault.include_paths entry '${rule.raw}' does not exist at the vault root; ` +
+          "an include root that matches nothing leaves the index empty",
       });
     }
   },

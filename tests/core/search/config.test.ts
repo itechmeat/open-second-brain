@@ -72,7 +72,7 @@ test("defaults are returned when config and env are empty", () => {
   expect(cfg.semantic.enabled).toBe(false);
   expect(cfg.semantic.provider).toBe("openai-compat");
   expect(cfg.semantic.apiKey).toBeNull();
-  const ignoreRaws = cfg.ignoreRules.map((r) => r.raw);
+  const ignoreRaws = cfg.scopeRules.ignore.map((r) => r.raw);
   expect(ignoreRaws).toContain(".git");
   expect(ignoreRaws).toContain(".open-second-brain");
   // v0.10.9: the default set folds in `.obsidian` (whole dir) and
@@ -176,7 +176,7 @@ test("OPEN_SECOND_BRAIN_SEARCH_IGNORE has no effect (removed in v0.10.9)", () =>
   writeFileSync(configPath, `vault: "${tmp}"\n`);
   process.env["OPEN_SECOND_BRAIN_SEARCH_IGNORE"] = "from-env-1,from-env-2";
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
-  const raws = cfg.ignoreRules.map((r) => r.raw);
+  const raws = cfg.scopeRules.ignore.map((r) => r.raw);
   expect(raws).not.toContain("from-env-1");
   expect(raws).not.toContain("from-env-2");
 });
@@ -187,7 +187,7 @@ test("search_ignore_paths in config.yaml has no effect (removed in v0.10.9)", ()
     `vault: "${tmp}"\nsearch_ignore_paths: "from-config-1,from-config-2"\n`,
   );
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
-  const raws = cfg.ignoreRules.map((r) => r.raw);
+  const raws = cfg.scopeRules.ignore.map((r) => r.raw);
   expect(raws).not.toContain("from-config-1");
   expect(raws).not.toContain("from-config-2");
 });
@@ -205,10 +205,31 @@ vault:
   );
   writeFileSync(configPath, `vault: "${tmp}"\n`);
   const cfg = resolveSearchConfig({ vault: tmp, configPath });
-  expect(cfg.ignoreRules.map((r) => r.raw)).toEqual(["my-cache", "Drafts"]);
+  expect(cfg.scopeRules.ignore.map((r) => r.raw)).toEqual(["my-cache", "Drafts"]);
   // The path-style entry survives classification.
-  const draftsRule = cfg.ignoreRules.find((r) => r.raw === "Drafts");
+  const draftsRule = cfg.scopeRules.ignore.find((r) => r.raw === "Drafts");
   expect(draftsRule?.kind).toBe("name");
+  // No allowlist declared: null, never an empty array.
+  expect(cfg.scopeRules.include).toBeNull();
+});
+
+test("vault.include_paths reaches the resolved search config", () => {
+  mkdirSync(join(tmp, "Brain"), { recursive: true });
+  writeFileSync(
+    join(tmp, "Brain", "_brain.yaml"),
+    `schema_version: 1
+vault:
+  include_paths:
+    - Brain
+    - Notes/Daily
+`,
+  );
+  writeFileSync(configPath, `vault: "${tmp}"\n`);
+  const cfg = resolveSearchConfig({ vault: tmp, configPath });
+  expect(cfg.scopeRules.include?.map((r) => r.raw)).toEqual(["Brain", "Notes/Daily"]);
+  expect(cfg.scopeRules.include?.map((r) => r.kind)).toEqual(["name", "path"]);
+  // The built-in exclusions are still in force alongside it.
+  expect(cfg.scopeRules.ignore.map((r) => r.raw)).toContain(".git");
 });
 
 test("env overrides config which overrides defaults", () => {

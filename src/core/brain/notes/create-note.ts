@@ -50,7 +50,12 @@ import type { FrontmatterMap } from "../../types.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { formatFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
-import { inspectPath, resolveVaultScope } from "../../vault-scope/index.ts";
+import {
+  inspectPath,
+  resolveVaultScope,
+  type InspectResult,
+  type VaultScope,
+} from "../../vault-scope/index.ts";
 import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "../paths.ts";
 import { requireNextStep } from "../next-step.ts";
 import { BrainConfigError } from "../policy.ts";
@@ -251,6 +256,22 @@ function configFault(err: BrainConfigError): CreateNoteError {
 }
 
 /**
+ * The refusal sentence for a path vault scope rejects, naming the key
+ * the operator has to open and the declaration that decided it.
+ *
+ * The two polarities read differently on purpose: an exclusion names
+ * the single entry that fired, because that entry is the thing to
+ * delete; an allowlist names the whole list, because nothing in it
+ * fired and the fix is to add a root.
+ */
+function scopeRefusal(scope: VaultScope, inspected: InspectResult): string {
+  if (inspected.reason === "not-included") {
+    return `path is outside vault.include_paths (${(scope.includePaths ?? []).join(", ")})`;
+  }
+  return `path is excluded by vault.ignore_paths (${inspected.rule?.raw ?? "rule"})`;
+}
+
+/**
  * Run `read`, translating a Brain config failure into {@link configFault}.
  * Shared by the two config-backed checks in the envelope — the vault
  * scope and the write binding — so a malformed config reads the same on
@@ -320,11 +341,16 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
     );
   }
 
+  // Vault scope is ONE policy every consumer obeys, so a write is
+  // refused wherever a walk would be refused - a note authored outside
+  // the operator's declared `include_paths` would never be indexed,
+  // never be recalled, and never be found again, which is a worse
+  // outcome than being told no. The message names WHICH polarity
+  // refused, because "excluded by vault scope" sends an operator to
+  // read the wrong list: an entry they wrote under `ignore_paths` is a
+  // different fix from a root missing from `include_paths`.
   if (inspected.excluded) {
-    throw new CreateNoteError(
-      "excluded",
-      `path is excluded by vault scope (${inspected.rule?.raw ?? "rule"}): ${relPath}`,
-    );
+    throw new CreateNoteError("excluded", `${scopeRefusal(scope, inspected)}: ${relPath}`);
   }
 
   // The operator's declared write binding (provenance-at-the-boundary,

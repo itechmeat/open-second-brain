@@ -546,11 +546,11 @@ Long-running operations (dream, `o2b search index | reindex`, bridges discover, 
 
 ## Vault scope
 
-Single exclusion policy for every vault walker.
+Single scope policy for every vault walker: `vault.ignore_paths` excludes, and the optional `vault.include_paths` allowlist narrows. A path is in scope when it is not excluded AND, if an allowlist is declared, under one of its roots. Absent, the allowlist changes nothing; an empty one is refused at parse time, because a list admitting no path is an off switch on indexing rather than a boundary. A dead include root is an error-severity `vault-include-missing-path` doctor finding — unlike a dead exclusion, it can leave the index empty.
 
 ```text
-o2b vault status              Walks the vault under the active policy; reports include / exclude counts and which rules fired
-o2b vault inspect <relpath>   Point-check one vault-relative path; reports matched rule, source, whether the path exists on disk, and the write-binding verdict (none declared | admits | refuses)
+o2b vault status              Walks the vault under the active policy; reports include / exclude counts, the declared include roots, and which rule or polarity refused each excluded path
+o2b vault inspect <relpath>   Point-check one vault-relative path; reports the scope verdict and which polarity refused it, the matched rule, source, whether the search index would accept the path, whether it exists on disk, and the write-binding verdict (none declared | admits | refuses)
 o2b vault profile <sub>       Manage named multi-vault profiles (since v0.22.0): list | create <name> <vault> | switch <name>; pointer-based activation in profiles.json
 o2b vault map [show]          Print the resolved vault-map role tokens -> folders (since v0.22.0), merging an optional Brain/_vault-map.yaml over defaults; read-only
 ```

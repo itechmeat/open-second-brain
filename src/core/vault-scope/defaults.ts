@@ -34,7 +34,16 @@ import { BRAIN_SNAPSHOTS_REL } from "../brain/paths.ts";
  */
 const POSIX_SEP = "/";
 
-export interface VaultIgnoreRule {
+/**
+ * One declared entry, classified. POLARITY-FREE by design: the same
+ * shape carries an exclusion (`vault.ignore_paths`) and an inclusion
+ * (`vault.include_paths`), and the matcher reads both through one
+ * grammar. Two readings of the same string - a bare name meaning
+ * "anywhere" on one key and "at the root" on the other - is precisely
+ * the drift this module exists to prevent, so the include side inherits
+ * the depth-agnostic reading rather than inventing a second syntax.
+ */
+export interface VaultPathRule {
   /** Entry exactly as written in `Brain/_brain.yaml`. */
   readonly raw: string;
   /**
@@ -43,6 +52,21 @@ export interface VaultIgnoreRule {
    * path exactly.
    */
   readonly kind: "name" | "path";
+}
+
+/**
+ * The resolved scope, both polarities in one value.
+ *
+ * `include` is `null` when the operator declared no allowlist, which is
+ * every vault that predates the key and every vault that does not want
+ * one. It is NEVER an empty array: a list that admits no path is an off
+ * switch on indexing rather than a boundary, and the block parser
+ * refuses it at parse time so the distinction cannot arrive here as a
+ * shape the matcher has to guess about.
+ */
+export interface VaultScopeRules {
+  readonly ignore: ReadonlyArray<VaultPathRule>;
+  readonly include: ReadonlyArray<VaultPathRule> | null;
 }
 
 export const DEFAULT_VAULT_IGNORE_PATHS: ReadonlyArray<string> = Object.freeze([
@@ -56,10 +80,12 @@ export const DEFAULT_VAULT_IGNORE_PATHS: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * Classify a raw entry into a `VaultIgnoreRule`.
+ * Classify a raw entry into a {@link VaultPathRule}. Shared by both
+ * keys under `vault:` - one grammar, one normalisation, no second
+ * reading of the same string.
  *
  * Normalises three operator footguns that would silently disable a
- * rule otherwise — `matchIgnore` walks prefixes with no trailing
+ * rule otherwise — the matcher walks prefixes with no trailing
  * slash and rejects empty segments, so the raw inputs are made to
  * match that shape:
  *
@@ -72,7 +98,7 @@ export const DEFAULT_VAULT_IGNORE_PATHS: ReadonlyArray<string> = Object.freeze([
  * keep their pre-normalisation classification; the policy validator
  * is responsible for rejecting them before they get here.
  */
-export function classifyVaultIgnoreRule(raw: string): VaultIgnoreRule {
+export function classifyVaultPathRule(raw: string): VaultPathRule {
   const normalised = normaliseRawRule(raw);
   return { raw: normalised, kind: normalised.includes("/") ? "path" : "name" };
 }

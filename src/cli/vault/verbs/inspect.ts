@@ -8,7 +8,9 @@
  * look in the wrong file:
  *
  *   - VAULT SCOPE — is this path part of the vault at all? Governs every
- *     walker (indexer, scanners) and is declared in `vault.ignore_paths`.
+ *     walker (indexer, scanners) and is declared in `vault.ignore_paths`
+ *     and `vault.include_paths`. The refusal names which of the two
+ *     decided, because they are different lists to go and fix.
  *   - WRITE BINDING — may a CALLER-NAMED write author here? Governs
  *     `brain_create_note` and the update / append / batch arms, and is
  *     declared in `write_binding.path_prefixes`
@@ -68,10 +70,13 @@ export async function cmdVaultInspect(argv: ReadonlyArray<string>): Promise<numb
     writeJson({
       relpath: result.relPath,
       status: result.excluded ? "excluded" : "included",
+      reason: result.reason,
       exists_on_disk: result.existsOnDisk,
       matched_rule: result.rule ? { raw: result.rule.raw, kind: result.rule.kind } : null,
       matched_at: result.matchedAt,
       source: result.source,
+      index_admitted: result.indexAdmitted,
+      index_refusal: result.admissionReason,
       write_binding:
         binding === null
           ? { declared: false }
@@ -86,15 +91,40 @@ export async function cmdVaultInspect(argv: ReadonlyArray<string>): Promise<numb
   info(`relpath:      ${result.relPath}`);
   if (!result.excluded) {
     info(`status:       included${notFoundSuffix}`);
+    reportIndexAdmission(result);
     reportWriteBinding(binding, bindingAdmits);
     return 0;
   }
   info(`status:       excluded${notFoundSuffix}`);
+  info(`reason:       ${refusalSentence(result)}`);
   if (result.rule) info(`matched rule: ${result.rule.raw} (${result.rule.kind})`);
   if (result.matchedAt) info(`matched at:   ${result.matchedAt}`);
   info(`source:       ${result.source}`);
   reportWriteBinding(binding, bindingAdmits);
   return 0;
+}
+
+/**
+ * Which polarity refused, in the operator's own vocabulary: the key
+ * they have to open. An exclusion has an entry to point at; an
+ * allowlist refusal has none, and saying "excluded" alone would send
+ * them to read the wrong list.
+ */
+function refusalSentence(result: ReturnType<typeof inspectPath>): string {
+  return result.reason === "not-included"
+    ? "outside vault.include_paths"
+    : "excluded by vault.ignore_paths";
+}
+
+/**
+ * The third verdict, printed only when it disagrees with the scope one.
+ * A path can be part of the vault and still never enter the index - the
+ * exact-state lane is - and reporting only "included" told an operator
+ * the file was searchable.
+ */
+function reportIndexAdmission(result: ReturnType<typeof inspectPath>): void {
+  if (result.indexAdmitted) return;
+  info(`index:        not indexed (${result.admissionReason ?? "refused"})`);
 }
 
 /** Human-stream rendering of the three write-binding states. */

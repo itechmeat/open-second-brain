@@ -4,9 +4,11 @@
 
 export const VAULT_HELP = `usage: o2b vault <verb> [options]
 
-Vault-wide exclusion policy inspection. The policy lives in
-<vault>/Brain/_brain.yaml under \`vault.ignore_paths\` (single source
-of truth for the search indexer, scan-inline, and future scanners).
+Vault-wide scope policy inspection. The policy lives in
+<vault>/Brain/_brain.yaml under \`vault.ignore_paths\` and the optional
+\`vault.include_paths\` allowlist (single source of truth for the search
+indexer, scan-inline, and future scanners). A path is in scope when it
+is not excluded AND, if an allowlist is declared, under one of its roots.
 
 verbs:
   status              Walk the vault under the active policy and
@@ -30,9 +32,10 @@ export const VAULT_VERB_HELP: Record<string, string> = {
     "excluded subtree are not enumerated separately.\n",
   inspect:
     "usage: o2b vault inspect <relpath> [--vault <path>] [--json]\n\n" +
-    "Resolves the policy and runs matchIgnore against <relpath>. The\n" +
-    "relpath is vault-relative (POSIX). Path traversal outside the\n" +
-    "vault is rejected with exit 2.\n",
+    "Resolves the policy and reports whether <relpath> is in scope,\n" +
+    "naming which polarity refused it when it is not, plus whether the\n" +
+    "search index would accept it. The relpath is vault-relative\n" +
+    "(POSIX). Path traversal outside the vault is rejected with exit 2.\n",
   profile:
     "usage: o2b vault profile <list | create <name> <vault> | switch <name>> [--json]\n\n" +
     "Manage named multi-vault profiles stored in profiles.json beside the\n" +

@@ -111,6 +111,19 @@ describe("walkMarkdownFiles", () => {
     expect(relPaths(vault, ["Daily"])).toEqual(["Daily/live.md"]);
   });
 
+  test("honours vault.include_paths, composed with the note roots", () => {
+    // Two independent narrowings that both have to hold: the operator's
+    // vault-wide allowlist AND the note roots this walk was given.
+    atomicWriteFileSync(
+      join(brainDirs(vault).brain, "_brain.yaml"),
+      "schema_version: 1\nnotes:\n  read_paths:\n    - Daily\nvault:\n  include_paths:\n    - Daily/Live\n",
+    );
+    writeMd("Daily/Live/keep.md");
+    writeMd("Daily/Draft/drop.md");
+    writeMd("Elsewhere/Live/also-drop.md");
+    expect(relPaths(vault, ["Daily"])).toEqual(["Daily/Live/keep.md"]);
+  });
+
   test("size cap reports and skips oversize files, leaving smaller ones", () => {
     writeMd("Daily/small.md", "tiny\n");
     writeMd("Daily/big.md", "x".repeat(2048));

@@ -23,7 +23,7 @@ import {
   parseRetireBlock,
   parseSnapshotsBlock,
 } from "./blocks/lifecycle.ts";
-import { parseVaultBlock } from "./blocks/vault-ignore.ts";
+import { parseVaultBlock } from "./blocks/vault-scope.ts";
 import { parseActiveBlock } from "./blocks/active.ts";
 import { parseLessonsBlock } from "./blocks/lessons.ts";
 import { parseDisciplineReportBlock } from "./blocks/discipline-report.ts";

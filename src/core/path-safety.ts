@@ -109,7 +109,7 @@ function safeRealpath(p: string): string {
  * Returns the input unchanged on POSIX hosts (`sep === "/"`); on
  * Windows, replaces every `\\` separator with `/`. Used by the
  * vault walkers when they project absolute or vault-relative OS
- * paths into the POSIX form that `matchIgnore` and Obsidian
+ * paths into the POSIX form that the vault-scope matcher and Obsidian
  * wikilinks both expect.
  */
 export function toPosix(p: string): string {

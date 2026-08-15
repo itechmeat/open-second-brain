@@ -35,7 +35,10 @@ function semanticConfig(
   return Object.freeze({
     vault: tmp,
     dbPath,
-    ignoreRules: Object.freeze([{ raw: ".git", kind: "name" as const }]),
+    scopeRules: Object.freeze({
+      ignore: Object.freeze([{ raw: ".git", kind: "name" as const }]),
+      include: null,
+    }),
     chunkSize: 800,
     chunkOverlap: 100,
     chunkMinSize: 100,

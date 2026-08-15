@@ -144,6 +144,14 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "follows it has already left the store",
   },
   {
+    code: "vault-include-missing-path",
+    reason:
+      "the allowlist names a root that is not at the vault root. Creating the folder and " +
+      "correcting the spelling are different intents with different indexes as their result, " +
+      "and the finding cannot tell which the operator meant - deleting the entry, the only " +
+      "mechanical option, would silently widen the boundary they wrote",
+  },
+  {
     code: "vault-ignore-missing-path",
     reason:
       "the ignore rule names a path that is not in this vault. It is usually a typo, but it can " +

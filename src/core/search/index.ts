@@ -27,13 +27,13 @@ import type {
   ResolvedRecallConfig,
   ResolvedRerankConfig,
   ResolvedSearchConfig,
-  VaultIgnoreRule,
+  VaultScopeRules,
 } from "./types.ts";
 
 type SearchConfigOverrides = Partial<
-  Omit<ResolvedSearchConfig, "ignoreRules" | "semantic" | "rerank">
+  Omit<ResolvedSearchConfig, "scopeRules" | "semantic" | "rerank">
 > & {
-  readonly ignoreRules?: ReadonlyArray<VaultIgnoreRule>;
+  readonly scopeRules?: VaultScopeRules;
   readonly semantic?: Partial<ResolvedEmbeddingConfig>;
   readonly rerank?: Partial<ResolvedRerankConfig>;
 };
@@ -60,7 +60,8 @@ export type {
   SearchOutcome,
   SearchSessionFocus,
   StructuredRecallQueryDocument,
-  VaultIgnoreRule,
+  VaultPathRule,
+  VaultScopeRules,
 } from "./types.ts";
 export {
   chunkWindowDiagnosticCode,
@@ -449,7 +450,7 @@ export function resolveSearchConfig(opts: {
   // `vault.ignore_paths`. The legacy `search_ignore_paths` config key
   // and `OPEN_SECOND_BRAIN_SEARCH_IGNORE` env variable were removed.
   const scope = resolveVaultScope(opts.vault);
-  const ignoreRules = scope.rules;
+  const scopeRules = scope.rules;
 
   const semanticEnabled = parseBool(
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", "search_semantic_enabled"),
@@ -905,7 +906,7 @@ export function resolveSearchConfig(opts: {
   const base: ResolvedSearchConfig = Object.freeze({
     vault: opts.vault,
     dbPath,
-    ignoreRules,
+    scopeRules,
     chunkSize,
     chunkOverlap,
     chunkMinSize,
@@ -930,9 +931,9 @@ export function resolveSearchConfig(opts: {
     ...opts.overrides,
     semantic: Object.freeze({ ...base.semantic, ...opts.overrides.semantic }),
     rerank: Object.freeze({ ...base.rerank, ...opts.overrides.rerank }),
-    ignoreRules: opts.overrides.ignoreRules
-      ? Object.freeze([...opts.overrides.ignoreRules])
-      : base.ignoreRules,
+    scopeRules: opts.overrides.scopeRules
+      ? Object.freeze({ ...opts.overrides.scopeRules })
+      : base.scopeRules,
   });
   validateResolvedConfig(merged);
   return merged;

@@ -15,7 +15,7 @@
 
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
-import type { VaultIgnoreRule } from "../vault-scope/defaults.ts";
+import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
 import type { BrainSearchResult, ScoreBreakdown, TrustMetadata } from "./search-result.ts";
@@ -25,7 +25,7 @@ import type {
 } from "../brain/trust/retrieval-receipts.ts";
 import type { RetrievalTrail } from "./retrieval-trail.ts";
 
-export type { VaultIgnoreRule };
+export type { VaultPathRule, VaultScopeRules };
 export type { BrainSearchResult, ScoreBreakdown, TrustMetadata };
 export {
   EMBEDDING_QUOTA_MESSAGE,
@@ -1183,15 +1183,16 @@ export interface ResolvedSearchConfig {
   readonly vault: string;
   readonly dbPath: string;
   /**
-   * Vault-wide exclusion rules. Resolved through
+   * Vault-wide scope rules, both polarities. Resolved through
    * `src/core/vault-scope` from `<vault>/Brain/_brain.yaml` →
-   * `vault.ignore_paths`; falls back to the shared built-in default
-   * set when the block is not declared. The legacy
-   * `search_ignore_paths` config key and the
+   * `vault.ignore_paths` and `vault.include_paths`; the exclude side
+   * falls back to the shared built-in default set when the block is not
+   * declared, and the include side is `null` when no allowlist is. The
+   * legacy `search_ignore_paths` config key and the
    * `OPEN_SECOND_BRAIN_SEARCH_IGNORE` env variable were removed in
    * v0.10.9.
    */
-  readonly ignoreRules: ReadonlyArray<VaultIgnoreRule>;
+  readonly scopeRules: VaultScopeRules;
   readonly chunkSize: number;
   readonly chunkOverlap: number;
   /**

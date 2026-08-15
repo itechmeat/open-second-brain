@@ -192,3 +192,26 @@ test("mtime+size fastpath skips read; hash fallback detects same-content touch",
   expect(second.updated).toBe(0);
   expect(second.added).toBe(0);
 });
+
+test("declaring vault.include_paths and reindexing PRUNES what is now out of scope", async () => {
+  // No migration code exists for a narrowed scope, and none is needed:
+  // the deletion sweep removes every document the walk no longer yields.
+  // This asserts that rather than assuming it.
+  writeMd(vault, "Brain/preferences/pref-a.md", "# A\n\nkeep me.");
+  writeMd(vault, "Notes/idea.md", "# B\n\ndrop me.");
+  writeMd(vault, "top.md", "# C\n\ndrop me too.");
+
+  const before = makeConfig({ vault, dbPath });
+  const first = await indexVault(before);
+  expect(first.added).toBe(3);
+
+  const after = makeConfig({ vault, dbPath, includePaths: ["Brain"] });
+  const second = await indexVault(after);
+  expect(second.added).toBe(0);
+  expect(second.unchanged).toBe(1);
+  expect(second.deleted).toBe(2);
+
+  const store = await Store.open(after, { mode: "read", loadVec: false });
+  expect([...store.listDocuments().keys()].toSorted()).toEqual(["Brain/preferences/pref-a.md"]);
+  await store.close();
+});

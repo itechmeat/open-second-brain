@@ -1329,21 +1329,29 @@ export interface BrainRollupConfig {
 }
 
 /**
- * Vault-wide exclusion policy (`Brain/_brain.yaml` → `vault:`).
+ * Vault-wide scope policy (`Brain/_brain.yaml` → `vault:`).
  *
  * Single source of truth for every vault walker — search indexer,
  * `scan-inline`, future scanners. Anchored in
- * `docs/plans/2026-05-19-vault-scope-design.md` §4.
+ * `docs/plans/2026-05-19-vault-scope-design.md` §4, extended with the
+ * positive allowlist in v1.46.0.
  *
- * Entries without `/` are bare directory names matched at any
- * depth; entries containing `/` are vault-relative POSIX paths
- * matched exactly. The block is optional in `_brain.yaml`; absence
- * (or absence of `ignore_paths`) leaves this field `undefined` and
- * the walkers fall back to `DEFAULT_VAULT_IGNORE_PATHS`. An
- * explicit empty array is a user choice meaning "exclude nothing".
+ * Entries without `/` are bare directory names matched at any depth;
+ * entries containing `/` are vault-relative POSIX paths matched
+ * exactly. One grammar, both keys.
+ *
+ * Both fields are optional and independent. `ignore_paths` absent means
+ * the walkers fall back to `DEFAULT_VAULT_IGNORE_PATHS`; an explicit
+ * empty array is a user choice meaning "exclude nothing".
+ * `include_paths` absent means no allowlist — every path not excluded
+ * is in scope, which is the behaviour of every vault written before the
+ * key existed. Present, it narrows scope to those roots; it is never
+ * empty, because the block parser refuses an empty list rather than
+ * accept an off switch dressed as a boundary.
  */
 export interface BrainVaultConfig {
-  readonly ignore_paths: ReadonlyArray<string>;
+  readonly ignore_paths?: ReadonlyArray<string>;
+  readonly include_paths?: ReadonlyArray<string>;
 }
 
 /**

@@ -4,11 +4,17 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §6 edge cases
  * (symlinks, ignore list).
  *
- * v0.10.9: ignore decisions are delegated to
- * `src/core/vault-scope:matchIgnore` so the search indexer and
- * `scan-inline` share one policy. `parseIgnore` (CSV string ➝ set)
- * was removed in this version; `ResolvedSearchConfig.ignoreRules`
- * is already classified at config-resolution time.
+ * v0.10.9: scope decisions are delegated to `src/core/vault-scope` so
+ * the search indexer and `scan-inline` share one policy. `parseIgnore`
+ * (CSV string ➝ set) was removed in this version;
+ * `ResolvedSearchConfig.scopeRules` is already classified at
+ * config-resolution time.
+ *
+ * v1.46.0: the same delegation now carries the positive
+ * `vault.include_paths` allowlist. Files are gated with `matchScope`
+ * and directories with `mayDescend`, which are different questions - a
+ * directory that holds no included file may still be the only route to
+ * a declared root.
  */
 
 import { readdirSync, statSync, realpathSync, type Dirent, type Stats } from "node:fs";
@@ -16,7 +22,7 @@ import { join, relative, sep } from "node:path";
 
 import { canonicalNotePath } from "../path-safety.ts";
 import { admitToIndex } from "../vault-scope/index-admission.ts";
-import { matchIgnore } from "../vault-scope/index.ts";
+import { matchScope, mayDescend } from "../vault-scope/index.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
 export interface WalkedFile {
@@ -38,7 +44,7 @@ function isInsideVault(absTarget: string, vaultReal: string): boolean {
 
 /**
  * Synchronous generator yielding every `.md` file under `config.vault`
- * (respecting `config.ignoreRules`). The caller drives the iteration so
+ * (respecting `config.scopeRules`). The caller drives the iteration so
  * the indexer can pipeline reads + writes without buffering the whole
  * tree.
  */
@@ -55,7 +61,7 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
   // into an infinite loop. `isInsideVault` covers escape outside the
   // vault but is not acyclic on its own.
   const seenDirs = new Set<string>([vaultReal]);
-  const rules = config.ignoreRules;
+  const rules = config.scopeRules;
 
   function* walk(dir: string): Generator<WalkedFile> {
     let entries: Dirent[];
@@ -89,7 +95,9 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       }
 
       if (stat.isDirectory()) {
-        if (matchIgnore(relPath, rules).excluded) continue;
+        // Descent, not membership: an allowlist root may live below a
+        // directory that holds no included file of its own.
+        if (!mayDescend(relPath, rules)) continue;
         // Index-admission predicate (seam 2): skip descending into an
         // excluded lane directory (e.g. the exact-state lane) entirely.
         if (!admitToIndex(relPath).admit) continue;
@@ -110,8 +118,9 @@ export function* walkVault(config: ResolvedSearchConfig): Generator<WalkedFile> 
       if (!entry.name.toLowerCase().endsWith(".md")) continue;
       if (isLinkHint && !isInsideVault(absPath, vaultReal)) continue;
       // File-level rule too: a `path/to/file.md` entry in
-      // `vault.ignore_paths` excludes that exact file.
-      if (matchIgnore(relPath, rules).excluded) continue;
+      // `vault.ignore_paths` excludes that exact file, and a declared
+      // `vault.include_paths` admits only what it names.
+      if (!matchScope(relPath, rules).inScope) continue;
       // Index-admission predicate (seam 2): the exact-state lane and any
       // other lane-owned artifact never enters the index. Defaults to
       // admit, so all existing non-lane content is yielded unchanged.

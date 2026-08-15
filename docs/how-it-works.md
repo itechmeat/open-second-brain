@@ -28,7 +28,7 @@ agent's entire write contract is "I touch only `Brain/`".
 ```text
 <vault>/
 ├── Brain/                          # agent-writable
-│   ├── _brain.yaml                 # schema, thresholds, retention, vault.ignore_paths, notes.read_paths
+│   ├── _brain.yaml                 # schema, thresholds, retention, vault scope, notes.read_paths
 │   ├── _BRAIN.md                   # operating manual for agents
 │   ├── active.md                   # derived: confirmed + quarantine + recently retired
 │   ├── inbox/                      # raw taste signals

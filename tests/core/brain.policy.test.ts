@@ -574,13 +574,56 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
     ).toThrow(/vault\.ignore_paths\[0\].*empty/);
   });
 
-  test("leading-slash entry is rejected (matchIgnore cannot match it)", () => {
+  test("leading-slash entry is rejected (the matcher cannot match it)", () => {
     expect(() =>
       validateBrainConfig(
         { schema_version: 1, vault: { ignore_paths: ["/Brain/.snapshots"] } },
         "<test>",
       ),
     ).toThrow(/vault\.ignore_paths\[0\].*leading '\/'/);
+  });
+
+  test("include_paths is a known key, parsed and normalised like ignore_paths", () => {
+    const result = validateBrainConfigDetailed(
+      { schema_version: 1, vault: { include_paths: ["./Brain/", "Notes//Daily"] } },
+      "<test>",
+    );
+    expect(result.config.vault?.include_paths).toEqual(["Brain", "Notes/Daily"]);
+    // Silently ignoring the key was the pre-1.46.0 behaviour, and an
+    // operator who declared a boundary that never applied had no way to
+    // find out. It must not be an unknown-field warning any more.
+    expect(result.warnings.some((w) => w.message.includes("include_paths"))).toBe(false);
+  });
+
+  test("include_paths without ignore_paths leaves the exclusion side undeclared", () => {
+    const cfg = validateBrainConfig(
+      { schema_version: 1, vault: { include_paths: ["Brain"] } },
+      "<test>",
+    );
+    expect(cfg.vault?.include_paths).toEqual(["Brain"]);
+    expect(cfg.vault?.ignore_paths).toBeUndefined();
+  });
+
+  test("an EMPTY include_paths is refused: it is an off switch, not a boundary", () => {
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: { include_paths: [] } }, "<test>"),
+    ).toThrow(/vault\.include_paths.*at least one/s);
+    // The asymmetry is deliberate and documented: an empty EXCLUDE list
+    // keeps its meaning, because "exclude nothing" is a coherent request.
+    const cfg = validateBrainConfig({ schema_version: 1, vault: { ignore_paths: [] } }, "<test>");
+    expect(cfg.vault?.ignore_paths).toEqual([]);
+  });
+
+  test("include_paths shape errors name the indexed entry", () => {
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: { include_paths: ["Brain", 42] } }, "<test>"),
+    ).toThrow(/vault\.include_paths\[1\]/);
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: { include_paths: ["./"] } }, "<test>"),
+    ).toThrow(/vault\.include_paths\[0\].*empty/);
+    expect(() =>
+      validateBrainConfig({ schema_version: 1, vault: { include_paths: ["/Brain"] } }, "<test>"),
+    ).toThrow(/vault\.include_paths\[0\].*leading '\/'/);
   });
 });
 
