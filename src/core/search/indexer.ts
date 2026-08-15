@@ -49,6 +49,13 @@ import {
 } from "./embeddings/signature.ts";
 import { resolveEventAnchor } from "./event-anchor.ts";
 import { extractLinks } from "./links.ts";
+import {
+  probeProvider,
+  PROVIDER_PROBE,
+  PROVIDER_PROBE_NOT_CONFIGURED,
+  PROVIDER_PROBE_SKIPPED,
+  type ProviderProbeState,
+} from "./provider-probe.ts";
 import { extractFrontmatterRelations } from "../graph/frontmatter-relations.ts";
 import { loadSchemaPack, type SchemaPack } from "../brain/schema-pack.ts";
 import { tieredFieldsForKind } from "../brain/frontmatter-tiers.ts";
@@ -76,7 +83,6 @@ import {
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
-import { withTimeout } from "./with-timeout.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
 import type {
   ChunkWindowCensus,
@@ -1298,7 +1304,23 @@ function isDirectoryWritable(dir: string): boolean {
   }
 }
 
-export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexCheckReport> {
+/** What one `indexCheck` run may do beyond reading this machine. */
+export interface IndexCheckOptions {
+  /**
+   * Whether to make the one outbound call this report can make: a single
+   * `ping` at the configured embedding provider. Defaults to `true`,
+   * which is what every release before it has done, so a caller that
+   * passes nothing gets the report it has always got. `false` produces
+   * the `skipped` probe state - never a pass and never a fault, because
+   * a call nobody made proves neither.
+   */
+  readonly probeProvider?: boolean;
+}
+
+export async function indexCheck(
+  config: ResolvedSearchConfig,
+  opts?: IndexCheckOptions,
+): Promise<IndexCheckReport> {
   const warnings: string[] = [];
   const fatal: string[] = [];
   // One resolver for what the operator configured, shared with the index
@@ -1370,24 +1392,30 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     warnings.push(await semanticCapabilityLabel(capability.code));
   }
 
-  let providerReachable: boolean | null = null;
-  let providerReason: string | null = null;
-  if (embeddingKeyResolved) {
-    try {
-      const provider = makeProvider(config.semantic);
-      const probe = await withTimeout(provider.ping(), 5_000);
-      if (probe.ok) {
-        providerReachable = true;
-      } else {
-        providerReachable = false;
-        providerReason = probe.reason;
-        warnings.push(`embedding provider check failed: ${probe.reason}`);
-      }
-    } catch (e) {
-      providerReachable = false;
-      providerReason = e instanceof Error ? e.message : String(e);
-      warnings.push(`embedding provider check failed: ${providerReason}`);
-    }
+  // The live probe (wiring-what-exists, E1). Three decisions, each one
+  // the difference between two states a single verdict used to blur:
+  //
+  //   - Nothing configured is `not-configured`, not a failed probe. The
+  //     absence of a provider is not a broken provider, and it costs no
+  //     network call: `probeProvider` is never reached on that arm.
+  //   - An unconfigured setup takes that arm even when the caller asked
+  //     for no probe, because "there is nothing to ask" is established
+  //     without asking and is the more specific true statement.
+  //   - Only a provider that ANSWERED with a refusal is a fatal finding.
+  //     A probe that did not complete goes to `warnings`, because it
+  //     proved nothing, and the CLI gives it an exit code of its own so
+  //     it is not read as either verdict.
+  const probe = !embeddingKeyResolved
+    ? PROVIDER_PROBE_NOT_CONFIGURED
+    : opts?.probeProvider === false
+      ? PROVIDER_PROBE_SKIPPED
+      : await probeProvider(() => makeProvider(config.semantic));
+  const providerProbe = probe.state;
+  const providerReason = probe.reason;
+  if (providerProbe === PROVIDER_PROBE.unreachable) {
+    fatal.push(`embedding provider unreachable: ${providerReason}`);
+  } else if (providerProbe === PROVIDER_PROBE.timedOut) {
+    warnings.push(`embedding provider probe did not complete: ${providerReason}`);
   }
 
   // Stored-versus-runtime embedding ABI (context-integrity-gates, Unit
@@ -1413,7 +1441,7 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     config,
     embeddingKeyResolved,
     vecExtension,
-    providerReachable,
+    providerProbe,
     embeddingAbi,
   });
 
@@ -1425,7 +1453,7 @@ export async function indexCheck(config: ResolvedSearchConfig): Promise<IndexChe
     embeddingAbi,
     vecExtension,
     embeddingKeyResolved,
-    providerReachable,
+    providerProbe,
     providerReason,
     warnings: Object.freeze(warnings),
     fatal: Object.freeze(fatal),
@@ -1437,7 +1465,7 @@ interface BuildRecommendationsInput {
   readonly config: ResolvedSearchConfig;
   readonly embeddingKeyResolved: boolean;
   readonly vecExtension: "loaded" | "unavailable" | "not-attempted";
-  readonly providerReachable: boolean | null;
+  readonly providerProbe: ProviderProbeState;
   readonly embeddingAbi: ReadonlyArray<StampMismatch>;
 }
 
@@ -1476,10 +1504,12 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
   }
 
   // "Everything wired, no embeddings yet" → suggest the first
-  // reindex plus the optional cron template. providerReachable is
-  // `true` only after both key and vec are present, so it is the
-  // tightest proxy for "ready to compute but never did".
-  if (input.providerReachable === true && input.vecExtension === "loaded") {
+  // reindex plus the optional cron template. The probe reports
+  // `reachable` only after both key and vec are present, so it is the
+  // tightest proxy for "ready to compute but never did" - and a probe
+  // that was skipped or timed out proves no such thing, which is why the
+  // comparison is against that one state rather than "not a failure".
+  if (input.providerProbe === PROVIDER_PROBE.reachable && input.vecExtension === "loaded") {
     recs.push(
       "Run `o2b search reindex --embeddings` to compute the first vectors, then optionally `o2b search reindex --cron-template` for periodic refresh.",
     );

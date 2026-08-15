@@ -21,9 +21,9 @@
  * uniformly across every provider.
  */
 
-import { SearchError } from "../types.ts";
+import { isRequestTimeout, SearchError } from "../types.ts";
 import type { ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider } from "./contract.ts";
+import type { EmbeddingProvider, PingResult } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
   Semaphore,
@@ -139,7 +139,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     return out;
   }
 
-  async ping(): Promise<{ ok: true; dimension: number } | { ok: false; reason: string }> {
+  async ping(): Promise<PingResult> {
     try {
       const vectors = await this.embedBatchWithRetry(["check"], { maxAttempts: 1 });
       const v = vectors[0];
@@ -147,7 +147,9 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
       return { ok: true, dimension: v.length };
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      return { ok: false, reason };
+      // See the openai-compat provider: a request abandoned on our own
+      // clock learned nothing, and must not read as a refusal.
+      return isRequestTimeout(e) ? { ok: false, reason, timedOut: true } : { ok: false, reason };
     }
   }
 

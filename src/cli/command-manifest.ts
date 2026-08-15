@@ -526,8 +526,18 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("status", "Print search index status"),
         command(
           "check",
-          "Run search pre-flight diagnostics; --integrity adds a full structural scan of the index file",
-          [flag("integrity", "boolean")],
+          "Run search pre-flight diagnostics; --integrity adds a full structural scan of the index file, --no-probe skips the live embedding-provider call",
+          // The whole schema, for the reason the three verbs above give:
+          // the vault-addressing triple was parsed here and advertised
+          // nowhere, so `o2b help --json` - the only discovery surface
+          // these verbs have - said this verb took nothing but --json.
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("db", "string"),
+            flag("integrity", "boolean"),
+            flag("no-probe", "boolean"),
+          ],
         ),
         command("provider", "Manage embedding provider profiles"),
         command("expand", "Drill a search card into the fuller note and its raw chunk transcript"),

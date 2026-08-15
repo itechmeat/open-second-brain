@@ -328,7 +328,11 @@ test("without --integrity the verb spends nothing and emits the bytes it always 
     "fts5_ok",
     "vec_extension",
     "embedding_key_resolved",
-    "provider_reachable",
+    // `provider_probe` replaced `provider_reachable` in the same slot
+    // (wiring-what-exists, E1): the boolean could not tell a provider
+    // that refused from one that never answered, and this verb's exit
+    // code now depends on the difference.
+    "provider_probe",
     "provider_reason",
     "warnings",
     "fatal",

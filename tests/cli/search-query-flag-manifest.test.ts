@@ -66,6 +66,16 @@ const COVERED: ReadonlyArray<CoveredVerb> = Object.freeze([
     minFlags: 9,
     witness: ["cron-template", "boolean"],
   },
+  {
+    // Added with the probe's exit codes (wiring-what-exists, E1): the
+    // verb had just gained a flag that decides whether it makes a network
+    // call, on a surface where an undeclared flag is an unreachable one.
+    verb: "check",
+    source: "check.ts",
+    marker: "export async function cmdSearchCheck",
+    minFlags: 5,
+    witness: ["no-probe", "boolean"],
+  },
 ]);
 
 /**

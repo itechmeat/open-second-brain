@@ -15,12 +15,36 @@
  */
 export type EmbedKind = "query" | "passage";
 
+/**
+ * What a `ping` learned when it did not get a vector back.
+ *
+ * `timedOut` is set ONLY when the provider attributes the failure to its
+ * own request budget elapsing rather than to an answer it received. Absent
+ * means the provider makes no such claim - which is not a claim that it
+ * did not time out, and readers must treat it as "not stated" rather than
+ * as "false". It is optional and additive, in the same shape as
+ * {@link EmbeddingProvider.consumeRetryCount}: a provider that cannot tell
+ * the two apart keeps returning exactly what it returned before.
+ *
+ * The distinction is load-bearing for the `o2b search check` pre-flight
+ * (wiring-what-exists, E1): a provider that answered and refused is a
+ * fault, while a provider that never answered is a measurement that did
+ * not complete, and the two must not share an exit code.
+ */
+export interface PingFailure {
+  readonly ok: false;
+  readonly reason: string;
+  readonly timedOut?: boolean;
+}
+
+export type PingResult = { readonly ok: true; readonly dimension: number } | PingFailure;
+
 export interface EmbeddingProvider {
   readonly name: string;
   readonly model: string;
   readonly dimension: number | null;
   embed(texts: ReadonlyArray<string>, kind?: EmbedKind): Promise<number[][]>;
-  ping(): Promise<{ ok: true; dimension: number } | { ok: false; reason: string }>;
+  ping(): Promise<PingResult>;
   /**
    * Optional read-and-reset of provider-internal retry tally. The
    * indexer consumes this after each `embed()` to populate

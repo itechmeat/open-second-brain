@@ -72,3 +72,15 @@ export class SearchError extends Error {
     if (opts?.retryAfterMs !== undefined) this.retryAfterMs = opts.retryAfterMs;
   }
 }
+
+/**
+ * Whether `e` is a provider request this build abandoned on its own clock.
+ *
+ * One predicate, because two providers raise the code and a third caller
+ * (the `search check` pre-flight probe) has to tell a request that never
+ * finished apart from an answer it did not like. Comparing `.code` is what
+ * makes that distinction survive a message reword.
+ */
+export function isRequestTimeout(e: unknown): boolean {
+  return e instanceof SearchError && e.code === "EMBEDDING_PROVIDER_TIMEOUT";
+}

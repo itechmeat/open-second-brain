@@ -128,6 +128,11 @@ import {
   isEgressOutcome,
 } from "../../../src/core/egress/guard.ts";
 import {
+  isProviderProbeState,
+  PROVIDER_PROBE,
+  PROVIDER_PROBE_STATES,
+} from "../../../src/core/search/provider-probe.ts";
+import {
   isSchemaCompletenessRule,
   isSchemaNodeKind,
   SCHEMA_COMPLETENESS_RULE,
@@ -441,6 +446,20 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: EGRESS_OUTCOME,
     members: EGRESS_OUTCOMES,
     guard: isEgressOutcome,
+  },
+  {
+    // E1. What the live embedding-provider probe of `o2b search check`
+    // concluded. It replaced a `boolean | null` that had to answer four
+    // questions with two truth values, so a provider that answered with a
+    // refusal and one that never answered were the same `false`. The
+    // values leave TypeScript through the verb's `--json` payload, where
+    // a caller reads `provider_probe` to decide whether the silence about
+    // an endpoint means healthy, broken, or unmeasured - which is exactly
+    // the copy this census exists to keep honest.
+    name: "PROVIDER_PROBE",
+    values: PROVIDER_PROBE,
+    members: PROVIDER_PROBE_STATES,
+    guard: isProviderProbeState,
   },
 ]);
 

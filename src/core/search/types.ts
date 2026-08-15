@@ -24,11 +24,13 @@ import type {
   RetrievalDecisionTrace,
 } from "../brain/trust/retrieval-receipts.ts";
 import type { RetrievalTrail } from "./retrieval-trail.ts";
+import type { ProviderProbeState } from "./provider-probe.ts";
 
 export type { VaultPathRule, VaultScopeRules };
 export type { BrainSearchResult, ScoreBreakdown, TrustMetadata };
 export {
   EMBEDDING_QUOTA_MESSAGE,
+  isRequestTimeout,
   SEARCH_ERROR_CODES,
   SearchError,
   type EmbeddingErrorCategory,
@@ -409,7 +411,17 @@ export interface IndexCheckReport {
   readonly fts5Ok: boolean;
   readonly vecExtension: VecExtensionState;
   readonly embeddingKeyResolved: boolean;
-  readonly providerReachable: boolean | null;
+  /**
+   * What the live pre-flight probe of the embedding provider concluded
+   * (wiring-what-exists, E1). Replaces a `boolean | null` that had two
+   * truth values for four questions: a provider that answered with a
+   * refusal and one that never answered were both `false`, and "nothing
+   * is configured" and "the probe did not run" were both `null`. Only
+   * `unreachable` is a fault; `timed-out` and `skipped` are the two ways
+   * of not having found out, and the CLI gives each its own exit code.
+   */
+  readonly providerProbe: ProviderProbeState;
+  /** The provider's own sentence for the state above; `null` when it gave none. */
   readonly providerReason: string | null;
   /**
    * Embedding-ABI fields whose token recorded in the index no longer

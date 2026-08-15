@@ -3,6 +3,29 @@
  * (vault, index directory, SQLite/FTS5, the vector extension, the
  * embedding key, the provider) plus the ABI stamp of the stored vectors.
  *
+ * Exit codes ({@link SEARCH_CHECK_EXIT}):
+ *   0  nothing this report can prove is wrong
+ *   1  a fault in the machine facts, or a requested integrity scan that
+ *      condemned the index or could not run
+ *   5  the embedding provider is configured and was PROVED unreachable
+ *   6  the provider probe did not complete, so nothing was proved
+ *
+ * Codes 5 and 6 exist because 0 was wrong. The live probe has always run,
+ * always asked the provider for one vector, and always printed what it
+ * learned - and then pushed the finding into `warnings`, which the exit
+ * code does not read. A provider that was configured and proved
+ * unreachable therefore exited 0, and every script gating on the exit
+ * code read the installation as healthy. Code 5 is the same answer
+ * `o2b install --check` gives for a runtime it proved unreachable, so the
+ * two verbs agree on what that number means.
+ *
+ * 6 is separate from 5 on purpose, and separate from 0 for the same
+ * reason: a probe that timed out has not found the provider broken and
+ * has not found it working. "I could not find out" is a third answer, and
+ * folding it into either of the other two is the defect this exit table
+ * exists to end. A probe the operator declined with `--no-probe` is the
+ * fourth state and exits 0 - nothing was claimed, and nothing was spent.
+ *
  * `--integrity` adds the one probe the rest of this report cannot give:
  * a full `PRAGMA quick_check` over the index FILE, run on demand
  * (what-the-index-already-knew, unit K, reader-side half).
@@ -54,6 +77,7 @@ import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
 import { indexCheck, serializeStampMismatches } from "../../../core/search/index.ts";
 import type { IndexCheckReport, ResolvedSearchConfig } from "../../../core/search/index.ts";
+import { PROVIDER_PROBE } from "../../../core/search/provider-probe.ts";
 import { acquireWriterLock } from "../../../core/search/store.ts";
 import { runIntegrityCheck } from "../../../core/search/store/lifecycle.ts";
 import { nowIso } from "../../../core/search/store/sql.ts";
@@ -72,6 +96,52 @@ import {
   searchAdvisoryStream,
   VAULT_FLAGS,
 } from "../helpers.ts";
+
+/**
+ * Every code this verb can return, named once so the docblock above, the
+ * return below and the tests all read the same table. `providerUnreachable`
+ * deliberately carries the value `o2b install --check` uses for the same
+ * finding (`INSTALL_EXIT.mcpUnreachable`), so one number means one
+ * thing across the CLI; the assertion that they agree lives in the tests.
+ */
+export const SEARCH_CHECK_EXIT = Object.freeze({
+  ok: 0,
+  fatal: 1,
+  providerUnreachable: 5,
+  probeIncomplete: 6,
+} as const);
+
+export type SearchCheckExit = (typeof SEARCH_CHECK_EXIT)[keyof typeof SEARCH_CHECK_EXIT];
+
+/**
+ * The exit this run earned, from the report rather than from what was
+ * printed.
+ *
+ * Precedence is by how basic the fault is, not by how specific the code
+ * is: a machine that cannot read the vault or open SQLite has a fault the
+ * operator must fix before an endpoint is worth investigating, so it keeps
+ * the generic code even when the probe also failed. `fatal` carries the
+ * provider's own line when the probe condemned it, which is why the count
+ * is compared against the one entry that arm contributes rather than
+ * against zero - the alternative is matching on message text, which is
+ * how a reworded sentence silently becomes a wrong exit.
+ */
+export function exitCodeForCheck(
+  report: IndexCheckReport,
+  integrityExitCode: string | null,
+): SearchCheckExit {
+  const probeFatal = report.providerProbe === PROVIDER_PROBE.unreachable ? 1 : 0;
+  if (report.fatal.length > probeFatal || integrityExitCode !== null) {
+    return SEARCH_CHECK_EXIT.fatal;
+  }
+  if (report.providerProbe === PROVIDER_PROBE.unreachable) {
+    return SEARCH_CHECK_EXIT.providerUnreachable;
+  }
+  // Neither a pass nor a fault: the probe did not complete. A skipped
+  // probe is NOT this state - nothing was attempted, so nothing failed.
+  if (report.providerProbe === PROVIDER_PROBE.timedOut) return SEARCH_CHECK_EXIT.probeIncomplete;
+  return SEARCH_CHECK_EXIT.ok;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The on-demand structural scan
@@ -314,7 +384,11 @@ function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
     fts5_ok: r.fts5Ok,
     vec_extension: r.vecExtension,
     embedding_key_resolved: r.embeddingKeyResolved,
-    provider_reachable: r.providerReachable,
+    // Replaces `provider_reachable`, whose two truth values could not
+    // hold the four answers this probe has (E1). A caller that gated on
+    // the old key gets a missing key rather than a wrong one, which is
+    // the failure mode worth having.
+    provider_probe: r.providerProbe,
     provider_reason: r.providerReason,
     // Emitted only on drift, so a matching store's JSON is byte-identical
     // to the pre-gate output (context-integrity-gates, Unit E).
@@ -363,10 +437,12 @@ function renderCheckHuman(r: IndexCheckReport): string {
   for (const m of r.embeddingAbi) {
     lines.push(`embedding_abi:         ${formatStampMismatch(m)}`);
   }
-  if (r.providerReachable !== null) {
-    lines.push(`provider_reachable:    ${r.providerReachable ? "OK" : "FAIL"}`);
-    if (r.providerReason) lines.push(`provider_reason:       ${r.providerReason}`);
-  }
+  // Always emitted, in every state. The line used to appear only when a
+  // probe had run, so a skipped one and an unconfigured one were both
+  // rendered as nothing at all - and silence is the one thing a report
+  // about what could not be checked must not say.
+  lines.push(`provider_probe:        ${r.providerProbe}`);
+  if (r.providerReason) lines.push(`provider_reason:       ${r.providerReason}`);
   for (const w of r.warnings) lines.push(`warning: ${w}`);
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
   if (r.recommendations.length > 0) {
@@ -422,11 +498,18 @@ export async function cmdSearchCheck(argv: ReadonlyArray<string>): Promise<numbe
   const { flags } = parseFlags(argv, {
     ...VAULT_FLAGS,
     integrity: { type: "boolean" },
+    "no-probe": { type: "boolean" },
     json: { type: "boolean" },
   });
   const cfg = resolveConfig(flags);
   const jsonRequested = flagBoolean(flags, "json");
-  const report = await indexCheck(cfg);
+  // The one outbound call this verb makes. It is opt-OUT rather than
+  // opt-in: every release so far has made it whenever a key resolved, and
+  // a pre-flight that silently stopped testing the provider would be a
+  // worse surprise than one that still does. `--no-probe` is for the
+  // caller who cannot spend a network round-trip - an air-gapped machine,
+  // a tight CI loop - and it reports `skipped` rather than a verdict.
+  const report = await indexCheck(cfg, { probeProvider: !flagBoolean(flags, "no-probe") });
   // Absent the flag nothing below runs, nothing is written, and the two
   // report shapes are byte-identical to what they were before it existed.
   const integrity = flagBoolean(flags, "integrity") ? await scanIntegrity(cfg) : null;
@@ -445,7 +528,8 @@ export async function cmdSearchCheck(argv: ReadonlyArray<string>): Promise<numbe
   if (integrity?.exitCode != null) {
     emitNextStep(integrity.exitCode, searchAdvisoryStream(argv, jsonRequested));
   }
-  // A requested check that found a fault, or could not run at all, is not
-  // a clean pre-flight - neither may exit 0.
-  return report.fatal.length > 0 || (integrity !== null && integrity.exitCode !== null) ? 1 : 0;
+  // A requested check that found a fault, could not run at all, or proved
+  // the configured provider unreachable is not a clean pre-flight - none
+  // of them may exit 0.
+  return exitCodeForCheck(report, integrity?.exitCode ?? null);
 }

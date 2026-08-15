@@ -19,9 +19,9 @@
  * whether to surface (`--semantic`) or warn (implicit).
  */
 
-import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "../types.ts";
+import { EMBEDDING_QUOTA_MESSAGE, isRequestTimeout, SearchError } from "../types.ts";
 import type { EmbeddingErrorCategory, ResolvedEmbeddingConfig } from "../types.ts";
-import type { EmbeddingProvider, EmbedKind } from "./contract.ts";
+import type { EmbeddingProvider, EmbedKind, PingResult } from "./contract.ts";
 import {
   AUTH_STATUSES,
   PAYMENT_REQUIRED_STATUS,
@@ -323,7 +323,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     return out;
   }
 
-  async ping(): Promise<{ ok: true; dimension: number } | { ok: false; reason: string }> {
+  async ping(): Promise<PingResult> {
     try {
       const vectors = await this.embedBatchWithRetry(["check"], { maxAttempts: 1 });
       const v = vectors[0];
@@ -331,7 +331,10 @@ export class OpenAICompatProvider implements EmbeddingProvider {
       return { ok: true, dimension: v.length };
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      return { ok: false, reason };
+      // A request this provider abandoned on its own clock did not learn
+      // that the endpoint is unreachable - it learned nothing - and the
+      // pre-flight check is the caller that must not confuse the two.
+      return isRequestTimeout(e) ? { ok: false, reason, timedOut: true } : { ok: false, reason };
     }
   }
 
