@@ -23,7 +23,6 @@ import {
   OPERATION,
   PROGRESS_KIND,
   PROGRESS_REASON,
-  progressCounter,
   type ProgressEvent,
 } from "../../../src/core/brain/progress.ts";
 import { createSafeguard, SafeguardTimeoutError } from "../../../src/core/brain/safeguard.ts";
@@ -159,15 +158,18 @@ describe("architect progress", () => {
     expect(res.progressFault).toBe("stream closed");
   });
 
-  test("a scan watched on its own reports through the caller's counter", () => {
+  test("a scan watched on its own opens the walk and does not close the run", () => {
+    // A bare scan is half a run: it reports the walk, and the terminator
+    // belongs to whoever also renders. `runIndex` reports its walk the
+    // same way, and `runEmbeddingPhase` reports the other half.
     const { events, sink } = record();
-    const counter = progressCounter(OPERATION.architect, sink);
 
-    scanProject(project, { progress: counter });
-    counter.finish();
+    scanProject(project, { onProgress: sink });
 
     expect(events[0]?.kind).toBe(PROGRESS_KIND.started);
     expect(events[0]?.stage).toBe(ARCHITECT_STAGE.walk);
-    expect(events.at(-1)?.kind).toBe(PROGRESS_KIND.finished);
+    expect(events.every((e) => e.stage === ARCHITECT_STAGE.walk)).toBe(true);
+    expect(events.some((e) => e.kind === PROGRESS_KIND.advanced)).toBe(true);
+    expect(events.some((e) => e.kind === PROGRESS_KIND.finished)).toBe(false);
   });
 });

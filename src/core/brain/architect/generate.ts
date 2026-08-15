@@ -249,6 +249,33 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Wrap a caller's sink so one broken stream cannot abort the run, and
+ * report the first failure exactly once.
+ *
+ * `progressCounter` already refuses to let a throwing sink escape when it
+ * is given a reporter - but a run spans TWO counters here, the scan's and
+ * the renderer's, and a fault reported per counter would tell the caller
+ * twice about one closed pipe. Detaching happens here, once, for the
+ * whole run.
+ */
+function guardedSink(
+  sink: ProgressSink | undefined,
+  onFault: (message: string) => void,
+): ProgressSink | undefined {
+  if (sink === undefined) return undefined;
+  let live = true;
+  return (event) => {
+    if (!live) return;
+    try {
+      sink(event);
+    } catch (error) {
+      live = false;
+      onFault(errorMessage(error));
+    }
+  };
+}
+
 /** Generate or refresh architecture notes for one project tree. */
 export function generateArchDocs(
   vault: string,
@@ -256,11 +283,10 @@ export function generateArchDocs(
   opts: GenerateArchDocsOptions = {},
 ): GenerateArchDocsResult {
   const progressFaults: string[] = [];
-  const progress = progressCounter(OPERATION.architect, opts.onProgress, {
-    onSinkError: (error) => progressFaults.push(errorMessage(error)),
-  });
+  const sink = guardedSink(opts.onProgress, (message) => progressFaults.push(message));
+  const progress = progressCounter(OPERATION.architect, sink);
   try {
-    return generateRun(vault, projectRoot, opts, progress, progressFaults);
+    return generateRun(vault, projectRoot, opts, sink, progress, progressFaults);
   } catch (error) {
     // A stop the operator asked for, or a deadline that elapsed, is a
     // fact about the run - reported on the stream before the error
@@ -276,12 +302,18 @@ function generateRun(
   vault: string,
   projectRoot: string,
   opts: GenerateArchDocsOptions,
+  sink: ProgressSink | undefined,
   progress: ProgressCounter,
   progressFaults: ReadonlyArray<string>,
 ): GenerateArchDocsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const facts = scanProject(projectRoot, { progress, safeguard: opts.safeguard });
+  // The scan opens the `walk` stage on its own counter over the same
+  // sink; this counter opens `render` and is the one that terminates.
+  const facts = scanProject(projectRoot, {
+    ...(sink === undefined ? {} : { onProgress: sink }),
+    ...(opts.safeguard === undefined ? {} : { safeguard: opts.safeguard }),
+  });
   const key = deriveRepoKey(facts.root);
   const dir = join(vault, "Brain", "projects", "arch", key);
   mkdirSync(join(dir, "modules"), { recursive: true });

@@ -21,7 +21,8 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 
-import type { ProgressCounter } from "../progress.ts";
+import { OPERATION, progressCounter, progressReasonForError } from "../progress.ts";
+import type { ProgressCounter, ProgressSink } from "../progress.ts";
 import type { Safeguard } from "../safeguard.ts";
 
 /**
@@ -133,16 +134,14 @@ export const ARCHITECT_STAGE = Object.freeze({
 
 export interface ScanProjectOptions {
   /**
-   * The ENCLOSING run's counter, not a sink of its own.
+   * Where a caller watches the walk. Absence means nobody asked.
    *
-   * A run has one terminator: a scan that opened and finished its own
-   * stream would report the operation as finished while the notes were
-   * still unwritten. A caller that only wants to watch a scan builds the
-   * counter itself - `progressCounter(OPERATION.architect, sink)` - and
-   * calls `finish()` when it is done with it, which is exactly what
-   * `generateArchDocs` does around this call.
+   * The scan opens the `walk` stage and never closes the stream: the
+   * render stage of the same run follows it, and one run has one
+   * terminator. This is the shape `runIndex` and `runEmbeddingPhase`
+   * already use for the two halves of an index run.
    */
-  readonly progress?: ProgressCounter;
+  readonly onProgress?: ProgressSink;
   /**
    * Cooperative deadline, checked once per directory read. That is the
    * walk's only natural boundary: everything between two `readdirSync`
@@ -151,15 +150,6 @@ export interface ScanProjectOptions {
   readonly safeguard?: Safeguard;
 }
 
-/**
- * Everything ONE traversal of the tree yields.
- *
- * The tree is walked exactly once and every fact is derived from what
- * that walk collected. It used to be walked at least twice - the totals
- * pass, then `src/<module>` again per module, and the whole tree a second
- * time on a flat layout - which doubled the syscall that dominates the
- * run for facts already in hand.
- */
 interface WalkStats {
   files: number;
   languages: Record<string, number>;
@@ -175,7 +165,13 @@ function tallyExtension(languages: Record<string, number>, path: string): void {
   if (ext !== "") languages[ext] = (languages[ext] ?? 0) + 1;
 }
 
-function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOptions): void {
+function walk(
+  dir: string,
+  stats: WalkStats,
+  prefix: string,
+  progress: ProgressCounter,
+  safeguard: Safeguard | undefined,
+): void {
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -184,8 +180,8 @@ function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOp
   }
   // One directory read, one boundary: the deadline is checked before the
   // count is claimed, so a tripped scan never reports work it abandoned.
-  opts.safeguard?.checkpoint();
-  opts.progress?.advance(ARCHITECT_STAGE.walk);
+  safeguard?.checkpoint();
+  progress.advance(ARCHITECT_STAGE.walk);
   for (const entry of entries.toSorted()) {
     const abs = join(dir, entry);
     const rel = prefix === "" ? entry : `${prefix}/${entry}`;
@@ -201,7 +197,7 @@ function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOp
     if (stat.isDirectory()) {
       if (isSkippedDir(entry)) continue;
       stats.dirs.push(rel);
-      walk(abs, stats, rel, opts);
+      walk(abs, stats, rel, progress, safeguard);
       continue;
     }
     stats.files += 1;
@@ -210,10 +206,35 @@ function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOp
   }
 }
 
-function statsFor(dir: string, opts: ScanProjectOptions): WalkStats {
+function statsFor(
+  dir: string,
+  progress: ProgressCounter,
+  safeguard: Safeguard | undefined,
+): WalkStats {
   const stats: WalkStats = { files: 0, languages: {}, paths: [], dirs: [] };
-  walk(dir, stats, "", opts);
+  walk(dir, stats, "", progress, safeguard);
   return stats;
+}
+
+/**
+ * The whole-tree walk, reporting a stop on the stage it stopped in.
+ *
+ * The stage the deadline interrupted is this counter's, so this is where
+ * the `stopped` event belongs - the renderer's counter has not opened a
+ * stage yet and could only report the stop into silence.
+ */
+function walkTree(
+  root: string,
+  progress: ProgressCounter,
+  safeguard: Safeguard | undefined,
+): WalkStats {
+  try {
+    return statsFor(root, progress, safeguard);
+  } catch (error) {
+    const reason = progressReasonForError(error);
+    if (reason !== null) progress.stop(reason);
+    throw error;
+  }
 }
 
 /** What one subtree of an already-walked tree contains. */
@@ -334,8 +355,9 @@ function detectEntryPoints(root: string, manifest: ManifestRead | null): Readonl
 export function scanProject(projectRoot: string, opts: ScanProjectOptions = {}): ProjectFacts {
   const root = resolve(projectRoot);
   const manifest = readManifest(root);
-  opts.progress?.start(ARCHITECT_STAGE.walk);
-  const total = statsFor(root, opts);
+  const progress = progressCounter(OPERATION.architect, opts.onProgress);
+  progress.start(ARCHITECT_STAGE.walk);
+  const total = walkTree(root, progress, opts.safeguard);
   const testLayout = TEST_LAYOUTS.find((layout) => existsSync(join(root, layout))) ?? null;
   return Object.freeze({
     root,

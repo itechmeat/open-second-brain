@@ -18,7 +18,7 @@ import { join } from "node:path";
 
 import { generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
 import { ARCHITECT_STAGE, scanProject } from "../../../src/core/brain/architect/scan.ts";
-import { OPERATION, PROGRESS_KIND, progressCounter } from "../../../src/core/brain/progress.ts";
+import { PROGRESS_KIND } from "../../../src/core/brain/progress.ts";
 import { RegionError } from "../../../src/core/brain/regions.ts";
 
 let tmp: string;
@@ -114,10 +114,11 @@ test("the traversal reads each directory exactly once", () => {
   // The progress counter is the instrument: it advances once per
   // directory read, so a subtree walked a second time doubles its count.
   let reads = 0;
-  const counter = progressCounter(OPERATION.architect, (event) => {
-    if (event.kind === PROGRESS_KIND.advanced) reads += 1;
+  scanProject(project, {
+    onProgress: (event) => {
+      if (event.kind === PROGRESS_KIND.advanced) reads += 1;
+    },
   });
-  scanProject(project, { progress: counter });
 
   expect(reads).toBe(walkable.length);
 });
