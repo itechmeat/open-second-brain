@@ -30,7 +30,7 @@ import type { Store } from "../../search/store.ts";
 import { getGraphSnapshot } from "./graph-index.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isoSecond } from "../time.ts";
-import { OPERATION, progressCounter } from "../progress.ts";
+import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
 import { formatFrontmatter, parseFrontmatter } from "../../vault.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -84,7 +84,6 @@ const COMMUNITY_STAGE = "sweep";
  * graph. Read-only.
  */
 export function detectCommunities(store: Store, opts: DetectCommunitiesOptions = {}): Community[] {
-  const minSize = Math.max(2, opts.minSize ?? COMMUNITY_DEFAULT_MIN_SIZE);
   const maxIterations = Math.max(1, opts.maxIterations ?? COMMUNITY_MAX_ITERATIONS);
   const progress = progressCounter(OPERATION.clusters, opts.onProgress);
   // `maxIterations` is a CEILING, not a denominator: propagation stops as
@@ -93,6 +92,16 @@ export function detectCommunities(store: Store, opts: DetectCommunitiesOptions =
   // counter with no scale at all - and the stream's `finished` event is
   // what says the pass ended, not the counter reaching the total.
   progress.start(COMMUNITY_STAGE, maxIterations);
+  return withProgress(progress, () => detectCommunitiesRun(store, opts, progress, maxIterations));
+}
+
+function detectCommunitiesRun(
+  store: Store,
+  opts: DetectCommunitiesOptions,
+  progress: ProgressCounter,
+  maxIterations: number,
+): Community[] {
+  const minSize = Math.max(2, opts.minSize ?? COMMUNITY_DEFAULT_MIN_SIZE);
   opts.safeguard?.checkpoint();
 
   // Resolved undirected adjacency + pathById come from the memoized

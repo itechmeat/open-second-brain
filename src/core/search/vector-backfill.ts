@@ -40,6 +40,12 @@ import { estimateCostUsd, estimateTokens, pricePerMillionTokens } from "./embedd
 import { runEmbeddingPhase } from "./indexer.ts";
 import { Store } from "./store.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
+import {
+  OPERATION,
+  progressCounter,
+  withProgressAsync,
+  type ProgressCounter,
+} from "../brain/progress.ts";
 
 export interface VectorBackfillOptions {
   /** When true, compute and store the missing vectors. Default false. */
@@ -49,10 +55,10 @@ export interface VectorBackfillOptions {
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
-   * Live progress observer (nothing-runs-unwatched, U1). Forwarded
-   * straight to the embedding phase: this verb owns the plan and the
-   * gate, and the phase owns the loop, so a second counter here would
-   * report the same batches twice under a different name.
+   * Live progress observer (nothing-runs-unwatched, U1). This verb owns
+   * the run - it holds the plan and the gate, and the embedding phase
+   * holds the loop - so the counter is built here and lent to the phase.
+   * One run, one counter, one terminator.
    */
   readonly onProgress?: import("../brain/progress.ts").ProgressSink;
 }
@@ -93,6 +99,19 @@ export async function planVectorBackfill(
   config: ResolvedSearchConfig,
   opts: VectorBackfillOptions = {},
 ): Promise<VectorBackfillResult> {
+  const progress = progressCounter(OPERATION.reindex, opts.onProgress);
+  progress.start(VECTOR_BACKFILL_STAGE);
+  return await withProgressAsync(progress, () => planVectorBackfillRun(config, opts, progress));
+}
+
+/** The one stage: the backfill plans, then lends the loop to the phase. */
+const VECTOR_BACKFILL_STAGE = "plan";
+
+async function planVectorBackfillRun(
+  config: ResolvedSearchConfig,
+  opts: VectorBackfillOptions,
+  progress: ProgressCounter,
+): Promise<VectorBackfillResult> {
   const apply = opts.apply === true;
   const capability = resolveSemanticCapability(config.semantic);
   const store = await Store.open(config, { mode: apply ? "write" : "read" });
@@ -109,7 +128,7 @@ export async function planVectorBackfill(
         forceCost: opts.forceCost === true,
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
-        ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
+        progress,
       });
     }
 

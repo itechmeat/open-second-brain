@@ -265,6 +265,49 @@ export function progressCounter(
 }
 
 /**
+ * Run `body` and terminate `counter` exactly once, whichever way it ends.
+ *
+ * The rule this enforces is the whole point of the vocabulary having a
+ * `finished` member at all: a stream that simply STOPS arriving is the
+ * shape of a completed run, a crashed run and a hung run all at once, so
+ * an emitter that never terminates has reported nothing a reader can act
+ * on. Written here rather than at each operation because five copies of
+ * one rule are five chances for one of them to be forgotten - which is
+ * exactly what happened to three of the five before this helper existed.
+ *
+ * A stop carries the reason when the error is a safeguard stop, and no
+ * reason otherwise: an unexpected throw is a crash, and calling it a
+ * cancellation would be an invented fact. The error always propagates.
+ */
+export function withProgress<T>(counter: ProgressCounter, body: () => T): T {
+  try {
+    const result = body();
+    counter.finish();
+    return result;
+  } catch (error) {
+    const reason = progressReasonForError(error);
+    if (reason !== null) counter.stop(reason);
+    throw error;
+  }
+}
+
+/** {@link withProgress} for an operation whose body is asynchronous. */
+export async function withProgressAsync<T>(
+  counter: ProgressCounter,
+  body: () => Promise<T>,
+): Promise<T> {
+  try {
+    const result = await body();
+    counter.finish();
+    return result;
+  } catch (error) {
+    const reason = progressReasonForError(error);
+    if (reason !== null) counter.stop(reason);
+    throw error;
+  }
+}
+
+/**
  * The reason a safeguard stop corresponds to, or `null` when `error` is
  * not a safeguard stop at all.
  *

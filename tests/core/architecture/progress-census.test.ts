@@ -54,10 +54,10 @@ const SPINE_MODULE = "core/brain/progress.ts";
  * inconvenient.
  */
 const DECLARED_EXEMPTIONS: ReadonlyMap<string, string> = new Map<string, string>([
-  // Deliberately empty. Every operation that carries a deadline today
-  // also carries a sink, including the ones that only FORWARD both to a
-  // pass they wrap - forwarding is cheaper than an exemption and leaves
-  // no reader wondering why one staged run is silent.
+  [
+    "EmbeddingPhaseOptions",
+    "A PHASE, not a run: called from indexInto and standalone by the vector backfill. Given a sink it would build a second counter, and a stream carrying two terminators cannot say which one ended the run - so it borrows the run owner's ProgressCounter instead, which is strictly more wiring than a sink, not less.",
+  ],
 ]);
 
 /** Every `.ts` file under `src/`, in a stable order. */

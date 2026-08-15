@@ -38,7 +38,7 @@ import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-sc
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
-import { OPERATION, progressCounter } from "../progress.ts";
+import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -99,12 +99,20 @@ export function discoverBridges(
   store: Store,
   opts: DiscoverBridgesOptions = {},
 ): BridgeDiscoveryReport {
+  const progress = progressCounter(OPERATION.bridges, opts.onProgress);
+  progress.start(BRIDGE_STAGE);
+  return withProgress(progress, () => discoverBridgesRun(store, opts, progress));
+}
+
+function discoverBridgesRun(
+  store: Store,
+  opts: DiscoverBridgesOptions,
+  progress: ProgressCounter,
+): BridgeDiscoveryReport {
   const minSimilarity = opts.minSimilarity ?? BRIDGE_DEFAULT_MIN_SIMILARITY;
   const maxProposals = Math.max(1, opts.maxProposals ?? BRIDGE_DEFAULT_MAX_PROPOSALS);
   const maxCandidates = Math.max(1, opts.maxCandidates ?? BRIDGE_DEFAULT_MAX_CANDIDATES);
   const dismissed = opts.dismissed ?? new Set<string>();
-  const progress = progressCounter(OPERATION.bridges, opts.onProgress);
-  progress.start(BRIDGE_STAGE);
   opts.safeguard?.checkpoint();
 
   if (!store.vecLoaded() || store.countEmbeddings() === 0) {

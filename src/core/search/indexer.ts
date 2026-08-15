@@ -64,7 +64,12 @@ import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import { parseFrontmatterTextWithNotices } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
-import { OPERATION, progressCounter } from "../brain/progress.ts";
+import {
+  OPERATION,
+  progressCounter,
+  withProgressAsync,
+  type ProgressCounter,
+} from "../brain/progress.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
@@ -319,6 +324,17 @@ async function indexInto(
 ): Promise<IndexStats> {
   const progress = progressCounter(OPERATION.reindex, opts?.onProgress);
   progress.start(INDEX_STAGE.walk);
+  return await withProgressAsync(progress, () =>
+    indexIntoRun(config, progress, opts, storeOverride),
+  );
+}
+
+async function indexIntoRun(
+  config: ResolvedSearchConfig,
+  progress: ProgressCounter,
+  opts?: IndexVaultOptions,
+  storeOverride?: Store,
+): Promise<IndexStats> {
   const t0 = Date.now();
   const ownsStore = !storeOverride;
   const store = storeOverride ?? (await Store.open(config, { mode: "write" }));
@@ -580,6 +596,7 @@ async function indexInto(
         forceCost: opts?.forceCost === true,
         ...(opts?.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts?.signal !== undefined ? { signal: opts.signal } : {}),
+        progress,
       });
       stats.backend = "semantic";
       stats.deferredReason = null;
@@ -825,11 +842,18 @@ export interface EmbeddingPhaseOptions {
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
   /**
-   * Live progress observer (nothing-runs-unwatched, U1). This phase is
-   * the half of an index run that CAN report a fraction - the pending
-   * list is an array before the loop starts.
+   * The RUN's progress counter, not a sink of its own.
+   *
+   * This phase is the half of an index run that can report a fraction -
+   * the pending list is an array before the loop starts - but it is a
+   * PHASE, not a run: it is called both from `indexInto` and standalone
+   * by the vector backfill. Given a sink it would build a second counter,
+   * and a stream carrying two terminators cannot say which one ended the
+   * run. So the caller that owns the run owns the counter, and this phase
+   * borrows it. That is why `progress-census.test.ts` carries a written
+   * exemption for this interface rather than a sink.
    */
-  readonly onProgress?: import("../brain/progress.ts").ProgressSink;
+  readonly progress?: import("../brain/progress.ts").ProgressCounter;
 }
 
 /**
@@ -854,7 +878,7 @@ export async function runEmbeddingPhase(
   const forceCost = opts.forceCost === true;
   const safeguard = opts.safeguard;
   const signal = opts.signal;
-  const progress = progressCounter(OPERATION.reindex, opts.onProgress);
+  const progress = opts.progress;
   if (!config.semantic.enabled) {
     throw new SearchError(
       "EMBEDDING_DISABLED",
@@ -909,14 +933,14 @@ export async function runEmbeddingPhase(
   // `embedding_concurrency`.
   const superBatch = batchSize * Math.max(1, config.semantic.concurrency);
 
-  progress.start(INDEX_STAGE.embed, pending.length);
+  progress?.start(INDEX_STAGE.embed, pending.length);
   for (let i = 0; i < pending.length; i += superBatch) {
     // Cooperative deadline: embedding batches are the other long
     // phase of an index run - abort between batches, never mid-batch.
     safeguard?.checkpoint();
     throwIfAborted(signal, "index");
     const batch = pending.slice(i, i + superBatch);
-    progress.advance(INDEX_STAGE.embed, batch.length);
+    progress?.advance(INDEX_STAGE.embed, batch.length);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts, "passage");
     stats.embeddingsRetries += provider.consumeRetryCount?.() ?? 0;
