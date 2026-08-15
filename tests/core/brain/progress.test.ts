@@ -113,6 +113,36 @@ describe("progressCounter", () => {
     });
   });
 
+  test("a throwing sink with no reporter is contained, not fatal, and not silent", () => {
+    // The default had to become the SAFE one. A reviewer found that with
+    // the unsafe default - the throw propagating - one of six emitters
+    // supplied a reporter and five did not, so a broken pipe aborted five
+    // long operations and left the sixth running. A rule every caller
+    // must remember is a rule five of six callers forget.
+    const lines: string[] = [];
+    const realWrite = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string) => {
+      lines.push(String(chunk));
+      return true;
+    }) as typeof process.stderr.write;
+    try {
+      let calls = 0;
+      const counter = progressCounter(OPERATION.clusters, () => {
+        calls += 1;
+        throw new Error("stream closed");
+      });
+      expect(() => counter.start("sweep")).not.toThrow();
+      expect(() => counter.advance("sweep")).not.toThrow();
+      // Detached after one failure: one defect, one report.
+      expect(calls).toBe(1);
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("clusters");
+      expect(lines[0]).toContain("stream closed");
+    } finally {
+      process.stderr.write = realWrite;
+    }
+  });
+
   test("no sink attached is the absence of an observer, not a swallowed event", () => {
     // The house idiom is `opts.onProgress?.(...)`: absence means nobody
     // asked. A counter built with no sink must therefore be constructible

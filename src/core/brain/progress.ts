@@ -195,22 +195,33 @@ export interface ProgressCounter {
 
 export interface ProgressCounterOptions {
   /**
-   * Where a throwing sink is reported.
+   * Where a throwing sink is reported, when the caller has somewhere
+   * better to put it than the default.
    *
    * Progress is observation, and an observation must not be able to
    * destroy the thing observed: a broken edge stream - a closed pipe, a
    * renderer defect - must not abort a consolidation pass that is
-   * otherwise succeeding. Swallowing the failure would be the silent
-   * fallback this project forbids, so the error is handed on **once** and
-   * the sink is then detached for the rest of the run. Detaching is the
-   * point: a stream that failed on the first tick would otherwise fail on
-   * every one, turning one defect into a flood of identical reports.
+   * otherwise succeeding. Nor may it vanish, so the error is reported
+   * **once** and the sink is then detached for the rest of the run.
+   * Detaching is the point: a stream that failed on the first tick would
+   * otherwise fail on every one, turning one defect into a flood.
    *
-   * With no reporter supplied the throw propagates, because a caller that
-   * neither handles nor reports it has asked for its own sink's default
-   * behaviour rather than for this module to decide.
+   * Supplying this is optional because the DEFAULT is already safe, and
+   * that is deliberate. It was optional before with an unsafe default -
+   * the throw propagated and took the pass down with it - and a reviewer
+   * found the predictable result: one of six emitters supplied a reporter
+   * and five did not, so a broken pipe aborted five long operations and
+   * left the sixth running. A rule every caller must remember is a rule
+   * five of six callers will forget, which is the argument this whole
+   * release is built on. The safe behaviour is therefore the one you get
+   * by writing nothing.
    */
   readonly onSinkError?: (error: unknown) => void;
+}
+
+/** One line of an unknown throw, without assuming it is an Error. */
+function describeError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** Guards a denominator so a bad one is a loud defect, not a wrong number. */
@@ -258,9 +269,20 @@ export function progressCounter(
     try {
       sink(event);
     } catch (error) {
-      if (opts.onSinkError === undefined) throw error;
       live = false;
-      opts.onSinkError(error);
+      if (opts.onSinkError !== undefined) {
+        opts.onSinkError(error);
+        return;
+      }
+      // The default report. Core may not write to stdout - the layering
+      // test enforces it - but a fail-soft diagnostic on stderr is the
+      // house convention, and stderr is never a protocol channel here:
+      // the MCP server speaks on stdout. One line, once, naming the
+      // operation whose stream just went dark, so a caller watching an
+      // empty stream is told why it is empty.
+      process.stderr.write(
+        `progress: ${operation} stream detached after the sink threw: ${describeError(error)}\n`,
+      );
     }
   };
 
