@@ -35,7 +35,7 @@ function writeWithMtime(path: string, contents: string, when: Date): void {
 
 describe("claude-code transcript resolver", () => {
   test("returns nothing when ~/.claude/projects is missing", () => {
-    expect(claudeCodeTranscript.collect(DAY_START, DAY_END, home)).toEqual([]);
+    expect(claudeCodeTranscript.scan(DAY_START, DAY_END, home).files).toEqual([]);
   });
 
   test("returns sessions modified within the window", () => {
@@ -43,7 +43,7 @@ describe("claude-code transcript resolver", () => {
     mkdirSync(projDir, { recursive: true });
     writeWithMtime(join(projDir, "sess-a.jsonl"), "{}", IN_DAY);
     writeWithMtime(join(projDir, "sess-b.jsonl"), "{}", OUT_OF_DAY);
-    const out = claudeCodeTranscript.collect(DAY_START, DAY_END, home);
+    const out = claudeCodeTranscript.scan(DAY_START, DAY_END, home).files;
     expect(out).toHaveLength(1);
     expect(out[0]).toContain("sess-a.jsonl");
   });
@@ -52,13 +52,13 @@ describe("claude-code transcript resolver", () => {
     const projDir = join(home, ".claude", "projects", "p");
     mkdirSync(projDir, { recursive: true });
     writeWithMtime(join(projDir, "readme.md"), "ok", IN_DAY);
-    expect(claudeCodeTranscript.collect(DAY_START, DAY_END, home)).toEqual([]);
+    expect(claudeCodeTranscript.scan(DAY_START, DAY_END, home).files).toEqual([]);
   });
 });
 
 describe("codex transcript resolver", () => {
   test("returns nothing when ~/.codex is missing", () => {
-    expect(codexTranscript.collect(DAY_START, DAY_END, home)).toEqual([]);
+    expect(codexTranscript.scan(DAY_START, DAY_END, home).files).toEqual([]);
   });
 
   test("walks sessions/ subdir for .json files", () => {
@@ -66,7 +66,7 @@ describe("codex transcript resolver", () => {
     mkdirSync(dir, { recursive: true });
     writeWithMtime(join(dir, "a.json"), "{}", IN_DAY);
     writeWithMtime(join(dir, "b.json"), "{}", OUT_OF_DAY);
-    const out = codexTranscript.collect(DAY_START, DAY_END, home);
+    const out = codexTranscript.scan(DAY_START, DAY_END, home).files;
     expect(out).toHaveLength(1);
   });
 
@@ -74,21 +74,21 @@ describe("codex transcript resolver", () => {
     const dir = join(home, ".codex", ".tmp", "marketplaces", "x");
     mkdirSync(dir, { recursive: true });
     writeWithMtime(join(dir, "trace.json"), "{}", IN_DAY);
-    const out = codexTranscript.collect(DAY_START, DAY_END, home);
+    const out = codexTranscript.scan(DAY_START, DAY_END, home).files;
     expect(out).toHaveLength(1);
   });
 });
 
 describe("cursor transcript resolver", () => {
   test("returns nothing when no Cursor workspace storage exists", () => {
-    expect(cursorTranscript.collect(DAY_START, DAY_END, home)).toEqual([]);
+    expect(cursorTranscript.scan(DAY_START, DAY_END, home).files).toEqual([]);
   });
 
   test("returns state.vscdb files modified within the window", () => {
     const dir = join(home, ".config", "Cursor", "User", "workspaceStorage", "abc123");
     mkdirSync(dir, { recursive: true });
     writeWithMtime(join(dir, "state.vscdb"), "binary", IN_DAY);
-    const out = cursorTranscript.collect(DAY_START, DAY_END, home);
+    const out = cursorTranscript.scan(DAY_START, DAY_END, home).files;
     expect(out).toHaveLength(1);
   });
 
@@ -96,7 +96,7 @@ describe("cursor transcript resolver", () => {
     const dir = join(home, ".config", "Cursor", "User", "workspaceStorage", "abc");
     mkdirSync(dir, { recursive: true });
     writeWithMtime(join(dir, "state.vscdb"), "binary", OUT_OF_DAY);
-    expect(cursorTranscript.collect(DAY_START, DAY_END, home)).toEqual([]);
+    expect(cursorTranscript.scan(DAY_START, DAY_END, home).files).toEqual([]);
   });
 });
 

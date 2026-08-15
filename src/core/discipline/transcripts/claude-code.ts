@@ -11,41 +11,52 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { TranscriptRuntime } from "./types.ts";
+import {
+  classifyTranscriptScan,
+  type TranscriptRuntime,
+  type TranscriptScanResult,
+} from "./types.ts";
 
 export const claudeCodeTranscript: TranscriptRuntime = {
   runtime: "claudecode",
   agentHint: "claude-vps-agent",
-  collect(dayStartMs, dayEndMs, home = homedir()): string[] {
+  scan(dayStartMs, dayEndMs, home = homedir()): TranscriptScanResult {
     const base = join(home, ".claude", "projects");
-    if (!existsSync(base)) return [];
-    const out: string[] = [];
+    const files: string[] = [];
+    const unreadable: string[] = [];
+    if (!existsSync(base)) return classifyTranscriptScan(false, files, unreadable);
+
     let entries: string[];
     try {
       entries = readdirSync(base);
     } catch {
-      return [];
+      // The store is there; we simply cannot see inside it. Reporting zero
+      // files here without saying so is the defect this scan exists to fix.
+      unreadable.push(base);
+      return classifyTranscriptScan(true, files, unreadable);
     }
-    for (const e of entries) {
-      const projectDir = join(base, e);
-      let files: string[];
+    for (const entry of entries) {
+      const projectDir = join(base, entry);
+      let projectFiles: string[];
       try {
-        files = readdirSync(projectDir);
+        projectFiles = readdirSync(projectDir);
       } catch {
+        unreadable.push(projectDir);
         continue;
       }
-      for (const f of files) {
-        if (!f.endsWith(".jsonl")) continue;
-        const full = join(projectDir, f);
+      for (const name of projectFiles) {
+        if (!name.endsWith(".jsonl")) continue;
+        const full = join(projectDir, name);
         try {
-          const st = statSync(full);
-          const ms = st.mtimeMs;
-          if (ms >= dayStartMs && ms < dayEndMs) out.push(full);
+          const ms = statSync(full).mtimeMs;
+          if (ms >= dayStartMs && ms < dayEndMs) files.push(full);
         } catch {
-          // unreadable file — ignore
+          // A file whose mtime cannot be read cannot be placed in or out of
+          // the window, so it is uncounted rather than assumed absent.
+          unreadable.push(full);
         }
       }
     }
-    return out;
+    return classifyTranscriptScan(true, files, unreadable);
   },
 };

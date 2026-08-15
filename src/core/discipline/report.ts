@@ -85,18 +85,15 @@ export function runDisciplineReport(opts: RunDisciplineReportOpts): DisciplineRe
   }
   const vd = vaultDelta(opts.vault, win);
 
-  // Per-runtime session-transcript activity (v0.10.11). Hardened: if
-  // a resolver throws (unreadable home, missing perms), we degrade
-  // to zero counts rather than failing the whole report.
-  let transcripts;
-  try {
-    transcripts = collectTranscriptActivity({
-      dayStartMs: win.startUtc.getTime(),
-      dayEndMs: win.endUtc.getTime(),
-    });
-  } catch {
-    transcripts = { byRuntime: [], totalFiles: 0 };
-  }
+  // Per-runtime session-transcript activity (v0.10.11). A resolver that
+  // cannot read a home no longer needs catching here: the aggregator turns
+  // it into an `unreadable` scan state on that runtime's row, which is the
+  // whole point - degrading to zero counts made a permissions failure look
+  // exactly like a quiet day.
+  const transcripts = collectTranscriptActivity({
+    dayStartMs: win.startUtc.getTime(),
+    dayEndMs: win.endUtc.getTime(),
+  });
 
   const structuralFilesChanged =
     repo.reduce((total, row) => total + row.git.filesChanged, 0) +

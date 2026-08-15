@@ -11,22 +11,37 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { TranscriptRuntime } from "./types.ts";
+import {
+  classifyTranscriptScan,
+  type TranscriptRuntime,
+  type TranscriptScanResult,
+} from "./types.ts";
+
+/** Subdirectories of `~/.codex/` that have held session files across releases. */
+const CANDIDATE_SUBDIRS: ReadonlyArray<string> = Object.freeze([
+  "sessions",
+  "session",
+  "history",
+  ".tmp",
+]);
+
+const MAX_DEPTH = 3;
 
 export const codexTranscript: TranscriptRuntime = {
   runtime: "codex",
   agentHint: "codex-vps-agent",
-  collect(dayStartMs, dayEndMs, home = homedir()): string[] {
+  scan(dayStartMs, dayEndMs, home = homedir()): TranscriptScanResult {
     const base = join(home, ".codex");
-    if (!existsSync(base)) return [];
-    const candidates = ["sessions", "session", "history", ".tmp"];
-    const out: string[] = [];
-    for (const sub of candidates) {
+    const files: string[] = [];
+    const unreadable: string[] = [];
+    let rootsPresent = false;
+    for (const sub of CANDIDATE_SUBDIRS) {
       const dir = join(base, sub);
       if (!existsSync(dir)) continue;
-      pushJsonInRange(dir, dayStartMs, dayEndMs, out, 3);
+      rootsPresent = true;
+      pushJsonInRange(dir, dayStartMs, dayEndMs, files, unreadable, MAX_DEPTH);
     }
-    return out;
+    return classifyTranscriptScan(rootsPresent, files, unreadable);
   },
 };
 
@@ -34,28 +49,34 @@ function pushJsonInRange(
   dir: string,
   dayStartMs: number,
   dayEndMs: number,
-  out: string[],
+  files: string[],
+  unreadable: string[],
   depth: number,
 ): void {
-  if (depth < 0) return;
+  if (depth < 0) {
+    // The walk stopped short of the bottom, so anything below is uncounted.
+    unreadable.push(dir);
+    return;
+  }
   let entries: import("node:fs").Dirent[];
   try {
     entries = readdirSync(dir, { withFileTypes: true });
   } catch {
+    unreadable.push(dir);
     return;
   }
-  for (const e of entries) {
-    const full = join(dir, e.name);
-    if (e.isDirectory()) {
-      pushJsonInRange(full, dayStartMs, dayEndMs, out, depth - 1);
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) {
+      pushJsonInRange(full, dayStartMs, dayEndMs, files, unreadable, depth - 1);
       continue;
     }
-    if (!e.isFile() || !e.name.endsWith(".json")) continue;
+    if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
     try {
-      const st = statSync(full);
-      if (st.mtimeMs >= dayStartMs && st.mtimeMs < dayEndMs) out.push(full);
+      const ms = statSync(full).mtimeMs;
+      if (ms >= dayStartMs && ms < dayEndMs) files.push(full);
     } catch {
-      // unreadable — ignore
+      unreadable.push(full);
     }
   }
 }

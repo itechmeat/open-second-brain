@@ -12,7 +12,12 @@
 import { claudeCodeTranscript } from "./claude-code.ts";
 import { codexTranscript } from "./codex.ts";
 import { cursorTranscript } from "./cursor.ts";
-import type { TranscriptActivity, TranscriptRuntime } from "./types.ts";
+import {
+  TRANSCRIPT_SCAN,
+  type TranscriptActivity,
+  type TranscriptRuntime,
+  type TranscriptRuntimeActivity,
+} from "./types.ts";
 
 export { claudeCodeTranscript, codexTranscript, cursorTranscript };
 export type { TranscriptActivity, TranscriptRuntime };
@@ -30,20 +35,45 @@ export interface CollectTranscriptOpts {
   readonly runtimes?: ReadonlyArray<TranscriptRuntime>;
 }
 
+/**
+ * Run every registered runtime's scan. A runtime that throws is reported as
+ * `unreadable` naming the failure, never dropped: the aggregate feeds an
+ * alert whose absence of evidence must not be produced by the aggregator
+ * itself.
+ */
 export function collectTranscriptActivity(opts: CollectTranscriptOpts): TranscriptActivity {
   const runtimes = opts.runtimes ?? DEFAULT_TRANSCRIPT_RUNTIMES;
-  const byRuntime = [];
+  const byRuntime: TranscriptRuntimeActivity[] = [];
+  const unreadableRuntimes: string[] = [];
   let total = 0;
   for (const r of runtimes) {
-    const files = r.collect(opts.dayStartMs, opts.dayEndMs, opts.home);
-    const detail = r.collectDetail?.(opts.dayStartMs, opts.dayEndMs, opts.home) ?? null;
+    let scan;
+    try {
+      scan = r.scan(opts.dayStartMs, opts.dayEndMs, opts.home);
+    } catch (err) {
+      scan = {
+        state: TRANSCRIPT_SCAN.unreadable,
+        files: [],
+        unreadable: [`${r.runtime}: ${(err as Error).message}`],
+      };
+    }
+    let detail = null;
+    try {
+      detail = r.collectDetail?.(opts.dayStartMs, opts.dayEndMs, opts.home) ?? null;
+    } catch {
+      // The detail pass is an enrichment of a count that already stands; its
+      // failure is reported by the scan state, not by losing the count.
+    }
     byRuntime.push({
       runtime: r.runtime,
-      fileCount: files.length,
+      fileCount: scan.files.length,
+      scan: scan.state,
+      unreadable: scan.unreadable,
       agentHint: r.agentHint,
       ...(detail ? { detail } : {}),
     });
-    total += files.length;
+    if (scan.unreadable.length > 0) unreadableRuntimes.push(r.runtime);
+    total += scan.files.length;
   }
-  return { byRuntime, totalFiles: total };
+  return { byRuntime, totalFiles: total, unreadableRuntimes };
 }

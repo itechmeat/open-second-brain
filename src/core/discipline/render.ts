@@ -1,6 +1,11 @@
 import { escapeMarkdownV2 as e } from "./telegram.ts";
 import type { BrainEventCounts } from "./log-counts.ts";
-import { transcriptConfirmed, type ActivitySummary, type DisciplineStatus } from "./decision.ts";
+import {
+  transcriptConfirmed,
+  transcriptsUnreadable,
+  type ActivitySummary,
+  type DisciplineStatus,
+} from "./decision.ts";
 
 export interface RenderInput {
   readonly localDate: string;
@@ -57,13 +62,17 @@ export function renderReport(r: RenderInput): string {
   const transcripts = r.activity.transcripts;
   if (transcripts && transcripts.byRuntime.length > 0) {
     const parts = transcripts.byRuntime
-      .filter((b) => b.fileCount > 0 || b.detail)
+      // A runtime with nothing to say is omitted; one that could not READ its
+      // store has something to say precisely because its count is zero.
+      .filter((b) => b.fileCount > 0 || b.detail || b.unreadable.length > 0)
       .map((b) => {
         const base = `${e(b.runtime)}: ${b.fileCount}`;
+        const scanned =
+          b.unreadable.length > 0 ? `${base} \\[${e(b.scan)}: ${b.unreadable.length}\\]` : base;
         if (b.detail) {
-          return `${base} \\(${b.detail.sessionCount} sessions, ${b.detail.messageCount} messages\\)`;
+          return `${scanned} \\(${b.detail.sessionCount} sessions, ${b.detail.messageCount} messages\\)`;
         }
-        return base;
+        return scanned;
       });
     if (parts.length > 0) {
       lines.push(`\\- transcripts — ${parts.join(", ")}`);
@@ -82,6 +91,14 @@ export function renderReport(r: RenderInput): string {
     if (transcriptConfirmed(r.activity)) {
       lines.push(
         "_Sub\\-reason: transcript\\-confirmed — runtime session files dated to this window\\._",
+      );
+    }
+    // An unread store is not a quiet one. Without this line the alert would
+    // present a permissions failure as evidence about the agent's day.
+    const unread = transcriptsUnreadable(r.activity);
+    if (unread.length > 0) {
+      lines.push(
+        `_Sub\\-reason: transcript\\-unreadable — ${e(unread.join(", "))}: store present, not enumerable\\._`,
       );
     }
     if (complexity?.warning === true) {

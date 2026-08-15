@@ -37,6 +37,17 @@ export function transcriptConfirmed(activity: ActivitySummary): boolean {
   return (activity.transcripts?.totalFiles ?? 0) > 0;
 }
 
+/**
+ * Runtimes whose transcript store exists and could not be enumerated, so
+ * their contribution to `totalFiles` is a lower bound rather than a
+ * measurement. Separate from {@link transcriptConfirmed} because the two
+ * answer opposite questions: one asks whether activity was seen, this one
+ * asks whether the looking worked.
+ */
+export function transcriptsUnreadable(activity: ActivitySummary): ReadonlyArray<string> {
+  return activity.transcripts?.unreadableRuntimes ?? [];
+}
+
 export type DisciplineStatus = "ok" | "info" | "alert";
 
 export function decideStatus(

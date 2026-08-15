@@ -13,17 +13,26 @@ import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
-import type { TranscriptDetail, TranscriptRuntime } from "./types.ts";
+import {
+  classifyTranscriptScan,
+  type TranscriptDetail,
+  type TranscriptRuntime,
+  type TranscriptScanResult,
+} from "./types.ts";
 
-function findDatabases(home: string): string[] {
-  const roots = [
+/** Every layout a Cursor build has used for per-workspace storage. */
+function workspaceStorageRoots(home: string): ReadonlyArray<string> {
+  return [
     join(home, ".config", "Cursor", "User", "workspaceStorage"),
     join(home, "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
     // macOS XDG-style fallback used by some Cursor builds
     join(home, ".cursor", "workspaceStorage"),
   ];
+}
+
+function findDatabases(home: string): string[] {
   const out: string[] = [];
-  for (const root of roots) {
+  for (const root of workspaceStorageRoots(home)) {
     if (!existsSync(root)) continue;
     let dirs: import("node:fs").Dirent[];
     try {
@@ -114,20 +123,18 @@ function queryCursorDb(
 export const cursorTranscript: TranscriptRuntime = {
   runtime: "cursor",
   agentHint: "cursor-vps-agent",
-  collect(dayStartMs, dayEndMs, home = homedir()): string[] {
-    const roots = [
-      join(home, ".config", "Cursor", "User", "workspaceStorage"),
-      join(home, "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
-      // macOS XDG-style fallback used by some Cursor builds
-      join(home, ".cursor", "workspaceStorage"),
-    ];
-    const out: string[] = [];
-    for (const root of roots) {
+  scan(dayStartMs, dayEndMs, home = homedir()): TranscriptScanResult {
+    const files: string[] = [];
+    const unreadable: string[] = [];
+    let rootsPresent = false;
+    for (const root of workspaceStorageRoots(home)) {
       if (!existsSync(root)) continue;
+      rootsPresent = true;
       let dirs: import("node:fs").Dirent[];
       try {
         dirs = readdirSync(root, { withFileTypes: true });
       } catch {
+        unreadable.push(root);
         continue;
       }
       for (const d of dirs) {
@@ -135,14 +142,14 @@ export const cursorTranscript: TranscriptRuntime = {
         const db = join(root, d.name, "state.vscdb");
         if (!existsSync(db)) continue;
         try {
-          const st = statSync(db);
-          if (st.mtimeMs >= dayStartMs && st.mtimeMs < dayEndMs) out.push(db);
+          const ms = statSync(db).mtimeMs;
+          if (ms >= dayStartMs && ms < dayEndMs) files.push(db);
         } catch {
-          // unreadable — ignore
+          unreadable.push(db);
         }
       }
     }
-    return out;
+    return classifyTranscriptScan(rootsPresent, files, unreadable);
   },
   collectDetail(dayStartMs, dayEndMs, home = homedir()): TranscriptDetail | null {
     const dbs = findDatabases(home);

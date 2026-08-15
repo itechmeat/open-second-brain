@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderReport } from "../../src/core/discipline/render.ts";
+import { TRANSCRIPT_SCAN } from "../../src/core/discipline/transcripts/types.ts";
 
 describe("renderReport", () => {
   test("status: ok with two agents, one repo, vault delta", () => {
@@ -124,17 +125,77 @@ describe("renderReport", () => {
             {
               runtime: "claudecode",
               fileCount: 2,
+              scan: TRANSCRIPT_SCAN.collected,
+              unreadable: [],
               agentHint: "claude-vps-agent",
             },
-            { runtime: "codex", fileCount: 0, agentHint: "codex-vps-agent" },
+            {
+              runtime: "codex",
+              fileCount: 0,
+              scan: TRANSCRIPT_SCAN.rootAbsent,
+              unreadable: [],
+              agentHint: "codex-vps-agent",
+            },
           ],
           totalFiles: 2,
+          unreadableRuntimes: [],
         },
       },
     });
     expect(text).toContain("Status: alert");
     expect(text).toContain("transcripts — claudecode: 2");
     expect(text).toContain("transcript\\-confirmed");
+  });
+
+  test("a runtime whose store could not be read is named, not silently zero", () => {
+    const text = renderReport({
+      localDate: "2026-05-17",
+      timezone: "UTC",
+      status: "alert",
+      events: {
+        byAgent: {
+          "@a": { feedback: 0, apply_evidence: 0, note: 0, other: 0, total: 0 },
+        },
+        unknownAgents: [],
+        total: 0,
+      },
+      activity: {
+        repo: [
+          {
+            path: "/x",
+            git: { commits: 3, filesChanged: 5, insertions: 10, deletions: 2 },
+          },
+        ],
+        nonRepo: [],
+        vaultDelta: { newSignals: 0, newPreferences: 0, newRetired: 0, total: 0 },
+        transcripts: {
+          byRuntime: [
+            {
+              runtime: "claudecode",
+              fileCount: 0,
+              scan: TRANSCRIPT_SCAN.unreadable,
+              unreadable: ["/home/agent/.claude/projects"],
+              agentHint: "claude-vps-agent",
+            },
+            {
+              runtime: "codex",
+              fileCount: 0,
+              scan: TRANSCRIPT_SCAN.idle,
+              unreadable: [],
+              agentHint: "codex-vps-agent",
+            },
+          ],
+          totalFiles: 0,
+          unreadableRuntimes: ["claudecode"],
+        },
+      },
+    });
+    // The zero is still reported, but never on its own.
+    expect(text).toContain("transcripts — claudecode: 0");
+    expect(text).toContain(TRANSCRIPT_SCAN.unreadable);
+    expect(text).toContain("transcript\\-unreadable");
+    // The runtime that genuinely had a quiet day is not implicated.
+    expect(text).not.toContain("codex: 0");
   });
 
   test("status: alert + complexity warning adds productivity-trap sub-reason", () => {
@@ -206,10 +267,13 @@ describe("renderReport", () => {
             {
               runtime: "claudecode",
               fileCount: 0,
+              scan: TRANSCRIPT_SCAN.idle,
+              unreadable: [],
               agentHint: "claude-vps-agent",
             },
           ],
           totalFiles: 0,
+          unreadableRuntimes: [],
         },
       },
     });
