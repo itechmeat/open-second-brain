@@ -51,10 +51,12 @@ import {
 } from "./gates/recoverability.ts";
 import { collisionCandidateName, snapshotPath, validateRunId } from "./paths.ts";
 import {
+  BrainSnapshotError,
   createSnapshot,
   pruneSnapshots,
   restoreSnapshot,
   type PruneSnapshotsResult,
+  type RecoveryPointEvidence,
   type RestoreSnapshotOptions,
   type RestoreSnapshotResult,
 } from "./snapshot.ts";
@@ -131,6 +133,17 @@ export interface WithDestructiveSnapshotOptions {
    * name.
    */
   readonly available?: (runId: string) => boolean;
+  /**
+   * Archives the retention pass behind this snapshot must not remove, on
+   * top of the snapshot itself (which is always protected).
+   *
+   * One caller needs it: the rollback takes its recovery point in the
+   * middle of a restore, and the archive being restored is still being
+   * read - its manifest sidecar, its derived-store archive - after that
+   * point lands. At the default retention of 10 the target is evicted
+   * whenever it is the 10th-oldest or older.
+   */
+  readonly protectRunIds?: ReadonlyArray<string>;
 }
 
 /** Upper bound on distinct run ids tried before giving up. */
@@ -219,13 +232,27 @@ export function createUniqueSnapshot(
  * sites used to spell their labels three different ways and nothing
  * parsed any of them back.
  *
- * Retention runs here rather than after the caller's operation, and that
- * is safe by arithmetic rather than by luck: the configured
- * `retention_count` is a positive integer and this archive is the newest
- * in the directory, so the prune can never evict the point it just made.
+ * Retention runs here rather than after the caller's operation, and the
+ * point it just made survives it for two reasons that are checked rather
+ * than assumed. It used to be neither: the claim was that the archive is
+ * "the newest in the directory" so the prune cannot reach it, but
+ * {@link listSnapshots} orders by MTIME. One archive whose mtime is ahead
+ * of the clock - `rsync -t`, `cp -p`, NFS skew, a stepped clock - and at
+ * retention 1 the prune evicted this very archive, while the gate
+ * reported `covered` and ran the caller's operation over nothing.
+ *
+ * So: the run id is PROTECTED in the prune call
+ * ({@link PruneSnapshotsOptions.protectRunIds}), which makes the survival
+ * structural rather than dependent on a sort; and
+ * {@link assertRecoveryPointOnDisk} then confirms the archive is really
+ * there, which is what covers the removals this module does not perform -
+ * a peer process, an operator, a half-finished mount.
+ *
  * A prune failure is a warning, never a throw - the recovery point exists,
  * and refusing the caller's operation because a cleanup pass could not run
- * would trade a real guarantee for a tidy directory.
+ * would trade a real guarantee for a tidy directory. A MISSING recovery
+ * point is the opposite and throws: from there on, every promise this
+ * module makes about the caller's operation would be false.
  *
  * What the prune DID travels back on the result, and a refusal is
  * announced on stderr rather than absorbed. A retention that silently
@@ -262,7 +289,12 @@ export function takeSnapshot(
 
   let prune: PruneSnapshotsResult | null = null;
   try {
-    prune = pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));
+    prune = pruneSnapshots(vault, loadSnapshotRetentionSafe(vault), {
+      // This archive, plus whatever else the caller is standing on: the
+      // rollback is mid-restore and still reading the archive it is
+      // restoring out of the same directory.
+      protectRunIds: [snapshot.runId, ...(opts.protectRunIds ?? [])],
+    });
     if (prune.refusal !== null) {
       process.stderr.write(
         `warning: snapshot retention after ${snapshot.runId} declined to run ` +
@@ -276,13 +308,42 @@ export function takeSnapshot(
     }
   } catch (err) {
     process.stderr.write(
-      `warning: snapshot prune after ${snapshot.runId} failed (the recovery point is intact): ${
+      `warning: snapshot prune after ${snapshot.runId} failed: ${
         (err as Error).message ?? String(err)
       }\n`,
     );
   }
 
+  // Whether the recovery point is intact is now ANSWERED rather than
+  // asserted in the warning above.
+  assertRecoveryPointOnDisk(snapshot.runId, snapshot.path);
+
   return { ...snapshot, prune };
+}
+
+/**
+ * Confirm the recovery point is on disk, and throw loudly when it is not.
+ *
+ * The one check that turns this module's promise into a fact. Everything
+ * downstream - the caller's destructive operation, the `covered` verdict,
+ * the archive path in the result - is conditional on an archive existing,
+ * and until this ran nothing ever looked: the gate reported the path it
+ * had asked for rather than the file that was there.
+ *
+ * A throw rather than a downgraded verdict, and the reason is the same
+ * one the module header gives for a snapshot that cannot be written: an
+ * operation that cannot be protected must abort. Downgrading to
+ * `unproven` would let `dream`, `deleteBySource --confirm` and the note
+ * delete run unprotected behind a warning nobody reads.
+ */
+export function assertRecoveryPointOnDisk(runId: string, path: string): void {
+  if (existsSync(path)) return;
+  throw new BrainSnapshotError(
+    `the recovery point ${path} is not on disk after the retention pass behind it; refusing to ` +
+      "run a destructive operation that has nothing to fall back to - check Brain/.snapshots/ " +
+      "and snapshots.retention_count",
+    runId,
+  );
 }
 
 /**
@@ -352,13 +413,24 @@ export interface RestoreWithRecoveryPointResult extends RestoreSnapshotResult {
  * exactly this: the operation behind it belongs to the archive being
  * restored, not to the tree being saved.
  *
- * Two orderings are load-bearing and neither is incidental. The point is
- * taken AFTER extraction, so a corrupt or missing archive leaves no
- * archive of a tree the restore never touched, and so the retention pass
- * behind it cannot evict bytes the restore still needs. And the point
- * lands in `.snapshots/`, which the restore's own deletion excludes -
- * that exclusion is what makes this recoverable rather than a snapshot
- * the next step erases.
+ * Three facts about the ordering are load-bearing and none is
+ * incidental. The point is taken AFTER extraction, so a corrupt or
+ * missing archive leaves no archive of a tree the restore never touched.
+ * The point lands in `.snapshots/`, which the restore's own deletion
+ * excludes - that exclusion is what makes this recoverable rather than a
+ * snapshot the next step erases. And the archive BEING RESTORED is named
+ * in `protectRunIds`, because extraction is not the end of the restore's
+ * reading: the manifest sidecar and the derived-store archive are still
+ * read out of `.snapshots/` afterwards, and the retention pass behind
+ * this recovery point used to remove them mid-restore - at the default
+ * retention of 10, whenever the target was the 10th-oldest or older. With
+ * `include_derived_store` on, that turned a covered store into "coverage
+ * unknown, nothing restored", silently.
+ *
+ * The recovery point is also what the restore's verdict is derived from:
+ * it hands the archive back as {@link RecoveryPointEvidence}, and
+ * `restoreSnapshot` probes that path rather than reading `covered` off
+ * the fact that a callback was supplied.
  */
 export function restoreSnapshotWithRecoveryPoint(
   vault: string,
@@ -368,8 +440,13 @@ export function restoreSnapshotWithRecoveryPoint(
   let recoveryPoint: DestructiveSnapshot | null = null;
   const result = restoreSnapshot(vault, runId, {
     ...opts,
-    beforeDiscard: () => {
-      recoveryPoint = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual, opts);
+    beforeDiscard: (): RecoveryPointEvidence => {
+      const point = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual, {
+        ...opts,
+        protectRunIds: [runId, ...(opts.protectRunIds ?? [])],
+      });
+      recoveryPoint = point;
+      return { runId: point.runId, path: point.path };
     },
   });
   if (recoveryPoint === null) {

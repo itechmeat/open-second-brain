@@ -339,6 +339,26 @@ export function isSnapshotPruneRefusal(value: unknown): value is SnapshotPruneRe
  */
 export const SNAPSHOT_RETENTION_FLOOR = 1;
 
+export interface PruneSnapshotsOptions {
+  /**
+   * Run ids this pass must never remove, whatever the ordering says.
+   *
+   * The retention order is by MTIME, and the caller that most needs this
+   * is the one that just wrote an archive: "the newest file is the newest
+   * mtime" is an assumption about the filesystem, not arithmetic. `rsync
+   * -t`, `cp -p`, an NFS server with clock skew, or a system clock
+   * stepped backwards all leave an older archive claiming a newer mtime,
+   * and at retention 1 the prune then evicted the recovery point the gate
+   * had made one line earlier - which the gate reported as `covered`.
+   *
+   * The rollback is the second such caller: it takes a recovery point
+   * mid-restore, and the archive being restored is still being read from
+   * `.snapshots/` (its manifest sidecar, its derived-store archive) after
+   * that point lands. Both are named here rather than trusted to sort.
+   */
+  readonly protectRunIds?: ReadonlyArray<string>;
+}
+
 export interface PruneSnapshotsResult {
   /** Vault-relative path of each deleted archive. */
   readonly deleted: ReadonlyArray<string>;
@@ -404,21 +424,48 @@ export interface RestoreSnapshotResult {
   readonly recoverability: RecoverabilityVerdict;
 }
 
+/**
+ * What a {@link RestoreSnapshotOptions.beforeDiscard} callback hands back
+ * to prove it archived the tree about to be discarded.
+ *
+ * A structural pair rather than the gate's own `DestructiveSnapshot`,
+ * because this module is the one `snapshot-gate.ts` composes: importing
+ * its type back would make the pair a cycle. The `path` is the field that
+ * matters - {@link restoreSnapshot} probes it on disk, so the verdict
+ * rests on an archive rather than on a promise that one was taken.
+ */
+export interface RecoveryPointEvidence {
+  /** Run id of the archive the callback wrote. */
+  readonly runId: string;
+  /** Absolute path of that archive. */
+  readonly path: string;
+}
+
 export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
   /**
    * Called once, AFTER the archive has been extracted into a temp
    * directory and BEFORE the first live entry is removed. That ordering
    * is the whole contract: extraction can fail on a corrupt or missing
    * archive, and a rollback that never touched the tree must not leave a
-   * recovery point of it; and once extraction has succeeded the bytes
-   * being restored are already off the archive, so a retention pass
-   * triggered by the recovery point cannot break the restore in flight.
+   * recovery point of it.
+   *
+   * Extraction being done is NOT the same as the restore being done with
+   * `.snapshots/`: the manifest sidecar and the derived-store archive are
+   * read after this callback returns, which is why a callback that prunes
+   * is checked rather than trusted - see the re-validation in
+   * {@link restoreSnapshot}.
+   *
+   * Return {@link RecoveryPointEvidence} to have the restore's
+   * recoverability verdict count the archive. Returning nothing is a
+   * legitimate answer and reads as `unproven`: the verdict is derived
+   * from an archive being on disk when the restore finishes, never from
+   * the fact that a callback was supplied.
    *
    * Injected rather than called directly because the recovery point is
    * minted by `snapshot-gate.ts`, which composes THIS module - taking
    * `takeSnapshot` from there would make the pair a cycle.
    */
-  readonly beforeDiscard?: () => void;
+  readonly beforeDiscard?: () => RecoveryPointEvidence | void;
 }
 
 // ----- Tooling detection ---------------------------------------------------
@@ -1138,9 +1185,22 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
  *
  * A removal that fails is REPORTED rather than swallowed. It used to be
  * silently skipped, so a permission problem stopped retention working and
- * every prune still read as clean.
+ * every prune still read as clean. A failure also STOPS the companion
+ * removal for that archive: the sidecar manifest and the store archive go
+ * only on the branch where the archive itself went, because an archive
+ * left on disk without its manifest is worse than either - rollback
+ * against it skips drift detection and silently never restores its
+ * derived store.
+ *
+ * {@link PruneSnapshotsOptions.protectRunIds} is how a caller keeps the
+ * archive it is standing on. See that field for why the ordering alone
+ * was never enough.
  */
-export function pruneSnapshots(vault: string, retentionCount: number): PruneSnapshotsResult {
+export function pruneSnapshots(
+  vault: string,
+  retentionCount: number,
+  opts: PruneSnapshotsOptions = {},
+): PruneSnapshotsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J). This is
   // the most destructive operation in the module - an `rmSync` over
   // archives - and it was the only one of the three without the guard
@@ -1167,19 +1227,33 @@ export function pruneSnapshots(vault: string, retentionCount: number): PruneSnap
       refusal: null,
     });
   }
-  const victims = all.slice(retentionCount);
+  const protectedIds = new Set(opts.protectRunIds ?? []);
+  // Protected archives are moved to the FRONT of the retention order and
+  // then filtered out of the victim list a second time. Two mechanisms
+  // for one guarantee, because they answer different failures: the
+  // reordering keeps the retained count at exactly `retentionCount` in
+  // the normal case, and the filter is what holds when a caller protects
+  // more archives than the retention allows.
+  const ordered = [
+    ...all.filter((s) => protectedIds.has(s.run_id)),
+    ...all.filter((s) => !protectedIds.has(s.run_id)),
+  ];
+  const victims = ordered.slice(retentionCount).filter((s) => !protectedIds.has(s.run_id));
   const deleted: string[] = [];
   const failed: string[] = [];
   for (const v of victims) {
     try {
       rmSync(v.path, { force: true });
-      deleted.push(v.path);
     } catch {
       // The archive stays put and the caller is told which one, so a
       // recurring permission problem is visible instead of being
-      // rediscovered when retention has quietly stopped working.
+      // rediscovered when retention has quietly stopped working. The
+      // companions below are deliberately NOT reached: an archive
+      // without its manifest is an archive a rollback misreads.
       failed.push(v.path);
+      continue;
     }
+    deleted.push(v.path);
     // Remove the matching sidecar manifest and derived-store archive if
     // present. Independent try/catch per companion so a missing one (a
     // snapshot whose sidecar write failed at creation time, or one taken
@@ -1363,6 +1437,8 @@ export function restoreSnapshot(
   // reclaiming disk. The create path already refuses before it writes;
   // this is the same ordering on the way back.
   assertDerivedStoreRestorable(vault, runId);
+  // The records the pre-flight just validated, as one comparable value.
+  const storeStateBefore = derivedStoreRestoreState(vault, runId);
 
   const ext = extractSnapshotToTemp(vault, runId);
   try {
@@ -1388,7 +1464,29 @@ export function restoreSnapshot(
     // The last moment at which the live tree still exists. A throw here
     // propagates and nothing has been removed yet, which is the same
     // abort-before-the-operation rule the destructive gate applies.
-    opts.beforeDiscard?.();
+    const evidence = opts.beforeDiscard?.() ?? null;
+
+    // The callback is the one step that can change `.snapshots/` between
+    // the pre-flight and the store swap - it takes a recovery point, and
+    // a retention pass rides behind that. `assertDerivedStoreRestorable`
+    // above validated a state this callback may have invalidated, so the
+    // pre-flight is re-run against the state that actually reaches the
+    // rest of the restore, and the RECORD is compared rather than only
+    // re-checked: a manifest that has been removed outright would pass a
+    // fresh pre-flight while turning a covered store into "coverage
+    // unknown, nothing restored".
+    if (opts.beforeDiscard !== undefined) {
+      assertDerivedStoreRestorable(vault, runId);
+      const after = derivedStoreRestoreState(vault, runId);
+      if (after !== storeStateBefore) {
+        throw new BrainSnapshotError(
+          "the derived-store records of this snapshot changed while the recovery point was " +
+            `being taken (${storeStateBefore} -> ${after}); refusing before the Brain tree is ` +
+            "touched, so nothing is half-restored",
+          runId,
+        );
+      }
+    }
 
     for (const name of liveEntries) {
       const target = join(dirs.brain, name);
@@ -1419,7 +1517,13 @@ export function restoreSnapshot(
       // derived store is replaced only when the archive carried one, so
       // it joins the blast radius exactly when it was actually swapped.
       recoverability: classifyRecoverability({
-        recoveryPoint: opts.beforeDiscard !== undefined,
+        // An ARCHIVE, probed here at the end of the restore rather than
+        // the presence of a callback. `beforeDiscard !== undefined` said
+        // `covered` for any caller that supplied a function - including
+        // one that took no snapshot, and including the case where the
+        // recovery point was written and then evicted by the retention
+        // pass behind it.
+        recoveryPoint: evidence !== null && existsSync(evidence.path),
         blastRadius: { brainTopLevel: true, derivedStore: derivedStore.replaced },
       }),
     };
@@ -1456,6 +1560,28 @@ export function restoreSnapshot(
  * is not on disk means the restore is already incomplete. Either way the
  * honest answer is to touch nothing and say why.
  */
+/**
+ * The three facts a restore's store step depends on, as one comparable
+ * token: whether the sidecar is readable, what it says about coverage,
+ * and whether the store archive is on disk.
+ *
+ * Compared rather than re-checked because the failure this exists to
+ * catch REMOVES a record: a fresh pre-flight over a vanished manifest
+ * passes (no record, nothing to validate) and the restore then reports
+ * coverage as unknown over a store it was asked to put back.
+ */
+function derivedStoreRestoreState(vault: string, runId: string): string {
+  const manifest = readManifestSidecar(vault, runId);
+  const record = manifest?.derived_store ?? null;
+  return [
+    manifest === null ? 0 : 1,
+    manifest?.derived_store_unreadable === true ? 1 : 0,
+    record === null ? 0 : record.included ? 1 : 2,
+    record?.archive_sha256 ?? "",
+    existsSync(snapshotStorePath(vault, runId)) ? 1 : 0,
+  ].join("/");
+}
+
 function assertDerivedStoreRestorable(vault: string, runId: string): void {
   const manifest = readManifestSidecar(vault, runId);
   if (manifest === null) return;
