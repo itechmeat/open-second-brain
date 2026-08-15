@@ -38,8 +38,20 @@ afterEach(() => {
 
 const handler = INGEST_TOOLS[0]!.handler;
 
+/**
+ * Seed the file a `source_path` names: an ingest whose source does not exist
+ * is untrusted and quarantines its entities (GitHub #160), so a case that
+ * reads them back from the canonical registry must give the source bytes.
+ */
+function seed(rel: string, contents = `bytes of ${rel}\n`): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, contents, "utf8");
+}
+
 describe("brain_ingest_source", () => {
   test("writes entity pages and a summary page, returns its vault path", async () => {
+    seed("Articles/eth.md");
     const res = await handler(ctx, {
       source_path: "Articles/eth.md",
       summary: "Ethereum scaling overview.",

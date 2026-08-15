@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,6 +37,12 @@ afterEach(() => {
 });
 
 function seedSource(sourcePath: string): string {
+  // The source file itself, not only the ingest: an ingest whose source does
+  // not exist is untrusted and quarantines its entities (GitHub #160), so a
+  // fixture that means "an ordinary ingested source" must have the bytes.
+  const abs = join(vault, sourcePath);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, `bytes of ${sourcePath}\n`, "utf8");
   const res = ingestSource(
     vault,
     {

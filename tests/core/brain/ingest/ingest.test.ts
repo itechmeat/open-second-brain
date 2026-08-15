@@ -40,6 +40,18 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
 });
 
+/**
+ * A source is trusted only when its file exists (GitHub #160), and an
+ * untrusted ingest quarantines the entities it introduces - so every case
+ * that reads its entities back from the canonical registry seeds the source
+ * it names. The cases that deliberately do NOT seed it are marked.
+ */
+function seedSourceFile(rel = INPUT.sourcePath): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, "the source bytes\n", "utf8");
+}
+
 const INPUT = {
   sourcePath: "Articles/restaking-primer.md",
   summary: "An overview of restaking and its role for validators.",
@@ -58,6 +70,7 @@ function readSummary(summaryPath: string): string {
 
 describe("ingestSource", () => {
   test("creates entity pages and a summary page that backlinks the source", () => {
+    seedSourceFile();
     const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     expect(res.created).toBe(true);
     expect(res.entitiesCreated).toHaveLength(2);
@@ -75,6 +88,7 @@ describe("ingestSource", () => {
     // Seed Validators so it pre-exists; the ingest should report it as a
     // connection to existing material, while Restaking is freshly created.
     upsertEntity(vault, { category: "concept", name: "Validators", agent: "claude", now: NOW });
+    seedSourceFile();
 
     const res = ingestSource(vault, INPUT, { agent: "claude", now: LATER });
     expect(res.entitiesCreated).toHaveLength(1); // Restaking
@@ -86,6 +100,7 @@ describe("ingestSource", () => {
   });
 
   test("is idempotent on the source path: re-ingest rewrites, does not duplicate", () => {
+    seedSourceFile();
     const first = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     const second = ingestSource(vault, INPUT, { agent: "claude", now: LATER });
     expect(second.created).toBe(false);
@@ -98,6 +113,7 @@ describe("ingestSource", () => {
   });
 
   test("entity pages cite the source in their body", () => {
+    seedSourceFile();
     const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     expect(res.summaryPath).toBeTruthy();
     const restaking = getEntity(vault, { category: "concept", query: "Restaking" });
@@ -106,8 +122,7 @@ describe("ingestSource", () => {
 
   test("planId records the ingested vault-file source into the plan checkpoint (t_ba1fa5f6)", () => {
     // The checkpoint is only recorded for a real vault file, so materialize it.
-    mkdirSync(join(vault, "Articles"), { recursive: true });
-    writeFileSync(join(vault, "Articles", "restaking-primer.md"), "content", "utf8");
+    seedSourceFile();
     const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
     ingestSource(vault, INPUT, { agent: "claude", now: NOW, planId });
     const cp = readCheckpoint(vault, planId);
@@ -115,8 +130,7 @@ describe("ingestSource", () => {
   });
 
   test("without planId no checkpoint is written", () => {
-    mkdirSync(join(vault, "Articles"), { recursive: true });
-    writeFileSync(join(vault, "Articles", "restaking-primer.md"), "content", "utf8");
+    seedSourceFile();
     const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
     ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     expect(readCheckpoint(vault, planId)).toBeNull();
@@ -170,7 +184,8 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
   });
 
   test("a non-code source reports unextracted rather than a fake empty success", () => {
-    // INPUT's source is not materialized on disk, so there is nothing to read.
+    // Deliberately unseeded: INPUT's source is not materialized on disk, so
+    // there is nothing to read (and the ingest quarantines its entities).
     const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW, preExtract: true });
     expect(res.preExtract?.extracted).toBe(false);
   });

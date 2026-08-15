@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -65,6 +65,10 @@ describe("createBrain", () => {
 
   test("source CRUD lifecycle: ingest -> list -> get -> delete", () => {
     const brain = createBrain(vault);
+    // The source file must exist for the ingest to read as trusted
+    // (GitHub #160); an absent one quarantines the entities it introduces.
+    mkdirSync(join(vault, "Articles"), { recursive: true });
+    writeFileSync(join(vault, "Articles", "x.md"), "bytes of x\n", "utf8");
     const res = brain.ingestSource(
       {
         sourcePath: "Articles/x.md",
