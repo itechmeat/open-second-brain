@@ -20,11 +20,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { PROGRESS_KIND, PROGRESS_REASON } from "../../src/core/brain/progress.ts";
+import { OPERATION, SafeguardAbortError } from "../../src/core/brain/safeguard.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { planVectorBackfill } from "../../src/core/search/vector-backfill.ts";
 import { SEMANTIC_CAPABILITY_TIER } from "../../src/core/search/capability-tier.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
+import { progressRecords, STAGE_IDENTIFIER } from "../helpers/progress-records.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -323,6 +326,79 @@ test.skipIf(!VEC_LOADABLE || RUNNING_AS_ROOT)(
     } finally {
       chmodSync(logDir, 0o700);
     }
+  },
+);
+
+/**
+ * `--progress` on this verb (nothing-runs-unwatched, U1 + U3).
+ *
+ * That a stream ARRIVES at all is asserted once, for every emitter in the
+ * tree, by `tests/cli/progress-emitter-census.test.ts`; repeating it here
+ * would be a seventh copy of one assertion. What lives here is what the
+ * census cannot see: that the payload a caller parses does not move
+ * because someone asked to watch, that nobody is watching unless they
+ * ask, and that the cancellation seam this verb now passes a signal
+ * through actually stops the run.
+ */
+test.skipIf(!VEC_LOADABLE)(
+  "--progress is additive: stdout is byte-identical, and silent without the flag",
+  async () => {
+    await indexWithoutVectors();
+    const args = ["search", "vector-backfill", "--vault", vault, "--db", dbPath, "--json"];
+
+    const plain = await runCli(args);
+    const watched = await runCli([...args, "--progress"]);
+
+    expect(plain.returncode).toBe(0);
+    expect(watched.returncode).toBe(0);
+    // A dry run reads and counts; two runs over one index report the same
+    // numbers, so the payloads are comparable byte for byte.
+    expect(watched.stdout).toBe(plain.stdout);
+
+    expect(progressRecords(plain.stderr)).toHaveLength(0);
+    const records = progressRecords(watched.stderr);
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r["operation"] === OPERATION.reindex)).toBe(true);
+    for (const record of records) {
+      expect(String(record["stage"])).toMatch(STAGE_IDENTIFIER);
+      expect(Number.isInteger(record["completed"])).toBe(true);
+    }
+  },
+);
+
+test.skipIf(!VEC_LOADABLE)(
+  "an aborted signal stops the run at a batch boundary and says so on the stream",
+  async () => {
+    await indexWithoutVectors();
+
+    // Proved against the core rather than by racing a real SIGINT, for the
+    // reason `brain-architect-progress.test.ts` gives: the fixture's
+    // embedding phase finishes in milliseconds, so a test that pressed
+    // Ctrl-C at the right moment would be a lottery. What the CLI adds on
+    // top of this is one line - `signal: interrupt.signal` - and the arm
+    // that turns the throw into an exit code.
+    const controller = new AbortController();
+    controller.abort();
+    const events: Array<{ kind: string; stage: string; reason?: string }> = [];
+
+    let thrown: unknown = null;
+    try {
+      await planVectorBackfill(semanticConfig(), {
+        apply: true,
+        signal: controller.signal,
+        onProgress: (e) =>
+          events.push({ kind: e.kind, stage: e.stage, ...(e.reason ? { reason: e.reason } : {}) }),
+      });
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(SafeguardAbortError);
+    // A cancelled run is not a crash and not a success: the stream names
+    // which, rather than simply ceasing to arrive.
+    const last = events.at(-1);
+    expect(last?.kind).toBe(PROGRESS_KIND.stopped);
+    expect(last?.reason).toBe(PROGRESS_REASON.aborted);
   },
 );
 

@@ -13,10 +13,37 @@
  * provider or writes a vector. The shape follows
  * `brain/verbs/authored-at-backfill.ts` line for line, including the log
  * append whose failure is reported on stderr rather than swallowed.
+ *
+ * ## Where the interrupt can and cannot land
+ *
+ * This verb holds a real cancellation handle, and it is the only one of
+ * the long verbs whose answer needed checking rather than assuming.
+ * `interruptIsObservable` answers per OPERATION, and this pass runs under
+ * `OPERATION.reindex`, which the table marks observable - but the table's
+ * reason is about the index BUILDERS, so it has to hold here on its own
+ * terms. It does, for the half of the run that is long:
+ * `runEmbeddingPhase` awaits a provider round trip per super-batch and
+ * calls `throwIfAborted` at every batch boundary, which is real I/O and
+ * therefore a real yield to the event loop.
+ *
+ * It does NOT hold for the plan: counting vectorless chunks is a
+ * synchronous SQLite query between two awaits, so a keystroke landing
+ * inside it is not observed at a checkpoint. That is not a hole this verb
+ * papers over - it is exactly what `release()` is for. An interrupt that
+ * arrived and that nothing acknowledged is re-raised there, so the run
+ * ends the way the un-suppressed keystroke would have, rather than
+ * returning 0 for a pass the operator stopped. The plan is milliseconds;
+ * the embedding phase is the part an operator would ever want to stop.
  */
 
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
+import {
+  createSafeguard,
+  OPERATION,
+  resolveSafeguardTimeoutMs,
+  SafeguardAbortError,
+} from "../../../core/brain/safeguard.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../core/brain/types.ts";
 import { resolveAgentName } from "../../../core/config.ts";
@@ -30,9 +57,12 @@ import {
   type VectorBackfillResult,
 } from "../../../core/search/vector-backfill.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
+import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { info, ok } from "../../output.ts";
+import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import {
   flagBoolean,
+  flagString,
   parseFlags,
   resolveConfig,
   resolveConfigPath,
@@ -87,16 +117,46 @@ export async function cmdSearchVectorBackfill(argv: ReadonlyArray<string>): Prom
     ...VAULT_FLAGS,
     apply: { type: "boolean" },
     "force-cost": { type: "boolean" },
+    progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const cfg = resolveConfig(flags);
   const apply = flagBoolean(flags, "apply");
   const jsonRequested = flagBoolean(flags, "json");
 
-  const result = await planVectorBackfill(cfg, {
-    apply,
-    forceCost: flagBoolean(flags, "force-cost"),
-  });
+  // Opt-in, for the reason the index builders give: attaching a sink by
+  // default would change the stderr of every existing invocation.
+  const observation = flagBoolean(flags, "progress")
+    ? attachProgress({ command: "search", argv: ["vector-backfill"], jsonRequested })
+    : null;
+  reportProgressRefusal(observation);
+
+  // Everything that can throw happens BEFORE the handle exists: `release`
+  // removes process-global listeners and settles a signal nobody acted
+  // on, and a throw between `onInterrupt()` and the `try` would skip it.
+  const interrupt = onInterrupt(OPERATION.reindex);
+  let result: VectorBackfillResult;
+  try {
+    result = await planVectorBackfill(cfg, {
+      apply,
+      forceCost: flagBoolean(flags, "force-cost"),
+      // The three seams this module declared and nothing produced until
+      // now. The deadline is the `reindex` budget off the same ladder the
+      // builders read, because this pass IS that run's embedding phase on
+      // its own - a second key for one phase would let the two disagree.
+      safeguard: createSafeguard({
+        operation: OPERATION.reindex,
+        timeoutMs: resolveSafeguardTimeoutMs(OPERATION.reindex, flagString(flags, "config")),
+      }),
+      signal: interrupt.signal,
+      ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
+    });
+  } catch (err) {
+    if (err instanceof SafeguardAbortError) return reportInterrupted(interrupt, err, jsonRequested);
+    throw err;
+  } finally {
+    interrupt.release();
+  }
 
   if (apply && result.embedded > 0) {
     try {

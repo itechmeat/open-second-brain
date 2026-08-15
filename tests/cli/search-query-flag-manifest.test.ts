@@ -76,6 +76,18 @@ const COVERED: ReadonlyArray<CoveredVerb> = Object.freeze([
     minFlags: 5,
     witness: ["no-probe", "boolean"],
   },
+  {
+    // Added with `--progress` (nothing-runs-unwatched, U1): this verb
+    // grew the whole progress spine in core - an options field, a
+    // counter, a terminator - with no flag to reach it, so the wiring
+    // was unreachable from every surface an operator has. The flag is
+    // the reach, and an undeclared flag on this family is no reach at all.
+    verb: "vector-backfill",
+    source: "vector-backfill.ts",
+    marker: "export async function cmdSearchVectorBackfill",
+    minFlags: 6,
+    witness: ["progress", "boolean"],
+  },
 ]);
 
 /**

@@ -575,9 +575,22 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("rerank-provider", "Manage reranker provider profiles"),
         command("rerank-fit", "Diagnose whether the configured reranker fits this vault's queries"),
         command("plan", "Preview the should-read shortlist for a query without reading the notes"),
+        // The whole `parseFlags` schema, for the reason the two builders
+        // above give: there is no per-verb `--help` on this family, so a
+        // flag the manifest does not model is a flag neither help nor
+        // completions can offer. `--progress` arrived here last and would
+        // have been the third such flag.
         command(
           "vector-backfill",
           "Compute vectors for indexed chunks that have none (dry-run unless --apply)",
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("db", "string"),
+            flag("apply", "boolean"),
+            flag("force-cost", "boolean"),
+            flag("progress", "boolean"),
+          ],
         ),
         command(
           "event-anchor-backfill",

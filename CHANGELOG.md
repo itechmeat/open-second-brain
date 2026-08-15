@@ -52,6 +52,7 @@ Three findings were resolved the opposite way to the obvious one, and in each ca
 
 - **Three long operations emitted progress and never terminated the stream.** The rule is written once now, because five copies of one rule are five chances to forget it - which is what happened.
 - **The first Ctrl-C was swallowed and the verb exited 0.** Registering a handler suppresses default termination, so a signal landing outside a checkpointed region was absorbed and the command reported success for a pass the operator stopped.
+- **`o2b search vector-backfill` grew the entire progress spine and no way to reach it.** An options field, a counter and a terminator in core, with no `--progress` flag, no caller passing a sink, no signal and no deadline - every line of it unreachable from any surface an operator has, which is the exact defect this release is about. Found by the new execution census, which drives each entry point for real; the source census could not see it, because a declared sink is not a passed one.
 - **A shared semaphore could be released by code holding nothing**, admitting four concurrent holders against a ceiling of two while its own high-water counter still reported two. `release()` is gone; `acquire()` returns a one-shot permit, and a second call on it throws.
 - **A retrying lock spun forever on a `NaN` budget** and froze the event loop for the whole of a valid one.
 - **The doctor could not see two of the three ingest locks**, because the stale-lock scan walked only one of the two roots locks live under.
