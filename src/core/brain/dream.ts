@@ -59,7 +59,7 @@ import {
   type DreamApplyResult,
 } from "./dream-apply.ts";
 import { planAutoRetires } from "./dream-plan-retires.ts";
-import { planTopics } from "./dream-plan-topics.ts";
+import { planTopics, topicKeyContentionWarnings } from "./dream-plan-topics.ts";
 import type { PlanState } from "./dream-plan.ts";
 import { planRefresh, scanApplyEvidence, type RefreshResult } from "./dream-refresh.ts";
 import { writeDreamLog } from "./dream-report.ts";
@@ -131,6 +131,12 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // 1-2. Plan per-topic transitions: new unconfirmed preferences,
   //      same-sign noted-redundant moves, rebuttal accumulation.
   const plan = planTopics(scan, cfg, now);
+  // A folded topic key claimed by two preferences is an ambiguity the pass
+  // refuses to settle by scan order, so it planned nothing for that key. The
+  // warning is how it says so - on the no-op summary as well as the changed
+  // one, because a run that decided nothing is exactly the run that must
+  // still explain itself.
+  warnings.push(...topicKeyContentionWarnings(plan));
 
   // 3. Plan refresh: applied / violated / last_evidence / confidence,
   //    and unconfirmed → confirmed promotion. We need the log of all

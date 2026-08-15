@@ -214,6 +214,15 @@ function buildSummaryBody(input: DreamReportInput): Record<string, string | Read
   if (plan.signalsSuppressed.length > 0) {
     body["suppressed"] = plan.signalsSuppressed.map((s) => `${s.signal} ← ${s.retired}`);
   }
+  // Folded topic keys the pass planned nothing for because two preferences
+  // claim them. The run summary's warnings carry the same finding to the
+  // caller; this row is the durable half, so a run that mutated something
+  // else leaves the ambiguity in the audit trail rather than only on stderr.
+  if (plan.topicKeyContentions.length > 0) {
+    body["topic_key_contentions"] = plan.topicKeyContentions.map(
+      (c) => `${c.key}: ${c.prefIds.join(", ")}`,
+    );
+  }
   if (refresh.bandDrops.length > 0) {
     // Format matches the digest's tolerant `parseShiftLine` parser:
     // `[[pref-…|principle]] <from> -> <to> (applied: N, violated: M)`.

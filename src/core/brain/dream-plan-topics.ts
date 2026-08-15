@@ -14,6 +14,12 @@
  *     logging a retain-pinned when it is pinned),
  *   - or record the topic as an unresolved contradiction.
  *
+ * Every one of those decisions is per TOPIC, so this module also owns what a
+ * topic is for the pass: signals, preferences and retired records are indexed
+ * by `topicKey` (the fold), while everything the plan reports keeps a raw
+ * spelling from the vault (the display form). Key and label are separate
+ * words here on purpose - see `preferredTopicDisplay`.
+ *
  * Pure: no I/O, no clock beyond the `now` it is handed.
  */
 
@@ -25,12 +31,14 @@ import {
   preferenceSlug,
   recordSignalMove,
   RETIRED_ID_PREFIX,
+  topicKey,
   type PlanState,
   type PreferenceRecord,
   type RetiredRecord,
   type ScanResult,
   type SignalRecord,
 } from "./dream-plan.ts";
+import type { DreamWarning } from "./dream-types.ts";
 import { resolveGuardrails } from "./policy.ts";
 import { isPinned } from "./pin.ts";
 import { countSigns, dominantSignOf } from "./sign.ts";
@@ -53,46 +61,167 @@ export function planTopics(scan: ScanResult, cfg: BrainConfig, now: Date): PlanS
   const plan = emptyPlan();
   const reservedSlugs = collectReservedPreferenceSlugs(scan);
 
-  // Group active signals by topic. We only consider active signals for
-  // the create/rebut decisions; processed signals stay in the global
-  // log via `evidenced_by` already.
-  const byTopic = new Map<string, SignalRecord[]>();
+  // Group active signals by folded topic key. We only consider active
+  // signals for the create/rebut decisions; processed signals stay in the
+  // global log via `evidenced_by` already.
+  const byTopic = new Map<string, TopicGroup>();
   for (const rec of scan.signals) {
     if (!rec.active) continue;
-    const topic = rec.signal.topic;
-    const arr = byTopic.get(topic);
-    if (arr) arr.push(rec);
-    else byTopic.set(topic, [rec]);
+    const raw = rec.signal.topic;
+    const key = topicKey(raw);
+    const group = byTopic.get(key);
+    if (group) {
+      group.sigs.push(rec);
+      group.display = preferredTopicDisplay(group.display, raw);
+    } else byTopic.set(key, { display: raw, sigs: [rec] });
   }
 
-  // Index existing active preferences by topic.
-  const prefByTopic = new Map<string, PreferenceRecord>();
-  for (const p of scan.preferences) {
-    // The first wins; design doc §7.4 invariant says "one preference per
-    // topic", so a duplicate would be a doctor-level issue, not a dream
-    // concern.
-    if (!prefByTopic.has(p.pref.topic)) prefByTopic.set(p.pref.topic, p);
-  }
+  // Index existing active preferences by the same key.
+  const prefs = indexPreferencesByTopicKey(scan.preferences, plan);
 
-  // Index retired by topic for supersede bookkeeping.
+  // Index retired by the same key for supersede and suppression
+  // bookkeeping. It has to fold with the rest: the loop below looks these
+  // up with the group's key, so leaving this map on raw bytes would make a
+  // user-rejected suppressor invisible to the very signals it exists to
+  // suppress.
   const retiredByTopic = new Map<string, RetiredRecord[]>();
   for (const r of scan.retired) {
-    const arr = retiredByTopic.get(r.topic);
+    const key = topicKey(r.topic);
+    const arr = retiredByTopic.get(key);
     if (arr) arr.push(r);
-    else retiredByTopic.set(r.topic, [r]);
+    else retiredByTopic.set(key, [r]);
   }
 
-  for (const [topic, sigs] of byTopic) {
-    const active = prefByTopic.get(topic);
+  for (const [key, group] of byTopic) {
+    // A contended key has no single rule of record, so there is no answer to
+    // "does this signal reinforce or rebut?" - and the wrong answer retires a
+    // preference the operator wrote. The pass plans nothing here and says so
+    // (`plan.topicKeyContentions` becomes one warning per key on the run
+    // summary); the signals stay in inbox/ and are re-evaluated on the next
+    // pass, once the vault has one owner for the key.
+    if (prefs.contended.has(key)) continue;
+    const topic = group.display;
+    const sigs = group.sigs;
+    const active = prefs.byKey.get(key);
     if (active) {
       handleSignalsOnActivePref(active, sigs, plan, cfg, now, scan.signals, reservedSlugs);
       continue;
     }
-    const candidateSigs = applySignalSuppression(topic, sigs, retiredByTopic.get(topic), plan);
+    const candidateSigs = applySignalSuppression(topic, sigs, retiredByTopic.get(key), plan);
     if (candidateSigs.length === 0) continue;
-    planTopicWithoutActivePref(topic, candidateSigs, plan, cfg, now, retiredByTopic, reservedSlugs);
+    planTopicWithoutActivePref(
+      topic,
+      key,
+      candidateSigs,
+      plan,
+      cfg,
+      now,
+      retiredByTopic,
+      reservedSlugs,
+    );
   }
   return plan;
+}
+
+/** Active signals sharing one folded key, plus the spelling that names them. */
+interface TopicGroup {
+  display: string;
+  readonly sigs: SignalRecord[];
+}
+
+/**
+ * Choose the raw spelling that represents a folded group.
+ *
+ * The display form is never the folded key: an operator reading the dream
+ * report - and the filename of any preference promoted from the group - must
+ * see what a signal actually said, not a lowercased, NFC-flattened rendering
+ * of it that appears in no file in the vault.
+ *
+ * The rule is the SMALLEST member in UTF-16 code-unit order, not the first one
+ * scanned. `scanBrain` walks `readdirSync` (`dream-scan.ts:35`), which returns
+ * entries in whatever order the filesystem stores them, so "first wins" would
+ * make the report - and the promoted preference's filename - depend on which
+ * machine ran the pass. A total order over the raw strings is a property of
+ * the corpus alone, so the same corpus always elects the same representative.
+ * Code-unit order rather than `localeCompare` for the same reason the fold
+ * itself is structural: the choice must not consult a locale.
+ */
+function preferredTopicDisplay(a: string, b: string): string {
+  return b < a ? b : a;
+}
+
+/** The preference index for one pass, plus the keys it refused to index. */
+interface PreferenceTopicIndex {
+  readonly byKey: Map<string, PreferenceRecord>;
+  readonly contended: Set<string>;
+}
+
+/**
+ * Index active preferences by folded topic key and record every key more than
+ * one topic claims.
+ *
+ * Byte-identical topics keep the historical rule - the first wins, design doc
+ * §7.4's "one preference per topic" makes a true duplicate a doctor-level
+ * issue rather than a dream concern. What the fold introduces is different: two
+ * preferences that were distinct subjects before it now resolve to one key,
+ * and the pass has no basis for choosing between them. Those keys are dropped
+ * from the index and recorded on the plan, so the ambiguity is reported rather
+ * than settled by scan order.
+ */
+function indexPreferencesByTopicKey(
+  preferences: ReadonlyArray<PreferenceRecord>,
+  plan: PlanState,
+): PreferenceTopicIndex {
+  const byKey = new Map<string, PreferenceRecord>();
+  const claimants = new Map<string, PreferenceRecord[]>();
+  for (const p of preferences) {
+    const key = topicKey(p.pref.topic);
+    if (!byKey.has(key)) byKey.set(key, p);
+    const arr = claimants.get(key);
+    if (arr) arr.push(p);
+    else claimants.set(key, [p]);
+  }
+
+  const contended = new Set<string>();
+  for (const [key, records] of claimants) {
+    const topics = [...new Set(records.map((r) => r.pref.topic))].toSorted();
+    if (topics.length < 2) continue;
+    contended.add(key);
+    byKey.delete(key);
+    plan.topicKeyContentions.push({
+      key,
+      topics,
+      prefIds: records.map((r) => r.pref.id).toSorted(),
+    });
+  }
+  // Sorted for the same reason the representative is chosen by order rather
+  // than by arrival: the report must not vary with directory enumeration.
+  plan.topicKeyContentions.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return { byKey, contended };
+}
+
+/** Warning code carried by every topic-key contention on a run summary. */
+export const TOPIC_KEY_CONTENTION_CODE = "topic-key-contention";
+
+/**
+ * Render the plan's topic-key contentions as run-summary warnings.
+ *
+ * A contention is a standing vault condition, not a mutation, so it does not
+ * by itself make a run "changed" - forcing a snapshot and a log write on every
+ * pass for a condition only the operator can clear would be churn. The warning
+ * rides on BOTH summary shapes (no-op and changed), which is why it is the
+ * channel: the CLI prints every warning to stderr and the JSON summary carries
+ * it, so a pass that decided nothing for a key still says which key and why.
+ */
+export function topicKeyContentionWarnings(plan: PlanState): DreamWarning[] {
+  return plan.topicKeyContentions.map((c) => ({
+    code: TOPIC_KEY_CONTENTION_CODE,
+    message:
+      `preferences ${c.prefIds.join(", ")} claim one topic key ${JSON.stringify(c.key)} ` +
+      `(topics ${c.topics.map((t) => JSON.stringify(t)).join(", ")}). ` +
+      `The pass planned nothing for that key; give it one owner by renaming a ` +
+      `topic or retiring one of the rules.`,
+  }));
 }
 
 /**
@@ -144,9 +273,14 @@ function applySignalSuppression(
   return remaining;
 }
 
-/** No active pref for this topic → either promote, quarantine, or note a contradiction. */
+/**
+ * No active pref for this topic → either promote, quarantine, or note a
+ * contradiction. `topic` is the group's display spelling (what the plan and
+ * the report say); `key` is its folded form (what the maps are indexed by).
+ */
 function planTopicWithoutActivePref(
   topic: string,
+  key: string,
   candidateSigs: SignalRecord[],
   plan: PlanState,
   cfg: BrainConfig,
@@ -170,7 +304,7 @@ function planTopicWithoutActivePref(
 
   // Decide supersede: if a retired pref for the same topic exists,
   // wire it through.
-  const retiredForTopic = retiredByTopic.get(topic);
+  const retiredForTopic = retiredByTopic.get(key);
   const supersedesRecord =
     retiredForTopic && retiredForTopic.length > 0 ? retiredForTopic[0]! : undefined;
   const source = dominant[0]!.signal;
@@ -293,7 +427,11 @@ function deriveActiveSign(
   const evidenceSign = dominantSignOf(active.pref.evidenced_by, signSignById);
   if (evidenceSign !== "unknown") return evidenceSign;
 
-  const topicRecords = allSignals.filter((r) => r.signal.topic === active.pref.topic);
+  // Folded, like every other topic comparison in this pass: a historical
+  // signal spelled differently from the preference it evidences is still a
+  // signal on the preference's subject.
+  const activeKey = topicKey(active.pref.topic);
+  const topicRecords = allSignals.filter((r) => topicKey(r.signal.topic) === activeKey);
   if (topicRecords.length > sigs.length) {
     // There are processed signals for this topic that are NOT among
     // the active inbox set — use them.

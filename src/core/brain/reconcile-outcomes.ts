@@ -13,6 +13,7 @@ import {
 } from "./reconcile-domains.ts";
 import {
   filterWithinWindow,
+  topicKey,
   type PlanState,
   type ScanResult,
   type SignalRecord,
@@ -65,15 +66,20 @@ export function buildReconcileOutcomes(
   // excluded the older signal from the contradiction in the first place).
   const freshnessMarginDays = Math.max(1, Math.ceil(windowDays / 2));
 
+  // Keyed by the folded topic, because the topics the plan flags ARE folded:
+  // a contradiction is now a group of raw spellings represented by one of
+  // them, so a raw-byte index here would re-split the group and classify the
+  // contradiction from only the fraction that happens to match the label.
   const byTopic = new Map<string, SignalRecord[]>();
   for (const rec of scan.signals) {
-    const arr = byTopic.get(rec.signal.topic);
+    const key = topicKey(rec.signal.topic);
+    const arr = byTopic.get(key);
     if (arr) arr.push(rec);
-    else byTopic.set(rec.signal.topic, [rec]);
+    else byTopic.set(key, [rec]);
   }
 
   for (const topic of plan.contradictionTopics) {
-    const sigs = filterWithinWindow(byTopic.get(topic) ?? [], windowDays, now);
+    const sigs = filterWithinWindow(byTopic.get(topicKey(topic)) ?? [], windowDays, now);
     const positives = sigs
       .filter((s) => s.signal.signal === BRAIN_SIGNAL_SIGN.positive)
       .map(toReconcileSignal);
