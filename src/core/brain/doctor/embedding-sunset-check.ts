@@ -58,9 +58,11 @@
  */
 
 import { resolveSearchConfig } from "../../search/index.ts";
+import { resolveEmbeddingSunsetDeclaration } from "../policy/blocks/embeddings.ts";
 import {
   classifyEmbeddingSunset,
   EMBEDDING_SUNSET,
+  EMBEDDING_SUNSET_SOURCE,
   EMBEDDING_SUNSET_SURVEY,
   EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS,
   EMBEDDING_SUNSET_UNDETERMINED_REASON,
@@ -107,7 +109,19 @@ const MIGRATION_COST =
  * how much to trust it.
  */
 function provenance(verdict: EmbeddingSunsetVerdict): string {
-  return `this rests on a decommission survey last reviewed ${verdict.surveyed_at}, which records model strings and identifies nobody's endpoint`;
+  if (verdict.source !== EMBEDDING_SUNSET_SOURCE.declaration) {
+    return `this rests on a decommission survey last reviewed ${verdict.surveyed_at}, which records model strings and identifies nobody's endpoint`;
+  }
+  const base =
+    "this is the date declared in embeddings.sunset_at in Brain/_brain.yaml, which outranks the survey compiled into this build";
+  if (!verdict.overrode_survey) return base;
+  // A silent override is how the wrong record survives, so both are named
+  // and the operator decides which to correct.
+  const held =
+    verdict.survey_sunset_at === null
+      ? "recorded no announcement for it"
+      : `records ${verdict.survey_sunset_at}`;
+  return `${base}. Note the disagreement: that survey, reviewed ${verdict.surveyed_at}, ${held} - one of the two is out of date`;
 }
 
 function announcedMessage(verdict: EmbeddingSunsetVerdict): string {
@@ -141,6 +155,12 @@ function undeterminedMessage(verdict: EmbeddingSunsetVerdict): string {
         `the decommission survey entry for ${verdict.model} carries a date this build cannot ` +
         "parse, so no verdict was reached. That is a defect in the shipped table rather than in " +
         "this vault"
+      );
+    case EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed:
+      return (
+        `the embeddings.sunset_at declared for ${verdict.model} in Brain/_brain.yaml is not an ` +
+        "ISO-8601 date, so no verdict was reached. The instant it meant is not recoverable from " +
+        "the text, and this build will not substitute one"
       );
     case null:
       // Unreachable: `undetermined` always carries a reason, and the
@@ -198,7 +218,18 @@ export function makeEmbeddingSunsetCheck(
       // string in the configuration, so it is named the way the index
       // names it rather than reported as unresolved.
       const model = semantic.provider === "local" ? LOCAL_EMBEDDING_MODEL : semantic.model;
-      const verdict = classifyEmbeddingSunset(model, ctx.now.getTime(), survey);
+      // The operator's layer, read straight off the context rather than
+      // loaded here: `_brain.yaml` is already resolved once per pass, and
+      // a second read could disagree with the one every other check saw.
+      // A vault with no declaration yields `null`, which means "consult
+      // the survey" and never "no shutdown exists".
+      const declared = resolveEmbeddingSunsetDeclaration(ctx.config);
+      const verdict = classifyEmbeddingSunset(
+        model,
+        ctx.now.getTime(),
+        survey,
+        declared ?? undefined,
+      );
 
       switch (verdict.state) {
         case EMBEDDING_SUNSET.noneAnnounced:

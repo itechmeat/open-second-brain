@@ -199,9 +199,12 @@ import {
 } from "../../../src/core/brain/sessions/import.ts";
 import {
   EMBEDDING_SUNSET,
+  EMBEDDING_SUNSET_SOURCE,
+  EMBEDDING_SUNSET_SOURCES,
   EMBEDDING_SUNSET_STATES,
   EMBEDDING_SUNSET_UNDETERMINED_REASON,
   EMBEDDING_SUNSET_UNDETERMINED_REASONS,
+  isEmbeddingSunsetSource,
   isEmbeddingSunsetState,
   isEmbeddingSunsetUndeterminedReason,
 } from "../../../src/core/search/embeddings/sunset.ts";
@@ -842,6 +845,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: EMBEDDING_SUNSET_UNDETERMINED_REASON,
     members: EMBEDDING_SUNSET_UNDETERMINED_REASONS,
     guard: isEmbeddingSunsetUndeterminedReason,
+  },
+  {
+    // B1. Which layer answered a sunset question - the operator's
+    // declaration in `_brain.yaml`, this build's table, or NEITHER. A
+    // boolean was the obvious shape and it is wrong: it would have made
+    // "the survey answered" and "nothing answered" the same value, which
+    // is the collapse this whole check exists to undo.
+    name: "EMBEDDING_SUNSET_SOURCE",
+    values: EMBEDDING_SUNSET_SOURCE,
+    members: EMBEDDING_SUNSET_SOURCES,
+    guard: isEmbeddingSunsetSource,
   },
   {
     // U6. What one maintenance-lane journal row records. It was a bare

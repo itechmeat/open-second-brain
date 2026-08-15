@@ -22,6 +22,7 @@ import { describe, expect, test } from "bun:test";
 import {
   classifyEmbeddingSunset,
   EMBEDDING_SUNSET,
+  EMBEDDING_SUNSET_SOURCE,
   EMBEDDING_SUNSET_STATES,
   EMBEDDING_SUNSET_SURVEY,
   EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS,
@@ -35,6 +36,8 @@ import { isValidIsoInstant, parseIsoUtc } from "../../../src/core/brain/health/i
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-06-01T00:00:00.000Z");
+/** A model string no shipped row carries, so a fixture owns it outright. */
+const MODEL_A = "vendor/model-x";
 
 /** A survey under this test's control, reviewed the day before `NOW`. */
 function survey(entries: EmbeddingSunsetSurvey["entries"]): EmbeddingSunsetSurvey {
@@ -158,6 +161,81 @@ describe("the clock is a parameter", () => {
       s,
     );
     expect(early.state).not.toBe(late.state);
+  });
+});
+
+describe("an operator declaration layers OVER the survey", () => {
+  const DECLARED = "2026-09-01";
+
+  test("it answers for a model the survey never heard of", () => {
+    const verdict = classifyEmbeddingSunset("vendor-q/private-embed", NOW, survey([]), {
+      model: "vendor-q/private-embed",
+      sunsetAt: DECLARED,
+    });
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.announced);
+    expect(verdict.sunset_at).toBe(DECLARED);
+    expect(verdict.source).toBe(EMBEDDING_SUNSET_SOURCE.declaration);
+    expect(verdict.overrode_survey).toBe(false);
+  });
+
+  test("it WINS over a survey row that names a different date, and says so", () => {
+    const s = survey([
+      { model: MODEL_A, sunsetAt: "2027-01-01", source: "unit fixture", note: "" },
+    ]);
+    const verdict = classifyEmbeddingSunset(MODEL_A, NOW, s, {
+      model: MODEL_A,
+      sunsetAt: DECLARED,
+    });
+    // The declaration exists BECAUSE the static table goes stale, so the
+    // operator who just read the vendor's notice outranks a table frozen
+    // at release. The disagreement is carried, never erased.
+    expect(verdict.sunset_at).toBe(DECLARED);
+    expect(verdict.source).toBe(EMBEDDING_SUNSET_SOURCE.declaration);
+    expect(verdict.overrode_survey).toBe(true);
+    expect(verdict.survey_sunset_at).toBe("2027-01-01");
+  });
+
+  test("it WINS over a surveyed negative, and the contradiction is visible", () => {
+    const s = survey([{ model: MODEL_A, sunsetAt: null, source: "unit fixture", note: "" }]);
+    const verdict = classifyEmbeddingSunset(MODEL_A, NOW, s, {
+      model: MODEL_A,
+      sunsetAt: DECLARED,
+    });
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.announced);
+    expect(verdict.overrode_survey).toBe(true);
+    // `null` is the survey's answer, not an absence of one.
+    expect(verdict.survey_sunset_at).toBeNull();
+  });
+
+  test("the SURVEY wins when the declaration is about another model", () => {
+    // The other direction. A declaration names its model explicitly, so a
+    // stale one cannot silently re-target itself at whatever the operator
+    // configured next.
+    const s = survey([
+      { model: MODEL_A, sunsetAt: "2027-01-01", source: "unit fixture", note: "" },
+    ]);
+    const verdict = classifyEmbeddingSunset(MODEL_A, NOW, s, {
+      model: "some-other/model",
+      sunsetAt: DECLARED,
+    });
+    expect(verdict.sunset_at).toBe("2027-01-01");
+    expect(verdict.source).toBe(EMBEDDING_SUNSET_SOURCE.survey);
+    expect(verdict.overrode_survey).toBe(false);
+  });
+
+  test("a verdict from neither layer names neither", () => {
+    const verdict = classifyEmbeddingSunset("nobody/knows", NOW, survey([]));
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.unsurveyed);
+    expect(verdict.source).toBe(EMBEDDING_SUNSET_SOURCE.none);
+  });
+
+  test("a declaration this build cannot parse is refused, never treated as absent", () => {
+    const verdict = classifyEmbeddingSunset(MODEL_A, NOW, survey([]), {
+      model: MODEL_A,
+      sunsetAt: "next tuesday",
+    });
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.undetermined);
+    expect(verdict.reason).toBe(EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed);
   });
 });
 

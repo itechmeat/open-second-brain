@@ -30,6 +30,7 @@ import {
 import type { DoctorUncertainEntry } from "../../../../src/core/brain/doctor/report.ts";
 import { DOCTOR_EXIT_EXCLUSIONS } from "../../../../src/core/brain/doctor-exits.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
+import { loadBrainConfig } from "../../../../src/core/brain/policy.ts";
 import type { EmbeddingSunsetSurvey } from "../../../../src/core/search/embeddings/sunset.ts";
 import { EMBEDDING_SUNSET_SURVEY_HORIZON_DAYS } from "../../../../src/core/search/embeddings/sunset.ts";
 import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
@@ -205,6 +206,77 @@ describe("what the check cannot establish reaches the uncertain stream", () => {
     const result = run(surveyWith(inDays(1)));
     expect(result.issues).toEqual([]);
     expect(result.uncertain).toEqual([]);
+  });
+});
+
+describe("an operator declaration layers over the survey, end to end", () => {
+  /**
+   * Write a `_brain.yaml` declaring `sunsetAt` for `model`.
+   *
+   * NOT named `declare`: that is a TypeScript contextual keyword, and a
+   * call to a helper of that name is silently swallowed at statement
+   * position rather than reported - the test passed its setup and then
+   * asserted against a vault nothing had been written to.
+   */
+  function declareSunset(model: string, sunsetAt: string): void {
+    const path = join(vault, "Brain", "_brain.yaml");
+    writeFileSync(
+      path,
+      `schema_version: 1\nembeddings:\n  sunset_model: "${model}"\n  sunset_at: "${sunsetAt}"\n`,
+    );
+  }
+
+  /** Run with the real `_brain.yaml` resolved onto the context. */
+  function runWithConfig(survey: EmbeddingSunsetSurvey, now: Date = NOW): RunResult {
+    const issues: DoctorIssue[] = [];
+    const uncertain: DoctorUncertainEntry[] = [];
+    makeEmbeddingSunsetCheck(survey).run(
+      {
+        vault,
+        now,
+        configPath,
+        config: loadBrainConfig(vault),
+      } as unknown as DoctorCheckContext,
+      { issues, uncertain },
+    );
+    return { issues, uncertain };
+  }
+
+  test("a declaration warns for a model the survey never heard of", () => {
+    const date = inDays(EMBEDDING_SUNSET_WARNING_WINDOW_DAYS - 5);
+    declareSunset(MODEL, date);
+    const issues = announced(runWithConfig({ reviewedAt: "2026-05-31", entries: [] }));
+    expect(issues.length).toBe(1);
+    expect(issues[0]!.message).toContain(date);
+    expect(issues[0]!.message).toContain("sunset_at");
+  });
+
+  test("a declaration OUTRANKS a survey row, and the disagreement is printed", () => {
+    const declared = inDays(EMBEDDING_SUNSET_WARNING_WINDOW_DAYS - 5);
+    const surveyed = inDays(EMBEDDING_SUNSET_WARNING_WINDOW_DAYS - 40);
+    declareSunset(MODEL, declared);
+    const issues = announced(runWithConfig(surveyWith(surveyed)));
+    expect(issues.length).toBe(1);
+    // Both dates are on the line: one of the two records is out of date
+    // and a silent override is how the wrong one survives.
+    expect(issues[0]!.message).toContain(declared);
+    expect(issues[0]!.message).toContain(surveyed);
+  });
+
+  test("the SURVEY still answers when the declaration names another model", () => {
+    const surveyed = inDays(EMBEDDING_SUNSET_WARNING_WINDOW_DAYS - 40);
+    declareSunset("some-other/model", inDays(1));
+    const issues = announced(runWithConfig(surveyWith(surveyed)));
+    expect(issues.length).toBe(1);
+    expect(issues[0]!.message).toContain(surveyed);
+  });
+
+  test("a declaration turns a surveyed negative into a warning", () => {
+    // The layer only ever ADDS a positive; the survey's own three answers
+    // are untouched when nothing is declared.
+    expect(announced(runWithConfig(surveyWith(null)))).toEqual([]);
+    declareSunset(MODEL, inDays(10));
+    expect(announced(runWithConfig(surveyWith(null))).length).toBe(1);
   });
 });
 

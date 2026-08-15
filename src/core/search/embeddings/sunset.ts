@@ -141,6 +141,8 @@ export const EMBEDDING_SUNSET_UNDETERMINED_REASON = Object.freeze({
   surveyStale: "survey_stale",
   /** A survey entry carries a date this build cannot parse. */
   surveyEntryMalformed: "survey_entry_malformed",
+  /** The operator's declared date is not an ISO instant. */
+  declarationMalformed: "declaration_malformed",
 } as const);
 
 /** Closed union over {@link EMBEDDING_SUNSET_UNDETERMINED_REASON}. */
@@ -153,6 +155,7 @@ export const EMBEDDING_SUNSET_UNDETERMINED_REASONS: ReadonlyArray<EmbeddingSunse
     EMBEDDING_SUNSET_UNDETERMINED_REASON.modelUnresolved,
     EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyStale,
     EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyEntryMalformed,
+    EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed,
   ]);
 
 /** Narrow a string read back off disk or across a tool boundary. */
@@ -162,6 +165,42 @@ export function isEmbeddingSunsetUndeterminedReason(
   return (
     typeof value === "string" &&
     (EMBEDDING_SUNSET_UNDETERMINED_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
+ * Which layer answered.
+ *
+ * A closed vocabulary rather than a boolean because there are three
+ * answers, not two: the operator's declaration, this build's table, and
+ * NEITHER - which is what `unsurveyed` and `undetermined` rest on. A
+ * boolean would have made "came from the survey" and "came from nowhere"
+ * the same value.
+ */
+export const EMBEDDING_SUNSET_SOURCE = Object.freeze({
+  /** The operator declared this date in `Brain/_brain.yaml`. */
+  declaration: "declaration",
+  /** This build's shipped survey answered. */
+  survey: "survey",
+  /** Neither layer had anything to say about the model. */
+  none: "none",
+} as const);
+
+/** Closed union over {@link EMBEDDING_SUNSET_SOURCE}. */
+export type EmbeddingSunsetSource =
+  (typeof EMBEDDING_SUNSET_SOURCE)[keyof typeof EMBEDDING_SUNSET_SOURCE];
+
+/** Membership list, in precedence order. */
+export const EMBEDDING_SUNSET_SOURCES: ReadonlyArray<EmbeddingSunsetSource> = Object.freeze([
+  EMBEDDING_SUNSET_SOURCE.declaration,
+  EMBEDDING_SUNSET_SOURCE.survey,
+  EMBEDDING_SUNSET_SOURCE.none,
+]);
+
+/** Narrow a string read back off disk or across a tool boundary. */
+export function isEmbeddingSunsetSource(value: unknown): value is EmbeddingSunsetSource {
+  return (
+    typeof value === "string" && (EMBEDDING_SUNSET_SOURCES as ReadonlyArray<string>).includes(value)
   );
 }
 
@@ -313,6 +352,20 @@ export const EMBEDDING_SUNSET_SURVEY: EmbeddingSunsetSurvey = Object.freeze({
 
 // ----- The classifier -------------------------------------------------------
 
+/**
+ * An operator's own record of an announcement they have read.
+ *
+ * It names its MODEL explicitly rather than meaning "whatever is
+ * configured". A declaration that meant the latter would silently
+ * re-target itself the next time `embedding_model` changed, asserting one
+ * vendor's shutdown date about a different vendor's model - which is the
+ * confidently-wrong output this whole unit exists to prevent.
+ */
+export interface EmbeddingSunsetDeclaration {
+  readonly model: string;
+  readonly sunsetAt: string;
+}
+
 export interface EmbeddingSunsetVerdict {
   readonly state: EmbeddingSunsetState;
   /** The model the verdict is about, or `null` when none resolved. */
@@ -325,6 +378,22 @@ export interface EmbeddingSunsetVerdict {
   readonly reason: EmbeddingSunsetUndeterminedReason | null;
   /** The survey review date this verdict rests on. */
   readonly surveyed_at: string;
+  /** Which layer answered. */
+  readonly source: EmbeddingSunsetSource;
+  /**
+   * True when a declaration answered AND the survey held a different
+   * answer for the same model. Distinguishes "the survey said nothing
+   * about this model" from "the survey disagreed" - one of the two
+   * records is then wrong, and hiding either is how a wrong date
+   * survives.
+   */
+  readonly overrode_survey: boolean;
+  /**
+   * What the survey held for this model when a declaration overrode it: a
+   * date, or `null` meaning the survey recorded no announcement. Only
+   * meaningful alongside {@link overrode_survey}.
+   */
+  readonly survey_sunset_at: string | null;
 }
 
 function undetermined(
@@ -339,6 +408,9 @@ function undetermined(
     days_remaining: null,
     reason,
     surveyed_at: surveyedAt,
+    source: EMBEDDING_SUNSET_SOURCE.none,
+    overrode_survey: false,
+    survey_sunset_at: null,
   };
 }
 
@@ -361,12 +433,44 @@ export function classifyEmbeddingSunset(
   model: string | null,
   nowMs: number,
   survey: EmbeddingSunsetSurvey = EMBEDDING_SUNSET_SURVEY,
+  declaration?: EmbeddingSunsetDeclaration,
 ): EmbeddingSunsetVerdict {
   const reviewedAt = survey.reviewedAt;
   if (model === null || model.trim() === "") {
     return undetermined(null, EMBEDDING_SUNSET_UNDETERMINED_REASON.modelUnresolved, reviewedAt);
   }
   const entry = survey.entries.find((e) => e.model === model) ?? null;
+
+  // The operator's layer first. It exists BECAUSE a table baked into the
+  // binary goes stale between releases, and whoever wrote it has just
+  // read the announcement; the survey was frozen at release. A
+  // declaration about some OTHER model is not about this one and does not
+  // participate - see EmbeddingSunsetDeclaration for why it names its
+  // model rather than meaning "whatever is configured".
+  if (declaration !== undefined && declaration.model === model) {
+    if (!isValidIsoInstant(declaration.sunsetAt)) {
+      return undetermined(
+        model,
+        EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed,
+        reviewedAt,
+      );
+    }
+    // A disagreement is carried, not erased: one of the two records is
+    // wrong, and a silent override is how the wrong one survives.
+    const disagrees = entry !== null && entry.sunsetAt !== declaration.sunsetAt;
+    return {
+      state: EMBEDDING_SUNSET.announced,
+      model,
+      sunset_at: declaration.sunsetAt,
+      days_remaining: Math.floor((parseIsoUtc(declaration.sunsetAt) - nowMs) / MS_PER_DAY),
+      reason: null,
+      surveyed_at: reviewedAt,
+      source: EMBEDDING_SUNSET_SOURCE.declaration,
+      overrode_survey: disagrees,
+      survey_sunset_at: disagrees ? entry.sunsetAt : null,
+    };
+  }
+
   if (entry === null) {
     return {
       state: EMBEDDING_SUNSET.unsurveyed,
@@ -375,6 +479,9 @@ export function classifyEmbeddingSunset(
       days_remaining: null,
       reason: null,
       surveyed_at: reviewedAt,
+      source: EMBEDDING_SUNSET_SOURCE.none,
+      overrode_survey: false,
+      survey_sunset_at: null,
     };
   }
   if (entry.sunsetAt !== null) {
@@ -395,6 +502,9 @@ export function classifyEmbeddingSunset(
       days_remaining: Math.floor((parseIsoUtc(entry.sunsetAt) - nowMs) / MS_PER_DAY),
       reason: null,
       surveyed_at: reviewedAt,
+      source: EMBEDDING_SUNSET_SOURCE.survey,
+      overrode_survey: false,
+      survey_sunset_at: null,
     };
   }
   // A surveyed NEGATIVE, and negatives expire.
@@ -410,5 +520,8 @@ export function classifyEmbeddingSunset(
     days_remaining: null,
     reason: null,
     surveyed_at: reviewedAt,
+    source: EMBEDDING_SUNSET_SOURCE.survey,
+    overrode_survey: false,
+    survey_sunset_at: null,
   };
 }
