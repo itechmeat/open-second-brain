@@ -23,9 +23,71 @@
  * It deliberately does NOT require values to be unique across
  * vocabularies. An absent config file and an absent store file are both
  * honestly named `absent`, and forcing them apart would buy nothing.
+ *
+ * ## The population is READ, not remembered
+ *
+ * The registry below used to be the whole file: a hand-written list of
+ * imports, auditing the vocabularies somebody remembered to add and
+ * nothing at all about the ones they did not. A new module carrying a
+ * duplicate value, a phantom member and a guard that accepts every
+ * string ran clean, because an unregistered vocabulary was invisible.
+ * {@link scanVocabularies} closes that: it walks `src/`, finds every
+ * vocabulary that carries the FOUR-PIECE shape, and
+ * {@link CENSUS} must account for each one.
+ *
+ * The four pieces, all four required and all four in one module:
+ *
+ *   1. `const NAME = Object.freeze({ … })` whose every entry is
+ *      `key: "string literal"`;
+ *   2. a union derived from it - `(typeof NAME)[keyof typeof NAME]`;
+ *   3. a membership list built from it - a const initialised from
+ *      `Object.values(NAME)` or from an array of `NAME.member`;
+ *   4. a guard: a function or arrow taking a parameter typed `unknown`
+ *      that reads the membership list or the object.
+ *
+ * All four, because all four is exactly what {@link auditVocabulary}
+ * audits. A frozen object with no guard has no guard to check, and
+ * demanding one would report `DREAM_STEP_RUNNABLE` and
+ * `DREAM_GATE_NAMES` - deliberate SUBSETS of their objects, listing the
+ * runnable steps rather than every step - as drift that is not drift.
+ * That is also why there is no exemption list here: a construct with all
+ * four pieces has nothing to be excused from, and an empty escape hatch
+ * is an invitation rather than a policy.
+ *
+ * ## What the scan cannot see, stated rather than implied
+ *
+ * It reads text, not a parse tree - this repository has one runtime
+ * dependency and no TypeScript AST library - so it masks comments and
+ * string CONTENTS before matching (a `"{"` inside a value cannot
+ * mis-terminate a body) and then reads brackets. What that still leaves:
+ *
+ *   - A vocabulary SPLIT ACROSS MODULES: object here, membership list or
+ *     guard there. Detection is per-file, so a split trio is out of
+ *     population entirely. No vocabulary in this tree is split.
+ *   - A vocabulary with no membership list or no guard. Two pieces are
+ *     not the idiom, and there is nothing for the audit to compare -
+ *     but it is the cheapest way to leave the population, so it is named
+ *     here rather than left for a reader to discover.
+ *   - Values that are not literals in the object: a spread of another
+ *     object, a computed key's value, a value built by a call. Any of
+ *     these drops the object out of the population.
+ *   - A guard whose parameter is typed `string`. It is a guard that can
+ *     only be called once the caller proved what it was asked to prove,
+ *     and the idiom's own rule is `unknown`.
+ *   - Trees other than `src/`. `hooks/`, `scripts/` and `plugins/`
+ *     declare no derived-union vocabulary today; if one appears there it
+ *     is invisible until this root list grows.
+ *
+ * Each of those is a shape a future contributor could write. The
+ * "the scan sees the shapes it claims to" block below pins the ones it
+ * DOES see, one synthetic module per shape - and, in the same block, the
+ * frozen objects that must stay OUT - so a scan that quietly stops
+ * matching fails by name instead of reporting a smaller population.
  */
 
 import { describe, expect, test } from "bun:test";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, relative } from "node:path";
 
 import {
   isSchemaPackIntegrityStatus,
@@ -60,7 +122,10 @@ import {
   SNAPSHOT_STORE_EXCLUSION_REASONS,
 } from "../../../src/core/brain/manifest.ts";
 import {
+  isSnapshotEntrySkipReason,
   isSnapshotPruneRefusal,
+  SNAPSHOT_ENTRY_SKIP_REASON,
+  SNAPSHOT_ENTRY_SKIP_REASONS,
   SNAPSHOT_PRUNE_REFUSAL,
   SNAPSHOT_PRUNE_REFUSALS,
 } from "../../../src/core/brain/snapshot.ts";
@@ -248,6 +313,11 @@ import {
   MAINTENANCE_VERDICT,
   MAINTENANCE_VERDICTS,
 } from "../../../src/core/brain/maintenance/journal.ts";
+import {
+  isProgressOutcome,
+  PROGRESS_OUTCOME,
+  PROGRESS_OUTCOMES,
+} from "../../../src/cli/progress-rail.ts";
 import {
   HOST_PRESSURE,
   HOST_PRESSURE_STATES,
@@ -893,7 +963,337 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: HOST_PRESSURE_UNMEASURABLE_REASONS,
     guard: isHostPressureUnmeasurableReason,
   },
+  {
+    // U1. Whether a progress line reached stderr or was refused because
+    // the command's streams are buffered for the whole run. It was NOT
+    // registered here when it shipped, and the source scan below is how
+    // it was found - the first vocabulary this census enrolled because
+    // the tree said so rather than because an author remembered.
+    name: "PROGRESS_OUTCOME",
+    values: PROGRESS_OUTCOME,
+    members: PROGRESS_OUTCOMES,
+    guard: isProgressOutcome,
+  },
+  {
+    // U6. Why one `.snapshots/` entry could not become a listing row.
+    // The second vocabulary the scan enrolled rather than an author: it
+    // shipped complete, beside SNAPSHOT_PRUNE_REFUSAL in the same module,
+    // and was registered here by nobody.
+    name: "SNAPSHOT_ENTRY_SKIP_REASON",
+    values: SNAPSHOT_ENTRY_SKIP_REASON,
+    members: SNAPSHOT_ENTRY_SKIP_REASONS,
+    guard: isSnapshotEntrySkipReason,
+  },
 ]);
+
+// ---------------------------------------------------------------------------
+// The population, read from `src/`
+// ---------------------------------------------------------------------------
+
+const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
+
+/** Roots the scan walks. See the docblock for what living outside costs. */
+const SCANNED_ROOTS: ReadonlyArray<string> = Object.freeze(["src"]);
+
+interface SourceFile {
+  readonly path: string;
+  readonly text: string;
+}
+
+function readSourceTree(): SourceFile[] {
+  const files: SourceFile[] = [];
+  const walk = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const abs = join(dir, entry.name);
+      if (entry.isDirectory()) walk(abs);
+      else if (entry.name.endsWith(".ts")) {
+        files.push({
+          path: relative(REPO_ROOT, abs).split("\\").join("/"),
+          text: readFileSync(abs, "utf8"),
+        });
+      }
+    }
+  };
+  for (const root of SCANNED_ROOTS) walk(join(REPO_ROOT, root));
+  files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  return files;
+}
+
+/**
+ * The same source with comment bodies and string CONTENTS replaced by
+ * spaces, character offsets preserved.
+ *
+ * Structure is read off the mask and content off the original at the same
+ * index. This is what makes bracket matching honest: a `"}"` inside a
+ * value cannot close an object, and `// }` in a comment cannot either.
+ */
+function maskSource(text: string): string {
+  const out = text.split("");
+  const blank = (from: number, to: number): void => {
+    for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== "\n") out[k] = " ";
+  };
+  let i = 0;
+  while (i < text.length) {
+    const char = text[i]!;
+    const next = text[i + 1];
+    if (char === "/" && next === "/") {
+      const end = text.indexOf("\n", i);
+      const stop = end === -1 ? text.length : end;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (char === "/" && next === "*") {
+      const end = text.indexOf("*/", i + 2);
+      const stop = end === -1 ? text.length : end + 2;
+      blank(i, stop);
+      i = stop;
+      continue;
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      let k = i + 1;
+      while (k < text.length) {
+        if (text[k] === "\\") {
+          k += 2;
+          continue;
+        }
+        if (text[k] === char) break;
+        k += 1;
+      }
+      blank(i + 1, k);
+      i = k + 1;
+      continue;
+    }
+    i += 1;
+  }
+  return out.join("");
+}
+
+const CLOSER: Readonly<Record<string, string>> = Object.freeze({
+  "{": "}",
+  "[": "]",
+  "(": ")",
+});
+
+/** Index of the bracket closing the one at `open`, or -1. */
+function matchBracket(masked: string, open: number): number {
+  const opener = masked[open]!;
+  const closer = CLOSER[opener]!;
+  let depth = 0;
+  for (let i = open; i < masked.length; i += 1) {
+    const char = masked[i];
+    if (char === opener) depth += 1;
+    else if (char === closer) {
+      depth -= 1;
+      if (depth === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** A `const NAME = …` whose initialiser is a bracketed expression. */
+interface Binding {
+  readonly name: string;
+  /** Index of the opening bracket of the initialiser's outermost group. */
+  readonly open: number;
+  /** Index of its closer. */
+  readonly close: number;
+  /** `{` for an object literal, `[` for an array, `(` for `Object.freeze(…)`. */
+  readonly bracket: string;
+}
+
+/**
+ * `Object.freeze(` and bare-array bindings. The optional type annotation
+ * is matched as "anything up to the `=`" excluding `;` and `=`, which is
+ * every annotation in this tree; a function-typed annotation (`() => T`)
+ * would hide the binding, and hiding a MEMBERSHIP LIST is the only way
+ * that matters - it drops its vocabulary out of the population.
+ */
+const FROZEN_BINDING_RE =
+  /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::[^;=]*)?=\s*Object\s*\.\s*freeze\s*\(/g;
+const ARRAY_BINDING_RE = /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::[^;=]*)?=\s*\[/g;
+
+function bindings(masked: string): Binding[] {
+  const found: Binding[] = [];
+  for (const match of masked.matchAll(FROZEN_BINDING_RE)) {
+    const paren = match.index! + match[0].length - 1;
+    const close = matchBracket(masked, paren);
+    if (close === -1) continue;
+    // `Object.freeze({ … })` and `Object.freeze([ … ])` are reported as
+    // the literal they wrap; `Object.freeze(Object.values(X))` stays a
+    // call, which is a membership list and never an object literal.
+    const inner = masked.slice(paren + 1, close);
+    const offset = inner.search(/\S/);
+    const first = offset === -1 ? "" : inner[offset];
+    if (first === "{" || first === "[") {
+      const open = paren + 1 + offset;
+      const innerClose = matchBracket(masked, open);
+      if (innerClose !== -1) {
+        found.push({ name: match[1]!, open, close: innerClose, bracket: first });
+        continue;
+      }
+    }
+    found.push({ name: match[1]!, open: paren, close, bracket: "(" });
+  }
+  for (const match of masked.matchAll(ARRAY_BINDING_RE)) {
+    const open = match.index! + match[0].length - 1;
+    const close = matchBracket(masked, open);
+    if (close !== -1) found.push({ name: match[1]!, open, close, bracket: "[" });
+  }
+  return found;
+}
+
+/** Top-level `,`-separated segments of a bracketed body, as index pairs. */
+function segments(masked: string, open: number, close: number): Array<readonly [number, number]> {
+  const parts: Array<readonly [number, number]> = [];
+  let depth = 0;
+  let start = open + 1;
+  for (let i = open + 1; i < close; i += 1) {
+    const char = masked[i];
+    if (char === "(" || char === "[" || char === "{") depth += 1;
+    else if (char === ")" || char === "]" || char === "}") depth -= 1;
+    else if (char === "," && depth === 0) {
+      parts.push([start, i]);
+      start = i + 1;
+    }
+  }
+  parts.push([start, close]);
+  return parts;
+}
+
+const ENTRY_RE = /^\s*(?:[A-Za-z_$][\w$]*|"[^"]*"|'[^']*')\s*:\s*(["'])/;
+
+/**
+ * The declared values of a frozen object literal, in source order, or
+ * `null` when ANY entry is something other than `key: "literal"` - a
+ * spread, a nested object, a call. Not-a-literal is not a partial read:
+ * it means this object is not a string vocabulary.
+ */
+function declaredValues(masked: string, text: string, binding: Binding): string[] | null {
+  if (binding.bracket !== "{") return null;
+  const values: string[] = [];
+  for (const [from, to] of segments(masked, binding.open, binding.close)) {
+    const segment = masked.slice(from, to);
+    if (segment.trim() === "") continue;
+    const match = ENTRY_RE.exec(segment);
+    if (match === null) return null;
+    const quote = match[1]!;
+    const valueStart = from + match[0].length;
+    const valueEnd = masked.indexOf(quote, valueStart);
+    if (valueEnd === -1 || valueEnd >= to) return null;
+    values.push(text.slice(valueStart, valueEnd));
+  }
+  return values.length > 0 ? values : null;
+}
+
+/** A declaration that takes a parameter typed `unknown`. */
+interface GuardCandidate {
+  readonly name: string;
+  /** Source range of the whole declaration, signature and body. */
+  readonly from: number;
+  readonly to: number;
+}
+
+const FUNCTION_RE = /\bfunction\s+([A-Za-z_$][\w$]*)\s*\(/g;
+const ARROW_RE = /\bconst\s+([A-Za-z_$][\w$]*)\s*(?::[^;=]*)?=\s*(?:async\s*)?\(/g;
+
+/** Index of the end of the statement starting at `from`, at depth zero. */
+function statementEnd(masked: string, from: number): number {
+  let depth = 0;
+  for (let i = from; i < masked.length; i += 1) {
+    const char = masked[i];
+    if (char === "(" || char === "[" || char === "{") depth += 1;
+    else if (char === ")" || char === "]" || char === "}") {
+      depth -= 1;
+      if (depth < 0) return i;
+    } else if (char === ";" && depth === 0) return i;
+  }
+  return masked.length;
+}
+
+function guardCandidates(masked: string): GuardCandidate[] {
+  const found: GuardCandidate[] = [];
+  for (const match of masked.matchAll(FUNCTION_RE)) {
+    const paramsOpen = match.index! + match[0].length - 1;
+    const paramsClose = matchBracket(masked, paramsOpen);
+    if (paramsClose === -1) continue;
+    if (!/:\s*unknown\b/.test(masked.slice(paramsOpen, paramsClose))) continue;
+    const bodyOpen = masked.indexOf("{", paramsClose);
+    const bodyClose = bodyOpen === -1 ? -1 : matchBracket(masked, bodyOpen);
+    found.push({
+      name: match[1]!,
+      from: match.index!,
+      to: bodyClose === -1 ? masked.length : bodyClose,
+    });
+  }
+  for (const match of masked.matchAll(ARROW_RE)) {
+    const paramsOpen = match.index! + match[0].length - 1;
+    const paramsClose = matchBracket(masked, paramsOpen);
+    if (paramsClose === -1) continue;
+    if (!/:\s*unknown\b/.test(masked.slice(paramsOpen, paramsClose))) continue;
+    if (!/^[^;{]*=>/.test(masked.slice(paramsClose + 1))) continue;
+    found.push({ name: match[1]!, from: match.index!, to: statementEnd(masked, paramsClose + 1) });
+  }
+  return found;
+}
+
+/** One vocabulary the tree declares, as the scan reads it. */
+interface ScannedVocabulary {
+  readonly file: string;
+  /** The frozen object's identifier. `CENSUS.name` must equal it. */
+  readonly name: string;
+  /** Its declared values, in source order. */
+  readonly values: ReadonlyArray<string>;
+  /** The membership-list constant built from it. */
+  readonly members: string;
+  /** The guard that takes `unknown`. */
+  readonly guard: string;
+}
+
+function scanVocabularies(files: ReadonlyArray<SourceFile>): ScannedVocabulary[] {
+  const found: ScannedVocabulary[] = [];
+  for (const file of files) {
+    const masked = maskSource(file.text);
+    const declared = bindings(masked);
+    const guards = guardCandidates(masked);
+    for (const binding of declared) {
+      const values = declaredValues(masked, file.text, binding);
+      if (values === null) continue;
+      const name = binding.name;
+      const derived = new RegExp(
+        String.raw`\(\s*typeof\s+${name}\s*\)\s*\[\s*keyof\s+typeof\s+${name}\s*\]`,
+      );
+      if (!derived.test(masked)) continue;
+      const referencesObject = new RegExp(
+        String.raw`\b${name}\s*\.|Object\s*\.\s*values\s*\(\s*${name}\s*\)`,
+      );
+      const list = declared.find(
+        (candidate) =>
+          candidate !== binding &&
+          candidate.bracket !== "{" &&
+          referencesObject.test(masked.slice(candidate.open, candidate.close)),
+      );
+      if (list === undefined) continue;
+      const reads = new RegExp(String.raw`\b(?:${list.name}|${name})\b`);
+      const guard = guards.find((candidate) =>
+        reads.test(masked.slice(candidate.from, candidate.to)),
+      );
+      if (guard === undefined) continue;
+      found.push({
+        file: file.path,
+        name,
+        values,
+        members: list.name,
+        guard: guard.name,
+      });
+    }
+  }
+  return found;
+}
+
+const SOURCE_TREE = readSourceTree();
+const SCANNED = scanVocabularies(SOURCE_TREE);
+const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
   test("the registry is not empty", () => {
@@ -969,4 +1369,195 @@ describe("the census itself catches drift", () => {
     });
     expect(problems).toContain("synthetic: values object carries a duplicate value");
   });
+});
+
+describe("the census reads the tree", () => {
+  test("every four-piece vocabulary in src/ is registered", () => {
+    // The finding this block exists for: an unregistered vocabulary used
+    // to be invisible, so a module carrying a duplicate value, a phantom
+    // member and a guard that accepts every string ran clean.
+    const unregistered = SCANNED.filter((row) => !REGISTERED.has(row.name)).map(
+      (row) => `${row.name} (${row.file})`,
+    );
+    // Named, not counted: the failure has to say which vocabulary.
+    expect(unregistered).toEqual([]);
+  });
+
+  test("no registration outlives the vocabulary it audits", () => {
+    // The other direction, and the reason the scan can be trusted at all:
+    // if it stopped seeing a shape, the vocabularies written in that shape
+    // would go missing here rather than silently leave the population.
+    const scanned = new Set(SCANNED.map((row) => row.name));
+    const orphaned = CENSUS.filter((entry) => !scanned.has(entry.name)).map((entry) => entry.name);
+    expect(orphaned).toEqual([]);
+  });
+
+  test("each registration names the object the source declares", () => {
+    // `name` is the source identifier, which is what lets the two halves
+    // be joined at all. A registration pointing at a different object -
+    // the copy-paste failure this file is one long list of opportunities
+    // for - lands here as a value mismatch.
+    const mismatched: string[] = [];
+    for (const row of SCANNED) {
+      const entry = REGISTERED.get(row.name);
+      if (entry === undefined) continue;
+      const registered = Object.values(entry.values).toSorted();
+      const read = [...row.values].toSorted();
+      if (registered.join(" ") !== read.join(" ")) {
+        mismatched.push(
+          `${row.name}: registered [${registered.join(",")}] source [${read.join(",")}]`,
+        );
+      }
+    }
+    expect(mismatched).toEqual([]);
+  });
+
+  test("the scan still finds the population it measures", () => {
+    // A scanner that matched nothing would report a clean sweep over an
+    // empty set. Set just under the measurement: a floor of 20 against 57
+    // would let two thirds of the population stop being seen.
+    expect(SCANNED.length).toBeGreaterThan(50);
+    expect(SOURCE_TREE.length).toBeGreaterThan(500);
+  });
+
+  test("a vocabulary whose list is a multi-line Object.values stays visible", () => {
+    // The concrete shape a line-oriented scan loses: the membership list
+    // is `Object.freeze(` then `Object.values(HOST_PRESSURE),` on the next
+    // line, so no single line carries both. Pinned by name because a
+    // regression to line matching drops 20-odd rows at once and every
+    // other test in this file still passes.
+    const row = SCANNED.find((candidate) => candidate.name === "HOST_PRESSURE");
+    expect(`${row?.members} ${row?.guard} ${row?.values.join(",")}`).toBe(
+      "HOST_PRESSURE_STATES isHostPressureState measured,unmeasurable",
+    );
+  });
+});
+
+describe("the scan sees the shapes it claims to", () => {
+  /**
+   * The real scan and the real registry, over one synthetic module.
+   *
+   * One file rather than the whole tree plus one, because
+   * {@link scanVocabularies} decides per file - the four pieces must be
+   * in one module - so the two runs cannot differ, and re-walking `src/`
+   * once per shape costs a second each for an identical answer.
+   */
+  function unregisteredWith(intruder: SourceFile): string[] {
+    return scanVocabularies([intruder])
+      .filter((row) => !REGISTERED.has(row.name))
+      .map((row) => row.name);
+  }
+
+  const OBJECT = 'export const ZZ = Object.freeze({\n  a: "a",\n  b: "b",\n} as const);\n';
+  const DERIVED = "export type Zz = (typeof ZZ)[keyof typeof ZZ];\n";
+  const FROZEN_LIST = "export const ZZS: ReadonlyArray<Zz> = Object.freeze([ZZ.a, ZZ.b]);\n";
+  const GUARD =
+    "export function isZz(value: unknown): value is Zz {\n" +
+    "  return typeof value === 'string' && (ZZS as ReadonlyArray<string>).includes(value);\n}\n";
+
+  /**
+   * Every source shape the four pieces can arrive in. Each must be
+   * enrolled on its own: these are the forms a contributor reaches for
+   * without thinking, and a scan that stops matching one fails here by
+   * name rather than reporting a quietly smaller population.
+   */
+  const INTRUDER_SHAPES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+    ["an array-literal membership list", OBJECT + DERIVED + FROZEN_LIST + GUARD],
+    [
+      "a multi-line Object.values membership list",
+      OBJECT +
+        DERIVED +
+        "export const ZZS: ReadonlyArray<Zz> = Object.freeze(\n  Object.values(ZZ),\n);\n" +
+        GUARD,
+    ],
+    [
+      "an unfrozen membership list",
+      OBJECT + DERIVED + "export const ZZS: ReadonlyArray<Zz> = [ZZ.a, ZZ.b];\n" + GUARD,
+    ],
+    [
+      "an arrow-function guard",
+      OBJECT +
+        DERIVED +
+        FROZEN_LIST +
+        "export const isZz = (value: unknown): value is Zz =>\n" +
+        "  typeof value === 'string' && (ZZS as ReadonlyArray<string>).includes(value);\n",
+    ],
+    [
+      "single-quoted values",
+      "export const ZZ = Object.freeze({\n  a: 'a',\n  b: 'b',\n} as const);\n" +
+        DERIVED +
+        FROZEN_LIST +
+        GUARD,
+    ],
+    [
+      "a brace inside a value and a brace inside a comment",
+      'export const ZZ = Object.freeze({\n  // closes nothing: }\n  a: "a }",\n  b: "b",\n} as const);\n' +
+        DERIVED +
+        FROZEN_LIST +
+        GUARD,
+    ],
+    ["a guard declared before the object it reads", GUARD + OBJECT + DERIVED + FROZEN_LIST],
+  ]);
+
+  for (const [shape, source] of INTRUDER_SHAPES) {
+    test(`a new vocabulary written as ${shape} is reported unregistered`, () => {
+      expect(unregisteredWith({ path: "src/core/zz-intruder.ts", text: source })).toEqual(["ZZ"]);
+    });
+  }
+
+  test("the module the reviewer smuggled past this file is now reported", () => {
+    // Reproduced from the review: a duplicate value, a member no value
+    // declares, and a guard that accepts every string - three of the
+    // defects `auditVocabulary` exists to catch. It scored 63 pass /
+    // 0 fail here before the scan existed.
+    const text =
+      'export const ZZ_NEW_VOCAB = Object.freeze({\n  first: "same",\n  second: "same",\n} as const);\n' +
+      "export type ZzNewVocab = (typeof ZZ_NEW_VOCAB)[keyof typeof ZZ_NEW_VOCAB];\n" +
+      "export const ZZ_NEW_VOCABS: ReadonlyArray<string> = Object.freeze([\n" +
+      '  ZZ_NEW_VOCAB.first,\n  "phantom",\n]);\n' +
+      "export function isZzNewVocab(value: unknown): value is ZzNewVocab {\n" +
+      "  return typeof value === 'string' && ZZ_NEW_VOCABS.length > 0;\n}\n";
+    expect(unregisteredWith({ path: "src/core/zz-new-vocab.ts", text })).toEqual(["ZZ_NEW_VOCAB"]);
+  });
+
+  /**
+   * Shapes that must stay OUT. A census that reports frozen objects which
+   * are not vocabularies gets deleted, and each of these is a live idiom
+   * in this tree - the second one by name.
+   */
+  const NON_VOCABULARY_SHAPES: ReadonlyArray<readonly [string, string]> = Object.freeze([
+    [
+      "a frozen object with no derived union type",
+      'export const ZZ = Object.freeze({ a: "a" });\n' +
+        "export const ZZS = Object.freeze(Object.values(ZZ));\n" +
+        "export function isZz(value: unknown): boolean {\n" +
+        "  return ZZS.includes(value as string);\n}\n",
+    ],
+    [
+      "a deliberate SUBSET list with no guard, as DREAM_STEP_RUNNABLE is",
+      OBJECT + DERIVED + "export const ZZ_RUNNABLE: ReadonlyArray<Zz> = Object.freeze([ZZ.a]);\n",
+    ],
+    [
+      "a frozen lookup whose values are not literals",
+      "export const ZZ = Object.freeze({ a: readSourceTree, b: maskSource });\n" +
+        DERIVED +
+        "export const ZZS = Object.freeze(Object.values(ZZ));\n" +
+        "export function isZz(value: unknown): boolean {\n" +
+        "  return ZZS.includes(value as never);\n}\n",
+    ],
+    [
+      "a guard that takes an already-narrowed string",
+      OBJECT +
+        DERIVED +
+        FROZEN_LIST +
+        "export function isZz(value: string): value is Zz {\n" +
+        "  return (ZZS as ReadonlyArray<string>).includes(value);\n}\n",
+    ],
+  ]);
+
+  for (const [shape, source] of NON_VOCABULARY_SHAPES) {
+    test(`${shape} is not dragged into the population`, () => {
+      expect(unregisteredWith({ path: "src/core/zz-intruder.ts", text: source })).toEqual([]);
+    });
+  }
 });

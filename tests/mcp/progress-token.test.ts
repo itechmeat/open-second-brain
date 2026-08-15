@@ -3,7 +3,7 @@
  *
  * Before this unit `handleToolsCall` read exactly two keys from `params`
  * - `name` and `arguments` - so a client's progress token was accepted by
- * the wire and then discarded without a word. These tests pin the three
+ * the wire and then discarded without a word. These tests pin the four
  * facts that replace that silence:
  *
  *   - stdio, which can write an unsolicited frame, carries the token as
@@ -11,7 +11,10 @@
  *   - HTTP, which writes one response and closes, refuses the token by
  *     name rather than accepting it and dropping the events;
  *   - a call with no token is byte-identical to the call the previous
- *     release made, which is what makes the feature additive.
+ *     release made, which is what makes the feature additive;
+ *   - a tool that dispatches on a `view` argument hands the sink to the
+ *     view it dispatched to, rather than dropping it one link short of
+ *     the pass that had something to report.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -29,7 +32,12 @@ import {
   startHttp,
 } from "../../src/mcp/index.ts";
 import { PROGRESS_META_KEY, PROGRESS_NOTIFICATION_METHOD } from "../../src/mcp/progress.ts";
-import { PROGRESS_KIND, PROGRESS_REASON, PROGRESS_SCHEMA } from "../../src/core/brain/progress.ts";
+import {
+  isProgressKind,
+  PROGRESS_KIND,
+  PROGRESS_REASON,
+  PROGRESS_SCHEMA,
+} from "../../src/core/brain/progress.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 
 interface JsonObject {
@@ -69,15 +77,27 @@ function dreamCall(id: number, token?: string | number): JsonObject {
 }
 
 /**
- * One response frame with the two members a rerun cannot reproduce
- * removed: `run_id` is derived from the wall clock, and `content` is that
- * same structured payload rendered, so it carries the id a second time.
+ * One response frame with the only member a rerun cannot reproduce
+ * NORMALISED rather than removed.
+ *
+ * `run_id` is derived from the wall clock, and it appears twice: once in
+ * `structuredContent` and again inside `content`, which is that same
+ * payload rendered. So the id is replaced wherever it occurs and every
+ * other byte of both members is still compared.
+ *
+ * The earlier form deleted `content` outright, and deleting it excused
+ * the entire rendered payload an MCP client displays: an independent
+ * review replaced that array wholesale whenever a progress token was
+ * present and this file stayed green. A frame with no run id to
+ * normalise is a defect in the response, not a frame to compare loosely,
+ * so it throws.
  */
-function stripRunId(frame: JsonObject | undefined): string {
-  const clone = JSON.parse(JSON.stringify(frame)) as Record<string, any>;
-  delete clone["result"]["content"];
-  delete clone["result"]["structuredContent"]["run_id"];
-  return JSON.stringify(clone);
+function normalizeRunId(frame: JsonObject | undefined): string {
+  const runId = (frame?.["result"] as JsonObject | undefined)?.["structuredContent"]?.["run_id"];
+  if (typeof runId !== "string" || runId.length === 0) {
+    throw new TypeError(`response frame carries no run_id to normalise: ${JSON.stringify(frame)}`);
+  }
+  return JSON.stringify(frame).split(runId).join("<run-id>");
 }
 
 function lines(out: string): JsonObject[] {
@@ -135,7 +155,13 @@ describe("stdio carries a progress token", () => {
       ),
     ).find((f) => f["id"] === 2);
 
-    expect(stripRunId(withToken)).toBe(stripRunId(without));
+    // The rendered payload is what a client displays, so the comparison
+    // is worthless if both frames happen to carry nothing there.
+    const content = (withToken?.["result"] as JsonObject | undefined)?.["content"] as
+      | ReadonlyArray<JsonObject>
+      | undefined;
+    expect(content?.length).toBeGreaterThan(0);
+    expect(normalizeRunId(withToken)).toBe(normalizeRunId(without));
   });
 
   test("no token produces no notification frames at all", async () => {
@@ -172,6 +198,74 @@ describe("stdio carries a progress token", () => {
     expect(progressIndexes.length).toBeGreaterThan(0);
     expect(Math.max(...progressIndexes)).toBeLessThan(responseIndex);
     for (const chunk of chunks) expect(chunk.endsWith("\n")).toBe(true);
+  });
+});
+
+/**
+ * The view dispatcher, from the outside.
+ *
+ * `dispatchByView` routes a consolidated tool's `view` argument to its
+ * per-view handler, and it used to call `handler(ctx, args)` - dropping
+ * the sink on the floor. Restoring that one-line defect left the whole
+ * of `tests/mcp` plus the progress suites at 882 pass / 0 fail, because
+ * no test sent a progress token through a dispatched tool. This block
+ * is that test: `brain_brief view=operator` is the consumer that made
+ * the fix necessary, since it runs a dry-run consolidation pass and is
+ * the slow half of an operator summary on a large vault.
+ */
+describe("a dispatched view carries the sink", () => {
+  function briefCall(id: number, token?: string): JsonObject {
+    return {
+      jsonrpc: JSONRPC_VERSION,
+      id,
+      method: "tools/call",
+      params: {
+        name: "brain_brief",
+        arguments: { view: "operator" },
+        ...(token === undefined ? {} : { _meta: { progressToken: token } }),
+      },
+    };
+  }
+
+  test("brain_brief view=operator emits progress frames for its dream pass", async () => {
+    const frames = lines(
+      await serveStdioFromString(
+        { vault },
+        JSON.stringify(INITIALIZE) + "\n" + JSON.stringify(briefCall(2, "tok-brief")) + "\n",
+      ),
+    );
+    const responseIndex = frames.findIndex((f) => f["id"] === 2);
+    expect(responseIndex).toBeGreaterThan(-1);
+    expect(frames[responseIndex]?.["error"]).toBeUndefined();
+
+    const notifications = frames.filter((f) => f["method"] === PROGRESS_NOTIFICATION_METHOD);
+    // The assertion the dropped sink fails: a dispatcher that swallows it
+    // produces a response and no frames at all, which is exactly what a
+    // hung run looks like.
+    expect(notifications.length).toBeGreaterThan(0);
+    for (const n of notifications) expect(frames.indexOf(n)).toBeLessThan(responseIndex);
+
+    const params = notifications[0]!["params"] as JsonObject;
+    expect(params["progressToken"]).toBe("tok-brief");
+    const event = (params["_meta"] as JsonObject)[PROGRESS_META_KEY] as JsonObject;
+    expect(event["schema"]).toBe(PROGRESS_SCHEMA);
+    // The operation naming the pass the sink reached, not merely "some
+    // frames arrived": the dispatcher's job is to hand the sink to the
+    // handler that runs the long half.
+    expect(event["operation"]).toBe("dream");
+    expect(isProgressKind(event["kind"])).toBe(true);
+  });
+
+  test("the same view with no token emits nothing", async () => {
+    // The negative control for the test above: the frames it counts are
+    // caused by the token, not by the tool being noisy.
+    const frames = lines(
+      await serveStdioFromString(
+        { vault },
+        JSON.stringify(INITIALIZE) + "\n" + JSON.stringify(briefCall(2)) + "\n",
+      ),
+    );
+    expect(frames.filter((f) => f["method"] !== undefined)).toEqual([]);
   });
 });
 
