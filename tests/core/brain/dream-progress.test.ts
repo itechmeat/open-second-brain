@@ -21,8 +21,16 @@ import { join } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
-import { PROGRESS_KIND, type ProgressEvent } from "../../../src/core/brain/progress.ts";
-import { OPERATION } from "../../../src/core/brain/safeguard.ts";
+import {
+  PROGRESS_KIND,
+  PROGRESS_REASON,
+  type ProgressEvent,
+} from "../../../src/core/brain/progress.ts";
+import {
+  createSafeguard,
+  OPERATION,
+  SafeguardAbortError,
+} from "../../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { digestVaultFiles, digestVaultTree } from "../../helpers/vault-digest.ts";
@@ -145,6 +153,33 @@ describe("dream progress", () => {
     } finally {
       rmSync(observed, { recursive: true, force: true });
     }
+  });
+
+  test("a pre-aborted signal stops the pass and says so on the stream", () => {
+    // SafeguardAbortError was unreachable in production before this
+    // release: the class, the signal field and the abort-beats-deadline
+    // priority were all written, and no call site passed a signal. This
+    // is the test that proves the wiring, and it does it without racing a
+    // real interrupt against a sub-second pass.
+    seedPromotion();
+    const controller = new AbortController();
+    controller.abort();
+    const { events, sink } = record();
+
+    expect(() =>
+      dream(vault, {
+        now: NOW,
+        onProgress: sink,
+        safeguard: createSafeguard({ operation: OPERATION.dream, signal: controller.signal }),
+      }),
+    ).toThrow(SafeguardAbortError);
+
+    // The stream must end with a stop, not simply end: a caller cannot
+    // otherwise tell a cancelled pass from a crashed or hung one.
+    expect(events.at(-1)).toMatchObject({
+      kind: PROGRESS_KIND.stopped,
+      reason: PROGRESS_REASON.aborted,
+    });
   });
 
   test("a sink that throws does not fail the pass, and does not vanish either", () => {

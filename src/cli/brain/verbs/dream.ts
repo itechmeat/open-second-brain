@@ -45,11 +45,15 @@ import {
 } from "../../../core/brain/dream-stage.ts";
 import {
   createSafeguard,
+  OPERATION,
   resolveSafeguardTimeoutMs,
+  SafeguardAbortError,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
+import { onInterrupt } from "../../interrupt.ts";
+import { attachProgress } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
 // The runnable set is read from the step registry, never retyped: a
@@ -102,6 +106,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     strict: { type: "boolean" },
     step: { type: "string" },
     gate: { type: "string-array" },
+    progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -200,10 +205,11 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   const { value: now, error: nowErr } = parseOptionalIsoDate(flags, "now");
   if (nowErr) return fail(nowErr);
 
-  const guard = () =>
+  const guard = (signal: AbortSignal) =>
     createSafeguard({
-      operation: "dream",
-      timeoutMs: resolveSafeguardTimeoutMs("dream", config ?? undefined),
+      operation: OPERATION.dream,
+      timeoutMs: resolveSafeguardTimeoutMs(OPERATION.dream, config ?? undefined),
+      signal,
     });
 
   if (wantsStep) {
@@ -379,21 +385,50 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     }
   }
 
+  // Progress is opt-in: attaching a sink by default would change the
+  // stderr of every existing invocation, and this CLI's one streaming
+  // precedent (`o2b search index --verbose`) is opt-in for the same
+  // reason. The rail decides whether the stream can carry it at all.
+  const observation =
+    flags["progress"] === true
+      ? attachProgress({ command: "brain", argv: ["dream"], jsonRequested: asJson })
+      : null;
+  const interrupt = onInterrupt();
   let summary;
   try {
     summary = dream(vault, {
       ...(now !== null ? { now } : {}),
       dryRun: Boolean(flags["dry-run"]),
       ...(agent ? { agentName: agent } : {}),
-      safeguard: guard(),
+      safeguard: guard(interrupt.signal),
+      ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
       ...(gates !== null ? { gates } : {}),
     });
   } catch (exc) {
+    // A pass the operator stopped did not do what it was asked, so it
+    // cannot exit 0 - but it is not a failure either, and reporting it as
+    // one would hide the difference the abort error exists to preserve.
+    if (exc instanceof SafeguardAbortError) {
+      const code = interrupt.exitCode();
+      if (asJson) {
+        okJson({ ok: false, interrupted: true, message: exc.message });
+        return code;
+      }
+      process.stderr.write(`${exc.message}\n`);
+      return code;
+    }
     if (exc instanceof SafeguardTimeoutError && asJson) {
       okJson({ ok: false, timed_out: true, message: exc.message });
       return 1;
     }
     return fail(`dream failed: ${(exc as Error).message ?? exc}`);
+  } finally {
+    interrupt.release();
+  }
+  if (observation?.reason !== undefined) {
+    // Asked for and refused: the caller learns why rather than watching a
+    // stream that never produces a line.
+    process.stderr.write(`progress: not emitted (${observation.reason})\n`);
   }
 
   for (const w of summary.warnings ?? []) {

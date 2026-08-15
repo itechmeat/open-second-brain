@@ -45,7 +45,12 @@
  * is for.
  */
 
-import { OPERATION, type Operation } from "./safeguard.ts";
+import {
+  OPERATION,
+  SafeguardAbortError,
+  SafeguardTimeoutError,
+  type Operation,
+} from "./safeguard.ts";
 
 /** Envelope discriminator, so a reader can tell which shape it holds. */
 export const PROGRESS_SCHEMA = "o2b.progress.v1";
@@ -257,6 +262,22 @@ export function progressCounter(
       emit(PROGRESS_KIND.stopped, reason);
     },
   };
+}
+
+/**
+ * The reason a safeguard stop corresponds to, or `null` when `error` is
+ * not a safeguard stop at all.
+ *
+ * Lives here rather than at each of the five long operations because the
+ * mapping is one fact - a cancellation is `aborted`, an elapsed deadline
+ * is `timed-out` - and five copies of it would be five chances to report
+ * a deliberate stop as a failure, which is the distinction
+ * `SafeguardAbortError` was created to preserve.
+ */
+export function progressReasonForError(error: unknown): ProgressReason | null {
+  if (error instanceof SafeguardAbortError) return PROGRESS_REASON.aborted;
+  if (error instanceof SafeguardTimeoutError) return PROGRESS_REASON.timedOut;
+  return null;
 }
 
 /** Re-exported so a call site needs one import to emit progress. */

@@ -68,7 +68,12 @@ import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
 import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
-import { OPERATION, progressCounter } from "./progress.ts";
+import {
+  OPERATION,
+  progressCounter,
+  progressReasonForError,
+  type ProgressCounter,
+} from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
@@ -137,9 +142,17 @@ function noteProgressFaults(warnings: DreamWarning[], faults: ReadonlyArray<stri
   });
 }
 
+/**
+ * Run one consolidation pass.
+ *
+ * A thin shell around {@link dreamRun} for one reason: a pass that stops
+ * at a checkpoint - because the operator interrupted it, or because the
+ * deadline elapsed - must say so on the progress stream before the error
+ * leaves. Without this the stream would simply end, and a caller could
+ * not tell a cancelled pass from a crashed one from a hung one, which is
+ * the whole distinction `SafeguardAbortError` exists to preserve.
+ */
 export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
-  const now = opts.now ?? new Date();
-  const dryRun = opts.dryRun === true;
   // A caller's progress sink is an observer, and an observer must not be
   // able to destroy what it observes: a closed pipe or a renderer defect
   // cannot be allowed to abort a pass that is otherwise succeeding. Nor
@@ -149,8 +162,31 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const progress = progressCounter(OPERATION.dream, opts.onProgress, {
     onSinkError: (error) => progressFaults.push(errorMessage(error)),
   });
-  opts.safeguard?.checkpoint();
+  try {
+    return dreamRun(vault, opts, progress, progressFaults);
+  } catch (error) {
+    const reason = progressReasonForError(error);
+    if (reason !== null) progress.stop(reason);
+    throw error;
+  }
+}
+
+function dreamRun(
+  vault: string,
+  opts: DreamOptions,
+  progress: ProgressCounter,
+  progressFaults: ReadonlyArray<string>,
+): DreamRunSummary {
+  const now = opts.now ?? new Date();
+  const dryRun = opts.dryRun === true;
+  // The stage opens BEFORE the first checkpoint, not after it. A guard
+  // that is already past its deadline - or a signal already aborted -
+  // trips here, and a counter with no stage open emits nothing, so the
+  // stream would report a pass that was stopped instantly as a pass that
+  // never spoke. Those are the two cases this release exists to keep
+  // apart.
   progress.start(DREAM_STAGE.scan);
+  opts.safeguard?.checkpoint();
   const cfg = loadBrainConfig(vault);
   // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
   // this run, the configured value decides when it is absent. Resolved
