@@ -17,6 +17,7 @@ import {
   assertExpectedCount,
   type CountGuardOptions,
 } from "../../core/brain/count-guard.ts";
+import type { ProgressSink } from "../../core/brain/progress.ts";
 
 /**
  * Read the shared `--expect` / `--strict` count-guard arguments from an MCP
@@ -166,15 +167,31 @@ export function coerceNonNegativeInteger(
   throw new MCPError(INVALID_PARAMS, `${tool}: ${field} must be a non-negative integer`);
 }
 
+/**
+ * Route one consolidated tool's `view` argument to its per-view handler.
+ *
+ * The progress sink is forwarded rather than dropped. It is optional at
+ * every link, so a view that has nothing to report ignores it - but a
+ * dispatcher that silently swallowed it would make a view which DOES run
+ * long, such as the operator brief's dry-run consolidation pass, look
+ * like a tool that emits no progress rather than one whose progress was
+ * discarded in transit. Those are the two cases this release exists to
+ * keep apart.
+ */
 export function dispatchByView(
   table: Readonly<
     Record<
       string,
-      (ctx: ServerContext, args: Record<string, unknown>) => Promise<unknown> | unknown
+      (
+        ctx: ServerContext,
+        args: Record<string, unknown>,
+        onProgress?: ProgressSink,
+      ) => Promise<unknown> | unknown
     >
   >,
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<unknown> | unknown {
   const view = typeof args["view"] === "string" ? args["view"] : "";
   const handler = table[view];
@@ -184,7 +201,7 @@ export function dispatchByView(
       `view must be one of ${Object.keys(table).join(", ")}; got ${JSON.stringify(args["view"])}`,
     );
   }
-  return handler(ctx, args);
+  return handler(ctx, args, onProgress);
 }
 
 /**
