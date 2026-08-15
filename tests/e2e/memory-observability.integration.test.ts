@@ -116,11 +116,15 @@ test("telemetry -> schema-stamped records -> ATOF/ATIF export -> bench report", 
   const benchReport = JSON.parse(bench.stdout) as {
     quality: { passed: number; total: number };
     latency_ms: { avg: number };
-    context_cost: { est_tokens: number };
+    context_cost: { avg_injected_tokens: number };
   };
   expect(benchReport.quality.passed).toBe(benchReport.quality.total);
   expect(benchReport.latency_ms.avg).toBeGreaterThanOrEqual(0);
-  expect(benchReport.context_cost.est_tokens).toBeGreaterThan(0);
+  // Renamed with the v2 report schema, and not only renamed: the old
+  // field averaged over whatever estimator each caller reached for, and
+  // five of them disagreed. This one is a single estimator over the
+  // strings actually injected.
+  expect(benchReport.context_cost.avg_injected_tokens).toBeGreaterThan(0);
   // The bench vault is disposable and separate from the operator vault.
   expect(existsSync(join(vault, "Brain", "notes", "coffee.md"))).toBe(false);
 }, 120_000);
