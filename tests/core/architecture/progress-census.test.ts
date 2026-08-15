@@ -54,9 +54,10 @@
  * matching cannot be steered by a `"{"` in a string or by a commented-out
  * member, and a rule that needs the literal value reads it back out of
  * the original text at the same offset. On top of that view sit three
- * small parsers - one for declarations (both `interface` and `type`, with
- * generic constraints skipped rather than walked into), one for object
- * members, and one for the string constants a stage can be named by.
+ * small parsers - one for declarations (`interface`, `class` and `type`
+ * alike, with generic constraints skipped rather than walked into), one
+ * for object members, and one for the string constants a stage can be
+ * named by.
  *
  * This project has one runtime dependency and no TypeScript AST, so a
  * real parser is out. What is in reach is a lexer that is CORRECT about
@@ -325,7 +326,7 @@ function closeBrace(code: string, open: number): number {
 interface Declaration {
   readonly name: string;
   readonly file: string;
-  /** `interface X { … }` or `type X = …`. */
+  /** `interface X { … }` / `class X { … }`, or `type X = …`. */
   readonly kind: "interface" | "alias";
   /** The block body, or the alias's right-hand side. */
   readonly body: string;
@@ -401,14 +402,17 @@ function declarations(
   d: ReadonlyArray<number>,
 ): ReadonlyArray<Declaration> {
   const out: Declaration[] = [];
-  const header = /\b(?:export\s+)?(?:declare\s+)?(interface|type)\s+([A-Za-z_$][\w$]*)/g;
+  const header =
+    /\b(?:export\s+)?(?:default\s+)?(?:declare\s+)?(?:abstract\s+)?(interface|class|type)\s+([A-Za-z_$][\w$]*)/g;
   for (const match of code.matchAll(header)) {
     const kind = match[1];
     const name = match[2] ?? "";
     const after = (match.index ?? 0) + match[0].length;
     const tail = skipTypeParameters(code, after);
-    if (kind === "interface") {
-      if (code[tail] !== "{" && !code.startsWith("extends", tail)) continue;
+    if (kind === "interface" || kind === "class") {
+      const heritage =
+        code[tail] === "{" || /^(?:extends|implements)\b/.test(code.slice(tail, tail + 10));
+      if (!heritage) continue;
       const open = scanTypeHeader(code, tail, "{");
       if (open === -1) continue;
       const close = closeBrace(code, open);
@@ -463,11 +467,14 @@ function memberRegions(body: string, kind: Declaration["kind"]): ReadonlyArray<s
  * not continuing an expression - the last clause is what makes a sink
  * written across three lines one declaration rather than three.
  */
-function typeText(body: string, d: ReadonlyArray<number>, at: number): string {
+function typeText(body: string, d: ReadonlyArray<number>, at: number, stopAtBrace = false): string {
   let i = at;
   while (i < body.length) {
     const c = body[i]!;
     if (d[i] === 0 && (c === ";" || c === ",")) break;
+    // A method signature in a CLASS is followed by its body; the return
+    // type ends where that body opens.
+    if (stopAtBrace && d[i] === 0 && c === "{") break;
     if (d[i] === 0 && c === "\n") {
       const soFar = body.slice(at, i).trim();
       if (soFar !== "" && !/[|&,?:]$|=>$/.test(soFar)) break;
@@ -491,7 +498,8 @@ function typeText(body: string, d: ReadonlyArray<number>, at: number): string {
 function objectMembers(body: string): ReadonlyMap<string, string> {
   const out = new Map<string, string>();
   const d = depths(body);
-  const method = /(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
+  const method =
+    /(?:(?:public|private|protected|static|abstract|override)\s+)*(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\(/g;
   for (const match of body.matchAll(method)) {
     const start = match.index ?? 0;
     if (d[start] !== 0) continue;
@@ -504,9 +512,10 @@ function objectMembers(body: string): ReadonlyMap<string, string> {
     let after = close + 1;
     while (after < body.length && /\s/.test(body[after] ?? "")) after += 1;
     if (body[after] !== ":") continue;
-    out.set(match[1] ?? "", typeText(body, d, after + 1));
+    out.set(match[1] ?? "", typeText(body, d, after + 1, true));
   }
-  const member = /(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\??\s*:/g;
+  const member =
+    /(?:(?:public|private|protected|static|abstract|override)\s+)*(?:readonly\s+)?([A-Za-z_$][\w$]*)\s*\??\s*:/g;
   for (const match of body.matchAll(member)) {
     const start = match.index ?? 0;
     if (d[start] !== 0) continue;
@@ -923,7 +932,8 @@ function asyncSinks(sources: ReadonlyArray<CensusSource>): ReadonlyArray<string>
     const sites = /\bonProgress\s*(?:\??\s*:|\()/g;
     for (const match of source.code.matchAll(sites)) {
       let from = (match.index ?? 0) + match[0].length;
-      if (match[0].endsWith("(")) {
+      const methodForm = match[0].endsWith("(");
+      if (methodForm) {
         const openParen = from - 1;
         const inner = (d[openParen] ?? 0) + 1;
         let close = from;
@@ -941,6 +951,7 @@ function asyncSinks(sources: ReadonlyArray<CensusSource>): ReadonlyArray<string>
         const c = source.code[i]!;
         if ((d[i] ?? 0) < base) break;
         if ((d[i] ?? 0) === base && (c === ";" || c === ",")) break;
+        if (methodForm && (d[i] ?? 0) === base && c === "{") break;
         if ((d[i] ?? 0) === base && c === "\n") {
           const soFar = source.code.slice(from, i).trim();
           if (soFar !== "" && !/[|&,?:]$|=>$/.test(soFar)) break;
@@ -1122,6 +1133,19 @@ describe("the census can fail", () => {
         "interface SyntheticWatched {\n  readonly safeguard?: Safeguard;\n  readonly onProgress?: ProgressSink;\n}\n\nexport interface HeirOptions extends SyntheticWatched {\n  readonly limit?: number;\n}\n",
       ),
     ).toEqual([]);
+  });
+
+  test("a class that holds a safeguard is in the population too", () => {
+    // An operation implemented as an object rather than a function is
+    // still an operation, and `readonly safeguard` reads the same in a
+    // class body as in an interface - so the naive cross-check would see
+    // it whether or not the parser did.
+    const path = "core/brain/synthetic-runner.ts";
+    const text =
+      "export class SyntheticRunner {\n" +
+      "  private readonly safeguard?: Safeguard;\n" +
+      "  run(): void {\n    this.safeguard?.checkpoint();\n  }\n}\n";
+    expect(sinkless(path, text)).toEqual([`${path}: SyntheticRunner`]);
   });
 
   test("declaration merging is one type, not a violation", () => {
