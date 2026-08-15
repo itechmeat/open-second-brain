@@ -16,6 +16,7 @@
 import { test, expect } from "bun:test";
 
 import { Semaphore } from "../../../src/core/search/embeddings/http-util.ts";
+import { SearchError } from "../../../src/core/search/types.ts";
 
 test("Semaphore hands a released permit to the waiter, not to a racing acquirer", async () => {
   const sem = new Semaphore(1);
@@ -57,4 +58,21 @@ test("Semaphore hands a released permit to the waiter, not to a racing acquirer"
   await Promise.all([b, c]);
   expect(peak).toBe(1);
   expect(held).toBe(0);
+});
+
+test("Semaphore takes a ceiling above 2^31-1 as given rather than truncating it", () => {
+  // `embedding_concurrency` is validated as an integer >= 1 with no upper
+  // bound, so this value is reachable from config. The former
+  // `Math.max(1, n | 0)` wrapped it negative and the clamp lifted it to 1:
+  // the largest ceiling an operator can ask for silently became the
+  // smallest one possible.
+  const sem = new Semaphore(3_000_000_000);
+  expect(sem.limit).toBe(3_000_000_000);
+});
+
+test("Semaphore refuses a ceiling it cannot honour", () => {
+  expect(() => new Semaphore(0)).toThrow(SearchError);
+  expect(() => new Semaphore(-1)).toThrow(SearchError);
+  expect(() => new Semaphore(2.5)).toThrow(SearchError);
+  expect(() => new Semaphore(Number.NaN)).toThrow(SearchError);
 });
