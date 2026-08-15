@@ -55,8 +55,8 @@ function tokenImpact(firstPassRate: number | null): TokenImpactSummary {
       added_tokens: 0,
       mean_savings_tokens: 33.3,
       by_method: {
-        exact: { samples: 3, net_savings_tokens: 100 },
-        fallback: { samples: 0, net_savings_tokens: 0 },
+        tokenizer: { samples: 3, net_savings_tokens: 100 },
+        heuristic: { samples: 0, net_savings_tokens: 0 },
       },
     },
     modeled_inference_avoidance: {

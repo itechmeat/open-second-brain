@@ -1,0 +1,99 @@
+{
+  "name": "failure-modes",
+  "description": "The four ways agent memory fails that retrieval questions do not measure (t_72d6eb23): proactive know-to-ask with a false-fire term, write-back fidelity through the shipped extraction path, cross-source isolation under a strict owner-scope gate, and the tokens actually injected. The vault sets integrity.owner_scope_delivery to fail because the shipped default is off, under which no scope is evaluated and an isolation gate would be vacuous.",
+  "notes": [
+    {
+      "path": "Brain/_brain.yaml",
+      "body": "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n"
+    },
+    {
+      "path": "Brain/notes/pgbouncer.md",
+      "body": "# Connection pooling\n\nThe pgbouncer pool cap is ninety connections in production.\n"
+    },
+    {
+      "path": "Brain/notes/staging-gate.md",
+      "body": "# Deploy runbook\n\nDeployment requires the staging gate to pass before the production smoke checklist runs.\n"
+    },
+    {
+      "path": "Brain/preferences/pref-shared.md",
+      "body": "---\nid: pref-shared\ntopic: indentation\nstatus: confirmed\nprinciple: Use tabs for indentation in Go files\ncreated_at: 2026-05-01T10:00:00\n---\n\nUse tabs for indentation in Go files.\n"
+    },
+    {
+      "path": "Brain/preferences/pref-own.md",
+      "body": "---\nid: pref-own\nowner: agent-a\ntopic: changelog\nstatus: confirmed\nprinciple: Write the changelog entry before pushing the branch\ncreated_at: 2026-05-02T10:00:00\n---\n\nWrite the changelog entry before pushing the branch.\n"
+    },
+    {
+      "path": "Brain/preferences/pref-other.md",
+      "body": "---\nid: pref-other\nowner: agent-b\ntopic: rollout\nstatus: confirmed\nprinciple: Roll out behind a flag and watch the error budget\ncreated_at: 2026-05-03T10:00:00\n---\n\nRoll out behind a flag and watch the error budget.\n"
+    }
+  ],
+  "continuity": [],
+  "questions": [
+    {
+      "id": "q-recall-hit-pool",
+      "category": "proactive_recall",
+      "prompt": "pgbouncer pool cap",
+      "expect_inject": true
+    },
+    {
+      "id": "q-recall-hit-staging",
+      "category": "proactive_recall",
+      "prompt": "staging gate",
+      "expect_inject": true
+    },
+    {
+      "id": "q-recall-quiet-unrelated",
+      "category": "proactive_recall",
+      "prompt": "book a dentist appointment for thursday",
+      "expect_inject": false
+    },
+    {
+      "id": "q-recall-quiet-offtopic",
+      "category": "proactive_recall",
+      "prompt": "quantum tunnelling in superconductors",
+      "expect_inject": false
+    },
+    {
+      "id": "q-fidelity-latin",
+      "category": "write_fidelity",
+      "intake_text": "Decision: Cap the pool at ninety connections.\nOpen question: Who owns the rollout?",
+      "expected_labels": ["decision", "open_question"],
+      "expected_provenance": [
+        "id",
+        "kind",
+        "createdAt",
+        "sourceRefs",
+        "session_id",
+        "turn_start",
+        "turn_end",
+        "turn_range",
+        "content_hash",
+        "dedupe_key"
+      ]
+    },
+    {
+      "id": "q-fidelity-non-latin",
+      "category": "write_fidelity",
+      "intake_text": "Решение: ограничить пул девяноста соединениями.\nОткрытый вопрос: кто отвечает за выкатку?",
+      "expected_labels": ["решение", "открытый_вопрос"],
+      "expected_provenance": [
+        "id",
+        "kind",
+        "createdAt",
+        "sourceRefs",
+        "session_id",
+        "turn_range",
+        "content_hash",
+        "dedupe_key"
+      ]
+    },
+    {
+      "id": "q-isolation-owner-scope",
+      "category": "source_isolation",
+      "agent_scope": "agent-a",
+      "expected_ids": ["pref-shared", "pref-own"],
+      "forbidden_ids": ["pref-other"],
+      "max_tokens": 500
+    }
+  ]
+}

@@ -76,7 +76,12 @@ export async function cmdBrainBench(argv: string[]): Promise<number> {
   );
   process.stdout.write(`latency_ms: avg ${report.latency_ms.avg} max ${report.latency_ms.max}\n`);
   process.stdout.write(
-    `context_cost: avg_chars ${report.context_cost.avg_chars} est_tokens ${report.context_cost.est_tokens}\n`,
+    `context_cost: avg_chars ${report.context_cost.avg_chars} avg_injected_tokens ${report.context_cost.avg_injected_tokens}\n`,
+  );
+  process.stdout.write(
+    `failure_modes: know_to_ask ${report.failure_modes.know_to_ask_failure_rate} ` +
+      `false_fire ${report.failure_modes.false_fire_rate} ` +
+      `isolation_violations ${report.failure_modes.source_isolation_violations}\n`,
   );
   process.stdout.write(`judge: ${report.judge.status}\n`);
   for (const question of report.questions) {

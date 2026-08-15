@@ -39,7 +39,7 @@ describe("o2b brain bench memory", () => {
       context_cost: { avg_chars: number };
       judge: { status: string };
     };
-    expect(report.schema).toBe("o2b.bench.v1");
+    expect(report.schema).toBe("o2b.bench.v2");
     expect(report.quality.total).toBe(6);
     expect(report.quality.passed).toBe(6);
     expect(report.judge.status).toBe("skipped");

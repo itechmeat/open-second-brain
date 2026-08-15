@@ -43,6 +43,13 @@ const RUNTIME_OVERRIDABLE_ENV = [
   "OPEN_SECOND_BRAIN_RECALL_GATE_TELEMETRY",
   "OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD",
   "OPEN_SECOND_BRAIN_POST_COMPACT_SURVIVAL_AUDIT",
+  // Search-lane selection. `resolveSearchConfig` reads these straight off
+  // `process.env`, so a developer with semantic search configured ran a
+  // DIFFERENT pipeline than CI - against a remote embedding provider -
+  // and every "deterministic and network-free" claim in the tree was a
+  // property of an unset shell rather than of the code.
+  "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC",
+  "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
 ] as const;
 
 export interface RunCliOptions {

@@ -113,7 +113,7 @@ describe("runMemoryBench", () => {
     expect(report.latency_ms.avg).toBeGreaterThanOrEqual(0);
     expect(report.latency_ms.max).toBeGreaterThanOrEqual(report.latency_ms.avg);
     expect(report.context_cost.avg_chars).toBeGreaterThan(0);
-    expect(report.context_cost.est_tokens).toBeGreaterThan(0);
+    expect(report.context_cost.avg_injected_tokens).toBeGreaterThan(0);
     expect(report.judge.status).toBe("skipped");
     // Stable question order by id for diffability.
     expect(report.questions.map((q) => q.id)).toEqual(report.questions.map((q) => q.id).toSorted());

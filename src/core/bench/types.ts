@@ -9,7 +9,18 @@
  * judge-model evaluation is an optional external command.
  */
 
-export const BENCH_REPORT_SCHEMA = "o2b.bench.v1";
+/**
+ * Bumped from `v1` for U10: `context_cost.est_tokens` was replaced by
+ * `context_cost.avg_injected_tokens`. The old field averaged
+ * `ceil(avg_chars / 4)` over an inline formula that did not even import
+ * the shared helper; the new one is `estimateTokens` applied to the
+ * strings the bench actually injected. Same family, different meaning and
+ * a different number, so the schema says so rather than letting a stored
+ * report be read under the wrong rule.
+ */
+import type { RecallFailure } from "./failure-modes.ts";
+
+export const BENCH_REPORT_SCHEMA = "o2b.bench.v2";
 
 export const BENCH_PHASES = ["ingest", "index", "retrieve", "evaluate", "report"] as const;
 export type BenchPhase = (typeof BENCH_PHASES)[number];
@@ -21,6 +32,11 @@ export const BENCH_CATEGORIES = [
   "multi_evidence",
   "session_handoff",
   "budget",
+  // The failure-mode suite (t_72d6eb23). Each drives a different shipped
+  // seam, so none of them can be expressed as a retrieval question.
+  "proactive_recall",
+  "write_fidelity",
+  "source_isolation",
 ] as const;
 export type BenchCategory = (typeof BENCH_CATEGORIES)[number];
 
@@ -60,10 +76,28 @@ export interface BenchQuestion {
   readonly session_id?: string;
   readonly expected_turns?: number;
   readonly expected_text?: string;
-  /** budget: pack item ids that must fit inside the budget. */
+  /** budget / source_isolation: pack item ids that must be delivered. */
   readonly expected_ids?: ReadonlyArray<string>;
   readonly max_tokens?: number;
   readonly max_total_chars?: number;
+  /** proactive_recall: the user prompt the decision core sees. */
+  readonly prompt?: string;
+  /**
+   * proactive_recall: whether memory SHOULD speak up for this prompt.
+   * `false` is the anti-gaming half of the fixture - a prompt the vault
+   * has nothing useful to say about, where injecting is the failure.
+   */
+  readonly expect_inject?: boolean;
+  /** write_fidelity: the labelled prose a host flushes before compaction. */
+  readonly intake_text?: string;
+  /** write_fidelity: normalized label tokens the extractor must recover, in order. */
+  readonly expected_labels?: ReadonlyArray<string>;
+  /** write_fidelity: payload keys that must survive onto every record. */
+  readonly expected_provenance?: ReadonlyArray<string>;
+  /** source_isolation: the owner scope the delivery is requested under. */
+  readonly agent_scope?: string;
+  /** source_isolation: pack item ids that must NOT be delivered. */
+  readonly forbidden_ids?: ReadonlyArray<string>;
 }
 
 export interface BenchFixture {
@@ -81,8 +115,14 @@ export interface BenchQuestionResult {
   /** One-line reason when pass is false. */
   readonly failure?: string;
   readonly latency_ms: number;
-  /** Pack character count (budget questions). */
+  /** Characters of context this question injected, when it injected any. */
   readonly context_chars?: number;
+  /** {@link estimateTokens} over the same string `context_chars` measured. */
+  readonly injected_tokens?: number;
+  /** proactive_recall: which failure mode fired, absent when none did. */
+  readonly recall_failure?: RecallFailure;
+  /** source_isolation: forbidden ids the pack actually delivered. */
+  readonly isolation_violations?: number;
 }
 
 export interface BenchReport {
@@ -98,7 +138,28 @@ export interface BenchReport {
     readonly by_category: Readonly<Record<string, { passed: number; total: number }>>;
   };
   readonly latency_ms: { readonly avg: number; readonly max: number };
-  readonly context_cost: { readonly avg_chars: number; readonly est_tokens: number };
+  /**
+   * Cost, kept apart from quality on purpose (the MemScore lesson stated
+   * at the top of this file). `avg_injected_tokens` is the fourth
+   * failure-mode metric and it lives HERE rather than in `failure_modes`
+   * because a token count is a cost, not a failure - collapsing it into
+   * the failure block is exactly the conflation this type exists to
+   * prevent. Both fields are averaged over the questions that injected
+   * something, so they describe the same population.
+   */
+  readonly context_cost: { readonly avg_chars: number; readonly avg_injected_tokens: number };
+  /**
+   * The three ways memory fails that are not "the query missed"
+   * (t_72d6eb23). Both rates share one denominator - every decision the
+   * proactive-recall questions produced - which is what stops a strategy
+   * that always injects from scoring well; see `failure-modes.ts`.
+   * `source_isolation_violations` is a COUNT and gates at zero.
+   */
+  readonly failure_modes: {
+    readonly know_to_ask_failure_rate: number;
+    readonly false_fire_rate: number;
+    readonly source_isolation_violations: number;
+  };
   readonly judge: { readonly status: "skipped" | "ran" | "error"; readonly detail?: string };
   readonly questions: ReadonlyArray<BenchQuestionResult>;
 }

@@ -179,6 +179,30 @@ function parseQuestion(raw: unknown, index: number): BenchQuestion {
     ...(positiveInt(record["max_total_chars"]) !== undefined
       ? { max_total_chars: positiveInt(record["max_total_chars"]) }
       : {}),
+    ...(nonEmptyString(record["prompt"]) !== undefined
+      ? { prompt: nonEmptyString(record["prompt"]) }
+      : {}),
+    // `expect_inject` is the one boolean field, and `false` is its most
+    // load-bearing value (the anti-gaming half of the fixture), so it is
+    // read by type rather than by truthiness.
+    ...(typeof record["expect_inject"] === "boolean"
+      ? { expect_inject: record["expect_inject"] }
+      : {}),
+    ...(nonEmptyString(record["intake_text"]) !== undefined
+      ? { intake_text: nonEmptyString(record["intake_text"]) }
+      : {}),
+    ...(stringArray(record["expected_labels"]) !== undefined
+      ? { expected_labels: stringArray(record["expected_labels"]) }
+      : {}),
+    ...(stringArray(record["expected_provenance"]) !== undefined
+      ? { expected_provenance: stringArray(record["expected_provenance"]) }
+      : {}),
+    ...(nonEmptyString(record["agent_scope"]) !== undefined
+      ? { agent_scope: nonEmptyString(record["agent_scope"]) }
+      : {}),
+    ...(stringArray(record["forbidden_ids"]) !== undefined
+      ? { forbidden_ids: stringArray(record["forbidden_ids"]) }
+      : {}),
   });
   validateQuestionShape(question);
   return question;
@@ -197,6 +221,27 @@ function validateQuestionShape(question: BenchQuestion): void {
   }
   if (question.category === "budget" && (question.expected_ids ?? []).length === 0) {
     throw new Error(`bench fixture: question ${question.id} needs expected_ids`);
+  }
+  if (question.category === "proactive_recall") {
+    if (question.prompt === undefined || question.expect_inject === undefined) {
+      throw new Error(
+        `bench fixture: question ${question.id} (proactive_recall) needs prompt and expect_inject`,
+      );
+    }
+  }
+  if (question.category === "write_fidelity") {
+    if (question.intake_text === undefined || (question.expected_labels ?? []).length === 0) {
+      throw new Error(
+        `bench fixture: question ${question.id} (write_fidelity) needs intake_text and expected_labels`,
+      );
+    }
+  }
+  if (question.category === "source_isolation") {
+    if (question.agent_scope === undefined || (question.forbidden_ids ?? []).length === 0) {
+      throw new Error(
+        `bench fixture: question ${question.id} (source_isolation) needs agent_scope and forbidden_ids`,
+      );
+    }
   }
 }
 

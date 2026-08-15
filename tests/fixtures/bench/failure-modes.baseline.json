@@ -1,0 +1,80 @@
+{
+  "schema": "o2b.bench.v2",
+  "fixture": "failure-modes",
+  "fixture_hash": "3a542496e25537b2",
+  "quality": {
+    "passed": 7,
+    "total": 7,
+    "pass_rate": 1,
+    "by_category": {
+      "proactive_recall": {
+        "passed": 4,
+        "total": 4
+      },
+      "source_isolation": {
+        "passed": 1,
+        "total": 1
+      },
+      "write_fidelity": {
+        "passed": 2,
+        "total": 2
+      }
+    }
+  },
+  "context_cost": {
+    "avg_chars": 152,
+    "avg_injected_tokens": 38
+  },
+  "failure_modes": {
+    "know_to_ask_failure_rate": 0,
+    "false_fire_rate": 0,
+    "source_isolation_violations": 0
+  },
+  "questions": [
+    {
+      "id": "q-fidelity-latin",
+      "category": "write_fidelity",
+      "pass": true
+    },
+    {
+      "id": "q-fidelity-non-latin",
+      "category": "write_fidelity",
+      "pass": true
+    },
+    {
+      "id": "q-isolation-owner-scope",
+      "category": "source_isolation",
+      "pass": true,
+      "context_chars": 90,
+      "injected_tokens": 23
+    },
+    {
+      "id": "q-recall-hit-pool",
+      "category": "proactive_recall",
+      "pass": true,
+      "context_chars": 338,
+      "injected_tokens": 85
+    },
+    {
+      "id": "q-recall-hit-staging",
+      "category": "proactive_recall",
+      "pass": true,
+      "context_chars": 333,
+      "injected_tokens": 84
+    },
+    {
+      "id": "q-recall-quiet-offtopic",
+      "category": "proactive_recall",
+      "pass": true,
+      "context_chars": 0,
+      "injected_tokens": 0
+    },
+    {
+      "id": "q-recall-quiet-unrelated",
+      "category": "proactive_recall",
+      "pass": true,
+      "context_chars": 0,
+      "injected_tokens": 0
+    }
+  ]
+}
