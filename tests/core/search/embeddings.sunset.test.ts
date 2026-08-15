@@ -161,7 +161,53 @@ describe("the clock is a parameter", () => {
   });
 });
 
+describe("the shipped survey reaches the `announced` arm in production", () => {
+  test("it carries at least one positive row - the code has a real producer", () => {
+    // The reason this assertion exists: a registered doctor code whose
+    // only producer is a table with no positive rows is a declared
+    // surface with nothing behind it, which is the defect this release
+    // hunts in other people's code.
+    const positives = EMBEDDING_SUNSET_SURVEY.entries.filter((e) => e.sunsetAt !== null);
+    expect(positives.length).toBeGreaterThan(0);
+  });
+
+  test("a first-generation OpenAI model resolves to its real shutdown date", () => {
+    // No injected fixture: this is the shipped table answering.
+    const verdict = classifyEmbeddingSunset("text-search-ada-doc-001", NOW);
+    expect(verdict.state).toBe(EMBEDDING_SUNSET.announced);
+    expect(verdict.sunset_at).toBe("2024-01-04");
+    // The date is in the past, so an operator restoring an old config is
+    // told the model is already gone rather than finding out at index time.
+    expect(verdict.days_remaining).toBeLessThan(0);
+  });
+
+  test("a live sibling of a shut-down model is NOT reported as shut down", () => {
+    // `text-search-ada-doc-001` is gone and `text-embedding-ada-002` is
+    // not; a prefix rule over "ada" would report a working model dead.
+    expect(classifyEmbeddingSunset("text-embedding-ada-002", NOW).state).toBe(
+      EMBEDDING_SUNSET.noneAnnounced,
+    );
+  });
+});
+
 describe("the shipped survey is well formed", () => {
+  test("every row records where its answer came from", () => {
+    const unsourced = EMBEDDING_SUNSET_SURVEY.entries
+      .filter((e) => e.source.trim().length === 0)
+      .map((e) => e.model);
+    expect(unsourced.join("\n")).toBe("");
+  });
+
+  test("every POSITIVE row cites a retrievable source", () => {
+    // A date is a claim about somebody else's product. An entry that
+    // cannot be checked against the announcement it came from is exactly
+    // the invented value this design refuses.
+    const uncitable = EMBEDDING_SUNSET_SURVEY.entries
+      .filter((e) => e.sunsetAt !== null && !e.source.includes("https://"))
+      .map((e) => e.model);
+    expect(uncitable.join("\n")).toBe("");
+  });
+
   test("its review date is a real ISO date", () => {
     expect(isValidIsoInstant(EMBEDDING_SUNSET_SURVEY.reviewedAt)).toBe(true);
   });

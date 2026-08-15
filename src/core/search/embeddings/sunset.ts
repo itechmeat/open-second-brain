@@ -221,23 +221,86 @@ function openCheckpoint(model: string): EmbeddingSunsetEntry {
   };
 }
 
+/** Where the OpenAI rows below were read from. Cited, not remembered. */
+const OPENAI_DEPRECATIONS_URL = "https://developers.openai.com/api/docs/deprecations";
+
+/**
+ * The one embedding deprecation that page carries, and the only positive
+ * this build can source.
+ *
+ * Announced 2023-07-06, shut down 2024-01-04, replacement
+ * `text-embedding-3-small`. The date is in the PAST, which is not a
+ * weakness of the entry - it is the arm that matters most. An operator
+ * restoring an old configuration, or copying one out of a years-old
+ * tutorial, is told the model is already gone instead of watching the
+ * first index build fail against an endpoint that no longer answers.
+ */
+const OPENAI_FIRST_GENERATION_SHUTDOWN = "2024-01-04";
+
+const OPENAI_FIRST_GENERATION_SOURCE =
+  `OpenAI deprecations, announced 2023-07-06, shutdown ${OPENAI_FIRST_GENERATION_SHUTDOWN}, ` +
+  `replacement text-embedding-3-small: ${OPENAI_DEPRECATIONS_URL}`;
+
+/**
+ * Every model named in that entry, verbatim. Listed rather than pattern
+ * matched: `text-search-ada-doc-001` is shut down and
+ * `text-embedding-ada-002` is not, so a prefix rule over "ada" would
+ * report a live model as decommissioned.
+ */
+const OPENAI_FIRST_GENERATION_EMBEDDINGS: ReadonlyArray<string> = Object.freeze([
+  "text-similarity-ada-001",
+  "text-search-ada-doc-001",
+  "text-search-ada-query-001",
+  "code-search-ada-code-001",
+  "code-search-ada-text-001",
+  "text-similarity-babbage-001",
+  "text-search-babbage-doc-001",
+  "text-search-babbage-query-001",
+  "code-search-babbage-code-001",
+  "code-search-babbage-text-001",
+  "text-similarity-curie-001",
+  "text-search-curie-doc-001",
+  "text-search-curie-query-001",
+  "text-similarity-davinci-001",
+  "text-search-davinci-doc-001",
+  "text-search-davinci-query-001",
+]);
+
+/**
+ * The hosted models this repository already names in `EMBEDDING_PRICING`.
+ *
+ * These are SOURCED negatives, not assumed ones: the deprecations page
+ * carries exactly one embedding entry and none of these three appears in
+ * it. That is a real reading of a real page, which is what separates a
+ * negative worth recording from the silence this check exists to remove.
+ */
+const OPENAI_CURRENT_EMBEDDINGS: ReadonlyArray<string> = Object.freeze([
+  "text-embedding-3-small",
+  "text-embedding-3-large",
+  "text-embedding-ada-002",
+]);
+
 /**
  * The shipped survey.
  *
- * It carries no positive entry today, and that is a statement rather than
- * an omission: this build knows of no verified decommission announcement
- * for any model it can name, and inventing a plausible date would be
- * exactly the confidently-wrong output the check exists to prevent. The
- * three hosted models in `EMBEDDING_PRICING` are deliberately ABSENT
- * rather than recorded as negatives - nobody here established that no
- * announcement exists for them, and an unverified negative is worse than
- * an honest `unsurveyed`.
- *
- * Adding a positive entry is a one-line edit plus a bump of `reviewedAt`.
+ * Adding an entry is a one-line edit plus a bump of `reviewedAt`; every
+ * row owes a `source` and a test enforces it.
  */
 export const EMBEDDING_SUNSET_SURVEY: EmbeddingSunsetSurvey = Object.freeze({
   reviewedAt: "2026-08-15",
   entries: Object.freeze([
+    ...OPENAI_FIRST_GENERATION_EMBEDDINGS.map((model) => ({
+      model,
+      sunsetAt: OPENAI_FIRST_GENERATION_SHUTDOWN,
+      source: OPENAI_FIRST_GENERATION_SOURCE,
+      note: "first-generation OpenAI embedding model; the endpoint stopped answering on the date",
+    })),
+    ...OPENAI_CURRENT_EMBEDDINGS.map((model) => ({
+      model,
+      sunsetAt: null,
+      source: `not listed in any deprecation entry on ${OPENAI_DEPRECATIONS_URL} as of the review date`,
+      note: "a hosted model, so this negative is the one on this table with a real expiry",
+    })),
     {
       model: LOCAL_EMBEDDING_MODEL,
       sunsetAt: null,

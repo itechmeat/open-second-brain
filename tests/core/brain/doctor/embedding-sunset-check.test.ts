@@ -137,6 +137,26 @@ describe("a declared date inside the window is a warning naming model and date",
   });
 });
 
+describe("the SHIPPED survey reaches the warning, with no fixture", () => {
+  test("a first-generation OpenAI model warns that it is already gone", () => {
+    configure("text-search-ada-doc-001");
+    const issues: DoctorIssue[] = [];
+    const uncertain: DoctorUncertainEntry[] = [];
+    // `makeEmbeddingSunsetCheck()` with no argument: the real table.
+    makeEmbeddingSunsetCheck().run(
+      { vault, now: NOW, configPath } as unknown as DoctorCheckContext,
+      {
+        issues,
+        uncertain,
+      },
+    );
+    const issue = issues.find((i) => i.code === EMBEDDING_MODEL_SUNSET_ANNOUNCED_CODE);
+    expect(issue).toBeDefined();
+    expect(issue!.message).toContain("text-search-ada-doc-001");
+    expect(issue!.message).toContain("2024-01-04");
+  });
+});
+
 describe("a model unknown to the survey is distinguishable from a clean one", () => {
   test("unsurveyed reaches the uncertain stream under its own code", () => {
     const result = run({ reviewedAt: "2026-05-31", entries: [] });
