@@ -28,6 +28,7 @@ import { resolveNoteRoots } from "../../../src/core/brain/notes/note-walk.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import {
   BRAIN_GUARDRAIL_DEFAULTS,
+  BRAIN_MAINTENANCE_DEFAULTS,
   BRAIN_MOST_APPLIED_DEFAULTS,
   BRAIN_NOTES_DEFAULTS,
   BRAIN_TEMPORAL_DEFAULTS,
@@ -37,6 +38,7 @@ import {
   loadFeedbackDefaultScopeSafe,
   loadGuardrailsConfigSafe,
   loadIntegrityConfigSafe,
+  loadMaintenanceConfigSafe,
   loadNotesConfigSafe,
   loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
@@ -82,6 +84,15 @@ const SAFE_LOADERS = [
     name: "loadActiveMostAppliedSafe",
     load: loadActiveMostAppliedSafe as (vault: string) => unknown,
     absentValue: BRAIN_MOST_APPLIED_DEFAULTS as unknown,
+  },
+  {
+    // Both knobs decide whether heavy work STARTS, so serving the
+    // defaults on a broken config would run a pass the operator had
+    // gated behind a pressure threshold and retry a task their streak
+    // limit had refused.
+    name: "loadMaintenanceConfigSafe",
+    load: loadMaintenanceConfigSafe as (vault: string) => unknown,
+    absentValue: BRAIN_MAINTENANCE_DEFAULTS as unknown,
   },
   {
     // Coverage is what an operator turned ON, so answering `false` from

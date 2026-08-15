@@ -1399,6 +1399,29 @@ export interface BrainActiveConfig {
  * Every field is optional; absence falls back to the `LESSONS_*`
  * defaults in policy.ts.
  */
+/**
+ * Optional `maintenance:` block (t_992f0c33). Vault-side policy for the
+ * quiet-window lane, as written in `_brain.yaml`: every field optional,
+ * absent meaning "the resolver's default decides".
+ */
+export interface BrainMaintenanceConfig {
+  /**
+   * Skip heavy work when the host's one-minute run queue stands at or
+   * above this percentage of usable CPU capacity. Absent = the gate is
+   * not configured and never fires.
+   */
+  readonly host_pressure_percent?: number;
+  /** Consecutive journaled failures after which a task is refused unforced. */
+  readonly failure_streak_limit?: number;
+}
+
+/** {@link BrainMaintenanceConfig} with every field decided. */
+export interface ResolvedBrainMaintenanceConfig {
+  /** `null` = the host-pressure gate is not configured. */
+  readonly host_pressure_percent: number | null;
+  readonly failure_streak_limit: number;
+}
+
 export interface BrainLessonsConfig {
   /** Exponential half-life of the recency decay, in days. */
   readonly half_life_days?: number;
@@ -1585,6 +1608,14 @@ export interface BrainConfig {
    * callers fall back to the `LESSONS_*` defaults in policy.ts.
    */
   readonly lessons?: BrainLessonsConfig;
+  /**
+   * Optional `maintenance:` block (t_992f0c33). Vault-side policy for the
+   * quiet-window lane: the host-pressure gate's threshold and the
+   * consecutive-failure limit past which a task is refused unforced.
+   * Absent: callers fall back to `BRAIN_MAINTENANCE_DEFAULTS` via
+   * `resolveMaintenance`, which leaves the pressure gate unconfigured.
+   */
+  readonly maintenance?: BrainMaintenanceConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
   /**
@@ -1636,6 +1667,12 @@ export interface BrainConfig {
    * to `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
    */
   readonly health?: BrainHealthConfig;
+  /**
+   * Optional `embeddings:` block. Carries the operator's own record of a
+   * decommission announcement for their embedding model, layered over the
+   * survey compiled into this build. Absent: the survey answers alone.
+   */
+  readonly embeddings?: BrainEmbeddingsConfig;
   /**
    * Optional `integrity:` block (context-integrity-gates). Chooses where
    * refusal begins for the owner-scoped delivery filter and the
@@ -1873,6 +1910,18 @@ export interface ResolvedBrainTemporalConfig {
  * remediation step cap. Absent: callers fall back to
  * `BRAIN_HEALTH_DEFAULTS` via `resolveHealth`.
  */
+/**
+ * Optional `embeddings:` block. The two keys are declared together or not
+ * at all - see `policy/blocks/embeddings.ts` for why half a declaration
+ * is a refusal rather than a default.
+ */
+export interface BrainEmbeddingsConfig {
+  /** Exact model string the declaration is about. */
+  readonly sunset_model?: string;
+  /** Announced decommission date, ISO-8601 date or timestamp. */
+  readonly sunset_at?: string;
+}
+
 export interface BrainHealthConfig {
   /** Minimum principle jaccard for a contradiction pair. Float in (0, 1]. */
   readonly contradiction_jaccard?: number;

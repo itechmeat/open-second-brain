@@ -240,6 +240,19 @@ import {
   RECALL_FAILURE,
   RECALL_FAILURES,
 } from "../../../src/core/bench/failure-modes.ts";
+import {
+  isMaintenanceVerdict,
+  MAINTENANCE_VERDICT,
+  MAINTENANCE_VERDICTS,
+} from "../../../src/core/brain/maintenance/journal.ts";
+import {
+  HOST_PRESSURE,
+  HOST_PRESSURE_STATES,
+  HOST_PRESSURE_UNMEASURABLE_REASON,
+  HOST_PRESSURE_UNMEASURABLE_REASONS,
+  isHostPressureState,
+  isHostPressureUnmeasurableReason,
+} from "../../../src/core/brain/maintenance/host-pressure.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -829,6 +842,42 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: EMBEDDING_SUNSET_UNDETERMINED_REASON,
     members: EMBEDDING_SUNSET_UNDETERMINED_REASONS,
     guard: isEmbeddingSunsetUndeterminedReason,
+  },
+  {
+    // U6. What one maintenance-lane journal row records. It was a bare
+    // union, and the fourth gate is what made the trio worth having: the
+    // rows are persisted as JSONL and read back by whichever build runs
+    // next, which after an upgrade is not the build that wrote them.
+    // `pressure:unmeasurable` is the member that earns the vocabulary -
+    // it is a NOTICE that a gate did not evaluate, emitted beside the
+    // decision rather than instead of it, so an operator can tell a host
+    // that was quiet from one that could not say.
+    name: "MAINTENANCE_VERDICT",
+    values: MAINTENANCE_VERDICT,
+    members: MAINTENANCE_VERDICTS,
+    guard: isMaintenanceVerdict,
+  },
+  {
+    // U6. Whether host pressure is a number or a named absence. Two
+    // members, and the pair is the whole unit: `os.loadavg()` returns
+    // zero both on an idle host and on the platform that does not
+    // implement it, so without this state the gate's "quiet" would have
+    // been indistinguishable from its "I cannot see".
+    name: "HOST_PRESSURE",
+    values: HOST_PRESSURE,
+    members: HOST_PRESSURE_STATES,
+    guard: isHostPressureState,
+  },
+  {
+    // U6. Which question failed. Separate from the state for the reason
+    // every undetermined-reason vocabulary here is separate from its
+    // verdict: the value is persisted into a journal row's
+    // `pressure_reason`, and one guard over both would let
+    // `cpu_quota_in_force` be read back where a load percentage belongs.
+    name: "HOST_PRESSURE_UNMEASURABLE_REASON",
+    values: HOST_PRESSURE_UNMEASURABLE_REASON,
+    members: HOST_PRESSURE_UNMEASURABLE_REASONS,
+    guard: isHostPressureUnmeasurableReason,
   },
 ]);
 

@@ -93,7 +93,11 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         ok(lease === null ? "lease: free" : `lease: ${lease.holder} until ${lease.expiresAt}`);
         ok(`journal (${journal.length} recent):`);
         for (const e of journal) {
-          ok(`  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task} ${e.ok ? "ok" : "FAILED"}` : ""}`);
+          // A refusal row names its task but records no outcome, because
+          // the task never ran; rendering it as FAILED would report an
+          // attempt that did not happen.
+          const outcome = e.ok === undefined ? "" : ` ${e.ok ? "ok" : "FAILED"}`;
+          ok(`  ${e.ts}  ${e.verdict}${e.task ? `  ${e.task}${outcome}` : ""}`);
         }
       }
       return 0;

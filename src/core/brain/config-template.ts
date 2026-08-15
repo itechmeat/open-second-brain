@@ -54,6 +54,7 @@ import {
   LESSONS_CORROBORATION_MIN_DEFAULT,
   LESSONS_HALF_LIFE_DAYS_DEFAULT,
   LESSONS_LIMIT_DEFAULT,
+  MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT,
   MOST_APPLIED_LIMIT_DEFAULT,
   MOST_APPLIED_WINDOW_DAYS_DEFAULT,
   STANDING_RULES_MAX_CHARS_DEFAULT,
@@ -367,6 +368,26 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
     ],
   },
   {
+    key: "embeddings",
+    doc: [
+      "Your own record of a decommission announcement you have read, for",
+      "the model you have configured. It layers OVER the survey compiled",
+      "into this build, which goes stale between releases; a declaration",
+      "here is reported immediately. The two keys are declared together",
+      "or not at all - a date with no model would re-target itself the",
+      "next time you switched models.",
+    ],
+    emit: "commented-example",
+    keys: [
+      example("sunset_model", "text-embedding-3-small", [
+        "Exact model string, matched against the configured embedding_model.",
+      ]),
+      example("sunset_at", "2027-03-01", [
+        "Announced decommission date, ISO-8601 (YYYY-MM-DD) or timestamp.",
+      ]),
+    ],
+  },
+  {
     key: "hygiene",
     doc: ["Continuity-hygiene pass."],
     emit: "commented-example",
@@ -413,6 +434,40 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
       def("moc_min_outbound_links", L.moc_min_outbound_links),
       def("moc_min_link_ratio", L.moc_min_link_ratio),
       def("vault_instruction_file", L.vault_instruction_file),
+    ],
+  },
+  {
+    key: "maintenance",
+    doc: [
+      "Quiet-window maintenance lane (`o2b brain maintenance run`).",
+      "The window and the busy threshold are flags on that verb - they",
+      "belong to the schedule that invokes it. These two belong to the",
+      "vault, because they answer what the cron line cannot: how much of",
+      "this machine a background pass may take, and how many times a task",
+      "may fail before re-running it stops being a retry.",
+    ],
+    emit: "commented-default",
+    keys: [
+      example("host_pressure_percent", 150, [
+        "Skip heavy work when the host's one-minute run queue stands at or",
+        "above this percentage of the CPUs this process may use (150 = half",
+        "again as many runnable tasks as CPUs). Unset by default, which",
+        "leaves the gate off - a number here would start refusing work on",
+        "vaults whose operator never asked for the gate.",
+        "Where the metric is degenerate - a platform whose load average is a",
+        "constant, or a cgroup with a CPU bandwidth quota, where the run",
+        "queue is the whole host's - the gate stays OPEN and the journal",
+        "carries a pressure:unmeasurable line saying which. It never reports",
+        "an unreadable host as a quiet one.",
+      ]),
+      def("failure_streak_limit", MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT, [
+        "Refuse a lane task that has failed this many times in a row in the",
+        "run journal, instead of retrying it; --force runs it anyway. A",
+        "single success clears the streak. Nothing here supervises a",
+        "repeating failure, and the lane runs tasks stale-first, so a",
+        "permanently broken task would otherwise take the lease first on",
+        "every pass.",
+      ]),
     ],
   },
   {

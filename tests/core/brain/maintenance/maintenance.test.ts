@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -22,9 +22,18 @@ import {
   runMaintenance,
 } from "../../../../src/core/brain/maintenance/lane.ts";
 import {
+  consecutiveTaskFailures,
   listJournal,
   MAINTENANCE_JOURNAL_CAP,
+  MAINTENANCE_VERDICT,
 } from "../../../../src/core/brain/maintenance/journal.ts";
+import {
+  HOST_PRESSURE,
+  HOST_PRESSURE_UNMEASURABLE_REASON,
+  type HostPressureReading,
+} from "../../../../src/core/brain/maintenance/host-pressure.ts";
+import { MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT } from "../../../../src/core/brain/policy/blocks/maintenance.ts";
+import { brainConfigPath } from "../../../../src/core/brain/paths.ts";
 import {
   emitRecallTelemetry,
   RECALL_CHANNEL,
@@ -84,13 +93,13 @@ describe("dailyWindowContains", () => {
 
 describe("evaluateGates", () => {
   test("no window configured and a quiet vault runs", () => {
-    expect(evaluateGates(vault, { now: NOW })).toBe("run");
+    expect(evaluateGates(vault, { now: NOW }).verdict).toBe(MAINTENANCE_VERDICT.run);
   });
 
   test("outside the window skips", () => {
     expect(
-      evaluateGates(vault, { now: NOW, window: { startHour: 10, endHour: 12, tz: "UTC" } }),
-    ).toBe("skipped:window");
+      evaluateGates(vault, { now: NOW, window: { startHour: 10, endHour: 12, tz: "UTC" } }).verdict,
+    ).toBe(MAINTENANCE_VERDICT.skippedWindow);
   });
 
   test("recent interactive queries above the threshold skip as busy", () => {
@@ -105,10 +114,85 @@ describe("evaluateGates", () => {
         createdAt: new Date(NOW.getTime() - 60_000).toISOString(),
       });
     }
-    expect(evaluateGates(vault, { now: NOW, busy: { minutes: 10, threshold: 5 } })).toBe(
-      "skipped:busy",
+    expect(evaluateGates(vault, { now: NOW, busy: { minutes: 10, threshold: 5 } }).verdict).toBe(
+      MAINTENANCE_VERDICT.skippedBusy,
     );
-    expect(evaluateGates(vault, { now: NOW, busy: { minutes: 10, threshold: 6 } })).toBe("run");
+    expect(evaluateGates(vault, { now: NOW, busy: { minutes: 10, threshold: 6 } }).verdict).toBe(
+      MAINTENANCE_VERDICT.run,
+    );
+  });
+});
+
+describe("the host-pressure gate", () => {
+  const measured = (percent: number): HostPressureReading => ({
+    state: HOST_PRESSURE.measured,
+    percent,
+    load_average_1m: percent / 25,
+    cpu_count: 4,
+  });
+  const unmeasurable: HostPressureReading = {
+    state: HOST_PRESSURE.unmeasurable,
+    reason: HOST_PRESSURE_UNMEASURABLE_REASON.platformBlind,
+  };
+
+  test("an unconfigured gate never fires and never measures", () => {
+    let measurements = 0;
+    const decision = evaluateGates(vault, {
+      now: NOW,
+      readPressure: () => {
+        measurements += 1;
+        return measured(999);
+      },
+    });
+    expect(decision.verdict).toBe(MAINTENANCE_VERDICT.run);
+    expect(decision.pressure).toBeUndefined();
+    expect(measurements).toBe(0);
+  });
+
+  test("pressure at or above the configured percentage skips", () => {
+    const decision = evaluateGates(vault, {
+      now: NOW,
+      pressure: { percent: 70 },
+      readPressure: () => measured(70),
+    });
+    expect(decision.verdict).toBe(MAINTENANCE_VERDICT.skippedPressure);
+    expect(decision.pressure).toEqual(measured(70));
+  });
+
+  test("pressure below the configured percentage leaves the gate open", () => {
+    const decision = evaluateGates(vault, {
+      now: NOW,
+      pressure: { percent: 70 },
+      readPressure: () => measured(69),
+    });
+    expect(decision.verdict).toBe(MAINTENANCE_VERDICT.run);
+  });
+
+  test("an unmeasurable host leaves the gate open and says so", () => {
+    const decision = evaluateGates(vault, {
+      now: NOW,
+      pressure: { percent: 1 },
+      readPressure: () => unmeasurable,
+    });
+    // A threshold of 1% would skip on any real reading; the gate is open
+    // because nothing was read, which is a different fact from "quiet".
+    expect(decision.verdict).toBe(MAINTENANCE_VERDICT.run);
+    expect(decision.pressure).toEqual(unmeasurable);
+  });
+
+  test("an earlier closed gate wins and the host is never probed", () => {
+    let measurements = 0;
+    const decision = evaluateGates(vault, {
+      now: NOW,
+      window: { startHour: 10, endHour: 12, tz: "UTC" },
+      pressure: { percent: 70 },
+      readPressure: () => {
+        measurements += 1;
+        return measured(99);
+      },
+    });
+    expect(decision.verdict).toBe(MAINTENANCE_VERDICT.skippedWindow);
+    expect(measurements).toBe(0);
   });
 });
 
@@ -174,5 +258,159 @@ describe("runMaintenance", () => {
 
   test("the journal is bounded", () => {
     expect(MAINTENANCE_JOURNAL_CAP).toBeGreaterThanOrEqual(100);
+  });
+});
+
+describe("the host-pressure gate through the lane", () => {
+  /** Configure the fourth gate in the vault the lane reads. */
+  function configurePressureGate(percent: number): void {
+    appendFileSync(brainConfigPath(vault), `\nmaintenance:\n  host_pressure_percent: ${percent}\n`);
+  }
+
+  test("a loaded host skips with its own verdict and journals the reading", async () => {
+    configurePressureGate(70);
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      readPressure: () => ({
+        state: HOST_PRESSURE.measured,
+        percent: 180,
+        load_average_1m: 7.2,
+        cpu_count: 4,
+      }),
+      tasks: [
+        {
+          name: "dream",
+          run: async () => {
+            throw new Error("the gate should have refused before this ran");
+          },
+        },
+      ],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.skippedPressure);
+    expect(result.tasks).toEqual([]);
+    const row = listJournal(vault).find((e) => e.verdict === MAINTENANCE_VERDICT.skippedPressure);
+    expect(row?.pressure_percent).toBe(180);
+  });
+
+  test("an unmeasurable host journals a SECOND kind of line and still runs", async () => {
+    configurePressureGate(1);
+    const ran: string[] = [];
+    const result = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      readPressure: () => ({
+        state: HOST_PRESSURE.unmeasurable,
+        reason: HOST_PRESSURE_UNMEASURABLE_REASON.platformBlind,
+      }),
+      tasks: [{ name: "dream", run: async () => void ran.push("dream") }],
+    });
+    expect(result.verdict).toBe(MAINTENANCE_VERDICT.run);
+    expect(ran).toEqual(["dream"]);
+
+    const journal = listJournal(vault);
+    const notice = journal.find((e) => e.verdict === MAINTENANCE_VERDICT.pressureUnmeasurable);
+    expect(notice?.pressure_reason).toBe(HOST_PRESSURE_UNMEASURABLE_REASON.platformBlind);
+    // Two different lines, never one: the notice that the gate could not
+    // evaluate is not the same row as the work that then went ahead, and
+    // neither is a `skipped:pressure`.
+    expect(journal.some((e) => e.verdict === MAINTENANCE_VERDICT.skippedPressure)).toBe(false);
+    expect(journal.some((e) => e.verdict === MAINTENANCE_VERDICT.run && e.task === "dream")).toBe(
+      true,
+    );
+    expect(notice?.task).toBeUndefined();
+  });
+});
+
+describe("the consecutive-failure streak", () => {
+  const TASK = "reindex";
+
+  /** Run the lane once with the streak-tracked task failing or succeeding. */
+  function laneRun(succeeds: boolean, force = false) {
+    return runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      ...(force ? { force: true } : {}),
+      tasks: [
+        {
+          name: TASK,
+          run: async () => {
+            if (!succeeds) throw new Error("disk full");
+          },
+        },
+      ],
+    });
+  }
+
+  test("the streak counts journaled failures back to the newest success", async () => {
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
+    await laneRun(false);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(1);
+    await laneRun(false);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(2);
+    // A different task's failures are not this task's streak.
+    await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      tasks: [
+        {
+          name: "dream",
+          run: async () => {
+            throw new Error("unrelated");
+          },
+        },
+      ],
+    });
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(2);
+  });
+
+  test("the limit refuses the task by name and states the streak", async () => {
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await laneRun(false);
+    }
+    const refused = await laneRun(false);
+    expect(refused.verdict).toBe(MAINTENANCE_VERDICT.run);
+    const task = refused.tasks[0]!;
+    expect(task.refused).toBe(true);
+    expect(task.ok).toBe(false);
+    expect(task.failure_streak).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+    expect(task.error).toContain(String(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT));
+    expect(task.error).toContain("--force");
+
+    const row = listJournal(vault).find((e) => e.verdict === MAINTENANCE_VERDICT.refusedStreak);
+    expect(row?.task).toBe(TASK);
+    expect(row?.streak).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+    // A refusal is not an attempt: it must not deepen the streak it reports.
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+  });
+
+  test("a single success resets the streak", async () => {
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await laneRun(false);
+    }
+    expect((await laneRun(false)).tasks[0]!.refused).toBe(true);
+
+    // --force is the way past a refusal, and the success it produces is
+    // what clears the streak for the next unforced run.
+    const forced = await laneRun(true, true);
+    expect(forced.tasks[0]!.ok).toBe(true);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
+
+    const after = await laneRun(false);
+    expect(after.tasks[0]!.refused).toBeUndefined();
+    expect(after.tasks[0]!.ok).toBe(false);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(1);
+  });
+
+  test("--force runs a task the streak would have refused", async () => {
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await laneRun(false);
+    }
+    const forced = await laneRun(false, true);
+    expect(forced.tasks[0]!.refused).toBeUndefined();
+    expect(forced.tasks[0]!.ok).toBe(false);
   });
 });

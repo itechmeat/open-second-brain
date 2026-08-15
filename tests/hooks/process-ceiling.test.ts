@@ -1,7 +1,12 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   DEFAULT_HOOK_CEILING_MS,
+  HOOK_CEILING_HEADROOM_MS,
+  HOOK_HOST_TIMEOUT_SECONDS,
   armProcessCeiling,
   resolveHookCeilingMs,
 } from "../../hooks/lib/process-ceiling.ts";
@@ -90,4 +95,46 @@ test("resolveHookCeilingMs: default, override, and invalid fallback", () => {
   expect(resolveHookCeilingMs({ OPEN_SECOND_BRAIN_HOOK_CEILING_MS: "nope" })).toBe(
     DEFAULT_HOOK_CEILING_MS,
   );
+});
+
+/**
+ * The watchdog and the host timeout are one design, and the thing worth
+ * pinning is the RELATION between them, not either number. Asserting the
+ * two constants separately would let someone raise the ceiling past the
+ * host timeout and still see green - which is the exact state this suite
+ * was written to end, where a 55 s self-ceiling sat behind a 10 s host
+ * timeout and could never once have fired.
+ */
+describe("the self-ceiling and the declared host timeout", () => {
+  const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+  const declaredTimeouts = (): number[] => {
+    const parsed = JSON.parse(readFileSync(join(REPO, "hooks", "hooks.json"), "utf8")) as {
+      hooks: Record<string, Array<{ hooks: Array<{ timeout?: number }> }>>;
+    };
+    const out: number[] = [];
+    for (const groups of Object.values(parsed.hooks)) {
+      for (const group of groups) {
+        for (const entry of group.hooks) {
+          if (entry.timeout !== undefined) out.push(entry.timeout);
+        }
+      }
+    }
+    return out;
+  };
+
+  test("every hooks.json entry declares the timeout the module is built against", () => {
+    const timeouts = declaredTimeouts();
+    expect(timeouts.length).toBeGreaterThan(0);
+    expect([...new Set(timeouts)]).toEqual([HOOK_HOST_TIMEOUT_SECONDS]);
+  });
+
+  test("the self-ceiling fires first, by the stated headroom", () => {
+    const hostMs = HOOK_HOST_TIMEOUT_SECONDS * 1000;
+    expect(HOOK_CEILING_HEADROOM_MS).toBeGreaterThan(0);
+    expect(DEFAULT_HOOK_CEILING_MS).toBe(hostMs - HOOK_CEILING_HEADROOM_MS);
+    expect(DEFAULT_HOOK_CEILING_MS).toBeLessThan(hostMs);
+    // And it is still a ceiling worth arming rather than a value the
+    // floor would swallow.
+    expect(resolveHookCeilingMs({})).toBe(DEFAULT_HOOK_CEILING_MS);
+  });
 });

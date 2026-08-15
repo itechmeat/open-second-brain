@@ -16,11 +16,45 @@
  *
  * Note: a JavaScript timer cannot interrupt a fully-synchronous CPU hang on a
  * single thread; the realistic hook hangs are asynchronous (network fetch,
- * fs stall on a mounted volume), which this covers. The host runtime's own
- * per-hook timeout remains a second line of defence.
+ * fs stall on a mounted volume), which this covers. That limit is exactly why
+ * the host's own per-hook timeout is the OUTER bound and this ceiling sits
+ * inside it: the host can kill a wedged process this timer cannot reach.
+ *
+ * ## Which deadline is authoritative
+ *
+ * The host's is. It is enforced from outside the process, it survives a
+ * synchronous hang, and every entry in `hooks/hooks.json` declares it. What
+ * this module adds is a CLEAN exit just before that deadline: a hook killed by
+ * the host writes no audit line and leaves no record of why it stopped, while
+ * one that hits this ceiling runs `onExpire` and exits 0.
+ *
+ * That only works if this ceiling is strictly SMALLER than the declared host
+ * timeout. It was not: the default was 55 s behind a declared 10 s, so under
+ * the shipped configuration the self-ceiling could never once have fired and
+ * the module's "second line of defence" was in fact the first and only one.
+ * The default is now derived from the declared timeout, and
+ * `tests/hooks/process-ceiling.test.ts` asserts the RELATION between the two
+ * rather than either number - so changing one without the other fails there
+ * instead of silently disarming the watchdog again.
  */
 
-export const DEFAULT_HOOK_CEILING_MS = 55_000;
+/**
+ * The per-hook timeout every entry in `hooks/hooks.json` declares, in
+ * seconds. Mirrored here because JSON cannot import a constant; the test
+ * suite reads the file and asserts the two agree.
+ */
+export const HOOK_HOST_TIMEOUT_SECONDS = 10;
+
+/**
+ * How far in front of the host's deadline this ceiling fires. It buys the
+ * `onExpire` side effect - a single audit-line append - and the exit, which
+ * is comfortably under two seconds even on a loaded machine with a slow
+ * filesystem.
+ */
+export const HOOK_CEILING_HEADROOM_MS = 2_000;
+
+/** Derived, never typed twice: see the module docblock for the ordering. */
+export const DEFAULT_HOOK_CEILING_MS = HOOK_HOST_TIMEOUT_SECONDS * 1_000 - HOOK_CEILING_HEADROOM_MS;
 
 /** Floor below which a configured ceiling is treated as a typo and ignored. */
 const MIN_HOOK_CEILING_MS = 1_000;

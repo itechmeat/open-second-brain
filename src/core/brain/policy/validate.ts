@@ -26,11 +26,13 @@ import {
 import { parseVaultBlock } from "./blocks/vault-scope.ts";
 import { parseActiveBlock } from "./blocks/active.ts";
 import { parseLessonsBlock } from "./blocks/lessons.ts";
+import { parseMaintenanceBlock } from "./blocks/maintenance.ts";
 import { parseDisciplineReportBlock } from "./blocks/discipline-report.ts";
 import { parseGuardrailsBlock } from "./blocks/guardrails.ts";
 import { parseRollupBlock } from "./blocks/rollup.ts";
 import { parseLinkGraphBlock } from "./blocks/link-graph.ts";
 import { parseTemporalBlock } from "./blocks/temporal.ts";
+import { parseEmbeddingsBlock } from "./blocks/embeddings.ts";
 import { parseHealthBlock } from "./blocks/health.ts";
 import { parseIntegrityBlock } from "./blocks/integrity.ts";
 import { parseNotesBlock } from "./blocks/notes.ts";
@@ -101,12 +103,14 @@ export function validateBrainConfigDetailed(
   const vault = parseVaultBlock(ctx);
   const active = parseActiveBlock(ctx);
   const lessons = parseLessonsBlock(ctx);
+  const maintenance = parseMaintenanceBlock(ctx);
   const disciplineReport = parseDisciplineReportBlock(ctx);
   const guardrails = parseGuardrailsBlock(ctx);
   const rollup = parseRollupBlock(ctx);
   const linkGraph = parseLinkGraphBlock(ctx);
   const temporal = parseTemporalBlock(ctx);
   const health = parseHealthBlock(ctx);
+  const embeddings = parseEmbeddingsBlock(ctx);
   const integrity = parseIntegrityBlock(ctx);
   const notes = parseNotesBlock(ctx);
   const writeBinding = parseWriteBindingBlock(ctx);
@@ -129,6 +133,7 @@ export function validateBrainConfigDetailed(
     ...(vault !== undefined ? { vault } : {}),
     ...(active !== undefined ? { active } : {}),
     ...(lessons !== undefined ? { lessons } : {}),
+    ...(maintenance !== undefined ? { maintenance } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(rollup !== undefined ? { rollup } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),
@@ -138,6 +143,7 @@ export function validateBrainConfigDetailed(
     ...(writeBinding !== undefined ? { write_binding: writeBinding } : {}),
     ...(sessions !== undefined ? { sessions } : {}),
     ...(health !== undefined ? { health } : {}),
+    ...(embeddings !== undefined ? { embeddings } : {}),
     ...(integrity !== undefined ? { integrity } : {}),
     ...(schema !== undefined ? { schema } : {}),
     ...(hygiene !== undefined ? { hygiene } : {}),

@@ -56,6 +56,7 @@ export {
   loadFeedbackDefaultScopeSafe,
   loadGuardrailsConfigSafe,
   loadIntegrityConfigSafe,
+  loadMaintenanceConfigSafe,
   loadNotesConfigSafe,
   loadSnapshotDerivedStorePolicySafe,
   loadSnapshotRetentionSafe,
@@ -98,6 +99,15 @@ export {
   LESSONS_LIMIT_MAX,
   LESSONS_LIMIT_MIN,
 } from "./policy/blocks/lessons.ts";
+export {
+  BRAIN_MAINTENANCE_DEFAULTS,
+  MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT,
+  MAINTENANCE_FAILURE_STREAK_LIMIT_MAX,
+  MAINTENANCE_FAILURE_STREAK_LIMIT_MIN,
+  MAINTENANCE_HOST_PRESSURE_PERCENT_MAX,
+  MAINTENANCE_HOST_PRESSURE_PERCENT_MIN,
+  resolveMaintenance,
+} from "./policy/blocks/maintenance.ts";
 export {
   BRAIN_GUARDRAIL_DEFAULTS,
   INSTRUCTION_FILE_MAX_LINES_CEILING,

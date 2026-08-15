@@ -36,6 +36,7 @@ import {
   resolveHealth,
   resolveIntegrity,
   resolveLinkGraph,
+  resolveMaintenance,
   resolveNotes,
   resolveSessions,
   resolveTemporal,
@@ -155,8 +156,13 @@ function resolvedView(cfg: BrainConfig): Record<string, unknown> {
     },
     guardrails: resolveGuardrails(cfg),
     link_graph: resolveLinkGraph(cfg),
+    maintenance: resolveMaintenance(cfg),
     temporal: resolveTemporal(cfg),
     health: resolveHealth(cfg),
+    // Both keys are commented examples with no default, so this is
+    // `undefined` on both sides - which is the claim: exposing them
+    // changed no behaviour for any existing vault.
+    embeddings: cfg.embeddings,
     integrity: resolveIntegrity(cfg),
     notes: resolveNotes(cfg),
     sessions: resolveSessions(cfg),
