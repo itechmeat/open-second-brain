@@ -320,7 +320,7 @@ not be read.
 ### Trusted recall and memory write surface (since v1.35.0)
 
 ```text
-o2b doctor                    gains --readiness: three functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter wiring) with per-check timeouts and outcomes pass, fail with a reason, or skipped-not-configured; any failure exits non-zero; without the flag output stays byte-identical
+o2b doctor                    gains --readiness: four functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure exits non-zero and an unknown does not; without the flag output stays byte-identical
 o2b brain morning-brief       renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and a relative age label; the underlying JSON data arrays are unchanged
 ```
 

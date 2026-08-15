@@ -78,7 +78,7 @@ A successful check prints:
 ```text
 o2b install --check
 --------------------
-  opencode      ok                $HOME/.config/opencode/opencode.json: both OSB keys present
+  opencode      ok                $HOME/.config/opencode/opencode.json: both OSB keys match the canonical payload (configuration comparison; no MCP handshake attempted)
 ```
 
 `$HOME` stands in for your home directory. This block is asserted

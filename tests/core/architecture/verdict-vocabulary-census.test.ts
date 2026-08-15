@@ -97,6 +97,16 @@ import {
   MATERIALIZE_UNKNOWN_REASON,
   MATERIALIZE_UNKNOWN_REASONS,
 } from "../../../src/core/brain/staleness.ts";
+import {
+  isReadinessStatus,
+  READINESS_STATUS,
+  READINESS_STATUSES,
+} from "../../../src/core/doctor-readiness.ts";
+import {
+  isRetrievalDegradationCode,
+  RETRIEVAL_DEGRADATION,
+  RETRIEVAL_DEGRADATION_CODES,
+} from "../../../src/core/search/retrieval-trail.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -163,6 +173,16 @@ function auditVocabulary(vocabulary: VocabularyUnderCensus): ReadonlyArray<strin
  * already shipped the complete trio.
  */
 const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
+  {
+    // B5. `unknown` is the member the trio was missing: the install-state
+    // probe reads a manifest that can exist and refuse to parse, and among
+    // pass, fail and skipped there was no answer for "could not measure"
+    // that was not a lie in one direction or the other.
+    name: "READINESS_STATUS",
+    values: READINESS_STATUS,
+    members: READINESS_STATUSES,
+    guard: isReadinessStatus,
+  },
   { name: "GATE_MODE", values: GATE_MODE, members: GATE_MODES, guard: isGateMode },
   {
     name: "SCHEMA_PACK_INTEGRITY",
@@ -314,6 +334,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: RECALL_TELEMETRY_STATUS,
     members: RECALL_TELEMETRY_STATUSES,
     guard: isRecallTelemetryStatus,
+  },
+  {
+    // C2. Why a retrieval narrowed or came back empty. Registered because
+    // the values leave TypeScript twice over: they are declared as an
+    // `enum` in the `brain_search` output schema, where an undeclared code
+    // fails the response contract, and they are emitted as recall-telemetry
+    // gap strings - two hand-written copies away from the one definition if
+    // nothing asserts the trio agrees.
+    name: "RETRIEVAL_DEGRADATION",
+    values: RETRIEVAL_DEGRADATION,
+    members: RETRIEVAL_DEGRADATION_CODES,
+    guard: isRetrievalDegradationCode,
   },
 ]);
 

@@ -355,10 +355,16 @@ async function cmdDoctor(argv: string[]): Promise<number> {
 
   if (readiness) {
     process.stdout.write(
-      `\nreadiness: ${readiness.probes.length} probes, ${readinessFailed} failed\n`,
+      `\nreadiness: ${readiness.probes.length} probes, ${readinessFailed} failed` +
+        (readiness.unknown > 0 ? `, ${readiness.unknown} unknown\n` : `\n`),
     );
     for (const p of readiness.probes) {
-      const tag = p.status === "pass" ? "PASS" : p.status === "fail" ? "FAIL" : "SKIP";
+      // The tag is the status, not a three-way approximation of it. Rendering
+      // `unknown` as SKIP would say "not configured" about a probe that found
+      // something it could not read, which is the conflation this release is
+      // about: the vocabulary grew a fourth member precisely because three
+      // could not carry "could not measure" without lying in one direction.
+      const tag = p.status === "pass" ? "PASS" : p.status === "fail" ? "FAIL" : p.status.toUpperCase();
       process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
     }
   }

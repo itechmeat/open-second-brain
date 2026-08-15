@@ -10,12 +10,19 @@
  *   o2b install --target generic --out <p|->     # generic adapter only
  *   o2b install --target generic --format json|yaml
  *
- * Exit codes:
+ * Exit codes ({@link INSTALL_EXIT}):
  *   0  success / no drift
  *   1  I/O / runtime error
  *   2  usage error (unknown target, bad flag)
  *   3  --check found drift
  *   4  user-modified-block conflict on apply (use --force to override)
+ *   5  --check found a runtime it proved unreachable
+ *
+ * Code 5 exists because 0 was wrong. `--check` used to exit 0 for both
+ * `not-installed` and `mcp-unreachable`, so `o2b install --check` reported
+ * success for a runtime whose own adapter had just failed to reach it -
+ * the one verify state backed by a live query rather than a file read.
+ * The two are not the same answer and no longer share a code.
  */
 
 import { homedir } from "node:os";
@@ -39,6 +46,19 @@ import {
   renderVerifyJson,
   renderVerifyTable,
 } from "./render.ts";
+
+/**
+ * Every code this verb can return, named once so the docblock above, the
+ * returns below and the tests all read the same table.
+ */
+export const INSTALL_EXIT = Object.freeze({
+  ok: 0,
+  runtimeError: 1,
+  usage: 2,
+  drift: 3,
+  userModifiedBlock: 4,
+  mcpUnreachable: 5,
+} as const);
 
 interface ParsedInstallArgs {
   readonly target: string | null;
@@ -142,7 +162,7 @@ export async function cmdInstall(argv: string[]): Promise<number> {
   } catch (e) {
     if (e instanceof UsageError) {
       process.stderr.write(`error: ${e.message}\n`);
-      return 2;
+      return INSTALL_EXIT.usage;
     }
     throw e;
   }
@@ -165,7 +185,7 @@ function runDetect(args: ParsedInstallArgs): number {
   } else {
     process.stdout.write(renderDetectTable(results));
   }
-  return 0;
+  return INSTALL_EXIT.ok;
 }
 
 function runTarget(args: ParsedInstallArgs): number {
@@ -175,7 +195,7 @@ function runTarget(args: ParsedInstallArgs): number {
       `error: unknown --target: ${args.target}. ` +
         `Available: ${defaultRegistry.targets().join(", ")}\n`,
     );
-    return 2;
+    return INSTALL_EXIT.usage;
   }
   const env = buildInstallEnv(args);
   let payload;
@@ -184,11 +204,11 @@ function runTarget(args: ParsedInstallArgs): number {
   } catch (e) {
     if (e instanceof UsageError) {
       process.stderr.write(`error: ${e.message}\n`);
-      return 2;
+      return INSTALL_EXIT.usage;
     }
     if (e instanceof PayloadError) {
       process.stderr.write(`error: ${e.message}\n`);
-      return 2;
+      return INSTALL_EXIT.usage;
     }
     throw e;
   }
@@ -208,7 +228,7 @@ function runTarget(args: ParsedInstallArgs): number {
     } else {
       process.stdout.write(renderPlan(plan));
     }
-    return 0;
+    return INSTALL_EXIT.ok;
   }
 
   try {
@@ -218,20 +238,20 @@ function runTarget(args: ParsedInstallArgs): number {
     } else {
       process.stdout.write(renderApplyResult(result));
     }
-    return 0;
+    return INSTALL_EXIT.ok;
   } catch (e) {
     if (e instanceof InstallError && e.kind === "user-modified-block") {
       process.stderr.write(`error: ${e.message}\n`);
       if (e.hint) process.stderr.write(`hint: ${e.hint}\n`);
-      return 4;
+      return INSTALL_EXIT.userModifiedBlock;
     }
     if (e instanceof InstallError) {
       process.stderr.write(`error: ${e.message}\n`);
       if (e.hint) process.stderr.write(`hint: ${e.hint}\n`);
-      return 1;
+      return INSTALL_EXIT.runtimeError;
     }
     process.stderr.write(`error: ${(e as Error).message}\n`);
-    return 1;
+    return INSTALL_EXIT.runtimeError;
   }
 }
 
@@ -244,7 +264,7 @@ function runCheck(args: ParsedInstallArgs): number {
     process.stderr.write(
       "error: vault not configured. Pass --vault <path>, set VAULT_DIR, or run `o2b init`.\n",
     );
-    return 2;
+    return INSTALL_EXIT.usage;
   }
   const targets = args.target
     ? defaultRegistry.get(args.target)
@@ -256,7 +276,7 @@ function runCheck(args: ParsedInstallArgs): number {
       `error: unknown --target: ${args.target}. ` +
         `Available: ${defaultRegistry.targets().join(", ")}\n`,
     );
-    return 2;
+    return INSTALL_EXIT.usage;
   }
   const results: VerifyResult[] = [];
   for (const a of targets) results.push(a.verify(env));
@@ -265,6 +285,25 @@ function runCheck(args: ParsedInstallArgs): number {
   } else {
     process.stdout.write(renderVerifyTable(results));
   }
-  const drift = results.some((r) => r.status === "drift");
-  return drift ? 3 : 0;
+  return exitCodeForVerify(results);
+}
+
+/**
+ * The exit code a `--check` run over `results` earns.
+ *
+ * Drift outranks unreachable deliberately, and the order is the operator's
+ * repair order rather than a severity ranking: a runtime may be unreachable
+ * BECAUSE its config drifted, so re-running `--apply` is the first move and
+ * a liveness verdict taken over a wrong config means nothing. `not-installed`
+ * stays 0 - the operator never asked for that runtime - which is exactly the
+ * bucket `mcp-unreachable` was wrongly sharing.
+ *
+ * Exported for the exit-code tests: `mcp-unreachable` is reachable only from
+ * an adapter that shells out to a runtime CLI, which a CLI-level test cannot
+ * stage without also staging that runtime.
+ */
+export function exitCodeForVerify(results: ReadonlyArray<VerifyResult>): number {
+  if (results.some((r) => r.status === "drift")) return INSTALL_EXIT.drift;
+  if (results.some((r) => r.status === "mcp-unreachable")) return INSTALL_EXIT.mcpUnreachable;
+  return INSTALL_EXIT.ok;
 }

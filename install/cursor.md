@@ -38,7 +38,7 @@ A successful check prints:
 ```text
 o2b install --check
 --------------------
-  cursor        ok                $HOME/.cursor/mcp.json: both OSB keys present
+  cursor        ok                $HOME/.cursor/mcp.json: both OSB keys match the canonical payload (configuration comparison; no MCP handshake attempted)
 ```
 
 `$HOME` stands in for your home directory. This block is asserted

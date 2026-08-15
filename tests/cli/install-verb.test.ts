@@ -12,6 +12,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
+import { INSTALL_EXIT, exitCodeForVerify } from "../../src/cli/install/install.ts";
+import type { VerifyResult } from "../../src/core/install/types.ts";
 
 // The install/uninstall adapters resolve the target home directory from the
 // environment at module-load time, so they need a fresh child process per call
@@ -146,6 +148,9 @@ describe("o2b install --check", () => {
     const r = await runCli(["install", "--check", "--target", "cursor"], { env: envBase() });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("ok");
+    // The `ok` is a configuration comparison, and says so: nothing here
+    // spoke MCP to Cursor.
+    expect(r.stdout).toContain("no MCP handshake attempted");
   });
 
   test("--check without configured vault exits 2 with vault-not-configured", async () => {
@@ -176,6 +181,42 @@ describe("o2b install --check", () => {
     const r = await runCli(["install", "--check", "--target", "cursor"], { env: envBase() });
     expect(r.returncode).toBe(3);
     expect(r.stdout).toContain("canonical payload");
+  });
+});
+
+describe("o2b install --check exit codes distinguish the verify states", () => {
+  function row(status: VerifyResult["status"], target = "unit"): VerifyResult {
+    return { target, status, details: [`${target}: ${status}`], fix_hint: null };
+  }
+
+  test("a runtime proved unreachable does not exit 0", () => {
+    const code = exitCodeForVerify([row("mcp-unreachable")]);
+    expect(code).toBe(INSTALL_EXIT.mcpUnreachable);
+    expect(code).not.toBe(INSTALL_EXIT.ok);
+  });
+
+  test("unreachable and not-installed are different codes", () => {
+    expect(exitCodeForVerify([row("not-installed")])).toBe(INSTALL_EXIT.ok);
+    expect(exitCodeForVerify([row("mcp-unreachable")])).not.toBe(
+      exitCodeForVerify([row("not-installed")]),
+    );
+  });
+
+  test("ok alone is success, and drift keeps its historical code", () => {
+    expect(exitCodeForVerify([row("ok")])).toBe(INSTALL_EXIT.ok);
+    expect(exitCodeForVerify([row("drift")])).toBe(INSTALL_EXIT.drift);
+    expect(INSTALL_EXIT.drift).toBe(3);
+  });
+
+  test("drift outranks unreachable: the config must be right before liveness means anything", () => {
+    expect(exitCodeForVerify([row("mcp-unreachable", "a"), row("drift", "b")])).toBe(
+      INSTALL_EXIT.drift,
+    );
+  });
+
+  test("every exit code is distinct", () => {
+    const codes = Object.values(INSTALL_EXIT);
+    expect(new Set(codes).size).toBe(codes.length);
   });
 });
 

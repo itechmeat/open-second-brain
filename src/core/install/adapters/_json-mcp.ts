@@ -4,10 +4,16 @@
  * kiro, Gemini CLI follow the default shape; opencode reuses the same
  * body with a custom top-level key and entry shape.
  *
- * Per-target specifics (config path, top-level key, post-install notes,
- * optional MCP probe) are injected via `JsonMcpAdapterSpec`. The body
- * itself owns idempotency, drift detection, manifest I/O, and the
+ * Per-target specifics (config path, top-level key, post-install notes)
+ * are injected via `JsonMcpAdapterSpec`. The body itself owns
+ * idempotency, drift detection, manifest I/O, and the
  * user-modified-block safety net.
+ *
+ * What `verify` here can and cannot prove: it compares the on-disk config
+ * against the canonical payload. It does not, and cannot from this side,
+ * establish that the runtime loaded the entry - see the comment on the
+ * `ok` return, where a declared-but-never-implemented MCP probe seam used
+ * to make that ambiguity invisible.
  */
 
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
@@ -32,6 +38,14 @@ import {
   type UninstallResult,
   type VerifyResult,
 } from "../types.ts";
+
+/**
+ * Stated on every clean `verify` so an `ok` cannot be read as "the
+ * runtime answered". One constant, because the sentence is a property of
+ * this adapter body and every target that reuses it must say it the same
+ * way.
+ */
+const NO_HANDSHAKE_NOTE = "configuration comparison; no MCP handshake attempted";
 
 export interface JsonMcpAdapterSpec {
   readonly target: string;
@@ -61,12 +75,6 @@ export interface JsonMcpAdapterSpec {
   readonly notes?: ReadonlyArray<string>;
   /** Plan-level post-install reminders (e.g. "restart Cursor app"). */
   readonly postNotes?: ReadonlyArray<string>;
-  /**
-   * Optional MCP-ping probe. Return `true` if the runtime answers an
-   * MCP handshake; `false` on definite failure. `null` means "we
-   * cannot probe" (skip — do not penalise).
-   */
-  probeMcp?(env: InstallEnv): boolean | null;
   /** Fix-hint text for `verify` when drift detected. */
   readonly fixHintForDrift?: string;
   /**
@@ -439,20 +447,24 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
           fix_hint: spec.fixHintForDrift ?? `o2b install --target ${spec.target} --apply`,
         };
       }
-      // Optional MCP probe — does not penalise when it returns null.
-      const probe = spec.probeMcp?.(env);
-      if (probe === false) {
-        return {
-          target: spec.target,
-          status: "mcp-unreachable",
-          details: ["MCP probe failed"],
-          fix_hint: "verify the runtime is running and o2b is on PATH",
-        };
-      }
+      // The `ok` below is a CONFIGURATION comparison and nothing more, and
+      // it now says so. This is where an optional `probeMcp(env)` seam used
+      // to sit: declared on the spec, called here, and implemented by zero
+      // adapters in the tree, so every JSON-MCP runtime reported `ok` on the
+      // strength of two matching JSON keys while the branch that could have
+      // said otherwise was unreachable. The seam is deleted rather than
+      // implemented because implementing it here would mean this process
+      // spawning each runtime's MCP server to speak a handshake to itself,
+      // which proves that WE can run `o2b`, not that Cursor or Gemini CLI
+      // loaded the entry - and no caller wanted that answer today. Liveness
+      // stays reachable where a runtime genuinely exposes it: `copilot-cli`
+      // asks `copilot mcp list` and returns `mcp-unreachable` from a real
+      // failure. An operator reading this verdict is owed the distinction,
+      // so the detail carries it instead of a bare "both OSB keys present".
       return {
         target: spec.target,
         status: "ok",
-        details: [`${path}: both OSB keys present`],
+        details: [`${path}: both OSB keys match the canonical payload (${NO_HANDSHAKE_NOTE})`],
         fix_hint: null,
       };
     },

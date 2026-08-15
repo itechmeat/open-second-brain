@@ -25,7 +25,7 @@ A successful check prints:
 ```text
 o2b install --check
 --------------------
-  gemini-cli    ok                $HOME/.gemini/settings.json: both OSB keys present
+  gemini-cli    ok                $HOME/.gemini/settings.json: both OSB keys match the canonical payload (configuration comparison; no MCP handshake attempted)
 ```
 
 `$HOME` stands in for your home directory. This block is asserted

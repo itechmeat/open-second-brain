@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import { BRAIN_INDEX_REL, BRAIN_ROOT_REL } from "../../src/core/brain/paths.ts";
+import { isReadinessStatus } from "../../src/core/doctor-readiness.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -203,30 +204,36 @@ describe("doctor", () => {
   });
 
   // Semantic search forced off so the readiness probes are deterministic
-  // (llm_key + embedding_provider skip; adapter wiring passes) regardless
-  // of any embedding env in the developer's shell.
-  const READINESS_ENV = {
+  // (llm_key + embedding_provider skip; adapter construction passes) regardless
+  // of any embedding env in the developer's shell. HOME is pinned to the
+  // per-test temp dir for the same reason and a sharper one: the installed-
+  // runtimes probe reads real runtime configs out of HOME, so a developer's
+  // own grok or Cursor install would otherwise decide this test's exit code,
+  // and the suite would pass on a bare runner and fail on a workstation.
+  // A function because `tmp` is assigned in beforeEach.
+  const readinessEnv = () => ({
     OPEN_SECOND_BRAIN_CONFIG: "",
     XDG_CONFIG_HOME: "",
     VAULT_DIR: "",
     OPEN_SECOND_BRAIN_SEARCH_SEMANTIC: "false",
-  };
+    HOME: tmp,
+  });
 
   test("without --readiness the output has no readiness section (byte-identical opt-out)", async () => {
-    const plain = await runCli(["doctor", "--vault", tmp], { env: READINESS_ENV });
+    const plain = await runCli(["doctor", "--vault", tmp], { env: readinessEnv() });
     expect(plain.returncode).toBe(0);
     expect(plain.stdout).not.toContain("readiness:");
 
     const withFlag = await runCli(["doctor", "--vault", tmp, "--readiness"], {
-      env: READINESS_ENV,
+      env: readinessEnv(),
     });
     // The readiness run appends its section; the base output is unchanged,
     // so the plain output is an exact prefix of the readiness output.
     expect(withFlag.stdout.startsWith(plain.stdout)).toBe(true);
   });
 
-  test("--readiness runs the three probes with explicit outcomes", async () => {
-    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], { env: READINESS_ENV });
+  test("--readiness runs the default probes with explicit outcomes", async () => {
+    const r = await runCli(["doctor", "--vault", tmp, "--readiness"], { env: readinessEnv() });
     expect(r.returncode).toBe(0);
     expect(r.stdout).toContain("readiness:");
     expect(r.stdout).toContain("llm_key:");
@@ -238,16 +245,19 @@ describe("doctor", () => {
   });
 
   test("--readiness --json omits the readiness key without the flag and adds it with it", async () => {
-    const plain = await runCli(["doctor", "--vault", tmp, "--json"], { env: READINESS_ENV });
+    const plain = await runCli(["doctor", "--vault", tmp, "--json"], { env: readinessEnv() });
     expect(JSON.parse(plain.stdout).readiness).toBeUndefined();
 
     const withFlag = await runCli(["doctor", "--vault", tmp, "--json", "--readiness"], {
-      env: READINESS_ENV,
+      env: readinessEnv(),
     });
     const parsed = JSON.parse(withFlag.stdout);
     expect(Array.isArray(parsed.readiness)).toBe(true);
-    expect(parsed.readiness.length).toBe(3);
-    expect(parsed.readiness.every((p: { status: string }) => typeof p.status === "string")).toBe(
+    // The probe set is the default registry; assert it is non-empty and that
+    // every entry carries a status from the closed vocabulary, rather than
+    // pinning a count that a new probe changes for no behavioural reason.
+    expect(parsed.readiness.length).toBeGreaterThan(0);
+    expect(parsed.readiness.every((p: { status: string }) => isReadinessStatus(p.status))).toBe(
       true,
     );
   });
