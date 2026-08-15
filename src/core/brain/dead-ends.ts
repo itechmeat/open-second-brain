@@ -16,7 +16,7 @@ import { join } from "node:path";
 import { sanitiseTextField } from "../redactor.ts";
 import { parseFrontmatterText, slugify, writeFrontmatterAtomic } from "../vault.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { allocateSlug } from "./paths.ts";
+import { allocateAndCreate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -79,7 +79,7 @@ function renderBody(approach: string, reason: string, context: string | null): s
 
 /**
  * Record one dead-end note and trim the active set. The id is
- * `de-<date>-<slug-of-approach>` with `allocateSlug` collision
+ * `de-<date>-<slug-of-approach>` with `allocateAndCreate` collision
  * suffixes, matching the signal naming discipline.
  */
 export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordDeadEndResult {
@@ -101,28 +101,38 @@ export function recordDeadEnd(vault: string, input: RecordDeadEndInput): RecordD
   const dir = deadEndsDir(vault);
   mkdirSync(dir, { recursive: true });
   const date = isoDate(input.now);
-  const allocated = allocateSlug({
-    vault,
-    targetDir: dir,
-    prefix: `de-${date}`,
-    slug: slugify(approach),
-  });
-  const id = `de-${date}-${allocated.slug}`;
   const createdAt = isoSecond(input.now);
 
-  const metadata: FrontmatterMap = {
-    kind: "brain-dead-end",
-    id,
-    created_at: createdAt,
-    agent: input.agent.trim(),
-    approach,
-    tags: ["brain", "brain/dead-end"],
-  };
-  writeFrontmatterAtomic(allocated.path, metadata, renderBody(approach, reason, context), {
-    overwrite: false,
-    existsErrorKind: "dead-end",
-    vaultForRelativePath: vault,
-  });
+  // Allocation and creation are one step: two agents recording the same
+  // approach on the same day both see the bare name free, and the loser
+  // of that exclusive create must fall through to `-2` rather than lose
+  // the note (GitHub #161). The frontmatter `id` is derived per attempt
+  // because it must always equal the filename it ships in.
+  const { allocation: allocated, value: id } = allocateAndCreate(
+    {
+      vault,
+      targetDir: dir,
+      prefix: `de-${date}`,
+      slug: slugify(approach),
+    },
+    (allocation) => {
+      const deadEndId = `de-${date}-${allocation.slug}`;
+      const metadata: FrontmatterMap = {
+        kind: "brain-dead-end",
+        id: deadEndId,
+        created_at: createdAt,
+        agent: input.agent.trim(),
+        approach,
+        tags: ["brain", "brain/dead-end"],
+      };
+      writeFrontmatterAtomic(allocation.path, metadata, renderBody(approach, reason, context), {
+        overwrite: false,
+        existsErrorKind: "dead-end",
+        vaultForRelativePath: vault,
+      });
+      return deadEndId;
+    },
+  );
 
   const archived = trimActive(vault, input.maxActive ?? DEAD_END_MAX_ACTIVE);
 

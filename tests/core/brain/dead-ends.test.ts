@@ -16,6 +16,7 @@ import {
   rmSync,
   writeFileSync,
   mkdirSync,
+  symlinkSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -102,6 +103,24 @@ describe("recordDeadEnd", () => {
 
   test("default cap is generous", () => {
     expect(DEAD_END_MAX_ACTIVE).toBeGreaterThanOrEqual(100);
+  });
+});
+
+describe("recordDeadEnd - a lost race retries instead of dropping the note", () => {
+  test("a name taken between the probe and the create lands on `-2`", () => {
+    // A dangling symlink is read as free by `existsSync` (which follows
+    // the link) and as taken by `link(2)` (which does not) - the exact
+    // pair of answers the loser of a concurrent write gets, without the
+    // timing dependence of racing two processes.
+    const dir = deadEndsDir(vault);
+    mkdirSync(dir, { recursive: true });
+    const taken = join(dir, "de-2026-06-04-mutable-global-cache.md");
+    symlinkSync(join(dir, "never-created"), taken);
+
+    const { entry } = record("Mutable global cache");
+
+    expect(entry.id).toBe("de-2026-06-04-mutable-global-cache-2");
+    expect(existsSync(entry.path)).toBe(true);
   });
 });
 

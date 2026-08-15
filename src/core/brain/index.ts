@@ -63,6 +63,9 @@ export {
   snapshotsDir,
   snapshotPath,
   allocateSlug,
+  allocateAndCreate,
+  collisionCandidateName,
+  SLUG_ALLOCATION_MAX_ATTEMPTS,
   validateSlug,
   validateIsoDate,
   validateRunId,
@@ -131,7 +134,12 @@ export type {
   ComputeBrainStatusOptions,
 } from "./status.ts";
 
-export type { BrainDirs, AllocateSlugOptions, AllocateSlugResult } from "./paths.ts";
+export type {
+  BrainDirs,
+  AllocateSlugOptions,
+  AllocateSlugResult,
+  AllocateAndCreateResult,
+} from "./paths.ts";
 
 // ----- Configuration --------------------------------------------------------
 export { DEFAULT_BRAIN_CONFIG_YAML, renderBrainConfigTemplate } from "./config-template.ts";

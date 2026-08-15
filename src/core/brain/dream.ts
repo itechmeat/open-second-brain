@@ -69,7 +69,12 @@ import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
-import { brainDirsForWrite, dreamWorkrunPath, snapshotPath } from "./paths.ts";
+import {
+  brainDirsForWrite,
+  collisionCandidateName,
+  dreamWorkrunPath,
+  snapshotPath,
+} from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
 import {
@@ -397,14 +402,38 @@ function formatRunId(d: Date): string {
   return `${BRAIN_SNAPSHOT_REASON.dream}-${compactRunStamp(d)}`;
 }
 
+/**
+ * Upper bound on distinct run ids probed. Two dream passes in the same
+ * second is already unusual; sixty-four is a decade of them.
+ */
+const MAX_DREAM_RUN_ID_ATTEMPTS = 64;
+
+/**
+ * First run id free in BOTH the snapshot directory and the workrun
+ * directory, laddering `-2`, `-3`, ... through the shared
+ * {@link collisionCandidateName}.
+ *
+ * This is a probe, not a reservation: the archive and the workrun are
+ * written later by two different subsystems, so there is no single create
+ * to fuse the probe with and `allocateAndCreate` does not fit. What it
+ * does have now is a bound. Unbounded, a directory that answered "taken"
+ * for every candidate - a stale `.snapshots/` never pruned, a permission
+ * problem that makes every probe look occupied - span the loop forever
+ * with no output at all, which is the worst way for a pass to fail.
+ */
 function nextAvailableDreamRunId(vault: string, baseRunId: string): string {
-  let candidate = baseRunId;
-  for (
-    let n = 2;
-    existsSync(snapshotPath(vault, candidate)) || existsSync(dreamWorkrunPath(vault, candidate));
-    n++
-  ) {
-    candidate = `${baseRunId}-${n}`;
+  for (let attempt = 1; attempt <= MAX_DREAM_RUN_ID_ATTEMPTS; attempt++) {
+    const candidate = collisionCandidateName(baseRunId, attempt);
+    if (
+      !existsSync(snapshotPath(vault, candidate)) &&
+      !existsSync(dreamWorkrunPath(vault, candidate))
+    ) {
+      return candidate;
+    }
   }
-  return candidate;
+  throw new Error(
+    `could not reserve a unique dream run id from "${baseRunId}" after ` +
+      `${MAX_DREAM_RUN_ID_ATTEMPTS} attempts; prune Brain/.snapshots/ and ` +
+      "Brain/log/dream-runs/, or check that both are readable",
+  );
 }

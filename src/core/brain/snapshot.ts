@@ -142,8 +142,16 @@ export class BrainSnapshotToolingMissingError extends Error {
  */
 export class BrainSnapshotError extends Error {
   readonly runId: string;
-  constructor(message: string, runId: string) {
-    super(`snapshot[${runId}]: ${message}`);
+  /**
+   * `cause` is forwarded rather than flattened into the message because the
+   * caller that allocates a unique run id retries a lost race and has to
+   * recognise a collision by its errno. `createUniqueSnapshot` keys on
+   * `isFileAlreadyExists`, which walks the cause chain; an error that only
+   * described its errno in prose would turn a retriable collision into a
+   * terminal failure, which is the shape this release removes.
+   */
+  constructor(message: string, runId: string, options?: { readonly cause?: unknown }) {
+    super(`snapshot[${runId}]: ${message}`, options);
     this.name = "BrainSnapshotError";
     this.runId = runId;
   }
@@ -880,6 +888,7 @@ function runCompressor(
     throw new BrainSnapshotError(
       `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
       runId,
+      { cause: err },
     );
   }
 }

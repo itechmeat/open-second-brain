@@ -26,7 +26,7 @@ import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import {
   BRAIN_CAPTURES_PROCESSED_REL,
   BRAIN_CAPTURES_REL,
-  allocateSlug,
+  allocateAndCreate,
   captureArchivePath,
   capturesDir,
   capturesProcessedDir,
@@ -93,7 +93,7 @@ function requireNonEmpty(value: string, label: string): string {
  * Derive the filename stem from the capture timestamp plus a short content
  * hash. The date-then-time prefix makes lexical order match chronological
  * order; the hash keeps two same-second captures from the same sender
- * distinct before `allocateSlug` has to append a numeric suffix.
+ * distinct before the allocator has to append a numeric suffix.
  */
 function captureBaseId(
   body: string,
@@ -121,11 +121,29 @@ export function writeCaptureNote(vault: string, input: WriteCaptureInput): Captu
   const dir = capturesDir(vault);
   mkdirSync(dir, { recursive: true });
   const { prefix, slug } = captureBaseId(body, { source, sender, capturedAt });
-  const allocated = allocateSlug({ vault, targetDir: dir, prefix, slug });
-  const id = `${prefix}-${allocated.slug}`;
   const provenance: CaptureProvenance = { source, sender, capturedAt };
-  const meta = captureFrontmatter(id, provenance);
-  writeFrontmatterAtomic(allocated.path, meta, body, { overwrite: false });
+
+  // Allocation and creation are one step: two captures that hash to the
+  // same stem race for the name, and the loser of the exclusive create
+  // must fall through to `-2` rather than drop the message (GitHub
+  // #161). The `id` is derived per attempt because it has to equal the
+  // filename it ships in.
+  const { allocation: allocated, value: id } = allocateAndCreate(
+    { vault, targetDir: dir, prefix, slug },
+    (allocation) => {
+      const captureId = `${prefix}-${allocation.slug}`;
+      // The kind and the vault-relative path its two siblings already
+      // pass: without them a collision here reported a raw errno naming
+      // an absolute path, which leaks the operator's home directory into
+      // CLI output and MCP envelopes and never says what collided.
+      writeFrontmatterAtomic(allocation.path, captureFrontmatter(captureId, provenance), body, {
+        overwrite: false,
+        existsErrorKind: "capture",
+        vaultForRelativePath: vault,
+      });
+      return captureId;
+    },
+  );
   return Object.freeze({
     id,
     path: vaultRelative(allocated.path, vault),

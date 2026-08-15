@@ -17,7 +17,7 @@
  *   - `writeSignal(vault, input, options)` allocates a free slug under
  *     `Brain/inbox/`, writes the file atomically through `fs-atomic`,
  *     and returns the resulting path + id. Slug collisions are resolved
- *     by `allocateSlug` (suffixes `-2`, `-3`, …).
+ *     by `allocateAndCreate` (suffixes `-2`, `-3`, …).
  *
  * The body shape ("## Raw" section with the optional `raw` text) is
  * deterministic so two writes with identical input produce byte-for-byte
@@ -38,7 +38,7 @@ import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import { normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
-import { allocateSlug, brainDirsForWrite, validateIsoDate } from "./paths.ts";
+import { allocateAndCreate, brainDirsForWrite, validateIsoDate } from "./paths.ts";
 import {
   isKnownSchemaToken,
   validateSchemaToken,
@@ -74,7 +74,7 @@ export interface WriteSignalInput {
   readonly created_at: string;
   /** Calendar date (UTC) used in the filename and the `created_at`. */
   readonly date: string;
-  /** Slug stem; collision is resolved by `allocateSlug` suffixes. */
+  /** Slug stem; collision is resolved by `allocateAndCreate` suffixes. */
   readonly slug: string;
   readonly scope?: string;
   readonly source?: ReadonlyArray<string>;
@@ -155,7 +155,7 @@ export interface WriteSignalInput {
 }
 
 export interface WriteSignalOptions {
-  /** Maximum collision suffixes to try; defaults to allocateSlug's cap. */
+  /** Maximum distinct names to try; defaults to the allocator's own cap. */
   readonly maxSlugAttempts?: number;
   /**
    * Vault-configured fallback scope (`feedback.default_scope`). Applied
@@ -222,8 +222,10 @@ const REQUIRED_INPUT_FIELDS: ReadonlyArray<keyof WriteSignalInput> = [
 ];
 
 /**
- * Write a signal atomically. Funnels through {@link allocateSlug} so a
- * second call with the same slug receives a `-2` suffix automatically.
+ * Write a signal atomically. Funnels through `allocateAndCreate` so a
+ * second call with the same slug receives a `-2` suffix automatically -
+ * including when the second call is a concurrent process that lost the
+ * first name between the probe and the create (GitHub #161).
  *
  * The body is the canonical "## Raw" section. When `raw` is omitted, the
  * section is rendered with an `_(not provided)_` placeholder so every
@@ -299,19 +301,66 @@ export function writeSignal(
   // materializes a mis-resolved root, so it asserts the vault identity
   // before allocating a filename under it.
   const dirs = brainDirsForWrite(vault);
-  const allocated = allocateSlug({
-    vault,
-    targetDir: options.targetDir ?? dirs.inbox,
-    prefix: signalPrefix(sanitised.date),
-    slug: sanitised.slug,
-    maxAttempts: options.maxSlugAttempts,
-  });
+  const prefix = signalPrefix(sanitised.date);
 
-  // The on-disk id always equals the filename basename, including any
-  // `-2`/`-3` collision suffix. We surface that as the canonical id and
-  // duplicate it inside the frontmatter so manual `mv` keeps the link.
-  const id = `${signalPrefix(sanitised.date)}-${allocated.slug}`;
+  // Allocation and creation are one step (#161): a signal write is the
+  // most contended name in the vault - inline scan, pending drain and
+  // session import each write many signals per run on the same date and
+  // often the same topic stem - so losing the name to a concurrent
+  // writer has to cost this call the next candidate, not the event.
+  const { allocation: allocated, value: id } = allocateAndCreate(
+    {
+      vault,
+      targetDir: options.targetDir ?? dirs.inbox,
+      prefix,
+      slug: sanitised.slug,
+      maxAttempts: options.maxSlugAttempts,
+    },
+    (allocation) => {
+      // The on-disk id always equals the filename basename, including any
+      // `-2`/`-3` collision suffix — which is why the document is rendered
+      // per attempt rather than once: a retry that reused the first
+      // attempt's bytes would ship a file whose `id` names a different
+      // file. We surface it as the canonical id and duplicate it inside
+      // the frontmatter so a manual `mv` keeps the link.
+      const signalId = `${prefix}-${allocation.slug}`;
+      const { metadata, body } = renderSignalDocument(sanitised, signalId);
+      writeFrontmatterAtomic(allocation.path, metadata, body, {
+        overwrite: false,
+        existsErrorKind: "signal",
+        vaultForRelativePath: vault,
+      });
+      return signalId;
+    },
+  );
 
+  // Record the key AFTER the file lands so a future retry dedupes. `ref`
+  // stores the vault-relative path + id so the dedupe branch above can
+  // return the original coordinates without re-deriving them.
+  if (idKey && contentHash !== undefined) {
+    rememberKey(vault, {
+      key: idKey,
+      contentHash,
+      createdAt: sanitised.created_at,
+      ref: { id, path: relative(vault, allocated.path) },
+    });
+  }
+
+  return { path: allocated.path, id };
+}
+
+/**
+ * Render one signal's frontmatter and body for a given id.
+ *
+ * Split out of {@link writeSignal} because the id is only known once a
+ * name has been successfully claimed: the fused allocator may hand this
+ * function a different id on a second attempt, and the document must
+ * follow the name rather than the other way round.
+ */
+function renderSignalDocument(
+  sanitised: WriteSignalInput,
+  id: string,
+): { readonly metadata: FrontmatterMap; readonly body: string } {
   const tags = composeSignalTags(sanitised);
   const metadata: FrontmatterMap = {
     kind: "brain-signal",
@@ -386,26 +435,7 @@ export function writeSignal(
     bodyInput = { ...sanitised, raw: compress(normalised) };
     metadata["_raw_codec"] = CODEC_VERSION;
   }
-  const body = renderSignalBody(bodyInput);
-  writeFrontmatterAtomic(allocated.path, metadata, body, {
-    overwrite: false,
-    existsErrorKind: "signal",
-    vaultForRelativePath: vault,
-  });
-
-  // Record the key AFTER the file lands so a future retry dedupes. `ref`
-  // stores the vault-relative path + id so the dedupe branch above can
-  // return the original coordinates without re-deriving them.
-  if (idKey && contentHash !== undefined) {
-    rememberKey(vault, {
-      key: idKey,
-      contentHash,
-      createdAt: sanitised.created_at,
-      ref: { id, path: relative(vault, allocated.path) },
-    });
-  }
-
-  return { path: allocated.path, id };
+  return { metadata, body: renderSignalBody(bodyInput) };
 }
 
 /**

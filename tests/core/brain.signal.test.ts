@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
   parseSignal,
@@ -251,6 +251,46 @@ describe("writeSignal — slug collision allocator", () => {
     writeSignal(tmp, baseInput());
     const c = writeSignal(tmp, baseInput());
     expect(c.id).toBe("sig-2026-05-14-no-internal-abbrev-3");
+  });
+});
+
+/**
+ * Plant a name that the read-only probe reads as free and the exclusive
+ * create reads as taken: a dangling symlink. `existsSync` follows the
+ * link and answers false; `link(2)` does not follow it and answers
+ * EEXIST. That is byte-exactly what the loser of a concurrent write
+ * observes - the winner's name is taken by the time the create runs -
+ * with none of the timing dependence of actually racing two processes.
+ */
+function plantLostRace(target: string): void {
+  mkdirSync(dirname(target), { recursive: true });
+  symlinkSync(join(dirname(target), "never-created"), target);
+}
+
+describe("writeSignal — a lost race retries instead of dropping the event (#161)", () => {
+  test("a name taken between the probe and the create lands on `-2`", () => {
+    plantLostRace(join(tmp, "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"));
+
+    const result = writeSignal(tmp, baseInput());
+
+    expect(result.id).toBe("sig-2026-05-14-no-internal-abbrev-2");
+    expect(existsSync(result.path)).toBe(true);
+    expect(parseSignal(result.path).id).toBe("sig-2026-05-14-no-internal-abbrev-2");
+  });
+
+  test("exhausting the bound fails loudly and carries the collision as cause", () => {
+    plantLostRace(join(tmp, "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"));
+
+    let thrown: unknown;
+    try {
+      writeSignal(tmp, baseInput(), { maxSlugAttempts: 1 });
+    } catch (err) {
+      thrown = err;
+    }
+    expect((thrown as Error).message).toMatch(/could not find a free name after 1 attempts/);
+    expect(((thrown as Error).cause as Error).message).toBe(
+      "signal already exists: Brain/inbox/sig-2026-05-14-no-internal-abbrev.md",
+    );
   });
 });
 

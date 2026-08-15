@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -131,4 +131,21 @@ test("catchup watermark round-trips and is absent by default", () => {
 test("path helpers resolve inside the Brain captures tree", () => {
   expect(capturesDir(vault).endsWith(join("Brain", "captures"))).toBe(true);
   expect(capturesProcessedDir(vault).endsWith(join("Brain", "captures", "processed"))).toBe(true);
+});
+
+test("writeCaptureNote retries a name lost between the probe and the create", () => {
+  // Learn the name this capture allocates, then re-plant it as a dangling
+  // symlink: `existsSync` follows the link and reads the name as free,
+  // `link(2)` does not follow it and reports EEXIST. That is the pair of
+  // answers the loser of a concurrent capture gets.
+  const input = { body: "a raced capture", provenance: prov() };
+  const first = writeCaptureNote(vault, input);
+  const taken = join(vault, first.path);
+  unlinkSync(taken);
+  symlinkSync(join(capturesDir(vault), "never-created"), taken);
+
+  const second = writeCaptureNote(vault, input);
+
+  expect(second.id).toBe(`${first.id}-2`);
+  expect(existsSync(join(vault, second.path))).toBe(true);
 });

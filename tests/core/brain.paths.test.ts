@@ -3,7 +3,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { FileAlreadyExistsError } from "../../src/core/fs-atomic.ts";
 import {
+  allocateAndCreate,
   allocateSlug,
   brainConfigPath,
   brainDirs,
@@ -344,5 +346,142 @@ describe("allocateSlug — collision allocator", () => {
     } finally {
       rmSync(outside, { recursive: true, force: true });
     }
+  });
+});
+
+describe("allocateAndCreate — fused allocation and exclusive create", () => {
+  /**
+   * The losing side of the race, replayed byte-exactly and without any
+   * mocking: the injected `create` writes the winner's file itself and
+   * then throws the collision the exclusive create would have thrown.
+   * That is precisely what the second of two concurrent processes
+   * observes, and it is deterministic because the seam is a callback
+   * rather than a wall-clock overlap.
+   */
+  test("retries the next candidate when the create loses the race", () => {
+    const targetDir = join(tmp, "Brain", "inbox");
+    mkdirSync(targetDir, { recursive: true });
+
+    let calls = 0;
+    const out = allocateAndCreate(
+      { vault: tmp, targetDir, prefix: "sig-2026-05-14", slug: "race" },
+      (allocation) => {
+        calls += 1;
+        if (calls === 1) {
+          writeFileSync(allocation.path, "winner", "utf8");
+          throw new FileAlreadyExistsError(allocation.path);
+        }
+        writeFileSync(allocation.path, "loser", "utf8");
+        return allocation.slug;
+      },
+    );
+
+    expect(calls).toBe(2);
+    expect(out.allocation.slug).toBe("race-2");
+    expect(out.allocation.suffix).toBe(2);
+    expect(out.allocation.path).toBe(join(targetDir, "sig-2026-05-14-race-2.md"));
+    expect(out.value).toBe("race-2");
+  });
+
+  test("recognises a collision that reached it wrapped on `cause`", () => {
+    const targetDir = join(tmp, "Brain", "inbox");
+    mkdirSync(targetDir, { recursive: true });
+
+    let calls = 0;
+    const out = allocateAndCreate(
+      { vault: tmp, targetDir, prefix: "de-2026-05-14", slug: "wrapped" },
+      (allocation) => {
+        calls += 1;
+        if (calls === 1) {
+          writeFileSync(allocation.path, "winner", "utf8");
+          // The shape a wrapper above the leaf writer produces.
+          throw new Error("dead-end already exists: Brain/dead-ends/x.md", {
+            cause: new FileAlreadyExistsError(allocation.path),
+          });
+        }
+        return allocation.path;
+      },
+    );
+
+    expect(calls).toBe(2);
+    expect(out.allocation.slug).toBe("wrapped-2");
+  });
+
+  test("propagates a non-collision error from the first attempt, untouched", () => {
+    const targetDir = join(tmp, "Brain", "inbox");
+    mkdirSync(targetDir, { recursive: true });
+
+    const disk = Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
+    let calls = 0;
+    expect(() =>
+      allocateAndCreate({ vault: tmp, targetDir, prefix: "sig", slug: "boom" }, () => {
+        calls += 1;
+        throw disk;
+      }),
+    ).toThrow(disk);
+    expect(calls).toBe(1);
+  });
+
+  test("exhausts a small maxAttempts loudly and names the lost races", () => {
+    const targetDir = join(tmp, "Brain", "inbox");
+    mkdirSync(targetDir, { recursive: true });
+
+    let calls = 0;
+    let thrown: unknown;
+    try {
+      allocateAndCreate(
+        { vault: tmp, targetDir, prefix: "sig", slug: "always", maxAttempts: 3 },
+        (allocation) => {
+          calls += 1;
+          throw new FileAlreadyExistsError(allocation.path, { kind: "signal" });
+        },
+      );
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(calls).toBe(3);
+    expect((thrown as Error).message).toMatch(/could not find a free name after 3 attempts/);
+    expect((thrown as Error).message).toMatch(/lost to a concurrent create/);
+    // The last collision travels as the cause, so the loud bound never
+    // costs the operator the underlying report.
+    expect(((thrown as Error).cause as Error).message).toBe(
+      `signal already exists: ${join(targetDir, "sig-always-3.md")}`,
+    );
+  });
+
+  test("skips names already on disk without invoking create", () => {
+    const targetDir = join(tmp, "Brain", "inbox");
+    mkdirSync(targetDir, { recursive: true });
+    writeFileSync(join(targetDir, "pref-taken.md"), "stub", "utf8");
+
+    const seen: string[] = [];
+    const out = allocateAndCreate(
+      { vault: tmp, targetDir, prefix: "pref", slug: "taken" },
+      (allocation) => {
+        seen.push(allocation.slug);
+        writeFileSync(allocation.path, "new", "utf8");
+        return allocation.slug;
+      },
+    );
+
+    expect(seen).toEqual(["taken-2"]);
+    expect(out.allocation.suffix).toBe(2);
+  });
+
+  test("refuses a targetDir outside the vault before calling create", () => {
+    const outside = mkdtempSync(join(tmpdir(), "o2b-brain-outside-create-"));
+    let calls = 0;
+    try {
+      expect(() =>
+        allocateAndCreate({ vault: tmp, targetDir: outside, prefix: "sig", slug: "x" }, () => {
+          calls += 1;
+          return null;
+        }),
+      ).toThrow(/path escapes vault/);
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
+    expect(calls).toBe(0);
   });
 });

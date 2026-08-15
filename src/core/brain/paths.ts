@@ -26,6 +26,7 @@
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 
+import { isFileAlreadyExists } from "../fs-atomic.ts";
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import {
@@ -725,10 +726,15 @@ export interface AllocateSlugOptions {
   /** Base slug requested by the caller. */
   readonly slug: string;
   /**
-   * Hard upper bound on suffix attempts. The default of 10_000 is far
-   * beyond any realistic same-day collision count and exists only to
-   * make a misuse error (caller passing a `targetDir` that resolves
-   * outside the vault, say) terminate instead of loop forever.
+   * Hard upper bound on how many DISTINCT candidate names are tried.
+   * Defaults to {@link SLUG_ALLOCATION_MAX_ATTEMPTS}, far beyond any
+   * realistic same-day collision count; it exists only to make a misuse
+   * error (caller passing a `targetDir` that resolves outside the vault,
+   * say) terminate instead of loop forever.
+   *
+   * One meaning, in both allocators: a name skipped because the probe
+   * found it taken and a name lost to a concurrent create each consume
+   * exactly one attempt.
    */
   readonly maxAttempts?: number;
 }
@@ -742,42 +748,157 @@ export interface AllocateSlugResult {
   readonly suffix: number | null;
 }
 
+export interface AllocateAndCreateResult<T> {
+  /** The name that was successfully created under. */
+  readonly allocation: AllocateSlugResult;
+  /** Whatever the injected create returned. */
+  readonly value: T;
+}
+
 /**
- * Find the first free `<prefix>-<slug>.md` under `targetDir`, appending
- * `-2`, `-3`, … to the slug on collision. The probe is read-only —
- * callers create the file themselves via the atomic-exclusive writer
- * (which closes the residual TOCTOU window).
+ * Default bound on distinct candidate names one allocation tries.
  *
- * Returns the chosen slug + the absolute path. The path is funnelled
- * through `ensureInsideVault` so a misconfigured `targetDir` (e.g. one
- * the caller assembled by hand and that points outside the vault)
+ * Named rather than inlined because two allocators and every caller's
+ * docblock refer to it: a bound that lives as a literal in one loop is a
+ * bound nobody else can state.
+ */
+export const SLUG_ALLOCATION_MAX_ATTEMPTS = 10_000;
+
+/**
+ * Candidate `attempt` of a collision ladder: the bare base first, then
+ * `-2`, `-3`, … per §5.1 / §9.2 of the design doc.
+ *
+ * Exported because the rule is not slug-specific - run ids ladder the
+ * same way in `snapshot-gate.ts` and `dream.ts`, and three private
+ * copies of `n === 1 ? base : \`${base}-${n}\`` were three places for
+ * the ladder to drift apart.
+ */
+export function collisionCandidateName(base: string, attempt: number): string {
+  return attempt === 1 ? base : `${base}-${attempt}`;
+}
+
+/** Shared guard: a prefix that is empty or carries separators is caller misuse. */
+function assertUsablePrefix(caller: string, prefix: string): void {
+  if (!prefix || /[\\/]/.test(prefix)) {
+    throw new Error(`${caller}: prefix must be non-empty and path-clean: ${prefix}`);
+  }
+}
+
+/**
+ * Candidate `attempt` as a full allocation. The path is funnelled through
+ * `ensureInsideVault`, so a `targetDir` that resolves outside the vault
  * raises before any disk probe is made.
  */
+function slugCandidate(
+  opts: AllocateSlugOptions,
+  baseSlug: string,
+  attempt: number,
+): AllocateSlugResult {
+  const slug = collisionCandidateName(baseSlug, attempt);
+  const path = ensureInsideVault(join(opts.targetDir, `${opts.prefix}-${slug}.md`), opts.vault);
+  return { slug, path, suffix: attempt === 1 ? null : attempt };
+}
+
+/**
+ * The one loud exhaustion error, shared by both allocators so their
+ * bounds cannot be reported in two different vocabularies. `lostRace`
+ * carries the last collision when at least one attempt was lost to a
+ * concurrent create: the operator gets both the bound that stopped us
+ * and the failure that consumed the attempts.
+ */
+function slugExhaustedError(
+  caller: string,
+  opts: AllocateSlugOptions,
+  baseSlug: string,
+  maxAttempts: number,
+  lostRace: unknown,
+): Error {
+  const head =
+    `${caller}: could not find a free name after ${maxAttempts} attempts ` +
+    `(prefix=${opts.prefix}, slug=${baseSlug})`;
+  if (lostRace === undefined) return new Error(head);
+  return new Error(`${head}; the attempts include names lost to a concurrent create`, {
+    cause: lostRace,
+  });
+}
+
+/**
+ * Find the first free `<prefix>-<slug>.md` under `targetDir`, appending
+ * `-2`, `-3`, … to the slug on collision. The probe is read-only, so the
+ * name it returns can be taken by another process before the caller
+ * creates it.
+ *
+ * Prefer {@link allocateAndCreate} for anything that goes on to create
+ * the file: it is this probe fused with the create, and losing the race
+ * costs it one attempt instead of the whole write. This entry point
+ * remains for callers that only want to know a free name.
+ */
 export function allocateSlug(opts: AllocateSlugOptions): AllocateSlugResult {
-  const { vault, targetDir, prefix } = opts;
   const baseSlug = validateSlug(opts.slug);
-  const maxAttempts = opts.maxAttempts ?? 10_000;
+  const maxAttempts = opts.maxAttempts ?? SLUG_ALLOCATION_MAX_ATTEMPTS;
+  assertUsablePrefix("allocateSlug", opts.prefix);
 
-  if (!prefix || /[\\/]/.test(prefix)) {
-    throw new Error(`allocateSlug: prefix must be non-empty and path-clean: ${prefix}`);
-  }
-
-  // The first candidate is the bare slug. Subsequent attempts append
-  // `-2`, `-3`, … per §5.1 / §9.2 of the design doc. Cap at
-  // `maxAttempts` to prevent an unbounded loop when the caller passes
-  // a target directory containing infinite collisions (e.g. on a fuzz
-  // test); the realistic worst case is a handful.
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const slug = attempt === 1 ? baseSlug : `${baseSlug}-${attempt}`;
-    const candidate = ensureInsideVault(join(targetDir, `${prefix}-${slug}.md`), vault);
-    if (!existsSync(candidate)) {
-      return { slug, path: candidate, suffix: attempt === 1 ? null : attempt };
+    const candidate = slugCandidate(opts, baseSlug, attempt);
+    if (!existsSync(candidate.path)) return candidate;
+  }
+  throw slugExhaustedError("allocateSlug", opts, baseSlug, maxAttempts, undefined);
+}
+
+/**
+ * Allocate a name AND create the artifact under it, retrying the next
+ * candidate when the create loses the name to a concurrent writer.
+ *
+ * The probe and the create have to be one loop. Separately, they are a
+ * check-then-act: two agents writing a signal on the same topic and date
+ * both see `sig-<date>-<topic>.md` free, one wins the exclusive create,
+ * and the other used to fail terminally with its event dropped on the
+ * floor (GitHub #161). Nothing looped back to try `-2`.
+ *
+ * The create is INJECTED rather than performed here, and that is
+ * load-bearing twice over. Every caller derives its frontmatter `id`
+ * from the ALLOCATED slug, so a helper that re-linked pre-rendered bytes
+ * would ship a file whose `id` contradicts its own filename. And it
+ * keeps this module free of any write call, so the path vocabulary does
+ * not acquire a dependency on the frontmatter writer.
+ *
+ * The rejected alternative was the lockfile primitive in
+ * `sync-lockfile.ts`. It locks one known target path, whereas the
+ * contended resource here is "the next free name under this directory
+ * for this prefix" - a directory-scoped lock, which would add a
+ * crash-stale-lock failure mode (only `brain_doctor` clears one) to the
+ * hottest write path in the system while buying nothing: `link(2)`
+ * already gives race-free exclusivity. The only missing piece was "on
+ * collision, try the next name".
+ *
+ * Only a collision retries. Any other failure - a full disk, a
+ * read-only mount - propagates from the attempt that raised it, with
+ * nothing swallowed and nothing re-labelled; retrying those would burn
+ * the bound and then report the wrong problem.
+ */
+export function allocateAndCreate<T>(
+  opts: AllocateSlugOptions,
+  create: (allocation: AllocateSlugResult) => T,
+): AllocateAndCreateResult<T> {
+  const baseSlug = validateSlug(opts.slug);
+  const maxAttempts = opts.maxAttempts ?? SLUG_ALLOCATION_MAX_ATTEMPTS;
+  assertUsablePrefix("allocateAndCreate", opts.prefix);
+
+  let lostRace: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const allocation = slugCandidate(opts, baseSlug, attempt);
+    // The probe stays as a cheap skip past names already on disk: it
+    // saves rendering and a temp file per taken name. It is no longer
+    // load-bearing for correctness - the exclusive create is.
+    if (existsSync(allocation.path)) continue;
+    try {
+      return { allocation, value: create(allocation) };
+    } catch (err) {
+      if (!isFileAlreadyExists(err)) throw err;
+      lostRace = err;
     }
   }
-  throw new Error(
-    `allocateSlug: could not find a free name after ${maxAttempts} attempts ` +
-      `(prefix=${prefix}, slug=${baseSlug})`,
-  );
+  throw slugExhaustedError("allocateAndCreate", opts, baseSlug, maxAttempts, lostRace);
 }
 
 /** Vault-relative renderer kept here for the `tests/core/brain.paths.test.ts` import. */

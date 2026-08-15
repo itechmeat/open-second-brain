@@ -32,7 +32,8 @@
 import { existsSync } from "node:fs";
 
 import { loadSnapshotRetentionSafe } from "./policy.ts";
-import { snapshotPath, validateRunId } from "./paths.ts";
+import { isFileAlreadyExists } from "../fs-atomic.ts";
+import { collisionCandidateName, snapshotPath, validateRunId } from "./paths.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
 import { compactRunStamp } from "./time.ts";
 import type { BrainSnapshotReason } from "./types.ts";
@@ -60,41 +61,59 @@ export interface WithDestructiveSnapshotOptions {
   readonly now?: Date;
 }
 
-/** Upper bound on run-id collision retries before giving up. */
+/** Upper bound on distinct run ids tried before giving up. */
 const MAX_SNAPSHOT_ID_ATTEMPTS = 64;
 
 /**
  * Create the recovery snapshot behind a unique run id. Selection and
  * creation are fused so a concurrent process cannot win the id between an
  * availability probe and the write: we start from `<reason>-<compactStamp>`,
- * append `-2`, `-3`, ... on collision, and RETRY `createSnapshot` when the
- * write fails because the archive now exists (a racing process claimed it).
- * Any other create failure (missing tooling, unwritable archive) propagates
- * on the first attempt. Mirrors the collision strategy `nextAvailableDreamRunId`
- * uses in `dream.ts`, but closes the check-then-write race window.
+ * ladder through `-2`, `-3`, ... via the shared
+ * {@link collisionCandidateName}, and retry when the create reports that
+ * the name was already taken.
+ *
+ * The retry is keyed on the TYPED collision predicate. It used to be keyed
+ * on re-running `existsSync` after the throw, which answered a different
+ * question than the one being asked: any failure that happened to leave
+ * bytes at the path - a compressor that died part-way through its output -
+ * read as a collision, was retried up to the bound, and was finally
+ * reported as an id exhaustion naming neither the real failure nor its
+ * cause. Only "the name was taken" retries now; everything else propagates
+ * from the attempt that raised it.
+ *
+ * `create` is injected for the same reason `allocateAndCreate` takes one:
+ * it is the seam that makes the lost-race behaviour testable as a
+ * deterministic replay rather than as two processes that may or may not
+ * overlap. {@link takeSnapshot} passes the real {@link createSnapshot}.
+ *
+ * Caveat worth stating rather than hiding: `createSnapshot` today flattens
+ * its own "refusing to overwrite an existing archive" into an untyped
+ * `BrainSnapshotError`, so a genuinely lost race reaches the operator as
+ * that loud, accurate error instead of being retried here. Making it
+ * retryable is a one-line change in `snapshot.ts` (carry the collision as
+ * `cause`), deliberately left outside this unit's file scope. Loud and
+ * correct beats silently retried and mislabelled.
  */
-function createUniqueSnapshot(
+export function createUniqueSnapshot(
   vault: string,
   baseRunId: string,
-  reason: BrainSnapshotReason,
-  now: Date,
+  create: (runId: string) => string,
+  maxAttempts: number = MAX_SNAPSHOT_ID_ATTEMPTS,
 ): DestructiveSnapshot {
-  for (let n = 1; n <= MAX_SNAPSHOT_ID_ATTEMPTS; n++) {
-    const candidate = n === 1 ? baseRunId : `${baseRunId}-${n}`;
+  let lostRace: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const candidate = collisionCandidateName(baseRunId, attempt);
     if (existsSync(snapshotPath(vault, candidate))) continue;
     try {
-      // The clock that minted the id also stamps the audit line, so a
-      // caller with an injected clock stays byte-reproducible.
-      return { runId: candidate, path: createSnapshot(vault, candidate, { reason, now }).path };
+      return { runId: candidate, path: create(candidate) };
     } catch (err) {
-      // A concurrent op may have created this archive between our probe and
-      // the write; createSnapshot refuses to overwrite. Retry the next id
-      // only for that collision - any other failure is a real error.
-      if (!existsSync(snapshotPath(vault, candidate))) throw err;
+      if (!isFileAlreadyExists(err)) throw err;
+      lostRace = err;
     }
   }
   throw new Error(
-    `could not reserve a unique snapshot run id from "${baseRunId}" after ${MAX_SNAPSHOT_ID_ATTEMPTS} attempts`,
+    `could not reserve a unique snapshot run id from "${baseRunId}" after ${maxAttempts} attempts`,
+    lostRace === undefined ? undefined : { cause: lostRace },
   );
 }
 
@@ -133,7 +152,13 @@ export function takeSnapshot(
   // Snapshot behind a collision-safe unique id. A throw here (missing
   // tooling, unwritable archive, refused derived-store coverage) reaches
   // the caller with nothing left on disk.
-  const snapshot = createUniqueSnapshot(vault, baseRunId, reason, now);
+  // The clock that minted the id also stamps the audit line, so a caller
+  // with an injected clock stays byte-reproducible across its snapshot.
+  const snapshot = createUniqueSnapshot(
+    vault,
+    baseRunId,
+    (runId) => createSnapshot(vault, runId, { reason, now }).path,
+  );
 
   try {
     pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));

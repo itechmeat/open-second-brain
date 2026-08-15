@@ -36,6 +36,7 @@ import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
 import type { RecallRetriever } from "../recall-inject.ts";
+import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
 
@@ -261,7 +262,7 @@ export function promoteGapsToTasks(
       created.push(key);
       noteCount++;
     } catch (exc) {
-      if (isAlreadyExists(exc)) {
+      if (isFileAlreadyExists(exc)) {
         skipped.push(key);
         continue;
       }
@@ -444,9 +445,4 @@ function stringField(value: unknown): string {
 /** Whether a recall candidate path points at a gap-task note (any origin). */
 function isGapTaskPath(path: string): boolean {
   return path.includes(BRAIN_GAP_TASKS_REL);
-}
-
-function isAlreadyExists(exc: unknown): boolean {
-  if ((exc as NodeJS.ErrnoException | null)?.code === "EEXIST") return true;
-  return exc instanceof Error && exc.message.includes("already exists");
 }

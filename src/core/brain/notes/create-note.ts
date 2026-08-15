@@ -48,6 +48,7 @@ import { dirname, join, posix, sep, win32 } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
+import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { formatFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import { inspectPath, resolveVaultScope } from "../../vault-scope/index.ts";
 import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "../paths.ts";
@@ -457,10 +458,11 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
       vaultForRelativePath: vault,
     });
   } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    const exists =
-      code === "EEXIST" || (err instanceof Error && /already exists/.test(err.message));
-    if (exists) {
+    // One predicate for "the name was taken", shared with every other
+    // collision-aware call site. The hand-rolled pair it replaces read
+    // the errno OR matched the wording of the message - and a message
+    // match is a coupling to prose that nothing stops anyone rewording.
+    if (isFileAlreadyExists(err)) {
       if (skipOccupied) {
         return skippedResult(relPath);
       }
