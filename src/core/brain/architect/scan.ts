@@ -206,30 +206,22 @@ function walk(
   }
 }
 
-function statsFor(
-  dir: string,
-  progress: ProgressCounter,
-  safeguard: Safeguard | undefined,
-): WalkStats {
-  const stats: WalkStats = { files: 0, languages: {}, paths: [], dirs: [] };
-  walk(dir, stats, "", progress, safeguard);
-  return stats;
-}
-
 /**
- * The whole-tree walk, reporting a stop on the stage it stopped in.
+ * The one traversal, reporting a stop on the stage it stopped in.
  *
- * The stage the deadline interrupted is this counter's, so this is where
- * the `stopped` event belongs - the renderer's counter has not opened a
- * stage yet and could only report the stop into silence.
+ * The stage a deadline interrupts is this counter's, so this is where the
+ * `stopped` event belongs - the renderer's counter has not opened a stage
+ * yet and could only report the stop into silence.
  */
 function walkTree(
   root: string,
   progress: ProgressCounter,
   safeguard: Safeguard | undefined,
 ): WalkStats {
+  const stats: WalkStats = { files: 0, languages: {}, paths: [], dirs: [] };
   try {
-    return statsFor(root, progress, safeguard);
+    walk(root, stats, "", progress, safeguard);
+    return stats;
   } catch (error) {
     const reason = progressReasonForError(error);
     if (reason !== null) progress.stop(reason);
