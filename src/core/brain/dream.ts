@@ -112,6 +112,15 @@ export { scanBrain } from "./dream-scan.ts";
  * durable output has already landed - both are about what finished, and
  * progress is about what is happening. These five name the spans between
  * the safeguard checkpoints, which is where the wall-clock actually goes.
+ *
+ * So one operation has two stage vocabularies, and a reader will trip on
+ * it, because `log` is a member of both and means different things: here
+ * it is the span during which the audit tail is written, and in
+ * `DREAM_PHASE` it is the summary section that reports what that span
+ * did. If you are reading a progress record, this is the list it draws
+ * from; if you are reading `DreamRunSummary.phases`, that is the other
+ * one. Merging them would mean either reporting spans the summary does
+ * not have or emitting progress for phases that never execute.
  */
 const DREAM_STAGE = Object.freeze({
   scan: "scan",
