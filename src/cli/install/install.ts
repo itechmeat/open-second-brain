@@ -35,9 +35,9 @@ import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/all.ts";
 
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
-import { buildDataOwnership, renderDataOwnership } from "../../core/install/ownership.ts";
+import { renderDataOwnership } from "../../core/install/ownership.ts";
 import type { DataOwnership } from "../../core/install/ownership.ts";
-import { resolveSearchConfig } from "../../core/search/index.ts";
+import { measureDataOwnership } from "../../core/install/ownership-measure.ts";
 import { InstallError } from "../../core/install/types.ts";
 import type { ApplyOpts, InstallEnv, VerifyResult } from "../../core/install/types.ts";
 import {
@@ -198,24 +198,18 @@ function loadPayload(args: ParsedInstallArgs, env: InstallEnv) {
  * table is pinned byte-for-byte against the install documents and the JSON
  * twin was pinned by nothing.
  *
- * Whether a networked embedding endpoint is configured is resolved here
- * because it decides one clause of the statement: "no service to cancel"
- * is a false blanket claim on a vault whose text has been sent to a cloud
- * provider. A search config that will not resolve answers `false` - the
- * clause is added only on evidence, never on a failure to look.
+ * Every measurement the statement needs is taken by
+ * {@link measureDataOwnership}, which the onboarding checklist calls too -
+ * the two surfaces cannot disagree about where the index landed or which
+ * outbound integrations are configured, because they ask the same
+ * function. This verb supplies only what it alone owns: the resolved vault
+ * and the live adapter registry.
  */
 function ownershipFor(env: InstallEnv, configPath: string): DataOwnership {
-  let networked = false;
-  try {
-    const semantic = resolveSearchConfig({ vault: env.vault, configPath }).semantic;
-    networked = semantic.provider !== "local" && semantic.provider !== "disabled";
-  } catch {
-    // A config that will not resolve is not evidence of a cloud account.
-  }
-  return buildDataOwnership({
+  return measureDataOwnership({
     vault: env.vault,
+    configPath,
     adapterTargets: defaultRegistry.targets(),
-    networkedEmbeddingProvider: networked,
   });
 }
 

@@ -65,6 +65,19 @@ export function realpathInsideVault(target: string, vault: string): boolean {
   return isLexicallyInside(realAncestor, realVault);
 }
 
+/**
+ * Step 1 of {@link ensureInsideVault} as a non-throwing predicate: does
+ * `target` resolve, lexically, to `root` or a descendant of it?
+ *
+ * Exported for the callers that need the ANSWER rather than the refusal -
+ * the ownership statement has to say where the search index actually
+ * landed, and a `try`/`catch` around a thrower would collapse "outside the
+ * vault" and "the check could not run" into one arm.
+ */
+export function pathIsInside(target: string, root: string): boolean {
+  return isLexicallyInside(resolve(target), resolve(root));
+}
+
 function isLexicallyInside(target: string, root: string): boolean {
   // Windows file paths are case-insensitive at the filesystem level —
   // `C:\Vault\x.md` and `c:\vault\x.md` resolve to the same inode. Doing

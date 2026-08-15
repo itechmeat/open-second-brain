@@ -21,7 +21,8 @@ import { defaultRegistry } from "../core/install/registry.ts";
 // ownership statement enumerates the runtime configs those adapters own,
 // so it has to see the same list the installer does.
 import "../core/install/adapters/all.ts";
-import { buildDataOwnership, type DataOwnership } from "../core/install/ownership.ts";
+import type { DataOwnership } from "../core/install/ownership.ts";
+import { measureDataOwnership } from "../core/install/ownership-measure.ts";
 import { resolveSearchConfig } from "../core/search/index.ts";
 import {
   collectRuntimeNotices,
@@ -190,13 +191,15 @@ export function buildOnboardingChecklist(
     ...(opts.env !== undefined ? { env: opts.env } : {}),
   });
 
-  // `networked` above is the same question the statement asks - whether an
-  // endpoint this tool does not run computes the embeddings - so it is read
-  // once rather than recomputed into a second answer.
-  const data_ownership = buildDataOwnership({
+  // Measured by the same function the install verb's close calls, so the
+  // two surfaces cannot answer differently about where the search index
+  // landed or which outbound integrations are configured. This checklist
+  // supplies only the vault and the live adapter registry.
+  const data_ownership = measureDataOwnership({
     vault,
+    ...(opts.configPath === undefined ? {} : { configPath: opts.configPath }),
     adapterTargets: defaultRegistry.targets(),
-    networkedEmbeddingProvider: networked,
+    ...(opts.env === undefined ? {} : { env: opts.env }),
   });
 
   return { vault, steps, notices, complete, data_ownership };
