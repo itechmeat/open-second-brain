@@ -662,7 +662,11 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           items: {
             type: "object",
             properties: {
-              op: { type: "string", enum: ["write", "append", "clear", "replace"] },
+              op: {
+                type: "string",
+                enum: ["write", "append", "clear", "replace"],
+                description: "What this step does to the pinned body.",
+              },
               content: { type: "string", description: "Body for write/append ops." },
               find: { type: "string", description: "Exact segment to locate for a replace op." },
               replace: { type: "string", description: "Replacement text for a replace op." },

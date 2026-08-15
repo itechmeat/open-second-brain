@@ -830,8 +830,18 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        topic: { type: "string", minLength: 1, maxLength: 500 },
-        limit: { type: "integer", minimum: 1, maximum: 100 },
+        topic: {
+          type: "string",
+          minLength: 1,
+          maxLength: 500,
+          description: "Subject the dossier is built around; matched notes are recalled for it.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 100,
+          description: "How many matched notes feed the synthesis. Default 30.",
+        },
         triggers: {
           type: "boolean",
           description: "Enqueue contradiction/gap findings into the trigger queue.",
@@ -875,7 +885,12 @@ export const KNOWLEDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     inputSchema: {
       type: "object",
       properties: {
-        cap: { type: "integer", minimum: 1, maximum: 50 },
+        cap: {
+          type: "integer",
+          minimum: 1,
+          maximum: 50,
+          description: "How many ranked ideas to return. Default 5.",
+        },
         triggers: {
           type: "boolean",
           description: "Enqueue the ranked ideas into the trigger queue.",

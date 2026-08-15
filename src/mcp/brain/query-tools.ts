@@ -568,9 +568,21 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "Opt-in recall telemetry: emit one continuity record (mode 'query', kind-only payload) for this call.",
         },
-        telemetry_host: { type: "string", maxLength: 200 },
-        session_id: { type: "string", maxLength: 512 },
-        turn_id: { type: "string", maxLength: 512 },
+        telemetry_host: {
+          type: "string",
+          maxLength: 200,
+          description: "Optional host/client label recorded on the telemetry record.",
+        },
+        session_id: {
+          type: "string",
+          maxLength: 512,
+          description: "Optional session correlation id recorded on the telemetry record.",
+        },
+        turn_id: {
+          type: "string",
+          maxLength: 512,
+          description: "Optional turn correlation id recorded on the telemetry record.",
+        },
         agent_scope: {
           type: "string",
           description:

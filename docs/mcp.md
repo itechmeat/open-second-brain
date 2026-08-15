@@ -17,6 +17,37 @@ in Open Second Brain depends on the MCP server being running.
 - Standard MCP lifecycle: `initialize`, `notifications/initialized`,
   `tools/list`, `tools/call`, optional `ping`.
 
+### Argument contract (since v1.46.0)
+
+Every advertised tool declares `additionalProperties: false`, and since
+v1.46.0 the server enforces it. A `tools/call` carrying an argument the
+tool does not declare is refused with `-32602` (invalid params) naming
+every undeclared argument, with a did-you-mean where a declared name is
+close enough by edit distance:
+
+```
+brain_search: unknown argument 'quiery' (did you mean 'query'?). This
+tool's inputSchema declares the <n> argument names it accepts.
+```
+
+An argument with no near match is told so rather than pointed at an
+unrelated parameter: `unknown argument 'wombat' (no close match)`.
+
+The error carries structured `data` for machine callers: `tool`,
+`unknown_arguments` (each `{name, suggestion?}`) and `declared_arguments`.
+Before this, a mistyped argument was ignored and the call returned a
+normal success envelope computed from defaults.
+
+The gate is top-level only. Nested object properties that declare their
+own `additionalProperties: false` are not enforced; an unknown key inside
+`usage` or inside an `operations` entry still reaches the handler.
+
+Every advertised parameter also carries a description, enforced in CI by
+the schema-completeness audit in `src/mcp/registry-guard.ts`. Output
+schemas are out of scope for that audit - their vocabulary declares
+union-typed fields with no `type` on purpose, and responses are validated
+against them at request time instead.
+
 ## Tool Highlights
 
 The full server currently advertises 79 tools; the 18 deprecated predecessor

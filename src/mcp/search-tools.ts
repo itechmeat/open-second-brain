@@ -93,17 +93,45 @@ const TELEMETRY_TOP_ARTIFACTS_MAX = 10;
 const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    query: { type: "string", minLength: 1, maxLength: 2000 },
-    query_document: { type: "string", minLength: 1, maxLength: 4000 },
-    focus_query: { type: "string", minLength: 1, maxLength: 1000 },
-    focus_path_prefix: { type: "string", minLength: 1, maxLength: 256 },
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 2000,
+      description:
+        "What to recall from the vault. Matched against the index by keyword, semantics, or both.",
+    },
+    query_document: {
+      type: "string",
+      minLength: 1,
+      maxLength: 4000,
+      description:
+        "Line-oriented query program with intent:, lex:, vec: and hyde: lanes, steering each retrieval layer separately. Absent means 'query' drives every lane.",
+    },
+    focus_query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 1000,
+      description:
+        "Steer this one call towards a working-set topic without persisting a session focus.",
+    },
+    focus_path_prefix: {
+      type: "string",
+      minLength: 1,
+      maxLength: 256,
+      description:
+        "Steer this one call towards a vault subtree, paired with focus_query as a transient focus.",
+    },
     focus_session: {
       type: "string",
       minLength: 1,
       maxLength: 128,
       description: "Session id whose bound focus applies (falls back to the global focus).",
     },
-    evidence_pack: { type: "boolean" },
+    evidence_pack: {
+      type: "boolean",
+      description:
+        "Return the evidence pack: matched/missing terms, coverage, abstention text and the false-absence guard. Default false.",
+    },
     include_superseded: {
       type: "boolean",
       description:
@@ -121,9 +149,21 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "Hard filter on event time (validity, body anchor, mtime last): at/before this point. Same forms as 'since'.",
     },
-    limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
-    semantic: { type: "boolean" },
-    keyword_only: { type: "boolean" },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MCP_LIMIT_MAX,
+      description: "How many ranked results to return. Default 10.",
+    },
+    semantic: {
+      type: "boolean",
+      description:
+        "Force the semantic lane on or off. Absent lets the configured hybrid strategy decide.",
+    },
+    keyword_only: {
+      type: "boolean",
+      description: "Skip the semantic lane entirely, so no embedding is needed. Default false.",
+    },
     disclosure: {
       type: "string",
       enum: ["full", "cards"],
@@ -175,11 +215,30 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
       description:
         "Cross-vault union: search profile vaults and read-only recall sources too, merging results with origin labels. Default false (active vault only).",
     },
-    path_prefix: { type: "string", maxLength: 256 },
-    telemetry: { type: "boolean" },
-    telemetry_host: { type: "string", maxLength: 200 },
-    session_id: { type: "string", maxLength: 512 },
-    turn_id: { type: "string", maxLength: 512 },
+    path_prefix: {
+      type: "string",
+      maxLength: 256,
+      description: "Restrict results to this vault subtree. Absent searches the whole vault.",
+    },
+    telemetry: {
+      type: "boolean",
+      description: "Emit one recall-telemetry continuity record for this call. Default false.",
+    },
+    telemetry_host: {
+      type: "string",
+      maxLength: 200,
+      description: "Optional host/client label recorded on the telemetry record.",
+    },
+    session_id: {
+      type: "string",
+      maxLength: 512,
+      description: "Optional session correlation id recorded on the telemetry record.",
+    },
+    turn_id: {
+      type: "string",
+      maxLength: 512,
+      description: "Optional turn correlation id recorded on the telemetry record.",
+    },
     properties: {
       type: "object",
       description:
@@ -457,11 +516,33 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
 const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    prompt: { type: "string", minLength: 1, maxLength: 4000 },
-    previous_prompt: { type: "string", maxLength: 4000 },
-    explicit: { type: "boolean" },
-    telemetry_host: { type: "string", maxLength: 200 },
-    session_id: { type: "string", maxLength: 512 },
+    prompt: {
+      type: "string",
+      minLength: 1,
+      maxLength: 4000,
+      description: "The turn's prompt, scored to decide whether recall is worth running at all.",
+    },
+    previous_prompt: {
+      type: "string",
+      maxLength: 4000,
+      description:
+        "The preceding turn's prompt, so a follow-up is judged in context rather than on its own.",
+    },
+    explicit: {
+      type: "boolean",
+      description:
+        "The user asked for memory in so many words; the gate then retrieves regardless of score. Default false.",
+    },
+    telemetry_host: {
+      type: "string",
+      maxLength: 200,
+      description: "Optional host/client label recorded on the telemetry record.",
+    },
+    session_id: {
+      type: "string",
+      maxLength: 512,
+      description: "Optional session correlation id recorded on the telemetry record.",
+    },
     scores: {
       type: "array",
       maxItems: 200,
@@ -1164,9 +1245,23 @@ function parseRecallScores(raw: unknown): ReadonlyArray<number> | undefined {
 const RECALL_FEEDBACK_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    query: { type: "string", minLength: 1, maxLength: 2000 },
-    result_path: { type: "string", minLength: 1, maxLength: 512 },
-    verdict: { type: "string", enum: ["up", "down"] },
+    query: {
+      type: "string",
+      minLength: 1,
+      maxLength: 2000,
+      description: "The query that produced the judged result; re-run to recover its layer scores.",
+    },
+    result_path: {
+      type: "string",
+      minLength: 1,
+      maxLength: 512,
+      description: "Vault path of the single result being judged.",
+    },
+    verdict: {
+      type: "string",
+      enum: ["up", "down"],
+      description: "'up' when the result was useful, 'down' when it was not.",
+    },
   },
   required: ["query", "result_path", "verdict"],
   additionalProperties: false,
@@ -1221,23 +1316,52 @@ const EVAL_INPUT_SCHEMA: Record<string, unknown> = {
         queries: {
           type: "array",
           minItems: 1,
+          description: "The benchmark cases, one per scored query. Non-empty.",
           items: {
             type: "object",
             required: ["id", "query", "expected"],
             properties: {
-              id: { type: "string", minLength: 1 },
-              query: { type: "string", minLength: 1 },
-              expected: { type: "array", minItems: 1, items: { type: "string", minLength: 1 } },
-              k: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
-              answer: { type: "string", minLength: 1 },
+              id: {
+                type: "string",
+                minLength: 1,
+                description: "Stable case id, reported back in per_query.",
+              },
+              query: { type: "string", minLength: 1, description: "The query text to run." },
+              expected: {
+                type: "array",
+                minItems: 1,
+                items: { type: "string", minLength: 1 },
+                description: "Vault paths a correct answer must surface. Non-empty.",
+              },
+              k: {
+                type: "integer",
+                minimum: 1,
+                maximum: MCP_LIMIT_MAX,
+                description: "Per-case cutoff, overriding the run-wide k.",
+              },
+              answer: {
+                type: "string",
+                minLength: 1,
+                description:
+                  "Reference answer text; enables answer-containment scoring for this case.",
+              },
             },
           },
         },
       },
       required: ["queries"],
     },
-    k: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
-    expand: { type: "boolean" },
+    k: {
+      type: "integer",
+      minimum: 1,
+      maximum: MCP_LIMIT_MAX,
+      description: "Run-wide rank depth for hit@k and the containment metrics. Default 5.",
+    },
+    expand: {
+      type: "boolean",
+      description:
+        "Route every query through deterministic expansion before scoring. Default false.",
+    },
   },
   required: ["dataset"],
   additionalProperties: false,
@@ -1362,9 +1486,26 @@ async function toolBrainEval(
 const FILE_CONTEXT_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
   properties: {
-    file_path: { type: "string", minLength: 1, maxLength: 1024 },
-    limit: { type: "integer", minimum: 1, maximum: MCP_LIMIT_MAX },
-    min_bytes: { type: "integer", minimum: 0, maximum: 10_000_000 },
+    file_path: {
+      type: "string",
+      minLength: 1,
+      maxLength: 1024,
+      description:
+        "Path of the file about to be read; its basename, stem and parent directory become the query terms.",
+    },
+    limit: {
+      type: "integer",
+      minimum: 1,
+      maximum: MCP_LIMIT_MAX,
+      description: "How many prior-work hits to return. Default 5.",
+    },
+    min_bytes: {
+      type: "integer",
+      minimum: 0,
+      maximum: 10_000_000,
+      description:
+        "Skip files smaller than this, reporting the reason instead of an empty hit. Default 1500.",
+    },
     agent_scope: AGENT_SCOPE_SCHEMA,
   },
   required: ["file_path"],

@@ -107,6 +107,14 @@ import {
   RETRIEVAL_DEGRADATION,
   RETRIEVAL_DEGRADATION_CODES,
 } from "../../../src/core/search/retrieval-trail.ts";
+import {
+  isSchemaCompletenessRule,
+  isSchemaNodeKind,
+  SCHEMA_COMPLETENESS_RULE,
+  SCHEMA_COMPLETENESS_RULES,
+  SCHEMA_NODE_KIND,
+  SCHEMA_NODE_KINDS,
+} from "../../../src/mcp/registry-guard.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -346,6 +354,24 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: RETRIEVAL_DEGRADATION,
     members: RETRIEVAL_DEGRADATION_CODES,
     guard: isRetrievalDegradationCode,
+  },
+  {
+    // C3. The two vocabularies the schema-completeness audit is built on:
+    // what kind of schema node the walk is standing on, and what a node
+    // failed to declare. Test-time only, so no value crosses a wire - but
+    // the rule vocabulary is the audit's whole contract with its readers,
+    // and a member added to the object and forgotten in the list would be
+    // a rule that never appears in a failure message.
+    name: "SCHEMA_NODE_KIND",
+    values: SCHEMA_NODE_KIND,
+    members: SCHEMA_NODE_KINDS,
+    guard: isSchemaNodeKind,
+  },
+  {
+    name: "SCHEMA_COMPLETENESS_RULE",
+    values: SCHEMA_COMPLETENESS_RULE,
+    members: SCHEMA_COMPLETENESS_RULES,
+    guard: isSchemaCompletenessRule,
   },
 ]);
 

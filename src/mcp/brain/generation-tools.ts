@@ -254,10 +254,26 @@ export const GENERATION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description:
             "record: optional agent-reported token usage (input_tokens, output_tokens, cached_tokens, total_tokens).",
           properties: {
-            input_tokens: { type: "integer", minimum: 0 },
-            output_tokens: { type: "integer", minimum: 0 },
-            cached_tokens: { type: "integer", minimum: 0 },
-            total_tokens: { type: "integer", minimum: 0 },
+            input_tokens: {
+              type: "integer",
+              minimum: 0,
+              description: "Prompt tokens the provider billed.",
+            },
+            output_tokens: {
+              type: "integer",
+              minimum: 0,
+              description: "Completion tokens the provider billed.",
+            },
+            cached_tokens: {
+              type: "integer",
+              minimum: 0,
+              description: "Prompt tokens served from the provider's cache.",
+            },
+            total_tokens: {
+              type: "integer",
+              minimum: 0,
+              description: "Provider-reported total; stored as given, never recomputed.",
+            },
           },
           additionalProperties: false,
         },
@@ -268,9 +284,9 @@ export const GENERATION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           items: {
             type: "object",
             properties: {
-              id: { type: "string" },
-              path: { type: "string" },
-              kind: { type: "string" },
+              id: { type: "string", description: "Identifier of the joined artifact. Required." },
+              path: { type: "string", description: "Optional vault path of the artifact." },
+              kind: { type: "string", description: "Optional artifact kind label." },
             },
             required: ["id"],
             additionalProperties: false,

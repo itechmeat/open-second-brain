@@ -10,6 +10,7 @@ import {
   resolveMcpRouteMetricsEnabled,
 } from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
+import { assertKnownArguments } from "./argument-guard.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
   INTERNAL_ERROR,
@@ -156,11 +157,18 @@ export class MCPServer {
    * (status `error` on throw), then re-raises so error handling upstream
    * is unchanged. The emit is gated and fail-open, so it can never fail
    * or slow-fail the call beyond one synchronous continuity append.
+   *
+   * The unknown-argument gate runs FIRST, before the timer and before the
+   * handler, because a refused call is not a route to measure. Placing it
+   * here rather than in `handleToolsCall` is what makes it cover the CLI
+   * bridge too, while leaving the many tests that call `tool.handler`
+   * directly exactly as they were.
    */
   private async invokeToolHandler(
     tool: ToolDefinition,
     args: Record<string, unknown>,
   ): Promise<unknown> {
+    assertKnownArguments(tool, args);
     if (!this.routeMetricsEnabled) return tool.handler(this.context, args);
     const start = performance.now();
     let status: McpRouteStatus = "ok";

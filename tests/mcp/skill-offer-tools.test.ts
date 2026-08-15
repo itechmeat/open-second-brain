@@ -5,7 +5,9 @@
  * accepts that id so the runtime's session log records which offer the
  * invocation came from, and `list_skills` surfaces the paths a skill
  * shadows. No new tool is added, so the registry guard's preview-budget
- * contract has to stay green - asserted here rather than assumed.
+ * contract is unaffected; it is asserted once over the whole table in
+ * `registry-guard.test.ts`, and re-asserting it here only meant two
+ * places to update when the table changes.
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
@@ -13,9 +15,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { auditPreviewBudgets } from "../../src/mcp/registry-guard.ts";
 import { SKILL_TOOLS } from "../../src/mcp/skill-tools.ts";
-import { buildToolTable } from "../../src/mcp/tools.ts";
 import { isSkillOfferId, SKILL_OFFER_ID_KEY } from "../../src/core/surface/skill-offer.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -136,11 +136,4 @@ test("an unshadowed skill reports an empty shadowed list", async () => {
     skills: Array<{ shadowed: string[] }>;
   };
   expect(result.skills[0]!.shadowed).toEqual([]);
-});
-
-test("the preview-budget contract still holds over the whole tool table", () => {
-  const audit = auditPreviewBudgets(buildToolTable("full"));
-  expect(audit.unbudgetedAndUnexempted).toEqual([]);
-  expect(audit.exemptButBudgeted).toEqual([]);
-  expect(audit.exemptButUnknown).toEqual([]);
 });

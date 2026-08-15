@@ -130,10 +130,21 @@ export const MEMORY_BRIDGE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze(
           items: {
             type: "object",
             properties: {
-              action: { type: "string", enum: ["add", "replace"] },
-              target: { type: "string", enum: ["memory", "user"] },
-              content: { type: "string" },
-              metadata: { type: "object" },
+              action: {
+                type: "string",
+                enum: ["add", "replace"],
+                description: "Host write action for this step.",
+              },
+              target: {
+                type: "string",
+                enum: ["memory", "user"],
+                description: "Host write target for this step.",
+              },
+              content: { type: "string", description: "The memory entry content for this step." },
+              metadata: {
+                type: "object",
+                description: "Optional host provenance (write_origin, session_id, tool_name, …).",
+              },
             },
             required: ["action", "target", "content"],
             additionalProperties: false,

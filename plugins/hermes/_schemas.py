@@ -156,7 +156,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                                    'enum': ['write',
                                                                                             'append',
                                                                                             'clear',
-                                                                                            'replace']},
+                                                                                            'replace'],
+                                                                                   'description': 'What this step does to the pinned body.'},
                                                                             'content': {'type': 'string',
                                                                                         'description': 'Body for write/append ops.'},
                                                                             'find': {'type': 'string',
@@ -189,9 +190,9 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                     'at': {'type': 'string',
                                            'description': 'Topic mode only: evaluate '
                                                           '`expiration_date` as of this instant, '
-                                                          'so a memory that lapsed after it '
-                                                          'comes back. ISO-8601 instant or '
-                                                          'YYYY-MM-DD. Default now.'},
+                                                          'so a memory that lapsed after it comes '
+                                                          'back. ISO-8601 instant or YYYY-MM-DD. '
+                                                          'Default now.'},
                                     'since': {'type': 'string',
                                               'description': 'ISO-8601 timestamp; returns every '
                                                              'Brain log event with timestamp >= '
@@ -206,9 +207,20 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                  'one continuity record (mode '
                                                                  "'query', kind-only payload) for "
                                                                  'this call.'},
-                                    'telemetry_host': {'type': 'string', 'maxLength': 200},
-                                    'session_id': {'type': 'string', 'maxLength': 512},
-                                    'turn_id': {'type': 'string', 'maxLength': 512},
+                                    'telemetry_host': {'type': 'string',
+                                                       'maxLength': 200,
+                                                       'description': 'Optional host/client label '
+                                                                      'recorded on the telemetry '
+                                                                      'record.'},
+                                    'session_id': {'type': 'string',
+                                                   'maxLength': 512,
+                                                   'description': 'Optional session correlation id '
+                                                                  'recorded on the telemetry '
+                                                                  'record.'},
+                                    'turn_id': {'type': 'string',
+                                                'maxLength': 512,
+                                                'description': 'Optional turn correlation id '
+                                                               'recorded on the telemetry record.'},
                                     'agent_scope': {'type': 'string',
                                                     'description': 'Optional owner scope: with '
                                                                    'owner_scoped_facts on, an '
@@ -221,48 +233,77 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
      'description': 'Full-text search across the vault. Optional semantic layer when configured. '
                     'Read-only.',
      'inputSchema': {'type': 'object',
-                     'properties': {'query': {'type': 'string', 'minLength': 1, 'maxLength': 2000},
+                     'properties': {'query': {'type': 'string',
+                                              'minLength': 1,
+                                              'maxLength': 2000,
+                                              'description': 'What to recall from the vault. '
+                                                             'Matched against the index by '
+                                                             'keyword, semantics, or both.'},
                                     'query_document': {'type': 'string',
                                                        'minLength': 1,
-                                                       'maxLength': 4000},
+                                                       'maxLength': 4000,
+                                                       'description': 'Line-oriented query program '
+                                                                      'with intent:, lex:, vec: '
+                                                                      'and hyde: lanes, steering '
+                                                                      'each retrieval layer '
+                                                                      'separately. Absent means '
+                                                                      "'query' drives every lane."},
                                     'focus_query': {'type': 'string',
                                                     'minLength': 1,
-                                                    'maxLength': 1000},
+                                                    'maxLength': 1000,
+                                                    'description': 'Steer this one call towards a '
+                                                                   'working-set topic without '
+                                                                   'persisting a session focus.'},
                                     'focus_path_prefix': {'type': 'string',
                                                           'minLength': 1,
-                                                          'maxLength': 256},
+                                                          'maxLength': 256,
+                                                          'description': 'Steer this one call towards a vault subtree, paired with focus_query as a transient focus.'},
                                     'focus_session': {'type': 'string',
                                                       'minLength': 1,
                                                       'maxLength': 128,
                                                       'description': 'Session id whose bound focus '
                                                                      'applies (falls back to the '
                                                                      'global focus).'},
-                                    'evidence_pack': {'type': 'boolean'},
+                                    'evidence_pack': {'type': 'boolean',
+                                                      'description': 'Return the evidence pack: '
+                                                                     'matched/missing terms, '
+                                                                     'coverage, abstention text '
+                                                                     'and the false-absence guard. '
+                                                                     'Default false.'},
                                     'include_superseded': {'type': 'boolean',
-                                                           'description': 'History mode for '
-                                                                          'relation polarity: keep '
-                                                                          'matched superseded '
-                                                                          'predecessors undemoted '
-                                                                          'and skip successor '
-                                                                          'pull-in. Default '
-                                                                          'false.'},
+                                                           'description': 'History mode for relation polarity: keep matched superseded predecessors undemoted and skip successor pull-in. Default false.'},
                                     'since': {'type': 'string',
                                               'maxLength': 64,
-                                              'description': 'Hard filter on event time '
-                                                             '(validity, body anchor, mtime '
-                                                             'last): at/after this point. ISO '
-                                                             'date/datetime, today, yesterday, '
-                                                             'last week, last month, '
-                                                             '<n>h/<n>d/<n>w.'},
+                                              'description': 'Hard filter on event time (validity, '
+                                                             'body anchor, mtime last): at/after '
+                                                             'this point. ISO date/datetime, '
+                                                             'today, yesterday, last week, last '
+                                                             'month, <n>h/<n>d/<n>w.'},
                                     'until': {'type': 'string',
                                               'maxLength': 64,
-                                              'description': 'Hard filter on event time '
-                                                             '(validity, body anchor, mtime '
-                                                             'last): at/before this point. Same '
-                                                             "forms as 'since'."},
-                                    'limit': {'type': 'integer', 'minimum': 1, 'maximum': 50},
-                                    'semantic': {'type': 'boolean'},
-                                    'keyword_only': {'type': 'boolean'},
+                                              'description': 'Hard filter on event time (validity, '
+                                                             'body anchor, mtime last): at/before '
+                                                             "this point. Same forms as 'since'."},
+                                    'limit': {'type': 'integer',
+                                              'minimum': 1,
+                                              'maximum': 50,
+                                              'description': 'How many ranked results to return. '
+                                                             'Default 10.'},
+                                    'semantic': {'type': 'boolean',
+                                                 'description': 'Force the semantic lane on or '
+                                                                'off. Absent lets the configured '
+                                                                'hybrid strategy decide.'},
+                                    'keyword_only': {'type': 'boolean',
+                                                     'description': 'Skip the semantic lane '
+                                                                    'entirely, so no embedding is '
+                                                                    'needed. Default false.'},
+                                    'disclosure': {'type': 'string',
+                                                   'enum': ['full', 'cards'],
+                                                   'description': "Result depth: 'full' (default) "
+                                                                  'returns full chunk content; '
+                                                                  "'cards' returns token-cheap "
+                                                                  'layer-1 cards — drill a hit '
+                                                                  'with brain_search_expand.'},
                                     'profile': {'type': 'string',
                                                 'enum': ['fast', 'balanced', 'thorough'],
                                                 'description': 'Named recall profile '
@@ -271,10 +312,9 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                'persisted self-tuning. Absent '
                                                                'leaves ranking unchanged.'},
                                     'explain': {'type': 'boolean',
-                                                'description': 'Add a per-result '
-                                                               'score_breakdown plus the '
-                                                               'retrieval_decision_trace and '
-                                                               'memory_trust_assessment '
+                                                'description': 'Add a per-result score_breakdown '
+                                                               'plus the retrieval_decision_trace '
+                                                               'and memory_trust_assessment '
                                                                'receipts. Default false.'},
                                     'trust': {'type': 'boolean',
                                               'description': 'Stamp each result with inline trust '
@@ -315,11 +355,29 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                               'too, merging results with origin '
                                                               'labels. Default false (active vault '
                                                               'only).'},
-                                    'path_prefix': {'type': 'string', 'maxLength': 256},
-                                    'telemetry': {'type': 'boolean'},
-                                    'telemetry_host': {'type': 'string', 'maxLength': 200},
-                                    'session_id': {'type': 'string', 'maxLength': 512},
-                                    'turn_id': {'type': 'string', 'maxLength': 512},
+                                    'path_prefix': {'type': 'string',
+                                                    'maxLength': 256,
+                                                    'description': 'Restrict results to this vault '
+                                                                   'subtree. Absent searches the '
+                                                                   'whole vault.'},
+                                    'telemetry': {'type': 'boolean',
+                                                  'description': 'Emit one recall-telemetry '
+                                                                 'continuity record for this call. '
+                                                                 'Default false.'},
+                                    'telemetry_host': {'type': 'string',
+                                                       'maxLength': 200,
+                                                       'description': 'Optional host/client label '
+                                                                      'recorded on the telemetry '
+                                                                      'record.'},
+                                    'session_id': {'type': 'string',
+                                                   'maxLength': 512,
+                                                   'description': 'Optional session correlation id '
+                                                                  'recorded on the telemetry '
+                                                                  'record.'},
+                                    'turn_id': {'type': 'string',
+                                                'maxLength': 512,
+                                                'description': 'Optional turn correlation id '
+                                                               'recorded on the telemetry record.'},
                                     'properties': {'type': 'object',
                                                    'description': 'Optional frontmatter property '
                                                                   'filter (v0.10.17). Each key '
@@ -333,8 +391,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                'description': 'Graph-degree predicates over '
                                                               'backlink/outlink counts, e.g. '
                                                               "'backlinks=0' (orphans) or "
-                                                              "'outlinks>=5' (hubs); ANDed. "
-                                                              'Absent = no filter.',
+                                                              "'outlinks>=5' (hubs); ANDed. Absent "
+                                                              '= no filter.',
                                                'items': {'type': 'string'}},
                                     'visibility': {'type': 'array',
                                                    'description': 'Optional content-visibility '
@@ -363,27 +421,42 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                      'project always match, '
                                                                      'project-tagged pages only '
                                                                      'this project. Absent = no '
-                                                                     'project filtering.'},
-                                    'disclosure': {'type': 'string',
-                                                   'enum': ['full', 'cards'],
-                                                   'description': "Result depth: 'full' "
-                                                                  '(default) returns full chunk '
-                                                                  "content; 'cards' returns token-"
-                                                                  'cheap layer-1 cards — drill a '
-                                                                  'hit with brain_search_expand.'}},
+                                                                     'project filtering.'}},
                      'required': ['query'],
                      'additionalProperties': False}},
     {'name': 'brain_recall_gate',
      'description': 'Classify whether an automatic recall/surfacing attempt should run. '
-                    'Diagnostics only; does not search. Pass `scores` (a recall attempt\'s '
-                    'top-k relevance scores) to also get an adequacy verdict — sufficient '
-                    '(proceed) / weak (re_recall) / insufficient (abstain + escalate).',
+                    "Diagnostics only; does not search. Pass `scores` (a recall attempt's top-k "
+                    'relevance scores) to also get an adequacy verdict — sufficient (proceed) / '
+                    'weak (re_recall) / insufficient (abstain + escalate).',
      'inputSchema': {'type': 'object',
-                     'properties': {'prompt': {'type': 'string', 'minLength': 1, 'maxLength': 4000},
-                                    'previous_prompt': {'type': 'string', 'maxLength': 4000},
-                                    'explicit': {'type': 'boolean'},
-                                    'telemetry_host': {'type': 'string', 'maxLength': 200},
-                                    'session_id': {'type': 'string', 'maxLength': 512},
+                     'properties': {'prompt': {'type': 'string',
+                                               'minLength': 1,
+                                               'maxLength': 4000,
+                                               'description': "The turn's prompt, scored to decide "
+                                                              'whether recall is worth running at '
+                                                              'all.'},
+                                    'previous_prompt': {'type': 'string',
+                                                        'maxLength': 4000,
+                                                        'description': "The preceding turn's "
+                                                                       'prompt, so a follow-up is '
+                                                                       'judged in context rather '
+                                                                       'than on its own.'},
+                                    'explicit': {'type': 'boolean',
+                                                 'description': 'The user asked for memory in so '
+                                                                'many words; the gate then '
+                                                                'retrieves regardless of score. '
+                                                                'Default false.'},
+                                    'telemetry_host': {'type': 'string',
+                                                       'maxLength': 200,
+                                                       'description': 'Optional host/client label '
+                                                                      'recorded on the telemetry '
+                                                                      'record.'},
+                                    'session_id': {'type': 'string',
+                                                   'maxLength': 512,
+                                                   'description': 'Optional session correlation id '
+                                                                  'recorded on the telemetry '
+                                                                  'record.'},
                                     'scores': {'type': 'array',
                                                'maxItems': 200,
                                                'items': {'type': 'number'},
@@ -391,8 +464,7 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                               'an adequacy verdict: '
                                                               'sufficient/proceed, weak/re_recall, '
                                                               'insufficient/abstain. An empty '
-                                                              'array adds the negative '
-                                                              'verdict.'}},
+                                                              'array adds the negative verdict.'}},
                      'required': ['prompt'],
                      'additionalProperties': False}},
     {'name': 'brain_context',

@@ -244,8 +244,8 @@ export const CALENDAR_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           items: {
             type: "object",
             properties: {
-              id: { type: "string" },
-              title: { type: "string" },
+              id: { type: "string", description: "Optional caller-side event id, echoed back." },
+              title: { type: "string", description: "Optional event title." },
               start: { type: "string", description: "ISO-8601 start timestamp." },
               end: { type: "string", description: "ISO-8601 end timestamp." },
               organizer: { type: "string", description: "Organiser email." },
