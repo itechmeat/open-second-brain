@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => {
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// ../../../node_modules/graceful-fs/polyfills.js
+// node_modules/graceful-fs/polyfills.js
 var require_polyfills = __commonJS((exports, module) => {
   var constants = __require("constants");
   var origCwd = process.cwd;
@@ -335,7 +335,7 @@ var require_polyfills = __commonJS((exports, module) => {
   }
 });
 
-// ../../../node_modules/graceful-fs/legacy-streams.js
+// node_modules/graceful-fs/legacy-streams.js
 var require_legacy_streams = __commonJS((exports, module) => {
   var Stream = __require("stream").Stream;
   module.exports = legacy;
@@ -432,7 +432,7 @@ var require_legacy_streams = __commonJS((exports, module) => {
   }
 });
 
-// ../../../node_modules/graceful-fs/clone.js
+// node_modules/graceful-fs/clone.js
 var require_clone = __commonJS((exports, module) => {
   module.exports = clone;
   var getPrototypeOf = Object.getPrototypeOf || function(obj) {
@@ -452,7 +452,7 @@ var require_clone = __commonJS((exports, module) => {
   }
 });
 
-// ../../../node_modules/graceful-fs/graceful-fs.js
+// node_modules/graceful-fs/graceful-fs.js
 var require_graceful_fs = __commonJS((exports, module) => {
   var fs = __require("fs");
   var polyfills = require_polyfills();
@@ -810,7 +810,7 @@ GFS4: `);
   }
 });
 
-// ../../../node_modules/retry/lib/retry_operation.js
+// node_modules/retry/lib/retry_operation.js
 var require_retry_operation = __commonJS((exports, module) => {
   function RetryOperation(timeouts, options) {
     if (typeof options === "boolean") {
@@ -939,7 +939,7 @@ var require_retry_operation = __commonJS((exports, module) => {
   };
 });
 
-// ../../../node_modules/retry/lib/retry.js
+// node_modules/retry/lib/retry.js
 var require_retry = __commonJS((exports) => {
   var RetryOperation = require_retry_operation();
   exports.operation = function(options) {
@@ -1023,7 +1023,7 @@ var require_retry = __commonJS((exports) => {
   };
 });
 
-// ../../../node_modules/signal-exit/signals.js
+// node_modules/signal-exit/signals.js
 var require_signals = __commonJS((exports, module) => {
   module.exports = [
     "SIGABRT",
@@ -1040,7 +1040,7 @@ var require_signals = __commonJS((exports, module) => {
   }
 });
 
-// ../../../node_modules/signal-exit/index.js
+// node_modules/signal-exit/index.js
 var require_signal_exit = __commonJS((exports, module) => {
   var process2 = global.process;
   var processOk = function(process3) {
@@ -1193,7 +1193,7 @@ var require_signal_exit = __commonJS((exports, module) => {
   var processEmit;
 });
 
-// ../../../node_modules/proper-lockfile/lib/mtime-precision.js
+// node_modules/proper-lockfile/lib/mtime-precision.js
 var require_mtime_precision = __commonJS((exports, module) => {
   var cacheSymbol = Symbol();
   function probe(file, fs, callback) {
@@ -1232,7 +1232,7 @@ var require_mtime_precision = __commonJS((exports, module) => {
   exports.getMtime = getMtime;
 });
 
-// ../../../node_modules/proper-lockfile/lib/lockfile.js
+// node_modules/proper-lockfile/lib/lockfile.js
 var require_lockfile = __commonJS((exports, module) => {
   var path = __require("path");
   var fs = require_graceful_fs();
@@ -1457,7 +1457,7 @@ var require_lockfile = __commonJS((exports, module) => {
   exports.getLocks = getLocks;
 });
 
-// ../../../node_modules/proper-lockfile/lib/adapter.js
+// node_modules/proper-lockfile/lib/adapter.js
 var require_adapter = __commonJS((exports, module) => {
   var fs = require_graceful_fs();
   function createSyncFs(fs2) {
@@ -1519,7 +1519,7 @@ var require_adapter = __commonJS((exports, module) => {
   };
 });
 
-// ../../../node_modules/proper-lockfile/index.js
+// node_modules/proper-lockfile/index.js
 var require_proper_lockfile = __commonJS((exports, module) => {
   var lockfile = require_lockfile();
   var { toPromise, toSync, toSyncOptions } = require_adapter();
@@ -1707,9 +1707,6 @@ var SCAN_TRUNCATED_MARKER = `
 
 ${SCAN_TRUNCATED_TOKEN} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` + `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]
 `;
-function wasScanTruncated(text) {
-  return typeof text === "string" && text.includes(SCAN_TRUNCATED_TOKEN);
-}
 var PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
 var PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
 var SECRET_KEYS = [
@@ -1736,7 +1733,8 @@ function isSecretKeyName(name) {
   return typeof name === "string" && SECRET_KEY_NAME_RE.test(name);
 }
 var ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
-var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})(\\s*:\\s*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
+var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})([ \\t]*:[ \\t]*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
+var YAML_SECRET_BLOCK_RE = new RegExp(`^([ \\t]*)(${KEY_PATTERN})[ \\t]*:[ \\t]*(?:[|>][+-]?\\d{0,2})?[ \\t]*\\r?\\n` + "(?:\\1[ \\t]+[^\\r\\n]*\\r?\\n?)+", "gim");
 var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
 var BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
 var IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
@@ -1786,8 +1784,13 @@ var VENDOR_TOKEN_RE = new RegExp([
   "\\bglpat-[A-Za-z0-9_-]{6,100}"
 ].join("|"), "g");
 var HIGH_ENTROPY_TOKEN_RE = /\b(?=[A-Za-z0-9_-]{24,200}\b)(?=[A-Za-z0-9_-]{0,199}[A-Za-z])(?=[A-Za-z0-9_-]{0,199}\d)[A-Za-z0-9_-]{24,200}\b/g;
+var CONTENT_ADDRESS_RE = /^[0-9a-fA-F]+(?:-[0-9a-fA-F]+)*$/;
+function isContentAddress(run) {
+  return CONTENT_ADDRESS_RE.test(run);
+}
+var BASE64_SECRET_RE = new RegExp("(?<![A-Za-z0-9+/=])" + "(?=[A-Za-z0-9+/=]{32,64}(?![A-Za-z0-9+/=]))" + "(?=[A-Za-z0-9+/=]{0,63}[a-z])" + "(?=[A-Za-z0-9+/=]{0,63}[A-Z])" + "(?=[A-Za-z0-9+/=]{0,63}\\d)" + "(?=[A-Za-z0-9+/=]{0,63}[+/=])" + "[A-Za-z0-9+=][A-Za-z0-9+/=]{30,62}[A-Za-z0-9+=]", "g");
 function redactBareTokens(text) {
-  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, PLACEHOLDER);
+  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(BASE64_SECRET_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, (run) => isContentAddress(run) ? run : PLACEHOLDER);
 }
 function redactUrlCredentials(text) {
   return text.replace(BASIC_AUTH_URL_RE, (_m, scheme) => `${scheme}${PLACEHOLDER}@`);
@@ -1800,6 +1803,19 @@ function redactInfraTopology(text) {
   out = out.replace(IPV6_RE, (match) => isPrivateOrReservedIPv6(match) ? match : PLACEHOLDER);
   out = out.replace(IPV4_BARE_RE, (match) => isPrivateOrReservedIPv4(match) ? match : PLACEHOLDER);
   return out;
+}
+var PLACEHOLDER_PATTERN = PLACEHOLDER.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+var FRONTMATTER_BLOCK_RE = /^(---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/;
+var FRONTMATTER_SCALAR_RE = new RegExp(`^([ \\t]*[^\\s#][^:\\r\\n]*:[ \\t]*)(${PLACEHOLDER_PATTERN}[^\\r\\n]*)$`, "gm");
+var FRONTMATTER_ITEM_RE = new RegExp(`^([ \\t]*-[ \\t]+)(${PLACEHOLDER_PATTERN}[^\\r\\n]*)$`, "gm");
+var FRONTMATTER_FLOW_ITEM_RE = new RegExp(`([[{,][ \\t]*)(${PLACEHOLDER_PATTERN})(?=[ \\t]*[,\\]}])`, "g");
+function quoteYamlScalar(value) {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, "\\\"")}"`;
+}
+function quoteRedactedFrontmatter(text) {
+  if (!text.startsWith("---"))
+    return text;
+  return text.replace(FRONTMATTER_BLOCK_RE, (_match, open, body, close) => open + body.replace(FRONTMATTER_SCALAR_RE, (_m, prefix, value) => value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`).replace(FRONTMATTER_ITEM_RE, (_m, prefix, value) => value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`).replace(FRONTMATTER_FLOW_ITEM_RE, (_m, prefix, value) => `${prefix}${quoteYamlScalar(value)}`) + close);
 }
 function stripPrivateRegions(text) {
   if (!text)
@@ -1838,9 +1854,9 @@ function stripPrivateRegions(text) {
   }
   return output;
 }
-function redactRawOutput(text, opts = {}) {
+function scanRawOutput(text, opts = {}) {
   if (!text)
-    return text;
+    return { text, truncated: false };
   let out = text;
   for (const literal of opts.literals ?? []) {
     if (literal.length === 0)
@@ -1848,7 +1864,8 @@ function redactRawOutput(text, opts = {}) {
     out = out.split(literal).join(PLACEHOLDER);
   }
   const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
-  if (out.length > maxInput)
+  const truncated = out.length > maxInput;
+  if (truncated)
     out = out.slice(0, maxInput) + SCAN_TRUNCATED_MARKER;
   out = stripPrivateRegions(out);
   out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
@@ -1860,6 +1877,8 @@ function redactRawOutput(text, opts = {}) {
     return `${key}${sep}${PLACEHOLDER}`;
   });
   out = out.replace(BEARER_RE, (_match, prefix) => `${prefix}${PLACEHOLDER}`);
+  out = out.replace(YAML_SECRET_BLOCK_RE, (_match, indent, key) => `${indent}${key}: "${PLACEHOLDER}"
+`);
   out = out.replace(COLON_VALUE_RE, (match, key, sep, value) => {
     if (value.includes(PLACEHOLDER))
       return match;
@@ -1869,7 +1888,7 @@ function redactRawOutput(text, opts = {}) {
     if (value.startsWith("'") && value.endsWith("'")) {
       return `${key}${sep}'${PLACEHOLDER}'`;
     }
-    return `${key}${sep}${PLACEHOLDER}`;
+    return `${key}${sep}"${PLACEHOLDER}"`;
   });
   if (opts.redactTokens)
     out = redactBareTokens(out);
@@ -1877,8 +1896,37 @@ function redactRawOutput(text, opts = {}) {
     out = redactInfraTopology(out);
   else if (opts.redactUrlCredentials)
     out = redactUrlCredentials(out);
-  return out;
+  out = quoteRedactedFrontmatter(out);
+  return { text: out, truncated };
 }
+var IDENTIFIER_KEY_RE = /(^|[_-])(id|ids|uuid|uuids|guid|path|paths|slug|slugs|filename|filenames|basename)$/i;
+function isIdentifierKeyName(name) {
+  return typeof name === "string" && IDENTIFIER_KEY_RE.test(name);
+}
+var PATH_ANCHOR_RE = /^(?:[/\\]|~[/\\]|\.{1,2}[/\\]|[A-Za-z]:[/\\])/;
+function isPathLikeValue(value) {
+  if (value.length === 0 || value.length > 4096)
+    return false;
+  if (value.includes("@") || value.includes("://"))
+    return false;
+  if (!value.includes("/") && !value.includes("\\"))
+    return false;
+  return PATH_ANCHOR_RE.test(value) || !/\s/.test(value);
+}
+var VENDOR_TOKEN_TEST_RE = new RegExp(VENDOR_TOKEN_RE.source);
+function identifierCarriesSecret(value) {
+  return VENDOR_TOKEN_TEST_RE.test(value);
+}
+function keyNameCarriesSecret(name) {
+  if (identifierCarriesSecret(name))
+    return true;
+  for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
+    if (!isContentAddress(match[0]))
+      return true;
+  }
+  return false;
+}
+var MAX_REPORTED_IDENTIFIERS = 12;
 function isPlainContainer(value) {
   const proto = Object.getPrototypeOf(value);
   return proto === Object.prototype || proto === null;
@@ -1886,46 +1934,68 @@ function isPlainContainer(value) {
 function redactStructured(input, opts = {}) {
   let redacted = false;
   let truncated = false;
-  const walk = (value, underSecretKey) => {
+  const secretIdentifiers = new Set;
+  const record = (location) => {
+    if (secretIdentifiers.size < MAX_REPORTED_IDENTIFIERS)
+      secretIdentifiers.add(location);
+  };
+  const walk = (value, location, underSecretKey, underIdentifierKey) => {
     if (underSecretKey) {
       if (value === null || value === undefined)
         return value;
       redacted = true;
       return PLACEHOLDER;
     }
-    if (typeof value === "string") {
-      const out = redactRawOutput(value, opts);
-      if (out !== value)
+    if (typeof value === "string" && (underIdentifierKey || isPathLikeValue(value))) {
+      if (identifierCarriesSecret(value))
+        record(location);
+      const cleaned = opts.redactInfra === true || opts.redactUrlCredentials === true ? redactUrlCredentials(value) : value;
+      if (cleaned !== value)
         redacted = true;
-      if (wasScanTruncated(out) && !wasScanTruncated(value))
-        truncated = true;
-      return out;
+      return cleaned;
     }
-    if (Array.isArray(value))
-      return value.map((item) => walk(item, false));
+    if (typeof value === "string") {
+      const scan = scanRawOutput(value, opts);
+      if (scan.text !== value)
+        redacted = true;
+      if (scan.truncated)
+        truncated = true;
+      return scan.text;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item, index) => walk(item, `${location}[${index}]`, false, underIdentifierKey));
+    }
     if (typeof value === "object" && value !== null) {
       if (!isPlainContainer(value))
         return value;
       const out = {};
+      let index = 0;
       for (const [key, child] of Object.entries(value)) {
-        out[key] = walk(child, isSecretKeyName(key));
+        if (keyNameCarriesSecret(key))
+          record(`${location === "" ? "" : location}#${index}`);
+        const childLocation = location === "" ? key : `${location}.${key}`;
+        out[key] = walk(child, childLocation, isSecretKeyName(key), isIdentifierKeyName(key));
+        index += 1;
       }
       return out;
     }
     return value;
   };
-  return { value: walk(input, false), redacted, truncated };
+  return {
+    value: walk(input, "", false, false),
+    redacted,
+    truncated,
+    secretIdentifiers: Object.freeze([...secretIdentifiers].toSorted())
+  };
 }
 
 // src/core/egress/registry.ts
 var EGRESS_REDACTION = Object.freeze({
   sharedRedactor: "shared_redactor",
-  upstreamReadModel: "upstream_read_model",
   noVaultContent: "no_vault_content"
 });
 var EGRESS_REDACTION_STATUSES = Object.freeze([
   EGRESS_REDACTION.sharedRedactor,
-  EGRESS_REDACTION.upstreamReadModel,
   EGRESS_REDACTION.noVaultContent
 ]);
 var R = EGRESS_REDACTION;
@@ -1969,8 +2039,8 @@ var EGRESS_SITES = Object.freeze({
     id: "brain-continuity-export",
     verb: "o2b brain continuity export",
     module: "src/cli/brain/verbs/continuity.ts",
-    redaction: R.upstreamReadModel,
-    reason: "the one path that already redacted. It consumes the continuity read model, " + "which drops `private` records and passes every string through the shared " + "redactor before the verb sees it (`continuity/redaction.ts`). A second pass here " + "would change its bytes without closing anything, so the coverage is declared " + "rather than duplicated. What it does NOT have is the truncation refusal the " + "other five gained: an oversized continuity record is marked in place by the " + "read model and exported carrying that marker."
+    redaction: R.sharedRedactor,
+    reason: "was declared as covered by its read model, which was wrong in both directions. " + "The upstream call redacts at WRITE time with the redactor's DEFAULT options, so " + "`redactTokens` and `redactUrlCredentials` were both off and a vendor key, a bare " + "high-entropy token and a `user:pass@host` URL all left through here verbatim - " + "the two flags the export boundary exists to turn on. Write-time coverage also " + "says nothing about a record already on disk or appended by another writer, since " + "the read model never re-scans. The verb now scans what it READ, which answers " + "both, and gains the truncation refusal the other five already had."
   },
   "install-adapter-out": {
     id: "install-adapter-out",
@@ -1984,11 +2054,13 @@ var EGRESS_SITES = Object.freeze({
 // src/core/egress/guard.ts
 var EGRESS_OUTCOME = Object.freeze({
   released: "released",
-  refusedScanTruncated: "refused_scan_truncated"
+  refusedScanTruncated: "refused_scan_truncated",
+  refusedSecretIdentifier: "refused_secret_identifier"
 });
 var EGRESS_OUTCOMES = Object.freeze([
   EGRESS_OUTCOME.released,
-  EGRESS_OUTCOME.refusedScanTruncated
+  EGRESS_OUTCOME.refusedScanTruncated,
+  EGRESS_OUTCOME.refusedSecretIdentifier
 ]);
 var EGRESS_REDACTION_OPTIONS = Object.freeze({
   redactTokens: true,
