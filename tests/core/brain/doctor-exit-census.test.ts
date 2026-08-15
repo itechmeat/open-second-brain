@@ -195,6 +195,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "stale-dependency",
   "sync-conflict-log",
   "tier-drift",
+  "topic-key-collision",
   "vault-walk-entry-skipped",
 ];
 

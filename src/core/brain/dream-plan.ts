@@ -11,7 +11,7 @@
  * cannot find.
  */
 
-import { normalizeEntityName } from "./entities/canonical.ts";
+import { foldQuoteVariantsByClass, normalizeEntityShape } from "./entities/canonical.ts";
 import type { BrainPreference, BrainRetiredReason, BrainSignal, BrainSignalSign } from "./types.ts";
 
 /**
@@ -22,17 +22,37 @@ import type { BrainPreference, BrainRetiredReason, BrainSignal, BrainSignalSign 
  * `normalizeEntityName`); the consolidation path compared raw bytes, so two
  * signals whose topics differed only by Unicode normal form, letter case, an
  * internal whitespace run, or a curly-versus-straight quote were consolidated
- * as unrelated subjects. This is the SAME normaliser, not a second one:
- * `normalizeEntityName` is NFC, trim, whitespace collapse, lowercase and
- * quote fold, every step structural, so the rule behaves identically for a
- * script with no case distinction and for one that has it.
+ * as unrelated subjects. The shape pass is the identity kernel's own -
+ * `normalizeEntityShape` is NFC, trim, whitespace collapse, lowercase, every
+ * step structural, so the rule behaves identically for a script with no case
+ * distinction and for one that has it.
+ *
+ * The quote step is the kernel's OTHER fold, and deliberately so. The kernel
+ * sends every quote class to the ASCII single quote, which merges a
+ * typographic DOUBLE quote with an apostrophe: `prefer-“single”-quotes` and
+ * `prefer-'single'-quotes` became one key, contended, and the pass then
+ * planned nothing for either - two live rules inert and an inbox that only
+ * grows. A topic key is computed per run and written nowhere, so it can
+ * afford the faithful fold that a persisted identity key cannot; see
+ * `foldQuoteVariantsByClass` and the note on `foldQuoteVariants` for what
+ * re-targeting a stored key would cost.
  *
  * A key is an index, never a label. Everything an operator reads back keeps
  * the raw spelling a signal actually used - see `preferredTopicDisplay` in
  * `dream-plan-topics.ts`.
+ *
+ * NOT every raw topic comparison in the Brain goes through this function, and
+ * the ones that do not are named rather than left implied: `query.ts`'s
+ * preference lookup and `intent-review.ts`'s pre-dream clustering both
+ * compare raw bytes, so the review can cluster signals differently from the
+ * plan that acts on them. Folding those is a behaviour change to the read
+ * path and to a report shape, which is a separate unit; what this release
+ * adds is a doctor check (`topic-key-collision` in
+ * `doctor/preference-hygiene.ts`) so the contention warning's remedy - find
+ * the near-duplicate pair and give the key one owner - has a tool behind it.
  */
 export function topicKey(rawTopic: string): string {
-  return normalizeEntityName(rawTopic);
+  return foldQuoteVariantsByClass(normalizeEntityShape(rawTopic));
 }
 
 /**

@@ -12,11 +12,50 @@
 const WHITESPACE_RUN_RE = /\s+/g;
 
 /**
- * The one form every typographic quote variant folds to. U+0027 is the
- * ASCII apostrophe, so the fold never rewrites an ASCII byte: a label
- * that is already ASCII keys exactly as it did before the fold existed.
+ * The one form every typographic quote variant folds to in the IDENTITY
+ * kernel. U+0027 is the ASCII apostrophe, so the fold never rewrites an
+ * ASCII byte: a label that is already ASCII keys exactly as it did before
+ * the fold existed.
+ *
+ * The asymmetry that follows, stated because it is not obvious and because
+ * a consumer that cannot live with it needs to know to reach for
+ * {@link foldQuoteVariantsByClass}: EVERY quote class lands here, the
+ * double-width ones included. So `«war»` and `'war'` are one identity while
+ * `"war"` is another - the ASCII double quote is the one quote form this
+ * fold cannot reach, because reaching it would mean rewriting an ASCII byte.
+ * See {@link foldQuoteVariants} for why the kernel keeps it that way.
  */
 export const QUOTE_VARIANT_FOLD_TARGET = "'";
+
+/**
+ * The target the class-aware fold uses for double-width quote marks. Also
+ * ASCII, so that fold rewrites no ASCII byte either.
+ */
+export const QUOTE_VARIANT_FOLD_TARGET_DOUBLE = '"';
+
+/**
+ * The quote variants whose width is UNAMBIGUOUSLY double.
+ *
+ * Enumerated rather than derived because Unicode publishes no property for
+ * quote width - `\p{Pi}`/`\p{Pf}` say a mark opens or closes a quotation,
+ * never whether it stands for one quote or two. The list is therefore
+ * confined to the marks whose width no reading disputes; every other member
+ * of the class, including the editorial half-brackets U+2E02…U+2E21 whose
+ * width Unicode does not state, keeps {@link QUOTE_VARIANT_FOLD_TARGET}.
+ *
+ * That default is what makes the enumeration safe to age: a code point
+ * added to `\p{Pi}`/`\p{Pf}` in a future Unicode version behaves exactly as
+ * it does today rather than acquiring a new, wrong classification. The
+ * footprint is asserted over the whole code point space in
+ * `tests/core/brain/topic-key-quote-classes.test.ts`.
+ */
+const DOUBLE_WIDTH_QUOTE_VARIANTS: ReadonlySet<string> = new Set([
+  "«", // « LEFT-POINTING DOUBLE ANGLE QUOTATION MARK
+  "»", // » RIGHT-POINTING DOUBLE ANGLE QUOTATION MARK
+  "“", // “ LEFT DOUBLE QUOTATION MARK
+  "”", // ” RIGHT DOUBLE QUOTATION MARK
+  "‟", // ‟ DOUBLE HIGH-REVERSED-9 QUOTATION MARK
+]);
 
 /**
  * U+02BC MODIFIER LETTER APOSTROPHE. It is a LETTER by general category
@@ -48,18 +87,61 @@ const QUOTE_VARIANT_RE = new RegExp(`[\\p{Pi}\\p{Pf}${MODIFIER_LETTER_APOSTROPHE
  * editor happened to insert. Identity is the one place that distinction
  * carries no information, so this is where it is discarded - the same
  * kind of deliberate loss as lowercasing and whitespace collapse.
+ *
+ * ## Why the single target stays, asymmetry and all
+ *
+ * Sending double-width marks to `"` instead (what
+ * {@link foldQuoteVariantsByClass} does) would be the more faithful fold,
+ * and it is NOT applied here, because this function's output is persisted:
+ * `truth/store.ts` writes `normalizeEntityName(entity)` and `(aspect)` into
+ * an append-only claim log. Re-targeting would leave every claim already
+ * written under the old key and every new claim under the new one, splitting
+ * a history in a log that by construction cannot be rewritten. It would also
+ * mint NEW duplicate refusals in the registry between ASCII-double and
+ * typographic-double labels that coexist on disk today - the same upgrade
+ * pain the fold's own introduction caused, for a second time.
+ *
+ * A consumer whose keys are ephemeral pays none of that and can afford the
+ * faithful fold; `dream-plan.ts`'s `topicKey` is the one such consumer today.
+ * Both folds live here so quote knowledge keeps a single home.
  */
 export function foldQuoteVariants(raw: string): string {
   return raw.replace(QUOTE_VARIANT_RE, QUOTE_VARIANT_FOLD_TARGET);
 }
 
 /**
+ * Fold every typographic quote variant onto the ASCII mark of its own
+ * WIDTH: double-width marks to `"`, everything else in the class to `'`.
+ *
+ * The same population as {@link foldQuoteVariants} - this is a re-targeting,
+ * never a widening - and the same "rewrites no ASCII byte" guarantee, now
+ * held for both ASCII quote forms rather than one. What it buys: `“strict”`
+ * keys with `"strict"` rather than with `'strict'`, so two labels that use
+ * different quote MARKS stay two subjects while two spellings of the same
+ * mark become one.
+ *
+ * For a caller whose keys are computed per run and never written down. A
+ * caller whose keys are persisted must use {@link normalizeEntityName}; see
+ * its fold for what re-targeting a stored key would cost.
+ */
+export function foldQuoteVariantsByClass(raw: string): string {
+  return raw.replace(QUOTE_VARIANT_RE, (mark) =>
+    DOUBLE_WIDTH_QUOTE_VARIANTS.has(mark)
+      ? QUOTE_VARIANT_FOLD_TARGET_DOUBLE
+      : QUOTE_VARIANT_FOLD_TARGET,
+  );
+}
+
+/**
  * The kernel's shape pass, WITHOUT the quote fold: NFC, trim, collapse
  * whitespace runs, lowercase. Separated from {@link normalizeEntityName}
  * so {@link differsOnlyByQuoteVariant} can name the difference the fold
- * makes rather than re-deriving it from a second copy of these steps.
+ * makes rather than re-deriving it from a second copy of these steps -
+ * and exported so a caller that pairs it with
+ * {@link foldQuoteVariantsByClass} (`dream-plan.ts`'s `topicKey`) shares
+ * these steps rather than copying them.
  */
-function normalizeEntityShape(raw: string): string {
+export function normalizeEntityShape(raw: string): string {
   return raw.normalize("NFC").trim().replace(WHITESPACE_RUN_RE, " ").toLowerCase();
 }
 

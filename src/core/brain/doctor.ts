@@ -54,6 +54,7 @@ import { evidenceRangeCheck, logShardCheck, orphanEvidenceCheck } from "./doctor
 import {
   contentHashDriftCheck,
   duplicatePreferenceCheck,
+  topicKeyCollisionCheck,
   lowEvidenceConfirmedCheck,
   pinnedWithoutRecentEvidenceCheck,
 } from "./doctor/preference-hygiene.ts";
@@ -145,6 +146,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   makeStaleDependencyCheck(auditStaleDependencies),
   removedToolReferenceCheck,
   duplicatePreferenceCheck,
+  topicKeyCollisionCheck,
   lowEvidenceConfirmedCheck,
   pinnedWithoutRecentEvidenceCheck,
   contentHashDriftCheck,

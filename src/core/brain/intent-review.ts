@@ -53,6 +53,15 @@ export function buildIntentReview(
   const records = collectActiveSignals(vault).filter((record) =>
     isWithinWindow(record.signal.created_at, config.dream.contradiction_window_days, now),
   );
+  // Clustered by RAW topic, deliberately and not yet reconciled: the dream
+  // pass that acts on these same signals indexes them by folded `topicKey`,
+  // so two spellings of one topic are two entries here and one cluster
+  // there, and this review can disagree with the plan it precedes. Folding
+  // here changes the shape of a report an operator reads and the grouping
+  // the candidate threshold is applied to, which is a unit of its own. Until
+  // it is done, the collision is at least FINDABLE: `o2b brain doctor`
+  // reports `topic-key-collision` for preferences whose topics fold
+  // together (`doctor/preference-hygiene.ts`).
   const byTopic = new Map<string, SignalRecord[]>();
   for (const record of records) {
     const topicRecords = byTopic.get(record.signal.topic);

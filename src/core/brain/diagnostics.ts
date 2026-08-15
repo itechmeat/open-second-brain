@@ -189,6 +189,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // Two topic spellings that fold onto one dream-pass key. The exit
+        // is the same as the duplicate above because the required end
+        // state is the same - one owner for the key - and it is the only
+        // structural command that reaches it; renaming a topic is a hand
+        // edit, which a next-step hint cannot spell.
+        code: "topic-key-collision",
+        issueClass: "topic key claimed by two spellings",
+        nextCommand: "o2b brain merge <keep> <drop>",
+        autoRepairable: false,
+      },
+      {
         code: "orphan-evidence",
         issueClass: "orphaned apply-evidence artifact",
         nextCommand: "o2b brain audit",

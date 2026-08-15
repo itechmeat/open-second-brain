@@ -342,6 +342,16 @@ function collectSignals(dir: string, topic: string, out: BrainSignal[]): void {
   }
 }
 
+/**
+ * Matches on RAW topic bytes, deliberately and not yet reconciled with the
+ * consolidation path: the dream pass resolves a topic through the folded
+ * `topicKey`, so a caller asking for `Api-Key` finds nothing here while the
+ * pass would treat it as the rule on `api-key`. Folding this lookup changes
+ * which record a read returns - a recall-path behaviour change with its own
+ * blast radius - so it is named rather than smuggled into a fix. The
+ * condition is findable meanwhile: `o2b brain doctor` reports
+ * `topic-key-collision` for preferences whose topics fold together.
+ */
 function findPreferenceForTopic(
   dir: string,
   topic: string,

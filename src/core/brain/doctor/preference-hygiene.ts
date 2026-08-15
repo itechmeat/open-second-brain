@@ -8,6 +8,7 @@
  */
 
 import { verifyContentHash } from "../content-hash.ts";
+import { topicKey } from "../dream-plan.ts";
 import { findSimilarPairs, tokenise } from "../similarity.ts";
 import { BRAIN_PREFERENCE_STATUS } from "../types.ts";
 import type { DoctorCheck } from "./check.ts";
@@ -56,6 +57,68 @@ export const duplicatePreferenceCheck: DoctorCheck = {
           `${a.scope ? ` (scope: ${a.scope})` : ""}` +
           ` look like duplicates (jaccard ${pair.jaccard.toFixed(2)} of principle tokens).` +
           " Consider merging.",
+      });
+    }
+  },
+};
+
+/** Issue code for two topic spellings that resolve to one dream-pass key. */
+const TOPIC_KEY_COLLISION_CODE = "topic-key-collision";
+
+/**
+ * `topic-key-collision`: two or more preferences whose topics differ as
+ * bytes but fold onto one `topicKey`.
+ *
+ * The dream pass already detects this and warns - and then plans NOTHING
+ * for the key, because "one preference per topic" can no longer decide
+ * which rule a signal on it bears on. Its warning tells the operator to give
+ * the key one owner by renaming a topic or retiring a rule, and until this
+ * check existed there was no way to go and find the pair: every doctor
+ * surface compared raw topic bytes, so the one condition the warning is
+ * about was the one condition the doctor could not see. A warning whose
+ * remedy has no tool behind it is a dead end.
+ *
+ * The check uses `topicKey` itself rather than a second copy of the rule, so
+ * the doctor and the pass cannot disagree about which pairs collide.
+ *
+ * Byte-identical topics are NOT reported here: that is the ordinary
+ * "one topic, two rules" duplicate, which `duplicate-preferences` already
+ * covers on principle similarity. The line is the same one
+ * `TopicKeyContention` draws.
+ *
+ * Deliberately not covered: `query.ts`'s preference lookup and
+ * `intent-review.ts`'s pre-dream clustering still compare raw topic bytes,
+ * so the review can cluster signals differently from the plan that acts on
+ * them in the same run. Folding those changes a read path and a report
+ * shape, which is a unit of its own; this check makes the condition
+ * FINDABLE, which is what the warning's remedy needed.
+ */
+export const topicKeyCollisionCheck: DoctorCheck = {
+  failSoft: true,
+  run({ preferences }, { issues }) {
+    const claimants = new Map<string, Map<string, string[]>>();
+    for (const { pref } of preferences) {
+      const key = topicKey(pref.topic);
+      if (key === "") continue;
+      const byTopic = claimants.get(key) ?? new Map<string, string[]>();
+      byTopic.set(pref.topic, [...(byTopic.get(pref.topic) ?? []), pref.id]);
+      claimants.set(key, byTopic);
+    }
+    for (const [key, byTopic] of [...claimants.entries()].toSorted(([a], [b]) =>
+      a.localeCompare(b),
+    )) {
+      if (byTopic.size < 2) continue;
+      const topics = [...byTopic.keys()].toSorted();
+      const ids = [...byTopic.values()].flat().toSorted();
+      issues.push({
+        severity: "warning",
+        code: TOPIC_KEY_COLLISION_CODE,
+        message:
+          `${ids.map((id) => `[[${id}]]`).join(" and ")} claim one topic key ` +
+          `${JSON.stringify(key)} with different spellings ` +
+          `(${topics.map((t) => JSON.stringify(t)).join(", ")}). ` +
+          "The dream pass plans nothing for a contended key: give it one owner " +
+          "by renaming a topic or retiring one of the rules.",
       });
     }
   },
