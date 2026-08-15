@@ -73,7 +73,13 @@ describe("openclaw bundle", () => {
     expect(bundleText).toContain("evaluateProjectStatus");
     expect(bundleText).toContain("defaultDetectProjectPathSupport");
     expect(bundleText).toContain("code projects:");
-    expect(bundleText).toContain("no per-query project_path support");
+    // "did not report", not "has no": the probe reads the partner's own
+    // usage text, so a probe that failed or ran out of time reads exactly
+    // like a partner without the feature, and the stronger wording was
+    // claiming something the check had not established. The phrase is
+    // asserted here because it is the distinctive string that proves the
+    // degrade path reached the bundle at all.
+    expect(bundleText).toContain("did not report per-query project_path support");
   });
 
   test("bundles before_prompt_build hook (per-turn identity reminder)", () => {
