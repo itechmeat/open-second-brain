@@ -20,6 +20,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { MAX_BATCH_OPERATIONS } from "../../src/core/brain/write-batch.ts";
+import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -74,6 +75,13 @@ type BatchResponse = {
   readonly applied: number;
   readonly results: ReadonlyArray<Record<string, unknown>>;
   readonly done: true;
+  readonly [PAGE_LINT_KEY]?: {
+    readonly findings: ReadonlyArray<Record<string, unknown>>;
+    readonly total: number;
+    readonly returned: number;
+    readonly truncated: boolean;
+    readonly skipped: ReadonlyArray<Record<string, unknown>>;
+  };
 };
 
 async function runBatch(operations: unknown[]): Promise<BatchResponse> {
@@ -210,5 +218,64 @@ describe("brain_write_batch", () => {
     await expect(
       tool.handler(ctx, { operations: [{ op: "create_note", path: "Brain/x.md", content: "y" }] }),
     ).rejects.toThrow(MCPError);
+  });
+});
+
+/**
+ * Write-time page lint (evidence-at-the-boundary, task A4). The batch ran
+ * no document validation at all; the lint runs once over every page the
+ * batch committed, with the basename index and schema pack computed ONCE
+ * per call rather than once per operation.
+ */
+describe("brain_write_batch - the lint attached to the receipt", () => {
+  test("a clean batch is byte-identical to the receipt that shipped before", async () => {
+    const res = await runBatch([
+      {
+        op: "create_note",
+        path: "Notes/CleanBatch.md",
+        frontmatter: { title: "Clean" },
+        content: "prose",
+      },
+    ]);
+    expect(JSON.stringify(res)).toBe(
+      JSON.stringify({
+        applied: 1,
+        results: [{ kind: "create_note", path: "Notes/CleanBatch.md", created: true }],
+        done: true,
+      }),
+    );
+    expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+
+  test("one report spans every page the batch wrote, each finding naming its page", async () => {
+    const res = await runBatch([
+      {
+        op: "create_note",
+        path: "Notes/One.md",
+        frontmatter: { title: "One" },
+        content: "see [[pref-ghost]]",
+      },
+      {
+        op: "create_note",
+        path: "Notes/Two.md",
+        frontmatter: { title: "Two" },
+        content: "see [[pref-other-ghost]]",
+      },
+      { op: "append_log_line", text: "batch landed" },
+    ]);
+    const lint = res[PAGE_LINT_KEY]!;
+    expect(lint.total).toBe(2);
+    expect(lint.returned).toBe(2);
+    expect(lint.truncated).toBe(false);
+    expect(lint.findings.map((f) => f["page"]).toSorted()).toEqual([
+      "Notes/One.md",
+      "Notes/Two.md",
+    ]);
+  });
+
+  test("a log-only batch writes no page and lints nothing", async () => {
+    const res = await runBatch([{ op: "append_log_line", text: "just a line" }]);
+    expect(res.applied).toBe(1);
+    expect(PAGE_LINT_KEY in res).toBe(false);
   });
 });

@@ -59,6 +59,7 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
+import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
 import { appendLogEvent } from "./log.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
@@ -671,6 +672,29 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
       // the routing signal it lacked, which is why the command carries
       // `--scope`: without it this entry would be indistinguishable
       // from `brain-empty`'s.
+      // --- Self-healing lint classes (evidence-at-the-boundary, task A4) ---
+      // Both were registered in `applier-capability.ts` as mechanically
+      // repairable and NOWHERE here, so `nextCommandField("fix-merged-link")`
+      // resolved to nothing: the table published that a fixer exists while
+      // no surface could say what to run to reach it. The write-time page
+      // lint carries the first of the two on a finding, which is what made
+      // the omission observable.
+      //
+      // Both resolve to the same command because one pass performs both
+      // repairs; `--yes` rides along because `--apply` refuses without it
+      // on any non-interactive stream, which is every stream an agent has.
+      {
+        code: LINT_CONSOLIDATE_KIND.mergedLink,
+        issueClass: "wikilink pointing at a page merged away",
+        nextCommand: "o2b brain lint --consolidate --apply --yes",
+        autoRepairable: true,
+      },
+      {
+        code: LINT_CONSOLIDATE_KIND.staleStableDemotion,
+        issueClass: "stable preference aged out with no verification",
+        nextCommand: "o2b brain lint --consolidate --apply --yes",
+        autoRepairable: true,
+      },
       {
         code: "capture-scope-absent",
         issueClass: "capture recorded with no routing scope",

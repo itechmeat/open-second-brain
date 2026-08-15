@@ -84,11 +84,20 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
   brain_apply_evidence: "write; returns a small fixed-shape ack",
   brain_note: "write; returns a small fixed-shape ack",
   brain_observed_use: "write; returns a small fixed-shape ack (records/aggregates count)",
+  // The four note writers. Their receipts are no longer fixed-shape:
+  // each carries an additive `lint` key over the pages it committed
+  // (evidence-at-the-boundary, task A4). That key is what bounds them
+  // now, and it bounds itself - the finding list is capped and reports
+  // `total`, `returned` and `truncated`, so a preview envelope would
+  // truncate a list that already declares its own truncation.
   brain_create_note:
-    "write; returns the created note path, a created flag, and the outcome discriminant",
-  brain_update_note: "write; returns the updated note path and an updated flag",
-  brain_append_note: "write; returns the appended note path and an appended flag",
-  brain_write_batch: "write; returns a bounded per-operation result list and an applied count",
+    "write; returns the created note path, a created flag, the outcome discriminant, and a page-lint finding list capped and self-declaring its truncation",
+  brain_update_note:
+    "write; returns the updated note path, the kernel's updated flag, and a page-lint finding list capped and self-declaring its truncation",
+  brain_append_note:
+    "write; returns the appended note path, the kernel's appended flag, and a page-lint finding list capped and self-declaring its truncation",
+  brain_write_batch:
+    "write; returns a bounded per-operation result list, an applied count, and one page-lint finding list capped and self-declaring its truncation",
   brain_pinned_context: "pinned.md is operator-curated and small by practice",
   brain_recall_feedback: "write; returns one event receipt plus bounded weights",
   brain_switch_vault: "write; returns a small profile ack",

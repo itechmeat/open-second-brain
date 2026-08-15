@@ -27,7 +27,7 @@ import {
 } from "../../core/brain/write-batch.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
+import { noteWriteResult, parseFrontmatterArg, writeBatchErrorToMcp } from "./notes-tools.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
 /** Recognised batch operation discriminators. */
@@ -173,11 +173,16 @@ async function toolBrainWriteBatch(
   } catch (err) {
     throw writeBatchErrorToMcp(err, "brain_write_batch");
   }
-  return {
+  // The pages this batch authored, in commit order. Log-writing ops name
+  // no note path: their line is machine-composed, not authored, so there
+  // is nothing for the page lint to judge. One report covers the whole
+  // batch, with the basename index and schema pack built ONCE.
+  const writtenPages = batch.results.filter((r) => "path" in r).map((r) => r.path);
+  return noteWriteResult(ctx, writtenPages, {
     applied: batch.applied,
     results: batch.results.map((r) => serializeResult(ctx, r)),
     done: true,
-  };
+  });
 }
 
 export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

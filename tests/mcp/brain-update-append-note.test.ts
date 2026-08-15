@@ -16,6 +16,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS, writeBatchErrorToMcp } from "../../src/mcp/brain/notes-tools.ts";
 import { WriteBatchError } from "../../src/core/brain/write-batch.ts";
+import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
@@ -155,5 +156,60 @@ describe("writeBatchErrorToMcp", () => {
     expect(mapped).toBeInstanceOf(MCPError);
     expect(mapped.code).toBe(INVALID_PARAMS);
     expect(mapped.data).toMatchObject({ code: "target_missing", index: 2, path: "Notes/x.md" });
+  });
+});
+
+/**
+ * Write-time page lint (evidence-at-the-boundary, task A4). Update and
+ * append ran NO document validation at all before this: they returned a
+ * hardcoded `{updated: true}` over a document that could have no
+ * frontmatter, a bogus type, or malformed tags. The lint runs after the
+ * commit, reports what a strict create would have refused, and never
+ * gates the write.
+ */
+describe("the lint attached to the update / append receipts", () => {
+  /** The handler's declared return is `unknown`; every case here reads keys. */
+  const call = async (
+    tool: typeof updateTool,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> => (await tool.handler(ctx, args)) as Record<string, unknown>;
+
+  test("a clean update is byte-identical to the receipt that shipped before", async () => {
+    seedNote("Notes/Clean.md", "old body", "title: Clean");
+    const res = await call(updateTool, { path: "Notes/Clean.md", content: "new body" });
+    expect(JSON.stringify(res)).toBe(JSON.stringify({ updated: true, path: "Notes/Clean.md" }));
+    expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+
+  test("a clean append is byte-identical to the receipt that shipped before", async () => {
+    seedNote("Notes/CleanA.md", "first", "title: CleanA");
+    const res = await call(appendTool, { path: "Notes/CleanA.md", content: "second" });
+    expect(JSON.stringify(res)).toBe(JSON.stringify({ appended: true, path: "Notes/CleanA.md" }));
+    expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+
+  test("an update that breaks the document reports error findings first", async () => {
+    seedNote("Notes/Doc.md", "body", "title: Doc");
+    const res = await call(updateTool, {
+      path: "Notes/Doc.md",
+      frontmatter: { type: "not-a-declared-type" },
+      content: "see [[pref-ghost]]",
+    });
+    expect(res).toMatchObject({ updated: true, path: "Notes/Doc.md" });
+    const lint = res[PAGE_LINT_KEY] as { findings: ReadonlyArray<Record<string, unknown>> };
+    expect(lint.findings[0]).toMatchObject({ severity: "error", code: "schema-type-unknown" });
+    expect(lint.findings.map((f) => f["code"])).toContain("broken-wikilink");
+  });
+
+  test("an append that introduces a broken link says so without refusing", async () => {
+    seedNote("Notes/App.md", "first", "title: App");
+    const res = await call(appendTool, {
+      path: "Notes/App.md",
+      content: "see [[pref-ghost]]",
+    });
+    expect(res).toMatchObject({ appended: true });
+    const lint = res[PAGE_LINT_KEY] as Record<string, unknown>;
+    expect(lint).toMatchObject({ total: 1, returned: 1, truncated: false, skipped: [] });
+    expect(readFileSync(join(vault, "Notes/App.md"), "utf8")).toContain("[[pref-ghost]]");
   });
 });

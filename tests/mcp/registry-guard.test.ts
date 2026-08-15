@@ -58,3 +58,34 @@ describe("preview-budget default", () => {
     expect(audit.unbudgetedAndUnexempted).toContain("toString");
   });
 });
+
+/**
+ * evidence-at-the-boundary, task A4. The four note-write tools were
+ * exempted with reasons reading "small fixed-shape receipt". They now
+ * carry an additive `lint` key whose finding list is bounded and declares
+ * its own truncation, so the reason has to state THAT rather than a
+ * fixed shape it no longer has.
+ */
+describe("the write-tool exemptions state what actually bounds them", () => {
+  const LINTED_WRITE_TOOLS = [
+    "brain_create_note",
+    "brain_update_note",
+    "brain_append_note",
+    "brain_write_batch",
+  ];
+
+  test("each names the bounded, truncation-declaring finding list", () => {
+    for (const name of LINTED_WRITE_TOOLS) {
+      const reason = PREVIEW_BUDGET_EXEMPT[name];
+      expect(reason, name).toBeDefined();
+      expect(reason!.toLowerCase(), name).toContain("truncat");
+      expect(reason!.toLowerCase(), name).toContain("lint");
+    }
+  });
+
+  test("none still claims a fixed-shape receipt", () => {
+    for (const name of LINTED_WRITE_TOOLS) {
+      expect(PREVIEW_BUDGET_EXEMPT[name]!.toLowerCase(), name).not.toContain("fixed-shape");
+    }
+  });
+});

@@ -61,6 +61,41 @@ describe("lintConsolidate — fix-merged-link", () => {
     expect(content).toContain("[[pref-canon#section]]");
   });
 
+  test("a two-step merge converges in ONE pass", () => {
+    // A -> B -> C. The single-hop merge map rewrote [[pref-a]] to
+    // [[pref-b]], reported a `to` that was itself merged away, and needed
+    // a second run to converge; the canonical-id resolver walks the chain.
+    writePref("c", { topic: "x", principle: "y" });
+    writePref("b", { topic: "x", principle: "y", merged_into: "pref-c" });
+    writePref("a", { topic: "x", principle: "y", merged_into: "pref-b" });
+    writeFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "saw [[pref-a]] today\n");
+
+    const report = lintConsolidate(vault, { apply: true });
+    expect(report.fixes.map((f) => [f.from, f.to])).toEqual([["pref-a", "pref-c"]]);
+    const content = readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8");
+    expect(content).toContain("[[pref-c]]");
+
+    // Idempotent: a second pass finds nothing left to converge.
+    const second = lintConsolidate(vault, { apply: true });
+    expect(second.fixes.length).toBe(0);
+    expect(second.filesWritten).toBe(0);
+  });
+
+  test("a merge cycle is declared as unresolved rather than silently skipped", () => {
+    writePref("loop-a", { topic: "x", principle: "y", merged_into: "pref-loop-b" });
+    writePref("loop-b", { topic: "x", principle: "y", merged_into: "pref-loop-a" });
+    writeFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "saw [[pref-loop-a]]\n");
+
+    const report = lintConsolidate(vault, { apply: true });
+    expect(report.fixes.length).toBe(0);
+    expect(report.unresolved.map((u) => u.target)).toEqual(["pref-loop-a"]);
+    expect(report.unresolved[0]!.reason).toContain("cycle");
+    // The link is left exactly where it is.
+    expect(readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8")).toContain(
+      "[[pref-loop-a]]",
+    );
+  });
+
   test("does not rewrite wikilinks that merely share a prefix", () => {
     writePref("canon", { topic: "x", principle: "y" });
     writePref("dup", { topic: "x", principle: "y", merged_into: "pref-canon" });
@@ -171,6 +206,7 @@ describe("lintConsolidate — empty vault", () => {
     const r = lintConsolidate(vault, { apply: false });
     expect(r.fixes.length).toBe(0);
     expect(r.demotions.length).toBe(0);
+    expect(r.unresolved.length).toBe(0);
     expect(r.filesWritten).toBe(0);
   });
 });

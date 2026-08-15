@@ -16,6 +16,33 @@
  * The function never mutates without `apply: true`. The diff shape
  * is identical between dry-run and apply runs so a CI step can
  * snapshot-test the report independently of writes.
+ *
+ * ## Merged links resolve through the canonical-id resolver
+ *
+ * evidence-at-the-boundary, task A4. This pass used to build its own
+ * merge map: one readdir over `preferences/` and `retired/`, parsing
+ * every file to read `merged_into:` ONE LEVEL DEEP. That map was 25 ms of
+ * the 359 ms pass (and `retired/` grows monotonically), and it was wrong:
+ * after a two-step merge A -> B -> C it rewrote `[[A]]` to `[[B]]`,
+ * reported a `to` that was itself merged away, and needed a second run to
+ * converge. `resolveCanonicalId` already walks the chain with cycle and
+ * depth guards, so the map is gone and the walk exists once.
+ *
+ * Two consequences worth naming rather than leaving to be discovered:
+ *
+ *   - The merged-page universe is the `pref-` / `ret-` id space the
+ *     resolver's strict grammar defines, while the REWRITE covers every
+ *     `.md` under `Brain/`. A page elsewhere in the tree carrying
+ *     `merged_into:` is therefore invisible to this pass. That is
+ *     unchanged from the merge map, which scanned the same two
+ *     directories, and it is left that way deliberately: the strict page
+ *     id grammar is what stops a crafted `merged_into:` value from
+ *     naming a rewrite target outside `Brain/`, and widening the source
+ *     set would mean admitting arbitrary basenames into that position
+ *     plus a full parse of every page in the vault.
+ *   - Identity now comes from the page's FILENAME rather than its `id:`
+ *     frontmatter field, because that is what a wikilink resolves by.
+ *     The two agree for every page this project writes.
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
@@ -23,7 +50,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
-import { WIKILINK_TARGET_RE } from "./wikilink.ts";
+import { WIKILINK_TARGET_RE, isBrainArtifactId } from "./wikilink.ts";
 import { BRAIN_ROOT_REL, brainDirs } from "./paths.ts";
 import {
   PAGE_LIFECYCLE,
@@ -31,7 +58,7 @@ import {
   ageDaysFromIso,
   readLifecycle,
 } from "./page-meta/lifecycle.ts";
-import { readMergedInto } from "./page-meta/page-id.ts";
+import { MergeChainError, resolveCanonicalId } from "./page-meta/page-id.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /**
@@ -58,10 +85,27 @@ export interface LintDemotion {
   readonly ageDays: number;
 }
 
+/**
+ * A wikilink whose merge chain could not be walked to a canonical target
+ * - a cycle, or a chain past the depth cap. The link is left exactly
+ * where it is, because rewriting into a chain that does not terminate
+ * would be a guess. It is REPORTED rather than skipped in silence: a
+ * merged-link pass that quietly drops the links it could not resolve
+ * looks like a pass that found nothing wrong.
+ */
+export interface LintUnresolvedLink {
+  readonly kind: typeof LINT_CONSOLIDATE_KIND.mergedLink;
+  readonly path: string;
+  readonly target: string;
+  readonly reason: string;
+}
+
 export interface LintReport {
   readonly scanned: number;
   readonly fixes: ReadonlyArray<LintFix>;
   readonly demotions: ReadonlyArray<LintDemotion>;
+  /** Merge chains that terminate in nothing; never rewritten, always named. */
+  readonly unresolved: ReadonlyArray<LintUnresolvedLink>;
   readonly applied: boolean;
   readonly filesWritten: number;
 }
@@ -72,52 +116,97 @@ export interface LintOptions {
   readonly staleDays?: number;
 }
 
-interface MergeMap {
-  /** secondary id → canonical id */
-  readonly forward: ReadonlyMap<string, string>;
+/**
+ * What one wikilink target is, as far as the merge chain is concerned.
+ * Both fields absent (`null`) is the overwhelmingly common answer: the
+ * target names a page that was never merged, so there is nothing to do.
+ */
+export interface MergedLinkResolution {
+  /** The canonical id when `target` names a merged-away page, else null. */
+  readonly canonical: string | null;
+  /** Why the chain could not be walked to a canonical id, else null. */
+  readonly unresolvable: string | null;
 }
 
-function buildMergeMap(vault: string): MergeMap {
-  const forward = new Map<string, string>();
-  const dirs = brainDirs(vault);
-  for (const dir of [dirs.preferences, dirs.retired]) {
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      if (!name.endsWith(".md")) continue;
-      const full = join(dir, name);
-      try {
-        const [meta] = parseFrontmatter(full);
-        const target = readMergedInto(meta);
-        if (target !== null) {
-          const id = typeof meta["id"] === "string" ? meta["id"] : name.replace(/\.md$/, "");
-          forward.set(id, target);
-        }
-      } catch {
-        // ignore
-      }
+const NOT_MERGED: MergedLinkResolution = Object.freeze({ canonical: null, unresolvable: null });
+
+/**
+ * Answers "has this wikilink target been merged away, and into what" for
+ * one pass over one vault, memoised.
+ *
+ * The single owner of that question, shared by this vault-wide pass and
+ * the per-page write-time lint (`page-lint.ts`) so the two cannot drift
+ * into two definitions of a merged link. The memo is per resolver
+ * instance and therefore per pass: a link repeated across a thousand log
+ * days costs one chain walk.
+ */
+export interface MergedLinkResolver {
+  resolve(target: string): MergedLinkResolution;
+}
+
+export function createMergedLinkResolver(vault: string): MergedLinkResolver {
+  const memo = new Map<string, MergedLinkResolution>();
+  return {
+    resolve(target: string): MergedLinkResolution {
+      const cached = memo.get(target);
+      if (cached !== undefined) return cached;
+      const resolved = resolveOnce(vault, target);
+      memo.set(target, resolved);
+      return resolved;
+    },
+  };
+}
+
+function resolveOnce(vault: string, target: string): MergedLinkResolution {
+  // Cheap prefix gate before the resolver, which answers MALFORMED for
+  // every ordinary note link by throwing. `isBrainArtifactId` asks the
+  // wider "is this a Brain artifact at all" question; the strict page-id
+  // grammar stays where it belongs, inside the resolver.
+  if (!isBrainArtifactId(target)) return NOT_MERGED;
+  try {
+    const canonical = resolveCanonicalId(vault, target);
+    return canonical === target ? NOT_MERGED : Object.freeze({ canonical, unresolvable: null });
+  } catch (err) {
+    if (err instanceof MergeChainError) {
+      // MALFORMED means the id is outside the merge namespace (a `sig-`
+      // artifact, say), which is not a defect - it is the resolver saying
+      // this link is not its business. A cycle or an over-deep chain is a
+      // defect, and is named.
+      if (err.code === "MALFORMED") return NOT_MERGED;
+      return Object.freeze({ canonical: null, unresolvable: err.message });
     }
+    throw err;
   }
-  return Object.freeze({ forward });
 }
 
 function scanFileForMergedLinks(
   path: string,
   raw: string,
-  merge: MergeMap,
-): { fixes: LintFix[]; rewritten: string } {
+  merge: MergedLinkResolver,
+): { fixes: LintFix[]; unresolved: LintUnresolvedLink[]; rewritten: string } {
   const fixes: LintFix[] = [];
-  const rewritten = raw.replace(WIKILINK_TARGET_RE, (match, target, suffix) => {
-    const canonical = merge.forward.get(target);
-    if (!canonical) return match;
+  const unresolved: LintUnresolvedLink[] = [];
+  const rewritten = raw.replace(WIKILINK_TARGET_RE, (match, target: string, suffix?: string) => {
+    const resolved = merge.resolve(target);
+    if (resolved.unresolvable !== null) {
+      unresolved.push({
+        kind: LINT_CONSOLIDATE_KIND.mergedLink,
+        path,
+        target,
+        reason: resolved.unresolvable,
+      });
+      return match;
+    }
+    if (resolved.canonical === null) return match;
     fixes.push({
       kind: LINT_CONSOLIDATE_KIND.mergedLink,
       path,
       from: target,
-      to: canonical,
+      to: resolved.canonical,
     });
-    return `[[${canonical}${suffix ?? ""}]]`;
+    return `[[${resolved.canonical}${suffix ?? ""}]]`;
   });
-  return { fixes, rewritten };
+  return { fixes, unresolved, rewritten };
 }
 
 function detectStaleStable(vault: string, now: Date, staleDays: number): LintDemotion[] {
@@ -195,10 +284,11 @@ export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
   if (opts.apply) assertVaultIdentityForWrite(vault);
   const now = opts.now ?? new Date();
   const staleDays = opts.staleDays ?? PAGE_STALE_DAYS_DEFAULT;
-  const merge = buildMergeMap(vault);
+  const merge = createMergedLinkResolver(vault);
 
   // Phase 1: scan + collect fix candidates.
   const fixes: LintFix[] = [];
+  const unresolved: LintUnresolvedLink[] = [];
   let scanned = 0;
   let filesWritten = 0;
   const brainRoot = join(vault, BRAIN_ROOT_REL);
@@ -232,7 +322,12 @@ export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
         } catch {
           continue;
         }
-        const { fixes: fileFixes, rewritten } = scanFileForMergedLinks(full, raw, merge);
+        const {
+          fixes: fileFixes,
+          unresolved: fileUnresolved,
+          rewritten,
+        } = scanFileForMergedLinks(full, raw, merge);
+        unresolved.push(...fileUnresolved);
         if (fileFixes.length === 0) continue;
         fixes.push(...fileFixes);
         if (opts.apply && rewritten !== raw) {
@@ -255,6 +350,7 @@ export function lintConsolidate(vault: string, opts: LintOptions): LintReport {
     scanned,
     fixes: Object.freeze(fixes),
     demotions: Object.freeze(demotions),
+    unresolved: Object.freeze(unresolved),
     applied: opts.apply,
     filesWritten,
   });

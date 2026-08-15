@@ -359,12 +359,21 @@ async function cmdDoctor(argv: string[]): Promise<number> {
         (readiness.unknown > 0 ? `, ${readiness.unknown} unknown\n` : `\n`),
     );
     for (const p of readiness.probes) {
-      // The tag is the status, not a three-way approximation of it. Rendering
-      // `unknown` as SKIP would say "not configured" about a probe that found
-      // something it could not read, which is the conflation this release is
-      // about: the vocabulary grew a fourth member precisely because three
-      // could not carry "could not measure" without lying in one direction.
-      const tag = p.status === "pass" ? "PASS" : p.status === "fail" ? "FAIL" : p.status.toUpperCase();
+      // Rendering `unknown` as SKIP would say "not configured" about a probe
+      // that found something it could not read, which is the conflation this
+      // release is about: the vocabulary grew a fourth member precisely
+      // because three could not carry "could not measure" without lying in
+      // one direction. Only the new member gets a new tag - the three that
+      // already existed keep their exact spelling, so a reader sees a
+      // byte-identical line for every outcome it already knew.
+      const tag =
+        p.status === "pass"
+          ? "PASS"
+          : p.status === "fail"
+            ? "FAIL"
+            : p.status === "skipped"
+              ? "SKIP"
+              : "UNKNOWN";
       process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
     }
   }

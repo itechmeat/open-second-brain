@@ -35,6 +35,7 @@ export async function cmdBrainLint(argv: string[]): Promise<number> {
       files_written: report.filesWritten,
       fixes: report.fixes,
       demotions: report.demotions,
+      unresolved: report.unresolved,
     });
     return 0;
   }
@@ -49,6 +50,14 @@ export async function cmdBrainLint(argv: string[]): Promise<number> {
   process.stdout.write(`demotions: ${report.demotions.length}\n`);
   for (const d of report.demotions) {
     process.stdout.write(`  ${d.id} (age=${d.ageDays}d) -> draft\n`);
+  }
+  // A merge chain that terminates in nothing is the one finding this pass can
+  // produce and never repair. Printing only the repairs would make a report
+  // whose totals said the vault was clean while a link pointed at a page that
+  // does not exist, so the unresolved list is rendered even when it is empty.
+  process.stdout.write(`unresolved: ${report.unresolved.length}\n`);
+  for (const u of report.unresolved) {
+    process.stdout.write(`  ${u.path}: [[${u.target}]] (${u.reason})\n`);
   }
   if (report.applied) {
     process.stdout.write(`files written: ${report.filesWritten}\n`);

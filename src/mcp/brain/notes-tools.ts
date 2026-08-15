@@ -15,6 +15,13 @@
  * the typed `code`, and both carry the advisory registry spelling of that
  * code plus its next command when one is registered - see
  * {@link advisoryFields}.
+ *
+ * This module also hosts {@link noteWriteResult}, the ONE write-result
+ * envelope all four note-write tools return through - the three here plus
+ * `brain_write_batch`, which already imports this module's argument
+ * parser and error mapper. It attaches the write-time page lint
+ * (`core/brain/page-lint.ts`) as an additive key that is absent entirely
+ * when the pages the call committed are clean.
  */
 
 import type { FrontmatterMap, FrontmatterValue } from "../../core/types.ts";
@@ -28,9 +35,12 @@ import {
 import {
   applyWriteBatch,
   WriteBatchError,
-  type WriteOperation,
+  type AppendNoteOperation,
+  type UpdateNoteOperation,
+  type WriteBatchOpResult,
 } from "../../core/brain/write-batch.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
+import { lintWrittenPages, pageLintField, type PageLintField } from "../../core/brain/page-lint.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../core/write-binding/index.ts";
 import { isFrontmatterKey } from "../../core/vault.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -240,8 +250,13 @@ async function toolBrainCreateNote(
     });
     // `outcome` is the discriminant; `created` is the boolean this tool
     // has always returned and stays in lockstep with it, so a skip can
-    // never be read as a create by either field.
-    return { created: res.created, outcome: res.outcome, path: res.path };
+    // never be read as a create by either field. A skip authored no
+    // bytes, so it names no page for the lint.
+    return noteWriteResult(ctx, res.created ? [res.path] : [], {
+      created: res.created,
+      outcome: res.outcome,
+      path: res.path,
+    });
   } catch (err) {
     // Almost every CreateNoteError is a client-input fault (bad path,
     // excluded location, an existing target, an invalid document, a
@@ -281,14 +296,16 @@ async function toolBrainUpdateNote(
       "brain_update_note: provide 'frontmatter', 'content', or both",
     );
   }
-  const op: WriteOperation = {
+  const op: UpdateNoteOperation = {
     kind: "update_note",
     path,
     ...(frontmatter !== undefined ? { frontmatter } : {}),
     ...(content !== null ? { body: content } : {}),
   };
   const result = runSingleWrite(ctx, op, "brain_update_note");
-  return { updated: true, path: result.path };
+  // The flag comes off the kernel result rather than being restated here:
+  // one fact, one source.
+  return noteWriteResult(ctx, [result.path], { updated: result.updated, path: result.path });
 }
 
 /**
@@ -301,20 +318,34 @@ async function toolBrainAppendNote(
 ): Promise<Record<string, unknown>> {
   const path = coerceStr(args, "path", true)!;
   const content = coerceStr(args, "content", true)!;
-  const op: WriteOperation = { kind: "append_note", path, content };
+  const op: AppendNoteOperation = { kind: "append_note", path, content };
   const result = runSingleWrite(ctx, op, "brain_append_note");
-  return { appended: true, path: result.path };
+  return noteWriteResult(ctx, [result.path], { appended: result.appended, path: result.path });
 }
+
+/** The kernel results that name a note file: exactly the three note ops. */
+type NoteOpResult = Extract<WriteBatchOpResult, { readonly path: string }>;
+
+/** The single-note operations these two handlers submit. */
+type SingleNoteOperation = UpdateNoteOperation | AppendNoteOperation;
 
 /**
  * Run a single-operation write batch and unwrap its one result, mapping
  * a typed {@link WriteBatchError} to a structured INVALID_PARAMS.
+ *
+ * The result kind is tied to the operation kind, so the caller reads the
+ * kernel's own success flag back without restating it. This used to
+ * return `path: "path" in only ? only.path : ""` - an unreachable arm
+ * that, had it ever been reached, would have reported a successful write
+ * at no path at all. A result whose kind does not match the operation is
+ * a broken contract between this layer and the kernel, so it is raised as
+ * one rather than papered over with an empty string.
  */
-function runSingleWrite(
+function runSingleWrite<K extends SingleNoteOperation["kind"]>(
   ctx: ServerContext,
-  op: WriteOperation,
+  op: Extract<SingleNoteOperation, { readonly kind: K }>,
   tool: string,
-): { readonly path: string } {
+): Extract<NoteOpResult, { readonly kind: K }> {
   let batch;
   try {
     batch = applyWriteBatch(ctx.vault, [op]);
@@ -322,7 +353,39 @@ function runSingleWrite(
     throw writeBatchErrorToMcp(err, tool);
   }
   const only = batch.results[0]!;
-  return { path: "path" in only ? only.path : "" };
+  if (only.kind !== op.kind) {
+    throw new MCPError(
+      INTERNAL_ERROR,
+      `${tool}: the write kernel returned a '${only.kind}' result for a '${op.kind}' operation`,
+    );
+  }
+  return only as Extract<NoteOpResult, { readonly kind: K }>;
+}
+
+/**
+ * The one write-result envelope, adopted by all four note-write tools
+ * (evidence-at-the-boundary, task A4).
+ *
+ * Before this there was no shared envelope at all: four handlers
+ * hand-built four shapes, two of them hardcoding a success flag the
+ * kernel result already carried. This composes the tool's own receipt
+ * with the write-time page lint over exactly the pages the call
+ * committed.
+ *
+ * The lint runs AFTER the commit and reads what is on disk, because the
+ * batch kernel wrote the bytes and the handler never composed them. It
+ * never gates the write, and it contributes NO key when there is nothing
+ * to say - so a receipt for a clean write is byte-identical to the one
+ * that shipped before. `pages` empty (a skipped create, a log-only batch)
+ * means no bytes were authored, so there is nothing to lint.
+ */
+export function noteWriteResult<T extends Record<string, unknown>>(
+  ctx: ServerContext,
+  pages: ReadonlyArray<string>,
+  receipt: T,
+): T & PageLintField {
+  if (pages.length === 0) return receipt;
+  return { ...receipt, ...pageLintField(lintWrittenPages(ctx.vault, pages)) };
 }
 
 export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([

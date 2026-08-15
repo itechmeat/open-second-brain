@@ -16,6 +16,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { NOTES_TOOLS } from "../../src/mcp/brain/notes-tools.ts";
 import { WRITE_BATCH_TOOLS } from "../../src/mcp/brain/write-batch-tools.ts";
 import { resolveNextStep } from "../../src/core/brain/next-step.ts";
+import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
@@ -231,5 +232,65 @@ describe("a frontmatter key must be a key the parser can read back", () => {
       handler(ctx, { path: "Notes/Inject.md", frontmatter: { "a\nowner: mallory": "v" } }),
     ).rejects.toThrow(MCPError);
     expect(existsSync(join(vault, "Notes/Inject.md"))).toBe(false);
+  });
+});
+
+/**
+ * Write-time page lint (evidence-at-the-boundary, task A4). The lint runs
+ * AFTER the commit, reads what is on disk, and never gates the write. The
+ * key is ABSENT ENTIRELY when there is nothing to say, which is what lets
+ * a caller read its absence as "clean" and only that.
+ */
+describe("brain_create_note - the lint attached to the receipt", () => {
+  /** The handler's declared return is `unknown`; every case here reads keys. */
+  const call = async (args: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    (await handler(ctx, args)) as Record<string, unknown>;
+
+  test("a clean write is byte-identical to the receipt that shipped before", async () => {
+    const res = await call({
+      path: "Notes/Clean.md",
+      frontmatter: { title: "Clean" },
+      content: "plain prose, no links",
+    });
+    expect(JSON.stringify(res)).toBe(
+      JSON.stringify({ created: true, outcome: "created", path: "Notes/Clean.md" }),
+    );
+    expect(PAGE_LINT_KEY in res).toBe(false);
+  });
+
+  test("a broken Brain wikilink rides back as one warning with a next command", async () => {
+    const res = await call({
+      path: "Notes/Broken.md",
+      frontmatter: { title: "Broken" },
+      content: "see [[pref-ghost]]",
+    });
+    expect(res).toMatchObject({ created: true, path: "Notes/Broken.md" });
+    const lint = res[PAGE_LINT_KEY] as Record<string, unknown>;
+    expect(lint).toMatchObject({ total: 1, returned: 1, truncated: false, skipped: [] });
+    expect((lint["findings"] as ReadonlyArray<Record<string, unknown>>)[0]).toMatchObject({
+      severity: "warning",
+      code: "broken-wikilink",
+      page: "Notes/Broken.md",
+      next_command: resolveNextStep("broken-wikilink")!.nextCommand,
+    });
+  });
+
+  test("an invalid document is reported, not refused: the note is on disk", async () => {
+    const res = await call({ path: "Notes/NoFm.md", content: "body only" });
+    expect(res).toMatchObject({ created: true, outcome: "created" });
+    expect(existsSync(join(vault, "Notes/NoFm.md"))).toBe(true);
+    const lint = res[PAGE_LINT_KEY] as { findings: ReadonlyArray<Record<string, unknown>> };
+    expect(lint.findings[0]).toMatchObject({ severity: "error", code: "frontmatter-missing" });
+  });
+
+  test("a skipped create wrote no bytes, so it lints nothing", async () => {
+    await handler(ctx, { path: "Notes/Idem2.md", content: "first" });
+    const res = await call({
+      path: "Notes/Idem2.md",
+      content: "second",
+      if_exists: "skip",
+    });
+    expect(res).toMatchObject({ created: false, outcome: "skipped" });
+    expect(PAGE_LINT_KEY in res).toBe(false);
   });
 });
