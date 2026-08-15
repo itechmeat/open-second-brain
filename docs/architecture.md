@@ -190,6 +190,15 @@ pass never writes outside the vault, never writes a path `vault.ignore_paths`
 or `vault.include_paths` excludes, and never rewrites `Brain/log/`, which
 is an append-only record of what was said at a time.
 
+An export refuses in two cases rather than writing something misleading.
+A payload the redactor could only partially scan refuses, because a file
+that was scanned in part cannot claim to be clean. And a secret-shaped
+**identifier** — a filename, an id, a mapping key — refuses rather than
+being redacted, because redacting an identifier does not hide it, it
+renames it: two notes whose names both redact to the same placeholder
+collapse onto one path and one of the bodies is lost. A placeholder in a
+payload is a redaction; a placeholder in an identifier is a lost identity.
+
 ```text
 Brain/
   _brain.yaml              # schema + thresholds + notes.read_paths (validated by o2b brain doctor)
