@@ -51,13 +51,19 @@ import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import { WIKILINK_TARGET_RE } from "./brain/wikilink.ts";
-import { atomicCreateFileSyncExclusive, atomicWriteFileSync } from "./fs-atomic.ts";
+import {
+  FileAlreadyExistsError,
+  atomicCreateFileSyncExclusive,
+  atomicWriteFileSync,
+  isFileAlreadyExists,
+} from "./fs-atomic.ts";
 import { stem } from "./fs-utils.ts";
 import {
   DEGRADATION_CODE,
   type DegradationNotice,
   emitDegradationNotice,
 } from "./integrity/degradation.ts";
+import { vaultRelative } from "./path-safety.ts";
 import type { FrontmatterMap, FrontmatterValue, VaultPage } from "./types.ts";
 
 const FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
@@ -418,9 +424,10 @@ export interface WriteFrontmatterAtomicOptions {
    * Optional human-readable label for the artifact kind (e.g. `"receipt"`,
    * `"asset"`, `"pending request"`). When the underlying write hits
    * `EEXIST` and `overwrite` is false, the resulting error message becomes
-   * `"<kind> already exists: <path>"` instead of the raw `EEXIST: ...`.
-   * The label is purely cosmetic — callers that don't supply it get the
-   * native errno error.
+   * `"<kind> already exists: <path>"` instead of the generic wording.
+   * The label affects only the message and the error's `kind` field —
+   * callers that don't supply it get the same
+   * {@link FileAlreadyExistsError} with the same `EEXIST` code.
    */
   readonly existsErrorKind?: string;
   /** Vault root used to render the relative path in the EEXIST message. */
@@ -436,13 +443,22 @@ export interface WriteFrontmatterAtomicOptions {
  *     (CLI + MCP server, multiple agents) → exclusive `link(2)` instead
  *     of the TOCTOU-prone `existsSync` + `writeFileSync` pair.
  *
- * On EEXIST the function throws either:
- *   - the native `Error & { code: "EEXIST" }` when no `existsErrorKind`
- *     was supplied (matches the underlying `link(2)` semantics so callers
- *     that want to inspect `err.code` still can), or
- *   - a friendlier `Error("<kind> already exists: <relative-path>")`
- *     when `existsErrorKind` was supplied — saves every caller from
- *     re-implementing the same try/catch.
+ * On a collision the function always throws a {@link FileAlreadyExistsError}
+ * carrying `code === "EEXIST"`, the absolute path, and the `kind` when one
+ * was supplied. Only the message differs between the two call shapes:
+ * `"<kind> already exists: <vault-relative path>"` with a kind, the leaf's
+ * generic wording without one.
+ *
+ * It re-wraps rather than re-throwing the leaf's error because the message
+ * has to change (the kind, and a vault-relative path instead of an absolute
+ * one that would leak the operator's home directory into CLI output and MCP
+ * envelopes). The rejected alternative — the plain
+ * `new Error(msg, { cause })` this used to throw — dropped `.code` on the
+ * way out, leaving the errno reachable only through `.cause`; a caller that
+ * wanted to retry a lost race then had nothing to key on but the message
+ * string. Wrapping in the same class keeps the wording AND the type, and
+ * `isFileAlreadyExists` recognises both shapes without a cause walk at the
+ * call site.
  */
 export function writeFrontmatterAtomic(
   path: string,
@@ -458,13 +474,18 @@ export function writeFrontmatterAtomic(
   try {
     atomicCreateFileSyncExclusive(path, contents);
   } catch (err) {
-    if (opts.existsErrorKind && (err as NodeJS.ErrnoException)?.code === "EEXIST") {
-      const rel = opts.vaultForRelativePath
-        ? path.startsWith(opts.vaultForRelativePath + "/")
-          ? path.slice(opts.vaultForRelativePath.length + 1)
-          : path
-        : path;
-      throw new Error(`${opts.existsErrorKind} already exists: ${rel}`, { cause: err });
+    if (opts.existsErrorKind && isFileAlreadyExists(err)) {
+      // `vaultRelative` rather than a hand-rolled `startsWith(vault + "/")`
+      // slice: the same rendering the rest of the tree uses, so a message
+      // here and a message from any other reporting surface name the page
+      // the same way, including on the Windows-separator input the manual
+      // slice silently failed to strip.
+      const rel = opts.vaultForRelativePath ? vaultRelative(path, opts.vaultForRelativePath) : path;
+      throw new FileAlreadyExistsError(path, {
+        kind: opts.existsErrorKind,
+        displayPath: rel,
+        cause: err,
+      });
     }
     throw err;
   }

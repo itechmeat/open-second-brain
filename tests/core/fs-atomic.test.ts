@@ -12,10 +12,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  FileAlreadyExistsError,
   atomicCreateFileSyncExclusive,
   atomicWriteFileSync,
   atomicWriteText,
+  isFileAlreadyExists,
 } from "../../src/core/fs-atomic.ts";
+import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
 
 let tmp: string;
 
@@ -93,6 +96,96 @@ describe("atomicCreateFileSyncExclusive", () => {
     const target = join(tmp, "a", "b", "c.md");
     atomicCreateFileSyncExclusive(target, "deep");
     expect(readFileSync(target, "utf8")).toBe("deep");
+  });
+});
+
+describe("FileAlreadyExistsError", () => {
+  test("the exclusive creator throws the typed error and the predicate recognises it", () => {
+    const target = join(tmp, "x.md");
+    writeFileSync(target, "preexisting");
+
+    let caught: unknown;
+    try {
+      atomicCreateFileSyncExclusive(target, "new");
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(FileAlreadyExistsError);
+    const err = caught as FileAlreadyExistsError;
+    expect(err.code).toBe("EEXIST");
+    expect(err.path).toBe(target);
+    expect(err.kind).toBeUndefined();
+    expect(err.name).toBe("FileAlreadyExistsError");
+    // The native errno survives so a caller that wants the raw link(2)
+    // detail still has it.
+    expect((err.cause as NodeJS.ErrnoException | undefined)?.code).toBe("EEXIST");
+    expect(isFileAlreadyExists(err)).toBe(true);
+  });
+
+  test("the predicate recognises a native EEXIST reachable through .cause", () => {
+    const native: NodeJS.ErrnoException = new Error("EEXIST: file already exists, link");
+    native.code = "EEXIST";
+    expect(isFileAlreadyExists(native)).toBe(true);
+    expect(isFileAlreadyExists(new Error("wrapper", { cause: native }))).toBe(true);
+  });
+
+  test("the predicate rejects an unrelated error", () => {
+    const enoent: NodeJS.ErrnoException = new Error("ENOENT: no such file");
+    enoent.code = "ENOENT";
+    expect(isFileAlreadyExists(enoent)).toBe(false);
+    expect(isFileAlreadyExists(new Error("plain"))).toBe(false);
+    expect(isFileAlreadyExists(new Error("wrapper", { cause: enoent }))).toBe(false);
+    expect(isFileAlreadyExists("EEXIST")).toBe(false);
+    expect(isFileAlreadyExists(null)).toBe(false);
+    expect(isFileAlreadyExists(undefined)).toBe(false);
+  });
+});
+
+describe("writeFrontmatterAtomic collision", () => {
+  test("keeps the kinded message byte-identical and stays typed", () => {
+    const vault = join(tmp, "vault");
+    const target = join(vault, "Brain", "inbox", "sig-topic.md");
+    writeFrontmatterAtomic(target, { id: "sig-topic" }, "body\n");
+
+    let caught: unknown;
+    try {
+      writeFrontmatterAtomic(target, { id: "sig-topic" }, "body\n", {
+        existsErrorKind: "signal",
+        vaultForRelativePath: vault,
+      });
+    } catch (err) {
+      caught = err;
+    }
+
+    // Byte-identical to the wording that shipped before the class existed.
+    expect((caught as Error).message).toBe("signal already exists: Brain/inbox/sig-topic.md");
+    expect(caught).toBeInstanceOf(FileAlreadyExistsError);
+    expect((caught as FileAlreadyExistsError).code).toBe("EEXIST");
+    expect((caught as FileAlreadyExistsError).kind).toBe("signal");
+    expect((caught as FileAlreadyExistsError).path).toBe(target);
+    expect(isFileAlreadyExists(caught)).toBe(true);
+  });
+
+  test("without a kind the collision is still recognised by the predicate", () => {
+    const target = join(tmp, "plain.md");
+    writeFrontmatterAtomic(target, { id: "plain" }, "body\n");
+    expect(() => writeFrontmatterAtomic(target, { id: "plain" }, "body\n")).toThrow(
+      FileAlreadyExistsError,
+    );
+    try {
+      writeFrontmatterAtomic(target, { id: "plain" }, "body\n");
+    } catch (err) {
+      expect(isFileAlreadyExists(err)).toBe(true);
+      expect((err as NodeJS.ErrnoException).code).toBe("EEXIST");
+    }
+  });
+
+  test("overwrite: true never collides", () => {
+    const target = join(tmp, "over.md");
+    writeFrontmatterAtomic(target, { id: "a" }, "one\n");
+    writeFrontmatterAtomic(target, { id: "b" }, "two\n", { overwrite: true });
+    expect(readFileSync(target, "utf8")).toContain("two");
   });
 });
 

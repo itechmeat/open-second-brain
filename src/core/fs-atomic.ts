@@ -110,8 +110,111 @@ export function atomicWriteText(
 }
 
 /**
- * Like {@link atomicWriteFileSync} but fails with `EEXIST` if `target`
- * already exists, atomically. Implemented via `link(2)` instead of
+ * The errno POSIX `link(2)` sets when the destination name is already taken.
+ * Named once so the thrown class, the predicate and the cause walk cannot
+ * drift apart on three copies of a string literal.
+ */
+const FILE_EXISTS_CODE = "EEXIST";
+
+/** Bound on how far {@link isFileAlreadyExists} follows the `cause` chain. */
+const CAUSE_WALK_LIMIT = 8;
+
+/** Optional detail carried by a {@link FileAlreadyExistsError}. */
+export interface FileAlreadyExistsOptions {
+  /**
+   * Human-readable label for what the caller was creating (`"signal"`,
+   * `"dead-end"`). Present only when a wrapper knows the artifact kind;
+   * this leaf never does.
+   */
+  readonly kind?: string;
+  /**
+   * Path as the message should render it — a vault-relative path where an
+   * absolute one would leak the operator's home directory into output.
+   * Defaults to `path`, which stays the structured, machine-readable field.
+   */
+  readonly displayPath?: string;
+  /** The underlying failure, normally the native `link(2)` errno error. */
+  readonly cause?: unknown;
+}
+
+/**
+ * A file could not be created because the name was already taken.
+ *
+ * This lives in the leaf that owns `linkSync` rather than in the vault
+ * writer above it, so that recognising a collision never costs an import of
+ * `vault.ts`: the losing side of a race is usually a slug allocator or a
+ * capture writer that has no business depending on the frontmatter layer.
+ *
+ * It deliberately carries the SAME errno the kernel does instead of a
+ * bespoke code. The rejected alternative was a private code (`"FILE_EXISTS"`)
+ * plus a translation at the boundary: every existing consumer of this write
+ * path already branches on `err.code === "EEXIST"` (`portability/okf.ts`,
+ * `write-session/store.ts`, `notes/create-note.ts`), so a private code would
+ * have silently stopped matching in three places while the type-checker
+ * stayed quiet. Sharing the errno makes the class strictly additive: `.code`
+ * keeps working, and `.path` / `.kind` are new.
+ */
+export class FileAlreadyExistsError extends Error {
+  /** Same errno the native `link(2)` failure carries. */
+  readonly code: typeof FILE_EXISTS_CODE = FILE_EXISTS_CODE;
+  /** Absolute path that was already taken. */
+  readonly path: string;
+  /** Artifact label supplied by a wrapper, if any. */
+  readonly kind: string | undefined;
+
+  constructor(path: string, opts: FileAlreadyExistsOptions = {}) {
+    super(fileAlreadyExistsMessage(opts.displayPath ?? path, opts.kind), { cause: opts.cause });
+    this.name = "FileAlreadyExistsError";
+    this.path = path;
+    this.kind = opts.kind;
+  }
+}
+
+/**
+ * The two message shapes, in one place.
+ *
+ * The kinded form is byte-identical to the wording `writeFrontmatterAtomic`
+ * has thrown since before this class existed, because that string is what
+ * CLI verbs and MCP envelopes print; the remedy is deliberately NOT appended
+ * there. The kindless form is the one nobody was rendering, so it gets the
+ * remedy the project's error convention asks for.
+ */
+function fileAlreadyExistsMessage(displayPath: string, kind: string | undefined): string {
+  if (kind) return `${kind} already exists: ${displayPath}`;
+  return (
+    `file already exists: ${displayPath}; this create refuses to overwrite. ` +
+    "Retry under a different name, or write with overwrite semantics if replacing it is intended."
+  );
+}
+
+/**
+ * Is `err` a "the name was already taken" failure, however it was wrapped?
+ *
+ * One predicate for every call site, so that no caller has to match on a
+ * message, and no caller has to know whether the collision reached it as the
+ * typed class, as the raw errno from `link(2)`, or nested one level down on
+ * `.cause` because a wrapper re-threw it. The walk is bounded rather than
+ * recursive-until-null: a `cause` chain can be made cyclic by a caller, and a
+ * hang inside an error handler is a worse failure than a missed match.
+ *
+ * The class is matched by the same errno test as the native error rather
+ * than by a separate `instanceof` branch — see {@link FileAlreadyExistsError}
+ * for why it shares the kernel's code.
+ */
+export function isFileAlreadyExists(err: unknown): boolean {
+  let current: unknown = err;
+  for (let depth = 0; depth < CAUSE_WALK_LIMIT; depth += 1) {
+    if (typeof current !== "object" || current === null) return false;
+    if ((current as NodeJS.ErrnoException).code === FILE_EXISTS_CODE) return true;
+    current = (current as { readonly cause?: unknown }).cause;
+  }
+  return false;
+}
+
+/**
+ * Like {@link atomicWriteFileSync} but fails with
+ * {@link FileAlreadyExistsError} if `target` already exists, atomically.
+ * Implemented via `link(2)` instead of
  * `rename(2)` because POSIX `link` returns EEXIST when the destination
  * inode is taken — there is no `rename`-with-no-clobber primitive that's
  * portable.
@@ -123,11 +226,23 @@ export function atomicWriteText(
  *
  * Requires `tmpPath` and `target` to live on the same filesystem, which
  * is guaranteed because the temp file is placed alongside the target.
+ *
+ * A taken destination is the ONE failure this primitive exists to report,
+ * so it leaves as a typed error naming the path rather than as the native
+ * errno, whose message is a `link(2)` trace mentioning a temp file the
+ * caller never asked for. Every other errno propagates untouched: a full
+ * disk or a read-only mount is not a collision and must not be retried as
+ * one.
  */
 export function atomicCreateFileSyncExclusive(target: string, contents: string): void {
   withTempFile(target, contents, (tmpPath) => {
     try {
       linkSync(tmpPath, target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException | null)?.code === FILE_EXISTS_CODE) {
+        throw new FileAlreadyExistsError(target, { cause: err });
+      }
+      throw err;
     } finally {
       // Always remove the temp inode regardless of whether linkSync
       // succeeded — the temp is an implementation detail.
