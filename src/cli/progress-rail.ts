@@ -155,3 +155,32 @@ export function attachProgress(
   };
   return Object.freeze({ outcome: PROGRESS_OUTCOME.emitted, sink });
 }
+
+/**
+ * Tell the caller its request for progress was declined, and why.
+ *
+ * A refusal that produced no line would be indistinguishable from an
+ * operation that simply had nothing to report - the caller would watch a
+ * silent stream and conclude the run had hung. So the reason is named on
+ * stderr, in the one wording every verb shares.
+ *
+ * Written BEFORE the operation starts rather than after it. A caller told
+ * at the end that nobody was watching learns it too late to do anything
+ * with; worse, an operation that is then interrupted or fails never
+ * reaches its own epilogue at all, so a refusal reported there would go
+ * missing exactly when the caller most needed to know why the stream was
+ * empty.
+ *
+ * `null` is the shape a verb holds when nobody asked for progress at all,
+ * and it is silent by construction: `reason` is set only on a refusal, so
+ * there is a fact to report or there is not.
+ */
+export function reportProgressRefusal(
+  attachment: ProgressAttachment | null,
+  write: (chunk: string) => void = (chunk) => {
+    process.stderr.write(chunk);
+  },
+): void {
+  if (attachment === null || attachment.reason === undefined) return;
+  write(`progress: not emitted (${attachment.reason})\n`);
+}

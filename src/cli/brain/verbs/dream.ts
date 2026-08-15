@@ -52,8 +52,8 @@ import {
 } from "../../../core/brain/safeguard.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
-import { onInterrupt } from "../../interrupt.ts";
-import { attachProgress } from "../../progress-rail.ts";
+import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
+import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
 // The runnable set is read from the step registry, never retyped: a
@@ -406,6 +406,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     flags["progress"] === true
       ? attachProgress({ command: "brain", argv: ["dream"], jsonRequested: asJson })
       : null;
+  reportProgressRefusal(observation);
   const interrupt = onInterrupt();
   let summary;
   try {
@@ -421,15 +422,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     // A pass the operator stopped did not do what it was asked, so it
     // cannot exit 0 - but it is not a failure either, and reporting it as
     // one would hide the difference the abort error exists to preserve.
-    if (exc instanceof SafeguardAbortError) {
-      const code = interrupt.exitCode();
-      if (asJson) {
-        okJson({ ok: false, interrupted: true, message: exc.message });
-        return code;
-      }
-      process.stderr.write(`${exc.message}\n`);
-      return code;
-    }
+    if (exc instanceof SafeguardAbortError) return reportInterrupted(interrupt, exc, asJson);
     if (exc instanceof SafeguardTimeoutError && asJson) {
       okJson({ ok: false, timed_out: true, message: exc.message });
       return 1;
@@ -438,12 +431,6 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   } finally {
     interrupt.release();
   }
-  if (observation?.reason !== undefined) {
-    // Asked for and refused: the caller learns why rather than watching a
-    // stream that never produces a line.
-    process.stderr.write(`progress: not emitted (${observation.reason})\n`);
-  }
-
   for (const w of summary.warnings ?? []) {
     process.stderr.write(`warning: ${w.code}: ${w.message}\n`);
   }

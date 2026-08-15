@@ -26,6 +26,8 @@
  * misleading quiet this release removes.
  */
 
+import { okJson } from "./output.ts";
+
 const SIGINT_EXIT = 130;
 const SIGTERM_EXIT = 143;
 
@@ -98,4 +100,26 @@ export function onInterrupt(): InterruptHandle {
       listeners.clear();
     },
   });
+}
+
+/**
+ * Report a run the operator stopped, and give back its exit code.
+ *
+ * Five long verbs reach this arm and every one of them says the same two
+ * things: the stop is not a crash, and it is not a success. Written once
+ * here rather than retyped per verb, for the reason `progressReasonForError`
+ * lives in the spine rather than at each of the operations - five copies of
+ * one fact are five chances for one of them to report a deliberate stop as
+ * a failure, which is the distinction `SafeguardAbortError` exists to keep.
+ *
+ * A `--json` caller gets the refusal as a document because its stdout is a
+ * payload it parses; a human gets the line on stderr, where the verb's
+ * other diagnostics already are. The two are exclusive: a JSON run that
+ * also wrote the prose line would put the same fact on two streams, and a
+ * human run has no document to put it in.
+ */
+export function reportInterrupted(handle: InterruptHandle, error: Error, asJson: boolean): number {
+  if (asJson) okJson({ ok: false, interrupted: true, message: error.message });
+  else process.stderr.write(`${error.message}\n`);
+  return handle.exitCode();
 }
