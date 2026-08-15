@@ -1,8 +1,13 @@
 import {
+  isRecallChannel,
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
   listRecallTelemetry,
+  RECALL_CHANNELS,
+  RECALL_TELEMETRY_MODES,
+  RECALL_TELEMETRY_STATUSES,
   summarizeRecallTelemetry,
+  type RecallTelemetryFilter,
 } from "../../../core/brain/recall-telemetry.ts";
 import { listGateTelemetry, summarizeGateTelemetry } from "../../../core/brain/gate-telemetry.ts";
 import { computeMemoryCostMeter } from "../../../core/brain/memory-cost-meter.ts";
@@ -61,6 +66,7 @@ function summarizeTelemetry(argv: string[]): number {
   process.stdout.write(`empty runs: ${summary.empty_runs}\n`);
   process.stdout.write(`by mode: ${JSON.stringify(summary.by_mode)}\n`);
   process.stdout.write(`by status: ${JSON.stringify(summary.by_status)}\n`);
+  process.stdout.write(`by channel: ${JSON.stringify(summary.by_channel)}\n`);
   process.stdout.write(`gaps: ${JSON.stringify(summary.gap_counts)}\n`);
   return 0;
 }
@@ -72,7 +78,7 @@ function rejectRecallOnlyFlags(
 ): void {
   // Gate records have no mode/status dimensions - dropping these
   // silently would hand back unfiltered results.
-  for (const name of ["mode", "status", ...alsoReject]) {
+  for (const name of ["mode", "status", "channel", ...alsoReject]) {
     if (flags[name] !== undefined) {
       throw new CliError(`${command}: --${name} is not supported for gate telemetry`);
     }
@@ -129,7 +135,7 @@ function costMeter(argv: string[]): number {
   // The cost meter is period-based; mode/status/host/limit filter recall
   // records only and have no write-side analogue, so reject them rather
   // than silently ignore.
-  for (const name of ["mode", "status", "host", "limit"]) {
+  for (const name of ["mode", "status", "channel", "host", "limit"]) {
     if (flags[name] !== undefined) {
       throw new CliError(
         `brain recall-telemetry cost: --${name} is not supported for the cost meter`,
@@ -190,6 +196,7 @@ function parseTelemetryFlags(argv: string[]): {
     json: { type: "boolean" },
     mode: { type: "string" },
     status: { type: "string" },
+    channel: { type: "string" },
     host: { type: "string" },
     since: { type: "string" },
     until: { type: "string" },
@@ -213,46 +220,44 @@ function parseNonNegativeNumber(
   return parsed;
 }
 
+/**
+ * Every filter flag parsed EXACTLY ONCE.
+ *
+ * The conditional-spread idiom used to call each parser twice - once to
+ * test for undefined and once to take the value - so every validating
+ * parser ran its checks and raised its errors twice for one flag. Binding
+ * first makes each flag one call, and makes adding a seventh flag a
+ * two-line change rather than a four-line one.
+ */
 function telemetryFilter(
   flags: Record<string, string | boolean | string[] | undefined>,
   label: string,
-): {
-  readonly mode?: ReturnType<typeof modeFlag>;
-  readonly status?: ReturnType<typeof statusFlag>;
-  readonly host?: string;
-  readonly since?: string;
-  readonly until?: string;
-  readonly limit?: number;
-} {
+): RecallTelemetryFilter {
+  const mode = modeFlag(flags["mode"], label);
+  const status = statusFlag(flags["status"], label);
+  const channel = channelFlag(flags["channel"], label);
+  const host = trimOrUndefined(flags["host"]);
+  const since = trimOrUndefined(flags["since"]);
+  const until = trimOrUndefined(flags["until"]);
+  const limit = parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit");
   return {
-    ...(modeFlag(flags["mode"], label) !== undefined
-      ? { mode: modeFlag(flags["mode"], label) }
-      : {}),
-    ...(statusFlag(flags["status"], label) !== undefined
-      ? { status: statusFlag(flags["status"], label) }
-      : {}),
-    ...(trimOrUndefined(flags["host"]) !== undefined
-      ? { host: trimOrUndefined(flags["host"]) }
-      : {}),
-    ...(trimOrUndefined(flags["since"]) !== undefined
-      ? { since: trimOrUndefined(flags["since"]) }
-      : {}),
-    ...(trimOrUndefined(flags["until"]) !== undefined
-      ? { until: trimOrUndefined(flags["until"]) }
-      : {}),
-    ...(parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit") !== undefined
-      ? {
-          limit: parsePositiveInteger(trimOrUndefined(flags["limit"]), label, "--limit"),
-        }
-      : {}),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(status !== undefined ? { status } : {}),
+    ...(channel !== undefined ? { channel } : {}),
+    ...(host !== undefined ? { host } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+    ...(limit !== undefined ? { limit } : {}),
   };
 }
 
 function modeFlag(raw: string | boolean | string[] | undefined, label: string) {
   const value = trimOrUndefined(raw);
   if (value === undefined) return undefined;
+  // Rendered from the frozen member list, never restated in prose: three
+  // hand-written copies of this sentence went stale when `query` landed.
   if (!isRecallTelemetryMode(value)) {
-    throw new CliError(`${label}: --mode must be search, context_pack, or pre_compress`);
+    throw new CliError(`${label}: --mode must be one of ${RECALL_TELEMETRY_MODES.join(", ")}`);
   }
   return value;
 }
@@ -261,7 +266,16 @@ function statusFlag(raw: string | boolean | string[] | undefined, label: string)
   const value = trimOrUndefined(raw);
   if (value === undefined) return undefined;
   if (!isRecallTelemetryStatus(value)) {
-    throw new CliError(`${label}: --status must be ok, empty, error, or timeout`);
+    throw new CliError(`${label}: --status must be one of ${RECALL_TELEMETRY_STATUSES.join(", ")}`);
+  }
+  return value;
+}
+
+function channelFlag(raw: string | boolean | string[] | undefined, label: string) {
+  const value = trimOrUndefined(raw);
+  if (value === undefined) return undefined;
+  if (!isRecallChannel(value)) {
+    throw new CliError(`${label}: --channel must be one of ${RECALL_CHANNELS.join(", ")}`);
   }
   return value;
 }

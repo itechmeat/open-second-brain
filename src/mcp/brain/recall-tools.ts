@@ -15,10 +15,15 @@ import { listGateTelemetry, summarizeGateTelemetry } from "../../core/brain/gate
 import { computeMemoryCostMeter } from "../../core/brain/memory-cost-meter.ts";
 import { observedReuseRates } from "../../core/brain/observed-use.ts";
 import {
+  isRecallChannel,
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
   listRecallTelemetry,
+  RECALL_CHANNELS,
+  RECALL_TELEMETRY_MODES,
+  RECALL_TELEMETRY_STATUSES,
   summarizeRecallTelemetry,
+  type RecallChannel,
   type RecallTelemetryFilter,
   type RecallTelemetryMode,
   type RecallTelemetryStatus,
@@ -282,6 +287,7 @@ function coerceNonNegativeNumber(name: string, raw: unknown): number | undefined
 function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFilter {
   const mode = coerceRecallTelemetryMode(args["mode"]);
   const status = coerceRecallTelemetryStatus(args["status"]);
+  const channel = coerceRecallChannel(args["channel"]);
   const host = optionalStringArg("brain_recall_telemetry", args, "host");
   const since = optionalStringArg("brain_recall_telemetry", args, "since");
   const until = optionalStringArg("brain_recall_telemetry", args, "until");
@@ -289,6 +295,7 @@ function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFi
   return {
     ...(mode !== undefined ? { mode } : {}),
     ...(status !== undefined ? { status } : {}),
+    ...(channel !== undefined ? { channel } : {}),
     ...(host !== undefined ? { host } : {}),
     ...(since !== undefined ? { since } : {}),
     ...(until !== undefined ? { until } : {}),
@@ -299,10 +306,13 @@ function recallTelemetryFilter(args: Record<string, unknown>): RecallTelemetryFi
 function coerceRecallTelemetryMode(raw: unknown): RecallTelemetryMode | undefined {
   if (raw === undefined || raw === null) return undefined;
   const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  // Rendered from the frozen member list. The prose copy this replaces
+  // omitted `query`, and so did the schema enum below it, so a mode the
+  // server records was refused at its own boundary.
   if (!isRecallTelemetryMode(trimmed)) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_recall_telemetry: mode must be search, context_pack, or pre_compress",
+      `brain_recall_telemetry: mode must be one of ${RECALL_TELEMETRY_MODES.join(", ")}`,
     );
   }
   return trimmed;
@@ -314,7 +324,19 @@ function coerceRecallTelemetryStatus(raw: unknown): RecallTelemetryStatus | unde
   if (!isRecallTelemetryStatus(trimmed)) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_recall_telemetry: status must be ok, empty, error, or timeout",
+      `brain_recall_telemetry: status must be one of ${RECALL_TELEMETRY_STATUSES.join(", ")}`,
+    );
+  }
+  return trimmed;
+}
+
+function coerceRecallChannel(raw: unknown): RecallChannel | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  const trimmed = typeof raw === "string" ? raw.trim() : raw;
+  if (!isRecallChannel(trimmed)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_recall_telemetry: channel must be one of ${RECALL_CHANNELS.join(", ")}`,
     );
   }
   return trimmed;
@@ -999,13 +1021,18 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         mode: {
           type: "string",
-          enum: ["search", "context_pack", "pre_compress"],
+          enum: [...RECALL_TELEMETRY_MODES],
           description: "Optional filter by recall mode.",
         },
         status: {
           type: "string",
-          enum: ["ok", "empty", "error", "timeout"],
+          enum: [...RECALL_TELEMETRY_STATUSES],
           description: "Optional filter by telemetry status.",
+        },
+        channel: {
+          type: "string",
+          enum: [...RECALL_CHANNELS],
+          description: "Optional filter by delivery channel.",
         },
         host: {
           type: "string",

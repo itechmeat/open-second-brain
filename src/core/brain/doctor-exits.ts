@@ -188,6 +188,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "is lost by leaving it reported",
   },
   {
+    code: "recall-channel-unmeasured",
+    reason:
+      "the finding is that the install side of a recall channel could not be READ - a config gate " +
+      "that would not resolve, or an audit root that denied the walk. What repairs it depends on " +
+      "which, and on why: a permission an operator has to decide to grant, a config file to fix, " +
+      "or a path that belongs to another user entirely. Guessing one would act on a state this " +
+      "pass never managed to observe",
+  },
+  {
     code: "preference-missing-field",
     reason:
       "a required frontmatter field is absent and its value is not recoverable from the rest of " +

@@ -25,18 +25,75 @@
  * present, is the standard `hookSpecificOutput.additionalContext` envelope.
  */
 
-import { join } from "node:path";
-
 import { defaultConfigPath, resolveRecallInjectEnabled, resolveVault } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
+import { emitGatedTelemetry } from "../src/core/brain/continuity/emit.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
 import {
   decideRecallInject,
   defaultRecallRetriever,
   type RecallInjectDecision,
 } from "../src/core/brain/recall-inject.ts";
+import {
+  emitRecallTelemetry,
+  RECALL_CHANNEL,
+  RECALL_TELEMETRY_MODE,
+  RECALL_TELEMETRY_STATUS,
+  type RecallTelemetryStatus,
+} from "../src/core/brain/recall-telemetry.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { isContextEventName } from "./lib/context-events.ts";
+
+/**
+ * Record one decision on both surfaces: the hook audit trail, and the
+ * recall-telemetry channel.
+ *
+ * The audit line alone made the `hook` channel empty by construction, so
+ * the doctor's coverage check could only ever answer "unknown" for the
+ * one channel operators complain about. Both writes are best-effort and
+ * neither can disturb the fail-open contract: the audit has its own
+ * try/catch, and the telemetry goes through the shared gated emitter,
+ * which swallows a throwing continuity write exactly as every other
+ * telemetry site does.
+ */
+function recordDecision(vault: string, decision: RecallInjectDecision): void {
+  auditDecision(vault, decision);
+  emitGatedTelemetry(true, () =>
+    emitRecallTelemetry(vault, {
+      host: HOOK_TELEMETRY_HOST,
+      channel: RECALL_CHANNEL.hook,
+      // The hook's retriever IS a search; nothing finer is claimed here.
+      mode: RECALL_TELEMETRY_MODE.search,
+      status: telemetryStatus(decision),
+      durationMs: 0,
+      resultCount: decision.kind === "inject" ? decision.noteCount : 0,
+      metadata: auditDetails(decision),
+    }),
+  );
+}
+
+/** Runtime identity on the record; the transport is `channel`, not this. */
+const HOOK_TELEMETRY_HOST = "recall-inject";
+
+/**
+ * The hook's three decisions onto the telemetry status vocabulary.
+ *
+ * `abstain` maps to `empty` rather than to nothing at all: the hook ran
+ * and decided not to inject, and that is precisely the signal that
+ * separates a quiet hook from an absent one. Emitting nothing for an
+ * abstain would destroy the evidence this unit exists to produce.
+ */
+function telemetryStatus(decision: RecallInjectDecision): RecallTelemetryStatus {
+  switch (decision.kind) {
+    case "inject":
+      return RECALL_TELEMETRY_STATUS.ok;
+    case "abstain":
+      return RECALL_TELEMETRY_STATUS.empty;
+    case "error":
+      return RECALL_TELEMETRY_STATUS.error;
+  }
+}
 
 /**
  * One payload-safe audit line per decision. Never throws (a hung filesystem
@@ -45,9 +102,9 @@ import { isContextEventName } from "./lib/context-events.ts";
  */
 function auditDecision(vault: string, decision: RecallInjectDecision): void {
   try {
-    appendAuditRecord(join(vault, ".open-second-brain", "hook-audit"), {
+    appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
-      actor: "recall-inject",
+      actor: HOOK_TELEMETRY_HOST,
       action: "recall_inject_decision",
       target: "UserPromptSubmit",
       ok: decision.kind === "inject",
@@ -78,7 +135,7 @@ async function main(): Promise<void> {
     ceilingMs: resolveHookCeilingMs(),
     onExpire: () => {
       if (auditVault !== null) {
-        auditDecision(auditVault, { kind: "error", reason: "hook_ceiling_exceeded" });
+        recordDecision(auditVault, { kind: "error", reason: "hook_ceiling_exceeded" });
       }
     },
   });
@@ -105,7 +162,7 @@ async function main(): Promise<void> {
     const configPath = defaultConfigPath();
 
     const decision = await decideRecallInject(prompt, defaultRecallRetriever(configPath, vault));
-    auditDecision(vault, decision);
+    recordDecision(vault, decision);
     if (decision.kind !== "inject") return;
 
     const out = {

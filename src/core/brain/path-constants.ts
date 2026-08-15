@@ -136,6 +136,17 @@ export const BRAIN_SNAPSHOT_EXCLUDED_ENTRIES: ReadonlyArray<string> = Object.fre
  */
 export const DERIVED_STORE_DIR = ".open-second-brain";
 export const DERIVED_STORE_FILE = "brain.sqlite";
+/**
+ * Where the runtime hooks append their one-line-per-decision audit trail,
+ * one shard per ISO week.
+ *
+ * Named here (C1) because it stopped being only the hooks' business: it
+ * is the readable install fact for the `hook` recall channel - the doctor
+ * check that asks whether an enabled hook ever ran has nothing else to
+ * look at. Six hook files spelled the root as a raw three-argument join
+ * beside a `DERIVED_STORE_DIR` that already existed.
+ */
+export const HOOK_AUDIT_DIR = "hook-audit";
 
 /** Brain-internal artefact filenames at the root of `Brain/`. */
 export const BRAIN_CONFIG_FILE = "_brain.yaml";

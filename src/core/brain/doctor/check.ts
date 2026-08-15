@@ -28,6 +28,16 @@ export interface DoctorCheckContext {
   readonly config: BrainConfig | undefined;
   /** Search-index path for index-backed checks; absent skips them. */
   readonly dbPath: string | undefined;
+  /**
+   * The `o2b` config file the pass was invoked against (C1).
+   *
+   * Carried on the context rather than discovered by the check that
+   * needs it, so a check reading a runtime gate is testable without
+   * mutating process environment. Absent means the caller named none and
+   * the resolver falls back to its own default discovery - the same
+   * answer the runtime itself would get.
+   */
+  readonly configPath: string | undefined;
   /** Every valid wikilink target inside `Brain/`, keyed by basename. */
   readonly knownBasenames: ReadonlySet<string>;
   /**

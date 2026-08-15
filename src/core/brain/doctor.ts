@@ -68,6 +68,7 @@ import {
   readAllLogRecords,
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
+import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
@@ -159,6 +160,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   lineageLedgerProbe,
   vaultMarkerProbe,
   staleLockProbe,
+  recallChannelCoverageCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------
@@ -367,6 +369,7 @@ function resolveContext(
     now: opts.now ?? new Date(),
     config,
     dbPath: opts.dbPath,
+    configPath: opts.configPath,
     knownBasenames: collectAllBasenames(vault, {
       site: CONTEXT_SITE,
       consequence:

@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { hookAuditDir } from "../../src/core/brain/paths.ts";
+import { listRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
+
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -54,7 +57,7 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
 }
 
 function auditRecords(): Array<Record<string, unknown>> {
-  const dir = join(vault, ".open-second-brain", "hook-audit");
+  const dir = hookAuditDir(vault);
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((name) => name.endsWith(".jsonl"))
@@ -115,5 +118,49 @@ describe("recall-inject hook", () => {
     const details = (record?.["details"] ?? {}) as Record<string, unknown>;
     expect(details["decision"]).toBe("abstain");
     expect(details["reason"]).toBe("empty_prompt");
+  });
+});
+
+describe("recall-inject telemetry", () => {
+  test("the flag-off no-op writes no telemetry, exactly as it writes no audit", async () => {
+    await runHook(
+      { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
+      { VAULT_DIR: vault },
+    );
+    expect(listRecallTelemetry(vault, { channel: RECALL_CHANNEL.hook })).toHaveLength(0);
+  });
+
+  test("an abstain is recorded as an empty delivery, not as no delivery", async () => {
+    // The whole point of the channel dimension: a hook that ran and
+    // decided not to inject must be distinguishable from a hook that was
+    // never installed. Emitting nothing here would destroy that.
+    const r = await runHook(
+      { hook_event_name: "UserPromptSubmit", prompt: "   " },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+    );
+    expect(r.exit).toBe(0);
+    expect(r.stdout).toBe("");
+
+    const records = listRecallTelemetry(vault, { channel: RECALL_CHANNEL.hook });
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload).toMatchObject({
+      channel: RECALL_CHANNEL.hook,
+      status: "empty",
+      result_count: 0,
+      metadata: { decision: "abstain", reason: "empty_prompt" },
+    });
+  });
+
+  test("a decision on a bare vault reaches the hook channel with a mapped status", async () => {
+    await runHook(
+      { hook_event_name: "UserPromptSubmit", prompt: "how do receipts work" },
+      { VAULT_DIR: vault, OPEN_SECOND_BRAIN_RECALL_INJECT_ENABLED: "true" },
+    );
+    const records = listRecallTelemetry(vault, { channel: RECALL_CHANNEL.hook });
+    expect(records).toHaveLength(1);
+    const payload = records[0]!.payload;
+    expect(payload["mode"]).toBe("search");
+    // inject -> ok, abstain -> empty, error -> error. Nothing else.
+    expect(["ok", "empty", "error"]).toContain(payload["status"] as string);
   });
 });

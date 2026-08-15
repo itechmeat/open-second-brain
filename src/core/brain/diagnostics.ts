@@ -212,6 +212,16 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // C1, evidence-at-the-boundary. The exit is the wider view of the
+        // same measurement: the check reports one fixed window, and the
+        // per-channel rollup over an operator-chosen one is what says
+        // whether the transport ever delivered or merely stopped.
+        code: "recall-channel-silent",
+        issueClass: "installed recall channel with no deliveries",
+        nextCommand: "o2b brain recall-telemetry summary --channel <channel> --since <iso>",
+        autoRepairable: false,
+      },
+      {
         code: "sync-conflict-log",
         issueClass: "sync-conflict log copy",
         nextCommand: "o2b brain doctor",

@@ -115,6 +115,12 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     result = runDoctor(vault, {
       strict: Boolean(flags["strict"]),
       dbPath: resolveSearchConfig({ vault, configPath: config ?? undefined }).dbPath,
+      // Checks that read a config gate (the recall-channel coverage check reads
+      // whether prompt-side recall injection is enabled) must read the SAME
+      // config this invocation was pointed at. Letting them fall through to
+      // default discovery would make `--config other.yaml` diagnose one file
+      // and report on another.
+      ...(config !== null ? { configPath: config } : {}),
     });
   } catch (exc) {
     return fail(`doctor failed: ${(exc as Error).message ?? exc}`);

@@ -1,11 +1,104 @@
 import { appendContinuityRecord, listContinuityRecords } from "./continuity/store.ts";
-import type { ContinuityRecord } from "./continuity/types.ts";
+import { CONTINUITY_CHANNEL_KEY, type ContinuityRecord } from "./continuity/types.ts";
 import { jaccard, tokenise } from "./similarity.ts";
 import type { DefaultRelationType } from "../graph/relation-vocab.ts";
 import type { BrainSearchResult } from "../search/search-result.ts";
 
-export type RecallTelemetryMode = "search" | "context_pack" | "pre_compress" | "query";
-export type RecallTelemetryStatus = "ok" | "empty" | "error" | "timeout";
+/**
+ * The transport a recall record was delivered over (C1, t_e5f447c1).
+ *
+ * `host` cannot answer this question and never could: it is an open,
+ * caller-supplied string capped at 200 characters, and its meaning is
+ * already overloaded between runtime identity ("claude-code") and
+ * transport (the `"mcp"` / `"cli"` defaults). One column answering both
+ * questions answers neither, which is why a hook that was never
+ * installed and a hook that ran and stayed quiet produce identical
+ * evidence today: none.
+ *
+ * Three members because three transports exist in this repository. There
+ * is no Hermes delivery path here - `hermes` appears as an agent name, an
+ * install document and a `telemetry_host` string in tests, which makes it
+ * a HOST - so no `hermes` member is minted. A channel nothing can write
+ * would hand the doctor a column that is silent by construction, which is
+ * the exact ambiguity this vocabulary removes.
+ *
+ * Anything finer than a transport belongs in `mode` or `metadata`.
+ */
+export const RECALL_CHANNEL = Object.freeze({
+  /** An MCP tool call on the server surface. */
+  mcp: "mcp",
+  /** An `o2b` verb run from a terminal or a script. */
+  cli: "cli",
+  /** A runtime hook that injects recall into a prompt. */
+  hook: "hook",
+} as const);
+
+/** Closed union over {@link RECALL_CHANNEL}. */
+export type RecallChannel = (typeof RECALL_CHANNEL)[keyof typeof RECALL_CHANNEL];
+
+/** Membership list, in the order the surfaces render their enums. */
+export const RECALL_CHANNELS: ReadonlyArray<RecallChannel> = Object.freeze([
+  RECALL_CHANNEL.mcp,
+  RECALL_CHANNEL.cli,
+  RECALL_CHANNEL.hook,
+]);
+
+/** Narrow a string read back off disk or across a tool boundary. */
+export function isRecallChannel(value: unknown): value is RecallChannel {
+  return typeof value === "string" && (RECALL_CHANNELS as ReadonlyArray<string>).includes(value);
+}
+
+/**
+ * The retrieval shape a record describes.
+ *
+ * Converted from a bare union plus a hand-rolled equality chain, which is
+ * how `query` came to be a mode the server records and three separate
+ * copies of the list did not know about - one of them a tool-schema enum
+ * that rejected it at the boundary. The members list below is now the
+ * only place the words are written down.
+ */
+export const RECALL_TELEMETRY_MODE = Object.freeze({
+  search: "search",
+  contextPack: "context_pack",
+  preCompress: "pre_compress",
+  query: "query",
+} as const);
+
+/** Closed union over {@link RECALL_TELEMETRY_MODE}. */
+export type RecallTelemetryMode =
+  (typeof RECALL_TELEMETRY_MODE)[keyof typeof RECALL_TELEMETRY_MODE];
+
+/** Membership list; every surface renders its enum from this array. */
+export const RECALL_TELEMETRY_MODES: ReadonlyArray<RecallTelemetryMode> = Object.freeze([
+  RECALL_TELEMETRY_MODE.search,
+  RECALL_TELEMETRY_MODE.contextPack,
+  RECALL_TELEMETRY_MODE.preCompress,
+  RECALL_TELEMETRY_MODE.query,
+]);
+
+/** How a recall attempt ended. The injecting hook maps onto these too. */
+export const RECALL_TELEMETRY_STATUS = Object.freeze({
+  /** Something was returned and delivered. */
+  ok: "ok",
+  /** The attempt ran to completion and returned nothing. */
+  empty: "empty",
+  /** The attempt failed. */
+  error: "error",
+  /** The attempt exceeded its time budget. */
+  timeout: "timeout",
+} as const);
+
+/** Closed union over {@link RECALL_TELEMETRY_STATUS}. */
+export type RecallTelemetryStatus =
+  (typeof RECALL_TELEMETRY_STATUS)[keyof typeof RECALL_TELEMETRY_STATUS];
+
+/** Membership list; every surface renders its enum from this array. */
+export const RECALL_TELEMETRY_STATUSES: ReadonlyArray<RecallTelemetryStatus> = Object.freeze([
+  RECALL_TELEMETRY_STATUS.ok,
+  RECALL_TELEMETRY_STATUS.empty,
+  RECALL_TELEMETRY_STATUS.error,
+  RECALL_TELEMETRY_STATUS.timeout,
+]);
 
 export interface RecallTelemetryArtifactInput {
   readonly id: string;
@@ -253,6 +346,14 @@ function derivePoolDiversity(rows: ReadonlyArray<BrainSearchResult>): RecallDive
 export interface RecallTelemetryInput {
   readonly createdAt?: string;
   readonly host: string;
+  /**
+   * The transport this record was delivered over. REQUIRED, not
+   * optional: an optional field lets a call site omit it and produce a
+   * record that reads as "no channel", which is the ambiguity C1 exists
+   * to remove. Required makes every emit site fail to compile until it
+   * names its channel, and that is the enforcement mechanism.
+   */
+  readonly channel: RecallChannel;
   readonly sessionId?: string;
   readonly turnId?: string;
   readonly mode: RecallTelemetryMode;
@@ -273,16 +374,47 @@ export interface RecallTelemetryInput {
 
 export interface RecallTelemetryOptions {
   readonly host: string;
+  /** See {@link RecallTelemetryInput.channel}: required for the same reason. */
+  readonly channel: RecallChannel;
   readonly createdAt?: string;
   readonly sessionId?: string;
   readonly turnId?: string;
   readonly metadata?: Readonly<Record<string, unknown>>;
 }
 
+/**
+ * The correlation fields every emit site copies onto its input.
+ *
+ * Five sites repeated the same four-line unpack of createdAt / host /
+ * sessionId / turnId, each with its own spelling of the
+ * omit-when-undefined idiom - which is how a sixth field (this release's
+ * `channel`) would have been added to four of them and forgotten in the
+ * fifth. The omissions are preserved exactly: an absent correlation id
+ * must not reach the payload as a present key.
+ */
+export interface RecallTelemetryEnvelope {
+  readonly createdAt?: string;
+  readonly host: string;
+  readonly channel: RecallChannel;
+  readonly sessionId?: string;
+  readonly turnId?: string;
+}
+
+export function recallTelemetryEnvelope(options: RecallTelemetryOptions): RecallTelemetryEnvelope {
+  return {
+    ...(options.createdAt !== undefined ? { createdAt: options.createdAt } : {}),
+    host: options.host,
+    channel: options.channel,
+    ...(options.sessionId !== undefined ? { sessionId: options.sessionId } : {}),
+    ...(options.turnId !== undefined ? { turnId: options.turnId } : {}),
+  };
+}
+
 export interface RecallTelemetryFilter {
   readonly mode?: RecallTelemetryMode;
   readonly status?: RecallTelemetryStatus;
   readonly host?: string;
+  readonly channel?: RecallChannel;
   readonly since?: string;
   readonly until?: string;
   readonly limit?: number;
@@ -292,6 +424,13 @@ export interface RecallTelemetrySummary {
   readonly total: number;
   readonly by_mode: Partial<Record<RecallTelemetryMode, number>>;
   readonly by_status: Partial<Record<RecallTelemetryStatus, number>>;
+  /**
+   * Deliveries per transport. A channel with no record at all is ABSENT
+   * rather than zero, the same way `by_mode` reports only what arrived:
+   * whether a silent channel should have delivered is a question about
+   * its install state, which only the doctor check holds.
+   */
+  readonly by_channel: Partial<Record<RecallChannel, number>>;
   readonly total_results: number;
   readonly empty_runs: number;
   readonly gap_counts: Record<string, number>;
@@ -310,6 +449,7 @@ export function emitRecallTelemetry(vault: string, input: RecallTelemetryInput):
     })),
     payload: {
       host: input.host,
+      [CONTINUITY_CHANNEL_KEY]: input.channel,
       ...(input.sessionId ? { session_id: input.sessionId } : {}),
       ...(input.turnId ? { turn_id: input.turnId } : {}),
       mode: input.mode,
@@ -349,6 +489,7 @@ export function summarizeRecallTelemetry(
   const records = listRecallTelemetry(vault, filter);
   const byMode: Partial<Record<RecallTelemetryMode, number>> = {};
   const byStatus: Partial<Record<RecallTelemetryStatus, number>> = {};
+  const byChannel: Partial<Record<RecallChannel, number>> = {};
   const gapCounts: Record<string, number> = {};
   let totalResults = 0;
   let emptyRuns = 0;
@@ -361,6 +502,8 @@ export function summarizeRecallTelemetry(
       byStatus[status] = (byStatus[status] ?? 0) + 1;
       if (status === "empty") emptyRuns += 1;
     }
+    const channel = record.payload[CONTINUITY_CHANNEL_KEY];
+    if (isRecallChannel(channel)) byChannel[channel] = (byChannel[channel] ?? 0) + 1;
     const resultCount = record.payload["result_count"];
     if (typeof resultCount === "number") totalResults += resultCount;
     const gaps = record.payload["gaps"];
@@ -376,20 +519,26 @@ export function summarizeRecallTelemetry(
     total: records.length,
     by_mode: Object.freeze(byMode),
     by_status: Object.freeze(byStatus),
+    by_channel: Object.freeze(byChannel),
     total_results: totalResults,
     empty_runs: emptyRuns,
     gap_counts: Object.freeze(gapCounts),
   });
 }
 
+/** Narrow a mode read back off disk or across a tool boundary. */
 export function isRecallTelemetryMode(value: unknown): value is RecallTelemetryMode {
   return (
-    value === "search" || value === "context_pack" || value === "pre_compress" || value === "query"
+    typeof value === "string" && (RECALL_TELEMETRY_MODES as ReadonlyArray<string>).includes(value)
   );
 }
 
+/** Narrow a status read back off disk or across a tool boundary. */
 export function isRecallTelemetryStatus(value: unknown): value is RecallTelemetryStatus {
-  return value === "ok" || value === "empty" || value === "error" || value === "timeout";
+  return (
+    typeof value === "string" &&
+    (RECALL_TELEMETRY_STATUSES as ReadonlyArray<string>).includes(value)
+  );
 }
 
 function matchesTelemetryFilter(record: ContinuityRecord, filter: RecallTelemetryFilter): boolean {
@@ -397,5 +546,8 @@ function matchesTelemetryFilter(record: ContinuityRecord, filter: RecallTelemetr
   if (filter.mode !== undefined && payload["mode"] !== filter.mode) return false;
   if (filter.status !== undefined && payload["status"] !== filter.status) return false;
   if (filter.host !== undefined && payload["host"] !== filter.host) return false;
+  if (filter.channel !== undefined && payload[CONTINUITY_CHANNEL_KEY] !== filter.channel) {
+    return false;
+  }
   return true;
 }

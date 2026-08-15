@@ -28,7 +28,11 @@ import {
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import { emitGatedTelemetry } from "./continuity/emit.ts";
-import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  recallTelemetryEnvelope,
+  type RecallTelemetryOptions,
+} from "./recall-telemetry.ts";
 import {
   contextSafetyReport,
   guardBrainContextSnippet,
@@ -289,10 +293,7 @@ export function buildPreCompressPack(vault: string, opts: PreCompressOptions): P
 
   const telemetry = emitGatedTelemetry(opts.telemetry, (telemetryOptions) =>
     emitRecallTelemetry(vault, {
-      createdAt: telemetryOptions.createdAt,
-      host: telemetryOptions.host,
-      sessionId: telemetryOptions.sessionId,
-      turnId: telemetryOptions.turnId,
+      ...recallTelemetryEnvelope(telemetryOptions),
       mode: "pre_compress",
       status: activeText !== null || items.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,

@@ -7,6 +7,7 @@
  */
 
 import { packContext } from "../../../core/brain/context-pack.ts";
+import { RECALL_CHANNEL } from "../../../core/brain/recall-telemetry.ts";
 import { brainVerbContext, fail, okJson, parse } from "../helpers.ts";
 
 export async function cmdBrainContextPack(argv: string[]): Promise<number> {
@@ -74,7 +75,8 @@ export async function cmdBrainContextPack(argv: string[]): Promise<number> {
       ...(flags["telemetry"] === true
         ? {
             telemetry: {
-              host: trimOrDefault(flags["telemetry-host"], "cli"),
+              host: trimOrDefault(flags["telemetry-host"], RECALL_CHANNEL.cli),
+              channel: RECALL_CHANNEL.cli,
               ...(trimOrUndefined(flags["session-id"]) !== undefined
                 ? { sessionId: trimOrUndefined(flags["session-id"]) }
                 : {}),

@@ -55,7 +55,11 @@ import {
   summarizePrefixPass,
 } from "./prompt-prefix.ts";
 import { isoSecond } from "./time.ts";
-import { emitRecallTelemetry, type RecallTelemetryOptions } from "./recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  recallTelemetryEnvelope,
+  type RecallTelemetryOptions,
+} from "./recall-telemetry.ts";
 import {
   applyContextTransforms,
   type ContextTransformOptions,
@@ -700,10 +704,7 @@ function finalizeContextPackReport(
   if (receipt) enriched = { ...enriched, receiptId: receipt.id };
   const telemetry = emitGatedTelemetry(opts.telemetry, (telemetryOptions) =>
     emitRecallTelemetry(vault, {
-      createdAt: telemetryOptions.createdAt,
-      host: telemetryOptions.host,
-      sessionId: telemetryOptions.sessionId,
-      turnId: telemetryOptions.turnId,
+      ...recallTelemetryEnvelope(telemetryOptions),
       mode: "context_pack",
       status: report.items.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,

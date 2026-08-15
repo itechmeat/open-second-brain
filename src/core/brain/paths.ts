@@ -66,6 +66,8 @@ import {
   BRAIN_STATE_REL,
   BRAIN_TENSIONS_REL,
   BRAIN_THESES_REL,
+  DERIVED_STORE_DIR,
+  HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -76,6 +78,18 @@ export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 // builders that guard on it. Re-exported wholesale: every constant this
 // module used to declare is still reachable from this path.
 export * from "./path-constants.ts";
+
+/**
+ * The runtime hooks' audit root: `<vault>/.open-second-brain/hook-audit`.
+ *
+ * Outside `Brain/` deliberately - it is derived operational evidence, not
+ * an authored artifact - and therefore not guarded by
+ * {@link assertVaultIdentityForWrite}: the hooks append to it on a
+ * fail-open path where a throw would cost the operator their prompt.
+ */
+export function hookAuditDir(vault: string): string {
+  return ensureInsideVault(join(vault, DERIVED_STORE_DIR, HOOK_AUDIT_DIR), vault);
+}
 
 /** Path of the persisted claim-graph projection: `Brain/claim-graph.json`. */
 export function claimGraphPath(vault: string): string {

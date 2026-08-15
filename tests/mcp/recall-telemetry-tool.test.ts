@@ -3,7 +3,13 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  RECALL_CHANNEL,
+  RECALL_CHANNELS,
+  RECALL_TELEMETRY_MODES,
+  RECALL_TELEMETRY_STATUSES,
+} from "../../src/core/brain/recall-telemetry.ts";
 import { recordHostMemoryWrite } from "../../src/core/brain/host-memory-write.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
@@ -100,6 +106,7 @@ describe("brain_recall_telemetry tool", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-05-20T16:00:00.000Z",
       host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
       mode: "context_pack",
       status: "ok",
       durationMs: 4,
@@ -109,6 +116,7 @@ describe("brain_recall_telemetry tool", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-05-20T16:01:00.000Z",
       host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
       mode: "search",
       status: "empty",
       durationMs: 9,
@@ -219,6 +227,7 @@ describe("brain_recall_telemetry tool", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-05-20T09:02:00.000Z",
       host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
       mode: "search",
       status: "ok",
       durationMs: 3,
@@ -316,5 +325,67 @@ describe("brain_observed_use tool (t_65588d8b)", () => {
       },
     })) as { error?: { code: number } };
     expect(response.error?.code).toBe(INVALID_PARAMS);
+  });
+});
+
+describe("brain_recall_telemetry channel dimension", () => {
+  test("the mode enum admits every mode the server records", () => {
+    // The schema enum used to omit `query`, so a legitimately recorded
+    // mode was rejected at the tool boundary before the handler ran.
+    const tool = buildToolTable("full").find((t) => t.name === "brain_recall_telemetry")!;
+    const properties = (tool.inputSchema as { properties: Record<string, { enum?: string[] }> })
+      .properties;
+    expect(properties["mode"]!.enum).toEqual([...RECALL_TELEMETRY_MODES]);
+    expect(properties["channel"]!.enum).toEqual([...RECALL_CHANNELS]);
+    expect(properties["status"]!.enum).toEqual([...RECALL_TELEMETRY_STATUSES]);
+  });
+
+  test("filters by channel and rolls the deliveries up per channel", async () => {
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.hook,
+      mode: "search",
+      status: "empty",
+      durationMs: 1,
+      resultCount: 0,
+    });
+    emitRecallTelemetry(vault, {
+      createdAt: "2026-05-20T17:01:00.000Z",
+      host: "mcp-test",
+      channel: RECALL_CHANNEL.mcp,
+      mode: "query",
+      status: "ok",
+      durationMs: 1,
+      resultCount: 3,
+    });
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+
+    const hooks = await callTelemetry(server, { operation: "list", channel: "hook" });
+    expect(hooks["total"]).toBe(1);
+
+    const byQuery = await callTelemetry(server, { operation: "list", mode: "query" });
+    expect(byQuery["total"]).toBe(1);
+
+    const summary = await callTelemetry(server, { operation: "summary" });
+    expect(summary["by_channel"]).toEqual({ hook: 1, mcp: 1 });
+  });
+
+  test("rejects a channel outside the closed set", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 9,
+      method: "tools/call",
+      params: {
+        name: "brain_recall_telemetry",
+        arguments: { operation: "list", channel: "hermes" },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(response.error?.code).toBe(INVALID_PARAMS);
+    expect(response.error?.message).toContain("mcp, cli, hook");
   });
 });

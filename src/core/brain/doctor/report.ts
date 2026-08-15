@@ -29,6 +29,14 @@ export interface RunDoctorOptions {
    */
   readonly dbPath?: string;
   /**
+   * The `o2b` config file this pass should read runtime gates from (C1).
+   *
+   * Passed through to {@link DoctorCheckContext.configPath}. Omitted, the
+   * gate resolvers fall back to their own default discovery, which is the
+   * answer the runtime being diagnosed would get.
+   */
+  readonly configPath?: string;
+  /**
    * Optional precomputed dream summary (v0.10.16). When supplied,
    * the doctor runs the verification-delta helper and folds the
    * counts into the trust verdict. When omitted, verification

@@ -10,7 +10,7 @@ import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
-import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
+import { emitRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -107,6 +107,7 @@ describe("o2b brain continuity rank", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-13T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,

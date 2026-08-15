@@ -76,6 +76,10 @@ async function toolBrainDoctor(
     strict,
     dbPath: resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined })
       .dbPath,
+    // Same reason as the CLI verb: a check that reads a config gate must read
+    // the config this server was started against, not whatever default
+    // discovery would find.
+    ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
   });
 
   // Decide a single ok flag — `strict` only changes the CLI exit code,

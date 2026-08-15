@@ -73,7 +73,9 @@ import { parseRecallBenchmarkDataset, runRecallBenchmark } from "../core/search/
 import {
   deriveRecallSignals,
   emitRecallTelemetry,
+  RECALL_CHANNEL,
   RECALL_SIGNALS_UNMEASURED_CARDS,
+  recallTelemetryEnvelope,
   type RecallQualitySignals,
   type RecallSignalsUnmeasured,
 } from "../core/brain/recall-telemetry.ts";
@@ -710,9 +712,17 @@ async function toolBrainSearch(
   const until = coerceStringOptional(args, "until", 64);
   const recordAccess = coerceBoolOptional(args, "record_access") ?? true;
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
-  const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
   const telemetryTurnId = coerceStringOptional(args, "turn_id", 512);
+  // One envelope for both emit sites below: the correlation fields are
+  // copied once, and `channel` is a fact about this handler rather than
+  // about the caller-supplied `telemetry_host` string.
+  const telemetryEnvelope = recallTelemetryEnvelope({
+    host: coerceStringOptional(args, "telemetry_host", 200) ?? RECALL_CHANNEL.mcp,
+    channel: RECALL_CHANNEL.mcp,
+    ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+    ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+  });
   const rawQueryDocument = coerceStringOptional(args, "query_document", 4000);
   const structuredQuery =
     rawQueryDocument !== undefined
@@ -806,9 +816,7 @@ async function toolBrainSearch(
     // this catch can no longer mask the original search error.
     emitGatedTelemetry(telemetry || undefined, () =>
       emitRecallTelemetry(ctx.vault, {
-        host: telemetryHost,
-        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
-        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+        ...telemetryEnvelope,
         mode: "search",
         status: e instanceof MCPError && e.message.includes("timeout") ? "timeout" : "error",
         durationMs: Date.now() - startedAtMs,
@@ -842,9 +850,7 @@ async function toolBrainSearch(
     // outcome and rows are frozen, so this lane can only read them.
     const signals = searchRecallSignals(outcome);
     return emitRecallTelemetry(ctx.vault, {
-      host: telemetryHost,
-      ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
-      ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+      ...telemetryEnvelope,
       mode: "search",
       status: surfaced.length > 0 ? "ok" : "empty",
       durationMs: Date.now() - startedAtMs,

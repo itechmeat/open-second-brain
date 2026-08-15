@@ -1,16 +1,32 @@
 /**
  * Help text for `o2b brain` and each of its verbs.
  *
- * Pure data plus one imported constant: the release the sidecar manifest
- * shipped in. That version used to be a literal here, a second literal
- * in the rollback warning and a third in the operating manual, so it is
- * imported from the module that owns the format rather than re-typed.
+ * Pure data plus imported constants. The release the sidecar manifest
+ * shipped in used to be a literal here, a second literal in the rollback
+ * warning and a third in the operating manual, so it is imported from the
+ * module that owns the format rather than re-typed. The recall-telemetry
+ * filter vocabularies are here for the same reason and a sharper one: the
+ * mode list was spelled out in prose in four places, and when `query` was
+ * added to the vocabulary all four kept advertising three modes - one of
+ * them a JSON schema enum, which rejected a mode the system was already
+ * recording. A hand-typed list of a closed set is a word list that goes
+ * stale silently, so every surface renders the set instead.
  * Split out of `./helpers.ts` so the verb-handler bundle does not
  * have to load this ~200-line string table when it only needs
  * `parse` / `resolveBrainVault`.
  */
 
 import { BRAIN_MANIFEST_SIDECAR_SINCE_VERSION } from "../../core/brain/manifest.ts";
+import {
+  RECALL_CHANNELS,
+  RECALL_TELEMETRY_MODES,
+  RECALL_TELEMETRY_STATUSES,
+} from "../../core/brain/recall-telemetry.ts";
+
+/** `search|context_pack|pre_compress|query`, rendered from the closed set. */
+const RECALL_MODE_CHOICES = RECALL_TELEMETRY_MODES.join("|");
+const RECALL_STATUS_CHOICES = RECALL_TELEMETRY_STATUSES.join("|");
+const RECALL_CHANNEL_CHOICES = RECALL_CHANNELS.join("|");
 
 export const BRAIN_HELP = `usage: o2b brain <verb> [args...]
 
@@ -740,7 +756,7 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain post-compact-audit [--session-id <id>] [--no-reassert] [--force] [--vault <path>] [--json]\n" +
     "Reads a { session_id, messages } JSON document from stdin. Detects a Hermes compaction, audits which pinned anchors survived in the active (non-summary) region, and re-asserts only the drifted ones. Gated by post_compact_survival_audit (default off); --force overrides the gate.\n",
   "recall-telemetry":
-    "usage: o2b brain recall-telemetry list [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n" +
+    `usage: o2b brain recall-telemetry list [--mode ${RECALL_MODE_CHOICES}] [--status ${RECALL_STATUS_CHOICES}] [--channel ${RECALL_CHANNEL_CHOICES}] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--vault <path>] [--json]\n` +
     "       o2b brain recall-telemetry summary [same filters] [--vault <path>] [--json]\n" +
     "       o2b brain recall-telemetry cost [--since <iso>] [--until <iso>] [--write-cost <n>] [--read-cost <n>] [--write-heavy-ratio <n>] [--vault <path>] [--json]\n" +
     "Read opt-in recall telemetry continuity records and aggregate coverage gaps. cost folds write volume (feedback/apply-evidence/note/host writes) against reads into a write-vs-read ratio, a write-heavy flag, and a rough weighted cost signal per period.\n",

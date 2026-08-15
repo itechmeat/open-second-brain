@@ -6,7 +6,7 @@
 
 import { isAbsolute, relative, resolve } from "node:path";
 import { resolveTimezone } from "../../core/config.ts";
-import { type RecallTelemetryOptions } from "../../core/brain/recall-telemetry.ts";
+import { RECALL_CHANNEL, type RecallTelemetryOptions } from "../../core/brain/recall-telemetry.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { formatLocalTimestamp } from "../../core/brain/present-time.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
@@ -230,20 +230,32 @@ export function requiredStringArg(
 
 // ----- brain_recall_telemetry ---------------------------------------------
 
+/**
+ * Telemetry options for an MCP tool handler, or `undefined` when the
+ * caller did not opt in.
+ *
+ * `channel` is fixed at {@link RECALL_CHANNEL.mcp} rather than taken from
+ * the caller: every caller of this helper IS an MCP tool handler, so the
+ * transport is a fact about the seam, not an argument. `telemetry_host`
+ * stays the caller's to set, and stays a runtime identity - which is the
+ * separation the channel dimension exists to make.
+ */
 export function telemetryOptionsFromArgs(
   tool: string,
   args: Record<string, unknown>,
   defaultHost: string,
 ): RecallTelemetryOptions | undefined {
   if (!coerceBool(args, "telemetry")) return undefined;
+  // Each id parsed ONCE. The conditional-spread idiom used to call the
+  // parser twice per field, so a validating parser ran its checks twice
+  // and any future non-idempotent one would have diverged silently.
+  const sessionId = optionalStringArg(tool, args, "session_id");
+  const turnId = optionalStringArg(tool, args, "turn_id");
   return {
     host: optionalStringArg(tool, args, "telemetry_host") ?? defaultHost,
-    ...(optionalStringArg(tool, args, "session_id") !== undefined
-      ? { sessionId: optionalStringArg(tool, args, "session_id") }
-      : {}),
-    ...(optionalStringArg(tool, args, "turn_id") !== undefined
-      ? { turnId: optionalStringArg(tool, args, "turn_id") }
-      : {}),
+    channel: RECALL_CHANNEL.mcp,
+    ...(sessionId !== undefined ? { sessionId } : {}),
+    ...(turnId !== undefined ? { turnId } : {}),
   };
 }
 

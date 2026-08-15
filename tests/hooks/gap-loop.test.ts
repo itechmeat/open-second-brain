@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { emitRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
+import { emitRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
 import { assessRecallAdequacy } from "../../src/core/brain/recall-adequacy.ts";
 import {
   normalizeQueryTerms,
@@ -70,6 +70,7 @@ function seedGap(topic: string, times: number): void {
   for (let i = 0; i < times; i++) {
     emitRecallTelemetry(vault, {
       host: "test",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "empty",
       durationMs: 0,

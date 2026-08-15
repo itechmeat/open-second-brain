@@ -40,7 +40,11 @@ import {
   coerceStringOptional,
 } from "../coerce.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
-import { emitRecallTelemetry } from "../../core/brain/recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  RECALL_CHANNEL,
+  recallTelemetryEnvelope,
+} from "../../core/brain/recall-telemetry.ts";
 import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
@@ -122,9 +126,14 @@ async function toolBrainQuery(
   // brain_search. The payload carries the query KIND only - never the
   // supplied preference id / topic slug / timestamp value.
   const telemetry = coerceBoolOptional(args, "telemetry") ?? false;
-  const telemetryHost = coerceStringOptional(args, "telemetry_host", 200) ?? "mcp";
   const telemetrySessionId = coerceStringOptional(args, "session_id", 512);
   const telemetryTurnId = coerceStringOptional(args, "turn_id", 512);
+  const telemetryEnvelope = recallTelemetryEnvelope({
+    host: coerceStringOptional(args, "telemetry_host", 200) ?? RECALL_CHANNEL.mcp,
+    channel: RECALL_CHANNEL.mcp,
+    ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
+    ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+  });
   const queryKind = preference !== null ? "preference" : topic !== null ? "topic" : "since";
 
   // Owner-scoped fact recall (Knowledge Provenance suite, v1.7). Off by
@@ -141,9 +150,7 @@ async function toolBrainQuery(
     // throwing continuity write can never fail the query itself.
     emitGatedTelemetry(telemetry || undefined, () =>
       emitRecallTelemetry(ctx.vault, {
-        host: telemetryHost,
-        ...(telemetrySessionId !== undefined ? { sessionId: telemetrySessionId } : {}),
-        ...(telemetryTurnId !== undefined ? { turnId: telemetryTurnId } : {}),
+        ...telemetryEnvelope,
         mode: "query",
         status,
         durationMs: Date.now() - startedAtMs,

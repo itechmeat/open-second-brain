@@ -15,16 +15,31 @@ export const CONTINUITY_SESSION_ID_KEY = "session_id";
 export const CONTINUITY_AGENT_ID_KEY = "agent_id";
 /** Payload key carrying a record's turn correlation id. */
 export const CONTINUITY_TURN_ID_KEY = "turn_id";
+/**
+ * Payload key carrying the transport a recall record arrived over (C1).
+ *
+ * Spelled here rather than in `recall-telemetry.ts` for the same reason
+ * the two identity keys are: the clip list below has to name it, and a
+ * protected key whose spelling lives in the module being protected is a
+ * rename away from silently losing its protection.
+ */
+export const CONTINUITY_CHANNEL_KEY = "channel";
 
 /**
  * Identity keys guaranteed to survive any output-budget clip of a
  * continuity payload (t_5be0654d). A clip may drop other keys to fit a
  * budget but MUST retain these, so a clipped record stays correlatable to
  * its session and its authoring agent. See {@link clipPayloadToBudget}.
+ *
+ * `channel` joins them (C1) on the same argument one step out: a clipped
+ * recall record that lost its channel is attributed to nothing, and a
+ * record attributed to nothing is exactly the silence the channel
+ * dimension was added to break.
  */
 export const CLIP_PROTECTED_PAYLOAD_KEYS: ReadonlyArray<string> = Object.freeze([
   CONTINUITY_SESSION_ID_KEY,
   CONTINUITY_AGENT_ID_KEY,
+  CONTINUITY_CHANNEL_KEY,
 ]);
 
 export type ContinuityRecordKind =
