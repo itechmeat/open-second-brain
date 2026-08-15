@@ -211,6 +211,13 @@ export interface DreamOptions {
    */
   readonly safeguard?: import("./safeguard.ts").Safeguard;
   /**
+   * Live progress observer (nothing-runs-unwatched, U1). Optional, and
+   * its absence means nobody asked - the pass behaves exactly as before.
+   * Emitted at the same boundaries `safeguard` is checked at, because a
+   * run worth guarding with a deadline is a run worth reporting on.
+   */
+  readonly onProgress?: import("./progress.ts").ProgressSink;
+  /**
    * Per-run gate overrides (no-dead-ends, Unit E). Additive: omitted, the
    * run reads every gate from `Brain/_brain.yaml` exactly as before.
    */

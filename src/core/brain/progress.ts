@@ -176,13 +176,20 @@ export interface ProgressCounter {
 
 export interface ProgressCounterOptions {
   /**
-   * Where a throwing sink is reported. Progress is observation: a broken
-   * edge stream must not abort an operation that is otherwise succeeding.
-   * Swallowing the failure outright would be the silent fallback this
-   * project forbids, so the error is handed on exactly once instead. With
-   * no reporter supplied the throw propagates, because a caller that
-   * neither handles nor reports it has asked for the default behaviour of
-   * its own sink.
+   * Where a throwing sink is reported.
+   *
+   * Progress is observation, and an observation must not be able to
+   * destroy the thing observed: a broken edge stream - a closed pipe, a
+   * renderer defect - must not abort a consolidation pass that is
+   * otherwise succeeding. Swallowing the failure would be the silent
+   * fallback this project forbids, so the error is handed on **once** and
+   * the sink is then detached for the rest of the run. Detaching is the
+   * point: a stream that failed on the first tick would otherwise fail on
+   * every one, turning one defect into a flood of identical reports.
+   *
+   * With no reporter supplied the throw propagates, because a caller that
+   * neither handles nor reports it has asked for its own sink's default
+   * behaviour rather than for this module to decide.
    */
   readonly onSinkError?: (error: unknown) => void;
 }
@@ -203,9 +210,10 @@ export function progressCounter(
   let stage: string | null = null;
   let completed = 0;
   let total: number | undefined;
+  let live = sink !== undefined;
 
   const emit = (kind: ProgressKind, reason?: ProgressReason): void => {
-    if (sink === undefined || stage === null) return;
+    if (!live || sink === undefined || stage === null) return;
     const event: ProgressEvent = {
       schema: PROGRESS_SCHEMA,
       operation,
@@ -219,6 +227,7 @@ export function progressCounter(
       sink(event);
     } catch (error) {
       if (opts.onSinkError === undefined) throw error;
+      live = false;
       opts.onSinkError(error);
     }
   };

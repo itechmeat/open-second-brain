@@ -68,6 +68,7 @@ import { buildChangedSummary, buildNoOpSummary } from "./dream-summary.ts";
 import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.ts";
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
+import { OPERATION, progressCounter } from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
@@ -98,10 +99,58 @@ export { scanBrain } from "./dream-scan.ts";
 
 // ----- Main entry ----------------------------------------------------------
 
+/**
+ * Execution stages of one pass, in the order they run.
+ *
+ * Neither existing vocabulary fits: `DREAM_PHASE` is the REPORTING order
+ * of the summary, and `WORKRUN_PHASE` marks the points where a phase's
+ * durable output has already landed - both are about what finished, and
+ * progress is about what is happening. These five name the spans between
+ * the safeguard checkpoints, which is where the wall-clock actually goes.
+ */
+const DREAM_STAGE = Object.freeze({
+  scan: "scan",
+  plan: "plan",
+  apply: "apply",
+  log: "log",
+  finalize: "finalize",
+} as const);
+
+/** Code carried on the summary when the caller's progress sink failed. */
+const PROGRESS_SINK_FAULT_CODE = "progress-sink-failed";
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * Carry a failed progress sink onto the summary the caller already reads.
+ * Only the first fault is reported: the sink is detached after it, so a
+ * second entry could only describe the same broken stream twice.
+ */
+function noteProgressFaults(warnings: DreamWarning[], faults: ReadonlyArray<string>): void {
+  const first = faults[0];
+  if (first === undefined) return;
+  warnings.push({
+    code: PROGRESS_SINK_FAULT_CODE,
+    message: `progress reporting stopped after the sink threw: ${first}`,
+  });
+}
+
 export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   const now = opts.now ?? new Date();
   const dryRun = opts.dryRun === true;
+  // A caller's progress sink is an observer, and an observer must not be
+  // able to destroy what it observes: a closed pipe or a renderer defect
+  // cannot be allowed to abort a pass that is otherwise succeeding. Nor
+  // may it vanish - the fault is carried out on the summary the caller
+  // already reads, once, and the sink is detached for the rest of the run.
+  const progressFaults: string[] = [];
+  const progress = progressCounter(OPERATION.dream, opts.onProgress, {
+    onSinkError: (error) => progressFaults.push(errorMessage(error)),
+  });
   opts.safeguard?.checkpoint();
+  progress.start(DREAM_STAGE.scan);
   const cfg = loadBrainConfig(vault);
   // Per-run gate resolution (no-dead-ends, Unit E): the override wins for
   // this run, the configured value decides when it is absent. Resolved
@@ -121,7 +170,9 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   //    can emit `skip-corrupted-frontmatter` log entries without
   //    aborting.
   const scan = scanBrain(vault);
+  progress.advance(DREAM_STAGE.scan);
   const intentReview = buildIntentReview(vault, { now });
+  progress.start(DREAM_STAGE.plan, scan.preferences.length);
 
   // 1-2. Plan per-topic transitions: new unconfirmed preferences,
   //      same-sign noted-redundant moves, rebuttal accumulation.
@@ -172,6 +223,11 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       regenerateActiveQuiet(vault, { now });
       regenerateLessonsQuiet(vault, { now });
     }
+    // A run that changed nothing still finished. Reporting it as an
+    // unterminated stream would make an idempotent rerun - the common
+    // case - indistinguishable from a pass that died in planning.
+    progress.finish();
+    noteProgressFaults(warnings, progressFaults);
     return buildNoOpSummary({
       runId,
       dryRun,
@@ -196,6 +252,7 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   let snapshotPathStr: string | undefined;
   // Honor an already-expired deadline BEFORE spending snapshot I/O.
   opts.safeguard?.checkpoint();
+  progress.start(DREAM_STAGE.apply);
 
   // v0.12.0 Brain Integrity Suite: durable workrun for the dream pass.
   // Opened lazily on the mutation path (no workrun on dry-run or
@@ -267,6 +324,8 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // this run is on disk, so a deadline that has passed stops the run here
   // rather than part-way through the audit tail.
   opts.safeguard?.checkpoint();
+  progress.advance(DREAM_STAGE.apply);
+  progress.start(DREAM_STAGE.log);
 
   // v0.12.0 Brain Integrity Suite: build the gated-slug set once so the
   // log body and the DreamRunSummary stay consistent — both views must
@@ -308,12 +367,17 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
   // already past its budget still reached `finalized`. Tripping here
   // leaves the workrun dangling, which is the documented contract.
   opts.safeguard?.checkpoint();
+  progress.advance(DREAM_STAGE.log);
+  progress.start(DREAM_STAGE.finalize);
 
   // v0.12.0 Brain Integrity Suite: finalise the durable workrun
   // immediately before constructing the summary. Any crash building
   // the summary leaves the workrun dangling for the next pass to
   // spot. `workrun` is null on dry-run / pre-mutation paths.
   workrun?.finalize();
+  progress.advance(DREAM_STAGE.finalize);
+  progress.finish();
+  noteProgressFaults(warnings, progressFaults);
 
   return buildChangedSummary({
     runId,
