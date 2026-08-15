@@ -21,6 +21,7 @@ import {
   CODEGRAPH_CLI,
   codegraphInitCommand,
   defaultRunStatusJson,
+  isCodegraphUnanswered,
   defaultWhichCodegraph,
   findCodeProjects,
   type CodegraphStatusResult,
@@ -279,6 +280,19 @@ function resolveIndexState(
   }
   const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
   const status = runFn(project);
+  if (isCodegraphUnanswered(status)) {
+    // `error` is the closest of the five states, and the reason carries
+    // what it cannot: the partner was stopped at its deadline rather than
+    // having reported anything. What matters is that this is NOT
+    // `not_indexed` - the state whose remediation is `codegraph init`,
+    // which is the wrong thing to run at a partner that is still going.
+    return {
+      state: "error",
+      reason:
+        `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.statusSubcommand} did not answer within ` +
+        `${status.waitedMs}ms and was stopped; nothing is claimed here about this index`,
+    };
+  }
   if (!status.ok) {
     return { state: "error", reason: status.error };
   }

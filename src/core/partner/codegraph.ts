@@ -173,9 +173,44 @@ export interface CodegraphStatusData {
   readonly selfLoops?: number;
 }
 
+/**
+ * What asking the partner for one project's status produced.
+ *
+ * Three arms, not two. `unanswered` is separate from `error` because the
+ * two are different facts about the world and only one of them is about
+ * the index: a partner that exited non-zero has told us something, and a
+ * partner that never returned has told us nothing at all. Collapsing them
+ * sends an operator to `codegraph init` over a process that is still
+ * running. This is the same distinction `DOCTOR_EXIT.probeIncomplete`
+ * draws one release earlier - a probe that did not complete is not a probe
+ * that failed.
+ */
+export interface CodegraphUnanswered {
+  readonly ok: false;
+  /** Present only on this arm; the field the guard below discriminates on. */
+  readonly unanswered: true;
+  /** The deadline that expired, in milliseconds, as the message quotes it. */
+  readonly waitedMs: number;
+}
+
 export type CodegraphStatusResult =
   | { readonly ok: true; readonly data: CodegraphStatusData }
-  | { readonly ok: false; readonly error: string };
+  | { readonly ok: false; readonly error: string }
+  | CodegraphUnanswered;
+
+/**
+ * Whether the partner never answered.
+ *
+ * A guard rather than a `kind` field on all three arms, because the two
+ * existing arms are a published shape that tests and the report module
+ * build by hand; narrowing on a member unique to the new arm adds the
+ * distinction without rewriting what already answers.
+ */
+export function isCodegraphUnanswered(
+  result: CodegraphStatusResult,
+): result is CodegraphUnanswered {
+  return result.ok === false && "unanswered" in result;
+}
 
 export interface CodegraphCheckDeps {
   readonly whichCodegraph?: () => string | null;
@@ -187,6 +222,19 @@ export interface CodegraphCheckDeps {
    * only (see {@link defaultDetectProjectPathSupport}).
    */
   readonly detectProjectPathSupport?: () => boolean;
+  /**
+   * Deadline for each partner invocation, defaulting to
+   * {@link CODEGRAPH_PARTNER_TIMEOUT_MS}.
+   *
+   * It lives on the deps rather than on {@link CodegraphCheckOptions}
+   * because it is a seam, not a setting: nothing in the product produces a
+   * value for it, and a configurable deadline nobody configures would be
+   * one more declared surface with no producer. What it buys is a test
+   * that can hang a real partner and watch a real bound end it, instead of
+   * asserting against a fake that returns the record the bound would have
+   * produced.
+   */
+  readonly timeoutMs?: number;
 }
 
 export interface CodegraphCheckOptions {
@@ -238,14 +286,49 @@ const CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
 /** The universal flag that makes a CLI print its own usage. */
 const HELP_FLAG = "--help";
 
-export function defaultDetectProjectPathSupport(): boolean {
+/**
+ * How long any single partner invocation may take before it is stopped.
+ *
+ * Both spawns are SYNCHRONOUS and `doctor()` has three callers - the CLI,
+ * the MCP `vault_health` tool and the OpenClaw extension - so an unbounded
+ * one blocks whichever of them asked, for as long as the partner is stuck.
+ * The bound existed nowhere: a wedged partner (a stale lock, an index
+ * rebuild that never returns, a stalled network filesystem) hung the
+ * doctor with no deadline, no refusal and no record.
+ *
+ * Ten seconds because this is a CEILING and not a target: a warm
+ * `codegraph status -j` over a 27k-node index on the machine this was
+ * measured on answers in ~0.7 s, and the partner's own config docblock
+ * names seconds against a cold HOME. An order of magnitude of headroom
+ * keeps a slow-but-working partner reporting its answer, while a partner
+ * that is not coming back stops being everyone else's problem.
+ */
+export const CODEGRAPH_PARTNER_TIMEOUT_MS = 10_000;
+
+/** Bun reports a killed-by-deadline spawn with its own flag; typed once here. */
+function timedOut(proc: { readonly exitedDueToTimeout?: boolean }): boolean {
+  return proc.exitedDueToTimeout === true;
+}
+
+/**
+ * @param timeoutMs deadline for the spawn; see {@link CODEGRAPH_PARTNER_TIMEOUT_MS}.
+ *   A probe that times out returns `false` for the same reason a probe
+ *   that throws does - the caller degrades to the first project and says
+ *   so - and the sentence it produces claims only that support was not
+ *   REPORTED, never that the partner lacks it.
+ */
+export function defaultDetectProjectPathSupport(
+  timeoutMs: number = CODEGRAPH_PARTNER_TIMEOUT_MS,
+): boolean {
   try {
     const proc = Bun.spawnSync({
       cmd: [CODEGRAPH_CLI.bin, CODEGRAPH_CLI.statusSubcommand, HELP_FLAG],
       stdout: "pipe",
       stderr: "pipe",
       env: partnerEnv(),
+      timeout: timeoutMs,
     });
+    if (timedOut(proc)) return false;
     const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
     return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
   } catch {
@@ -253,7 +336,10 @@ export function defaultDetectProjectPathSupport(): boolean {
   }
 }
 
-export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult {
+export function defaultRunStatusJson(
+  projectPath: string,
+  timeoutMs: number = CODEGRAPH_PARTNER_TIMEOUT_MS,
+): CodegraphStatusResult {
   try {
     const proc = Bun.spawnSync({
       cmd: [
@@ -265,7 +351,13 @@ export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult
       stdout: "pipe",
       stderr: "pipe",
       env: partnerEnv(),
+      timeout: timeoutMs,
     });
+    // Checked BEFORE the output is read, because a partner killed at the
+    // deadline usually wrote nothing and would otherwise be reported as
+    // "empty status output" - a sentence about what it said, over a
+    // process that never said anything.
+    if (timedOut(proc)) return { ok: false, unanswered: true, waitedMs: timeoutMs };
     const stdout = new TextDecoder().decode(proc.stdout).trim();
     const stderr = new TextDecoder().decode(proc.stderr).trim();
     if (!proc.success) {
@@ -334,30 +426,60 @@ export function checkCodegraph(
   // runs (there is nothing to thread across), so behavior and output are
   // exactly today's.
   if (projects.length === 1) {
-    return evaluateProjectStatus(projects[0]!, deps);
+    return evaluateProjectStatus(projects[0]!, deps).result;
   }
 
   // Multi-project workspace. Threading status per project is only sound when
   // the partner accepts a per-query project path; otherwise every query would
   // report whatever project the CLI infers from its own cwd, so we degrade to
   // the first project and say so explicitly.
-  const detectFn = deps?.detectProjectPathSupport ?? defaultDetectProjectPathSupport;
+  const detectFn =
+    deps?.detectProjectPathSupport ?? (() => defaultDetectProjectPathSupport(partnerTimeout(deps)));
   if (!detectFn()) {
-    const first = evaluateProjectStatus(projects[0]!, deps);
+    const first = evaluateProjectStatus(projects[0]!, deps).result;
     return {
       name: "code_graph",
       ok: first.ok,
-      message: `${first.message}; note: codegraph CLI has no per-query project_path support - reported 1 of ${projects.length} discovered projects only`,
+      // "did not report" rather than "has no": the probe reads the
+      // partner's own usage text, and a probe that failed or ran out of
+      // time reads exactly like a partner without the feature. Saying the
+      // stronger thing would be claiming what was not established.
+      message: `${first.message}; note: codegraph CLI did not report per-query project_path support - reported 1 of ${projects.length} discovered projects only`,
     };
   }
 
-  const results = projects.map((project) => evaluateProjectStatus(project, deps));
+  // A partner that has already failed to answer once is not asked again:
+  // per-project retries would multiply the deadline by the project count,
+  // which is how a bound stops bounding anything. The projects that were
+  // consequently never consulted are named rather than dropped.
+  const results: CheckResult[] = [];
+  let unanswered = false;
+  for (const project of projects) {
+    if (unanswered) {
+      results.push({
+        name: "code_graph",
+        ok: false,
+        message:
+          `code project at ${project}: not consulted - ${CODEGRAPH_CLI.bin} did not answer for ` +
+          "an earlier project in this workspace, so nothing is claimed here about this index",
+      });
+      continue;
+    }
+    const evaluated = evaluateProjectStatus(project, deps);
+    unanswered = evaluated.unanswered;
+    results.push(evaluated.result);
+  }
   const header = `${projects.length} code projects:`;
   return {
     name: "code_graph",
     ok: results.every((r) => r.ok),
     message: [header, ...results.map((r) => `- ${r.message}`)].join("\n"),
   };
+}
+
+/** The deadline this call runs under. */
+function partnerTimeout(deps?: CodegraphCheckDeps): number {
+  return deps?.timeoutMs ?? CODEGRAPH_PARTNER_TIMEOUT_MS;
 }
 
 /**
@@ -384,14 +506,26 @@ function codegraphDisabledResult(): CheckResult {
   };
 }
 
+/** One project's verdict, plus whether the partner failed to answer for it. */
+interface EvaluatedProject {
+  readonly result: CheckResult;
+  /**
+   * True when the partner ran out of time rather than answering. Carried
+   * beside the result rather than parsed back out of its message, because
+   * the aggregate above changes what it DOES on this fact.
+   */
+  readonly unanswered: boolean;
+}
+
 /**
  * Evaluate one project's codegraph status into a `code_graph` CheckResult,
  * threading the project path into the status query. This is the exact
- * per-project logic (not-indexed / status-failed / indexed + graph-health) that
- * the single-project path returns verbatim, so a single-project workspace stays
- * byte-identical and a multi-project aggregate reuses one implementation.
+ * per-project logic (not-indexed / no-answer / status-failed / indexed +
+ * graph-health) that the single-project path returns verbatim, so a
+ * single-project workspace stays byte-identical and a multi-project
+ * aggregate reuses one implementation.
  */
-function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): CheckResult {
+function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): EvaluatedProject {
   const indexDir = join(project, ".codegraph");
   // Stat'ed rather than probed with `isDir`, which answers `false` both for
   // an index that was never built and for one this process cannot look at.
@@ -402,37 +536,59 @@ function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): Chec
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
   } catch (exc) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: index directory unreadable: ${(exc as Error).message ?? exc}`,
       fix: `chmod u+rx "${indexDir}"`,
-    };
+    });
   }
   if (!indexed) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`,
-    };
+    });
   }
 
-  const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
+  const runFn =
+    deps?.runStatusJson ?? ((path: string) => defaultRunStatusJson(path, partnerTimeout(deps)));
   const status = runFn(project);
-  if (!status.ok) {
+  if (isCodegraphUnanswered(status)) {
+    // `ok: false` is the lesser wrong of the two values this field has,
+    // for the mirror of the reason `codegraphDisabledResult` chooses
+    // `true`: reporting a wedged partner as a pass would be the silent
+    // no-op, and the doctor has no third stream to put "did not complete"
+    // on without changing every consumer of `CheckResult`. The message
+    // therefore carries the distinction the flag cannot.
     return {
+      result: {
+        name: "code_graph",
+        ok: false,
+        message:
+          `code project at ${project}: ${CODEGRAPH_CLI.bin} ` +
+          `${CODEGRAPH_CLI.statusSubcommand} did not answer within ${status.waitedMs}ms and was ` +
+          "stopped, so NOTHING is claimed here about this index - a probe that did not complete " +
+          "is not an index that failed",
+        fix: `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.statusSubcommand} ${CODEGRAPH_CLI.statusJsonFlag} ${project}`,
+      },
+      unanswered: true,
+    };
+  }
+  if (!status.ok) {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: codegraph status failed: ${status.error}`,
-    };
+    });
   }
 
   if (!status.data.initialized) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`,
-    };
+    });
   }
 
   const nodes = status.data.nodeCount ?? 0;
@@ -456,13 +612,18 @@ function evaluateProjectStatus(project: string, deps?: CodegraphCheckDeps): Chec
     worktreeRoot: resolveRealpath(status.data.worktreeMismatch?.worktreeRoot ?? project),
   });
 
-  return {
+  return answered({
     name: "code_graph",
     ok: true,
     message: health.ok
       ? base
       : `${base}; graph-health: ${summarizeGraphHealth(health)} - run: o2b partner codegraph report`,
-  };
+  });
+}
+
+/** A verdict the partner (or the filesystem) actually produced. */
+function answered(result: CheckResult): EvaluatedProject {
+  return { result, unanswered: false };
 }
 
 /**
