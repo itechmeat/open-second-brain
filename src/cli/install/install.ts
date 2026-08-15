@@ -28,7 +28,7 @@
 import { homedir } from "node:os";
 
 import { parseFlags } from "../argparse.ts";
-import { defaultConfigPath, discoverConfig } from "../../core/config.ts";
+import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
 // The canonical adapter set registers itself into `defaultRegistry` at
 // module-load time via this barrel (single source of the adapter list).
@@ -110,9 +110,33 @@ function parseInstallArgs(argv: string[]): ParsedInstallArgs {
 
 class UsageError extends Error {}
 
+/**
+ * The vault this verb installs FOR, resolved through the one chain the
+ * rest of the CLI uses.
+ *
+ * `--vault` comes first because it is the operator naming the directory in
+ * the same breath as the command; everything below it is
+ * {@link resolveVault} verbatim - `VAULT_DIR`, the project pointer, the
+ * active profile, then the config `vault` key - so the path written into
+ * an agent's MCP entry is the path every other verb operates on.
+ *
+ * This verb used to carry its own chain (`--vault` then the config key
+ * then `VAULT_DIR`), which put `VAULT_DIR` LAST where the canonical
+ * resolver puts it FIRST and consulted neither pointers nor profiles. On a
+ * machine with both settings the installer wrote one vault into the MCP
+ * config while `o2b status` read another, and nothing reported the split.
+ *
+ * The absent case stays the empty string rather than `null`: every caller
+ * here refuses it by name (`runCheck`, {@link loadPayload}) and an
+ * `InstallEnv.vault` is typed `string`.
+ */
+export function resolveInstallVault(explicitVault: string | null, configPath: string): string {
+  return explicitVault ?? resolveVault(configPath) ?? "";
+}
+
 function buildInstallEnv(args: ParsedInstallArgs): InstallEnv {
   const cfg = discoverConfig(args.config).data;
-  const vault = args.vault ?? cfg["vault"] ?? process.env["VAULT_DIR"] ?? "";
+  const vault = resolveInstallVault(args.vault, args.config);
   const env = { ...process.env } as Record<string, string>;
   if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
   if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
@@ -142,7 +166,12 @@ function buildApplyOpts(
 
 function loadPayload(args: ParsedInstallArgs, env: InstallEnv) {
   const cfg = discoverConfig(args.config).data;
-  const vault = env.vault || cfg["vault"];
+  // `env.vault` is already {@link resolveInstallVault}'s answer, and that
+  // chain ends on the same `vault` config key this used to re-read as a
+  // fallback. Keeping the second read would mean an empty `env.vault`
+  // could still produce a payload built against a key the canonical
+  // resolver had just declined - a third precedence, in one function.
+  const vault = env.vault;
   if (!vault) {
     throw new UsageError(
       "o2b install: vault not configured. Pass --vault <path>, set VAULT_DIR, or run `o2b init`.",
