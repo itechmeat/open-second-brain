@@ -314,6 +314,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Tombstone or supersede a memory, resolve chain tips, list curator slices",
         ),
         command(
+          "note-lifecycle",
+          "Note FILES: rename, move, archive or delete one, rewriting inbound wikilinks",
+        ),
+        command(
           "claims",
           "Claim-graph query: current truth, truth at an instant, replaced-by, contested-by",
         ),

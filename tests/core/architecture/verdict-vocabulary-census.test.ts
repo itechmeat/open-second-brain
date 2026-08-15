@@ -161,6 +161,17 @@ import {
   RECOVERY_COVERAGE,
   RECOVERY_COVERAGES,
 } from "../../../src/core/brain/gates/recoverability.ts";
+import {
+  BASENAME_REWRITE,
+  BASENAME_REWRITES,
+  INDEX_EVIDENCE,
+  INDEX_EVIDENCE_STATES,
+  isBasenameRewrite,
+  isIndexEvidenceState,
+  isNoteLifecycleAction,
+  NOTE_LIFECYCLE_ACTION,
+  NOTE_LIFECYCLE_ACTIONS,
+} from "../../../src/core/brain/notes/lifecycle.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -540,6 +551,37 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SNAPSHOT_PRUNE_REFUSAL,
     members: SNAPSHOT_PRUNE_REFUSALS,
     guard: isSnapshotPruneRefusal,
+  },
+  {
+    // B2. The dispatch key of the note-file lifecycle tool, so the value
+    // arrives as an untyped MCP argument or a raw CLI positional and the
+    // guard is the boundary between the two.
+    name: "NOTE_LIFECYCLE_ACTION",
+    values: NOTE_LIFECYCLE_ACTION,
+    members: NOTE_LIFECYCLE_ACTIONS,
+    guard: isNoteLifecycleAction,
+  },
+  {
+    // B2. What a rename did about `[[Basename]]` - the one inbound
+    // spelling that is not unique by construction. Three answers, and
+    // the reason it is a vocabulary rather than a boolean is that
+    // "withheld because two notes carry the name" and "there was nothing
+    // to rewrite" are opposite facts a boolean would collapse.
+    name: "BASENAME_REWRITE",
+    values: BASENAME_REWRITE,
+    members: BASENAME_REWRITES,
+    guard: isBasenameRewrite,
+  },
+  {
+    // B2. The freshness of the derived index a relocation could not
+    // update. No `current` member: nothing in this codebase writes the
+    // `links` table on a note write, so an index that exists is stale
+    // with respect to a rename that just happened, and declaring a
+    // member nothing produces would invite the opposite reading.
+    name: "INDEX_EVIDENCE",
+    values: INDEX_EVIDENCE,
+    members: INDEX_EVIDENCE_STATES,
+    guard: isIndexEvidenceState,
   },
 ]);
 

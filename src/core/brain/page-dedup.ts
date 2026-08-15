@@ -14,12 +14,12 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { join, posix, relative, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
-import { brainDirs } from "./paths.ts";
+import { brainDirs, BRAIN_ROOT_REL } from "./paths.ts";
 import { setMergedInto } from "./page-meta/page-id.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -137,34 +137,100 @@ export function findDuplicateCandidates(vault: string): DedupReport {
 }
 
 /**
- * Rewrite every `[[<oldTarget>]]` reference inside `<vault>/Brain/`
- * to `[[<newTarget>]]`. Returns the number of files touched. Reads
- * every Markdown file under the Brain root once; only writes when
- * the content actually changes.
+ * One wikilink target spelling, and what it should become.
+ *
+ * `to` is OPTIONAL, and that is the whole reason this shape exists
+ * rather than a pair of strings. A note-file delete has to know how many
+ * inbound references it is about to strand and must rewrite none of
+ * them, while a rename has to rewrite exactly the same set; running the
+ * two through one matcher is what stops "what would change" and "what
+ * changed" from becoming two different opinions of the same vault. An
+ * absent `to` is match-only.
  */
-export function patchWikilinks(vault: string, oldTarget: string, newTarget: string): number {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  if (oldTarget === newTarget) return 0;
-  const brainRoot = join(vault, "Brain");
-  if (!existsSync(brainRoot)) return 0;
-  let touched = 0;
-  const stack: string[] = [brainRoot];
-  // Escape the oldTarget for use inside a regex. Wikilinks can carry
-  // aliases (`[[oldTarget|some alias]]`) and section anchors
-  // (`[[oldTarget#heading]]`); replace the target portion only.
-  const escaped = oldTarget.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const pattern = new RegExp(`\\[\\[${escaped}(?=[#|\\]])`, "g");
+export interface WikilinkRetarget {
+  /** Target spelling to match, e.g. `Projects/Old` or `pref-foo`. */
+  readonly from: string;
+  /** Replacement spelling. Absent means count the matches, rewrite nothing. */
+  readonly to?: string;
+}
+
+/** What one {@link retargetWikilinks} pass read, matched and wrote. */
+export interface WikilinkRetargetReport {
+  /**
+   * Every Markdown file the walk read, vault-relative POSIX, sorted.
+   *
+   * Carried rather than counted because a caller deciding whether a bare
+   * `[[Basename]]` spelling unambiguously names one note needs the
+   * population the rewrite would act on - and that is exactly this list,
+   * not a second walk under a second rule set.
+   */
+  readonly files: ReadonlyArray<string>;
+  /** Files holding at least one matched spelling, vault-relative, sorted. */
+  readonly matched: ReadonlyArray<string>;
+  /** Files this pass rewrote. Always empty when `apply` is false. */
+  readonly rewritten: ReadonlyArray<string>;
+}
+
+export interface RetargetWikilinksOptions {
+  /**
+   * Vault-relative directory to walk. Defaults to the Brain root, which
+   * is where this function's first caller (the page merge) lives.
+   *
+   * A note-file rename passes `""` - the vault root - because a user
+   * note is referenced from user notes and from Brain artifacts alike,
+   * and a rewrite that saw only one of those would report a number that
+   * looked like coverage and was not.
+   */
+  readonly root?: string;
+  /** False walks and counts without writing a byte. Defaults to true. */
+  readonly apply?: boolean;
+}
+
+/** Directory names never walked, whatever the root. */
+const RETARGET_SKIP_DIRS: ReadonlySet<string> = new Set([
+  ".git",
+  ".obsidian",
+  ".trash",
+  ".stversions",
+  "node_modules",
+]);
+
+/** Escape a literal for use inside a regular expression. */
+function escapeForRegExp(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Apply one retarget to one file's text. Wikilinks can carry aliases
+ * (`[[target|some alias]]`) and section anchors (`[[target#heading]]`);
+ * the target portion alone is replaced.
+ */
+function rewriteOne(raw: string, retarget: WikilinkRetarget): string {
+  const to = retarget.to;
+  if (to === undefined || to === retarget.from) return raw;
+  const pattern = new RegExp(`\\[\\[${escapeForRegExp(retarget.from)}(?=[#|\\]])`, "g");
+  return raw.replaceAll(`[[${retarget.from}]]`, `[[${to}]]`).replace(pattern, `[[${to}`);
+}
+
+/** True when `raw` carries at least one `[[<from>]]`-shaped reference. */
+function mentions(raw: string, from: string): boolean {
+  return new RegExp(`\\[\\[${escapeForRegExp(from)}(?=[#|\\]])`).test(raw);
+}
+
+/** Absolute paths of every `.md` file under `dir`, depth-first. */
+function markdownFilesUnder(dir: string): string[] {
+  const out: string[] = [];
+  const stack: string[] = [dir];
   while (stack.length > 0) {
-    const dir = stack.pop()!;
+    const current = stack.pop()!;
     let names: string[];
     try {
-      names = readdirSync(dir);
+      names = readdirSync(current);
     } catch {
       continue;
     }
     for (const name of names) {
-      const full = join(dir, name);
+      const full = join(current, name);
       let info;
       try {
         info = statSync(full);
@@ -172,27 +238,105 @@ export function patchWikilinks(vault: string, oldTarget: string, newTarget: stri
         continue;
       }
       if (info.isDirectory()) {
-        stack.push(full);
+        if (!RETARGET_SKIP_DIRS.has(name)) stack.push(full);
         continue;
       }
-      if (!name.endsWith(".md")) continue;
-      let raw: string;
-      try {
-        raw = readFileSync(full, "utf8");
-      } catch {
-        continue;
-      }
-      // Replace `[[oldTarget]]`, `[[oldTarget|alias]]`, `[[oldTarget#sec]]`.
-      const next = raw
-        .replaceAll(`[[${oldTarget}]]`, `[[${newTarget}]]`)
-        .replace(pattern, `[[${newTarget}`);
-      if (next !== raw) {
-        atomicWriteFileSync(full, next);
-        touched++;
-      }
+      if (name.endsWith(".md")) out.push(full);
     }
   }
-  return touched;
+  return out;
+}
+
+/**
+ * Rewrite wikilink targets across a subtree of the vault, or count what
+ * a rewrite would touch.
+ *
+ * This used to be `patchWikilinks`: Brain-scoped by a hard-coded
+ * `join(vault, "Brain")` and keyed on one id-shaped target at a time. A
+ * user note lives outside `Brain/`, is referenced from both sides of
+ * that boundary, and is spelled three different ways in Obsidian
+ * (`[[Projects/Old]]`, `[[Projects/Old.md]]`, `[[Old]]`), so neither
+ * narrowing survived contact with a note-file rename. Both are now
+ * caller decisions and the default is the old behaviour exactly.
+ *
+ * Retargets are applied longest-spelling-first so a shorter prefix
+ * cannot consume a longer one's match, and every replacement is anchored
+ * at `[[`, so a spelling that has already been rewritten is not a
+ * candidate for the next retarget in the list.
+ *
+ * Reads each Markdown file once; writes only where the bytes change.
+ */
+export function retargetWikilinks(
+  vault: string,
+  retargets: ReadonlyArray<WikilinkRetarget>,
+  opts: RetargetWikilinksOptions = {},
+): WikilinkRetargetReport {
+  const apply = opts.apply !== false;
+  // Vault-identity write guard (context-integrity-gates, Unit J). A
+  // counting pass writes nothing, so it asserts nothing: refusing to
+  // COUNT against a foreign vault would deny a caller the blast radius
+  // it needs in order to decide not to write.
+  if (apply) assertVaultIdentityForWrite(vault);
+
+  const root = opts.root === undefined ? BRAIN_ROOT_REL : opts.root;
+  const abs = root === "" ? vault : join(vault, root);
+  const empty = Object.freeze({
+    files: Object.freeze([]),
+    matched: Object.freeze([]),
+    rewritten: Object.freeze([]),
+  });
+  if (!existsSync(abs)) return empty;
+
+  const ordered = [...retargets].toSorted((a, b) => b.from.length - a.from.length);
+  const files: string[] = [];
+  const matched: string[] = [];
+  const rewritten: string[] = [];
+
+  for (const full of markdownFilesUnder(abs)) {
+    let raw: string;
+    try {
+      raw = readFileSync(full, "utf8");
+    } catch {
+      continue;
+    }
+    const rel = relative(vault, full).split(sep).join(posix.sep);
+    files.push(rel);
+    if (ordered.some((retarget) => mentions(raw, retarget.from))) matched.push(rel);
+    if (!apply) continue;
+    let next = raw;
+    for (const retarget of ordered) next = rewriteOne(next, retarget);
+    if (next !== raw) {
+      atomicWriteFileSync(full, next);
+      rewritten.push(rel);
+    }
+  }
+
+  return Object.freeze({
+    files: Object.freeze(files.toSorted()),
+    matched: Object.freeze(matched.toSorted()),
+    rewritten: Object.freeze(rewritten.toSorted()),
+  });
+}
+
+/**
+ * Rewrite every `[[<oldTarget>]]` reference inside `<vault>/Brain/`
+ * to `[[<newTarget>]]`. Returns the number of files touched.
+ *
+ * The page merge's spelling of {@link retargetWikilinks}: one id-shaped
+ * target, the Brain root, applied. Kept as its own name because that IS
+ * the merge's whole vocabulary - a page id is not a path and has no
+ * basename spelling - and widening the merge's call site would have made
+ * it answer questions it does not ask.
+ */
+export function patchWikilinks(vault: string, oldTarget: string, newTarget: string): number {
+  if (oldTarget === newTarget) {
+    // Vault-identity write guard (context-integrity-gates, Unit J):
+    // asserted on the no-op path too, so a caller pointed at a foreign
+    // vault is refused whether or not its arguments happened to be equal.
+    assertVaultIdentityForWrite(vault);
+    return 0;
+  }
+  return retargetWikilinks(vault, [{ from: oldTarget, to: newTarget }]).rewritten.length;
 }
 
 export interface MergePageResult {

@@ -264,6 +264,7 @@ describe("tool listing", () => {
         "brain_session_checkpoint",
         "brain_idea_lineage",
         "brain_note_history",
+        "brain_note_lifecycle",
         // Schema admin + watchdog recovery probes.
         "schema_apply_mutations",
         "schema_inspect",
@@ -694,7 +695,9 @@ describe("stdio loop", () => {
     //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
     // + brain_retrieval_plan (shadow-only retrieval advisor,
     //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
-    expect(list.result.tools.length).toBe(108);
+    // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
+    //   wiring-what-exists B2 t_ae62fabd) = 109.
+    expect(list.result.tools.length).toBe(109);
   });
 
   test("returns parse error for invalid JSON", async () => {

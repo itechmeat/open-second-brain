@@ -43,7 +43,12 @@
  * retrieval-quality-and-context-delivery release added `brain_retrieval_plan`
  * (the shadow-only retrieval advisor: composes query plan, context-pack
  * density, token-impact ledger, and route latency into a read-only
- * per-question plan, exposing no mutating parameters).
+ * per-question plan, exposing no mutating parameters); the
+ * wiring-what-exists release added `brain_note_lifecycle` (rename, move,
+ * archive and delete for note FILES - the first MCP verb that removes a
+ * user note, behind a dry-run default, an explicit confirm, a count guard
+ * over inbound references, and a recoverability verdict that says the
+ * archive it took does not cover a note living outside `Brain/`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -104,6 +109,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_moc_audit",
   "brain_note",
   "brain_note_history",
+  "brain_note_lifecycle",
   "brain_obligation",
   "brain_observed_use",
   "brain_pinned_context",

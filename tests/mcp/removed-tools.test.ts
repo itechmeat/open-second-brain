@@ -179,5 +179,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
   // + brain_retrieval_plan (shadow-only retrieval advisor,
   //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
-  expect(list.result.tools.length).toBe(108);
+  // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
+  //   wiring-what-exists B2 t_ae62fabd) = 109.
+  expect(list.result.tools.length).toBe(109);
 });

@@ -572,6 +572,12 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
   deleteBySource: "delete-by-source",
   /** Pre-prune point taken before malformed entity notes are deleted. */
   entityPrune: "entity-prune",
+  /**
+   * Pre-deletion point taken before a note file is removed from the
+   * vault. Kebab-case like its siblings because the value doubles as the
+   * archive's filename prefix.
+   */
+  noteDelete: "note-delete",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */

@@ -13,6 +13,7 @@ import {
   cmdBrainFeedback,
   cmdBrainNote,
   cmdBrainLifecycle,
+  cmdBrainNoteLifecycle,
   cmdBrainClaims,
   cmdBrainDecision,
   cmdBrainTension,
@@ -178,6 +179,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainNote(rest);
       case "lifecycle":
         return await cmdBrainLifecycle(rest);
+      case "note-lifecycle":
+        return await cmdBrainNoteLifecycle(rest);
       case "claims":
         return await cmdBrainClaims(rest);
       case "decision":

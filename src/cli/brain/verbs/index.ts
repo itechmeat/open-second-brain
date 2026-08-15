@@ -2,6 +2,7 @@ export { cmdBrainInit } from "./init.ts";
 export { cmdBrainFeedback } from "./feedback.ts";
 export { cmdBrainNote } from "./note.ts";
 export { cmdBrainLifecycle } from "./lifecycle.ts";
+export { cmdBrainNoteLifecycle } from "./note-lifecycle.ts";
 export { cmdBrainClaims } from "./claims.ts";
 export { cmdBrainDecision } from "./decision.ts";
 export { cmdBrainTension } from "./tension.ts";

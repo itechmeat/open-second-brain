@@ -409,6 +409,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "AND its presence on disk was re-confirmed - the retire is a move whose write " +
       "half already goes through the shared writer.",
   },
+  "src/core/brain/notes/lifecycle.ts": {
+    categories: [C.lifecycleMove, C.retentionDelete],
+    calls: ["unlinkSync"],
+    reason:
+      "the note-file rename / move / archive is a relocation whose write half is " +
+      "`atomicCreateFileSyncExclusive`, re-confirmed on disk before the source unlink - " +
+      "the same ordering the signal retire uses, copying rather than re-rendering so a " +
+      "note's own prose survives. The second `unlinkSync` is the delete, which runs " +
+      "inside `withDestructiveSnapshot` and reports a verdict saying the archive it took " +
+      "does not cover a note living outside `Brain/`.",
+  },
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync"],
