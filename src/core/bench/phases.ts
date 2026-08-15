@@ -98,8 +98,20 @@ interface RetrievedQuestion {
  * `LocalProvider` is deliberate: the bench's scoring is keyword
  * containment, so an embedding lane would add a second ranking signal to
  * a number nobody asked to include, and cost time for it.
+ *
+ * Exported so the invariant is assertable directly. It has to be: a test
+ * that sets the env vars and compares two reports passes whether or not
+ * the override is there, because reaching the embedding lane also needs
+ * an index built with embeddings, which this harness does not build. The
+ * resolved config is where the difference is real, so that is what the
+ * test reads.
+ *
+ * One residual, named rather than implied: `resolveSearchConfig` parses
+ * the provider name BEFORE merging overrides, so an env var naming a
+ * provider it does not recognise makes this throw. That is a loud, named
+ * failure rather than a silently different bench.
  */
-function benchSearchConfig(vault: string): ReturnType<typeof resolveSearchConfig> {
+export function benchSearchConfig(vault: string): ReturnType<typeof resolveSearchConfig> {
   return resolveSearchConfig({ vault, overrides: { semantic: { enabled: false } } });
 }
 

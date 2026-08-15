@@ -28,7 +28,7 @@ import {
   scoreProactiveRecall,
   type RecallFailure,
 } from "../../../src/core/bench/failure-modes.ts";
-import { runMemoryBench } from "../../../src/core/bench/phases.ts";
+import { benchSearchConfig, runMemoryBench } from "../../../src/core/bench/phases.ts";
 import type { BenchFixture } from "../../../src/core/bench/types.ts";
 import {
   decideRecallInject,
@@ -79,6 +79,34 @@ describe("the committed failure-mode fixture", () => {
     expect(second.failure_modes).toEqual(first.failure_modes);
     expect(second.context_cost).toEqual(first.context_cost);
   }, 60_000);
+});
+
+describe("the harness holds its own determinism", () => {
+  test("a shell configured for semantic search still resolves the CI lane", () => {
+    // `resolveSearchConfig` reads `process.env`, so before the override
+    // the harness's "deterministic and network-free" claim was a property
+    // of an unset developer shell: a configured semantic lane is a second
+    // ranking signal, and on a remote provider a network call.
+    const previous = {
+      semantic: process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"],
+      provider: process.env["OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER"],
+    };
+    try {
+      process.env["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC"] = "1";
+      process.env["OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER"] = "openai-compat";
+      expect(resolveSearchConfig({ vault: runsDir }).semantic.enabled).toBe(true);
+      // Same shell, same vault - the harness refuses the lane anyway.
+      expect(benchSearchConfig(runsDir).semantic.enabled).toBe(false);
+    } finally {
+      for (const [key, value] of [
+        ["OPEN_SECOND_BRAIN_SEARCH_SEMANTIC", previous.semantic],
+        ["OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER", previous.provider],
+      ] as const) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
 });
 
 describe("metric 1: proactive know-to-ask, with the anti-gaming term", () => {
