@@ -64,6 +64,7 @@ import { normalizeSchemaToken } from "../brain/schema-vocab.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import { parseFrontmatterTextWithNotices } from "../vault.ts";
 import { appendMetric } from "../brain/metrics.ts";
+import { OPERATION, progressCounter } from "../brain/progress.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
@@ -121,6 +122,17 @@ export interface IndexVaultOptions {
    * completion, so an aborted run leaves a consistent partial index.
    */
   readonly signal?: AbortSignal;
+  /**
+   * Live progress observer (nothing-runs-unwatched, U1). Distinct from
+   * {@link IndexVaultOptions.onFile}, which reports WHAT happened to each
+   * file for the `--verbose` human stream; this reports HOW FAR the run
+   * has got, in the one shape every long operation here uses.
+   *
+   * The walk phase carries no denominator and cannot: `walkVault` is a
+   * generator, and counting first costs a second full traversal. The
+   * embed phase carries one, because its pending list is an array.
+   */
+  readonly onProgress?: import("../brain/progress.ts").ProgressSink;
 }
 
 /** Site recorded on the frontmatter notices an index run collects. */
@@ -305,6 +317,8 @@ async function indexInto(
   opts?: IndexVaultOptions,
   storeOverride?: Store,
 ): Promise<IndexStats> {
+  const progress = progressCounter(OPERATION.reindex, opts?.onProgress);
+  progress.start(INDEX_STAGE.walk);
   const t0 = Date.now();
   const ownsStore = !storeOverride;
   const store = storeOverride ?? (await Store.open(config, { mode: "write" }));
@@ -326,6 +340,7 @@ async function indexInto(
       // Per-file document upserts are transactional, so a tripped
       // guard leaves a consistent (partially refreshed) index.
       opts?.safeguard?.checkpoint();
+      progress.advance(INDEX_STAGE.walk);
       // On-demand cancellation, same boundary as the deadline.
       throwIfAborted(opts?.signal, "index");
       // Mark seen FIRST. If anything downstream throws (read fault,
@@ -788,6 +803,17 @@ async function formatChunkWindowMeasured(
  * standalone vector backfill without either knowing about the other;
  * `MutableStats` satisfies it structurally.
  */
+/**
+ * The two spans an index run has. `walk` cannot carry a denominator -
+ * `walkVault` is a generator and counting first costs a second full
+ * traversal - while `embed` always can, because its pending list is an
+ * array before the loop starts. One event shape carries both.
+ */
+const INDEX_STAGE = Object.freeze({
+  walk: "walk",
+  embed: "embed",
+} as const);
+
 export interface EmbeddingPhaseTally {
   embeddingsComputed: number;
   embeddingsRetries: number;
@@ -798,6 +824,12 @@ export interface EmbeddingPhaseOptions {
   readonly forceCost?: boolean;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
+  /**
+   * Live progress observer (nothing-runs-unwatched, U1). This phase is
+   * the half of an index run that CAN report a fraction - the pending
+   * list is an array before the loop starts.
+   */
+  readonly onProgress?: import("../brain/progress.ts").ProgressSink;
 }
 
 /**
@@ -822,6 +854,7 @@ export async function runEmbeddingPhase(
   const forceCost = opts.forceCost === true;
   const safeguard = opts.safeguard;
   const signal = opts.signal;
+  const progress = progressCounter(OPERATION.reindex, opts.onProgress);
   if (!config.semantic.enabled) {
     throw new SearchError(
       "EMBEDDING_DISABLED",
@@ -876,12 +909,14 @@ export async function runEmbeddingPhase(
   // `embedding_concurrency`.
   const superBatch = batchSize * Math.max(1, config.semantic.concurrency);
 
+  progress.start(INDEX_STAGE.embed, pending.length);
   for (let i = 0; i < pending.length; i += superBatch) {
     // Cooperative deadline: embedding batches are the other long
     // phase of an index run - abort between batches, never mid-batch.
     safeguard?.checkpoint();
     throwIfAborted(signal, "index");
     const batch = pending.slice(i, i + superBatch);
+    progress.advance(INDEX_STAGE.embed, batch.length);
     const texts = batch.map((p) => p.content);
     const vectors = await provider.embed(texts, "passage");
     stats.embeddingsRetries += provider.consumeRetryCount?.() ?? 0;

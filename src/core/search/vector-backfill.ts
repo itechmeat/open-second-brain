@@ -48,6 +48,13 @@ export interface VectorBackfillOptions {
   readonly forceCost?: boolean;
   readonly safeguard?: import("../brain/safeguard.ts").Safeguard;
   readonly signal?: AbortSignal;
+  /**
+   * Live progress observer (nothing-runs-unwatched, U1). Forwarded
+   * straight to the embedding phase: this verb owns the plan and the
+   * gate, and the phase owns the loop, so a second counter here would
+   * report the same batches twice under a different name.
+   */
+  readonly onProgress?: import("../brain/progress.ts").ProgressSink;
 }
 
 export interface VectorBackfillResult {
@@ -102,6 +109,7 @@ export async function planVectorBackfill(
         forceCost: opts.forceCost === true,
         ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
         ...(opts.signal !== undefined ? { signal: opts.signal } : {}),
+        ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
       });
     }
 

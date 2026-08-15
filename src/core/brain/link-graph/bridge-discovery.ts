@@ -38,6 +38,7 @@ import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-sc
 import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { OPERATION, progressCounter } from "../progress.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -74,7 +75,16 @@ export interface DiscoverBridgesOptions {
    * per scanned candidate document.
    */
   readonly safeguard?: import("../safeguard.ts").Safeguard;
+  /**
+   * Live progress observer (nothing-runs-unwatched, U1). Emitted at the
+   * same boundaries the deadline is checked at; absence means nobody
+   * asked and the scan behaves exactly as before.
+   */
+  readonly onProgress?: import("../progress.ts").ProgressSink;
 }
+
+/** The one stage this scan has: it walks candidates and compares them. */
+const BRIDGE_STAGE = "candidates";
 
 /** Canonical unordered pair key. */
 export function bridgePairKey(a: string, b: string): string {
@@ -93,6 +103,8 @@ export function discoverBridges(
   const maxProposals = Math.max(1, opts.maxProposals ?? BRIDGE_DEFAULT_MAX_PROPOSALS);
   const maxCandidates = Math.max(1, opts.maxCandidates ?? BRIDGE_DEFAULT_MAX_CANDIDATES);
   const dismissed = opts.dismissed ?? new Set<string>();
+  const progress = progressCounter(OPERATION.bridges, opts.onProgress);
+  progress.start(BRIDGE_STAGE);
   opts.safeguard?.checkpoint();
 
   if (!store.vecLoaded() || store.countEmbeddings() === 0) {
@@ -130,9 +142,14 @@ export function discoverBridges(
 
   // Best similarity per unordered pair.
   const best = new Map<string, BridgeProposal>();
+  // The denominator is known here and only here: `candidates` was
+  // materialised and sliced above, unlike the index walk which consumes a
+  // generator and can never report a fraction.
+  progress.start(BRIDGE_STAGE, candidates.length);
   for (const candidate of candidates) {
     // Cooperative deadline: abort between candidates (read-only scan).
     opts.safeguard?.checkpoint();
+    progress.advance(BRIDGE_STAGE);
     const chunks = store.chunksForDocument(candidate.id).slice(0, BRIDGE_CHUNKS_PER_DOC);
     for (const chunk of chunks) {
       const embedding = store.embeddingForChunk(chunk.id);
