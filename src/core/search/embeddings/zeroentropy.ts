@@ -11,7 +11,8 @@
  *
  * `results` preserves input order (there is no per-item index field), so
  * vectors map positionally. Network discipline mirrors the OpenAI-compat
- * provider: bounded concurrency, per-request timeout, batches closing on
+ * provider: concurrency bounded process-wide per provider identity and
+ * endpoint (`provider-semaphore.ts`), per-request timeout, batches closing on
  * whichever of `embedding_batch_size` / `embedding_batch_tokens` fills
  * first, retry on 429/5xx and network/timeout with jittered backoff,
  * vectors unit-normalised so cosine equals 1 - L2²/2.
@@ -26,12 +27,12 @@ import type { ResolvedEmbeddingConfig } from "../types.ts";
 import type { EmbeddingProvider, PingResult } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
-  Semaphore,
   chunkArrayByTokenBudget,
   jittered,
   sleep,
   unitNormaliseInPlace,
 } from "./http-util.ts";
+import { providerCeilingKey, providerSemaphore } from "./provider-semaphore.ts";
 
 const ZEROENTROPY_INPUT_TYPE = "document";
 
@@ -77,6 +78,12 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
   private readonly http: ResolvedHttp;
   private readonly backoffMs: ReadonlyArray<number>;
   private retriesSeen = 0;
+  /**
+   * Registry key of the process-wide ceiling this provider shares.
+   * Resolved once, from the CONFIGURED identity, so it cannot move when
+   * `_dimension` is learned from the first response.
+   */
+  private readonly ceilingKey: string;
 
   constructor(config: ResolvedEmbeddingConfig, opts?: ZeroEntropyProviderOptions) {
     this.config = config;
@@ -84,6 +91,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     this.model = config.model!;
     this._dimension = config.dimension;
     this.backoffMs = opts?.backoffMs ?? [1000, 2000];
+    this.ceilingKey = providerCeilingKey(this.name, config, this.http.url);
   }
 
   get dimension(): number | null {
@@ -104,7 +112,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
       this.config.batchTokens,
       (b) => b.text,
     );
-    const sem = new Semaphore(this.config.concurrency);
+    const sem = providerSemaphore(this.ceilingKey, this.config.concurrency);
     const out: number[][] = new Array(texts.length);
     const cancel = new AbortController();
 

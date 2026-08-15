@@ -4,7 +4,9 @@
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §11.
  *
  * Network rules:
- *   - One concurrent batch per semaphore slot (`embedding_concurrency`).
+ *   - One concurrent batch per semaphore slot (`embedding_concurrency`),
+ *     on a ceiling shared PROCESS-WIDE by every provider resolving to the
+ *     same identity and endpoint - see `provider-semaphore.ts`.
  *   - Each batch contains up to `embedding_batch_size` texts and, when
  *     `embedding_batch_tokens` is set, at most that many estimated tokens
  *     of prefixed text; the batch closes on whichever cap fills first.
@@ -27,13 +29,13 @@ import {
   PAYMENT_REQUIRED_STATUS,
   RATE_LIMIT_STATUS,
   RETRYABLE_STATUSES,
-  Semaphore,
   chunkArrayByTokenBudget,
   jittered,
   parseRetryAfterMs,
   sleep,
   unitNormaliseInPlace,
 } from "./http-util.ts";
+import { providerCeilingKey, providerSemaphore } from "./provider-semaphore.ts";
 
 /**
  * Sentinel embedded in a synthetic error message when a batch is cancelled
@@ -235,6 +237,12 @@ export class OpenAICompatProvider implements EmbeddingProvider {
   /** Ordered probe keys; `activeKeyIndex` pins the first that authenticates. */
   private readonly keys: ReadonlyArray<string>;
   private activeKeyIndex = 0;
+  /**
+   * Registry key of the process-wide ceiling this provider shares.
+   * Resolved once, from the CONFIGURED identity, so it cannot move when
+   * `_dimension` is learned from the first response.
+   */
+  private readonly ceilingKey: string;
 
   constructor(config: ResolvedEmbeddingConfig, opts?: OpenAICompatProviderOptions) {
     this.config = config;
@@ -243,6 +251,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
     this._dimension = config.dimension;
     this.backoffMs = opts?.backoffMs ?? [1000, 2000];
     this.keys = resolveKeys(config, this.http.apiKey);
+    this.ceilingKey = providerCeilingKey(this.name, config, this.http.url);
   }
 
   private get activeKey(): string {
@@ -276,7 +285,7 @@ export class OpenAICompatProvider implements EmbeddingProvider {
       this.config.batchTokens,
       (b) => b.text,
     );
-    const sem = new Semaphore(this.config.concurrency);
+    const sem = providerSemaphore(this.ceilingKey, this.config.concurrency);
     const out: number[][] = new Array(texts.length);
 
     // Shared abort controller cancels in-flight siblings and skips
