@@ -453,6 +453,17 @@ const FRONTMATTER_ITEM_RE = new RegExp(
   "gm",
 );
 
+/**
+ * `[***REDACTED***]` - a placeholder as an item of a FLOW sequence or
+ * mapping. `formatFrontmatter` writes lists inline, so `aliases:` comes
+ * back as `[…]` and the two line-anchored rules above never see it. Same
+ * alias node, same parse error, one position further in.
+ */
+const FRONTMATTER_FLOW_ITEM_RE = new RegExp(
+  `([[{,][ \\t]*)(${PLACEHOLDER_PATTERN})(?=[ \\t]*[,\\]}])`,
+  "g",
+);
+
 function quoteYamlScalar(value: string): string {
   return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
@@ -469,6 +480,10 @@ function quoteRedactedFrontmatter(text: string): string {
         )
         .replace(FRONTMATTER_ITEM_RE, (_m, prefix: string, value: string) =>
           value.startsWith('"') ? `${prefix}${value}` : `${prefix}${quoteYamlScalar(value)}`,
+        )
+        .replace(
+          FRONTMATTER_FLOW_ITEM_RE,
+          (_m, prefix: string, value: string) => `${prefix}${quoteYamlScalar(value)}`,
         ) +
       close,
   );

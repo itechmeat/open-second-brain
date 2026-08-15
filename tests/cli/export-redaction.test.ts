@@ -143,6 +143,19 @@ describe("a vendor-prefixed key does not leave through any export path", () => {
     const page = readFileSync(join(out, "concepts", "Leaky.md"), "utf8");
     expect(page).not.toContain(VENDOR_TOKEN);
     expect(page).toContain(REDACTION_PLACEHOLDER);
+
+    // And it still PARSES. `toContain(PLACEHOLDER)` was the whole check
+    // here, which an unquoted `***REDACTED***` passes while making the
+    // frontmatter an unresolved YAML alias - rejected by Obsidian and by
+    // every spec-compliant reader, accepted only by this repo's lenient
+    // parser. Asserted with a strict parser for that reason.
+    const frontmatter = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(page)?.[1];
+    expect(typeof frontmatter).toBe("string");
+    const parsed = (Bun as unknown as { YAML: { parse: (s: string) => unknown } }).YAML.parse(
+      frontmatter!,
+    ) as Record<string, unknown>;
+    expect(parsed["title"]).toBe(REDACTION_PLACEHOLDER);
+    expect(parsed["aliases"]).toEqual([REDACTION_PLACEHOLDER]);
   });
 
   test("brain export --format json", async () => {

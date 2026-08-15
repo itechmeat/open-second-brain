@@ -109,6 +109,18 @@ describe("a redacted frontmatter block is still valid YAML", () => {
     expect(parsed["aliases"]).toEqual([REDACTION_PLACEHOLDER]);
   });
 
+  test("a placeholder inside an inline list is quoted too", () => {
+    // `formatFrontmatter` writes lists INLINE, so this is the shape an
+    // exported OKF page actually carries - and the line-anchored rules
+    // for `key:` and `- item` never see it.
+    const page = `---\ntitle: Simple\naliases: [${VENDOR_TOKEN}, keep-me]\n---\n\nbody\n`;
+    const parsed = parseStrictYaml(frontmatterOf(redactRawOutput(page, TOKENS))) as Record<
+      string,
+      unknown
+    >;
+    expect(parsed["aliases"]).toEqual([REDACTION_PLACEHOLDER, "keep-me"]);
+  });
+
   test("an already-quoted value is not double-quoted", () => {
     const page = `---\ntitle: "Simple"\napi_key: "${VENDOR_TOKEN}"\n---\n\nbody\n`;
     const parsed = parseStrictYaml(frontmatterOf(redactRawOutput(page, TOKENS))) as Record<
