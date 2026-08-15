@@ -31,6 +31,14 @@
  * per-entry with a named reason rather than by refusing the envelope.
  * Bumping the version would turn every existing bundle into a hard
  * refusal for material this reader already handles honestly.
+ *
+ * The same per-entry rule covers the other thing an older bundle can
+ * carry: the redactor's placeholder in a field that names the record. The
+ * export boundary now refuses to emit one, but a bundle already on disk
+ * can hold it, and a placeholder is a constant - two records that lost a
+ * name land on one. Both halves refuse those records and restore the rest:
+ * preferences through `redacted_identifier` in `preferences.failed[]`, page
+ * nodes through `graph.rejected[]`.
  */
 
 import { collectExportRows, type ExportedPreferenceRow } from "../export.ts";

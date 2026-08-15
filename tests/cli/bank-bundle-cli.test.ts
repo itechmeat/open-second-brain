@@ -8,6 +8,12 @@
  * vault, and a rule that could not be restored makes the run exit
  * non-zero instead of reporting a clean import of material it dropped.
  * The per-field round-trip is asserted in the core suite, not here.
+ *
+ * The redacted-identity refusal is locked here only at the operator
+ * surface - the reason reaches stdout and the run exits non-zero. Which
+ * fields count as an identity, and the payload placeholder that must still
+ * restore, are asserted in
+ * `tests/core/brain/portability/redacted-identity-restore.test.ts`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -16,6 +22,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 
 let tmp: string;
 let vault: string;
@@ -168,6 +175,34 @@ describe("o2b brain bank-export / bank-import", () => {
     expect(imp.returncode).not.toBe(0);
     expect(imp.stdout).toContain("missing_trial_window");
     expect(existsSync(join(vault, "Brain", "preferences", "pref-carried-rule.md"))).toBe(false);
+  });
+
+  test("bank-import names a row whose identity was redacted and exits non-zero", async () => {
+    // The bundle an earlier build of this branch could produce: the
+    // redactor ran over the export and replaced the topic - an identity -
+    // with its placeholder. Restoring it would write a rule keyed on a
+    // constant that every other redacted row shares.
+    await bootstrap();
+    const bundleFile = join(tmp, "redacted-prefs.json");
+    writeFileSync(
+      bundleFile,
+      JSON.stringify({
+        schema: "1",
+        graph: { nodes: [] },
+        preferences: [
+          { ...preferenceRow(), topic: REDACTION_PLACEHOLDER },
+          { ...preferenceRow(), id: "pref-intact-rule" },
+        ],
+      }),
+    );
+    const imp = await runCli(["brain", "bank-import", bundleFile], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(imp.returncode).not.toBe(0);
+    expect(imp.stdout).toContain("redacted_identifier");
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-carried-rule.md"))).toBe(false);
+    // The rest of the bundle is not held hostage by the refused row.
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-intact-rule.md"))).toBe(true);
   });
 
   test("bank-import rejects an unknown --mode", async () => {

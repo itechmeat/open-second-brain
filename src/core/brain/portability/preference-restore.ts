@@ -48,6 +48,15 @@
  *      would then record something the bundle did not say) nor refuses the
  *      row (a backup-recovery path is the worst place for a new failure
  *      mode); it names the collision. See {@link RestoredTopicKeyCollision}.
+ *   6. **A lost IDENTITY is refused; a redacted payload is not.** A bundle
+ *      an earlier build produced can carry {@link REDACTION_PLACEHOLDER} in
+ *      a field that names the record - its id, its topic, an alias. The
+ *      placeholder is one constant, so those rows do not merely arrive
+ *      anonymous: they arrive as the SAME record, and restoring two of them
+ *      writes one file twice while reporting two rules. Such a row is
+ *      refused with `redacted_identifier`. A placeholder in the principle
+ *      is an honest redaction the operator chose and restores untouched.
+ *      See {@link refuseRedactedIdentity}.
  *
  * The audit records the transition the txn derived (`create` /
  * `promote` / `update`) with {@link PREFERENCE_RESTORE_AUDIT_REASON} as
@@ -56,6 +65,7 @@
  * came from, which is strictly more than a `restore` op could carry.
  */
 
+import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
 import { collectExportRows, type ExportedPreferenceRow } from "../export.ts";
 import { topicKey } from "../dream-plan.ts";
 import {
@@ -107,6 +117,16 @@ export const PREFERENCE_RESTORE_FAILURE = Object.freeze({
   preferenceLocked: "preference_locked",
   /** The write itself was refused (validation, vault identity, I/O). */
   writeRejected: "write_rejected",
+  /**
+   * An identity-bearing field carries {@link REDACTION_PLACEHOLDER}: the
+   * preference id, its topic, or one of its aliases. The export boundary
+   * now refuses to emit such a bundle, but a bundle written by an earlier
+   * build - or by any tool that scrubbed the payload before handing it
+   * over - can still carry one, and the placeholder is a CONSTANT: two
+   * rows redacted in the same field land on the same identity, so the
+   * second silently overwrites the first. See {@link refuseRedactedIdentity}.
+   */
+  redactedIdentifier: "redacted_identifier",
 } as const);
 
 export type PreferenceRestoreFailure =
@@ -242,6 +262,31 @@ const isNonEmptyString = (value: unknown): value is string =>
 const isStringArray = (value: unknown): value is ReadonlyArray<string> =>
   Array.isArray(value) && value.every((item) => typeof item === "string");
 
+/**
+ * Refuse a value that carries the redactor's placeholder in a field that
+ * IS an identity.
+ *
+ * The distinction this draws is the whole point of the guard. A
+ * placeholder in PAYLOAD text - a principle, a body - is an honest
+ * redaction the operator chose, and the row restores with it: the rule is
+ * still the rule, minus a secret nobody wanted in a backup. A placeholder
+ * in an IDENTIFIER is a lost identity. `id` names the file the rule is
+ * written to, `topic` is the key the dream pass folds and consolidates on,
+ * and an alias is an inbound wikilink target. Worse, the placeholder is a
+ * single constant, so two rows redacted in the same field are not two
+ * anonymous rules - they are one, and restoring both writes one file twice
+ * while reporting two.
+ *
+ * `includes` rather than equality: a partially-redacted identifier lost
+ * exactly as much identity as a wholly-redacted one, and two rows redacted
+ * at the same position collide the same way.
+ */
+function refuseRedactedIdentity(value: string, field: string): void {
+  if (value.includes(REDACTION_PLACEHOLDER)) {
+    throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.redactedIdentifier, field);
+  }
+}
+
 function requireText(row: Record<string, unknown>, field: string): string {
   const value = row[field];
   if (!isNonEmptyString(value))
@@ -307,6 +352,7 @@ function readSlug(row: Record<string, unknown>): string {
   if (!id.startsWith(PREFERENCE_ID_PREFIX) || id.length <= PREFERENCE_ID_PREFIX.length) {
     throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.malformedRow, "id");
   }
+  refuseRedactedIdentity(id, "id");
   return id.slice(PREFERENCE_ID_PREFIX.length);
 }
 
@@ -393,16 +439,25 @@ export function toRestoreRow(row: unknown): RestoreRowMapping {
   const record = row as Record<string, unknown>;
   const slug = readSlug(record);
   const topic = requireText(record, "topic");
+  refuseRedactedIdentity(topic, "topic");
+  // `principle` is PAYLOAD, not identity: a redaction inside it is one the
+  // operator chose, and the rule it states survives it. It is deliberately
+  // not passed through the identity guard.
   const principle = requireText(record, "principle");
   const created_at = requireText(record, "created_at");
   const status = readStatus(record);
+  // Read here, ahead of the trial window, for the same reason the window
+  // is resolved after the structural fields: a row that lost an alias has
+  // lost an identity whatever else is true of it, and `redacted_identifier`
+  // should not lose the race to a window this restore could have derived.
+  const aliases = record["aliases"] === null ? [] : optionalStrings(record, "aliases");
+  for (const alias of aliases) refuseRedactedIdentity(alias, "aliases");
   // Resolved AFTER the structural fields so `missing_trial_window` means
   // what it says - an otherwise-complete row from a bundle written
   // before the window was exported - rather than doubling as the first
   // complaint about a row that is malformed in several ways at once.
   const trialWindow = resolveTrialWindow(record, status, created_at);
   const scope = optionalText(record, "scope");
-  const aliases = record["aliases"] === null ? [] : optionalStrings(record, "aliases");
   const input: WritePreferenceInput = {
     slug,
     topic,

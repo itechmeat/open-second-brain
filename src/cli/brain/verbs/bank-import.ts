@@ -14,7 +14,9 @@ const MODES: ReadonlyArray<GraphImportMode> = ["skip", "overwrite", "merge"];
  * `--mode` governs the page graph; `skip` (default) never overwrites.
  * Preferences restore through the audited preference transaction and are
  * governed by their revision instead: a bundle behind the vault is
- * refused per-row and named in the result. Page contracts and the
+ * refused per-row and named in the result, as is a row whose id, topic or
+ * alias arrived carrying the redactor's placeholder - a name that is gone
+ * and that every other redacted row shares. Page contracts and the
  * sources dashboard stay carried-not-restored. An unsupported bundle
  * schema fails loudly.
  */
