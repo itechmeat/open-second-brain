@@ -234,7 +234,7 @@ export async function runRecallBenchmark(
   const perQuery = await Promise.all(
     dataset.queries.map(async (q): Promise<RecallBenchmarkQueryResult> => {
       const depth = q.k ?? k;
-      await queryGate.acquire();
+      const permit = await queryGate.acquire();
       let outcome: SearchOutcome;
       try {
         outcome = await search(config, {
@@ -243,7 +243,7 @@ export async function runRecallBenchmark(
           ...(expand ? { expand: true } : {}),
         });
       } finally {
-        queryGate.release();
+        permit();
       }
       const expected = new Set(q.expected);
       const topK = outcome.results.slice(0, depth);

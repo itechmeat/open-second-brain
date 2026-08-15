@@ -117,7 +117,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
     const cancel = new AbortController();
 
     const tasks = batches.map(async (batch) => {
-      await sem.acquire();
+      const permit = await sem.acquire();
       try {
         if (cancel.signal.aborted) return;
         const vectors = await this.embedBatchWithRetry(
@@ -128,7 +128,7 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
           out[batch[i]!.originalIndex] = vectors[i]!;
         }
       } finally {
-        sem.release();
+        permit();
       }
     });
 

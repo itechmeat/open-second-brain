@@ -998,7 +998,17 @@ is the same one the cost gate uses, applied to the text as it will be sent
 (instruction prefix included). With the key unset the field is absent and
 batching is byte-identical to the fixed `embedding_batch_size` stride; a
 single text whose own estimate exceeds the budget is sent alone rather than
-dropped or split. `search_fusion_mode`
+dropped or split.
+`embedding_concurrency` (`OPEN_SECOND_BRAIN_EMBEDDING_CONCURRENCY`, default 4)
+bounds embedding requests in flight for one embedding identity - provider,
+model and configured dimension - against one resolved endpoint, across the
+whole process rather than one call. Two models configured against the same
+host are two identities and therefore two budgets, so that host sees up to
+`embedding_concurrency x identities` at once: size the knob against the
+budget the provider actually meters. Two configurations that ask for
+different values on the same identity and endpoint are refused by name
+rather than reconciled to one of them.
+`search_fusion_mode`
 (default `linear`) may be set to `rrf` to fuse the keyword and semantic
 lanes by reciprocal rank (`search_rrf_k`, default 60); `linear` keeps
 ranking bit-identical.

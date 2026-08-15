@@ -118,10 +118,17 @@ function requireCap(cap: number, field: string): number {
 }
 
 /**
+ * One permit, handed to the acquirer that holds it. Calling it gives the
+ * permit back; calling it a second time raises, because the second call
+ * is a release of something the caller no longer holds.
+ */
+export type SemaphorePermit = () => void;
+
+/**
  * A minimal counting semaphore for bounded concurrency.
  *
- * `release()` hands the freed permit DIRECTLY to the head of the waiter
- * queue instead of returning it to the pool for the woken waiter to claim
+ * Giving a permit back hands it DIRECTLY to the head of the waiter queue
+ * instead of returning it to the pool for the woken waiter to claim
  * later. The pool form over-subscribes by one for every wakeup: between
  * the `permits++` and the waiter's continuation there is a microtask in
  * which a fresh `acquire()` sees a free permit and takes it, and the
@@ -129,8 +136,39 @@ function requireCap(cap: number, field: string): number {
  * higher than configured. With a hand-off the permit is never observable
  * as free, so the invariant holds for any interleaving.
  *
- * It also keeps a high-water mark of concurrent holders, because a bound
- * nothing can observe is a bound nothing can verify.
+ * ## Why a permit rather than a `release()` method
+ *
+ * An over-release is a CALLER DEFECT, not an input: nothing an operator
+ * configures can produce one, only code that gives back a permit it never
+ * took or gives one back twice. So it is refused loudly rather than
+ * clamped - a clamp would leave the defective call site running, and the
+ * whole point of this object is that the number of requests on the wire
+ * is the configured number and not a number that drifted.
+ *
+ * Refusing needs the holder's own record, which is what makes the permit
+ * a value instead of a method:
+ *
+ *   - `if (permits >= limit) throw` cannot see the case that matters.
+ *     With a waiter queued the pool count is 0, so a stray release passes
+ *     that test and is handed straight to the waiter: one more holder
+ *     than the ceiling, and no counter moved.
+ *   - `if (held === 0) throw` misses the same case for the same reason.
+ *   - A one-shot permit closure decides it locally: the second call knows
+ *     it is the second call, whatever the pool and queue happen to hold,
+ *     and code that never acquired has nothing to call.
+ *
+ * That also repairs the instrument. {@link peakInFlight} counts entries
+ * and matched exits ONLY, so it can no longer be driven below the truth
+ * by the very releases that break the bound - the failure mode where a
+ * ceiling of 2 ran 4 real holders and the counter still reported 2
+ * (nothing-runs-unwatched review, C4). A bound nothing can observe is a
+ * bound nothing can verify, and a counter the breach silences is worse
+ * than none.
+ *
+ * The ceiling is process-wide and shared between callers
+ * (`provider-semaphore.ts`), so one caller's stray release would widen
+ * the ceiling for every other caller against the same provider. That is
+ * why the guard lives here rather than at any one call site.
  */
 export class Semaphore {
   /** The ceiling enforced here: the permit count when nothing is held. */
@@ -143,26 +181,33 @@ export class Semaphore {
     this.limit = requireCap(limit, CAP_FIELD.concurrency);
     this.permits = this.limit;
   }
-  /** Most permits held at once since construction; never above `limit`. */
+  /**
+   * Most permits held at once since construction. Every increment is an
+   * acquirer that entered and every decrement is that acquirer's own
+   * permit coming back, so this is the true high-water mark of holders -
+   * and never above `limit`, as a consequence rather than a coincidence.
+   */
   get peakInFlight(): number {
     return this.peak;
   }
-  private enter(): void {
+  private enter(): SemaphorePermit {
     this.held++;
     if (this.held > this.peak) this.peak = this.held;
+    let spent = false;
+    return (): void => {
+      if (spent) {
+        throw new SearchError(
+          "INVALID_INPUT",
+          `semaphore permit released twice (ceiling ${this.limit}): a second release ` +
+            `returns a permit this caller no longer holds and widens the ceiling for ` +
+            `every caller sharing it`,
+        );
+      }
+      spent = true;
+      this.leave();
+    };
   }
-  async acquire(): Promise<void> {
-    if (this.permits > 0) {
-      this.permits--;
-      this.enter();
-      return;
-    }
-    // The releaser transfers its permit to this waiter, so the resumed
-    // acquirer must NOT decrement `permits` again.
-    await new Promise<void>((res) => this.waiters.push(res));
-    this.enter();
-  }
-  release(): void {
+  private leave(): void {
     this.held--;
     const next = this.waiters.shift();
     if (next) {
@@ -170,6 +215,17 @@ export class Semaphore {
       return;
     }
     this.permits++;
+  }
+  /** Take a permit, waiting for one; call the result once to give it back. */
+  async acquire(): Promise<SemaphorePermit> {
+    if (this.permits > 0) {
+      this.permits--;
+      return this.enter();
+    }
+    // The releaser transfers its permit to this waiter, so the resumed
+    // acquirer must NOT decrement `permits` again.
+    await new Promise<void>((res) => this.waiters.push(res));
+    return this.enter();
   }
 }
 

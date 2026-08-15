@@ -2,20 +2,26 @@
  * The outbound-request ceiling, from the counting primitive up
  * (nothing-runs-unwatched, U4).
  *
- * Three claims, in the order they compose:
+ * Four claims, in the order they compose:
  *   1. `Semaphore` never lets more holders in than its ceiling, including
  *      when a fresh acquire lands in the same synchronous turn as a
  *      release.
- *   2. The ceiling is taken exactly as configured or refused - never
+ *   2. A permit cannot be given back twice, so no caller can widen the
+ *      ceiling for every other caller - and `peakInFlight` counts what
+ *      actually entered rather than a number the breach itself lowers.
+ *   3. The ceiling is taken exactly as configured or refused - never
  *      truncated into a different one.
- *   3. The ceiling spans the PROCESS: two overlapping `embed()` calls
- *      against one resolved provider identity share one budget, and two
- *      different identities do not.
+ *   4. The ceiling spans the PROCESS and is keyed per (identity,
+ *      endpoint): two overlapping `embed()` calls against one resolved
+ *      provider identity share one budget, and two identities against one
+ *      endpoint get one budget EACH - so an endpoint carries
+ *      `embedding_concurrency x identities` at most.
  */
 
 import { test, expect, describe, beforeEach, afterEach } from "bun:test";
 
 import { Semaphore } from "../../../src/core/search/embeddings/http-util.ts";
+import type { SemaphorePermit } from "../../../src/core/search/embeddings/http-util.ts";
 import { OpenAICompatProvider } from "../../../src/core/search/embeddings/openai-compat.ts";
 import { _resetProviderCeilingsForTests } from "../../../src/core/search/embeddings/provider-semaphore.ts";
 import { ZeroEntropyProvider } from "../../../src/core/search/embeddings/zeroentropy.ts";
@@ -31,28 +37,28 @@ test("Semaphore hands a released permit to the waiter, not to a racing acquirer"
     held++;
     if (held > peak) peak = held;
   };
-  const leave = (): void => {
+  const leave = (permit: SemaphorePermit): void => {
     held--;
-    sem.release();
+    permit();
   };
 
   // A holds the only permit.
-  await sem.acquire();
+  const a = await sem.acquire();
   enter();
 
   // The critical section spans an await, so two holders overlap rather
   // than running to completion one microtask apart.
-  const hold = async (): Promise<void> => {
+  const hold = async (permit: SemaphorePermit): Promise<void> => {
     enter();
     await Promise.resolve();
-    leave();
+    leave(permit);
   };
 
   // B queues behind A.
   const b = sem.acquire().then(hold);
 
   // A releases. The freed permit is B's.
-  leave();
+  leave(a);
 
   // C arrives in the SAME synchronous turn as that release - before B's
   // continuation has had a microtask to run. A semaphore that bumps its
@@ -63,6 +69,104 @@ test("Semaphore hands a released permit to the waiter, not to a racing acquirer"
   await Promise.all([b, c]);
   expect(peak).toBe(1);
   expect(held).toBe(0);
+});
+
+/**
+ * Yield one macrotask turn, which drains every pending microtask first -
+ * so a waiter that was going to be resumed has been resumed by the time
+ * this returns, and one that was not, was not.
+ */
+async function settlePendingAcquirers(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+test("a permit cannot be given back twice, so no caller can widen the ceiling", async () => {
+  const sem = new Semaphore(2);
+  const first = await sem.acquire();
+  const second = await sem.acquire();
+
+  first();
+  expect(() => first()).toThrow(SearchError);
+  expect(() => first()).toThrow(/released twice/);
+
+  // Exactly one permit came back, so exactly one of two acquirers enters.
+  let entered = 0;
+  const third = sem.acquire().then((p) => {
+    entered++;
+    return p;
+  });
+  const fourth = sem.acquire().then((p) => {
+    entered++;
+    return p;
+  });
+  await settlePendingAcquirers();
+  expect(entered).toBe(1);
+  expect(sem.peakInFlight).toBe(2);
+
+  second();
+  (await third)();
+  (await fourth)();
+});
+
+test("a stray release cannot smuggle a queued waiter past the ceiling", async () => {
+  const sem = new Semaphore(2);
+  const a = await sem.acquire();
+  const b = await sem.acquire();
+
+  // C queues: both permits are out, so nothing is free for it to take.
+  const queued = sem.acquire();
+  a();
+  const c = await queued;
+
+  // The permit went straight from A to C, so the pool count is still 0
+  // and a guard on "permits >= limit" sees nothing wrong here. The stray
+  // release has to be refused on the holder's own record instead, or a
+  // third permit exists against a ceiling of two.
+  expect(() => a()).toThrow(SearchError);
+
+  let entered = false;
+  const fourth = sem.acquire().then((p) => {
+    entered = true;
+    return p;
+  });
+  await settlePendingAcquirers();
+  expect(entered).toBe(false);
+  expect(sem.peakInFlight).toBe(2);
+
+  b();
+  c();
+  (await fourth)();
+});
+
+test("peakInFlight counts the holders that entered, not a number a stray release lowers", async () => {
+  // The review's reproduction, turned into an assertion. Against the
+  // previous Semaphore this printed:
+  //   limit: 2 | real concurrent holders: 4 | semaphore reports peakInFlight: 2
+  // - the bound broken, and the instrument built to show it reading clean,
+  // because the same stray releases drove the held count negative.
+  const sem = new Semaphore(2);
+
+  const stray = await sem.acquire();
+  stray();
+  expect(() => stray()).toThrow(SearchError);
+  expect(() => stray()).toThrow(SearchError);
+
+  let live = 0;
+  let observedPeak = 0;
+  const work = async (): Promise<void> => {
+    const permit = await sem.acquire();
+    live++;
+    if (live > observedPeak) observedPeak = live;
+    await new Promise<void>((r) => setTimeout(r, 5));
+    live--;
+    permit();
+  };
+
+  await Promise.all([work(), work(), work(), work()]);
+
+  expect(observedPeak).toBe(2);
+  expect(sem.peakInFlight).toBe(observedPeak);
+  expect(live).toBe(0);
 });
 
 test("Semaphore takes a ceiling above 2^31-1 as given rather than truncating it", () => {
@@ -204,6 +308,32 @@ describe("the ceiling spans the process", () => {
     await Promise.all([first.embed(FOUR_TEXTS), second.embed(FOUR_TEXTS)]);
 
     expect(probe.peak).toBe(2);
+  });
+
+  test("an endpoint carries the ceiling ONCE PER IDENTITY, not once in total", async () => {
+    // What the ceiling bounds, pinned in the one arrangement that can
+    // distinguish the three readings of it. Two identities, two
+    // overlapping calls each, ceiling 2:
+    //   - 2 would mean the endpoint itself is the budget (it is not: the
+    //     key carries the identity, and `embedding_concurrency` is
+    //     configured per identity, so there is no per-host number to
+    //     enforce);
+    //   - 8 would mean the semaphore is per `embed()` call again;
+    //   - 4 is the shipped behaviour: one shared budget per identity.
+    // The two negative tests below cannot tell these apart on their own -
+    // they pin the partition, not the ceiling.
+    const probe = probeConcurrency(server);
+    const a = ceilingCfg(server.url, { concurrency: 2, model: "model-a" });
+    const b = ceilingCfg(server.url, { concurrency: 2, model: "model-b" });
+
+    await Promise.all([
+      new OpenAICompatProvider(a).embed(FOUR_TEXTS),
+      new OpenAICompatProvider(a).embed(FOUR_TEXTS),
+      new OpenAICompatProvider(b).embed(FOUR_TEXTS),
+      new OpenAICompatProvider(b).embed(FOUR_TEXTS),
+    ]);
+
+    expect(probe.peak).toBe(4);
   });
 
   test("one identity on two endpoints does not share a ceiling", async () => {
