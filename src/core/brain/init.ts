@@ -20,7 +20,15 @@
  *     never a torn hybrid.
  */
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  statSync,
+} from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -60,6 +68,84 @@ export class BrainStarterError extends Error {
 export interface CopyStarterOptions {
   /** Override the source directory; defaults to the bundled `templates/brain-starter/`. */
   readonly starterPath?: string;
+  /**
+   * Instant the dropped bundle is aged to; defaults to the wall clock.
+   * Passing the bundle's own anchor day reproduces the source bytes
+   * exactly, which is what the fixed-`--now` tests rely on.
+   */
+  readonly now?: Date;
+}
+
+const DAY_MS = 86_400_000;
+const DATE_RE = /\d{4}-\d{2}-\d{2}/g;
+
+/**
+ * The bundle's authored "today": the newest day in its `log/`.
+ *
+ * Read from the bundle rather than declared next to it, because a
+ * constant here is one the next person to extend the log has to
+ * remember to move, and nothing would fail if they did not.
+ * Returns null for a bundle with no dated log day - a custom
+ * `starterPath` in a test, typically - and such a bundle is copied
+ * verbatim.
+ */
+function starterAnchorDay(src: string): string | null {
+  let newest: string | null = null;
+  let entries: string[];
+  try {
+    entries = readdirSync(join(src, "log"));
+  } catch {
+    return null;
+  }
+  for (const name of entries) {
+    const day = /^(\d{4}-\d{2}-\d{2})\.md$/.exec(name)?.[1];
+    if (day !== undefined && (newest === null || day > newest)) newest = day;
+  }
+  return newest;
+}
+
+function shiftDay(day: string, days: number): string {
+  const shifted = new Date(`${day}T00:00:00Z`).getTime() + days * DAY_MS;
+  return new Date(shifted).toISOString().slice(0, 10);
+}
+
+/**
+ * Age the copied bundle so its history ends on the day it was dropped.
+ *
+ * The bundle carries a fictional five-day history with fixed dates, and
+ * one of its preferences is `pinned`. Left as authored, that pin passed
+ * `stale_evidence_days` ninety days after the bundle was written and
+ * every vault initialised after that woke up with a doctor warning on
+ * its first run - a bundle that is only clean for one quarter is not a
+ * starting point. Every date moves by the same whole number of days, so
+ * every interval the bundle demonstrates - the trial window still open,
+ * the evidence two days back, the retired entries months behind -
+ * survives the move exactly.
+ */
+function ageStarterCopy(
+  vault: string,
+  copied: ReadonlyArray<string>,
+  days: number,
+): ReadonlyArray<string> {
+  if (days === 0) return copied;
+  const renamed: string[] = [];
+  for (const rel of copied) {
+    const abs = join(vault, rel);
+    atomicWriteFileSync(
+      abs,
+      readFileSync(abs, "utf8").replace(DATE_RE, (d) => shiftDay(d, days)),
+    );
+    const name = basename(rel);
+    const moved = name.replace(DATE_RE, (d) => shiftDay(d, days));
+    if (moved === name) {
+      renamed.push(rel);
+      continue;
+    }
+    const target = join(dirname(rel), moved);
+    renameSync(abs, join(vault, target));
+    renamed.push(target);
+  }
+  return Object.freeze(renamed);
 }
 
 export interface StarterBundleResult {
@@ -149,16 +235,25 @@ export function copyStarterBundle(
       copied.push(join(BRAIN_ROOT_REL, sub, name));
     }
   }
-  return Object.freeze({ copied });
+  const anchor = starterAnchorDay(src);
+  const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
+  const days =
+    anchor === null
+      ? 0
+      : Math.round(
+          (new Date(`${today}T00:00:00Z`).getTime() - new Date(`${anchor}T00:00:00Z`).getTime()) /
+            DAY_MS,
+        );
+  return Object.freeze({ copied: ageStarterCopy(vault, copied, days) });
 }
 
 export interface BootstrapBrainOptions {
   /** Overwrite `_brain.yaml` and `_BRAIN.md` if they already exist. */
   readonly force?: boolean;
   /**
-   * Injection seam for deterministic tests. Currently unused in the
-   * rendered output (templates carry static text), but reserved so
-   * future timestamped substitutions stay test-friendly.
+   * Injection seam for deterministic tests. The rendered `_brain.yaml`
+   * and `_BRAIN.md` carry static text and ignore it; `--starter` ages
+   * the dropped bundle to this instant instead of the wall clock.
    */
   readonly now?: Date;
   /**
@@ -295,6 +390,7 @@ export function bootstrapBrain(
   if (opts.starter === true) {
     const starterResult = copyStarterBundle(vault, {
       starterPath: opts.starterPath,
+      ...(opts.now !== undefined ? { now: opts.now } : {}),
     });
     created.push(...starterResult.copied);
   }

@@ -633,11 +633,13 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   // --- Bulk subtree transfer ---------------------------------------------
   "src/core/brain/init.ts": {
     categories: [C.archiveTransfer],
-    calls: ["cpSync"],
+    calls: ["cpSync", "renameSync"],
     reason:
       "one recursive copy per bootstrap subdirectory into a destination the pre-check " +
       "already proved empty. This is also the path that CREATES the tree, so it can " +
-      "not be gated on anything the tree is about to contain.",
+      "not be gated on anything the tree is about to contain. The rename re-dates the " +
+      "starter bundle's own log filenames immediately after that copy, inside the same " +
+      "proven-empty destination.",
   },
   "src/core/brain/snapshot.ts": {
     categories: [C.archiveTransfer, C.retentionDelete],

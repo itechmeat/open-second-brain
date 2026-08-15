@@ -55,11 +55,29 @@ describe("resolveDefaultConfigPath — supported platforms", () => {
   test("the zero-argument form reads the real process and still resolves here", () => {
     // This test process runs on a supported platform; the refusal must be
     // unreachable for it, and the answer unchanged from before the branch.
+    //
+    // The two overrides are removed and PUT BACK. bun runs every test file in
+    // one process, so dropping `OPEN_SECOND_BRAIN_CONFIG` for good takes the
+    // hermetic default `tests/setup.ts` installs away from every file ordered
+    // after this one - which is invisible on a machine that has a real
+    // `~/.config/open-second-brain/config.yaml` to fall back on, and is 40-odd
+    // failures on a bare runner that does not.
+    const saved = {
+      config: process.env["OPEN_SECOND_BRAIN_CONFIG"],
+      xdg: process.env["XDG_CONFIG_HOME"],
+    };
     delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
     delete process.env["XDG_CONFIG_HOME"];
-    expect(defaultConfigPath()).toBe(
-      join(homedir(), ".config", "open-second-brain", "config.yaml"),
-    );
+    try {
+      expect(defaultConfigPath()).toBe(
+        join(homedir(), ".config", "open-second-brain", "config.yaml"),
+      );
+    } finally {
+      if (saved.config === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+      else process.env["OPEN_SECOND_BRAIN_CONFIG"] = saved.config;
+      if (saved.xdg === undefined) delete process.env["XDG_CONFIG_HOME"];
+      else process.env["XDG_CONFIG_HOME"] = saved.xdg;
+    }
   });
 });
 
