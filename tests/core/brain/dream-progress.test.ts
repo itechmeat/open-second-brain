@@ -135,11 +135,11 @@ describe("dream progress", () => {
       // Everything else the pass authored is compared.
       const EXCLUDED_PREFIXES = ["Brain/.snapshots/", "Brain/log/dream-runs/"];
       const authored = (root: string): Map<string, string> => {
-        const files = digestVaultFiles(root);
-        for (const path of [...files.keys()]) {
-          if (EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) files.delete(path);
+        const kept = new Map<string, string>();
+        for (const [path, digest] of digestVaultFiles(root)) {
+          if (!EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) kept.set(path, digest);
         }
-        return files;
+        return kept;
       };
       expect(authored(observed)).toEqual(authored(vault));
     } finally {
