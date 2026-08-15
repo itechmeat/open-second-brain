@@ -1,0 +1,350 @@
+/**
+ * Materialise a note for an unresolved wikilink target (B3).
+ *
+ * Three places already KNOW a link target does not exist, and every one
+ * of them stops at knowing. `link-graph/repair-lane.ts:236-239` decides
+ * `skip-missing-target`. `deep-synthesis.ts:706` emits the advice "write
+ * the missing note or fix the dangling link". `doctor/link-checks.ts`
+ * emits `broken-backlinks` with a structured `target` and its `sources`.
+ * Nothing materialises anything, so each of the three is a report an
+ * operator has to act on by hand - in a project whose whole argument is
+ * that a mechanism which must be invoked by hand will be missed.
+ *
+ * Nothing here is new machinery either. The bytes come from
+ * {@link renderStub}, which the graph importer has used since it shipped.
+ * The write is `createNote`, so the nine-step path envelope and the
+ * `if_exists` disposition apply unchanged. The proof that a target is
+ * really missing is `note-title-resolver.ts`, which is fail-closed and
+ * lists candidates rather than guessing.
+ *
+ * ## The stub contains nothing invented
+ *
+ * Its title is the target the link spelled. Its body is a list of the
+ * documents that referenced it, as wikilinks, which is the one fact the
+ * index actually holds about a target that does not exist. There is no
+ * prose, in any language, pretending to be the user's - a scaffolded note
+ * that opened with a sentence nobody wrote would be worse than the
+ * dangling link it replaced.
+ *
+ * ## Why the scan refuses instead of returning nothing
+ *
+ * `resolveLinkTargets` runs as a global post-pass but `replaceDocAliases`
+ * runs only for the documents a run actually read, so a dangling count
+ * taken after an incremental pass differs from one taken after a forced
+ * full pass. An empty list from a partially-resolved index reads as "this
+ * vault has no broken links", which is a clean bill of health for a vault
+ * nobody finished measuring. `link-ratchet.ts:211-233` already models the
+ * refusal - `unmeasurable("partial-resolution")`, verified from the
+ * index's own state keys rather than documented - and this follows it.
+ * An unmeasurable index is a distinct outcome from a clean one, and there
+ * is no fallback that reports zero.
+ */
+
+import { posix } from "node:path";
+
+import { requireNextStep } from "../next-step.ts";
+import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
+import { renderStub } from "../portability/graph.ts";
+import type { DanglingLinkTarget } from "../../search/store/links.ts";
+import { createNote, type CreateNoteIfExists, type CreateNoteOutcome } from "./create-note.ts";
+import {
+  NoteTitleResolutionError,
+  resolveNoteTarget as resolveNoteTitle,
+} from "./note-title-resolver.ts";
+
+// ----- Why a dangling scan could not answer ---------------------------------
+
+/**
+ * The state of one dangling-target scan. Three of the four members are
+ * refusals, and that is the point: each names a different reason the
+ * index could not be believed, and none of them is spelled as an empty
+ * result.
+ */
+export const DANGLING_SCAN = Object.freeze({
+  /** The index recorded a forced full pass as its last run; the list is real. */
+  measured: "measured",
+  /** No index database at the configured path. */
+  indexMissing: "index_missing",
+  /** An index exists and could not be opened or queried. */
+  indexUnreadable: "index_unreadable",
+  /** The last index run was not a forced full pass, so a count is not reproducible. */
+  partialResolution: "partial_resolution",
+} as const);
+
+/** Closed union over {@link DANGLING_SCAN}. */
+export type DanglingScan = (typeof DANGLING_SCAN)[keyof typeof DANGLING_SCAN];
+
+/** Membership list, measurable first. */
+export const DANGLING_SCANS: ReadonlyArray<DanglingScan> = Object.freeze(
+  Object.values(DANGLING_SCAN),
+);
+
+/**
+ * `unknown` rather than `string`: the value crosses the MCP and CLI JSON
+ * boundaries, and the vocabulary census probes every guard with `null`,
+ * `42` and `{}`.
+ */
+export function isDanglingScan(value: unknown): value is DanglingScan {
+  return typeof value === "string" && (DANGLING_SCANS as ReadonlyArray<string>).includes(value);
+}
+
+/** What one scan found, or why it declined to say. */
+export interface DanglingScanResult {
+  readonly state: DanglingScan;
+  /**
+   * The unresolved targets. Empty unless the state is `measured` - and an
+   * empty list under any other state means "not measured", never "none".
+   */
+  readonly targets: ReadonlyArray<DanglingLinkTarget>;
+  /** Why the scan could not measure; `null` when it did. */
+  readonly detail: string | null;
+  /** The registered command that makes a measurement possible. */
+  readonly nextCommand: string;
+}
+
+/**
+ * The command that produces an index a dangling scan can believe.
+ * Resolved from the diagnostics registry rather than written here, so a
+ * registry rename fails at import instead of inside the refusal it was
+ * meant to explain.
+ */
+const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
+
+/** Default cap on targets returned by one scan. */
+export const DANGLING_SCAN_DEFAULT_LIMIT = 100;
+
+function refusal(state: DanglingScan, detail: string): DanglingScanResult {
+  return Object.freeze({
+    state,
+    targets: Object.freeze([]),
+    detail,
+    nextCommand: REINDEX_COMMAND,
+  });
+}
+
+export interface ListDanglingOptions {
+  /** Maximum targets returned. Defaults to {@link DANGLING_SCAN_DEFAULT_LIMIT}. */
+  readonly limit?: number;
+}
+
+/**
+ * List the vault's unresolved wikilink targets from the search index,
+ * refusing rather than reporting zero when the index cannot be believed.
+ *
+ * The search modules are reached through a deferred import for the same
+ * reason `notes/lifecycle.ts` defers them: the search barrel imports back
+ * into the Brain tree, and a static edge from a Brain note writer into it
+ * is the shape the acyclic-import ratchet exists to keep out.
+ */
+export async function listDanglingTargets(
+  vault: string,
+  opts: ListDanglingOptions = {},
+): Promise<DanglingScanResult> {
+  const limit = Math.max(0, Math.floor(opts.limit ?? DANGLING_SCAN_DEFAULT_LIMIT));
+  const { existsSync } = await import("node:fs");
+  const { resolveSearchConfig } = await import("../../search/index.ts");
+  const { LAST_FULL_INDEX_AT_STATE_KEY, LAST_INDEXED_AT_STATE_KEY, Store } =
+    await import("../../search/store.ts");
+
+  let config;
+  try {
+    config = resolveSearchConfig({ vault });
+  } catch (err) {
+    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+  }
+  if (!existsSync(config.dbPath)) {
+    return refusal(DANGLING_SCAN.indexMissing, `no search index at ${config.dbPath}`);
+  }
+
+  let store;
+  try {
+    store = await Store.open(config, { mode: "read" });
+  } catch (err) {
+    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+  }
+  try {
+    const full = store.getState(LAST_FULL_INDEX_AT_STATE_KEY);
+    const last = store.getState(LAST_INDEXED_AT_STATE_KEY);
+    if (full === null || last === null || full !== last) {
+      return refusal(
+        DANGLING_SCAN.partialResolution,
+        `last full index ${full ?? "(never)"} is not the last index run ${last ?? "(never)"}; ` +
+          "a dangling list is only reproducible after a forced full pass",
+      );
+    }
+    return Object.freeze({
+      state: DANGLING_SCAN.measured,
+      targets: store.listDangling(limit),
+      detail: null,
+      nextCommand: REINDEX_COMMAND,
+    });
+  } catch (err) {
+    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+  } finally {
+    await store.close();
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// ----- Materialising one target ---------------------------------------------
+
+/** Machine-readable reason a {@link scaffoldStub} call was refused. */
+export type ScaffoldStubErrorCode =
+  /** The target was empty after unwrapping its brackets. */
+  | "empty_target"
+  /** The target already resolves to a note, so nothing is missing. */
+  | "target_resolves"
+  /** The target names more than one existing note. */
+  | "target_ambiguous";
+
+export class ScaffoldStubError extends Error {
+  readonly code: ScaffoldStubErrorCode;
+  /** Vault-relative candidate paths, populated only for `target_ambiguous`. */
+  readonly candidates: ReadonlyArray<string>;
+  constructor(
+    code: ScaffoldStubErrorCode,
+    message: string,
+    candidates: ReadonlyArray<string> = [],
+  ) {
+    super(message);
+    this.name = "ScaffoldStubError";
+    this.code = code;
+    this.candidates = Object.freeze([...candidates]);
+  }
+}
+
+export interface ScaffoldStubInput {
+  /** The unresolved wikilink target, e.g. `Projects/Foo` or `Foo`. */
+  readonly target: string;
+  /**
+   * Explicit destination. Absent derives `<target>.md`, which is the
+   * path the link itself named - so a pathed target lands where the link
+   * pointed and a bare basename lands at the vault root, predictably,
+   * rather than at a location this module guessed from the sources.
+   */
+  readonly path?: string;
+  /** Documents that referenced the target; they become the stub's body links. */
+  readonly sources?: ReadonlyArray<string>;
+  /** Occupied-target policy, forwarded to `createNote`. Absent means refuse. */
+  readonly ifExists?: CreateNoteIfExists;
+  /** False (the default) resolves and plans, writing nothing. */
+  readonly apply?: boolean;
+}
+
+export interface ScaffoldStubResult {
+  /** The target as the caller spelled it, minus decoration. */
+  readonly target: string;
+  /** Vault-relative path the stub would occupy, or does. */
+  readonly path: string;
+  /** False when this was a plan-only run. */
+  readonly applied: boolean;
+  /** What `createNote` did; `null` on a plan-only run. */
+  readonly outcome: CreateNoteOutcome | null;
+  /** The source documents whose wikilinks the stub's body carries, sorted. */
+  readonly sources: ReadonlyArray<string>;
+}
+
+/** The `.md` suffix, matched case-insensitively by the path envelope. */
+const MARKDOWN_SUFFIX = ".md";
+
+/** `Projects/Foo.md` -> `Projects/Foo`; anything else unchanged. */
+function withoutSuffix(path: string): string {
+  return path.toLowerCase().endsWith(MARKDOWN_SUFFIX)
+    ? path.slice(0, -MARKDOWN_SUFFIX.length)
+    : path;
+}
+
+/** `Projects/Foo` -> `Foo`. */
+function basenameOf(target: string): string {
+  return target.split(posix.sep).at(-1) ?? target;
+}
+
+/**
+ * Prove the target is really missing.
+ *
+ * Success from the title resolver is a REFUSAL here, and that inversion
+ * is the whole check: it means a note already answers this link, so there
+ * is nothing dangling and creating a second one would introduce the
+ * ambiguity the resolver refuses. `ambiguous` is refused for the same
+ * reason, one step further along - the link is not broken, it is
+ * over-answered, and a third note makes it worse. Only `not_found` /
+ * `path_not_found` is a target worth materialising.
+ */
+function assertMissing(vault: string, target: string): void {
+  let resolved: string | null = null;
+  try {
+    resolved = resolveNoteTitle(vault, target);
+  } catch (err) {
+    if (err instanceof NoteTitleResolutionError) {
+      if (err.code === "ambiguous") {
+        throw new ScaffoldStubError(
+          "target_ambiguous",
+          `target "${target}" already names more than one note; ` +
+            `resolve the ambiguity rather than adding a third: ${err.candidates.join(", ")}`,
+          err.candidates,
+        );
+      }
+      if (err.code === "empty_target") {
+        throw new ScaffoldStubError("empty_target", err.message);
+      }
+      return;
+    }
+    throw err;
+  }
+  throw new ScaffoldStubError(
+    "target_resolves",
+    `target "${target}" already resolves to ${resolved}; there is nothing to materialise`,
+  );
+}
+
+/**
+ * Materialise a stub note for one unresolved wikilink target.
+ *
+ * Dry run by default. Scaffolding is never a side effect of anything: the
+ * repair lane's `skip-missing-target` stays its default decision, and
+ * this function is reached only when a caller asked for it.
+ */
+export function scaffoldStub(vault: string, input: ScaffoldStubInput): ScaffoldStubResult {
+  const target = withoutSuffix(input.target.trim());
+  if (target.length === 0) {
+    throw new ScaffoldStubError("empty_target", "scaffold target must not be empty");
+  }
+  assertMissing(vault, target);
+
+  const path = input.path ?? `${target}${MARKDOWN_SUFFIX}`;
+  const sources = Object.freeze([...(input.sources ?? [])].toSorted());
+  // Body links are the SOURCES, spelled the way a wikilink spells a note:
+  // the vault-relative path without its extension. Nothing else about a
+  // target that does not exist is known, so nothing else is written.
+  const [frontmatter, body] = renderStub(
+    basenameOf(target),
+    sources.map((source) => withoutSuffix(source)),
+    {},
+  );
+
+  if (input.apply !== true) {
+    // The path is still resolved by the caller's next call, not guessed
+    // here: a plan that reported a destination the envelope would refuse
+    // is the misleading success this release removes. `createNote` is the
+    // only thing that decides, so a plan reports the path it WOULD pass
+    // and writes nothing.
+    return Object.freeze({ target, path, applied: false, outcome: null, sources });
+  }
+
+  const created = createNote(vault, {
+    path,
+    frontmatter,
+    content: body,
+    ...(input.ifExists !== undefined ? { ifExists: input.ifExists } : {}),
+  });
+  return Object.freeze({
+    target,
+    path: created.path,
+    applied: true,
+    outcome: created.outcome,
+    sources,
+  });
+}

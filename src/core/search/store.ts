@@ -88,7 +88,7 @@ export type { DocumentInput, DocumentSummary } from "./store/documents.ts";
 export type { EventAnchor } from "./event-anchor.ts";
 export type { ChunkInput, ChunkRow, HydratedChunk } from "./store/chunks.ts";
 export type { KeywordHit } from "./store/keyword.ts";
-export type { LinkInput, LinkResolutionCounts } from "./store/links.ts";
+export type { DanglingLinkTarget, LinkInput, LinkResolutionCounts } from "./store/links.ts";
 export type { EmbeddingPrefixPair, ModelChangeOutcome, SemanticHit } from "./store/vectors.ts";
 export type { StoreCounts } from "./store/counts.ts";
 
@@ -528,6 +528,18 @@ export class Store {
    */
   linkResolutionCounts(): links.LinkResolutionCounts {
     return links.linkResolutionCounts(this.db);
+  }
+
+  /**
+   * The unresolved link targets themselves, grouped by target and capped
+   * at `limit` targets. The same predicate {@link linkResolutionCounts}
+   * counts, so the list and the number cannot disagree about which links
+   * are broken. A caller must decide whether this index is resolved
+   * enough to believe - an empty list from a partially-resolved index is
+   * not the same answer as a vault with no dangling links.
+   */
+  listDangling(limit: number): ReadonlyArray<links.DanglingLinkTarget> {
+    return links.listDangling(this.db, limit);
   }
 
   /**

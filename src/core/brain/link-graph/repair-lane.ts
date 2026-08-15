@@ -37,6 +37,7 @@ import { listContinuityRecords } from "../continuity/store.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { scaffoldStub } from "../notes/scaffold-stub.ts";
 
 /** Identity-strength tiers, strongest first. `inferred` is opt-in. */
 export const IDENTITY_STRENGTH = Object.freeze({
@@ -100,6 +101,18 @@ export interface RepairReport {
   /** Count of edges written (or, in dry-run, that would be written). */
   readonly written: number;
   readonly decisions: readonly RepairDecision[];
+  /**
+   * Vault-relative paths of stub notes this run materialised, sorted.
+   *
+   * Always empty unless the caller opted in AND this is an apply. The
+   * lane's premise is that it never creates a dangling edge; before B3
+   * the only way to honour that was `skip-missing-target`, which left the
+   * operator with a report and no verb. Scaffolding is the other way to
+   * honour it, and it is opt-in precisely because "the repair pass also
+   * created eleven notes" must never be something a run discovers
+   * afterwards.
+   */
+  readonly scaffolded: ReadonlyArray<string>;
 }
 
 export interface RepairLaneOptions {
@@ -113,6 +126,13 @@ export interface RepairLaneOptions {
   readonly confidenceThreshold?: number;
   /** Per-run write cap override. Defaults to {@link REPAIR_WRITE_CAP}. */
   readonly writeCap?: number;
+  /**
+   * Materialise a stub for a candidate whose target does not exist,
+   * instead of deciding `skip-missing-target` (B3). Default false, and
+   * inert on a dry run: scaffolding must never be a side effect of a
+   * repair pass.
+   */
+  readonly scaffoldMissingTargets?: boolean;
 }
 
 /** Raised when an apply is requested without the exact confirmation phrase. */
@@ -203,6 +223,8 @@ export function runRepairLane(
   // a full rerun after apply converges to zero writes.
   const linkedBySource = new Map<string, Set<string>>();
   const decisions: RepairDecision[] = [];
+  const scaffolded: string[] = [];
+  const scaffold = apply && opts.scaffoldMissingTargets === true;
   let written = 0;
 
   for (const candidate of orderCandidates(candidates)) {
@@ -234,8 +256,16 @@ export function runRepairLane(
       continue;
     }
     if (!existsSync(targetAbs)) {
-      decide("skip-missing-target");
-      continue;
+      // The default is unchanged and stays the default: a missing target
+      // is a skip. Only an explicit opt-in on an apply run turns it into
+      // a materialisation, and a scaffold that could not run falls back
+      // to the skip rather than writing an edge to a note that still does
+      // not exist.
+      if (!scaffold || !scaffoldMissingTarget(vault, candidate.target, candidate.source)) {
+        decide("skip-missing-target");
+        continue;
+      }
+      scaffolded.push(candidate.target);
     }
 
     // A candidate with no canonical endpoint key cannot be deduped against
@@ -272,7 +302,30 @@ export function runRepairLane(
     mode: apply ? "apply" : "dry-run",
     written,
     decisions: Object.freeze(decisions),
+    scaffolded: Object.freeze(scaffolded.toSorted()),
   };
+}
+
+/**
+ * Materialise the stub for one missing target, reporting whether it now
+ * exists.
+ *
+ * A refusal from the scaffolder - the target actually resolves, or names
+ * several notes, or the path envelope rejects the destination - is
+ * answered with `false`, so that candidate falls back to
+ * `skip-missing-target` rather than one unscaffoldable endpoint aborting
+ * a whole run. The fallback is not silent: the decision the caller reads
+ * back is the same `skip-missing-target` it would have got with the
+ * option off, and the path is absent from `scaffolded`.
+ */
+function scaffoldMissingTarget(vault: string, target: string, source: string): boolean {
+  try {
+    return (
+      scaffoldStub(vault, { target, path: target, sources: [source], apply: true }).outcome !== null
+    );
+  } catch {
+    return false;
+  }
 }
 
 // ----- Candidate collection from vault structure ----------------------------

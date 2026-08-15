@@ -318,6 +318,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Note FILES: rename, move, archive or delete one, rewriting inbound wikilinks",
         ),
         command(
+          "scaffold-stub",
+          "Unresolved wikilink targets: list them from the index, or materialise a stub",
+        ),
+        command(
           "claims",
           "Claim-graph query: current truth, truth at an instant, replaced-by, contested-by",
         ),

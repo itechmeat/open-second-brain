@@ -144,6 +144,53 @@ export function linkResolutionCounts(db: Database): LinkResolutionCounts {
   return Object.freeze({ total: row?.total ?? 0, unresolved: row?.unresolved ?? 0 });
 }
 
+/** One unresolved link target and the documents that reference it. */
+export interface DanglingLinkTarget {
+  /** The target spelling the link carried, verbatim. */
+  readonly target: string;
+  /** Vault-relative paths of the referencing documents, sorted. */
+  readonly sources: ReadonlyArray<string>;
+}
+
+/**
+ * The unresolved link targets themselves, grouped by target.
+ *
+ * {@link linkResolutionCounts} could say HOW MANY links resolve to
+ * nothing and nothing else, so a consumer wanting to act on one - write
+ * the missing note, fix the link - had to re-derive the set with its own
+ * scan under its own definition. This is the same predicate as the count,
+ * over {@link RESOLVED_LINK_TARGET_SQL}, so the list and the number can
+ * never disagree about which links are broken.
+ *
+ * `limit` caps the TARGETS returned, not the rows, and the ordering is
+ * total (`target`, then `source`) so two runs over an unchanged index
+ * return the same page. Tag rows carry no target path and are excluded by
+ * the same `target_path IS NOT NULL` clause the count uses.
+ */
+export function listDangling(db: Database, limit: number): ReadonlyArray<DanglingLinkTarget> {
+  const rows = db
+    .query<{ target: string; source: string }, []>(
+      "SELECT DISTINCT l.target_path AS target, d.path AS source " +
+        "FROM links l JOIN documents d ON d.id = l.source_document_id " +
+        `WHERE l.target_path IS NOT NULL AND ${RESOLVED_LINK_TARGET_SQL} IS NULL ` +
+        "ORDER BY target, source",
+    )
+    .all();
+  const out: DanglingLinkTarget[] = [];
+  const sourcesByTarget = new Map<string, string[]>();
+  for (const row of rows) {
+    let sources = sourcesByTarget.get(row.target);
+    if (sources === undefined) {
+      if (out.length >= limit) continue;
+      sources = [];
+      sourcesByTarget.set(row.target, sources);
+      out.push(Object.freeze({ target: row.target, sources }) as DanglingLinkTarget);
+    }
+    sources.push(row.source);
+  }
+  return Object.freeze(out.map((t) => Object.freeze({ ...t, sources: Object.freeze(t.sources) })));
+}
+
 /**
  * Every link edge resolved to a (source, target) document-id pair,
  * deduplicated, using the same conservative resolution ladder as

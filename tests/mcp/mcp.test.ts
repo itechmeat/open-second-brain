@@ -328,6 +328,7 @@ describe("tool listing", () => {
         "brain_memory_bridge",
         // Route-level MCP latency (context-pack-economics-observability).
         "brain_route_metrics",
+        "brain_scaffold_stub",
         // Shadow-only retrieval advisor (retrieval-quality-and-context-delivery).
         "brain_retrieval_plan",
         // Durable token-impact ledger (context-pack-economics-observability).
@@ -697,7 +698,9 @@ describe("stdio loop", () => {
     //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
     // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
     //   wiring-what-exists B2 t_ae62fabd) = 109.
-    expect(list.result.tools.length).toBe(109);
+    // + brain_scaffold_stub (materialise a note for an unresolved wikilink
+    //   target, wiring-what-exists B3 t_783b37f8) = 110.
+    expect(list.result.tools.length).toBe(110);
   });
 
   test("returns parse error for invalid JSON", async () => {

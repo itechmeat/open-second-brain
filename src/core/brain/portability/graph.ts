@@ -159,8 +159,15 @@ function isValidGraphNode(node: unknown): node is GraphNodeInput {
  * body wikilinks list the links. Multi-target relations are flattened
  * into the body links (type not preserved - a documented limitation of
  * the frontmatter parser).
+ *
+ * Exported for `notes/scaffold-stub.ts` (B3), which materialises a note
+ * for a dangling wikilink target. That verb needs exactly this shape and
+ * for exactly this reason: every byte it emits is DERIVED - the title
+ * from the target the link spelled, the body links from the documents the
+ * index says referenced it - so a scaffolded note contains no prose
+ * pretending to be the user's.
  */
-function renderStub(
+export function renderStub(
   title: string,
   links: ReadonlyArray<string>,
   relations: Readonly<Record<string, ReadonlyArray<string>>>,

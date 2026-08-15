@@ -181,5 +181,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
   // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
   //   wiring-what-exists B2 t_ae62fabd) = 109.
-  expect(list.result.tools.length).toBe(109);
+  // + brain_scaffold_stub (materialise a note for an unresolved wikilink
+  //   target, wiring-what-exists B3 t_783b37f8) = 110.
+  expect(list.result.tools.length).toBe(110);
 });

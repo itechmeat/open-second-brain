@@ -29,13 +29,22 @@ import {
   isNoteLifecycleAction,
   type NoteLifecycleResult,
 } from "../../core/brain/notes/lifecycle.ts";
+import {
+  listDanglingTargets,
+  scaffoldStub,
+  ScaffoldStubError,
+} from "../../core/brain/notes/scaffold-stub.ts";
 import { CountGuardError } from "../../core/brain/count-guard.ts";
-import { CreateNoteError } from "../../core/brain/notes/create-note.ts";
+import {
+  CreateNoteError,
+  CREATE_NOTE_IF_EXISTS,
+  type CreateNoteIfExists,
+} from "../../core/brain/notes/create-note.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr } from "../coerce.ts";
-import { readCountGuardArgs } from "./shared.ts";
+import { coerceNonNegativeInteger, readCountGuardArgs } from "./shared.ts";
 
 const TOOL = "brain_note_lifecycle";
 
@@ -131,6 +140,119 @@ async function toolBrainNoteLifecycle(
   }
 }
 
+/**
+ * The two things a caller can do about an unresolved wikilink target
+ * (B3): find out which ones there are, and materialise one.
+ *
+ * A separate tool from {@link TOOL} rather than a fifth action on it, and
+ * the reason is the subject. Every note-lifecycle action names an
+ * EXISTING note by path; a dangling target has no path yet - that is what
+ * makes it dangling. Folding them together would give one required
+ * parameter two meanings and one vocabulary two shapes.
+ */
+const STUB_TOOL = "brain_scaffold_stub";
+
+export const STUB_SCAFFOLD_ACTION = Object.freeze({
+  /** Read the vault's unresolved targets from the index, or say why not. */
+  list: "list",
+  /** Materialise a stub for one target. */
+  write: "write",
+} as const);
+
+/** Closed union over {@link STUB_SCAFFOLD_ACTION}. */
+export type StubScaffoldAction = (typeof STUB_SCAFFOLD_ACTION)[keyof typeof STUB_SCAFFOLD_ACTION];
+
+/** Membership list, read before write. */
+export const STUB_SCAFFOLD_ACTIONS: ReadonlyArray<StubScaffoldAction> = Object.freeze(
+  Object.values(STUB_SCAFFOLD_ACTION),
+);
+
+/** See {@link isNoteLifecycleAction} for why the parameter is `unknown`. */
+export function isStubScaffoldAction(value: unknown): value is StubScaffoldAction {
+  return (
+    typeof value === "string" && (STUB_SCAFFOLD_ACTIONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** Read an optional string array argument, refusing a non-array. */
+function coerceStringArray(args: Record<string, unknown>, field: string): string[] {
+  const raw = args[field];
+  if (raw === undefined || raw === null) return [];
+  if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string")) {
+    throw new MCPError(INVALID_PARAMS, `${STUB_TOOL}: ${field} must be an array of strings`);
+  }
+  return raw as string[];
+}
+
+async function toolBrainScaffoldStub(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const action = coerceStr(args, "action", true)!;
+  if (!isStubScaffoldAction(action)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${STUB_TOOL}: 'action' must be one of ${STUB_SCAFFOLD_ACTIONS.join(", ")}`,
+    );
+  }
+
+  if (action === STUB_SCAFFOLD_ACTION.list) {
+    const limit = coerceNonNegativeInteger(STUB_TOOL, "limit", args["limit"]);
+    const scan = await listDanglingTargets(ctx.vault, limit !== undefined ? { limit } : {});
+    return {
+      action,
+      state: scan.state,
+      targets: scan.targets.map((t) => ({ target: t.target, sources: [...t.sources] })),
+      detail: scan.detail,
+      next_command: scan.nextCommand,
+    };
+  }
+
+  const target = coerceStr(args, "target", true)!;
+  const path = coerceStr(args, "path", false) ?? undefined;
+  const ifExists = coerceStr(args, "if_exists", false) ?? undefined;
+  if (ifExists !== undefined && !CREATE_NOTE_IF_EXISTS.includes(ifExists as CreateNoteIfExists)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${STUB_TOOL}: if_exists must be one of ${CREATE_NOTE_IF_EXISTS.join(", ")}`,
+    );
+  }
+  const apply = coerceBoolOptional(args, "apply");
+
+  try {
+    const res = scaffoldStub(ctx.vault, {
+      target,
+      ...(path !== undefined ? { path } : {}),
+      sources: coerceStringArray(args, "sources"),
+      ...(ifExists !== undefined ? { ifExists: ifExists as CreateNoteIfExists } : {}),
+      ...(apply !== undefined ? { apply } : {}),
+    });
+    return {
+      action,
+      target: res.target,
+      path: res.path,
+      applied: res.applied,
+      outcome: res.outcome,
+      sources: [...res.sources],
+    };
+  } catch (err) {
+    if (err instanceof ScaffoldStubError) {
+      throw new MCPError(INVALID_PARAMS, `${STUB_TOOL}: ${err.message}`, {
+        code: err.code,
+        ...(err.candidates.length > 0 ? { candidates: [...err.candidates] } : {}),
+      });
+    }
+    if (err instanceof CreateNoteError) {
+      throw new MCPError(INVALID_PARAMS, `${STUB_TOOL}: ${err.message}`, { code: err.code });
+    }
+    if (err instanceof MCPError) throw err;
+    throw new MCPError(
+      INTERNAL_ERROR,
+      `${STUB_TOOL}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
@@ -180,5 +302,55 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
     },
     previewBudget: MCP_PREVIEW_BUDGET,
     handler: toolBrainNoteLifecycle,
+  },
+  {
+    name: STUB_TOOL,
+    description:
+      "Unresolved wikilink targets. action: list reads them from the search index and refuses with a state and a next_command when that index is missing or partly resolved, rather than reporting zero; write materialises a stub for one target, its body linking back to the sources. Dry-run unless apply.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [...STUB_SCAFFOLD_ACTIONS],
+          description: "list reads the dangling targets; write materialises one.",
+        },
+        target: {
+          type: "string",
+          description: "write: the unresolved wikilink target, e.g. Projects/Foo or Foo.",
+        },
+        path: {
+          type: "string",
+          description:
+            "write: explicit vault-relative destination. Absent derives <target>.md, the path the link itself named.",
+        },
+        sources: {
+          type: "array",
+          items: { type: "string" },
+          description:
+            "write: vault-relative paths that referenced the target; they become the stub's body wikilinks.",
+        },
+        if_exists: {
+          type: "string",
+          enum: [...CREATE_NOTE_IF_EXISTS],
+          description:
+            "write: occupied-destination policy. Default refuse; skip returns outcome=skipped, never created.",
+        },
+        apply: {
+          type: "boolean",
+          description:
+            "write: materialise the stub. Absent means a dry run that reports the destination and writes nothing.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 0,
+          description: "list: maximum targets returned.",
+        },
+      },
+      required: ["action"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainScaffoldStub,
   },
 ]);

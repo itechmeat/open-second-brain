@@ -48,7 +48,10 @@
  * archive and delete for note FILES - the first MCP verb that removes a
  * user note, behind a dry-run default, an explicit confirm, a count guard
  * over inbound references, and a recoverability verdict that says the
- * archive it took does not cover a note living outside `Brain/`).
+ * archive it took does not cover a note living outside `Brain/`) and
+ * `brain_scaffold_stub` (the unresolved wikilink targets the search index
+ * holds, and the verb that materialises a note for one - the list REFUSES
+ * a missing or partially-resolved index rather than reporting zero).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -125,6 +128,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_retrieval_plan",
   "brain_review_candidates",
   "brain_route_metrics",
+  "brain_scaffold_stub",
   "brain_search_by_source",
   "brain_secrets",
   "brain_session_checkpoint",

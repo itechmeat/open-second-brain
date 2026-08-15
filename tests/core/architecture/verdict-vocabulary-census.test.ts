@@ -172,6 +172,16 @@ import {
   NOTE_LIFECYCLE_ACTION,
   NOTE_LIFECYCLE_ACTIONS,
 } from "../../../src/core/brain/notes/lifecycle.ts";
+import {
+  DANGLING_SCAN,
+  DANGLING_SCANS,
+  isDanglingScan,
+} from "../../../src/core/brain/notes/scaffold-stub.ts";
+import {
+  isStubScaffoldAction,
+  STUB_SCAFFOLD_ACTION,
+  STUB_SCAFFOLD_ACTIONS,
+} from "../../../src/mcp/brain/lifecycle-file-tools.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -582,6 +592,27 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: INDEX_EVIDENCE,
     members: INDEX_EVIDENCE_STATES,
     guard: isIndexEvidenceState,
+  },
+  {
+    // B3. Three of its four members are refusals, and that is the unit:
+    // the index reports dangling links as a COUNT, and a count taken
+    // after an incremental pass is not reproducible. An empty list from
+    // a partially-resolved index would read as a clean vault, so the
+    // scan says which of the four states produced the answer.
+    name: "DANGLING_SCAN",
+    values: DANGLING_SCAN,
+    members: DANGLING_SCANS,
+    guard: isDanglingScan,
+  },
+  {
+    // B3. The dispatch key of the stub-scaffolding tool. Separate from
+    // NOTE_LIFECYCLE_ACTION because the subjects are different kinds:
+    // every lifecycle action names an existing note by path, and a
+    // dangling target has no path yet - that is what makes it dangling.
+    name: "STUB_SCAFFOLD_ACTION",
+    values: STUB_SCAFFOLD_ACTION,
+    members: STUB_SCAFFOLD_ACTIONS,
+    guard: isStubScaffoldAction,
   },
 ]);
 
