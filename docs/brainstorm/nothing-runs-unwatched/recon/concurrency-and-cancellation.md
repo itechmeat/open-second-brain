@@ -495,7 +495,18 @@ ownership boundary: "Hermes Agent owns the schedule (dream cron, daily digests�
 `ensureVaultCurrent(vault, { background: true })` is called at **two** startup points:
 
 - `src/cli/main.ts:648` — every full-scope MCP server start;
-- `hooks/active-inject.ts:161` — the `SessionStart` **and** `PostCompact` hook.
+- `hooks/active-inject.ts:161` — the `SessionStart` hook.
+
+  **Correction (implementation, U5).** This note originally said "the
+  `SessionStart` **and** `PostCompact` hook". That is wrong: the call is
+  guarded by `if (hookEventName === "SessionStart")` at
+  `hooks/active-inject.ts:158`, so a PostCompact event spawns nothing. The
+  module IS registered for both events, which is where the error came
+  from - reading the registration rather than the branch. The herd is
+  therefore one spawn per session start plus one per MCP server start,
+  not two per session. It is still a herd, and the losers still died into
+  a discarded stderr, so the unit's subject is unchanged; the multiplier
+  is smaller than this note claimed.
 
 In background mode it calls `spawnDetachedReindex`
 (`src/core/maintenance/ensure-current.ts:87-99`): `Bun.spawn(["…/o2b", "search",
@@ -571,7 +582,7 @@ Points where the task framing does not survive contact with the source.
 | 4 | Existing concurrency controls are "FILE-LEVEL locks serializing writes" (`inline-rewrite.ts:17,51`, `log.ts:310`, `metrics.ts:13`) | Two of the three are right; the third is inverted. `src/core/brain/metrics.ts:11-14` documents the deliberate **absence** of a lock (bare `appendFileSync` at `:101`, relying on `O_APPEND` atomicity). And `inline-rewrite.ts` locks the **parent directory**, not the file (`:17-19`) |
 | 5 | `src/core/brain/idempotency-ledger.ts:23-167` is dream run state | It is a **client-supplied idempotency-key store for the signal write path** (`:1-33`). `dream()` never touches it. The dream pass's own journal is `src/core/brain/dream-workrun.ts`, explicitly **non-resuming** (`:9-13`) |
 | 6 | t_992f0c33: "startup crash-loop recovery" and "startup grace period" | **No daemon exists.** `docs/architecture.md:229`; `src/cli/main.ts:1004-1013`. Every entry point is one-shot or client-scoped. There is no PID guard, no supervisor, and no cross-process failure counter |
-| 7 | The thundering herd is about the dream pass | It is about **reindex**: `src/core/maintenance/ensure-current.ts:87-99` spawns a detached `o2b search reindex` from *both* MCP startup (`src/cli/main.ts:648`) and the `SessionStart`/`PostCompact` hook (`hooks/active-inject.ts:161`). The collision is already named in-source at `src/core/search/indexer.ts:930-937`. Dream is never triggered automatically at all |
+| 7 | The thundering herd is about the dream pass | It is about **reindex**: `src/core/maintenance/ensure-current.ts:87-99` spawns a detached `o2b search reindex` from *both* MCP startup (`src/cli/main.ts:648`) and the `SessionStart` hook (`hooks/active-inject.ts:161`; see the correction in §6.3 - PostCompact is registered but branches away). The collision is already named in-source at `src/core/search/indexer.ts:930-937`. Dream is never triggered automatically at all |
 | 8 | "a write-batch primitive that yields when pressure is high" | `brain_write_batch` already exists and is **all-or-nothing atomic** — `src/core/brain/write-batch.ts:206`, `src/mcp/brain/write-batch-tools.ts:1-16`. A batch that yields mid-way would break the contract the tool is named for. Its bound is a hardcoded `MAX_BATCH_OPERATIONS = 100` (`:56`), justified precisely as a blocking-window cap (`:51-54`) |
 | 9 | (implied) a pressure gate is new ground | `evaluateGates` (`src/core/brain/maintenance/lane.ts:99-113`) is already a measured-pressure gate — the metric is interactive query rate, not host load. The lease, the journal, the verdict vocabulary and the `--force` semantics all exist |
 
