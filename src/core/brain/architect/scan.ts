@@ -48,6 +48,9 @@ const ENTRY_CANDIDATES = [
 
 const TEST_LAYOUTS = ["tests", "test", "__tests__", "spec"];
 
+/** Where modules are looked for, in preference order. */
+const MODULE_BASES = ["src", "packages"];
+
 export interface ModuleFact {
   readonly name: string;
   /** Project-relative POSIX path. */
@@ -112,10 +115,28 @@ export interface ScanProjectOptions {
   readonly safeguard?: Safeguard;
 }
 
+/**
+ * Everything ONE traversal of the tree yields.
+ *
+ * The tree is walked exactly once and every fact is derived from what
+ * that walk collected. It used to be walked at least twice - the totals
+ * pass, then `src/<module>` again per module, and the whole tree a second
+ * time on a flat layout - which doubled the syscall that dominates the
+ * run for facts already in hand.
+ */
 interface WalkStats {
   files: number;
   languages: Record<string, number>;
+  /** Project-relative POSIX paths of every file, in walk order. */
   paths: string[];
+  /** Project-relative POSIX paths of every directory the walk entered. */
+  dirs: string[];
+}
+
+/** Count one file's extension, the single place the mapping is defined. */
+function tallyExtension(languages: Record<string, number>, path: string): void {
+  const ext = extname(path).toLowerCase();
+  if (ext !== "") languages[ext] = (languages[ext] ?? 0) + 1;
 }
 
 function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOptions): void {
@@ -143,43 +164,72 @@ function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOp
     }
     if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
+      stats.dirs.push(rel);
       walk(abs, stats, rel, opts);
       continue;
     }
     stats.files += 1;
     stats.paths.push(rel);
-    const ext = extname(entry).toLowerCase();
-    if (ext !== "") stats.languages[ext] = (stats.languages[ext] ?? 0) + 1;
+    tallyExtension(stats.languages, entry);
   }
 }
 
 function statsFor(dir: string, opts: ScanProjectOptions): WalkStats {
-  const stats: WalkStats = { files: 0, languages: {}, paths: [] };
+  const stats: WalkStats = { files: 0, languages: {}, paths: [], dirs: [] };
   walk(dir, stats, "", opts);
   return stats;
 }
 
-function listDirs(dir: string): ReadonlyArray<string> {
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return [];
-  }
-  return entries
-    .toSorted()
-    .filter((entry) => !SKIP_DIRS.has(entry))
-    .filter((entry) => {
-      try {
-        const stat = lstatSync(join(dir, entry));
-        return !stat.isSymbolicLink() && stat.isDirectory();
-      } catch {
-        return false;
-      }
-    });
+/** What one subtree of an already-walked tree contains. */
+interface SubtreeStats {
+  readonly files: number;
+  readonly languages: Record<string, number>;
+  /** Subtree-relative POSIX paths. */
+  readonly paths: ReadonlyArray<string>;
 }
 
-function readManifest(root: string): ManifestFact | null {
+/**
+ * The stats of `prefix` read out of the whole-tree walk, with no second
+ * traversal: the walk already visited every file under it, and a path is
+ * under `prefix` exactly when it starts with `prefix/`.
+ */
+function subtreeStats(total: WalkStats, prefix: string): SubtreeStats {
+  const head = `${prefix}/`;
+  const paths = total.paths
+    .filter((path) => path.startsWith(head))
+    .map((p) => p.slice(head.length));
+  const languages: Record<string, number> = {};
+  for (const path of paths) tallyExtension(languages, path);
+  return { files: paths.length, languages, paths };
+}
+
+/**
+ * Direct child directories of `base`, from the same walk. Sorted, because
+ * module order decides the rendered note order and must not depend on
+ * traversal order.
+ */
+function childDirs(total: WalkStats, base: string): ReadonlyArray<string> {
+  const head = `${base}/`;
+  return total.dirs
+    .filter((dir) => dir.startsWith(head) && !dir.slice(head.length).includes("/"))
+    .map((dir) => dir.slice(head.length))
+    .toSorted();
+}
+
+/**
+ * A manifest and the object it was parsed from. The raw object travels
+ * with the fact because entry-point detection needs `main` and `bin`,
+ * which the fact does not carry - reading and parsing `package.json` a
+ * second time to reach them was two syscalls and a parse for data
+ * already in memory, and left two readers that could disagree about
+ * what the file said.
+ */
+interface ManifestRead {
+  readonly fact: ManifestFact;
+  readonly raw: Record<string, unknown>;
+}
+
+function readManifest(root: string): ManifestRead | null {
   const path = join(root, "package.json");
   if (!existsSync(path)) return null;
   try {
@@ -188,56 +238,49 @@ function readManifest(root: string): ManifestFact | null {
       typeof raw["dependencies"] === "object" && raw["dependencies"] !== null
         ? Object.keys(raw["dependencies"] as Record<string, unknown>).toSorted()
         : [];
-    return Object.freeze({
-      name: typeof raw["name"] === "string" ? raw["name"] : null,
-      version: typeof raw["version"] === "string" ? raw["version"] : null,
-      description: typeof raw["description"] === "string" ? raw["description"] : null,
-      dependencies: Object.freeze(deps),
-    });
+    return {
+      fact: Object.freeze({
+        name: typeof raw["name"] === "string" ? raw["name"] : null,
+        version: typeof raw["version"] === "string" ? raw["version"] : null,
+        description: typeof raw["description"] === "string" ? raw["description"] : null,
+        dependencies: Object.freeze(deps),
+      }),
+      raw,
+    };
   } catch {
     return null;
   }
 }
 
-function detectModules(root: string, opts: ScanProjectOptions): ReadonlyArray<ModuleFact> {
-  for (const base of ["src", "packages"]) {
-    const baseDir = join(root, base);
-    if (!existsSync(baseDir)) continue;
-    const dirs = listDirs(baseDir);
-    if (dirs.length === 0) continue;
-    return Object.freeze(
-      dirs.map((name) => {
-        const stats = statsFor(join(baseDir, name), opts);
-        return Object.freeze({
-          name,
-          path: `${base}/${name}`,
-          files: stats.files,
-          languages: Object.freeze(stats.languages),
-          topFiles: Object.freeze(stats.paths.toSorted().slice(0, TOP_FILES_CAP)),
-        });
-      }),
-    );
-  }
-  // Flat layout: the project root is the single module.
-  const stats = statsFor(root, opts);
-  return Object.freeze([
-    Object.freeze({
-      name: "root",
-      path: ".",
-      files: stats.files,
-      languages: stats.languages,
-      topFiles: Object.freeze(stats.paths.toSorted().slice(0, TOP_FILES_CAP)),
-    }),
-  ]);
+function moduleFact(name: string, path: string, stats: SubtreeStats): ModuleFact {
+  return Object.freeze({
+    name,
+    path,
+    files: stats.files,
+    languages: Object.freeze(stats.languages),
+    topFiles: Object.freeze(stats.paths.toSorted().slice(0, TOP_FILES_CAP)),
+  });
 }
 
-function detectEntryPoints(root: string, manifest: ManifestFact | null): ReadonlyArray<string> {
+function detectModules(total: WalkStats): ReadonlyArray<ModuleFact> {
+  for (const base of MODULE_BASES) {
+    const dirs = childDirs(total, base);
+    if (dirs.length === 0) continue;
+    return Object.freeze(
+      dirs.map((name) =>
+        moduleFact(name, `${base}/${name}`, subtreeStats(total, `${base}/${name}`)),
+      ),
+    );
+  }
+  // Flat layout: the project root is the single module, and the root walk
+  // IS its walk - nothing is traversed a second time to learn that.
+  return Object.freeze([moduleFact("root", ".", total)]);
+}
+
+function detectEntryPoints(root: string, manifest: ManifestRead | null): ReadonlyArray<string> {
   const points = new Set<string>();
   if (manifest !== null) {
-    const raw = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as Record<
-      string,
-      unknown
-    >;
+    const raw = manifest.raw;
     if (typeof raw["main"] === "string") points.add(raw["main"]);
     if (typeof raw["bin"] === "object" && raw["bin"] !== null) {
       for (const value of Object.values(raw["bin"] as Record<string, unknown>)) {
@@ -260,10 +303,10 @@ export function scanProject(projectRoot: string, opts: ScanProjectOptions = {}):
   const testLayout = TEST_LAYOUTS.find((layout) => existsSync(join(root, layout))) ?? null;
   return Object.freeze({
     root,
-    name: manifest?.name ?? basename(root),
-    manifest,
+    name: manifest?.fact.name ?? basename(root),
+    manifest: manifest?.fact ?? null,
     entryPoints: detectEntryPoints(root, manifest),
-    modules: detectModules(root, opts),
+    modules: detectModules(total),
     testLayout,
     totalFiles: total.files,
     languages: Object.freeze(total.languages),

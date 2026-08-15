@@ -10,6 +10,7 @@ import { join } from "node:path";
 
 import { generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
 import { scanProject } from "../../../src/core/brain/architect/scan.ts";
+import { OPERATION, PROGRESS_KIND, progressCounter } from "../../../src/core/brain/progress.ts";
 
 let tmp: string;
 let project: string;
@@ -67,6 +68,32 @@ test("scanProject produces deterministic structural facts", () => {
   expect(facts.languages[".ts"]).toBe(5);
   // Determinism: scanning twice gives deep-equal results.
   expect(scanProject(project)).toEqual(facts);
+});
+
+test("the traversal reads each directory exactly once", () => {
+  seed("src/core/deep/nested/util.ts");
+  // Every directory the scan is allowed to enter, listed rather than
+  // computed: `node_modules/dep` and `.git` are skipped, so reading
+  // either of them would show up here as an extra count.
+  const walkable = [
+    "",
+    "src",
+    "src/cli",
+    "src/core",
+    "src/core/deep",
+    "src/core/deep/nested",
+    "tests",
+  ];
+
+  // The progress counter is the instrument: it advances once per
+  // directory read, so a subtree walked a second time doubles its count.
+  let reads = 0;
+  const counter = progressCounter(OPERATION.architect, (event) => {
+    if (event.kind === PROGRESS_KIND.advanced) reads += 1;
+  });
+  scanProject(project, { progress: counter });
+
+  expect(reads).toBe(walkable.length);
 });
 
 test("scanProject skips symlinks instead of following them", () => {
