@@ -170,7 +170,7 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     label: "vault profiles registry",
     location: "profiles.json, beside the config file above",
     carries_memory: false,
-    created_by: "`o2b brain profile create`, and any profile switch",
+    created_by: "`o2b vault profile create <name> <vault>`, and `o2b vault profile switch`",
     removed_by: "`o2b uninstall --apply-local`, which removes the directory it sits in",
     note:
       "The name and absolute path of every registered vault, plus which one is active. Deleting " +
