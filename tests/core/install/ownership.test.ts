@@ -502,10 +502,20 @@ const SWEPT_ROOTS: ReadonlyArray<string> = Object.freeze(["src", "hooks", "plugi
  *
  * `env.home` is included because the install adapters receive the home
  * directory injected rather than reading it, and they are the largest
- * family of out-of-vault writers in the tree.
+ * family of out-of-vault writers in the tree. `XDG_` is matched by prefix
+ * rather than by naming the four variables this build happens to use, and
+ * a quoted `~/` is matched because the cron recipes emit shell text whose
+ * writes are performed by the operator's crontab: both widen the
+ * population by nothing today, which is the moment to widen them.
+ *
+ * What it still cannot see, by construction: a root that arrives from a
+ * config key or an env override with no token in the source, a path
+ * resolved against the working directory, and a hardcoded absolute path
+ * outside the vault. The first two are the shapes {@link
+ * SOURCES_INVISIBLE_TO_THE_SWEEP} enumerates.
  */
 const OUT_OF_VAULT_ANCHOR_RE =
-  /XDG_DATA_HOME|XDG_CONFIG_HOME|XDG_STATE_HOME|XDG_CACHE_HOME|homedir\(\)|process\.env\[["']HOME["']\]|process\.env\[["']USERPROFILE["']\]|\.local\/(?:bin|share|state)|tmpdir\(\)|TMPDIR|env\.home/;
+  /XDG_[A-Z_]+|homedir\(\)|process\.env\[["']HOME["']\]|process\.env\[["']USERPROFILE["']\]|\.local\/(?:bin|share|state)|tmpdir\(\)|TMPDIR|env\.home|["'`]~\//;
 
 /**
  * Comments stripped before the pattern runs: a docblock that explains why
