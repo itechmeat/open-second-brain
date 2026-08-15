@@ -10,6 +10,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { hashFile } from "../../src/core/brain/ingest/content-manifest.ts";
+import {
+  INTAKE_TRUST,
+  UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+} from "../../src/core/brain/trust/untrusted-provenance.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { DISTILL_TOOLS } from "../../src/mcp/brain/distill-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
@@ -57,5 +62,38 @@ describe("brain_distill_source", () => {
 
   test("missing source_path is rejected", async () => {
     await expect(handler(ctx, { claims: [{ text: "x" }] })).rejects.toThrow(MCPError);
+  });
+});
+
+/**
+ * The lane reaches the caller (wiring-what-exists, A1). Before this unit the
+ * tool wrote every distillation under `provenance: stated` and returned a
+ * `source_hash` of the literal string `missing` for a source with no bytes, so
+ * a caller had no way to learn that what it just wrote is quarantined from
+ * ordinary reads.
+ */
+describe("brain_distill_source - the response names the lane it committed in", () => {
+  test("a source with a real file behind it is trusted and carries its digest", async () => {
+    const res = (await handler(ctx, {
+      source_path: "Articles/src.md",
+      claims: [{ text: "A claim." }],
+    })) as { trust: string; source_hash?: string };
+    expect(res.trust).toBe(INTAKE_TRUST.trusted);
+    expect(res.source_hash).toBe(hashFile(join(vault, "Articles", "src.md")));
+  });
+
+  test("a source that names no file is untrusted and reports no digest at all", async () => {
+    const res = (await handler(ctx, {
+      source_path: "Articles/absent.md",
+      claims: [{ text: "A claim." }],
+    })) as { trust: string; source_hash?: string };
+    expect(res.trust).toBe(INTAKE_TRUST.untrusted);
+    expect(res.source_hash).toBeUndefined();
+  });
+
+  test("the description states the guarantee, as the intake tool's does", () => {
+    // A caller choosing between tools reads the description, not this test;
+    // pinning it keeps the promise and the behaviour from drifting apart.
+    expect(DISTILL_TOOLS[0]!.description).toContain(UNTRUSTED_SOURCE_FRONTMATTER_KEY);
   });
 });

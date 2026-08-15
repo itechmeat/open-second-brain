@@ -41,7 +41,15 @@ async function toolBrainDistillSource(
       distillation_path: res.distillationPath,
       created: res.created,
       claim_count: res.claimCount,
-      source_hash: res.sourceHash,
+      // Omitted rather than reported as a sentinel when the source had no
+      // bytes to hash: an absent key reads as "not recorded", where the
+      // `missing` string this used to return read as a digest until you knew
+      // better.
+      ...(res.sourceHash !== undefined ? { source_hash: res.sourceHash } : {}),
+      // The lane the page ACTUALLY landed in. Classifying the source a second
+      // time here would be a second answer to one question, free to disagree
+      // with the write that already happened.
+      trust: res.trust,
     };
   });
 }
@@ -49,8 +57,15 @@ async function toolBrainDistillSource(
 export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
+    // The guarantee is stated here, in the idiom `brain_intake_entities` uses:
+    // a caller choosing a tool reads this, and a write that quarantines what it
+    // just wrote must say so where the choice is made. The parameter-by-
+    // parameter recital the description used to open with was dropped to make
+    // room within `TOOL_DESCRIPTION_MAX` - every one of those facts is already
+    // in the `inputSchema` property descriptions below, and the guarantee was
+    // nowhere.
     description:
-      "Distill one source into atomic claims with block-level provenance. Supply `source_path` (vault path or URL) and `claims`: a non-empty array of { text, block? } (`block` is the source's Obsidian block id). Writes one idempotent page citing each claim as `[[source#^block]]`. No model.",
+      "Distill one source into atomic claims with block-level provenance; runs no model. Writes one idempotent page citing each claim as `[[source#^block]]`. The page is marked `untrusted_source` and excluded from ordinary reads unless `source_path` names a file that exists; `trust` reports the lane.",
     inputSchema: {
       type: "object",
       properties: {

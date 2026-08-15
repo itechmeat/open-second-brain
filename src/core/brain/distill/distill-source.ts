@@ -16,22 +16,36 @@
  *
  * Language-agnostic: block-id validation is structural (the Obsidian `^id`
  * grammar), never over natural-language vocabulary.
+ *
+ * TRUST. Both arguments are caller-supplied, and the caller is the same agent
+ * that read the material - so the source identity is a CLAIM, not a fact. This
+ * module used to take it at face value: it canonicalised the string, stat-ed
+ * and hashed whatever `join(vault, ...)` landed on, and wrote every page under
+ * `provenance: stated`, the top authority tier. It now asks the same question
+ * of the same classifier the other two claim-write paths ask
+ * ({@link classifySourceOrigin}), so a source this vault does not own commits
+ * in the quarantine lane the retrieval trust gate can actually see.
  */
 
-import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import { dirname, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
 import { formatFrontmatter, parseFrontmatter, slugify } from "../../vault.ts";
+import { classifySourceOrigin, normalizeSourceIdentity } from "../intake/source-trust.ts";
 import { distillationPagePath } from "../paths.ts";
 import {
   DISTILL_CLAIMS_SHAPE,
   DISTILL_CLAIMS_SURFACE,
   assertResponseShape,
 } from "../response-shape.ts";
+import {
+  sourceContentHashFrontmatter,
+  untrustedSourceFrontmatter,
+  type IntakeTrust,
+} from "../trust/untrusted-provenance.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import {
   renderProvenanceSection,
@@ -42,9 +56,6 @@ import { isoSecond } from "../time.ts";
 
 /** Frontmatter `kind:` marker of a distillation page. */
 export const BRAIN_DISTILLATION_KIND = "brain-distillation";
-
-/** Hash recorded for a source whose bytes are not on disk (a URL identity). */
-const MISSING_SOURCE_HASH = "missing";
 
 /** Structural grammar of an Obsidian block id (the text after `#^`). */
 const BLOCK_ID_RE = /^[A-Za-z0-9][A-Za-z0-9-]*$/;
@@ -101,8 +112,22 @@ export interface DistillSourceResult {
   readonly created: boolean;
   /** Number of atomic claims written. */
   readonly claimCount: number;
-  /** sha256 over the source bytes, or `missing` when the source has no bytes. */
-  readonly sourceHash: string;
+  /**
+   * sha256 over the source bytes, ABSENT when there were none to hash.
+   *
+   * It used to be the literal string `missing` in that case, which recorded an
+   * answer where there was none: a caller comparing digests had to know that
+   * one particular value is not a digest at all. Absence is now the whole of
+   * the report, and the reason for it is {@link trust}.
+   */
+  readonly sourceHash?: string;
+  /**
+   * The lane this distillation committed in, as the page was ACTUALLY written.
+   * A caller told only where its page landed is told nothing about whether an
+   * ordinary read can ever reach it again - the trust gate excludes an
+   * untrusted page from every scope.
+   */
+  readonly trust: IntakeTrust;
 }
 
 /** A distillation failed structural validation; nothing was written. */
@@ -139,9 +164,14 @@ function renderClaim(claim: DistillClaim, canonicalSource: string): string {
 
 /**
  * Distill a source into atomic claims. Validates the claims (throwing
- * {@link DistillValidationError} with no write on failure), then writes a
- * distillation page listing each claim with its block-level citation and a
- * `## Sources` provenance section. Idempotent on the source identity.
+ * {@link DistillValidationError} with no write on failure), classifies the
+ * source, then writes a distillation page listing each claim with its
+ * block-level citation and a `## Sources` provenance section. Idempotent on
+ * the source identity.
+ *
+ * The classification lives HERE rather than at either surface because there
+ * are two ways in - the MCP tool and `o2b brain distill` - and a guard in one
+ * of them is a guard in neither.
  */
 export function distillSource(
   vault: string,
@@ -152,16 +182,26 @@ export function distillSource(
   assertVaultIdentityForWrite(vault);
   validate(input);
 
-  const canonicalSource = canonicalNotePath(input.sourcePath);
+  // The SAME normaliser the trust classifier uses, so the identity this page
+  // records and the identity that was classified cannot be two different
+  // strings. A bare `canonicalNotePath` left a caller's `[[Articles/x.md]]`
+  // wrapped, which cited `[[[[Articles/x.md]]]]` in the body and keyed a
+  // second page off a second identity hash for one source - the same defect
+  // `ingestSource` was moved off in v1.46.0.
+  const canonicalSource = normalizeSourceIdentity(input.sourcePath);
   const sourceLink = `[[${canonicalSource}]]`;
   const provenance: Provenance = { level: "stated", sources: [sourceLink], premises: [] };
 
-  // Content sha256 the verifier can reproduce from the file (provenance the
-  // block citations hang off). URL / identity-only sources have no bytes.
-  const absSource = join(vault, canonicalSource);
-  const sourceHash = existsSync(absSource)
-    ? createHash("sha256").update(readFileSync(absSource)).digest("hex")
-    : MISSING_SOURCE_HASH;
+  // Before any write, so a source the filesystem refuses to answer for leaves
+  // no half-written page behind. The classifier owns both halves of the
+  // question this module used to answer with a bare `existsSync`: whether the
+  // identity is SHAPED like a location this vault owns (so `../../etc/passwd`
+  // is never stat-ed, let alone hashed), and whether bytes are actually there.
+  // `provenance.level` stays `stated` - that vocabulary bands how a conclusion
+  // was DERIVED, which is orthogonal to who was entitled to supply the
+  // material; the lane is carried by the marker below.
+  const origin = classifySourceOrigin(vault, input.sourcePath);
+  const sourceHash = origin.contentHash;
 
   const idHash = sourceIdentityHash([canonicalSource]);
   const absPath = distillationPagePath(vault, `${slugify(canonicalSource)}-${idHash.slice(0, 12)}`);
@@ -183,7 +223,22 @@ export function distillSource(
     const meta: FrontmatterMap = {
       kind: BRAIN_DISTILLATION_KIND,
       source_path: canonicalSource,
-      source_hash: sourceHash,
+      // `source_hash` is this page kind's own historical spelling of the
+      // content digest, kept because distillation pages already on disk carry
+      // it and this release rewrites none of them. It cannot be the ONLY
+      // record: on a `Brain/sources` page the same key holds the source
+      // IDENTITY hash instead (`ingest/ingest.ts`), and `sources-registry.ts`
+      // reads it generically - so a consumer holding an unknown Brain page
+      // cannot tell which of the two it has. `source_content_hash` has one
+      // meaning everywhere it appears, and it is written by the same helper
+      // the entity registry writes it with.
+      ...(sourceHash !== undefined ? { source_hash: sourceHash } : {}),
+      ...sourceContentHashFrontmatter(sourceHash),
+      // Marks the page when the claims were distilled from material this vault
+      // does not own, so the retrieval trust gate excludes it with a reason
+      // rather than ranking it beside the operator's own notes. A trusted
+      // source adds nothing, keeping its page byte-identical to before.
+      ...untrustedSourceFrontmatter(origin.trust),
       provenance: provenance.level,
       agent: opts.agent,
       claim_count: input.claims.length,
@@ -207,7 +262,8 @@ export function distillSource(
     distillationPath: canonicalNotePath(relative(vault, absPath)),
     created: !existed,
     claimCount: input.claims.length,
-    sourceHash,
+    ...(sourceHash !== undefined ? { sourceHash } : {}),
+    trust: origin.trust,
   };
 }
 

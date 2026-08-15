@@ -19,6 +19,11 @@ import {
   type DistillClaim,
 } from "../../../core/brain/distill/distill-source.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
+import {
+  INTAKE_TRUST,
+  UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+  type IntakeTrust,
+} from "../../../core/brain/trust/untrusted-provenance.ts";
 import { brainVerbContext, fail, ok, okJson, parse, resolveBrainAgent } from "../helpers.ts";
 
 const USAGE =
@@ -50,6 +55,17 @@ function parseClaims(raw: string): DistillClaim[] {
       : parsed;
   if (!Array.isArray(payload)) throw new Error(CLAIMS_SHAPE_HINT);
   return parseDistillClaims(payload);
+}
+
+/**
+ * What the success line adds when the page was quarantined. The token is the
+ * frontmatter key itself rather than a sentence, so the operator can grep for
+ * the same string on disk - and a trusted run's line stays exactly as it was.
+ * Silence here would report one success sentence for two different outcomes,
+ * one of which no ordinary read will ever return.
+ */
+function untrustedNote(trust: IntakeTrust): string {
+  return trust === INTAKE_TRUST.untrusted ? ` [${UNTRUSTED_SOURCE_FRONTMATTER_KEY}]` : "";
 }
 
 export async function cmdBrainDistill(argv: string[]): Promise<number> {
@@ -91,12 +107,15 @@ export async function cmdBrainDistill(argv: string[]): Promise<number> {
         distillation_path: res.distillationPath,
         created: res.created,
         claim_count: res.claimCount,
-        source_hash: res.sourceHash,
+        // Absent when the source had no bytes to hash, so the operator reads
+        // "not recorded" rather than a sentinel that looks like a digest.
+        ...(res.sourceHash !== undefined ? { source_hash: res.sourceHash } : {}),
+        trust: res.trust,
       });
       return 0;
     }
     ok(
-      `distilled ${res.claimCount} claim(s) -> ${res.distillationPath}${res.created ? "" : " (updated)"}`,
+      `distilled ${res.claimCount} claim(s) -> ${res.distillationPath}${res.created ? "" : " (updated)"}${untrustedNote(res.trust)}`,
     );
     return 0;
   } catch (err) {

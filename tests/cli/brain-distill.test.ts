@@ -89,6 +89,43 @@ test("a malformed claim item still reports its path", async () => {
   expect(res.stderr).toContain("$[0].text");
 });
 
+/**
+ * The CLI is the SECOND entry point into `distillSource` (wiring-what-exists,
+ * A1). A trust guard placed in the MCP handler alone would leave this verb
+ * writing under the top authority tier for a source nothing in the vault owns,
+ * which is why the classification lives in the core and both surfaces report it.
+ */
+test("the lane reaches the operator on both surfaces", async () => {
+  const claims = JSON.stringify([{ text: "An atomic claim." }]);
+
+  const trusted = await runCli(
+    ["brain", "distill", "Articles/src.md", "--claims", claims, "--vault", vault, "--json"],
+    { env },
+  );
+  expect(trusted.returncode).toBe(0);
+  const trustedOut = JSON.parse(trusted.stdout) as { trust: string; source_hash?: string };
+  expect(trustedOut.trust).toBe("trusted");
+  expect(typeof trustedOut.source_hash).toBe("string");
+
+  const untrusted = await runCli(
+    ["brain", "distill", "Articles/absent.md", "--claims", claims, "--vault", vault, "--json"],
+    { env },
+  );
+  expect(untrusted.returncode).toBe(0);
+  const untrustedOut = JSON.parse(untrusted.stdout) as { trust: string; source_hash?: string };
+  expect(untrustedOut.trust).toBe("untrusted");
+  expect(untrustedOut.source_hash).toBeUndefined();
+
+  // The human line says so too: an operator who never passes --json would
+  // otherwise read the same success sentence for both lanes.
+  const human = await runCli(
+    ["brain", "distill", "Articles/absent.md", "--claims", claims, "--vault", vault],
+    { env },
+  );
+  expect(human.returncode).toBe(0);
+  expect(human.stdout).toContain("untrusted_source");
+});
+
 test("missing <source> or --claims is a usage error (exit 2)", async () => {
   const noSource = await runCli(["brain", "distill", "--claims", "[]", "--vault", vault], { env });
   expect(noSource.returncode).toBe(2);
