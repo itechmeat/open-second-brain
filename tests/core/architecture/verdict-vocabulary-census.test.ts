@@ -193,6 +193,11 @@ import {
   TRANSCRIPT_SCANS,
 } from "../../../src/core/discipline/transcripts/types.ts";
 import {
+  IMPORT_WRITE_MODE,
+  IMPORT_WRITE_MODES,
+  isImportWriteMode,
+} from "../../../src/core/brain/sessions/import.ts";
+import {
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   VAULT_BACKING,
@@ -783,6 +788,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: TRANSCRIPT_SCAN,
     members: TRANSCRIPT_SCANS,
     guard: isTranscriptScan,
+  },
+  {
+    // U7. Whether an import result's counters describe writes that happened
+    // or writes it would have made. Two members, and the vocabulary earns
+    // its place on the pair it separates: `signals_created: 0` was the
+    // honest answer for a dry run AND for a real run over a session with
+    // nothing in it, so the counters alone could not say which run the
+    // operator had just performed.
+    name: "IMPORT_WRITE_MODE",
+    values: IMPORT_WRITE_MODE,
+    members: IMPORT_WRITE_MODES,
+    guard: isImportWriteMode,
   },
 ]);
 

@@ -1,6 +1,10 @@
 import { statSync } from "node:fs";
 import { resolveAgentName, resolveSessionCaptureRoles } from "../../../core/config.ts";
-import { importSession, importSessionPath } from "../../../core/brain/sessions/import.ts";
+import {
+  importSession,
+  importSessionPath,
+  IMPORT_WRITE_MODE,
+} from "../../../core/brain/sessions/import.ts";
 import { SessionImportError, type SessionAdapterId } from "../../../core/brain/sessions/types.ts";
 import {
   isSessionAdapterId,
@@ -154,9 +158,13 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
         files: result.files.map((f) => ({
           file: f.file,
           format: f.format,
+          write_mode: f.write_mode,
           turns_scanned: f.turns_scanned,
           signals_created: f.signals_created,
+          signals_withheld: f.signals_withheld,
           signals_deduped: f.signals_deduped,
+          facts_extracted: f.facts_extracted,
+          facts_withheld: f.facts_withheld,
           tool_replays: f.tool_replays,
           malformed: f.malformed,
           filtered_turns: f.filtered_turns,
@@ -170,8 +178,15 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
       for (const f of result.files) {
         ok(`file: ${f.file}`);
         ok(`  format: ${f.format}`);
+        ok(`  write_mode: ${f.write_mode}`);
         ok(`  turns_scanned: ${f.turns_scanned}`);
         ok(`  signals_created: ${f.signals_created}`);
+        // Printed only on a rehearsal, where it is the whole answer; an
+        // applied run's withheld count is zero by construction.
+        if (f.write_mode === IMPORT_WRITE_MODE.dryRun) {
+          ok(`  signals_withheld: ${f.signals_withheld}`);
+          ok(`  facts_withheld: ${f.facts_withheld}`);
+        }
         ok(`  signals_deduped: ${f.signals_deduped}`);
         ok(`  tool_replays: ${f.tool_replays}`);
         ok(`  filtered_turns: ${f.filtered_turns}`);

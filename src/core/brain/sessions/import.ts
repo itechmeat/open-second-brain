@@ -134,12 +134,43 @@ export function resolveEventInstant(
   return { instant: new Date(ms), fromTurn: true };
 }
 
+/**
+ * Whether an import's counters describe writes that HAPPENED or writes it
+ * would have made. A dry run's `signals_created` is zero by construction,
+ * which is also what a real run over a session with nothing in it reports;
+ * without this the two results are the same bytes.
+ */
+export const IMPORT_WRITE_MODE = Object.freeze({
+  applied: "applied",
+  dryRun: "dry_run",
+} as const);
+
+export type ImportWriteMode = (typeof IMPORT_WRITE_MODE)[keyof typeof IMPORT_WRITE_MODE];
+
+export const IMPORT_WRITE_MODES: ReadonlyArray<ImportWriteMode> = Object.freeze([
+  IMPORT_WRITE_MODE.applied,
+  IMPORT_WRITE_MODE.dryRun,
+]);
+
+export function isImportWriteMode(value: unknown): value is ImportWriteMode {
+  return typeof value === "string" && (IMPORT_WRITE_MODES as ReadonlyArray<string>).includes(value);
+}
+
 export interface ImportSessionResult {
   readonly file: string;
   /** Id of the adapter that parsed the file; a registry key, not a union. */
   readonly format: string;
+  /** Whether the counters below describe writes made or writes forecast. */
+  readonly write_mode: ImportWriteMode;
   readonly turns_scanned: number;
   readonly signals_created: number;
+  /**
+   * Signals a dry run would have written. Always 0 under
+   * {@link IMPORT_WRITE_MODE.applied} - a real run writes instead of
+   * withholding - so the pair (`signals_created`, `signals_withheld`) says
+   * which run this was and what it did in one reading.
+   */
+  readonly signals_withheld: number;
   readonly signals_deduped: number;
   readonly tool_replays: number;
   /** Per-skill invocations captured as skill_invoked continuity records. */
@@ -151,6 +182,8 @@ export interface ImportSessionResult {
   /** Turns whose text was suppressed before any extraction. */
   readonly suppressed_turns: number;
   readonly facts_extracted: number;
+  /** Facts a dry run would have written. Always 0 on an applied run. */
+  readonly facts_withheld: number;
   readonly facts_deduped: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
@@ -225,8 +258,10 @@ export async function importSession(
   const sessionKey = sessionRefIdentity(absPath, opts.recallSessionId);
   const errors: { path: string; message: string }[] = [];
 
+  const writeMode = opts.dryRun === true ? IMPORT_WRITE_MODE.dryRun : IMPORT_WRITE_MODE.applied;
   let turnsScanned = 0;
   let signalsCreated = 0;
+  let signalsWithheld = 0;
   let signalsDeduped = 0;
   let toolReplays = 0;
   let skillInvocations = 0;
@@ -234,7 +269,15 @@ export async function importSession(
   let filteredTurns = 0;
   let suppressedTurns = 0;
   let factsExtracted = 0;
+  let factsWithheld = 0;
   let factsDeduped = 0;
+  /**
+   * Hashes a dry run has already forecast. The dedup index only learns a
+   * hash when a signal actually lands, so without this a marker repeated
+   * inside one rehearsal would be forecast twice where the real run counts
+   * one write and one dedup.
+   */
+  const withheldHashes = new Set<string>();
   const recallTurns: SessionTurn[] = [];
   const filterRoles =
     opts.filterRoles && opts.filterRoles.length > 0 ? new Set(opts.filterRoles) : null;
@@ -259,9 +302,14 @@ export async function importSession(
       return;
     }
     if (opts.dryRun) {
-      // Mirror scan-inline: dry-run reports the dedup hit count and
-      // turns scanned, but `signals_created` stays 0 — nothing was
-      // actually written.
+      // Nothing is written, and the result says so: `signals_created` stays
+      // 0 and the forecast lands in `signals_withheld` instead.
+      if (withheldHashes.has(input.dedupHash)) {
+        signalsDeduped++;
+        return;
+      }
+      withheldHashes.add(input.dedupHash);
+      signalsWithheld++;
       return;
     }
     const sessionRef = `${sessionKey}#${input.turnId}`;
@@ -326,8 +374,10 @@ export async function importSession(
     Object.freeze({
       file: absPath,
       format: adapter.id,
+      write_mode: writeMode,
       turns_scanned: 0,
       signals_created: 0,
+      signals_withheld: 0,
       signals_deduped: 0,
       tool_replays: 0,
       skill_invocations: 0,
@@ -336,6 +386,7 @@ export async function importSession(
       boundary_decision: boundaryDecision,
       suppressed_turns: 0,
       facts_extracted: 0,
+      facts_withheld: 0,
       facts_deduped: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
@@ -380,6 +431,7 @@ export async function importSession(
         ...(opts.dryRun === true ? { dryRun: true } : {}),
       });
       factsExtracted += routed.created;
+      factsWithheld += routed.withheld;
       factsDeduped += routed.deduped;
     }
 
@@ -520,8 +572,10 @@ export async function importSession(
   return Object.freeze({
     file: absPath,
     format: adapter.id,
+    write_mode: writeMode,
     turns_scanned: turnsScanned,
     signals_created: signalsCreated,
+    signals_withheld: signalsWithheld,
     signals_deduped: signalsDeduped,
     tool_replays: toolReplays,
     skill_invocations: skillInvocations,
@@ -529,6 +583,7 @@ export async function importSession(
     boundary_decision: boundaryDecision,
     suppressed_turns: suppressedTurns,
     facts_extracted: factsExtracted,
+    facts_withheld: factsWithheld,
     facts_deduped: factsDeduped,
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,

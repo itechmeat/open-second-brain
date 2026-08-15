@@ -98,6 +98,13 @@ export interface DreamStageOptions {
   readonly now: Date;
   /** Forwarded to the underlying dream pass. */
   readonly safeguard?: DreamOptions["safeguard"];
+  /**
+   * Forwarded to the underlying dream pass. Staging IS a dream call, so
+   * a caller who asked to watch a staged pass watches the same five
+   * stages; a second counter here would report them twice under a
+   * different operation name.
+   */
+  readonly onProgress?: DreamOptions["onProgress"];
   readonly agentName?: string;
 }
 
@@ -242,6 +249,7 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
     now: opts.now,
     dryRun: true,
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
+    ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
   });
   const plan = projectDreamPlan(summary);
@@ -357,6 +365,7 @@ export function validateDreamBundle(
     now: opts.now,
     dryRun: true,
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
+    ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
   });
   const recomputed = projectDreamPlan(summary);
@@ -395,6 +404,7 @@ export function applyDreamBundle(
   const summary = dream(vault, {
     now: opts.now,
     ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
+    ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
   });
 

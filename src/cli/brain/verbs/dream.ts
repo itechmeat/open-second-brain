@@ -239,11 +239,16 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     return 0;
   }
 
+  // The staged actions each run a dream pass of their own, so they get
+  // the same handle the inline run does. Cancellation that reached only
+  // one of the two entry points would be the half-wired mechanism this
+  // release exists to remove.
+  const stagedInterrupt = onInterrupt();
   try {
     if (action === "stage") {
       const bundle = stageDream(vault, {
         now: now ?? new Date(),
-        safeguard: guard(),
+        safeguard: guard(stagedInterrupt.signal),
         ...(agent ? { agentName: agent } : {}),
       });
       if (asJson) {
@@ -264,7 +269,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       const runId = positional[1]!;
       const stageOpts = {
         now: now ?? new Date(),
-        safeguard: guard(),
+        safeguard: guard(stagedInterrupt.signal),
         ...(agent ? { agentName: agent } : {}),
       };
       if (action === "validate") {
@@ -334,6 +339,12 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (exc) {
+    if (exc instanceof SafeguardAbortError) {
+      const code = stagedInterrupt.exitCode();
+      if (asJson) okJson({ ok: false, interrupted: true, message: exc.message });
+      else process.stderr.write(`${exc.message}\n`);
+      return code;
+    }
     const timedOut = exc instanceof SafeguardTimeoutError;
     if (asJson) {
       okJson({
@@ -344,6 +355,8 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 1;
     }
     return fail(`dream ${action} failed: ${(exc as Error).message ?? exc}`);
+  } finally {
+    stagedInterrupt.release();
   }
 
   // action === "run": the legacy inline pass.

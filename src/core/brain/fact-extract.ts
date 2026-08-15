@@ -217,6 +217,12 @@ export interface RouteFactsInput {
 
 export interface RouteFactsResult {
   readonly created: number;
+  /**
+   * Facts a dry run would have written. Zero on a real run, so `created: 0`
+   * plus `withheld: n` is a rehearsal and `created: 0` plus `withheld: 0` is
+   * a pass that genuinely found nothing durable to write.
+   */
+  readonly withheld: number;
   readonly deduped: number;
   /**
    * Facts the durability gate (A2) rejected as transient operational
@@ -305,10 +311,16 @@ function entityAnchors(anchorables: ReadonlyArray<AnchorableEntity>, factText: s
  * the capture boundary; both seams pin that order with tests.
  */
 export function routeExtractedFacts(vault: string, input: RouteFactsInput): RouteFactsResult {
-  if (input.facts.length === 0) return { created: 0, deduped: 0, durabilityRejected: 0 };
+  if (input.facts.length === 0) {
+    return { created: 0, withheld: 0, deduped: 0, durabilityRejected: 0 };
+  }
   let created = 0;
+  let withheld = 0;
   let deduped = 0;
   let durabilityRejected = 0;
+  // A dry run never touches `input.dedup`, so a fact repeated within one
+  // rehearsal has to be recognised here to be forecast once.
+  const withheldHashes = new Set<string>();
   let entityIndex: ReturnType<typeof buildEntityIndex>;
   try {
     entityIndex = buildEntityIndex(vault);
@@ -386,7 +398,15 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       }
       continue;
     }
-    if (input.dryRun) continue;
+    if (input.dryRun) {
+      if (withheldHashes.has(hash)) {
+        deduped++;
+        continue;
+      }
+      withheldHashes.add(hash);
+      withheld++;
+      continue;
+    }
     const anchors = entityAnchors(anchorables, fact.text);
     const topic = `fact-${fact.family}`;
     try {
@@ -414,5 +434,5 @@ export function routeExtractedFacts(vault: string, input: RouteFactsInput): Rout
       // One unwritable fact must not break capture; the next turn retries.
     }
   }
-  return { created, deduped, durabilityRejected };
+  return { created, withheld, deduped, durabilityRejected };
 }
