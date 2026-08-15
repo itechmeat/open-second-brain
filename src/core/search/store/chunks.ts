@@ -49,9 +49,18 @@ export interface HydratedChunk {
   readonly mtime: number;
   /**
    * Transcript turn instant (unix seconds) or null (conversation
-   * chronology, S1). Feeds the exact-tie recency tie-break in the ranker
-   * and is surfaced on the search result. Null for notes with no turn
-   * instant, keeping their ordering byte-identical.
+   * chronology, S1). It is the ranker's freshness anchor - age is
+   * measured from it, falling back to {@link HydratedChunk.mtime} when it
+   * is null - it separates an exact score tie, and it is surfaced on the
+   * search result. Null for notes with no turn instant, which keeps their
+   * ranking and their ordering byte-identical.
+   *
+   * BOTH reads project it (D1). It was once absent from the
+   * representative-chunk read, which left that row unable to distinguish
+   * "this document declares no instant" from "this read did not ask" -
+   * and a consumer that routed such a row through the ranker would have
+   * silently got the storage clock back. Optional in the type only
+   * because a caller may construct a row without one.
    */
   readonly authoredAt?: number | null;
   /**
@@ -61,6 +70,9 @@ export interface HydratedChunk {
    * ABSENT - not null - on reads that do not project it (the
    * representative-chunk read behind traversal expansion), keeping those
    * rows byte-identical to what they were before the projection existed.
+   * That absence is load-bearing: {@link HydratedChunk.authoredAt} is the
+   * one field that has since left this rule, and it left it deliberately,
+   * for the reason stated above.
    */
   readonly contentHash?: string;
   /**
@@ -267,6 +279,15 @@ export function hydrateChunks(
  * which for markdown is the document head (title / opening section).
  * The traversal layer surfaces this when a linked document is not
  * already a relevance hit.
+ *
+ * Projects `authored_at` (D1) on the join that already fetches `mtime`,
+ * so both producers of a {@link HydratedChunk} report the same freshness
+ * anchor. Today's consumers - traversal expansion, the graph pre-pass and
+ * the relational arm - read `path`, `content` and the ids, so this
+ * changes no current ranking; what it removes is the trap that a row from
+ * here silently answers the storage clock for a question about content
+ * age. The chunk and document hashes stay unprojected, for the reason
+ * given on {@link HydratedChunk.contentHash}.
  */
 export function representativeChunks(
   db: Database,
@@ -286,12 +307,13 @@ export function representativeChunks(
         start_line: number;
         end_line: number;
         mtime: number;
+        authored_at: number | null;
       },
       number[]
     >(
       "SELECT c.id AS chunk_id, c.document_id AS document_id, d.path AS path, " +
         "d.title AS title, c.content AS content, c.start_line AS start_line, " +
-        "c.end_line AS end_line, d.mtime AS mtime " +
+        "c.end_line AS end_line, d.mtime AS mtime, d.authored_at AS authored_at " +
         "FROM chunks c JOIN documents d ON d.id = c.document_id " +
         `WHERE c.document_id IN (${placeholders}) ` +
         "ORDER BY c.document_id, c.chunk_index ASC",
@@ -310,6 +332,7 @@ export function representativeChunks(
         startLine: r.start_line,
         endLine: r.end_line,
         mtime: r.mtime,
+        authoredAt: r.authored_at,
       }),
     );
   }

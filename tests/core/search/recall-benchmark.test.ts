@@ -2,10 +2,20 @@
  * Recall benchmark CI gate (link-recall-intelligence, t_e2215d49):
  * the committed fixture vault + dataset score against the live hybrid
  * pipeline with the deterministic local embedding provider; pinned
- * thresholds fail the suite on a ranking regression. Measured on
- * 2026-06-05: hit@5 = 1.000, MRR = 0.958 - thresholds sit one
- * failing-direction margin below so legitimate ranking improvements
- * do not flap the gate.
+ * thresholds fail the suite on a ranking regression. Re-measured on
+ * 2026-08-15 after D1 moved the freshness prior onto the authoring
+ * instant: hit@5 = 1.000, MRR = 0.958, answer-containment@5 = 1.000,
+ * unchanged from the 2026-06-05 measurement, and identical in expand
+ * mode. Thresholds sit one failing-direction margin below so legitimate
+ * ranking improvements do not flap the gate.
+ *
+ * What that unchanged number does and does not prove. No note in the
+ * fixture vault declares an `authored_at`, so every candidate here falls
+ * back to storage mtime and D1 is inert over this corpus - which is the
+ * byte-identity half of its claim, and the whole of what this gate
+ * witnessed. It is NOT evidence that ranking on the authoring instant
+ * works; that lives in `recency-authored-at.test.ts`, and a regression
+ * in it would leave these numbers exactly where they are.
  */
 
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
@@ -28,7 +38,8 @@ const FIXTURE = join(import.meta.dir, "..", "..", "fixtures", "recall-benchmark"
  * CI thresholds - margin below the measured values above. Re-measure
  * (run the suite and read the report) whenever the fixture vault,
  * dataset, or ranking pipeline changes, and update both the pins and
- * the header comment.
+ * the header comment. A pin is never loosened to admit a measurement
+ * that fell: a fallen number is the finding.
  */
 const MIN_HIT_AT_5 = 0.9;
 const MIN_MRR = 0.85;

@@ -328,6 +328,30 @@ test("limit truncates after ranking", () => {
 });
 
 // ── conversation chronology: exact-score recency tie-break (S1 / t_347e8224) ──
+//
+// Re-derived under D1. These tests were written when `authored_at` reached
+// the score through nothing at all: freshness ran on `mtime`, so two rows
+// with equal `mtime` were an exact tie BY CONSTRUCTION and the rung below
+// the score was the only thing that could separate them.
+//
+// D1 makes `authored_at` the freshness anchor, which removes that
+// construction. Equal `mtime` no longer implies an equal score, so each
+// test below now states WHY its pair still ties and asserts that reason
+// rather than assuming it. The rung is not dead - three configurations
+// reach it, and all three are exercised here:
+//
+//   1. both instants sit past the point where `weibullDecay` floors to
+//      exactly 0 (`recency.ts` EPSILON), so they decay to the same value.
+//      This is the common case for archived conversations, and it is the
+//      configuration the original tests happened to be written in;
+//   2. `clamp01` saturates the composite, so a real difference in the
+//      freshness term lands on the same final score - the case the
+//      ladder's own docblock cites;
+//   3. the freshness layer is off (`amplitude: 0`) or fully damped.
+//
+// What narrowed, stated plainly: two instants inside the live decay band
+// no longer reach the rung, because the layer above them now separates
+// the pair on its own. The test after the first one pins that.
 
 /** Like `hyd`, but with an explicit `authored_at` (unix seconds) or null. */
 function hydAuthored(
@@ -349,11 +373,21 @@ function hydAuthored(
   });
 }
 
+// Both are ~578 days before NOW: past the point where the Weibull boost
+// falls under the display epsilon and `recency.ts` floors it to exactly 0.
 const T_OLD = 1_700_000_000; // unix seconds
 const T_NEW = 1_700_100_000;
+// Inside the live decay band, where two different instants produce two
+// different boosts.
+const T_LIVE_OLD = NOW / 1000 - 40 * 24 * 3600;
+const T_LIVE_NEW = NOW / 1000 - 5 * 24 * 3600;
 
 test("exact hybrid-score tie orders the more recent authored_at first (S1)", () => {
-  // Equal bm25 + no boosts → an EXACT score tie between the two chunks.
+  // Premise, re-derived under D1: the freshness anchor is now the
+  // authoring instant, and BOTH instants are old enough that the Weibull
+  // boost floors to 0. Equal bm25 plus two zero freshness terms is what
+  // makes the score tie exact - not the equal mtime, which no longer
+  // reaches the score at all here.
   const kw: KeywordHit[] = [
     { chunkId: 1, documentId: 10, bm25: -3 },
     { chunkId: 2, documentId: 11, bm25: -3 },
@@ -367,15 +401,70 @@ test("exact hybrid-score tie orders the more recent authored_at first (S1)", () 
     { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
     { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
   );
-  expect(ranked[0]!.score).toBeCloseTo(ranked[1]!.score, 6);
+  // The premise, asserted rather than assumed: the rung is only reached
+  // because the freshness layer contributed nothing to either row.
+  expect(ranked[0]!.recencyBoost).toBe(0);
+  expect(ranked[1]!.recencyBoost).toBe(0);
+  expect(ranked[0]!.score).toBe(ranked[1]!.score);
   expect(ranked[0]!.chunkId).toBe(2); // newer first
   expect(ranked[0]!.authoredAt).toBe(T_NEW);
   expect(ranked[1]!.authoredAt).toBe(T_OLD);
 });
 
+test("two live authoring instants separate the score, never reaching the rung (D1)", () => {
+  // The domain the rung lost. Same construction as the test above -
+  // equal bm25, equal mtime, different authored_at - but with both
+  // instants inside the live decay band. The freshness layer now
+  // separates them itself, so the ordering is settled one level up.
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    [1, hydAuthored(1, 10, OLD_MTIME, T_LIVE_OLD)],
+    [2, hydAuthored(2, 11, OLD_MTIME, T_LIVE_NEW)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    // Half weight: at weight 1 the two equal bm25 values normalise to 1
+    // each and `clamp01` would saturate the sum, which is the NEXT test.
+    { keywordWeight: 0.5, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  expect(ranked[0]!.recencyBoost).toBeGreaterThan(ranked[1]!.recencyBoost);
+  expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
+  expect(ranked[0]!.chunkId).toBe(2); // newer first, by score - not by tie-break
+});
+
+test("a saturated composite still reaches the authoring rung (D1)", () => {
+  // The second configuration that keeps the rung alive, and the one the
+  // ladder's own docblock names: two different freshness terms land on
+  // the same final score because `clamp01` saturates the sum. Equal bm25
+  // at full keyword weight normalises to 1 for both rows, so every row
+  // scores exactly 1 whatever the boost adds.
+  const kw: KeywordHit[] = [
+    { chunkId: 1, documentId: 10, bm25: -3 },
+    { chunkId: 2, documentId: 11, bm25: -3 },
+  ];
+  const hydrated = new Map<number, HydratedChunk>([
+    [1, hydAuthored(1, 10, OLD_MTIME, T_LIVE_OLD)],
+    [2, hydAuthored(2, 11, OLD_MTIME, T_LIVE_NEW)],
+  ]);
+  const ranked = rankResults(
+    { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
+    { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
+  );
+  // The freshness terms genuinely differ; the composite hides it.
+  expect(ranked[0]!.recencyBoost).not.toBe(ranked[1]!.recencyBoost);
+  expect(ranked[0]!.score).toBe(1);
+  expect(ranked[1]!.score).toBe(1);
+  expect(ranked[0]!.chunkId).toBe(2); // newer first, by the tie-break rung
+});
+
 test("a non-tied pair keeps today's order regardless of authored_at (S1 regression)", () => {
   // chunk 1 has the STRONGER bm25 (higher score) but the OLDER authored_at;
   // chunk 2 is weaker but newer. Different scores → recency must NOT reorder.
+  // Both instants are past the epsilon floor, so the D1 freshness anchor
+  // contributes nothing to either row and bm25 alone decides.
   const kw: KeywordHit[] = [
     { chunkId: 1, documentId: 10, bm25: -10 },
     { chunkId: 2, documentId: 11, bm25: -1 },
@@ -388,11 +477,16 @@ test("a non-tied pair keeps today's order regardless of authored_at (S1 regressi
     { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
     { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
   );
+  expect(ranked[0]!.recencyBoost).toBe(0);
+  expect(ranked[1]!.recencyBoost).toBe(0);
   expect(ranked[0]!.score).toBeGreaterThan(ranked[1]!.score);
   expect(ranked[0]!.chunkId).toBe(1); // stronger score wins despite older authored_at
 });
 
 test("an exact tie where neither side carries authored_at keeps the historical order (S1)", () => {
+  // Neither row declares an instant, so both fall back to `mtime` for the
+  // freshness anchor as well as for the ladder - the whole of D1's
+  // no-op-by-default claim, in one pair.
   const kw: KeywordHit[] = [
     { chunkId: 1, documentId: 10, bm25: -3 },
     { chunkId: 2, documentId: 11, bm25: -3 },
@@ -411,6 +505,11 @@ test("an exact tie where neither side carries authored_at keeps the historical o
 });
 
 test("an exact tie with only one authored_at falls through to the historical tie-break (S1)", () => {
+  // A mixed pair, and under D1 the two rows are now measured on two
+  // different clocks: chunk 1 on its mtime, chunk 2 on its instant. The
+  // score tie survives only because both land past the epsilon floor -
+  // stated here because it is the premise, not a coincidence the test may
+  // rely on silently.
   const kw: KeywordHit[] = [
     { chunkId: 1, documentId: 10, bm25: -3 },
     { chunkId: 2, documentId: 11, bm25: -3 },
@@ -424,5 +523,7 @@ test("an exact tie with only one authored_at falls through to the historical tie
     { keyword: kw, semantic: [], hydrated, inboundLinkSources: new Map(), tagsByDoc: new Map() },
     { keywordWeight: 1, semanticWeight: 0, limit: 10, nowMs: NOW },
   );
+  expect(ranked[0]!.recencyBoost).toBe(0);
+  expect(ranked[1]!.recencyBoost).toBe(0);
   expect(ranked.map((r) => r.chunkId)).toEqual([1, 2]); // chunkId asc, unchanged
 });

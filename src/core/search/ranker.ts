@@ -7,6 +7,13 @@
  * The ranker imports no I/O modules. Callers (search.ts) gather the
  * inputs from the store and pass them in. This makes it trivially
  * testable and substitutable.
+ *
+ * Freshness is measured from the authoring instant the document declares
+ * (`documents.authored_at`), falling back to the filesystem mtime the
+ * indexer recorded. The fallback is not decoration: only session import
+ * and the inbox backfill stamp `authored_at`, so for every other
+ * ingestion path the column is NULL and the freshness prior is exactly
+ * what it was before. See {@link freshnessAnchorSeconds}.
  */
 
 import { clamp01 } from "../math.ts";
@@ -215,10 +222,37 @@ function semanticFromDistance(distance: number): number {
   return clamp01(sim);
 }
 
-function recencyBoost(mtime: number, nowMs: number, opts: WeibullRecencyOptions): number {
-  const ageMs = Math.max(0, nowMs - mtime * 1000);
+/**
+ * Freshness decay for a candidate whose age is measured from
+ * `anchorSeconds` (unix seconds - the same unit both `documents.mtime`
+ * and `documents.authored_at` are stored in, so no conversion enters
+ * here).
+ */
+function recencyBoost(anchorSeconds: number, nowMs: number, opts: WeibullRecencyOptions): number {
+  const ageMs = Math.max(0, nowMs - anchorSeconds * 1000);
   const ageDays = ageMs / DAY_MS;
   return weibullDecay(ageDays, opts);
+}
+
+/**
+ * The instant a candidate's age is measured from, in unix seconds: the
+ * authoring instant the document declares, else the filesystem mtime the
+ * indexer recorded when it wrote the file.
+ *
+ * `mtime` answers "when did this vault last touch the file", which is a
+ * storage fact. Freshness is a question about the content, and only
+ * `authored_at` answers it: a conversation imported today whose turns
+ * happened a year ago is a year old, however new its file is.
+ *
+ * The named limit: `authored_at` is stamped by session import (only for
+ * turns that carried a usable timestamp) and by the inbox backfill.
+ * NOTHING else writes the column, so for every other ingestion path it is
+ * NULL and this resolves to `mtime` - the pre-existing behaviour, exactly.
+ * That is the honest size of this layer: it corrects imported
+ * conversations and leaves a hand-written vault untouched.
+ */
+function freshnessAnchorSeconds(authoredAt: number | null | undefined, mtime: number): number {
+  return authoredAt ?? mtime;
 }
 
 interface Candidate {
@@ -499,7 +533,12 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // the prior points at "now" and the query points at the past, so
     // leaving it undamped would fight the layer below. Damped, never
     // removed - `recencyAmplitude: 0` stays the only off switch.
-    const recency = recencyBoost(c.mtime, nowMs, recencyOpts) * recMul * temporalDamping;
+    // Age runs from the authoring instant when the record declares one
+    // (D1) - see `freshnessAnchorSeconds` for why, and for the limit.
+    const recency =
+      recencyBoost(freshnessAnchorSeconds(hyd.authoredAt, c.mtime), nowMs, recencyOpts) *
+      recMul *
+      temporalDamping;
     // Relevance term: reciprocal-rank-fused when in rrf mode, otherwise
     // the weighted sum of the normalised lanes. The fused value already
     // carries the intent multipliers (applied per lane, above); the
@@ -641,6 +680,13 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
   // an `authored_at`. A pair where either side has none falls through to
   // the historical tie-break, so any non-tied pair (and every pair without
   // turn instants) keeps today's order byte-identically.
+  // D1 narrowed this rung's domain without emptying it. Now that the same
+  // instant drives the freshness prior above, two instants inside the live
+  // decay band separate the SCORE and never arrive here. What still does:
+  // a pair whose instants both decay to the same value (the epsilon floor
+  // in `recency.ts` swallows anything past roughly half a year), a
+  // composite `clamp01` saturated, and a vault that turned the freshness
+  // layer off. Those are ordinary, so the rung stays.
   // Query-side temporal intent (t_58fc4720): under an active window the
   // temporal layer separates the tie FIRST - above the whole ladder
   // below, `keywordScore` included, not only above the two freshness
