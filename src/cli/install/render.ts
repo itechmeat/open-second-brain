@@ -4,6 +4,19 @@
  * Two surfaces: human-readable text (default) and JSON (`--json`).
  * Both forms describe the same data so the agent can switch on
  * `--json` without losing detail.
+ *
+ * ## One envelope, because there used to be four
+ *
+ * This verb has four modes and each built its own `--json` payload. Three
+ * declared `schema_version: 1`; apply - the only mode that CHANGES the
+ * machine - declared none, and the plan payload was assembled inline in
+ * `install.ts` rather than here at all. No test asserted a field name in
+ * any of them, while the human `--check` table is pinned byte-for-byte
+ * against the `install/<runtime>.md` documents.
+ *
+ * {@link installJson} is the single exit now, so a payload cannot be
+ * emitted without a version, and `tests/cli/install-json-shape.test.ts`
+ * pins the key set of all four.
  */
 
 import type {
@@ -12,6 +25,29 @@ import type {
   InstallPlan,
   VerifyResult,
 } from "../../core/install/types.ts";
+
+/**
+ * The version every payload below declares.
+ *
+ * Still 1 after apply gained the key: the field is ADDITIVE on a payload
+ * that previously had no version to compare against, and the three modes
+ * that already said 1 describe the same shapes they always did. A consumer
+ * pinning `=== 1` keeps working, which a bump would have broken to
+ * announce a change that took nothing away.
+ */
+export const INSTALL_JSON_SCHEMA_VERSION = 1;
+
+/**
+ * Serialise one `--json` payload.
+ *
+ * The version is prepended here rather than spelled at each call site -
+ * the whole reason the apply payload could ship without one.
+ */
+export function installJson(payload: Readonly<Record<string, unknown>>): string {
+  return (
+    JSON.stringify({ schema_version: INSTALL_JSON_SCHEMA_VERSION, ...payload }, null, 2) + "\n"
+  );
+}
 
 export interface DetectTableRow {
   readonly target: string;
@@ -55,16 +91,23 @@ export function renderDetectTable(rows: ReadonlyArray<DetectResult>): string {
 }
 
 export function renderDetectJson(rows: ReadonlyArray<DetectResult>): string {
-  const payload = {
-    schema_version: 1,
+  return installJson({
     targets: rows.map((r) => ({
       target: r.target,
       status: r.status,
       config_path: r.configPath,
       notes: r.notes,
     })),
-  };
-  return JSON.stringify(payload, null, 2) + "\n";
+  });
+}
+
+/**
+ * The plan payload. It lived inline in `install.ts` and moves here so all
+ * four `--json` shapes are readable in one file - the arrangement that
+ * would have made the missing version on apply obvious.
+ */
+export function renderPlanJson(plan: InstallPlan): string {
+  return installJson({ plan });
 }
 
 export function renderPlan(plan: InstallPlan): string {
@@ -104,8 +147,17 @@ export function renderApplyResult(result: ApplyResult): string {
   return lines.join("\n");
 }
 
+/**
+ * The apply payload.
+ *
+ * The version is added BESIDE the result's own fields rather than nesting
+ * the result under a key: a consumer reading `.manifest` or
+ * `.steps_executed` keeps working and gains a version it never had, which
+ * a re-nesting would have broken to announce a change that took nothing
+ * away.
+ */
 export function renderApplyJson(result: ApplyResult): string {
-  return JSON.stringify(result, null, 2) + "\n";
+  return installJson({ ...result });
 }
 
 export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {
@@ -123,5 +175,5 @@ export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {
 }
 
 export function renderVerifyJson(rows: ReadonlyArray<VerifyResult>): string {
-  return JSON.stringify({ schema_version: 1, targets: rows }, null, 2) + "\n";
+  return installJson({ targets: rows });
 }

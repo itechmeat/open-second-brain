@@ -19,12 +19,42 @@
  * free.
  */
 
+import { Semaphore } from "./embeddings/http-util.ts";
 import { search } from "./search.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 
 /** Default rank depth for hit@k / reciprocal rank. */
 export const BENCHMARK_DEFAULT_K = 5;
+
+/**
+ * Most dataset queries this process runs at once.
+ *
+ * The dataset is operator-supplied and unbounded in size, and `tuneRecall`
+ * multiplies it by the 24-point parameter grid, so the fan-out is the
+ * product of two numbers this module does not choose. Eight concurrent
+ * hybrid searches keep a benchmark run overlapping its SQLite reads
+ * without letting a large dataset - or the grid - open one connection and
+ * one query plan per query at the same instant.
+ */
+export const BENCHMARK_QUERY_CONCURRENCY = 8;
+
+/**
+ * The ceiling itself, module-scoped so it spans the process: `tuneRecall`
+ * awaits 24 concurrent `runRecallBenchmark` calls, and a gate constructed
+ * per call would bound each one at 8 while the process ran 192.
+ */
+const queryGate = new Semaphore(BENCHMARK_QUERY_CONCURRENCY);
+
+/**
+ * Test-only: the high-water mark of concurrent queries this process has
+ * reached. The leading underscore is this repo's marker for a test-only
+ * export, which is exactly what the rule below flags.
+ */
+// oxlint-disable-next-line no-underscore-dangle
+export function _benchmarkQueryPeakForTests(): number {
+  return queryGate.peakInFlight;
+}
 
 export interface RecallBenchmarkQuery {
   readonly id: string;
@@ -184,7 +214,8 @@ export function parseRecallBenchmarkDataset(raw: unknown): RecallBenchmarkDatase
 
 /**
  * Score the dataset against the vault behind `config`. Queries run
- * concurrently (read-only); the report order follows the dataset.
+ * concurrently (read-only) up to {@link BENCHMARK_QUERY_CONCURRENCY}
+ * in flight process-wide; the report order follows the dataset.
  */
 export async function runRecallBenchmark(
   config: ResolvedSearchConfig,
@@ -203,11 +234,17 @@ export async function runRecallBenchmark(
   const perQuery = await Promise.all(
     dataset.queries.map(async (q): Promise<RecallBenchmarkQueryResult> => {
       const depth = q.k ?? k;
-      const outcome = await search(config, {
-        query: q.query,
-        limit: depth,
-        ...(expand ? { expand: true } : {}),
-      });
+      await queryGate.acquire();
+      let outcome;
+      try {
+        outcome = await search(config, {
+          query: q.query,
+          limit: depth,
+          ...(expand ? { expand: true } : {}),
+        });
+      } finally {
+        queryGate.release();
+      }
       const expected = new Set(q.expected);
       const topK = outcome.results.slice(0, depth);
       const topKPaths = new Set(topK.map((r) => r.path));

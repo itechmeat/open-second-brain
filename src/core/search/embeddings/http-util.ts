@@ -4,6 +4,10 @@
  * config knowledge - so each provider owns its own request/response
  * mapping while reusing identical batching, concurrency, backoff, and
  * unit-normalisation semantics.
+ *
+ * {@link Semaphore} is the one exception to "embedding providers": it is
+ * the search layer's only concurrency limiter, and the recall benchmark
+ * bounds its query fan-out with it too rather than growing a second one.
  */
 
 import { SearchError } from "../types.ts";
@@ -124,26 +128,42 @@ function requireCap(cap: number, field: string): number {
  * waiter then decrements past zero. Both run, and the ceiling reads one
  * higher than configured. With a hand-off the permit is never observable
  * as free, so the invariant holds for any interleaving.
+ *
+ * It also keeps a high-water mark of concurrent holders, because a bound
+ * nothing can observe is a bound nothing can verify.
  */
 export class Semaphore {
   /** The ceiling enforced here: the permit count when nothing is held. */
   readonly limit: number;
   private permits: number;
+  private held = 0;
+  private peak = 0;
   private readonly waiters: Array<() => void> = [];
   constructor(limit: number) {
     this.limit = requireCap(limit, CAP_FIELD.concurrency);
     this.permits = this.limit;
   }
+  /** Most permits held at once since construction; never above `limit`. */
+  get peakInFlight(): number {
+    return this.peak;
+  }
+  private enter(): void {
+    this.held++;
+    if (this.held > this.peak) this.peak = this.held;
+  }
   async acquire(): Promise<void> {
     if (this.permits > 0) {
       this.permits--;
+      this.enter();
       return;
     }
     // The releaser transfers its permit to this waiter, so the resumed
-    // acquirer must NOT decrement again.
+    // acquirer must NOT decrement `permits` again.
     await new Promise<void>((res) => this.waiters.push(res));
+    this.enter();
   }
   release(): void {
+    this.held--;
     const next = this.waiters.shift();
     if (next) {
       next();

@@ -43,6 +43,7 @@ import {
   renderDetectJson,
   renderDetectTable,
   renderPlan,
+  renderPlanJson,
   renderVerifyJson,
   renderVerifyTable,
 } from "./render.ts";
@@ -253,7 +254,7 @@ function runTarget(args: ParsedInstallArgs): number {
   // Plan-only (no --apply, no --check) — print and return.
   if (!args.apply) {
     if (args.json) {
-      process.stdout.write(JSON.stringify({ schema_version: 1, plan }, null, 2) + "\n");
+      process.stdout.write(renderPlanJson(plan));
     } else {
       process.stdout.write(renderPlan(plan));
     }
