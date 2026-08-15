@@ -26,10 +26,22 @@ mtime at index time.
 Three things bound the honest claim:
 
 - `representativeChunks` (`store/chunks.ts:271-317`) does not project `authored_at` -
-  its SELECT stops at `d.mtime` (`:292-294`). Link-expansion candidates would
-  silently keep ranking on mtime. `chunks.ts:61-63` documents the *absence* of
-  unprojected fields as load-bearing for byte-identity on that read, so adding the
-  column is a deliberate change to that contract, not an oversight fix.
+  its SELECT stops at `d.mtime` (`:292-294`). `chunks.ts:61-63` documents the
+  *absence* of unprojected fields as load-bearing for byte-identity on that read, so
+  adding the column is a deliberate change to that contract, not an oversight fix.
+
+  **Correction, made during implementation.** This recon first claimed that
+  link-expansion candidates therefore "silently keep ranking on mtime". That claim is
+  not established. The relational arm pushes only `rep.chunkId` into the ranked list
+  (`pipeline/relational-arm.ts:58-67`) and the ranker's hydrated map is built by
+  `hydrateChunks`, which does project the column; traversal expansions carry
+  `recencyBoost: 0` (`traversal.ts:69`, `relation-polarity.ts:146`). Against that,
+  `pipeline/assemble.ts:150-151` states that some candidates are "hydrated through the
+  representative-chunk read", so the two readings are not reconciled here. The
+  projection is added on a ground that does not depend on the answer: without it those
+  rows cannot distinguish "declares no instant" from "this read did not ask". Whether
+  any current consumer routes a representative chunk into the recency prior is an open
+  question carried into review rather than answered by assertion.
 - `authored_at` is stamped only by session import (`sessions/import.ts:284-293`, and
   only when the turn carried a usable timestamp) and by the inbox backfill. For any
   other ingestion path the column is NULL and the fallback changes nothing. That is a
