@@ -23,7 +23,9 @@ import { appendMetric } from "../../../core/brain/metrics.ts";
 import { brainConfigPath } from "../../../core/brain/paths.ts";
 import {
   createSafeguard,
+  OPERATION,
   resolveSafeguardTimeoutMs,
+  SafeguardAbortError,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import {
@@ -43,11 +45,14 @@ import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { listVaultPages, parseFrontmatter } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
+import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
+import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
-  "usage: o2b brain clusters run [--min-size N] [--batch-size N] [--if-stale] | list  [--vault <path>] [--json]";
+  "usage: o2b brain clusters run [--min-size N] [--batch-size N] [--if-stale] [--progress] | " +
+  "list  [--vault <path>] [--json]";
 
 /** Vault-relative directory holding the materialized cluster notes. */
 const CLUSTERS_DIR_REL = join("Brain", "clusters");
@@ -123,6 +128,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
     "min-size": { type: "string" },
     "batch-size": { type: "string" },
     "if-stale": { type: "boolean" },
+    progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const asJson = flags["json"] === true;
@@ -252,14 +258,26 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
     }
 
     const now = new Date();
+    // Progress is opt-in: attaching a sink by default would change the
+    // stderr of every existing invocation, and this CLI's one streaming
+    // precedent (`o2b search index --verbose`) is opt-in for the same
+    // reason. The rail decides whether the stream can carry it at all.
+    const observation =
+      flags["progress"] === true
+        ? attachProgress({ command: "brain", argv: ["clusters"], jsonRequested: asJson })
+        : null;
+    reportProgressRefusal(observation);
+    const interrupt = onInterrupt();
     try {
       const safeguard = createSafeguard({
-        operation: "clusters",
-        timeoutMs: resolveSafeguardTimeoutMs("clusters", config ?? undefined),
+        operation: OPERATION.clusters,
+        timeoutMs: resolveSafeguardTimeoutMs(OPERATION.clusters, config ?? undefined),
+        signal: interrupt.signal,
       });
       const communities = detectCommunities(store, {
         ...(minSize !== undefined ? { minSize } : {}),
         safeguard,
+        ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
       });
       // O(1) from the snapshot detectCommunities just built (same index
       // revision -> cache hit, no second graph rebuild).
@@ -327,7 +345,14 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         if (result.removed.length > 0) ok(`  removed stale: ${result.removed.join(", ")}`);
       }
       return 0;
+    } catch (exc) {
+      // A pass the operator stopped materialized no notes, so it cannot
+      // exit 0 - but it is not a failure either, and the catch below
+      // would report it as one.
+      if (exc instanceof SafeguardAbortError) return reportInterrupted(interrupt, exc, asJson);
+      throw exc;
     } finally {
+      interrupt.release();
       await store.close();
     }
   } catch (exc) {
