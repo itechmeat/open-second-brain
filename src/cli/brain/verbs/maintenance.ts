@@ -25,7 +25,12 @@ import {
   materializeClusterNotes,
 } from "../../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
-import { createSafeguard, resolveSafeguardTimeoutMs } from "../../../core/brain/safeguard.ts";
+import {
+  createSafeguard,
+  OPERATION,
+  resolveSafeguardTimeoutMs,
+  type Operation,
+} from "../../../core/brain/safeguard.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
 import { Store } from "../../../core/search/store.ts";
 import { currentLease, MAINTENANCE_LEASE_NAME } from "../../../core/brain/maintenance/lease.ts";
@@ -38,11 +43,17 @@ import {
 import { listJournal } from "../../../core/brain/maintenance/journal.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../../../core/search/index.ts";
+import { onInterrupt } from "../../interrupt.ts";
+import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
 const USAGE =
   "usage: o2b brain maintenance run [--force] [--window H-H] [--tz ZONE] " +
-  "[--busy-minutes N] [--busy-threshold N] | status [--limit N]  [--vault <path>] [--json]";
+  "[--busy-minutes N] [--busy-threshold N] [--progress] | status [--limit N]  " +
+  "[--vault <path>] [--json]";
+
+/** The four long operations the lane dispatches, in its own order. */
+type LaneOperation = Extract<Operation, "dream" | "reindex" | "bridges" | "clusters">;
 
 export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -54,6 +65,7 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     "busy-threshold": { type: "string" },
     limit: { type: "string" },
     agent: { type: "string" },
+    progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const op = positional[0];
@@ -113,97 +125,135 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
     const holder =
       ((flags["agent"] as string | undefined)?.trim() || resolveAgentName(config)) +
       `@${process.pid}`;
+    // Progress is opt-in, on the same terms as every other long verb: a
+    // sink attached by default would change the stderr of every cron
+    // invocation that has ever run this lane.
+    //
+    // The lane is a DISPATCHER over four long operations, not a fifth
+    // one, so it forwards the caller's sink to each task instead of
+    // counting tasks itself. A lane-owned counter would emit "1 of 4"
+    // and then say nothing for the length of a full reindex, which is
+    // the silence this release exists to remove - and it would ALSO
+    // double-count, because each of the four already reports its own
+    // stages. Forwarding needs no change to `MaintenanceTask`: the tasks
+    // are built here, so the sink reaches them by closure, and every
+    // record names the operation that emitted it, which is exactly what
+    // tells a reader which task the lane is currently inside. The MCP
+    // lane took the same decision for the same reason; a second shape
+    // here would make the two surfaces disagree about one mechanism.
+    const observation =
+      flags["progress"] === true
+        ? attachProgress({ command: "brain", argv: ["maintenance"], jsonRequested: asJson })
+        : null;
+    reportProgressRefusal(observation);
+    const laneProgress = observation?.sink !== undefined ? { onProgress: observation.sink } : {};
+    // Ctrl-C reaches whichever task is running: the lane records the
+    // abort as that task's failure and releases the lease in its own
+    // `finally`, so the vault is never left leased by a stopped run.
+    const interrupt = onInterrupt();
     // One fresh deadline per lane task: each long pass gets its own
     // budget (per-op key -> global -> default), created lazily so the
     // clock starts when the task starts, not when the lane is gated.
-    const laneSafeguard = (operation: "dream" | "reindex" | "bridges" | "clusters") =>
+    const laneSafeguard = (operation: LaneOperation) =>
       createSafeguard({
         operation,
         timeoutMs: resolveSafeguardTimeoutMs(operation, config ?? undefined),
+        signal: interrupt.signal,
       });
     const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
-    const result = await runMaintenance(vault, {
-      now,
-      holder,
-      force: flags["force"] === true,
-      ...(window !== undefined ? { window } : {}),
-      busy: { minutes: busyMinutes, threshold: busyThreshold },
-      tasks: [
-        {
-          name: "dream",
-          run: async () => {
-            dream(vault, { now, safeguard: laneSafeguard("dream") });
+    let result: Awaited<ReturnType<typeof runMaintenance>>;
+    try {
+      result = await runMaintenance(vault, {
+        now,
+        holder,
+        force: flags["force"] === true,
+        ...(window !== undefined ? { window } : {}),
+        busy: { minutes: busyMinutes, threshold: busyThreshold },
+        tasks: [
+          {
+            name: "dream",
+            run: async () => {
+              dream(vault, { now, safeguard: laneSafeguard(OPERATION.dream), ...laneProgress });
+            },
           },
-        },
-        {
-          name: "reindex",
-          run: async () => {
-            await indexVault(searchConfig, { safeguard: laneSafeguard("reindex") });
-          },
-        },
-        // Link-recall-intelligence passes ride the same lease, after
-        // reindex so they see fresh edges. Both are fail-soft inside:
-        // a vault without embeddings simply proposes nothing.
-        {
-          name: "bridges",
-          run: async () => {
-            const store = await Store.open(searchConfig, { mode: "read" });
-            try {
-              const report = discoverBridges(store, {
-                dismissed: readDismissedBridges(vault),
-                safeguard: laneSafeguard("bridges"),
+          {
+            name: "reindex",
+            run: async () => {
+              await indexVault(searchConfig, {
+                safeguard: laneSafeguard(OPERATION.reindex),
+                signal: interrupt.signal,
+                ...laneProgress,
               });
-              writeBridgeProposals(vault, report, { now });
-              try {
-                appendMetric(vault, {
-                  surface: "bridge_discovery",
-                  runAt: isoSecond(now),
-                  payload: {
-                    proposals: report.proposals.length,
-                    scanned_candidates: report.scannedCandidates,
-                    vec_available: report.vecAvailable,
-                    lane: true,
-                  },
-                });
-              } catch {
-                // Metrics are observability, not correctness.
-              }
-            } finally {
-              await store.close();
-            }
+            },
           },
-        },
-        {
-          name: "clusters",
-          run: async () => {
-            const store = await Store.open(searchConfig, { mode: "read" });
-            try {
-              const communities = detectCommunities(store, {
-                safeguard: laneSafeguard("clusters"),
-              });
-              const materialized = materializeClusterNotes(vault, communities, { store, now });
+          // Link-recall-intelligence passes ride the same lease, after
+          // reindex so they see fresh edges. Both are fail-soft inside:
+          // a vault without embeddings simply proposes nothing.
+          {
+            name: "bridges",
+            run: async () => {
+              const store = await Store.open(searchConfig, { mode: "read" });
               try {
-                appendMetric(vault, {
-                  surface: "communities",
-                  runAt: isoSecond(now),
-                  payload: {
-                    communities: communities.length,
-                    sizes: communities.map((c) => c.size),
-                    written: materialized.written.length,
-                    removed: materialized.removed.length,
-                    lane: true,
-                  },
+                const report = discoverBridges(store, {
+                  dismissed: readDismissedBridges(vault),
+                  safeguard: laneSafeguard(OPERATION.bridges),
+                  ...laneProgress,
                 });
-              } catch {
-                // Metrics are observability, not correctness.
+                writeBridgeProposals(vault, report, { now });
+                try {
+                  appendMetric(vault, {
+                    surface: "bridge_discovery",
+                    runAt: isoSecond(now),
+                    payload: {
+                      proposals: report.proposals.length,
+                      scanned_candidates: report.scannedCandidates,
+                      vec_available: report.vecAvailable,
+                      lane: true,
+                    },
+                  });
+                } catch {
+                  // Metrics are observability, not correctness.
+                }
+              } finally {
+                await store.close();
               }
-            } finally {
-              await store.close();
-            }
+            },
           },
-        },
-      ],
-    });
+          {
+            name: "clusters",
+            run: async () => {
+              const store = await Store.open(searchConfig, { mode: "read" });
+              try {
+                const communities = detectCommunities(store, {
+                  safeguard: laneSafeguard(OPERATION.clusters),
+                  ...laneProgress,
+                });
+                const materialized = materializeClusterNotes(vault, communities, { store, now });
+                try {
+                  appendMetric(vault, {
+                    surface: "communities",
+                    runAt: isoSecond(now),
+                    payload: {
+                      communities: communities.length,
+                      sizes: communities.map((c) => c.size),
+                      written: materialized.written.length,
+                      removed: materialized.removed.length,
+                      lane: true,
+                    },
+                  });
+                } catch {
+                  // Metrics are observability, not correctness.
+                }
+              } finally {
+                await store.close();
+              }
+            },
+          },
+        ],
+      });
+    } finally {
+      interrupt.release();
+    }
 
     if (asJson) okJson({ verdict: result.verdict, tasks: result.tasks });
     else {
@@ -212,6 +262,12 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
         ok(`  ${t.name}: ${t.ok ? "ok" : `FAILED (${t.error})`} in ${t.duration_ms}ms`);
       }
     }
+    // A stopped lane is reported as stopped, not as four failures. The
+    // lane catches each task's abort and journals it, so without this the
+    // run would exit 1 - a code that says "these passes are broken" about
+    // passes the operator simply cancelled. The report above is written
+    // first either way: the journal is what makes the stop auditable.
+    if (interrupt.received() !== null) return interrupt.exitCode();
     return result.tasks.some((t) => !t.ok) ? 1 : 0;
   } catch (exc) {
     const message = `maintenance ${op} failed: ${(exc as Error).message ?? exc}`;
