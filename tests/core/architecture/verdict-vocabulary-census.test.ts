@@ -182,6 +182,15 @@ import {
   STUB_SCAFFOLD_ACTION,
   STUB_SCAFFOLD_ACTIONS,
 } from "../../../src/mcp/brain/lifecycle-file-tools.ts";
+import {
+  isProgressKind,
+  isProgressReason,
+  PROGRESS_KIND,
+  PROGRESS_KINDS,
+  PROGRESS_REASON,
+  PROGRESS_REASONS,
+} from "../../../src/core/brain/progress.ts";
+import { isOperation, OPERATION, OPERATIONS } from "../../../src/core/brain/safeguard.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -613,6 +622,37 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: STUB_SCAFFOLD_ACTION,
     members: STUB_SCAFFOLD_ACTIONS,
     guard: isStubScaffoldAction,
+  },
+  {
+    // U1. What one progress tick says happened. `refused` and `stopped`
+    // are the members that earn the vocabulary: an operation whose events
+    // no transport could carry, and one the operator cancelled, are
+    // different facts, and both were previously reported as an absence of
+    // progress - which is what a hung run looks like too.
+    name: "PROGRESS_KIND",
+    values: PROGRESS_KIND,
+    members: PROGRESS_KINDS,
+    guard: isProgressKind,
+  },
+  {
+    // U1. Why a run stopped short or why its ticks could not be carried.
+    // Closed for the same reason the kind is: a reader must branch on it,
+    // and a free string would let prose onto a structured surface.
+    name: "PROGRESS_REASON",
+    values: PROGRESS_REASON,
+    members: PROGRESS_REASONS,
+    guard: isProgressReason,
+  },
+  {
+    // U1. The operations this repository calls long. It was a bare union
+    // owned by the safeguard; the progress spine needed to name the same
+    // population, and a second list would have drifted. Registering it
+    // here is what stops the two readers - the timeout ladder and the
+    // progress event - from disagreeing about what is long.
+    name: "OPERATION",
+    values: OPERATION,
+    members: OPERATIONS,
+    guard: isOperation,
   },
 ]);
 

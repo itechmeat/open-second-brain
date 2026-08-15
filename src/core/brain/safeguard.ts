@@ -22,8 +22,47 @@
 
 import { discoverConfig } from "../config.ts";
 
-/** Operations that accept a safeguard. */
-export type SafeguardOperation = "dream" | "reindex" | "bridges" | "clusters" | "maintenance";
+/**
+ * The operations this repository calls long.
+ *
+ * It was a bare union until the progress spine needed to name the same
+ * population - a run that carries a deadline is exactly a run worth
+ * reporting on - and a second list would have drifted from this one.
+ * Promoted to the four-piece vocabulary the census enforces so both the
+ * timeout ladder and `ProgressEvent.operation` read from one place.
+ */
+export const OPERATION = Object.freeze({
+  dream: "dream",
+  reindex: "reindex",
+  bridges: "bridges",
+  clusters: "clusters",
+  maintenance: "maintenance",
+  architect: "architect",
+} as const);
+
+export type Operation = (typeof OPERATION)[keyof typeof OPERATION];
+
+/** Membership list for {@link isOperation}. */
+export const OPERATIONS: ReadonlyArray<Operation> = Object.freeze([
+  OPERATION.dream,
+  OPERATION.reindex,
+  OPERATION.bridges,
+  OPERATION.clusters,
+  OPERATION.maintenance,
+  OPERATION.architect,
+]);
+
+/**
+ * Whether `value` names an operation this build understands. Takes
+ * `unknown` because it arrives from a config key a person typed or from a
+ * progress line a caller parsed.
+ */
+export function isOperation(value: unknown): value is Operation {
+  return typeof value === "string" && (OPERATIONS as ReadonlyArray<string>).includes(value);
+}
+
+/** Historical name for {@link Operation}, kept so call sites need no edit. */
+export type SafeguardOperation = Operation;
 
 /** Built-in fallback budget (mirage uses 600s; same scale fits here). */
 export const SAFEGUARD_DEFAULT_TIMEOUT_SECONDS = 600;
