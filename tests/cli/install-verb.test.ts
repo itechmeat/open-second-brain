@@ -6,11 +6,12 @@
  * --check, --json, exit codes.
  */
 
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { describe, expect, test, beforeEach, afterEach, setDefaultTimeout } from "bun:test";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli as baseRunCli, type RunCliOptions, type RunResult } from "../helpers/run-cli.ts";
 import { INSTALL_EXIT, exitCodeForVerify } from "../../src/cli/install/install.ts";
 import type { VerifyResult } from "../../src/core/install/types.ts";
@@ -22,6 +23,10 @@ import type { VerifyResult } from "../../src/core/install/types.ts";
 function runCli(args: ReadonlyArray<string>, opts: RunCliOptions = {}): Promise<RunResult> {
   return baseRunCli(args, { ...opts, subprocess: true });
 }
+
+// Every case here therefore pays a cold process start, which does not fit
+// bun's 5 s default on a machine doing other work.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let vault: string;
 let home: string;

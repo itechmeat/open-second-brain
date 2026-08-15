@@ -8,12 +8,15 @@
  * error at the call site that caused it.
  */
 
-import { expect, test } from "bun:test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { ConcurrentInProcessRunError, runCli } from "../helpers/run-cli.ts";
+
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 test("a second in-process run refuses while the first is still open", async () => {
   const first = runCli(["--help"]);
