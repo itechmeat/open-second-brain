@@ -552,6 +552,11 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         if not turns:
             return
         text = "\n\n".join(f"User: {u}\nAssistant: {a}" for u, a in turns)
+        # Turn bounds are turn *ids* on the server contract, so they go over as
+        # strings — the tool reads them with `requiredStringArg`, which does not
+        # coerce, and `_safe_call` swallows the `-32602` it raises. Sending ints
+        # here loses the whole flushed segment with nothing on either side
+        # saying so. Matches the sibling Aider bracket, which also sends "0".
         args: dict[str, Any] = {
             "session_id": self._session_id or "hermes",
             "turn_start": "0",

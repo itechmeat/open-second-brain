@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import unittest
 from pathlib import Path
@@ -273,6 +275,209 @@ class ProviderNormalizeSurvivalTests(unittest.TestCase):
                 self.assertFalse(_is_prewrapped(entry))
                 self.assertTrue(entry["name"])
                 self.assertNotIn("inputSchema", entry)
+
+
+_JSON_TYPES: dict[str, tuple[type, ...]] = {
+    "string": (str,),
+    "integer": (int,),
+    "number": (int, float),
+    "boolean": (bool,),
+    "array": (list, tuple),
+    "object": (dict,),
+}
+
+
+def _type_matches(expected: str, value: object) -> bool:
+    """JSON-Schema type check with Python's bool/int overlap handled.
+
+    ``isinstance(True, int)`` is true in Python, and every numeric type accepts
+    a bool, so a naive check would pass a boolean off as an integer. JSON draws
+    the line where the server does, so this does too.
+    """
+    types = _JSON_TYPES.get(expected)
+    if types is None:
+        return True
+    if expected == "boolean":
+        return isinstance(value, bool)
+    if isinstance(value, bool):
+        return False
+    if expected == "integer":
+        return isinstance(value, int)
+    return isinstance(value, types)
+
+
+def schema_violations(schema: dict, args: dict) -> list[str]:
+    """Return every way ``args`` fails ``schema``; empty means conforming.
+
+    Deliberately narrow - required keys, declared types, enums, string bounds
+    and the ``additionalProperties: false`` closure. That is the surface the
+    server's own argument readers enforce, and the surface a provider-built
+    payload can violate without anything saying so.
+    """
+    violations: list[str] = []
+    properties = schema.get("properties", {})
+    for key in schema.get("required", []):
+        if key not in args:
+            violations.append(f"missing required arg {key!r}")
+    if schema.get("additionalProperties") is False:
+        for key in args:
+            if key not in properties:
+                violations.append(f"unknown arg {key!r}")
+    for key, value in args.items():
+        declared = properties.get(key)
+        if not isinstance(declared, dict):
+            continue
+        expected = declared.get("type")
+        if isinstance(expected, str) and not _type_matches(expected, value):
+            violations.append(
+                f"{key!r} must be {expected}, got {type(value).__name__} ({value!r})"
+            )
+        enum = declared.get("enum")
+        if isinstance(enum, list) and value not in enum:
+            violations.append(f"{key!r} must be one of {enum}, got {value!r}")
+        if isinstance(value, str):
+            # The server's own string reader rejects a blank value outright, so
+            # a declared minLength of 1 is not the only way to fail here.
+            minimum = declared.get("minLength")
+            if len(value.strip()) == 0:
+                violations.append(f"{key!r} must be a non-empty string")
+            elif isinstance(minimum, int) and len(value) < minimum:
+                violations.append(f"{key!r} is shorter than minLength {minimum}")
+            maximum = declared.get("maxLength")
+            if isinstance(maximum, int) and len(value) > maximum:
+                violations.append(f"{key!r} is longer than maxLength {maximum}")
+    return violations
+
+
+class ProviderPayloadConformanceTests(unittest.TestCase):
+    """Payloads the provider BUILDS must satisfy the schema the server publishes.
+
+    The server does not coerce: `requiredStringArg` rejects a non-string with
+    `-32602` before the tool body runs, and `_safe_call` swallows that error so
+    a lifecycle hook cannot break a turn. A type mismatch on a provider-built
+    payload is therefore a silent, total loss of whatever that call carried,
+    with nothing on either side saying so. `brain_pre_compact_extract` shipped
+    exactly that shape - `turn_start`/`turn_end` sent as ints against a string
+    schema - so every buffered turn was dropped at the boundary.
+
+    Asserting on one payload's literal values would not have caught it; this
+    drives the lifecycle and validates what actually crossed the bridge.
+    """
+
+    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+
+    # Tools the provider builds payloads for itself. `handle_tool_call` is
+    # excluded by construction: those args come from the model, so a violation
+    # there is the model's to fix and the server's to report.
+    _PROVIDER_BUILT = frozenset(
+        {
+            "brain_context",
+            "brain_recall_gate",
+            "brain_context_pack",
+            "brain_pre_compact_extract",
+        }
+    )
+
+    def setUp(self):
+        self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
+
+    def tearDown(self):
+        for k in self._ENV_KEYS:
+            os.environ.pop(k, None)
+            if self._saved[k] is not None:
+                os.environ[k] = self._saved[k]
+
+    @staticmethod
+    def _drive_lifecycle(home: str) -> list[tuple[str, dict]]:
+        """Run every provider hook that builds a payload; return the calls made."""
+        bridge = FakeBrainBridge(
+            results={
+                "brain_context": {"structuredContent": {"content": "ACTIVE PREFS"}},
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+                "brain_pre_compact_extract": {"structuredContent": {}},
+            }
+        )
+        provider = OpenSecondBrainMemoryProvider(bridge=bridge)
+        provider.initialize("sess-1", hermes_home=home)
+        provider.system_prompt_block()
+        provider.prefetch("what did we decide", session_id="sess-1")
+        provider.sync_turn("u1", "a1", session_id="sess-1")
+        provider.sync_turn("u2", "a2", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_pre_compress([])
+        provider.sync_turn("u3", "a3", session_id="sess-1")
+        provider._drain_captures()
+        provider.on_session_end([], interrupted=True)
+        return list(bridge.calls)
+
+    def test_every_provider_built_payload_conforms_to_its_vendored_schema(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = self._drive_lifecycle(tmp)
+        schemas = {s["name"]: s["inputSchema"] for s in STATIC_TOOL_SCHEMAS}
+        exercised = set()
+        for name, args in calls:
+            schema = schemas.get(name)
+            if schema is None:
+                continue
+            exercised.add(name)
+            with self.subTest(tool=name):
+                self.assertEqual(
+                    schema_violations(schema, args),
+                    [],
+                    f"{name} payload violates the vendored schema: {args!r}",
+                )
+        # Without this the test passes when a hook stops calling out entirely -
+        # a silent flush is the failure mode being guarded, so an unexercised
+        # path must fail here rather than read as a clean run.
+        self.assertEqual(exercised, self._PROVIDER_BUILT)
+
+    def test_the_flush_payload_carries_both_turn_bounds_as_strings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = self._drive_lifecycle(tmp)
+        flushes = [args for name, args in calls if name == "brain_pre_compact_extract"]
+        self.assertEqual(len(flushes), 2, "one flush per boundary that had buffered turns")
+        for args in flushes:
+            with self.subTest(turn_end=args.get("turn_end")):
+                self.assertIsInstance(args["turn_start"], str)
+                self.assertIsInstance(args["turn_end"], str)
+        # Per-boundary bounds, not cumulative: two turns then one.
+        self.assertEqual([a["turn_end"] for a in flushes], ["2", "1"])
+
+    def test_the_validator_catches_the_regression_it_guards(self):
+        # A guard that cannot fail is not a guard. This is the exact payload
+        # `_flush_buffer` used to send.
+        schema = next(
+            s["inputSchema"] for s in STATIC_TOOL_SCHEMAS if s["name"] == "brain_pre_compact_extract"
+        )
+        violations = schema_violations(
+            schema,
+            {"session_id": "s", "turn_start": 0, "turn_end": 2, "text": "User: u\nAssistant: a"},
+        )
+        self.assertEqual(len(violations), 2, violations)
+        self.assertTrue(any("turn_start" in v for v in violations))
+        self.assertTrue(any("turn_end" in v for v in violations))
+
+    def test_the_validator_catches_missing_and_unknown_args(self):
+        schema = next(
+            s["inputSchema"] for s in STATIC_TOOL_SCHEMAS if s["name"] == "brain_pre_compact_extract"
+        )
+        violations = schema_violations(schema, {"session_id": "s", "turn_start": "0", "typo": 1})
+        self.assertTrue(any("missing required arg 'turn_end'" in v for v in violations))
+        self.assertTrue(any("missing required arg 'text'" in v for v in violations))
+        self.assertTrue(any("unknown arg 'typo'" in v for v in violations))
+
+    def test_the_validator_does_not_pass_a_bool_off_as_a_number(self):
+        # Python's bool-is-int overlap is the one place a naive isinstance check
+        # would call a wrong payload conforming.
+        schema = next(
+            s["inputSchema"] for s in STATIC_TOOL_SCHEMAS if s["name"] == "brain_context_pack"
+        )
+        self.assertEqual(schema_violations(schema, {"max_tokens": 1024}), [])
+        self.assertTrue(schema_violations(schema, {"max_tokens": True}))
+        self.assertTrue(schema_violations(schema, {"max_tokens": 1024.5}))
+        self.assertEqual(schema_violations(schema, {"max_tokens": 1, "lanes": True}), [])
+        self.assertTrue(schema_violations(schema, {"max_tokens": 1, "lanes": 1}))
 
 
 if __name__ == "__main__":
