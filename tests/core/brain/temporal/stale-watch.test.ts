@@ -9,7 +9,7 @@
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -106,6 +106,31 @@ describe("findStaleEntries", () => {
     });
     expect(out.staleLogFiles.length).toBe(1);
     expect(out.staleLogFiles[0]!.path).toContain("2025-08-01.jsonl");
+  });
+
+  test("an unstattable log file fails the scan by name rather than vanishing", () => {
+    // Read without execute on the log directory: `readdir` still
+    // enumerates the entry, `stat` on it fails EACCES. That is the same
+    // condition a log file rotated away between the two calls produces.
+    // `StaleLogFileRow` has no reason field and the envelope has no notice
+    // channel, so the scan still refuses rather than reporting a clean
+    // stale watch; what B3 changed is that the refusal names the scan and
+    // the file instead of arriving as a bare filesystem error.
+    const logDir = join(VAULT, "Brain", "log");
+    writeFileMtime(join(logDir, "d.jsonl"), "", "2025-08-01T00:00:00Z");
+    const idx = buildTimelineIndex(VAULT, {});
+    chmodSync(logDir, 0o400);
+    try {
+      // Root ignores the mode bits; only assert the refusal where the
+      // construction actually bites.
+      if (process.getuid?.() !== 0) {
+        expect(() => findStaleEntries(idx, VAULT, BRAIN_TEMPORAL_DEFAULTS, { now: NOW })).toThrow(
+          /findStaleEntries: cannot read the mtime of log file .*d\.jsonl/,
+        );
+      }
+    } finally {
+      chmodSync(logDir, 0o700);
+    }
   });
 
   test("thresholds returned alongside results", () => {

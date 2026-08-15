@@ -76,13 +76,11 @@ import {
 import { readLifecycleState } from "./lifecycle/tombstone.ts";
 import { boundaryToMs, VALID_UNTIL_KEY } from "./lifecycle/temporal-replace.ts";
 import { brainDirs } from "./paths.ts";
+import { MS_PER_DAY } from "./time.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { brainArtifactSlug } from "./wikilink.ts";
 
 // ----- Constants ------------------------------------------------------------
-
-/** Milliseconds in one day, for the lookback arithmetic. */
-const MS_PER_DAY = 86_400_000;
 
 /** Extension of every Brain artifact this module reads. */
 const MARKDOWN_EXT = ".md";

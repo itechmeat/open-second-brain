@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,6 +62,28 @@ test("ranks open questions above orphans above aging signals", () => {
 test("cap bounds the ranked list", () => {
   const ideas = discoverIdeas(vault, { now: NOW, cap: 2, openQuestions: [] });
   expect(ideas).toHaveLength(2);
+});
+
+test("an artifact whose age cannot be measured says so instead of reading as new", () => {
+  // A dangling symlink is enumerated by `readdir` and fails `stat`, which
+  // is the portable construction for "exists as a directory entry, cannot
+  // be aged". Before B3 both of these read as 0 days old: the signal was
+  // then dropped for being under the aging threshold, and the orphan was
+  // reported "0d old".
+  symlinkSync(join(vault, "Brain", "gone.md"), join(vault, "Brain", "inbox", "sig-broken.md"));
+  symlinkSync(join(vault, "Brain", "gone.md"), join(vault, "Brain", "notes", "broken-note.md"));
+
+  const ideas = discoverIdeas(vault, { now: NOW, cap: 20, openQuestions: [] });
+
+  const signal = ideas.find((i) => i.sourceArtifacts[0] === "Brain/inbox/sig-broken.md");
+  expect(signal).toBeDefined();
+  expect(signal!.reason).toContain("could not be aged");
+  expect(signal!.reason).toContain("Brain/inbox/sig-broken.md");
+
+  const orphan = ideas.find((i) => i.title === "broken-note");
+  expect(orphan).toBeDefined();
+  expect(orphan!.reason).toContain("age unreadable");
+  expect(orphan!.reason).not.toContain("0d old");
 });
 
 test("ideaCandidates convert into enqueueable trigger candidates", () => {

@@ -13,12 +13,16 @@
  * {@link isProfileStale} so repeated calls stay cheap.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { buildMorningBrief } from "./morning-brief.ts";
+import { fileAgeMs } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+/** Milliseconds in one second, for the `maxAgeSeconds` conversion. */
+const MS_PER_SECOND = 1000;
 
 export const PROFILE_DOC_REL = join("Brain", "profile.md");
 export const O2BFS_MARKER_FILE = ".o2bfs";
@@ -120,10 +124,13 @@ export function isProfileStale(vault: string, maxAgeSeconds: number, now: Date):
   // A missing root marker is stale too: shell-root detection depends
   // on it, so a deleted/failed marker must force regeneration.
   if (!existsSync(path) || !existsSync(join(vault, O2BFS_MARKER_FILE))) return true;
-  try {
-    const mtimeMs = statSync(path).mtimeMs;
-    return now.getTime() - mtimeMs > maxAgeSeconds * 1000;
-  } catch {
-    return true;
-  }
+  const ageMs = fileAgeMs(path, now.getTime());
+  // An unmeasurable age is stale, stated here rather than inherited from
+  // a helper. This is the ONE gate on regeneration: a profile that exists
+  // and cannot be aged is a profile nothing else will ever refresh, and
+  // rewriting it costs a directory count. The opposite policy - the one
+  // `idea-discovery` used to carry - would pin a broken profile as
+  // permanently fresh.
+  if (ageMs === null) return true;
+  return ageMs > maxAgeSeconds * MS_PER_SECOND;
 }

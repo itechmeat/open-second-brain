@@ -14,7 +14,7 @@
  * (Kernel B) via {@link synthesisCandidates}.
  */
 
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
@@ -23,6 +23,7 @@ import { walkVault } from "../search/walker.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
+import { fileAgeMs, msToWholeDays } from "./time.ts";
 import type { InsightCandidate } from "./triggers/types.ts";
 import { checkEntityContamination, type ContaminationEntityLike } from "./truth/contamination.ts";
 
@@ -422,6 +423,9 @@ export async function deepSynthesis(
   const agreements: SynthesisAgreement[] = [];
   const contradictions: SynthesisContradiction[] = [];
   const staleClaims: SynthesisStaleClaim[] = [];
+  // Declared here rather than beside the finding pass below because the
+  // age measurement is the first thing that can gate a note out.
+  const excludedFindings: SynthesisExcludedFinding[] = [];
   const gapSources = new Map<string, Set<string>>();
   const contaminated: SynthesisContamination[] = [];
   const citedContentCache = new Map<string, string>();
@@ -450,13 +454,24 @@ export async function deepSynthesis(
     }
 
     // Stale: superseded notes always; otherwise age by mtime.
-    let ageDays = 0;
-    try {
-      const mtimeMs = statSync(join(config.vault, note.path)).mtimeMs;
-      ageDays = Math.floor((opts.now.getTime() - mtimeMs) / (24 * 3600 * 1000));
-    } catch {
-      ageDays = 0;
+    //
+    // A note whose mtime cannot be read is gated out here instead of
+    // being aged 0. Every downstream consumer of `ageDays` reads it as a
+    // number of days - `staleClaims`, the objection's `oldest`, and
+    // `computeFreshness`, which would score an unreadable note at
+    // maximum freshness - and none of those shapes has a null slot.
+    // Widening three public shapes for a case that in practice coincides
+    // with an unreadable body was rejected in favour of reporting the
+    // note through the exclusion vocabulary this module already owns; a
+    // path that cannot be stat'ed is `unreadable` in exactly its sense.
+    // The relation edges collected above are kept, as they were before,
+    // because they came from the search index rather than from disk.
+    const ageMs = fileAgeMs(join(config.vault, note.path), opts.now.getTime());
+    if (ageMs === null) {
+      excludedFindings.push(Object.freeze({ path: note.path, reason: "unreadable" }));
+      continue;
     }
+    const ageDays = msToWholeDays(ageMs);
     if (supersededBy !== null || ageDays > staleAgeDays) {
       staleClaims.push(Object.freeze({ path: note.path, ageDays, supersededBy }));
     }
@@ -540,7 +555,6 @@ export async function deepSynthesis(
   // Finding pass (t_40fa4e8d): build one finding per matched note that
   // clears the evidence-identity gate; report the rest as a visible loss.
   const findings: SynthesisFinding[] = [];
-  const excludedFindings: SynthesisExcludedFinding[] = [];
   for (const acc of perNote) {
     if (acc.content === null) {
       excludedFindings.push(Object.freeze({ path: acc.note.path, reason: "unreadable" }));

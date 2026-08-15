@@ -1,8 +1,12 @@
 /**
- * Time helpers for the Brain layer.
+ * Time helpers for the Brain layer. A true leaf: it imports nothing from
+ * this repository, which is what lets every layer above depend on it
+ * without closing a cycle (`tests/core/architecture/import-cycles.test.ts`).
  *
- * Both functions emit canonical UTC strings expected by the on-disk
- * formats (frontmatter, log headings, run ids):
+ * ## Formatting half
+ *
+ * These emit canonical UTC strings expected by the on-disk formats
+ * (frontmatter, log headings, run ids):
  *
  *   - `isoSecond` → `YYYY-MM-DDTHH:MM:SSZ` (no sub-second precision).
  *     The log heading shape is `HH:MM:SS` only, so anything finer is
@@ -12,7 +16,86 @@
  *
  * Both default to `new Date()` so callers can do `isoSecond()` without
  * threading the clock when they don't need determinism.
+ *
+ * ## Measurement half (evidence-at-the-boundary, unit B3)
+ *
+ * "How old is this file by wall clock, from its mtime" existed as five
+ * independent copies, spelling one day three different ways
+ * (`86_400_000`, `24 * 3600 * 1000`, `24 * 60 * 60 * 1000`) and - worse -
+ * disagreeing about the stat failure. `profile-doc` treated it as stale,
+ * `idea-discovery` returned age zero so an unreadable note read as brand
+ * new, `stale-watch` let the raw `ENOENT` abort the whole scan. Three
+ * policies for one event, none of them chosen at the site that had to
+ * live with it.
+ *
+ * {@link fileAgeMs} therefore returns `null` and every caller must say
+ * what it means. The rejected alternative was a discriminated result
+ * (`{ ok: true, ageMs } | { ok: false, reason }`), which carries a named
+ * reason but costs a shape and a guard at six call sites for a
+ * distinction none of them acts on: absent and unreadable both mean
+ * "this measurement did not happen", and the callers that want to name
+ * the path already have it in hand. `null` is the smallest thing
+ * `noUncheckedIndexedAccess`-grade strictness will not let a caller
+ * ignore, and that unignorability is the whole point - a value that
+ * cannot be silently averaged into an age. What is deliberately NOT
+ * offered is a default-carrying overload: `fileAgeMs(path, now, 0)`
+ * would rebuild the exact defect this unit removes.
+ *
+ * Neither function clamps a negative age. A file stamped in the future
+ * is a real condition (clock skew, a copied mtime) and the callers that
+ * want it floored - `weekly-brief`'s recency label - floor it themselves
+ * where the floor is part of that surface's meaning, not of the
+ * measurement.
  */
+
+import { statSync } from "node:fs";
+
+/**
+ * Milliseconds in one day. The single spelling for every day-scale
+ * conversion in the Brain layer; see the module docblock for the three
+ * it replaced.
+ */
+export const MS_PER_DAY = 86_400_000;
+
+/**
+ * A duration in milliseconds as completed whole days, truncating the
+ * partial day.
+ *
+ * Pure unit conversion, deliberately separate from {@link fileAgeMs}:
+ * one of these can fail to measure and the other cannot, and folding
+ * them into a single `fileAgeDays` would force the sub-day callers
+ * (`profile-doc` gates on seconds) back onto their own arithmetic. It
+ * takes a DURATION rather than a pair of instants because that is what
+ * {@link fileAgeMs} hands back and what four of the five re-pointed
+ * sites already had; a two-instant signature would have made each of
+ * them spell the subtraction again, which is half of what was
+ * duplicated. Negative for a negative duration; see the module docblock.
+ */
+export function msToWholeDays(durationMs: number): number {
+  return Math.floor(durationMs / MS_PER_DAY);
+}
+
+/**
+ * Wall-clock age of the file at `path` in milliseconds, measured from
+ * its mtime against the caller-supplied `nowMs`.
+ *
+ * `null` means the age could not be measured at all - the path is
+ * absent, or it exists behind a directory that denies traversal. It is
+ * NOT an age, and no caller may treat it as one; see the module
+ * docblock for why this is a `null` rather than a discriminated result
+ * and why there is no default-carrying overload.
+ *
+ * `nowMs` is required rather than defaulted so a caller that already
+ * holds a pinned clock cannot accidentally measure against a second,
+ * later one mid-scan.
+ */
+export function fileAgeMs(path: string, nowMs: number): number | null {
+  try {
+    return nowMs - statSync(path).mtimeMs;
+  } catch {
+    return null;
+  }
+}
 
 /** ISO-8601 UTC at whole-second precision (`YYYY-MM-DDTHH:MM:SSZ`). */
 export function isoSecond(d: Date = new Date()): string {

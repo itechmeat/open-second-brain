@@ -20,7 +20,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { extractWikilinkRichBodies, parseWikilinkRich } from "../link-graph/parse-wikilink.ts";
-import { isoSecond } from "./../time.ts";
+import { isoSecond, MS_PER_DAY, msToWholeDays } from "./../time.ts";
 import type { BrainLogEventKind, ResolvedBrainTemporalConfig } from "./../types.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./../types.ts";
 import { selectEvents } from "./select-events.ts";
@@ -34,7 +34,8 @@ import {
 } from "./period-common.ts";
 import type { TemporalEvent, TimelineIndex } from "./types.ts";
 
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
+/** Window length of the weekly synthesis, in days. */
+const WEEK_DAYS = 7;
 
 export interface WeeklyContradiction {
   readonly at: string;
@@ -105,7 +106,7 @@ export function buildWeeklySynthesis(
   if (!Number.isFinite(windowEndMs)) {
     throw new Error(`buildWeeklySynthesis: invalid weekEnd ${JSON.stringify(weekEnd)}`);
   }
-  const windowStartMs = windowEndMs - 7 * ONE_DAY_MS;
+  const windowStartMs = windowEndMs - WEEK_DAYS * MS_PER_DAY;
   const windowStart = isoSecond(new Date(windowStartMs));
   const windowEndIso = isoSecond(new Date(windowEndMs));
   const generatedAt = (opts.now ?? new Date()).toISOString();
@@ -303,7 +304,10 @@ function nominateTopSource(
 
   let best: WeeklyTopSource | null = null;
   for (const c of candidates) {
-    const recencyDays = Math.max(0, Math.floor((windowEndMs - c.mtimeMs) / (24 * 60 * 60 * 1000)));
+    // Floored at 0 here rather than in the shared conversion: a note
+    // stamped after the window end is a real condition, but "modified -2d
+    // before window end" is not a sentence this label can carry.
+    const recencyDays = Math.max(0, msToWholeDays(windowEndMs - c.mtimeMs));
     const recency = Math.max(0, 1 - (windowEndMs - c.mtimeMs) / (windowEndMs - windowStartMs));
     const inboundLinks = inbound.get(c.relPath) ?? 0;
     const outboundLinks = outbound.get(c.relPath) ?? 0;

@@ -10,15 +10,15 @@
  * top candidates can feed the trigger queue (Kernel B).
  */
 
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildMorningBrief, type MorningBriefOpenQuestion } from "./morning-brief.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
+import { fileAgeMs, msToWholeDays } from "./time.ts";
 import { parseFrontmatter } from "../vault.ts";
 import type { InsightCandidate, TriggerKind } from "./triggers/types.ts";
 
-const DAY_MS = 24 * 3600 * 1000;
 const KIND_WEIGHT: Readonly<Record<string, number>> = Object.freeze({
   open_question: 3,
   orphan_research: 2,
@@ -91,12 +91,42 @@ function baseName(relPath: string): string {
   return name.endsWith(".md") ? name.slice(0, -".md".length) : name;
 }
 
-function ageDays(absPath: string, now: Date): number {
-  try {
-    return Math.floor((now.getTime() - statSync(absPath).mtimeMs) / DAY_MS);
-  } catch {
-    return 0;
-  }
+/**
+ * Age cap on the tie-break bonus, so an ancient artifact cannot outrank
+ * a higher-weighted kind on age alone.
+ */
+const AGE_BONUS_CAP_DAYS = 365;
+
+/** Divisor turning the capped day count into a sub-unit tie-break bonus. */
+const AGE_BONUS_DIVISOR = 1000;
+
+/**
+ * Whole-day age of a candidate artifact, or `null` when its mtime could
+ * not be read.
+ *
+ * This used to return 0 on a stat failure, which said "brand new" about
+ * a file nobody could read - the sharpest form of the defect this unit
+ * removes, because the two consumers below both take a QUIETER action on
+ * a low age (a smaller tie-break bonus, and a skip below the aging
+ * threshold). `null` propagates instead, and each consumer names the
+ * unmeasurable age in the `reason` string it already emits: this surface
+ * is a ranked suggestion list with no report field, so the reason line IS
+ * the channel, exactly as it already is for an unreadable frontmatter.
+ */
+function ageDays(absPath: string, now: Date): number | null {
+  const ageMs = fileAgeMs(absPath, now.getTime());
+  return ageMs === null ? null : msToWholeDays(ageMs);
+}
+
+/**
+ * Tie-break bonus from an age, or 0 when the age is unmeasurable: an
+ * artifact that could not be aged gets no age-derived rank, which leaves
+ * it sorted with the youngest of its kind rather than promoted past
+ * artifacts whose age is known.
+ */
+function ageBonus(age: number | null): number {
+  if (age === null) return 0;
+  return Math.min(age, AGE_BONUS_CAP_DAYS) / AGE_BONUS_DIVISOR;
 }
 
 export function discoverIdeas(
@@ -154,12 +184,13 @@ export function discoverIdeas(
     // ranked suggestion list - precision over completeness.
     if (inbound.has(name)) continue;
     const age = ageDays(note.absPath, opts.now);
+    const ageText = age === null ? "age unreadable" : `${age}d old`;
     candidates.push(
       Object.freeze({
         kind: "orphan_research" as const,
         title: name,
-        reason: `${note.relPath} has no inbound links (${age}d old) - research nobody picked up`,
-        score: KIND_WEIGHT["orphan_research"]! + Math.min(age, 365) / 1000,
+        reason: `${note.relPath} has no inbound links (${ageText}) - research nobody picked up`,
+        score: KIND_WEIGHT["orphan_research"]! + ageBonus(age),
         sourceArtifacts: Object.freeze([note.relPath]),
       }),
     );
@@ -172,7 +203,13 @@ export function discoverIdeas(
       if (!name.startsWith("sig-") || !name.endsWith(".md")) continue;
       const absPath = join(inbox, name);
       const age = ageDays(absPath, opts.now);
-      if (age < agingSignalDays) continue;
+      // An unmeasurable age cannot clear the aging threshold and cannot
+      // fail it either. Dropping the signal here is what the old age-0
+      // return did silently; the signal is nominated instead, with a
+      // reason that states the threshold was never evaluated. A false
+      // nomination costs one line on a suggestion list, where a silent
+      // drop costs the operator the only notice that the file is broken.
+      if (age !== null && age < agingSignalDays) continue;
       let topic = name.slice(0, -".md".length);
       // Unit F: this site used to do its own `readFileSync` inside a
       // `catch {}` that silently kept the filename-derived topic - the one
@@ -186,12 +223,17 @@ export function discoverIdeas(
       // in src/core/vault.ts for where the condition IS reported.
       const [meta] = parseFrontmatter(absPath);
       if (typeof meta["topic"] === "string" && meta["topic"] !== "") topic = meta["topic"];
+      const reason =
+        age === null
+          ? `inbox signal '${topic}' could not be aged (Brain/inbox/${name} is unreadable), ` +
+            `so the ${agingSignalDays}-day wait could not be checked`
+          : `inbox signal '${topic}' has waited ${age}d without becoming a preference`;
       candidates.push(
         Object.freeze({
           kind: "idea_direction" as const,
           title: topic,
-          reason: `inbox signal '${topic}' has waited ${age}d without becoming a preference`,
-          score: KIND_WEIGHT["idea_direction"]! + Math.min(age, 365) / 1000,
+          reason,
+          score: KIND_WEIGHT["idea_direction"]! + ageBonus(age),
           sourceArtifacts: Object.freeze([`Brain/inbox/${name}`]),
         }),
       );

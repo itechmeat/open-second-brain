@@ -13,16 +13,15 @@
  * Task 5 in `plan.md`.
  */
 
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
 import { brainDirs } from "./../paths.ts";
 import { parsePreference } from "./../preference.ts";
 import { parseSignal } from "./../signal.ts";
+import { fileAgeMs, msToWholeDays } from "./../time.ts";
 import type { ResolvedBrainTemporalConfig } from "./../types.ts";
 import type { TimelineIndex } from "./types.ts";
-
-const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface FindStaleEntriesOptions {
   /** Wall clock; defaults to `new Date()`. */
@@ -156,9 +155,21 @@ function scanLogFiles(vault: string, thresholdDays: number, nowMs: number): Stal
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith(".jsonl") && !entry.name.endsWith(".md")) continue;
     const path = join(dirs.log, entry.name);
-    const st = statSync(path);
-    const mtimeMs = st.mtimeMs;
-    const ageDays = Math.floor((nowMs - mtimeMs) / ONE_DAY_MS);
+    const ageMs = fileAgeMs(path, nowMs);
+    // A log file this loop enumerated a moment ago that can no longer be
+    // stat'ed is not a stale entry and is not an absent one either: the
+    // scan cannot say. `StaleLogFileRow` has no reason field and the
+    // envelope has no notice channel, so the honest surface is the one
+    // this scan already used - the failure propagates - except that it now
+    // names the scan and the file instead of arriving as a bare `ENOENT`
+    // from a path the report never mentions. Skipping the row instead
+    // would trade an unreadable log for a clean bill of health, which is
+    // the failure mode this release exists to remove.
+    if (ageMs === null) {
+      throw new Error(`findStaleEntries: cannot read the mtime of log file ${path}`);
+    }
+    const mtimeMs = nowMs - ageMs;
+    const ageDays = msToWholeDays(ageMs);
     if (ageDays < thresholdDays) continue;
     out.push(
       Object.freeze({
@@ -187,5 +198,5 @@ function mostRecentEventAt(index: TimelineIndex, prefId: string): string | undef
 function computeAgeDays(anchorIso: string, nowMs: number): number | undefined {
   const ms = Date.parse(anchorIso);
   if (!Number.isFinite(ms)) return undefined;
-  return Math.floor((nowMs - ms) / ONE_DAY_MS);
+  return msToWholeDays(nowMs - ms);
 }
