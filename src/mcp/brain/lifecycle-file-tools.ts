@@ -182,6 +182,60 @@ export function isStubScaffoldAction(value: unknown): value is StubScaffoldActio
   );
 }
 
+/**
+ * Which arguments belong to which action, so one sent to the other is
+ * refused rather than dropped.
+ *
+ * `brain_scaffold_stub` dispatches on `action` and its two actions share
+ * one flat argument list, so `{"action":"list","target":"Foo","apply":true}`
+ * used to return a normal `state: "measured", targets: []` envelope - an
+ * agent holding a stale `action` reads that as a write that happened.
+ * `argument-guard.ts` calls a silently ignored argument "the worst kind
+ * of fallback", and the sibling tool in this file has taken the other
+ * road since it shipped: `to` on an archive or a delete is a typed
+ * `destination_forbidden`, not a no-op.
+ */
+const STUB_ACTION_ARGUMENTS: Readonly<Record<StubScaffoldAction, ReadonlyArray<string>>> =
+  Object.freeze({
+    [STUB_SCAFFOLD_ACTION.list]: Object.freeze(["limit"]),
+    [STUB_SCAFFOLD_ACTION.write]: Object.freeze([
+      "target",
+      "path",
+      "sources",
+      "if_exists",
+      "apply",
+    ]),
+  });
+
+/** The `data.code` an action-incompatible argument is refused under. */
+const ARGUMENT_FORBIDDEN_CODE = "argument_forbidden";
+
+/**
+ * Refuse every argument that belongs to the OTHER action. `action`
+ * itself is the dispatch key and belongs to both; anything the schema
+ * does not declare at all is already refused upstream by the
+ * unknown-argument gate, so this reads the declared vocabulary only.
+ */
+function assertArgumentsMatchAction(
+  args: Record<string, unknown>,
+  action: StubScaffoldAction,
+): void {
+  const mine = STUB_ACTION_ARGUMENTS[action];
+  const foreign = STUB_SCAFFOLD_ACTIONS.flatMap((other) =>
+    other === action ? [] : [...STUB_ACTION_ARGUMENTS[other]],
+  )
+    .filter((name) => !mine.includes(name))
+    .filter((name) => args[name] !== undefined && args[name] !== null)
+    .toSorted();
+  if (foreign.length === 0) return;
+  throw new MCPError(
+    INVALID_PARAMS,
+    `${STUB_TOOL}: action=${action} takes none of ${foreign.join(", ")}; ` +
+      `it reads ${mine.join(", ")}`,
+    { code: ARGUMENT_FORBIDDEN_CODE, action, forbidden: foreign, accepted: [...mine] },
+  );
+}
+
 /** Read an optional string array argument, refusing a non-array. */
 function coerceStringArray(args: Record<string, unknown>, field: string): string[] {
   const raw = args[field];
@@ -203,6 +257,8 @@ async function toolBrainScaffoldStub(
       `${STUB_TOOL}: 'action' must be one of ${STUB_SCAFFOLD_ACTIONS.join(", ")}`,
     );
   }
+
+  assertArgumentsMatchAction(args, action);
 
   if (action === STUB_SCAFFOLD_ACTION.list) {
     const limit = coerceNonNegativeInteger(STUB_TOOL, "limit", args["limit"]);

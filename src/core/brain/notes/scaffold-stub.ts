@@ -40,8 +40,9 @@
  * is no fallback that reports zero.
  */
 
-import { posix } from "node:path";
+import { dirname, posix } from "node:path";
 
+import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
 import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
 import { renderStub } from "../portability/graph.ts";
@@ -150,17 +151,20 @@ export async function listDanglingTargets(
   try {
     config = resolveSearchConfig({ vault });
   } catch (err) {
-    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+    return refusal(DANGLING_SCAN.indexUnreadable, hostPathFree(err, vault, null));
   }
   if (!existsSync(config.dbPath)) {
-    return refusal(DANGLING_SCAN.indexMissing, `no search index at ${config.dbPath}`);
+    // The path is deliberately absent: `admin-tools.ts:137` says the same
+    // thing the same way, and the caller already knows which vault it
+    // asked about. `nextCommand` carries the remedy.
+    return refusal(DANGLING_SCAN.indexMissing, "the vault has no search index yet");
   }
 
   let store;
   try {
     store = await Store.open(config, { mode: "read" });
   } catch (err) {
-    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+    return refusal(DANGLING_SCAN.indexUnreadable, hostPathFree(err, vault, config.dbPath));
   }
   try {
     const full = store.getState(LAST_FULL_INDEX_AT_STATE_KEY);
@@ -179,14 +183,37 @@ export async function listDanglingTargets(
       nextCommand: REINDEX_COMMAND,
     });
   } catch (err) {
-    return refusal(DANGLING_SCAN.indexUnreadable, errorMessage(err));
+    return refusal(DANGLING_SCAN.indexUnreadable, hostPathFree(err, vault, config.dbPath));
   } finally {
     await store.close();
   }
 }
 
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+/**
+ * `err`'s own message with this install's absolute host paths removed.
+ *
+ * The `detail` this returns crosses the MCP boundary and lands in model
+ * context - the contract `src/mcp/tools.ts:94-118` states, and the reason
+ * `vaultStoreReference` renders `vault://<hex>` instead of a vault path
+ * unless `expose_host_paths` is set. A sqlite error embeds the database
+ * file it failed on, so passing the raw message through told any agent
+ * that called this on an unindexed or locked vault where the operator's
+ * home directory is.
+ *
+ * Substitution rather than suppression: WHICH file the store failed on is
+ * not information the caller needs (there is one), but WHAT the
+ * filesystem said about it is the whole of the diagnosis. Longest first,
+ * so the database path is replaced before the directory that contains it
+ * can consume its prefix.
+ */
+function hostPathFree(err: unknown, vault: string, dbPath: string | null): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  const hostPaths = (dbPath === null ? [vault] : [dbPath, dirname(dbPath), vault])
+    .filter((candidate) => candidate.length > 0)
+    .toSorted((a, b) => b.length - a.length);
+  let out = raw;
+  for (const hostPath of hostPaths) out = out.split(hostPath).join(REDACTION_PLACEHOLDER);
+  return out;
 }
 
 // ----- Materialising one target ---------------------------------------------
