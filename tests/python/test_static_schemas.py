@@ -309,8 +309,8 @@ def _type_matches(expected: str, value: object) -> bool:
 def schema_violations(schema: dict, args: dict) -> list[str]:
     """Return every way ``args`` fails ``schema``; empty means conforming.
 
-    Deliberately narrow - required keys, declared types, enums, string bounds
-    and the ``additionalProperties: false`` closure. That is the surface the
+    Deliberately narrow - required keys, declared types, enums, numeric and
+    string bounds, and the ``additionalProperties: false`` closure. That is the surface the
     server's own argument readers enforce, and the surface a provider-built
     payload can violate without anything saying so.
     """
@@ -335,6 +335,13 @@ def schema_violations(schema: dict, args: dict) -> list[str]:
         enum = declared.get("enum")
         if isinstance(enum, list) and value not in enum:
             violations.append(f"{key!r} must be one of {enum}, got {value!r}")
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            low = declared.get("minimum")
+            if isinstance(low, (int, float)) and value < low:
+                violations.append(f"{key!r} is below minimum {low}, got {value!r}")
+            high = declared.get("maximum")
+            if isinstance(high, (int, float)) and value > high:
+                violations.append(f"{key!r} is above maximum {high}, got {value!r}")
         if isinstance(value, str):
             # The server's own string reader rejects a blank value outright, so
             # a declared minLength of 1 is not the only way to fail here.
@@ -478,6 +485,19 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         self.assertTrue(schema_violations(schema, {"max_tokens": 1024.5}))
         self.assertEqual(schema_violations(schema, {"max_tokens": 1, "lanes": True}), [])
         self.assertTrue(schema_violations(schema, {"max_tokens": 1, "lanes": 1}))
+
+    def test_the_validator_enforces_declared_numeric_bounds(self):
+        # `max_tokens` is `minimum: 1`. A zero budget is the right type and
+        # still a payload the server refuses.
+        schema = next(
+            s["inputSchema"] for s in STATIC_TOOL_SCHEMAS if s["name"] == "brain_context_pack"
+        )
+        violations = schema_violations(schema, {"max_tokens": 0})
+        self.assertTrue(any("below minimum 1" in v for v in violations), violations)
+        gate = next(
+            s["inputSchema"] for s in STATIC_TOOL_SCHEMAS if s["name"] == "brain_recall_gate"
+        )
+        self.assertTrue(schema_violations(gate, {"prompt": "x" * 4001}))
 
 
 if __name__ == "__main__":

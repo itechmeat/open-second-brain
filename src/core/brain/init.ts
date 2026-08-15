@@ -110,6 +110,31 @@ function shiftDay(day: string, days: number): string {
 }
 
 /**
+ * Age one copied entry in place, descending into it when it is a
+ * directory. The copy above is recursive, so a custom `starterPath` may
+ * put a subtree under a starter target and reading it as a file would
+ * fail the whole install with `EISDIR`. Only Markdown bodies are
+ * rewritten - a starter target holds Brain notes, and a bundle that
+ * smuggled a binary in should come back out with its bytes intact.
+ */
+function ageStarterEntry(abs: string, days: number): void {
+  if (statSync(abs).isDirectory()) {
+    for (const child of readdirSync(abs)) {
+      const childAbs = join(abs, child);
+      ageStarterEntry(childAbs, days);
+      const moved = child.replace(DATE_RE, (d) => shiftDay(d, days));
+      if (moved !== child) renameSync(childAbs, join(abs, moved));
+    }
+    return;
+  }
+  if (!abs.endsWith(".md")) return;
+  atomicWriteFileSync(
+    abs,
+    readFileSync(abs, "utf8").replace(DATE_RE, (d) => shiftDay(d, days)),
+  );
+}
+
+/**
  * Age the copied bundle so its history ends on the day it was dropped.
  *
  * The bundle carries a fictional five-day history with fixed dates, and
@@ -131,10 +156,7 @@ function ageStarterCopy(
   const renamed: string[] = [];
   for (const rel of copied) {
     const abs = join(vault, rel);
-    atomicWriteFileSync(
-      abs,
-      readFileSync(abs, "utf8").replace(DATE_RE, (d) => shiftDay(d, days)),
-    );
+    ageStarterEntry(abs, days);
     const name = basename(rel);
     const moved = name.replace(DATE_RE, (d) => shiftDay(d, days));
     if (moved === name) {
