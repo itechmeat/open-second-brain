@@ -788,6 +788,9 @@ o2b search reindex            Rebuild the SQLite + FTS5 index from scratch
                               --interval <N>m|h|d sets that recipe's cadence, default 30m; an interval
                               cron cannot express (seconds, 60m+, 24h+, 28d+) is refused with the
                               reason rather than rendered as a schedule that means something else
+                              --self-heal records this run's terminal outcome (or its failure, by
+                              name) on the self_heal_reindex metrics surface; set by the detached
+                              post-upgrade rebuild, whose streams are all ignored
 o2b search index              Incrementally update the index; --embeddings computes vectors
                               --force-cost bypasses the embedding cost gate (since v0.36.0)
 o2b search vector-backfill    Run the vector phase ALONE for indexed chunks that have no vector -

@@ -188,6 +188,11 @@ import {
   SESSION_ADAPTER_IDS,
 } from "../../../src/core/brain/sessions/types.ts";
 import {
+  isTranscriptScan,
+  TRANSCRIPT_SCAN,
+  TRANSCRIPT_SCANS,
+} from "../../../src/core/discipline/transcripts/types.ts";
+import {
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   VAULT_BACKING,
@@ -217,6 +222,11 @@ import {
   TOKEN_COUNT_METHOD,
   TOKEN_COUNT_METHODS,
 } from "../../../src/core/brain/token-impact.ts";
+import {
+  isRecallFailure,
+  RECALL_FAILURE,
+  RECALL_FAILURES,
+} from "../../../src/core/bench/failure-modes.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -662,6 +672,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isTokenCountMethod,
   },
   {
+    // U10. How one proactive-recall decision failed. `faulted` is the
+    // member that earns the vocabulary: a retriever that threw is not a
+    // memory that stayed quiet, and a boolean would collapse them - which
+    // would let a broken harness report itself as a cautious one. The
+    // guard is the boundary for a value read back out of a persisted
+    // retrieve-phase result file.
+    name: "RECALL_FAILURE",
+    values: RECALL_FAILURE,
+    members: RECALL_FAILURES,
+    guard: isRecallFailure,
+  },
+  {
     // U1. What one progress tick says happened. `refused` and `stopped`
     // are the members that earn the vocabulary: an operation whose events
     // no transport could carry, and one the operator cancelled, are
@@ -749,6 +771,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SESSION_ADAPTER_ID,
     members: SESSION_ADAPTER_IDS,
     guard: isSessionAdapterId,
+  },
+  {
+    // U7. Which emptiness a transcript scan found. `root_absent`,
+    // `unreadable` and `idle` were one value - a zero file count - feeding
+    // an alert that exists to notice a day with no recorded work, so an
+    // unreadable home was read as a confirmed quiet day. The three cannot
+    // be one member for the same reason `partial` is not `full`: the
+    // middle one is the report failing, not the agent resting.
+    name: "TRANSCRIPT_SCAN",
+    values: TRANSCRIPT_SCAN,
+    members: TRANSCRIPT_SCANS,
+    guard: isTranscriptScan,
   },
 ]);
 

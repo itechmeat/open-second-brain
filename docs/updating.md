@@ -89,6 +89,15 @@ hands-off:
   detached reindex), so startup never blocks; and as a safety net the search
   read path self-heals a stale/missing index on first query.
 
+A schema bump makes every session that starts afterwards find the index stale
+at once, so the spawn is checked against the index writer lock first: a rebuild
+that can already be seen to lose is not started at all. That check reads an
+instant and cannot exclude anything - the writer lock still does that - so a
+child can still lose a real race, and it now says so. Every detached rebuild
+records what it decided and how it ended on the `self_heal_reindex` metrics
+surface (`docs/metrics.md`), because the child runs with its streams pointed at
+nothing and a failure would otherwise be reported nowhere.
+
 It is **state-driven, not version-stamped.** Each step keys off actual on-disk
 state - the search index `schema_version`, the `_brain.yaml` pending-changes
 plan, directory existence - rather than a "last version" marker. This is
@@ -152,3 +161,4 @@ These properties are locked by tests; do not weaken them:
 - `tests/cli/install-cli.test.ts` — idempotent reclaim and conservative self-heal.
 - `tests/core/search/self-heal.test.ts` — search rebuilds a stale/missing index on read.
 - `tests/core/maintenance/ensure-current.test.ts` — state-driven migration, idempotent, never throws.
+- `tests/core/maintenance/self-heal-reindex.test.ts` — the herd is thinned against the writer lock, and a detached rebuild's outcome is readable.

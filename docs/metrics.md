@@ -17,6 +17,7 @@ Brain/metrics/
 ├── communities.jsonl
 ├── recall_benchmark.jsonl
 ├── self_tuning.jsonl
+├── self_heal_reindex.jsonl
 └── dream_stage.jsonl
 ```
 
@@ -65,10 +66,20 @@ writes, and a metric record is a summary, not a report.
 | `dream_stage` | `o2b brain dream stage` / `apply`, MCP `brain_dream` (since 1.0.0) | `action` (`stage`/`apply`), `run_id`, `proposals`, `sources`, `changed`; apply adds `new_unconfirmed`, `confirmed`, `retired` counts |
 | `prompt_prefix` | decision-panel commit (opt-in `promptPrefixMetric`), context-pack consume (opt-in `promptPrefix`) | `kind` (`write_session`/`context_pack`), `prefix_hash` (sha-256 of the stable preamble), `prefix_chars`, `call_count`, `stable_count` |
 | `vault_vitals` | `o2b brain vitals` | `preferences_scanned`, `domain_diversity`, `connectivity_index`, `orphan_count`, `gap_pressure` |
+| `self_heal_reindex` | `ensureVaultCurrent` (parent) and `o2b search reindex --self-heal` (child) | parent row: `decision` (`spawned` / `skipped_writer_lock`), `pid` (on `spawned`). Child row: `outcome` (`completed` / `failed`), `pid`, `duration_ms`, `error` (on `failed`) |
 
 Payload fields marked "(lane runs)" appear only on maintenance-lane
 emissions. All fields are additive-optional from a consumer's point
 of view: render what is present, ignore what is unknown.
+
+`self_heal_reindex` is the one surface written by two processes. The
+post-upgrade rebuild is spawned detached with every stream ignored, so
+the parent records what it decided to do and the child records how it
+ended; the two pair on the child's `pid`. A `spawned` row with no
+terminal row beside it is a child that never got to report - killed,
+or reaped with its session. The rows describe a per-device index from
+inside a synced vault, so a row says a self-heal ran on some device,
+never that this device's index is stale.
 
 ## Reading
 

@@ -52,6 +52,30 @@ export function acquireWriterLockSync(path: string): () => void {
 }
 
 /**
+ * Whether the writer lock on `dbPath` is held by a live holder RIGHT NOW.
+ *
+ * ADVISORY, and only that. It answers about the instant it is called: the
+ * lock can be taken or released the moment after it returns, so a caller
+ * that acts on `false` is not excluded from anything - {@link
+ * acquireWriterLock} is the only thing that excludes. What this buys is
+ * cheaper contention, not exclusion: a caller about to start a rebuild it
+ * can already see will lose can decline to start it at all.
+ *
+ * Same `stale` window as both acquire paths, so a lock whose holder was
+ * SIGKILLed reads as free here exactly when it would be taken over there.
+ * A stale lock is reported free without being removed - removing it is the
+ * acquiring writer's business.
+ *
+ * Throws whatever the stat failed with (EACCES, ELOOP). It does NOT
+ * collapse an unreadable lock directory to `false`: "the lock is free" and
+ * "I could not find out" are different answers, and a caller that treats
+ * the second as the first has been told something untrue.
+ */
+export function isWriterLockHeld(dbPath: string): boolean {
+  return lockfile.checkSync(dbPath, { stale: WRITER_LOCK_STALE_MS, realpath: false });
+}
+
+/**
  * Acquire the exclusive writer lock on the LIVE index path. Shared by
  * `Store.open({ mode: "write" })` and `reindexVault`'s rebuild+swap so both
  * serialise on the SAME lock (keyed on `dbPath`, not on the `.new` staging

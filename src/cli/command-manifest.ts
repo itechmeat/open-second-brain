@@ -546,6 +546,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("verbose", "boolean"),
           flag("cron-template", "boolean"),
           flag("interval", "string"),
+          flag("self-heal", "boolean"),
         ]),
         command("watch", "Watch the vault and incrementally sync the index on .md edits"),
         command("status", "Print search index status"),

@@ -12,9 +12,14 @@ import {
   chunkWindowDiagnosticCode,
   indexVault,
   reindexVault,
+  SearchError,
   serializeChunkWindowCensus,
 } from "../../../core/search/index.ts";
 import type { ChunkWindowCensus, IndexStats } from "../../../core/search/index.ts";
+import {
+  recordSelfHealOutcome,
+  SELF_HEAL_REINDEX_OUTCOME,
+} from "../../../core/maintenance/self-heal-reindex.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextSteps } from "../../advisory-rail.ts";
 import { CronTemplateError, renderCronTemplate } from "../../search-cron-template.ts";
@@ -151,6 +156,16 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
   return 0;
 }
 
+/**
+ * Rebuild the index from scratch.
+ *
+ * `--self-heal` marks the run as the automatic post-upgrade rebuild that
+ * `ensureVaultCurrent` spawns detached, with every stream ignored because
+ * there is no terminal to write to. It changes nothing about the rebuild;
+ * it only makes the run's terminal outcome - success or the failure by
+ * name - land on the `self_heal_reindex` metrics surface, which is the only
+ * place such a run can be read from afterwards.
+ */
 export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
     ...VAULT_FLAGS,
@@ -161,6 +176,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     verbose: { type: "boolean" },
     "cron-template": { type: "boolean" },
     interval: { type: "string" },
+    "self-heal": { type: "boolean" },
   });
   if (flagBoolean(flags, "cron-template")) {
     const intervalRaw = flagString(flags, "interval") ?? DEFAULT_CRON_INTERVAL;
@@ -177,16 +193,48 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     }
   }
   const cfg = resolveConfig(flags);
-  const stats = await reindexVault(cfg, {
-    safeguard: reindexSafeguard(flags),
-    embeddings: flagBoolean(flags, "embeddings"),
-    forceCost: flagBoolean(flags, "force-cost"),
-    onFile: flagBoolean(flags, "verbose")
-      ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
-      : undefined,
-  });
+  const selfHeal = flagBoolean(flags, "self-heal");
+  const startedAt = Date.now();
+  let stats: IndexStats;
+  try {
+    stats = await reindexVault(cfg, {
+      safeguard: reindexSafeguard(flags),
+      embeddings: flagBoolean(flags, "embeddings"),
+      forceCost: flagBoolean(flags, "force-cost"),
+      onFile: flagBoolean(flags, "verbose")
+        ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
+        : undefined,
+    });
+  } catch (err) {
+    // The only report a self-heal run's failure ever gets. Recorded before
+    // the rethrow so the row exists whatever the caller's stderr is
+    // pointed at, and the rethrow is unchanged so an operator running this
+    // by hand still sees the error and the exit code they always saw.
+    if (selfHeal) {
+      recordSelfHealOutcome(
+        cfg.vault,
+        SELF_HEAL_REINDEX_OUTCOME.failed,
+        Date.now() - startedAt,
+        describeFailure(err),
+      );
+    }
+    throw err;
+  }
+  if (selfHeal) {
+    recordSelfHealOutcome(cfg.vault, SELF_HEAL_REINDEX_OUTCOME.completed, Date.now() - startedAt);
+  }
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
   return 0;
+}
+
+/**
+ * One line naming what failed. A {@link SearchError} leads with its CODE:
+ * the row is read back by an operator and by tests, and a code survives a
+ * message reword where the prose does not.
+ */
+function describeFailure(err: unknown): string {
+  if (err instanceof SearchError) return `${err.code}: ${err.message}`;
+  return err instanceof Error ? err.message : String(err);
 }
 
 /**
