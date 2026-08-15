@@ -229,13 +229,22 @@ describe("an operator declaration layers OVER the survey", () => {
     expect(verdict.source).toBe(EMBEDDING_SUNSET_SOURCE.none);
   });
 
-  test("a declaration this build cannot parse is refused, never treated as absent", () => {
-    const verdict = classifyEmbeddingSunset(MODEL_A, NOW, survey([]), {
-      model: MODEL_A,
-      sunsetAt: "next tuesday",
-    });
-    expect(verdict.state).toBe(EMBEDDING_SUNSET.undetermined);
-    expect(verdict.reason).toBe(EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed);
+  test("a declaration this build cannot parse is a caller's error, not a vault's verdict", () => {
+    // It used to be `undetermined/declaration_malformed`: a reported
+    // state, with its own vocabulary member and its own four-sentence
+    // operator message, that no vault could produce. `sunset_at` is
+    // validated by `parseEmbeddingsBlock` - the only producer of
+    // `BrainConfig.embeddings` - which throws a `BrainConfigError` naming
+    // the key at load time, and that refusal is pinned in
+    // `tests/core/brain/policy/embeddings-block.test.ts`. What is left
+    // here is an invariant over an exported function, and it says so
+    // rather than inventing an instant.
+    expect(() =>
+      classifyEmbeddingSunset(MODEL_A, NOW, survey([]), {
+        model: MODEL_A,
+        sunsetAt: "next tuesday",
+      }),
+    ).toThrow(TypeError);
   });
 });
 

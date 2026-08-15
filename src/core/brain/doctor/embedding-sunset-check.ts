@@ -58,7 +58,7 @@
  */
 
 import { resolveSearchConfig } from "../../search/index.ts";
-import { resolveEmbeddingSunsetDeclaration } from "../policy/blocks/embeddings.ts";
+import { resolveEmbeddingSunsetDeclaration } from "../policy.ts";
 import {
   classifyEmbeddingSunset,
   EMBEDDING_SUNSET,
@@ -155,12 +155,6 @@ function undeterminedMessage(verdict: EmbeddingSunsetVerdict): string {
         `the decommission survey entry for ${verdict.model} carries a date this build cannot ` +
         "parse, so no verdict was reached. That is a defect in the shipped table rather than in " +
         "this vault"
-      );
-    case EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed:
-      return (
-        `the embeddings.sunset_at declared for ${verdict.model} in Brain/_brain.yaml is not an ` +
-        "ISO-8601 date, so no verdict was reached. The instant it meant is not recoverable from " +
-        "the text, and this build will not substitute one"
       );
     case null:
       // Unreachable: `undetermined` always carries a reason, and the

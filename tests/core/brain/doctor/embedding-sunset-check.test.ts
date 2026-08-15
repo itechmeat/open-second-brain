@@ -193,6 +193,20 @@ describe("what the check cannot establish reaches the uncertain stream", () => {
     );
   });
 
+  test("a survey entry this build cannot parse reaches the operator as a table defect", () => {
+    // The producer of `survey_entry_malformed` is the SHIPPED table going
+    // wrong, and the survey is injectable at this factory precisely so a
+    // release that mistypes a date is caught here rather than reported to
+    // an operator as "no announcement". A shipped table that parses today
+    // is pinned separately (`embeddings.sunset.test.ts`); this pins what
+    // happens when one does not.
+    const result = run(surveyWith("2027-13-45"));
+    const entry = result.uncertain.find((e) => e.code === EMBEDDING_MODEL_SUNSET_UNDETERMINED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("defect in the shipped table");
+    expect(entry!.message).toContain(MODEL);
+  });
+
   test("semantic search enabled with no model resolved is uncertain", () => {
     configure(null);
     const result = run(surveyWith(null));
@@ -269,6 +283,15 @@ describe("an operator declaration layers over the survey, end to end", () => {
     const issues = announced(runWithConfig(surveyWith(surveyed)));
     expect(issues.length).toBe(1);
     expect(issues[0]!.message).toContain(surveyed);
+  });
+
+  test("a malformed declared date never reaches the check at all", () => {
+    // Why the classifier has no `declaration_malformed` verdict: the
+    // config layer refuses the value at load time, naming the key, so the
+    // operator meets this as a config error rather than as a doctor line
+    // - and no vault can hand the classifier a date it cannot parse.
+    declareSunset(MODEL, "next tuesday");
+    expect(() => loadBrainConfig(vault)).toThrow(/sunset_at/);
   });
 
   test("a declaration turns a surveyed negative into a warning", () => {

@@ -139,10 +139,18 @@ export const EMBEDDING_SUNSET_UNDETERMINED_REASON = Object.freeze({
   modelUnresolved: "model_unresolved",
   /** The survey's own review date is older than the horizon. */
   surveyStale: "survey_stale",
-  /** A survey entry carries a date this build cannot parse. */
+  /**
+   * A survey entry carries a date this build cannot parse.
+   *
+   * Produced by the SHIPPED table going wrong, which is why it survives
+   * while its declaration-side twin did not: the survey is data compiled
+   * into the binary and injectable at the check's own factory
+   * (`makeEmbeddingSunsetCheck`), so a release that mistypes a date has
+   * to say so rather than report the model as un-announced. The
+   * operator's declaration has no such gap - see
+   * {@link classifyEmbeddingSunset}.
+   */
   surveyEntryMalformed: "survey_entry_malformed",
-  /** The operator's declared date is not an ISO instant. */
-  declarationMalformed: "declaration_malformed",
 } as const);
 
 /** Closed union over {@link EMBEDDING_SUNSET_UNDETERMINED_REASON}. */
@@ -155,7 +163,6 @@ export const EMBEDDING_SUNSET_UNDETERMINED_REASONS: ReadonlyArray<EmbeddingSunse
     EMBEDDING_SUNSET_UNDETERMINED_REASON.modelUnresolved,
     EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyStale,
     EMBEDDING_SUNSET_UNDETERMINED_REASON.surveyEntryMalformed,
-    EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed,
   ]);
 
 /** Narrow a string read back off disk or across a tool boundary. */
@@ -449,10 +456,21 @@ export function classifyEmbeddingSunset(
   // model rather than meaning "whatever is configured".
   if (declaration !== undefined && declaration.model === model) {
     if (!isValidIsoInstant(declaration.sunsetAt)) {
-      return undetermined(
-        model,
-        EMBEDDING_SUNSET_UNDETERMINED_REASON.declarationMalformed,
-        reviewedAt,
+      // Not a verdict, because no vault can reach this. `sunset_at` is
+      // validated with this same predicate by `parseEmbeddingsBlock`,
+      // which is the ONLY producer of `BrainConfig.embeddings` and throws
+      // a `BrainConfigError` naming the key - so an operator who mistypes
+      // the date is told at load time, long before any check runs. An
+      // `undetermined/declaration_malformed` verdict here would be a
+      // reported state with a four-sentence operator message and no input
+      // that could produce it, which is the defect this release removes.
+      // A caller that reaches this has skipped the parser, and that is a
+      // programming error: it gets said rather than turned into a
+      // fabricated instant.
+      throw new TypeError(
+        `classifyEmbeddingSunset: declared sunsetAt for ${model} is not an ISO-8601 instant ` +
+          `(${declaration.sunsetAt}); declarations come from parseEmbeddingsBlock, which ` +
+          "validates them",
       );
     }
     // A disagreement is carried, not erased: one of the two records is
