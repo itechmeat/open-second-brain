@@ -46,7 +46,7 @@ import type { ProgressCounter, ProgressSink } from "../progress.ts";
 import { buildRegionDocument, mergeRegions } from "../regions.ts";
 import type { Region } from "../regions.ts";
 import type { Safeguard } from "../safeguard.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
+import { acquireLockSyncWithRetry, LOCK_WAIT_INTERACTIVE_MS } from "../sync-lockfile.ts";
 import { ARCHITECT_STAGE, scanProject } from "./scan.ts";
 import type { ModuleFact, ProjectFacts } from "./scan.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -425,7 +425,16 @@ function generateRun(
   // already replaced, so both tell the operator they created notes only
   // one of them created. `architect-concurrent-runs.test.ts` is the
   // discriminating test, and the tally is its instrument.
-  const handle = acquireLockSyncWithRetry(dir);
+  //
+  // The INTERACTIVE budget, not the default. Waiting on this lock is a
+  // synchronous freeze of the whole process, and this process has a
+  // progress stream and an operator's Ctrl-C behind it. The default is
+  // sized for the ingest fan-out, where several processes contend by
+  // design and the waiter is a short-lived worker with nothing else to
+  // run; a second architect run over the same repo is not that workload.
+  // One second absorbs a genuine brief overlap and refuses the rest by
+  // name, rather than parking a watched terminal for five.
+  const handle = acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS);
   let plans: ReadonlyArray<PlannedNote>;
   try {
     plans = renderNotes(dir, key, facts, opts, progress);

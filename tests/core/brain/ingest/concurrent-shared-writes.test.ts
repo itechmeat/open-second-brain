@@ -18,7 +18,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -246,25 +246,19 @@ describe("acquireLockSyncWithRetry — an expired budget is loud", () => {
   });
 });
 
-describe("the shared files are not corrupted by the race", () => {
-  test(
-    "the manifest stays parseable JSON after concurrent writers",
-    async () => {
-      writeManifestAtomic(vault, { "sources/a.md": "0".repeat(64) });
-      mkdirSync(join(vault, "sources"), { recursive: true });
-      for (let w = 0; w < WRITERS; w++) {
-        for (let i = 0; i < PER_WRITER; i++) {
-          writeFileSync(join(vault, `sources/w${w}-${i}.md`), `b${w}${i}`, "utf8");
-        }
-      }
-      await runWriters("manifest-writer-2.ts", [
-        `import { updateManifest } from ${JSON.stringify(srcModule("core/brain/ingest/content-manifest.ts"))};`,
-        "for (let i = 0; i < Number(count); i++) {",
-        "  updateManifest(vault, [`sources/${tag}-${i}.md`]);",
-        "}",
-      ]);
-      expect(() => JSON.parse(readFileSync(manifestPath(vault), "utf8"))).not.toThrow();
-    },
-    SPAWN_TIMEOUT_MS,
-  );
-});
+/*
+ * REMOVED: "the shared files are not corrupted by the race" - a fifth test
+ * that re-ran the manifest race and asserted only that the file still
+ * parsed as JSON.
+ *
+ * It could not fail. `atomicWriteFileSync` renames a whole file into
+ * place, so the manifest is parseable with the lock, without it, and with
+ * every writer racing - which is the sibling docblock's own point at the
+ * top of this file ("Atomicity is not exclusivity"). Neutralising the lock
+ * turned the other four tests red and left that one green. It certified a
+ * property the lock does not provide, under a heading claiming the
+ * opposite, and it cost four more processes to do it. The property itself
+ * is not lost: `tests/core/fs-atomic.test.ts` tests the atomic write
+ * directly, and the `updateManifest` race above asserts every entry and an
+ * exact count, neither of which survives an unparseable file.
+ */

@@ -95,6 +95,27 @@ describe("runDoctor — writer locks left on disk", () => {
     }
   });
 
+  /**
+   * The retry docblock tells an operator that a lock a crash left behind
+   * is what `brain doctor` reports. For the two locks the parallel ingest
+   * path takes most often that was untrue: both live in
+   * `.open-second-brain/`, and the probe walked `Brain/` only, so the
+   * doctor reported nothing with the lock plainly on disk.
+   */
+  test("a held lock under .open-second-brain/ is named with its path", () => {
+    writeVaultIdentity(vault);
+    const target = join(vault, ".open-second-brain", "ingest-manifest.json");
+    mkdirSync(join(vault, ".open-second-brain"), { recursive: true });
+    const handle = acquireLockSync(target);
+    try {
+      const entry = (runDoctor(vault).uncertain ?? []).find((u) => u.code === "stale-lock");
+      expect(entry).toBeDefined();
+      expect(entry!.path).toBe(handle.path);
+    } finally {
+      handle.release();
+    }
+  });
+
   test("a vault with no locks reports none", () => {
     writeVaultIdentity(vault);
     expect(codes()).not.toContain("stale-lock");

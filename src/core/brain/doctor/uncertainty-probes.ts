@@ -115,11 +115,18 @@ export const vaultMarkerProbe: DoctorCheck = {
   },
 };
 
-/** Code for a `.lock` file the doctor found under the Brain tree. */
+/** Code for a `.lock` file the doctor found in one of OSB's vault directories. */
 const STALE_LOCK_CODE = "stale-lock";
 
 /**
- * Report every `.lock` file under `Brain/`.
+ * Report every `.lock` file in the directories OSB writes into the vault.
+ *
+ * The scan takes the VAULT and enumerates its own roots
+ * ({@link scanStaleLocks}). This probe used to pass `brainDirs(vault).brain`
+ * and so walked `Brain/` alone, which silently missed the content manifest
+ * and the ingest checkpoint in `.open-second-brain/` - the two locks a
+ * crashed parallel ingest is most likely to leave behind, and the ones the
+ * retry docblock points an operator here to find.
  *
  * Deliberately NOT age-filtered and deliberately not removed. The lock
  * primitive is a single-attempt exclusive create with no breaker, by
@@ -133,9 +140,7 @@ const STALE_LOCK_CODE = "stale-lock";
 export const staleLockProbe: DoctorCheck = {
   failSoft: true,
   run({ vault }, { uncertain }) {
-    const dirs = brainDirs(vault);
-    if (!existsSync(dirs.brain)) return;
-    for (const lockPath of scanStaleLocks(dirs.brain)) {
+    for (const lockPath of scanStaleLocks(vault)) {
       pushUncertain(uncertain, {
         code: STALE_LOCK_CODE,
         path: lockPath,
