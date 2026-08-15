@@ -209,9 +209,9 @@ function extractLines(text: string): ExtractedLine[] {
     const match = LABELLED_LINE_RE.exec(line);
     if (match === null) continue;
     const type = normalizePreCompactLabel(match[1]!);
-    const text = match[2]!.trim();
-    if (type === null || text.length === 0) continue;
-    items.push({ type, text, line: index + 1 });
+    const body = match[2]!.trim();
+    if (type === null || body.length === 0) continue;
+    items.push({ type, text: body, line: index + 1 });
   }
   return items;
 }
