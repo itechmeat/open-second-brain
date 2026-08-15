@@ -535,6 +535,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("force-cost", "boolean"),
           flag("concurrency", "string"),
           flag("verbose", "boolean"),
+          flag("progress", "boolean"),
         ]),
         command("reindex", "Rebuild the search index", [
           flag("vault", "string"),
@@ -544,6 +545,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("force-cost", "boolean"),
           flag("concurrency", "string"),
           flag("verbose", "boolean"),
+          flag("progress", "boolean"),
           flag("cron-template", "boolean"),
           flag("interval", "string"),
           flag("self-heal", "boolean"),
