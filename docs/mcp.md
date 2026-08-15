@@ -48,7 +48,7 @@ schemas are out of scope for that audit - their vocabulary declares
 union-typed fields with no `type` on purpose, and responses are validated
 against them at request time instead.
 
-### Progress notifications (since v1.48.0)
+### Progress notifications
 
 A client asks for liveness on a long call by putting a token on the
 request, `params._meta.progressToken`. Per the specification the token is
