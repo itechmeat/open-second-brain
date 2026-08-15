@@ -40,8 +40,10 @@
  * is no fallback that reports zero.
  */
 
-import { dirname, posix } from "node:path";
+import { statSync } from "node:fs";
+import { dirname, join, posix } from "node:path";
 
+import { ensureInsideVault } from "../../path-safety.ts";
 import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
 import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
@@ -225,7 +227,9 @@ export type ScaffoldStubErrorCode =
   /** The target already resolves to a note, so nothing is missing. */
   | "target_resolves"
   /** The target names more than one existing note. */
-  | "target_ambiguous";
+  | "target_ambiguous"
+  /** A declared source is not an existing Markdown file inside the vault. */
+  | "unknown_source";
 
 export class ScaffoldStubError extends Error {
   readonly code: ScaffoldStubErrorCode;
@@ -328,6 +332,47 @@ function assertMissing(vault: string, target: string): void {
 }
 
 /**
+ * Refuse a declared source that is not an existing Markdown file inside
+ * the vault.
+ *
+ * The stub's whole claim is that nothing in it is invented: its title is
+ * the target the link spelled and its body is the documents that
+ * referenced it. `target` and `path` have always gone through the path
+ * envelope, and `sources` went through nothing at all - so a caller
+ * could hand this function three strings it made up and get a note whose
+ * body cited three documents that do not exist, in a surface whose
+ * documented selling point is that it cites rather than composes.
+ *
+ * Existence inside the vault is what can be checked here and it is
+ * checked. Whether that document really carries the reference is the
+ * INDEX's claim, and `action: "list"` is where a caller gets it from;
+ * re-deriving it here would make a write depend on an index the write
+ * path deliberately does not consult.
+ */
+function assertSourcesExist(vault: string, sources: ReadonlyArray<string>): void {
+  for (const source of sources) {
+    let abs: string;
+    try {
+      abs = ensureInsideVault(join(vault, source), vault);
+    } catch {
+      throw new ScaffoldStubError(
+        "unknown_source",
+        `source "${source}" is not a path inside the vault`,
+      );
+    }
+    if (
+      !source.toLowerCase().endsWith(MARKDOWN_SUFFIX) ||
+      !statSync(abs, { throwIfNoEntry: false })?.isFile()
+    ) {
+      throw new ScaffoldStubError(
+        "unknown_source",
+        `source "${source}" is not an existing Markdown note; a stub cites documents, it does not invent them`,
+      );
+    }
+  }
+}
+
+/**
  * Materialise a stub note for one unresolved wikilink target.
  *
  * Dry run by default. Scaffolding is never a side effect of anything: the
@@ -343,6 +388,7 @@ export function scaffoldStub(vault: string, input: ScaffoldStubInput): ScaffoldS
 
   const path = input.path ?? `${target}${MARKDOWN_SUFFIX}`;
   const sources = Object.freeze([...(input.sources ?? [])].toSorted());
+  assertSourcesExist(vault, sources);
   // Body links are the SOURCES, spelled the way a wikilink spells a note:
   // the vault-relative path without its extension. Nothing else about a
   // target that does not exist is known, so nothing else is written.

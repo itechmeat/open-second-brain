@@ -1,7 +1,8 @@
 /**
  * What `brain_scaffold_stub` says at the MCP boundary.
  *
- * Two defects, both about the boundary rather than the scaffolding.
+ * Three defects, two of them about the boundary rather than the
+ * scaffolding.
  *
  * A. the `detail` it returns named the absolute host path of the search
  *    index - `no search index at ${config.dbPath}`, and the raw sqlite
@@ -20,10 +21,19 @@
  *    calls a silently ignored argument "the worst kind of fallback", and
  *    the sibling tool in the same file refuses `to` on an archive rather
  *    than dropping it.
+ *
+ * E. `docs/mcp.md:102` said the stub's body "links back to the documents
+ *    that referenced it, so nothing in it is invented", and the write
+ *    path never consulted the index: it wrote whatever strings the
+ *    caller put in `sources`, unvalidated and outside the path envelope
+ *    `target` and `path` both go through. So a caller could hand it
+ *    three invented paths and get a note citing three documents that do
+ *    not exist, from the one surface whose selling point is that it
+ *    cites rather than composes.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -75,6 +85,40 @@ describe("host paths in the response (A)", () => {
   test("the whole envelope carries no absolute host path", async () => {
     const res = await call({ action: "list" });
     expect(JSON.stringify(res)).not.toContain(vault);
+  });
+});
+
+describe("the sources a stub cites (E)", () => {
+  test("a source that is not an existing note is refused, not written", async () => {
+    const attempt = call({
+      action: "write",
+      target: "Projects/Missing",
+      sources: ["Notes/DoesNotExist.md"],
+      apply: true,
+    });
+    await expect(attempt).rejects.toMatchObject({ data: { code: "unknown_source" } });
+  });
+
+  test("a source that escapes the vault is refused", async () => {
+    const attempt = call({
+      action: "write",
+      target: "Projects/Missing",
+      sources: ["../../etc/passwd"],
+      apply: true,
+    });
+    await expect(attempt).rejects.toMatchObject({ data: { code: "unknown_source" } });
+  });
+
+  test("an existing note is cited, and the body links back to it", async () => {
+    writeFileSync(join(vault, "Ref.md"), "see [[Projects/Missing]]\n");
+    const res = await call({
+      action: "write",
+      target: "Projects/Missing",
+      sources: ["Ref.md"],
+      apply: true,
+    });
+    expect(res["applied"]).toBe(true);
+    expect(readFileSync(join(vault, "Projects/Missing.md"), "utf8")).toContain("[[Ref]]");
   });
 });
 
