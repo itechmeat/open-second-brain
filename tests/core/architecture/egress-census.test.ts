@@ -22,30 +22,57 @@
  *
  * ## The population, defined structurally
  *
- * A module is IN POPULATION when it declares an operator-named output
- * DESTINATION flag: an entry in a flag-parser spec whose name is one of
- * {@link DESTINATION_FLAGS} and whose type is `string`. That is the one
- * syntactic fact common to every egress path - the operator says where
- * the bytes go - and it needs no judgment about whether a given payload
- * "is vault content". Deciding that is what the registry entry is for.
+ * Two rules, because one name means two different things depending on
+ * what the module does with it.
  *
- * The rule deliberately does NOT require the module to call `fs` itself.
- * `okf-export` delegates its writes to `writeOkfBundle`, and a rule keyed
- * on the write call would have missed the widest directory export in the
- * tree. The flag is declared where the decision is made; the write can be
- * anywhere downstream.
+ * 1. UNAMBIGUOUS: the module declares a string parameter whose name is
+ *    one of {@link DESTINATION_FLAGS} (`out`, `outdir`, `dest`, …). Those
+ *    names name a destination and nothing else, so the declaration alone
+ *    puts the module in population. The rule deliberately does NOT
+ *    require the module to call `fs` itself: `okf-export` delegates its
+ *    writes to `writeOkfBundle`, and a rule keyed on the write call would
+ *    have missed the widest directory export in the tree.
+ *
+ * 2. AMBIGUOUS NAME PLUS A WRITE: `--file`, `--path`, `--to`, `--report`
+ *    are destinations in a writer and inputs in a reader - `brain facts
+ *    --file` reads one. Admitting the name alone would drag fourteen
+ *    read-only modules in and make the registry a list of every verb that
+ *    takes a path; ignoring it left the reviewer's synthetic `--file`
+ *    export invisible. So an ambiguous name counts when the SAME module
+ *    also puts bytes on disk ({@link RAW_WRITE_RE}). This rule is what
+ *    reaches the MCP surface at all: an MCP tool declares its destination
+ *    as an `inputSchema` property, not a flag spec, and the property has
+ *    the same `name: { type: "string" }` shape.
+ *
+ * Rule 2 adds no module today, which is the point - it is a tripwire, not
+ * a backlog.
  *
  * ## What it does not cover, stated rather than implied
  *
- * A destination taken as a positional argument rather than a flag, and a
- * flag spec built dynamically instead of written as an object literal.
- * Both would be new shapes in this tree; {@link INTRUDER_SHAPES} is where
- * a new one gets added the day it appears. It also says nothing about
- * `process.stdout` - every CLI verb writes there, so including it would
- * make the population the whole CLI and the record meaningless. The
- * stdout arm of each declared verb is covered by the same guard call the
- * `--out` arm makes, which is why the guard is asserted per MODULE and
- * not per write.
+ * - A destination taken as a POSITIONAL argument, or a flag spec built
+ *   dynamically instead of written as an object literal.
+ * - A module that declares an ambiguous destination and DELEGATES the
+ *   write to another module: rule 1 covers delegation only for the
+ *   unambiguous names, and rule 2 needs the write in the same file. An
+ *   MCP tool that handed `args.path` to a core helper that writes is the
+ *   live shape of this gap.
+ * - A plain helper with no parameter DECLARATION at all -
+ *   `spillVault(destination, contents)`. Both rules read declared
+ *   parameter specs; a function signature is not one. Nothing keys this
+ *   census on `fs` reachability, because in-vault writers are what
+ *   `write-site-census.test.ts` already measures and merging the two
+ *   would make both unreadable.
+ * - `process.stdout`. Every CLI verb writes there, so including it would
+ *   make the population the whole CLI.
+ * - Per-WRITE coverage. The guard is asserted per declared DESTINATION
+ *   ({@link "every declared destination in a redacting module is matched
+ *   by a guard call"}), which catches a new unguarded verb appended to an
+ *   already-declared module - the hole the reviewer walked through by
+ *   adding one to `src/cli/main.ts` - but two writes behind one
+ *   declaration and one guard call still pass as a pair.
+ *
+ * {@link INTRUDER_SHAPES} is where a new source shape gets added the day
+ * it appears.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -77,17 +104,50 @@ const DESTINATION_FLAGS: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * A flag-parser spec entry: `out: { type: "string" }`, optionally quoted,
- * with or without further properties. The leading class rejects a longer
- * identifier ending in one of the names (`about:`, `stdout:`).
+ * Names that MIGHT be a destination. `--file` is a destination in a
+ * writer and an input in a reader (`brain facts --file` reads one), so
+ * these count only alongside a write in the same module. `path` is here
+ * rather than in {@link DESTINATION_FLAGS} for the same reason, and it is
+ * also how an MCP `inputSchema` property reaches this census at all.
  */
-const DESTINATION_FLAG_RE = new RegExp(
-  String.raw`(^|[^A-Za-z0-9_$"'\-])"?(${DESTINATION_FLAGS.join("|")})"?\s*:\s*\{\s*type\s*:\s*"string"`,
-  "m",
+const AMBIGUOUS_DESTINATION_NAMES: ReadonlyArray<string> = Object.freeze([
+  "file",
+  "path",
+  "to",
+  "report",
+]);
+
+/**
+ * A parameter spec entry: `out: { type: "string" }`, optionally quoted,
+ * with or without further properties - the same shape in a CLI flag spec
+ * and in an MCP `inputSchema` property. The leading class rejects a
+ * longer identifier ending in one of the names (`about:`, `stdout:`).
+ */
+function namedStringParamRe(names: ReadonlyArray<string>, flags: string): RegExp {
+  return new RegExp(
+    String.raw`(^|[^A-Za-z0-9_$"'\-])"?(${names.join("|")})"?\s*:\s*\{\s*type\s*:\s*"string"`,
+    flags,
+  );
+}
+
+const DESTINATION_FLAG_RE = namedStringParamRe(DESTINATION_FLAGS, "m");
+const AMBIGUOUS_DESTINATION_RE = namedStringParamRe(AMBIGUOUS_DESTINATION_NAMES, "m");
+const ANY_DESTINATION_G_RE = namedStringParamRe(
+  [...DESTINATION_FLAGS, ...AMBIGUOUS_DESTINATION_NAMES],
+  "gm",
 );
+
+/**
+ * A call that puts file bytes on disk. Only what a CLI verb or an MCP
+ * tool would reach for directly; the in-vault write surface is
+ * `write-site-census.test.ts`'s subject, not this one's.
+ */
+const RAW_WRITE_RE =
+  /\b(?:writeFileSync|appendFileSync|copyFileSync|cpSync|createWriteStream|atomicWriteFileSync|writeFile)\s*\(|\bBun\.write\s*\(/;
 
 /** The shared egress guard. A module that calls it redacts on the way out. */
 const EGRESS_GUARD_CALL_RE = /\bredactForEgress\s*\(/;
+const EGRESS_GUARD_CALL_G_RE = /\bredactForEgress\s*\(/g;
 
 /** Every `.ts` file under `src/`, as repo-relative POSIX path + text. */
 function readSourceTree(): ReadonlyArray<{ path: string; text: string }> {
@@ -101,9 +161,18 @@ function readSourceTree(): ReadonlyArray<{ path: string; text: string }> {
   return files;
 }
 
-/** True when this module declares an operator-named output destination. */
+/**
+ * True when this module declares an operator-named output destination:
+ * an unambiguous destination name, or an ambiguous one in a module that
+ * also writes bytes. See the two rules in the docblock.
+ */
 function declaresDestination(text: string): boolean {
-  return DESTINATION_FLAG_RE.test(text);
+  if (DESTINATION_FLAG_RE.test(text)) return true;
+  return AMBIGUOUS_DESTINATION_RE.test(text) && RAW_WRITE_RE.test(text);
+}
+
+function countMatches(text: string, re: RegExp): number {
+  return (text.match(re) ?? []).length;
 }
 
 const SOURCE_TREE = readSourceTree();
@@ -143,6 +212,30 @@ describe("egress site census", () => {
         !EGRESS_GUARD_CALL_RE.test(moduleText(entry.module)),
     ).map((entry) => entry.id);
     expect(missing).toEqual([]);
+  });
+
+  test("every declared destination in a redacting module is matched by a guard call", () => {
+    // Presence of ONE guard call is not coverage of the module. A new
+    // verb appended to `src/cli/main.ts` - the CLI dispatcher, the
+    // natural home for a new top-level verb, and a module that already
+    // contained a `redactForEgress` call - passed the presence check
+    // while writing raw bytes to its own `--out`. Counting destinations
+    // against guard calls closes that: a second destination needs a
+    // second guard call.
+    const uncovered = ENTRIES.filter((entry) => entry.redaction === EGRESS_REDACTION.sharedRedactor)
+      .map((entry) => {
+        const text = moduleText(entry.module);
+        return {
+          module: entry.module,
+          destinations: countMatches(text, ANY_DESTINATION_G_RE),
+          guards: countMatches(text, EGRESS_GUARD_CALL_G_RE),
+        };
+      })
+      .filter((row) => row.guards < row.destinations)
+      .map(
+        (row) => `${row.module}: ${row.destinations} destination(s), ${row.guards} guard call(s)`,
+      );
+    expect(uncovered).toEqual([]);
   });
 
   test("no entry understates what its module does", () => {
@@ -228,6 +321,20 @@ describe("the census cannot pass by finding nothing", () => {
     ["a quoted flag name", '  "out-dir": { type: "string" },\n'],
     ["a longer destination name", '  destination: { type: "string" },\n'],
     ["extra properties after the type", '  output: { type: "string", required: true },\n'],
+    [
+      "a CLI verb whose destination flag is --file",
+      'const { flags } = parse(argv, { file: { type: "string" } });\n' +
+        '  writeFileSync(flags["file"] as string, body, "utf8");\n',
+    ],
+    [
+      "an MCP tool taking its destination in args",
+      'inputSchema: { properties: { path: { type: "string", description: "where to write" } } }\n' +
+        "  writeFileSync(args.path as string, body);\n",
+    ],
+    [
+      "a verb that delegates the write but names --outdir",
+      '  outdir: { type: "string" },\n  writeBundle(outdir, plan);\n',
+    ],
   ]);
 
   for (const [shape, source] of INTRUDER_SHAPES) {
@@ -239,6 +346,26 @@ describe("the census cannot pass by finding nothing", () => {
   test("an identifier that merely ends in a destination name is not one", () => {
     expect(declaresDestination('  stdout: { type: "string" },\n')).toBe(false);
     expect(declaresDestination('  about: { type: "string" },\n')).toBe(false);
+  });
+
+  test("an ambiguous name without a write is a reader, not an egress path", () => {
+    // `brain facts --file` reads a claims file. Admitting the name alone
+    // would put fourteen read-only modules in population and make the
+    // registry a list of every verb that takes a path.
+    expect(
+      declaresDestination('  file: { type: "string" },\n  readFileSync(flags["file"]);\n'),
+    ).toBe(false);
+    expect(declaresDestination('  path: { type: "string" },\n')).toBe(false);
+  });
+
+  test("the ambiguous-name rule adds nothing today, so it is a tripwire", () => {
+    // If it ever starts adding modules, that is a real new egress path
+    // and the failure above will name it. Pinned so the rule cannot be
+    // widened into a backlog by accident.
+    const byAmbiguousOnly = SOURCE_TREE.filter(
+      (f) => !DESTINATION_FLAG_RE.test(f.text) && declaresDestination(f.text),
+    ).map((f) => f.path);
+    expect(byAmbiguousOnly).toEqual([]);
   });
 
   test("a non-string destination flag is not a path", () => {
