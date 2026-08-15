@@ -47,6 +47,9 @@ Three findings were resolved the opposite way to the obvious one, and in each ca
 - **`brain_token_impact` no longer reports `method: "exact"`.** It counts nothing - it subtracts integers a caller supplied - so the vocabulary now names provenance (`tokenizer` / `heuristic`) rather than an accuracy nobody verified.
 - **The bench report is schema v2**: `context_cost.est_tokens` changed meaning, not only name.
 - **`o2b brain doctor` reports the codegraph check as deliberately not consulted** when it is switched off, where it previously omitted the row. Omission made a setting that had just taken effect indistinguishable from one that had done nothing.
+- **`listSnapshots` returns a listing rather than an array.** A per-entry read failure was dropped with a bare `continue`, so a recovery-point history whose archives could not be stat'ed read as a history that never existed. The skipped entries are now returned beside the snapshots, `o2b brain snapshot log --json` gains `skipped`, and `pruneSnapshots`'s `retained` no longer claims "still on disk" about entries it could not see.
+- **`o2b search vector-backfill` now runs under a deadline.** It declared `safeguard`, `signal` and `onProgress` and had a producer for none of them; wiring two of the three would have left the third declared and unreachable. The budget is the `reindex` key off the same ladder `o2b search index` reads, because this pass is that run's embedding phase alone.
+- **`EMBEDDING_SUNSET_UNDETERMINED_REASON` loses `declaration_malformed`.** Nothing could produce it: the config parser validates the declared instant with the same predicate and refuses the vault before any check runs, so the member described a state that could not exist.
 
 ### Fixed
 
