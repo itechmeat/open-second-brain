@@ -4,13 +4,22 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
-import { scanProject } from "../../../src/core/brain/architect/scan.ts";
+import { ARCHITECT_STAGE, scanProject } from "../../../src/core/brain/architect/scan.ts";
 import { OPERATION, PROGRESS_KIND, progressCounter } from "../../../src/core/brain/progress.ts";
+import { RegionError } from "../../../src/core/brain/regions.ts";
 
 let tmp: string;
 let project: string;
@@ -214,6 +223,51 @@ test("the language tie-break does not depend on the host collation", () => {
 
   expect(reversed).toBe(plain);
   expect(plain).toContain(".aaa (1)");
+});
+
+test("a corrupted note aborts the run before any note is written", () => {
+  const first = generateArchDocs(vault, project);
+  const cliNote = first.modulePaths.find((p) => p.endsWith("cli.md"))!;
+  // Unbalanced sentinels: `mergeRegions` fails closed on this note.
+  writeFileSync(cliNote, readFileSync(cliNote, "utf8").replace("<!-- o2b:end facts -->", ""));
+  const overviewBefore = readFileSync(first.overviewPath, "utf8");
+  seed("src/core/added.ts"); // the overview WOULD change
+
+  expect(() => generateArchDocs(vault, project)).toThrow(RegionError);
+  // The overview is written first, so a run that wrote as it went would
+  // have left it updated next to a module note it could not repair.
+  expect(readFileSync(first.overviewPath, "utf8")).toBe(overviewBefore);
+});
+
+test("module_paths follows the scan's module order, not the write order", () => {
+  const res = generateArchDocs(vault, project);
+  const facts = scanProject(project);
+  expect(res.modulePaths).toEqual(
+    facts.modules.map((m) => join(res.dir, "modules", `${m.name}.md`)),
+  );
+});
+
+test("the notes are written inside one lock, which is released afterwards", () => {
+  const first = generateArchDocs(vault, project);
+  const lockPath = `${first.dir}.lock`;
+  seed("src/core/added.ts"); // force real writes on the second run
+
+  // The sink runs inside the run, so it can see what the run is holding.
+  const heldDuringWrites: boolean[] = [];
+  const res = generateArchDocs(vault, project, {
+    onProgress: (event) => {
+      // `advanced` only: the stage is announced BEFORE the lock is
+      // waited for, so a watcher sees "rendering" during the wait too.
+      if (event.stage === ARCHITECT_STAGE.render && event.kind === PROGRESS_KIND.advanced) {
+        heldDuringWrites.push(existsSync(lockPath));
+      }
+    },
+  });
+
+  expect(res.updated).toBeGreaterThan(0);
+  expect(heldDuringWrites.length).toBeGreaterThan(0);
+  expect(heldDuringWrites.every(Boolean)).toBe(true);
+  expect(existsSync(lockPath)).toBe(false);
 });
 
 test("unchanged project regenerates byte-identically", () => {
