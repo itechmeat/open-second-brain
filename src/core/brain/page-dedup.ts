@@ -306,7 +306,24 @@ function rewriteOne(raw: string, retarget: WikilinkRetarget): string {
   return raw.replaceAll(`[[${retarget.from}]]`, `[[${to}]]`).replace(pattern, `[[${to}`);
 }
 
-/** True when `segment` carries at least one `[[<from>]]`-shaped reference. */
+/**
+ * True when `segment` carries at least one `[[<from>]]`-shaped reference.
+ *
+ * CASE-SENSITIVE, and deliberately so. Obsidian resolves a wikilink
+ * case-insensitively, so `[[projects/old]]` is a live reference this pass
+ * leaves dangling while reporting `filesRewritten: 0` - a real gap, and
+ * one that is NOT this module's to close alone. Every other resolver in
+ * this project is case-sensitive on the same question:
+ * `store/links.ts`'s ladder compares `d.basename = l.target_path` with
+ * SQLite's default binary collation, and
+ * `notes/note-title-resolver.ts:120` compares titles with `===`. Making
+ * only the rewriter case-insensitive would give this pass a different
+ * opinion of "a live reference" than the index and the title resolver
+ * have, so a rename would repoint spellings the rest of the project still
+ * reads as naming something else. Case-insensitive resolution is a
+ * project-wide decision with a migration behind it, and taking it here
+ * would be taking it in the one place least able to hold it.
+ */
 function mentionsIn(segment: string, from: string): boolean {
   return new RegExp(`\\[\\[${escapeForRegExp(from)}(?=[#|\\]])`).test(segment);
 }
