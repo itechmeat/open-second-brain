@@ -337,6 +337,55 @@ export function noUnsafeShrink(minRatio: number): WritePreferenceExpectation {
 }
 
 /**
+ * Rewind gate for a replayed record (bank-bundle restore).
+ *
+ * {@link expectRevision} asks "is the file still at the revision I
+ * read?", which is the right question for a read-modify-write. A restore
+ * asks a different one: it carries a record captured at `incoming` and
+ * must decide whether replaying it moves the vault forward or backward.
+ * The answer cannot be "whichever write lands last" - that resolves a
+ * genuine divergence by import order.
+ *
+ * Refuses two cases, both as `StaleUpdate`:
+ *
+ *   - the on-disk revision is AHEAD of `incoming` - the vault holds an
+ *     edit the record predates, and writing would discard it;
+ *   - the revisions are EQUAL but the content fingerprints differ - two
+ *     lineages numbered the same, so no ordering exists to trust.
+ *
+ * A first write (no existing file) and an equal-revision replay of
+ * identical content both pass: the first has nothing to rewind, the
+ * second is a no-op the writer already collapses.
+ */
+export function noRevisionRewind(incoming: number): WritePreferenceExpectation {
+  if (!Number.isInteger(incoming) || incoming < 0) {
+    throw new RangeError(
+      `noRevisionRewind(incoming) expects a non-negative integer; got ${String(incoming)}`,
+    );
+  }
+  return (ctx) => {
+    const existing = ctx.existing;
+    if (!existing) return;
+    const current = existing.revision ?? 0;
+    if (current > incoming) {
+      throw new BrainCollisionError(
+        BRAIN_COLLISION_KIND.staleUpdate,
+        `revision rewind: incoming revision ${incoming} is behind on-disk ${current} (path=${ctx.path})`,
+      );
+    }
+    if (current < incoming) return;
+    const currentHash = computeContentHash(existing.principle, existing.scope);
+    const proposedHash = computeContentHash(ctx.input.principle, ctx.input.scope);
+    if (currentHash !== proposedHash) {
+      throw new BrainCollisionError(
+        BRAIN_COLLISION_KIND.staleUpdate,
+        `divergent content at revision ${incoming}: on-disk ${currentHash} vs incoming ${proposedHash} (path=${ctx.path})`,
+      );
+    }
+  };
+}
+
+/**
  * DuplicateWrite gate. Triggers when the proposed content's
  * {@link computeContentHash} matches the existing `content_hash`
  * AND the existing `last_evidence_at` is within `windowMs` of `now()`.

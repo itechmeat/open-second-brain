@@ -63,7 +63,7 @@ export interface BrainSdk {
   exportBank(): BankBundle;
   importBank(
     bundle: Parameters<typeof importBankBundle>[1],
-    opts?: { mode?: GraphImportMode },
+    opts?: { mode?: GraphImportMode; agent?: string },
   ): BankImportResult;
 
   // Page link-graph export/import.

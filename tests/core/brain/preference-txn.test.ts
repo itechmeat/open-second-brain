@@ -15,6 +15,7 @@ import { parsePreference } from "../../../src/core/brain/preference.ts";
 import {
   BrainCollisionError,
   BRAIN_COLLISION_KIND,
+  noRevisionRewind,
   writePreferenceTxn,
   type WritePreferenceExpectation,
 } from "../../../src/core/brain/preference-txn.ts";
@@ -200,5 +201,78 @@ describe("writePreferenceTxn", () => {
     expect(text).toContain("principle: exact bytes please");
     expect(text).toContain("kind: brain-preference");
     expect(text).toContain("_status: unconfirmed");
+  });
+});
+
+/**
+ * `noRevisionRewind` (bank-bundle restore, unit E2). A restore replays a
+ * record captured at some revision into a vault that has kept moving.
+ * Without a gate the replay is decided by whichever write lands last,
+ * which is the one thing a restore must never do to a rule the operator
+ * has since edited.
+ */
+describe("noRevisionRewind", () => {
+  test("allows a first write, whatever revision the incoming record carries", () => {
+    expect(() =>
+      writePreferenceTxn(vault, baseInput({ slug: "fresh-rule", revision: 5 }), [
+        noRevisionRewind(5),
+      ]),
+    ).not.toThrow();
+    expect(parsePreference(preferencePath(vault, "fresh-rule")).revision).toBe(5);
+  });
+
+  test("allows an incoming record that is ahead of the on-disk one", () => {
+    writePreferenceTxn(vault, baseInput({ slug: "ahead-rule", revision: 2 }), []);
+    writePreferenceTxn(
+      vault,
+      baseInput({ slug: "ahead-rule", revision: 8, principle: "the newer text of the rule" }),
+      [noRevisionRewind(8)],
+      { overwrite: true },
+    );
+    expect(parsePreference(preferencePath(vault, "ahead-rule")).revision).toBe(8);
+  });
+
+  test("refuses a rewind with the StaleUpdate discriminant", () => {
+    writePreferenceTxn(vault, baseInput({ slug: "rewind-rule", revision: 9 }), []);
+    let caught: unknown;
+    try {
+      writePreferenceTxn(
+        vault,
+        baseInput({ slug: "rewind-rule", revision: 4, principle: "an older text of the rule" }),
+        [noRevisionRewind(4)],
+        { overwrite: true },
+      );
+    } catch (exc) {
+      caught = exc;
+    }
+    expect(caught).toBeInstanceOf(BrainCollisionError);
+    expect((caught as BrainCollisionError).kind).toBe(BRAIN_COLLISION_KIND.staleUpdate);
+    expect(parsePreference(preferencePath(vault, "rewind-rule")).principle).toBe(
+      baseInput().principle as string,
+    );
+  });
+
+  test("refuses divergent content at an equal revision", () => {
+    writePreferenceTxn(vault, baseInput({ slug: "diverged-rule", revision: 3 }), []);
+    expect(() =>
+      writePreferenceTxn(
+        vault,
+        baseInput({ slug: "diverged-rule", revision: 3, principle: "a different text entirely" }),
+        [noRevisionRewind(3)],
+        { overwrite: true },
+      ),
+    ).toThrow(BrainCollisionError);
+  });
+
+  test("accepts an identical record at an equal revision (a replayed restore)", () => {
+    writePreferenceTxn(vault, baseInput({ slug: "replay-rule", revision: 3 }), []);
+    expect(() =>
+      writePreferenceTxn(
+        vault,
+        baseInput({ slug: "replay-rule", revision: 3 }),
+        [noRevisionRewind(3)],
+        { overwrite: true },
+      ),
+    ).not.toThrow();
   });
 });

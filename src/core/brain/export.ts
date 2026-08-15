@@ -7,6 +7,13 @@
  * llms-txt follows the [llmstxt.org](https://llmstxt.org) shape;
  * empty status sections are omitted so a single-status vault
  * renders one H2 rather than three.
+ *
+ * {@link BRAIN_EXPORT_SCHEMA_VERSION} versions the ENVELOPE, not the
+ * row. A row gains fields additively - readers tolerate their absence
+ * exactly as the frontmatter parsers do - so a consumer written against
+ * an earlier export keeps working and no version dispatch is needed on
+ * either side. A field that ever changes meaning or disappears is what
+ * would force the version.
  */
 
 import { existsSync, readdirSync } from "node:fs";
@@ -37,6 +44,22 @@ export interface ExportedPreferenceRow {
   readonly last_evidence_at: string | null;
   readonly created_at: string;
   readonly confirmed_at: string | null;
+  /**
+   * End of the trial window. Every preference write requires it and no
+   * other exported field can stand in for it, so an export without it
+   * cannot be restored: the restore would have to invent a window, and
+   * an invented trial window silently re-dates a rule's promotion
+   * deadline. Carried so `importBankBundle` can hand it back to
+   * `writePreferenceTxn` verbatim.
+   */
+  readonly unconfirmed_until: string;
+  /**
+   * Monotonic write counter (`_revision`). The only ordering that lets a
+   * restore tell "this bundle is ahead of the vault" from "this bundle
+   * would rewind an edit the operator has since made". Absent on disk
+   * reads as `0`, the same absent-as-zero convention the parser uses.
+   */
+  readonly revision: number;
   readonly aliases: ReadonlyArray<string> | null;
   readonly tags: ReadonlyArray<string>;
   readonly evidenced_by: ReadonlyArray<string>;
@@ -116,6 +139,11 @@ function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {
     last_evidence_at: p.last_evidence_at,
     created_at: p.created_at,
     confirmed_at: p.confirmed_at,
+    unconfirmed_until: p.unconfirmed_until,
+    // Absent-as-zero, the convention `BrainPreference.revision`'s reader
+    // already uses: a file written before `_revision` existed is at 0,
+    // which is behind every later write and ahead of nothing.
+    revision: p.revision ?? 0,
     aliases: p.aliases ? Object.freeze([...p.aliases]) : null,
     tags: Object.freeze([...p.tags]),
     evidenced_by: Object.freeze([...p.evidenced_by]),

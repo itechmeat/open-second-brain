@@ -2,8 +2,12 @@
  * Whole-vault (bank) export/import (Brain Portability & Interop suite,
  * Unit A). `exportBankBundle` composes the existing exporters into one
  * schema-versioned envelope; `importBankBundle` reconstructs the page
- * graph (delegating to importVaultGraph) and reports every other carried
- * section honestly as exported-not-restored.
+ * graph (delegating to importVaultGraph) and the preferences (delegating
+ * to the audited preference transaction), and reports every other
+ * carried section honestly as exported-not-restored.
+ *
+ * The per-field preference round-trip lives in `bundle-roundtrip.test.ts`;
+ * this file covers the envelope, the schema guard, and the graph half.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -73,14 +77,15 @@ describe("importBankBundle", () => {
     }
   });
 
-  test("reports preferences, pages, and sources as carried-not-restored", () => {
+  test("reports pages and sources as carried-not-restored, preferences as restored", () => {
     note("Notes/Alpha.md", "---\ntitle: Alpha\nkind: note\n---\nx\n");
     const bundle = exportBankBundle(vault);
     const dest = mkdtempSync(join(tmpdir(), "o2b-bank-dest2-"));
     try {
       const result = importBankBundle(dest, bundle, { mode: "skip" });
       expect(result.pagesCarried).toBe(bundle.pages.length);
-      expect(result.preferencesCarried).toBe(bundle.preferences.length);
+      expect(result.preferences.carried).toBe(bundle.preferences.length);
+      expect(result.preferences.fieldsNotRestored.length).toBeGreaterThan(0);
       expect(result.sourcesCarried).toBe(true);
     } finally {
       rmSync(dest, { recursive: true, force: true });

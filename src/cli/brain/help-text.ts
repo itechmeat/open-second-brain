@@ -98,7 +98,7 @@ Brain verbs (observing memory):
   graph-export        Serialise the vault knowledge graph to graph.json
   graph-import        Reconstruct vault pages from graph.json (--mode skip|overwrite|merge)
   bank-export         Serialise a whole-vault bank bundle (prefs + graph + pages + sources)
-  bank-import         Reconstruct the page graph from a bank bundle (--mode skip|overwrite|merge)
+  bank-import         Reconstruct the page graph + preferences from a bank bundle (--mode skip|overwrite|merge)
   backlinks           List inbound references to a Brain artifact id
   semantics-backfill  Preview deterministic typed preference-edge backfill proposals
   authored-at-backfill  Backfill authored_at on session signals (dry-run default; --apply to write)
@@ -563,10 +563,15 @@ export const VERB_HELP: Record<string, string> = {
     "Serialise a whole-vault bank bundle (preferences + page graph + page\n" +
     "contracts + sources dashboard) to a schema-versioned JSON. Read-only.\n",
   "bank-import":
-    "usage: o2b brain bank-import <file> [--mode skip|overwrite|merge] [--vault <path>] [--json]\n" +
-    "Reconstruct the page graph from a bank bundle. Preferences, page\n" +
-    "contracts, and the sources dashboard are reported as carried-not-restored;\n" +
-    "an unsupported bundle schema fails loudly.\n",
+    "usage: o2b brain bank-import <file> [--mode skip|overwrite|merge] [--agent <name>]\n" +
+    "                             [--vault <path>] [--json]\n" +
+    "Reconstruct the page graph and the preferences from a bank bundle.\n" +
+    "--mode governs the page graph; preferences restore through the audited\n" +
+    "preference transaction and are governed by their revision, so a bundle\n" +
+    "behind the vault is refused per-row and named. Exits non-zero when any\n" +
+    "carried preference could not be restored. Page contracts and the sources\n" +
+    "dashboard are reported as carried-not-restored; an unsupported bundle\n" +
+    "schema fails loudly.\n",
   "okf-export":
     "usage: o2b brain okf-export --out <dir> [--vault <path>] [--force]\n" +
     "Write a portable Open Knowledge Format bundle: concepts/, queries/,\n" +

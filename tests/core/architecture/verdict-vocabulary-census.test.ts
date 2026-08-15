@@ -133,6 +133,11 @@ import {
   PROVIDER_PROBE_STATES,
 } from "../../../src/core/search/provider-probe.ts";
 import {
+  isPreferenceRestoreFailure,
+  PREFERENCE_RESTORE_FAILURE,
+  PREFERENCE_RESTORE_FAILURES,
+} from "../../../src/core/brain/portability/preference-restore.ts";
+import {
   isSchemaCompletenessRule,
   isSchemaNodeKind,
   SCHEMA_COMPLETENESS_RULE,
@@ -460,6 +465,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: PROVIDER_PROBE,
     members: PROVIDER_PROBE_STATES,
     guard: isProviderProbeState,
+  },
+  {
+    // E2. Why one preference in a bank bundle did not restore. The values
+    // ride out of TypeScript in the `preferences.failed[]` array of the
+    // bank-import result and its `--json` rendering, where an operator
+    // reads the reason to decide whether to re-export, resolve a
+    // divergence by hand, or upgrade an old bundle. A value the guard
+    // rejects would read back off that JSON as an unknown refusal.
+    name: "PREFERENCE_RESTORE_FAILURE",
+    values: PREFERENCE_RESTORE_FAILURE,
+    members: PREFERENCE_RESTORE_FAILURES,
+    guard: isPreferenceRestoreFailure,
   },
 ]);
 

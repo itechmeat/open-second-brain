@@ -338,7 +338,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "bank-export",
           "Serialise a whole-vault bank bundle: preferences, graph, pages, sources",
         ),
-        command("bank-import", "Reconstruct the page graph from a bank bundle"),
+        command("bank-import", "Reconstruct the page graph and preferences from a bank bundle"),
         command(
           "authored-at-backfill",
           "Backfill authored_at on session-imported signals (dry-run by default)",
