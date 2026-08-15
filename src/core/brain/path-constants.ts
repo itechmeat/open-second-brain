@@ -143,8 +143,12 @@ export const DERIVED_STORE_FILE = "brain.sqlite";
  * Named here (C1) because it stopped being only the hooks' business: it
  * is the readable install fact for the `hook` recall channel - the doctor
  * check that asks whether an enabled hook ever ran has nothing else to
- * look at. Six hook files spelled the root as a raw three-argument join
- * beside a `DERIVED_STORE_DIR` that already existed.
+ * look at. Six hook files used to spell the root as a raw three-argument
+ * join beside a `DERIVED_STORE_DIR` that already existed; all six now go
+ * through {@link hookAuditDir}, and `tests/hooks/audit-root.test.ts`
+ * reads the hook sources to keep it that way. Five independent spellings
+ * of a path a check depends on is a rename that succeeds once and looks
+ * done.
  */
 export const HOOK_AUDIT_DIR = "hook-audit";
 

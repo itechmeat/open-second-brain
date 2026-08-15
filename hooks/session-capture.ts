@@ -5,10 +5,9 @@
  * intentionally silent so a hook problem never blocks the agent.
  */
 
-import { join } from "node:path";
-
 import { resolveAgentName, resolveVault } from "../src/core/config.ts";
 import { captureSessionLifecycleEvent } from "../src/core/brain/session-lifecycle.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { normalizeHookPayload, readHookInput } from "./lib/stdin.ts";
@@ -23,7 +22,7 @@ async function main(): Promise<void> {
     onExpire: () => {
       if (auditVault === null) return;
       try {
-        appendAuditRecord(join(auditVault, ".open-second-brain", "hook-audit"), {
+        appendAuditRecord(hookAuditDir(auditVault), {
           timestamp: new Date().toISOString(),
           actor: "session-capture",
           action: "hook_ceiling_exceeded",

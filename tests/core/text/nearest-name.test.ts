@@ -15,7 +15,33 @@ import {
   editDistance,
   nearestName,
   NEAREST_NAME_MAX_DISTANCE_RATIO,
+  NEAREST_NAME_MAX_TARGET_LENGTH,
 } from "../../../src/core/text/nearest-name.ts";
+
+/**
+ * `nearestName` with neither length bound: every candidate is measured,
+ * however long the target is. The bounds under test must agree with this
+ * on every name a caller could plausibly mistype, which is what makes
+ * them an early-out rather than a change of behaviour.
+ */
+function unboundedNearestName(target: string, candidates: Iterable<string>): string | undefined {
+  let best: string | undefined;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const candidate of candidates) {
+    const distance = editDistance(target, candidate);
+    if (distance > Math.max(target.length, candidate.length) * NEAREST_NAME_MAX_DISTANCE_RATIO) {
+      continue;
+    }
+    if (
+      distance < bestDistance ||
+      (distance === bestDistance && best !== undefined && candidate < best)
+    ) {
+      best = candidate;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
 
 describe("editDistance", () => {
   test("an identical pair is zero and an empty pair is zero", () => {
@@ -108,5 +134,77 @@ describe("nearestName", () => {
 
   test("duplicate candidates do not change the answer", () => {
     expect(nearestName("quiery", ["query", "query", "limit"])).toBe("query");
+  });
+});
+
+describe("the length bounds", () => {
+  /** A closed tool schema's worth of declared names, at realistic lengths. */
+  const SCHEMA_NAMES: ReadonlyArray<string> = Object.freeze([
+    "query",
+    "limit",
+    "semantic",
+    "session_id",
+    "turn_id",
+    "path_prefix",
+    "telemetry_host",
+    "modeled_tokens_per_inference",
+  ]);
+
+  test("a pathological argument name is refused promptly and suggests nothing", () => {
+    // The request-path reproduction: one `tools/call` carrying a single
+    // 1 MB argument key. Unbounded, the edit-distance walk is
+    // O(len(name) x len(candidate)) against every declared property and
+    // blocks the event loop for over ten seconds - inside the HTTP
+    // transport's 1 MB body cap, and with no cap at all on stdio.
+    const pathological = "a".repeat(1_000_000);
+    const started = performance.now();
+    const answer = nearestName(pathological, SCHEMA_NAMES);
+    const elapsedMs = performance.now() - started;
+    expect(answer).toBeUndefined();
+    expect(elapsedMs).toBeLessThan(100);
+  });
+
+  test("the bounds change no answer for names a caller could plausibly mistype", () => {
+    // The early-out is exact, not an approximation: edit distance is at
+    // least the difference in length, so a candidate the bound skips
+    // could never have come within the threshold anyway.
+    const targets: ReadonlyArray<string> = [
+      ...SCHEMA_NAMES,
+      "quiery",
+      "qeury",
+      "querx",
+      "sesion_id",
+      "turnid",
+      "path-prefix",
+      "pathprefix",
+      "telemetry_hosts",
+      "modeled_tokens_per_inferenc",
+      "modeled_tokens_per_inferences",
+      "s",
+      "",
+      "wombat",
+      "zzzzzzzz",
+      "session",
+      "session_identifier",
+      "a".repeat(NEAREST_NAME_MAX_TARGET_LENGTH),
+    ];
+    for (const target of targets) {
+      expect(nearestName(target, SCHEMA_NAMES), target).toBe(
+        unboundedNearestName(target, SCHEMA_NAMES),
+      );
+    }
+  });
+
+  test("the target cap sits far above the longest name any schema declares", () => {
+    // 28 characters is the longest declared property name on this server,
+    // and at the ratio above a candidate must be at least two thirds of
+    // the target's length to be reachable at all.
+    const longestDeclared = SCHEMA_NAMES.map((name) => name.length).reduce((a, b) =>
+      Math.max(a, b),
+    );
+    expect(longestDeclared).toBeLessThan(NEAREST_NAME_MAX_TARGET_LENGTH);
+    expect(NEAREST_NAME_MAX_TARGET_LENGTH * (1 - NEAREST_NAME_MAX_DISTANCE_RATIO)).toBeGreaterThan(
+      longestDeclared,
+    );
   });
 });

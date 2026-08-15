@@ -14,6 +14,7 @@
  * |--------------|------------|------------------------------------------|
  * | expected     | 0          | warning, `recall-channel-silent`         |
  * | expected     | >0         | nothing                                  |
+ * | expected     | unreadable | uncertain, `recall-channel-unmeasured`   |
  * | not expected | any        | nothing                                  |
  * | unknown      | any        | uncertain, `recall-channel-unmeasured`   |
  *
@@ -22,6 +23,15 @@
  * named for, so an install side that could not be READ goes to the
  * uncertainty stream naming why, never to nothing and never to a warning
  * about a channel whose configuration the check never saw.
+ *
+ * BOTH sides get that treatment, which the first version got right for
+ * the install side only. The delivery rollup ran unguarded ahead of the
+ * loop, and this check is registered `failSoft`, so a continuity store
+ * the pass could not open threw away every finding - the check reported
+ * nothing about any channel, which is precisely the undiagnosable
+ * silence above. A delivery count that could not be read is now an
+ * uncertain entry naming why, and it never suppresses the install-side
+ * reporting.
  *
  * {@link installState} is a `switch` over {@link RecallChannel} with NO
  * default arm. That is where the closed vocabulary becomes a COMPILE-TIME
@@ -151,15 +161,51 @@ function describe(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** Deliveries per transport, or why the count could not be read. */
+type DeliveryCounts =
+  /** The window was read; a channel absent from the map delivered nothing. */
+  | { readonly kind: "counted"; readonly byChannel: Partial<Record<RecallChannel, number>> }
+  /** The continuity store could not be opened; no count either way. */
+  | { readonly kind: "unreadable"; readonly reason: string };
+
+/**
+ * ONE rollup for every channel: the by-channel summary exists so this
+ * check costs one pass over the window rather than one per transport.
+ *
+ * Guarded rather than left to the `failSoft` registration, because
+ * failing soft here means the whole check disappears - install side
+ * included - and a check that reports nothing is indistinguishable from
+ * a vault with nothing wrong.
+ */
+function deliveryCounts(vault: string, since: string): DeliveryCounts {
+  try {
+    return { kind: "counted", byChannel: summarizeRecallTelemetry(vault, { since }).by_channel };
+  } catch (err) {
+    return { kind: "unreadable", reason: describe(err) };
+  }
+}
+
+/**
+ * What the delivery side adds to an entry whose INSTALL side is already
+ * unknown. Stated rather than assumed: the original sentence claimed the
+ * delivery count was readable, which was true only because nothing had
+ * checked.
+ */
+function deliverySideClause(delivered: DeliveryCounts): string {
+  return delivered.kind === "counted"
+    ? "Its delivery count is readable, but with the install side unknown a silent channel " +
+        "cannot be told from one nothing asked to run"
+    : `Its delivery count could not be read either (${delivered.reason}), so neither half of ` +
+        "the cross is available";
+}
+
 export const recallChannelCoverageCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
     const since = new Date(
       ctx.now.getTime() - RECALL_CHANNEL_COVERAGE_WINDOW_DAYS * MS_PER_DAY,
     ).toISOString();
-    // ONE rollup for every channel: the by-channel summary exists so this
-    // check costs one pass over the window rather than one per transport.
-    const delivered = summarizeRecallTelemetry(ctx.vault, { since }).by_channel;
+    const delivered = deliveryCounts(ctx.vault, since);
 
     for (const channel of RECALL_CHANNELS) {
       const state = installState(channel, ctx);
@@ -168,14 +214,25 @@ export const recallChannelCoverageCheck: DoctorCheck = {
           code: RECALL_CHANNEL_UNMEASURED_CODE,
           path: ctx.vault,
           message:
-            `the ${channel} recall channel could not be measured: ${state.reason}. Its delivery ` +
-            "count is readable, but with the install side unknown a silent channel cannot be " +
-            "told from one nothing asked to run",
+            `the ${channel} recall channel could not be measured: ${state.reason}. ` +
+            deliverySideClause(delivered),
         });
         continue;
       }
       if (state.kind === "not_expected") continue;
-      if ((delivered[channel] ?? 0) > 0) continue;
+      if (delivered.kind === "unreadable") {
+        pushUncertain(out.uncertain, {
+          code: RECALL_CHANNEL_UNMEASURED_CODE,
+          path: ctx.vault,
+          message:
+            `the ${channel} recall channel could not be measured: its delivery count could not ` +
+            `be read (${delivered.reason}). Its install side says it is expected to deliver ` +
+            `(${state.evidence}), so an installed and quiet channel cannot be told from a ` +
+            "working one whose records this pass could not open",
+        });
+        continue;
+      }
+      if ((delivered.byChannel[channel] ?? 0) > 0) continue;
       out.issues.push({
         severity: "warning",
         code: RECALL_CHANNEL_SILENT_CODE,

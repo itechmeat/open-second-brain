@@ -49,6 +49,13 @@ const DUPLICATE_KEY_SEPARATOR = ":";
 const NO_TRAVERSAL_HOPS = 0;
 const MMR_OFF_LAMBDA = 1;
 
+/**
+ * One row past the cap: enough to SEE truncation, never enough to change
+ * the answer. See {@link assembleRankedResults} for why the cap is
+ * measured rather than inferred.
+ */
+const CAP_PROBE_ROW = 1;
+
 export interface AssemblyInput {
   readonly store: Store;
   readonly config: ResolvedSearchConfig;
@@ -233,8 +240,21 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // post-visibility list, and whether the cap was actually hit (so the
   // caller can tell "the pool ran out" from "the cap truncated more").
   const assemble = (rankCap: number): Assembly => {
-    let ranked = rankCandidates(input, rankCap);
-    const capHit = ranked.length >= rankCap;
+    // Rank ONE row past the cap, so "the cap bit" is measured rather than
+    // inferred. A pool whose length merely EQUALS the cap is the exhausted
+    // corpus and the truncated one at once, and reporting the first as
+    // `rank-cap-truncated-pool` told the caller matches existed below a cut
+    // that never happened - the pool ended there. `rankResults` sorts the
+    // whole fused candidate set and slices last, so the retained prefix is
+    // byte-identical to ranking at `rankCap` and the probe costs one result
+    // object. The rejected alternative was counting the fused candidates
+    // here from the lane hits: that is a second copy of the ranker's own
+    // admission rules (a hit whose chunk failed to hydrate is dropped, the
+    // relational arm adds candidates no lane matched), and two copies of
+    // one rule are what drift.
+    const probed = rankCandidates(input, rankCap + CAP_PROBE_ROW);
+    const capHit = probed.length > rankCap;
+    let ranked = capHit ? probed.slice(0, rankCap) : probed;
     // Retrieval-time staleness barrier (t_b0c9d0a3): drop any exact-state
     // lane artifact a stale/older index may still hold, before any later
     // phase can surface it. No-op (same reference) when the pool has none,

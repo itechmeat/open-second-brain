@@ -40,6 +40,30 @@
 export const NEAREST_NAME_MAX_DISTANCE_RATIO = 1 / 3;
 
 /**
+ * Longest target name a suggestion is computed for at all. Past it,
+ * {@link nearestName} answers "no suggestion" without measuring anything.
+ *
+ * The target is caller-supplied and unbounded: the MCP argument gate
+ * hands this function a raw key off `tools/call`, so a single 1 MB
+ * argument name used to cost an O(len(name) x len(candidate)) walk
+ * against EVERY declared property - ten seconds of blocked event loop,
+ * inside the HTTP transport's 1 MB body cap and with no cap at all on
+ * stdio, and charged before any handler runs so no per-tool limit could
+ * reach it.
+ *
+ * 64 rather than a tighter number because the bound must never refuse a
+ * name a caller could really have mistyped. The longest property name
+ * this server declares is 28 characters, and at the ratio above a
+ * candidate has to be at least two thirds of the target's length to be
+ * reachable - so matching a 64-character target would need a declared
+ * name of 43 characters, half again the longest that exists. The
+ * per-candidate skip below already makes this cap redundant for every
+ * schema in the tree; it is kept so the guarantee rests on a constant
+ * rather than on what the candidate set happens to contain.
+ */
+export const NEAREST_NAME_MAX_TARGET_LENGTH = 64;
+
+/**
  * Edit distance between two names: insertions, deletions, substitutions
  * and adjacent transpositions, each costing one.
  *
@@ -89,16 +113,27 @@ export function editDistance(left: string, right: string): number {
  * the candidate SET and not on the order the caller happened to pass it
  * in. Two clients that send the same typo against the same schema get the
  * same sentence back.
+ *
+ * Two length bounds keep the cost of a hostile target off the request
+ * path, and both are stated as constants rather than buried here.
+ * {@link NEAREST_NAME_MAX_TARGET_LENGTH} refuses an absurd target before
+ * any candidate is looked at. Within it, a candidate whose length differs
+ * from the target by more than the threshold allows is skipped without
+ * measuring: edit distance is at least the difference in length, so such
+ * a candidate cannot be within the threshold. That skip is EXACT - it
+ * changes no answer, it only declines to compute answers already known.
  */
 export function nearestName(target: string, candidates: Iterable<string>): string | undefined {
+  if (target.length > NEAREST_NAME_MAX_TARGET_LENGTH) return undefined;
+
   let best: string | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
 
   for (const candidate of candidates) {
+    const allowance = Math.max(target.length, candidate.length) * NEAREST_NAME_MAX_DISTANCE_RATIO;
+    if (Math.abs(target.length - candidate.length) > allowance) continue;
     const distance = editDistance(target, candidate);
-    if (distance > Math.max(target.length, candidate.length) * NEAREST_NAME_MAX_DISTANCE_RATIO) {
-      continue;
-    }
+    if (distance > allowance) continue;
     if (
       distance < bestDistance ||
       (distance === bestDistance && best !== undefined && candidate < best)

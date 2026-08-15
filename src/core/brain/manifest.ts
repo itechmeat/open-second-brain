@@ -312,6 +312,14 @@ function freezeManifest(
 // ---------- diffManifests --------------------------------------------------
 
 /**
+ * Sort order for every diff bucket: one comparator, defined once. The three
+ * buckets must agree, and a comparator rebuilt per call is three chances for
+ * them to stop agreeing.
+ */
+const byManifestPath = (a: BrainManifestDiffEntry, b: BrainManifestDiffEntry): number =>
+  a.path.localeCompare(b.path);
+
+/**
  * Compute the path-keyed diff between two manifests. Order of the
  * arguments matters: `before → after` is the conventional direction
  * (left is the older state).
@@ -342,11 +350,9 @@ export function diffManifests(before: BrainManifest, after: BrainManifest): Brai
     added.push({ path, before: null, after: right });
   }
 
-  const cmp = (a: BrainManifestDiffEntry, b: BrainManifestDiffEntry): number =>
-    a.path.localeCompare(b.path);
-  added.sort(cmp);
-  removed.sort(cmp);
-  changed.sort(cmp);
+  added.sort(byManifestPath);
+  removed.sort(byManifestPath);
+  changed.sort(byManifestPath);
   return Object.freeze({
     added: Object.freeze(added),
     removed: Object.freeze(removed),

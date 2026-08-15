@@ -25,6 +25,7 @@ import type { RetrievalDegradationSink } from "../../../src/core/search/retrieva
 import {
   RETRIEVAL_DEGRADATION,
   RETRIEVAL_DEGRADATION_CODES,
+  RETRIEVAL_DETAIL_IDENTIFIER,
   RETRIEVAL_TRAIL_KEY,
   describeRetrievalDegradation,
   isRetrievalDegradationCode,
@@ -85,6 +86,61 @@ test("a healthy non-empty search carries no trail", async () => {
   expect(out.results.length).toBeGreaterThan(0);
   expect(out.retrievalTrail).toBeUndefined();
   expect(retrievalTrailEnvelope(out)).toEqual({});
+});
+
+/**
+ * The rank cap the assembler applies for any small `limit` - its pool
+ * floor. Stated here because the case that matters is a corpus that ends
+ * EXACTLY on it: a two-document vault can never reach the cap, so it
+ * cannot tell "the cap truncated the pool" from "the pool ran out".
+ */
+const RANK_CAP_FLOOR = 30;
+const WINDOW = 10;
+
+/** `count` single-chunk documents, every one matching `reindexing`. */
+async function vaultOfMatchingDocs(
+  prefix: string,
+  count: number,
+): Promise<ReturnType<typeof makeConfig>> {
+  const v = createTempVault(prefix);
+  cleanups.push(v.cleanup);
+  for (let i = 0; i < count; i++) {
+    writeMd(v.vault, `doc-${i}.md`, `# Doc ${i}\n\nReindexing the vault is discussed here.`);
+  }
+  const cfg = makeConfig({ vault: v.vault, dbPath: v.dbPath });
+  await indexVault(cfg, {});
+  return cfg;
+}
+
+test("a corpus that ends exactly on the rank cap is not a truncated pool", async () => {
+  const cfg = await vaultOfMatchingDocs("trail-cap-exact", RANK_CAP_FLOOR);
+
+  const out = await search(cfg, { query: "reindexing", limit: WINDOW });
+
+  // Every candidate the lanes produced was ranked; the window is narrower
+  // than the pool, which is what a `limit` is for and not a narrowing.
+  expect(out.results).toHaveLength(WINDOW);
+  expect(out.total).toBe(RANK_CAP_FLOOR);
+  expect(out.retrievalTrail).toBeUndefined();
+  expect(retrievalTrailEnvelope(out)).toEqual({});
+});
+
+test("a pool the cap really did cut still names the code and the cap", async () => {
+  // A wider lane pool than the cap admits: `poolMultiplier` governs how
+  // many hits the keyword lane fetches, so raising it is the one knob that
+  // hands the ranker more candidates than the cap can keep.
+  const base = await vaultOfMatchingDocs("trail-cap-cut", RANK_CAP_FLOOR + WINDOW);
+  const cfg = Object.freeze({
+    ...base,
+    recall: Object.freeze({ ...base.recall, poolMultiplier: 10 }),
+  });
+
+  const out = await search(cfg, { query: "reindexing", limit: WINDOW });
+
+  const entry = out.retrievalTrail?.degraded.find(
+    (d) => d.code === RETRIEVAL_DEGRADATION.rankCapTruncatedPool,
+  );
+  expect(entry?.detail).toEqual({ cap: RANK_CAP_FLOOR });
 });
 
 // ─── a degraded lane names its code ──────────────────────────────────────────
@@ -199,6 +255,10 @@ test("a scope filter that removes every hit no longer reads as an empty vault", 
 
 // ─── the detail rule ─────────────────────────────────────────────────────────
 
+// The namespaced half of the same rule - an origin label like
+// `source/team` - is proved in `cross-vault.test.ts`, against this same
+// exported pattern: the trigram lane is the only degradation this fixture
+// can reach, and it emits a bare identifier.
 test("detail carries identifiers and integers only", async () => {
   const { vault, dbPath } = await indexedVault("trail-detail");
   const cfg = makeConfig({
@@ -217,8 +277,8 @@ test("detail carries identifiers and integers only", async () => {
         expect(Number.isFinite(value)).toBe(true);
         continue;
       }
-      // An identifier: no whitespace, no path separator, no prose.
-      expect(value).toMatch(/^[A-Za-z0-9_.:-]+$/);
+      // An identifier under the rule the module itself states.
+      expect(value).toMatch(RETRIEVAL_DETAIL_IDENTIFIER);
     }
   }
 });

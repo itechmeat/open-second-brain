@@ -19,8 +19,6 @@
  * additionalContext, so this hook never writes stdout.
  */
 
-import { join } from "node:path";
-
 import {
   defaultConfigPath,
   resolveGapLoopEnabled,
@@ -28,6 +26,7 @@ import {
   resolveVault,
 } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { defaultRecallRetriever } from "../src/core/brain/recall-inject.ts";
 import { autoCloseRecalledGaps, promoteGapsToTasks } from "../src/core/brain/gaps/gap-loop.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
@@ -35,7 +34,7 @@ import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 
 function auditRun(vault: string, details: Record<string, unknown>): void {
   try {
-    appendAuditRecord(join(vault, ".open-second-brain", "hook-audit"), {
+    appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
       actor: "gap-promote",
       action: "gap_loop_run",

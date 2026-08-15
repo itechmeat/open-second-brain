@@ -115,13 +115,16 @@ describe("decideRecallInject (A2 / t_2ce46130)", () => {
     });
     expect(decision.kind).toBe("error");
     if (decision.kind !== "error") return;
-    expect(decision.reason).toContain("index unreadable");
+    // The classification is what any persisted surface may read; the
+    // retriever's own sentence stays on `detail`, for the local audit.
+    expect(decision.fault).toBe("retriever_failed");
+    expect(decision.detail).toContain("index unreadable");
   });
 
   test("returns a timeout error decision when the retriever exceeds the time budget", async () => {
     const hang: RecallRetriever = () => new Promise<RecallResultSet>(() => {});
     const decision = await decideRecallInject("receipts", hang, { timeBudgetMs: 20 });
-    expect(decision).toEqual({ kind: "error", reason: "timeout" });
+    expect(decision).toEqual({ kind: "error", fault: "timeout" });
   });
 });
 

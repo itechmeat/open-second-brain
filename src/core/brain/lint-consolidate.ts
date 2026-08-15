@@ -168,11 +168,19 @@ function resolveOnce(vault: string, target: string): MergedLinkResolution {
     return canonical === target ? NOT_MERGED : Object.freeze({ canonical, unresolvable: null });
   } catch (err) {
     if (err instanceof MergeChainError) {
-      // MALFORMED means the id is outside the merge namespace (a `sig-`
-      // artifact, say), which is not a defect - it is the resolver saying
-      // this link is not its business. A cycle or an over-deep chain is a
-      // defect, and is named.
-      if (err.code === "MALFORMED") return NOT_MERGED;
+      // MALFORMED on the id we STARTED from means the link is outside the
+      // merge namespace (a `sig-` artifact, say), which is not a defect: it
+      // is the resolver saying this link is not its business.
+      //
+      // MALFORMED raised further down the chain is the opposite. It means a
+      // page this link reaches declares a `merged_into:` value the page-id
+      // grammar rejects, so the chain terminates in nothing and the link can
+      // neither be followed nor left alone honestly. Returning "not merged"
+      // for it made `o2b brain lint` print a clean vault over a link pointing
+      // at a page that has been merged away, which is precisely the silence
+      // this pass exists to break. The error carries the id it failed on, so
+      // the two cases are distinguishable rather than guessed at.
+      if (err.code === "MALFORMED" && err.id === target) return NOT_MERGED;
       return Object.freeze({ canonical: null, unresolvable: err.message });
     }
     throw err;

@@ -50,20 +50,29 @@
  * The report always carries `total`, `returned`, `truncated` and
  * `skipped`, so a capped list can never be read as a complete one, and a
  * page too large to validate lands in `skipped` with a reason instead of
- * vanishing.
+ * vanishing. A page the lint THREW on lands there too: the failure is one
+ * page's, and reporting it as a whole-report `unavailable` discarded the
+ * findings already collected for the pages before it.
+ *
+ * Every string in the report is composed here from identifiers and
+ * integers. A raw errno message would name an absolute path, which is the
+ * operator's home directory in a write receipt - the leak
+ * `writeFrontmatterAtomic` was rewritten to close in the same release.
  *
  * ## Attachment
  *
  * Modelled field for field on `write-advisory.ts`: computed AROUND the
  * write, never gating it, surfaced as an additive key that is ABSENT
- * ENTIRELY when there is nothing to say. Failure of the lint itself
- * degrades to a named {@link PageLintUnavailable} on the key rather than
- * to a missing key - an absent `lint` key must mean clean, and only that.
+ * ENTIRELY when there is nothing to say. Failure of the lint itself - of
+ * the whole call, before any page has been read - degrades to a named
+ * {@link PageLintUnavailable} on the key rather than to a missing key: an
+ * absent `lint` key must mean clean, and only that.
  */
 
 import { readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 
+import { vaultRelative } from "../path-safety.ts";
 import { parseFrontmatterText } from "../vault.ts";
 import { collectAllBasenames } from "./doctor/records.ts";
 import {
@@ -99,9 +108,52 @@ const BROKEN_WIKILINK_CODE = "broken-wikilink";
 export const PAGE_LINT_SKIP_REASON = Object.freeze({
   overByteCap: "page-over-byte-cap",
   unreadable: "page-unreadable",
+  /** The page was read and the lint itself threw on it. See {@link lintOnePage}. */
+  lintFailed: "page-lint-failed",
 } as const);
 
 export type PageLintSkipReason = (typeof PAGE_LINT_SKIP_REASON)[keyof typeof PAGE_LINT_SKIP_REASON];
+
+/** Membership list, in the order a page meets the three gates. */
+export const PAGE_LINT_SKIP_REASONS: ReadonlyArray<PageLintSkipReason> = Object.freeze([
+  PAGE_LINT_SKIP_REASON.overByteCap,
+  PAGE_LINT_SKIP_REASON.unreadable,
+  PAGE_LINT_SKIP_REASON.lintFailed,
+]);
+
+/**
+ * Narrow a string read back across a tool boundary. The reason crosses the
+ * MCP wire on all four write tools, where a caller decides from it whether
+ * the silence about that page means clean or means unread, so a reader needs
+ * to be able to reject a value this build does not understand.
+ */
+export function isPageLintSkipReason(value: unknown): value is PageLintSkipReason {
+  return (
+    typeof value === "string" && (PAGE_LINT_SKIP_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** What a failure is called when it carries neither an errno nor a name. */
+const UNNAMED_FAILURE_CODE = "unknown";
+
+/**
+ * The identity of a failure, with nothing of the operator's filesystem in it:
+ * the errno code when the kernel supplied one, the error's class otherwise.
+ *
+ * The rejected alternative is `err.message`, which is what shipped. Node
+ * renders an errno as `ENOENT: no such file or directory, stat
+ * '/home/<user>/<vault>/Brain/x.md'` - an absolute home path, in a key that
+ * rides back on every note-write response. The same release rewrote
+ * `writeFrontmatterAtomic` (`src/core/vault.ts`) for precisely this reason:
+ * identifiers and integers cross this boundary, never a path and never an OS
+ * message.
+ */
+function failureCode(err: unknown): string {
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (typeof code === "string" && code.length > 0) return code;
+  const name = (err as Error | null)?.name;
+  return typeof name === "string" && name.length > 0 ? name : UNNAMED_FAILURE_CODE;
+}
 
 /** Rank by severity: errors are what a strict create would have refused. */
 const SEVERITY_RANK: Readonly<Record<DoctorSeverity, number>> = Object.freeze({
@@ -126,9 +178,13 @@ export interface PageLintFinding extends NextCommandField {
 
 /** A written page the lint did not read, and why. */
 export interface PageLintSkip {
+  /** Vault-relative path of the page, never an absolute one. */
   readonly page: string;
   readonly reason: PageLintSkipReason;
-  /** The measurement or errno behind the skip, so the reason is checkable. */
+  /**
+   * The measurement or the errno CODE behind the skip, so the reason is
+   * checkable. Identifiers and integers only - see {@link failureCode}.
+   */
   readonly detail: string;
 }
 
@@ -209,8 +265,16 @@ function distinctLinkTargets(raw: string): ReadonlyArray<string> {
   return [...seen];
 }
 
-/** Everything the lint computes once per call and threads per page. */
-interface LintContext {
+/**
+ * Everything the lint computes once per call and threads per page.
+ *
+ * Exported with {@link lintPagesWithContext} so the per-page failure path can
+ * be exercised: no filesystem state reaches it - every reader inside
+ * {@link lintOnePage} either cannot throw or catches its own errors - and an
+ * accumulation that is only correct in theory is the kind this release keeps
+ * finding. A caller already holding the indexes can lint with them too.
+ */
+export interface LintContext {
   readonly basenames: ReadonlySet<string>;
   readonly vocabulary: BrainSchemaVocabulary;
   readonly mergedLinks: MergedLinkResolver;
@@ -267,6 +331,10 @@ function lintOnePage(ctx: LintContext, page: string, raw: string): PageLintFindi
   return out;
 }
 
+function skip(page: string, reason: PageLintSkipReason, detail: string): PageLintSkip {
+  return Object.freeze({ page, reason, detail });
+}
+
 /** The empty report: nothing detected, nothing skipped, nothing to say. */
 function emptyReport(unavailable?: PageLintUnavailable): PageLintReport {
   return Object.freeze({
@@ -284,8 +352,11 @@ function emptyReport(unavailable?: PageLintUnavailable): PageLintReport {
  *
  * Runs AFTER the commit on purpose: the batch kernel wrote the bytes and
  * the handler never composed them, so the only honest subject is the
- * file. It never gates the write and it NEVER throws - a failure of the
- * lint is reported as {@link PageLintReport.unavailable}.
+ * file. It never gates the write and it NEVER throws: a failure that
+ * leaves nothing to lint AGAINST is reported as
+ * {@link PageLintReport.unavailable}, and a failure on one page is a
+ * {@link PAGE_LINT_SKIP_REASON.lintFailed} entry beside the results of the
+ * pages that did lint.
  *
  * Cost discipline: the basename index and the schema pack are computed
  * ONCE per call and threaded, the merge resolver memoises per call, and
@@ -303,14 +374,32 @@ export function lintWrittenPages(vault: string, pages: ReadonlyArray<string>): P
   } catch (err) {
     return emptyReport({
       code: PAGE_LINT_UNAVAILABLE_CODE,
-      message: `write-time page lint could not start: ${(err as Error).message}`,
+      message: `write-time page lint could not start: ${failureCode(err)}`,
     });
   }
+  return lintPagesWithContext(vault, ctx, pages);
+}
 
+/**
+ * Lint pages against indexes that are already built. The body of
+ * {@link lintWrittenPages}, split at the one seam that matters: everything
+ * above it fails the whole report (there are no indexes to lint against),
+ * everything below it fails at most one page.
+ */
+export function lintPagesWithContext(
+  vault: string,
+  ctx: LintContext,
+  pages: ReadonlyArray<string>,
+): PageLintReport {
   const detected: PageLintFinding[] = [];
   const skipped: PageLintSkip[] = [];
-  for (const page of pages) {
-    const absolute = join(vault, page);
+  for (const named of pages) {
+    // Rendered through the same helper every other reporting surface uses,
+    // so the page a finding names is vault-relative whichever spelling the
+    // caller handed in - an absolute path here would be the operator's home
+    // directory in a write receipt.
+    const absolute = resolve(vault, named);
+    const page = vaultRelative(absolute, vault);
     let raw: string;
     try {
       // Size first, from the inode: an over-cap page must be REPORTED as
@@ -319,32 +408,28 @@ export function lintWrittenPages(vault: string, pages: ReadonlyArray<string>): P
       const bytes = statSync(absolute).size;
       if (bytes > ARTIFACT_MAX_BYTES) {
         skipped.push(
-          Object.freeze({
+          skip(
             page,
-            reason: PAGE_LINT_SKIP_REASON.overByteCap,
-            detail: `${bytes} bytes exceeds the ${ARTIFACT_MAX_BYTES}-byte artifact cap`,
-          }),
+            PAGE_LINT_SKIP_REASON.overByteCap,
+            `${bytes} bytes exceeds the ${ARTIFACT_MAX_BYTES}-byte artifact cap`,
+          ),
         );
         continue;
       }
       raw = readFileSync(absolute, "utf8");
     } catch (err) {
-      skipped.push(
-        Object.freeze({
-          page,
-          reason: PAGE_LINT_SKIP_REASON.unreadable,
-          detail: (err as Error).message,
-        }),
-      );
+      skipped.push(skip(page, PAGE_LINT_SKIP_REASON.unreadable, failureCode(err)));
       continue;
     }
     try {
       detected.push(...lintOnePage(ctx, page, raw));
     } catch (err) {
-      return emptyReport({
-        code: PAGE_LINT_UNAVAILABLE_CODE,
-        message: `write-time page lint failed on ${page}: ${(err as Error).message}`,
-      });
+      // One page's failure is one page's news. Reporting it as `unavailable`
+      // threw away the findings already collected for EARLIER pages and the
+      // skip list with them, and left the pages after it silently unlinted -
+      // a report that reads clean about work that was never done. The report
+      // already has an honest shape for "this page was not linted".
+      skipped.push(skip(page, PAGE_LINT_SKIP_REASON.lintFailed, failureCode(err)));
     }
   }
 

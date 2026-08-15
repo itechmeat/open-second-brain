@@ -181,4 +181,28 @@ describe("the seam every caller passes through", () => {
     const response = await call("brain_health", {});
     expect(response?.error?.message ?? "").not.toContain("unknown argument");
   });
+
+  test("the recorded nested limit is a checked one: an unknown key inside an operation still reaches the handler", async () => {
+    // `brain_write_batch.operations[]` declares `additionalProperties:
+    // false` of its own and this gate does not enforce it. That is a
+    // STATED boundary, not a fallback pretending to work - widening it
+    // means walking the argument tree against the schema tree, which is
+    // a validator, and this is not one. Pinned here so a future reader
+    // who assumes the gate is recursive is contradicted by a test rather
+    // than by a comment.
+    const args = {
+      operations: [{ op: "append_log_line", text: "a line", quiery: "an unknown nested key" }],
+    };
+    const declared = server.tools.find((tool) => tool.name === "brain_write_batch");
+    expect(declared).toBeDefined();
+    expect(findUnknownArguments(declared!.inputSchema, args)).toEqual([]);
+
+    const response = await call("brain_write_batch", args);
+    // Whatever the handler makes of the nonexistent vault, the one answer
+    // it must not give is the boundary's: an invalid-params refusal
+    // naming the nested key.
+    expect(response?.error?.code ?? 0).not.toBe(INVALID_PARAMS);
+    expect(response?.error?.message ?? "").not.toContain("unknown argument");
+    expect(response?.error?.message ?? "").not.toContain("quiery");
+  });
 });

@@ -21,10 +21,13 @@ import {
   PAGE_LINT_SKIP_REASON,
   PAGE_LINT_UNAVAILABLE_CODE,
   comparePageLintFindings,
+  lintPagesWithContext,
   lintWrittenPages,
   pageLintField,
+  type LintContext,
 } from "../../../src/core/brain/page-lint.ts";
 import { LINT_CONSOLIDATE_KIND } from "../../../src/core/brain/lint-consolidate.ts";
+import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 import { ARTIFACT_MAX_BYTES } from "../../../src/core/brain/write-session/validate.ts";
 
 let vault: string;
@@ -155,6 +158,95 @@ describe("lintWrittenPages - bounds", () => {
     const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"]);
     expect(report.findings).toEqual([]);
     expect(report.skipped.map((s) => s.reason)).toEqual([PAGE_LINT_SKIP_REASON.unreadable]);
+  });
+});
+
+/**
+ * The report crosses the MCP wire on all four write tools, so it obeys the
+ * rule the rest of this release applies to that channel: identifiers and
+ * integers, never a path and never a kernel sentence. Node renders an errno
+ * as `ENOENT: no such file or directory, stat '/home/<user>/<vault>/x.md'`,
+ * which is the operator's home directory in a write receipt.
+ */
+describe("lintWrittenPages - nothing of the operator's filesystem crosses the wire", () => {
+  test("an unreadable page carries the errno CODE, not the kernel's sentence", () => {
+    const report = lintWrittenPages(vault, ["Notes/NeverWritten.md"]);
+    expect(report.skipped).toEqual([
+      {
+        page: "Notes/NeverWritten.md",
+        reason: PAGE_LINT_SKIP_REASON.unreadable,
+        detail: "ENOENT",
+      },
+    ]);
+    expect(JSON.stringify(report)).not.toContain(vault);
+  });
+
+  test("a lint that cannot start names its errno code and no path", () => {
+    mkdirSync(join(vault, "Brain", "_brain.yaml"), { recursive: true });
+    const rel = writeNote("Notes/Any.md", "---\ntitle: A\n---\n\nx\n");
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.unavailable!.message).not.toContain(vault);
+    expect(report.unavailable!.message).toMatch(/could not start: [A-Za-z][A-Za-z0-9_]*$/);
+  });
+
+  test("an over-cap skip is stated in bytes, which name nothing on disk", () => {
+    const rel = writeNote("Notes/Huge.md", "x".repeat(ARTIFACT_MAX_BYTES + 8));
+    const report = lintWrittenPages(vault, [rel]);
+    expect(report.skipped[0]!.reason).toBe(PAGE_LINT_SKIP_REASON.overByteCap);
+    expect(JSON.stringify(report)).not.toContain(vault);
+  });
+});
+
+/**
+ * A page the lint THREW on is one page's worth of bad news, not the whole
+ * report's. The failure is accumulated per page so the findings already
+ * collected survive and the pages after it are still linted - the report
+ * already has an honest shape for saying part of it could not be produced.
+ *
+ * No filesystem state reaches this branch (every reader inside `lintOnePage`
+ * either cannot throw or catches its own errors), so it is exercised through
+ * the context seam with a resolver that throws.
+ */
+describe("lintPagesWithContext - one page's failure is not the report's", () => {
+  function throwingContext(reason: Error): LintContext {
+    return {
+      basenames: new Set<string>(),
+      vocabulary: loadSchemaPack(vault).vocabulary,
+      mergedLinks: {
+        resolve() {
+          throw reason;
+        },
+      },
+    };
+  }
+
+  test("the failing page is a skip and the pages around it still report", () => {
+    const first = writeNote("Notes/First.md", "---\ntitle: F\n---\n\nsee [[pref-ghost]]\n");
+    const second = writeNote("Notes/Second.md", "no frontmatter at all\n");
+    const report = lintPagesWithContext(
+      vault,
+      throwingContext(Object.assign(new Error("read failed"), { code: "EIO" })),
+      [first, second],
+    );
+    expect(report.skipped).toEqual([
+      { page: first, reason: PAGE_LINT_SKIP_REASON.lintFailed, detail: "EIO" },
+    ]);
+    // The second page never reaches the resolver (it has no wikilink), so its
+    // finding is the proof that the walk continued past the failure.
+    expect(report.findings.map((f) => f.code)).toEqual(["frontmatter-missing"]);
+    expect(report.total).toBe(1);
+    expect(report.unavailable).toBeUndefined();
+  });
+
+  test("a failure carrying no errno is named by its class, never by its message", () => {
+    const rel = writeNote("Notes/Third.md", "---\ntitle: T\n---\n\nsee [[pref-ghost]]\n");
+    const report = lintPagesWithContext(vault, throwingContext(new TypeError("/home/x/vault/x")), [
+      rel,
+    ]);
+    expect(report.skipped).toEqual([
+      { page: rel, reason: PAGE_LINT_SKIP_REASON.lintFailed, detail: "TypeError" },
+    ]);
+    expect(JSON.stringify(report)).not.toContain("/home/x/vault");
   });
 });
 

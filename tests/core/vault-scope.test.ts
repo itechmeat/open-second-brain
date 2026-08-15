@@ -39,6 +39,7 @@ function scopeOf(ignore: ReadonlyArray<string>, include: ReadonlyArray<string> |
       include: include === null ? null : include.map(classifyVaultPathRule),
     },
     source: "_brain.yaml",
+    declared: { ignore: true, include: include !== null },
   };
 }
 

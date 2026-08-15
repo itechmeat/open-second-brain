@@ -46,7 +46,6 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 
 import { resolveVault } from "../src/core/config.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
@@ -54,6 +53,7 @@ import {
   brainActivePath,
   brainLessonsPath,
   brainStandingRulesPath,
+  hookAuditDir,
 } from "../src/core/brain/paths.ts";
 import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import {
@@ -87,7 +87,7 @@ import type { BrainConfig } from "../src/core/brain/types.ts";
 function auditHook(vault: string | null, action: string, details: Record<string, unknown>): void {
   if (vault === null) return;
   try {
-    appendAuditRecord(join(vault, ".open-second-brain", "hook-audit"), {
+    appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
       actor: "active-inject",
       action,

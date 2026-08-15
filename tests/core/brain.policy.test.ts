@@ -583,6 +583,27 @@ describe("validateBrainConfig — vault block (v0.10.9)", () => {
     ).toThrow(/vault\.ignore_paths\[0\].*leading '\/'/);
   });
 
+  test("an entry climbing out of the vault is rejected on both keys", () => {
+    // A `..` segment matches nothing the walkers ever produce: on the
+    // ignore side it excludes nothing, and on the include side it admits
+    // nothing, which empties the index. The dead-root lint cannot see it
+    // either, because existsSync on a climbing path resolves OUTSIDE the
+    // vault and answers true for a directory the vault does not contain.
+    // The parser is the only place that can refuse it.
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { include_paths: ["../outside"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.include_paths\[0\].*inside the vault/);
+    expect(() =>
+      validateBrainConfig(
+        { schema_version: 1, vault: { ignore_paths: ["Notes/../../escape"] } },
+        "<test>",
+      ),
+    ).toThrow(/vault\.ignore_paths\[0\].*inside the vault/);
+  });
+
   test("include_paths is a known key, parsed and normalised like ignore_paths", () => {
     const result = validateBrainConfigDetailed(
       { schema_version: 1, vault: { include_paths: ["./Brain/", "Notes//Daily"] } },

@@ -96,6 +96,36 @@ describe("lintConsolidate — fix-merged-link", () => {
     );
   });
 
+  test("a merged_into value the id grammar rejects is declared, not swallowed", () => {
+    // A hand edit or an external tool can leave a `merged_into:` value the
+    // page-id grammar refuses. The chain then terminates in nothing: the
+    // link can neither be followed nor honestly left alone. Reporting
+    // nothing for it printed a clean vault over a link pointing at a page
+    // that has been merged away, which is the silence this pass exists to
+    // break. Distinct from a malformed link TARGET, which is simply not
+    // this resolver's business and stays silent - the case below.
+    writePref("bad-hop", { topic: "x", principle: "y", merged_into: "pref_B" });
+    writeFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "saw [[pref-bad-hop]]\n");
+
+    const report = lintConsolidate(vault, { apply: true });
+    expect(report.fixes.length).toBe(0);
+    expect(report.unresolved.map((u) => u.target)).toEqual(["pref-bad-hop"]);
+    expect(readFileSync(join(vault, "Brain", "log", "2026-05-25.md"), "utf8")).toContain(
+      "[[pref-bad-hop]]",
+    );
+  });
+
+  test("a link whose own id is outside the merge namespace stays silent", () => {
+    // The other half of the same discriminator: `sig-` artifacts are not
+    // merge-namespace ids at all, so the resolver saying "not my business"
+    // is correct and must not become a finding.
+    writeFileSync(join(vault, "Brain", "log", "2026-05-26.md"), "saw [[sig-2026-05-01-x]]\n");
+
+    const report = lintConsolidate(vault, { apply: false });
+    expect(report.fixes.length).toBe(0);
+    expect(report.unresolved.length).toBe(0);
+  });
+
   test("does not rewrite wikilinks that merely share a prefix", () => {
     writePref("canon", { topic: "x", principle: "y" });
     writePref("dup", { topic: "x", principle: "y", merged_into: "pref-canon" });

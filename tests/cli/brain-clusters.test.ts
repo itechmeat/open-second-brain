@@ -223,6 +223,23 @@ test("run --if-stale reads the ceiling from the health block (B4)", async () => 
   expect(JSON.parse(r.stdout)).toMatchObject({ skipped: "fresh" });
 });
 
+test("run --if-stale refuses a config it cannot read instead of claiming freshness", async () => {
+  // The gate resolves its ceiling from the health block. Falling back to
+  // the default on a config that will not parse let a broken vault report
+  // `skipped: "fresh"` and exit 0, while every other verb refused the same
+  // config loudly - the one path where an unreadable configuration became
+  // a clean answer.
+  await index();
+  await runCli(["brain", "clusters", "run", "--vault", vault]);
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\nhealth:\n  materialize_max_age_days: not-a-number\n",
+  );
+  const r = await runCli(["brain", "clusters", "run", "--vault", vault, "--if-stale", "--json"]);
+  expect(r.returncode).not.toBe(0);
+  expect(r.stdout + r.stderr).toContain("materialize_max_age_days");
+});
+
 test("run --if-stale recomputes and names the reason when freshness is unknown (B4)", async () => {
   await index();
   const first = await runCli(["brain", "clusters", "run", "--vault", vault, "--json"]);

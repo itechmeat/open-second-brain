@@ -25,10 +25,9 @@
  *     record per tool call.
  */
 
-import { join } from "node:path";
-
 import { resolveHookStrictEnabled, resolveVault } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { decideOrient, type OrientDecision } from "../src/core/brain/pretool-orient.ts";
 import { armProcessCeiling, resolveHookCeilingMs } from "./lib/process-ceiling.ts";
 import { detectHookRuntime } from "./lib/detect.ts";
@@ -51,7 +50,7 @@ function auditDecision(vault: string, toolName: string, decision: OrientDecision
   // audit log records only the meaningful strict-mode decisions.
   if (decision.kind === "allow") return;
   try {
-    appendAuditRecord(join(vault, ".open-second-brain", "hook-audit"), {
+    appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
       actor: "pretool-orient",
       action: "orient_decision",

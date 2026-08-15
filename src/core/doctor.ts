@@ -18,7 +18,6 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
-import { defaultConfigPath, resolveVault } from "./config.ts";
 import { statOrAbsent } from "./fs-utils.ts";
 import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";

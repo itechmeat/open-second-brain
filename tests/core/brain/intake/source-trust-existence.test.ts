@@ -39,7 +39,12 @@ import {
   intakeExtraction,
   IntakeValidationError,
 } from "../../../../src/core/brain/intake/extract-intake.ts";
-import { classifySourceOrigin } from "../../../../src/core/brain/intake/source-trust.ts";
+import {
+  classifySourceOrigin,
+  classifySourceTrust,
+  SOURCE_HASH_MAX_BYTES,
+  SourceTrustError,
+} from "../../../../src/core/brain/intake/source-trust.ts";
 import {
   INTAKE_TRUST,
   SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
@@ -120,6 +125,69 @@ describe("classifySourceOrigin - a shape without bytes is not a source", () => {
   );
 });
 
+/**
+ * The refusal above travels: `brain_intake_entities` wraps this classifier,
+ * and a rethrown Node errno renders as
+ * `EACCES: permission denied, stat '/home/<user>/<vault>/Locked/note.md'` -
+ * the operator's home path in an MCP error, on a string the CALLER supplied.
+ * That is a per-path existence-and-permission oracle over the operator's
+ * filesystem. The refusal stays; only the message is ours to compose.
+ */
+describe("classifySourceOrigin - a refusal names the identity and the errno, nothing else", () => {
+  test.skipIf(RUNNING_AS_ROOT)("an unreadable source refuses without a path or a sentence", () => {
+    seed(`${LOCKED_DIR}/note.md`);
+    chmodSync(join(vault, LOCKED_DIR), 0o000);
+    let thrown: unknown;
+    try {
+      classifySourceOrigin(vault, `${LOCKED_DIR}/note.md`);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SourceTrustError);
+    const message = (thrown as Error).message;
+    expect(message).toContain(`${LOCKED_DIR}/note.md`);
+    expect(message).toContain("EACCES");
+    expect(message).not.toContain(vault);
+    expect(message).not.toContain("permission denied");
+  });
+
+  test("a source past the read ceiling is refused rather than read for a lane", () => {
+    seed(SOURCE, "x".repeat(SOURCE_HASH_MAX_BYTES + 1));
+    let thrown: unknown;
+    try {
+      classifySourceOrigin(vault, SOURCE);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SourceTrustError);
+    expect((thrown as Error).message).toContain(SOURCE);
+    expect((thrown as Error).message).toContain(String(SOURCE_HASH_MAX_BYTES));
+    expect((thrown as Error).message).not.toContain(vault);
+  });
+
+  test("a source under the ceiling is hashed as before", () => {
+    const abs = seed(SOURCE, "x".repeat(1024));
+    expect(classifySourceOrigin(vault, SOURCE).contentHash).toBe(hashFile(abs));
+  });
+});
+
+/**
+ * The lane alone, for the caller that cites several sources and will discard
+ * every digest anyway. Same shape gate, same existence question, no read.
+ */
+describe("classifySourceTrust - the lane without the bytes", () => {
+  test("agrees with the full classifier on both verdicts", () => {
+    seed(SOURCE);
+    expect(classifySourceTrust(vault, SOURCE)).toBe(INTAKE_TRUST.trusted);
+    expect(classifySourceTrust(vault, "evil.com/article")).toBe(INTAKE_TRUST.untrusted);
+  });
+
+  test("a source too large to hash still has a lane, because no lane needs its bytes", () => {
+    seed(SOURCE, "x".repeat(SOURCE_HASH_MAX_BYTES + 1));
+    expect(classifySourceTrust(vault, SOURCE)).toBe(INTAKE_TRUST.trusted);
+  });
+});
+
 describe("intakeExtraction - the verdict follows the bytes", () => {
   function intake(source: string): void {
     intakeExtraction(vault, EXTRACTION, {
@@ -152,6 +220,29 @@ describe("intakeExtraction - the verdict follows the bytes", () => {
       provenance: { level: "stated", sources: [`[[${SOURCE}]]`], premises: [] },
     });
     expect(res.trust).toBe(INTAKE_TRUST.trusted);
+  });
+
+  test("a source whose hash would be discarded is never read for it", () => {
+    // Two trusted sources: there is no single set of bytes this extraction
+    // came from, so no hash is recorded - and a classifier that hashed every
+    // source before deciding that would read the large one in full for a
+    // digest it then threw away. Past the read ceiling, that read is a
+    // refusal, which is what makes the waste observable here.
+    seed(SOURCE);
+    seed("Articles/huge.md", "x".repeat(SOURCE_HASH_MAX_BYTES + 1));
+    intakeExtraction(vault, EXTRACTION, {
+      agent: "ingest-agent",
+      now: NOW,
+      provenance: {
+        level: "stated",
+        sources: [`[[${SOURCE}]]`, "[[Articles/huge.md]]"],
+        premises: [],
+      },
+    });
+    const entity = getEntity(vault, { category: "concept", query: "Restaking" });
+    expect(entity).not.toBeNull();
+    const [meta] = parseFrontmatter(entity!.path);
+    expect(meta[SOURCE_CONTENT_HASH_FRONTMATTER_KEY]).toBeUndefined();
   });
 
   test("an intake citing no source at all is refused, and writes nothing", () => {

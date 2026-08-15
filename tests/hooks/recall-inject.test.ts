@@ -5,6 +5,14 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { hookAuditDir } from "../../src/core/brain/paths.ts";
+import {
+  isRecallInjectFault,
+  RECALL_INJECT_FAULT,
+  RECALL_INJECT_FAULTS,
+  recallInjectAuditDetails,
+  recallInjectTelemetryMetadata,
+  type RecallInjectDecision,
+} from "../../src/core/brain/recall-inject.ts";
 import { listRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
 
 const HOOK = resolve(
@@ -149,6 +157,55 @@ describe("recall-inject telemetry", () => {
       result_count: 0,
       metadata: { decision: "abstain", reason: "empty_prompt" },
     });
+  });
+
+  test("an error's telemetry metadata carries a classification, never the retriever's message", () => {
+    // `errorReason()` used to hand the raw `Error.message` straight to the
+    // telemetry metadata, and `brain_recall_telemetry` returns those
+    // records verbatim to a model. A SQLite, store or config failure names
+    // the index file or the config path, and the shared redactor removes
+    // secret-shaped tokens, not paths.
+    const decision: RecallInjectDecision = {
+      kind: "error",
+      fault: RECALL_INJECT_FAULT.retrieverFailed,
+      detail:
+        "cannot read schema_version from /home/operator/vault/.open-second-brain/brain.sqlite: " +
+        "disk I/O error",
+    };
+    const metadata = recallInjectTelemetryMetadata(decision);
+    expect(metadata).toEqual({ decision: "error", fault: RECALL_INJECT_FAULT.retrieverFailed });
+    expect(JSON.stringify(metadata)).not.toContain("brain.sqlite");
+    expect(JSON.stringify(metadata)).not.toContain("/home/operator");
+  });
+
+  test("the local audit line keeps the message, because that file never leaves the machine", () => {
+    const decision: RecallInjectDecision = {
+      kind: "error",
+      fault: RECALL_INJECT_FAULT.retrieverFailed,
+      detail:
+        "cannot read schema_version from /home/operator/vault/.open-second-brain/brain.sqlite",
+    };
+    const details = recallInjectAuditDetails(decision);
+    expect(details["fault"]).toBe(RECALL_INJECT_FAULT.retrieverFailed);
+    expect(String(details["detail"])).toContain("brain.sqlite");
+  });
+
+  test("the two projections agree wherever nothing is being withheld", () => {
+    const decisions: ReadonlyArray<RecallInjectDecision> = [
+      { kind: "inject", brief: "a fenced brief", noteCount: 2, topScore: 0.9 },
+      { kind: "abstain", reason: "empty_prompt", topScore: 0 },
+      { kind: "error", fault: RECALL_INJECT_FAULT.timeout },
+    ];
+    for (const decision of decisions) {
+      expect(recallInjectAuditDetails(decision), decision.kind).toEqual(
+        recallInjectTelemetryMetadata(decision) as Record<string, unknown>,
+      );
+    }
+  });
+
+  test("every fault a decision can carry is a member of the closed vocabulary", () => {
+    for (const fault of RECALL_INJECT_FAULTS) expect(isRecallInjectFault(fault)).toBe(true);
+    expect(isRecallInjectFault("a retriever sentence about /var/lib")).toBe(false);
   });
 
   test("a decision on a bare vault reaches the hook channel with a mapped status", async () => {

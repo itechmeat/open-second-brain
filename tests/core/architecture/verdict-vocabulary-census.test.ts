@@ -76,6 +76,11 @@ import {
   isGraphHealthCode,
 } from "../../../src/core/partner/codegraph-health.ts";
 import {
+  isRecallInjectFault,
+  RECALL_INJECT_FAULT,
+  RECALL_INJECT_FAULTS,
+} from "../../../src/core/brain/recall-inject.ts";
+import {
   isRecallChannel,
   isRecallTelemetryMode,
   isRecallTelemetryStatus,
@@ -107,6 +112,11 @@ import {
   RETRIEVAL_DEGRADATION,
   RETRIEVAL_DEGRADATION_CODES,
 } from "../../../src/core/search/retrieval-trail.ts";
+import {
+  isPageLintSkipReason,
+  PAGE_LINT_SKIP_REASON,
+  PAGE_LINT_SKIP_REASONS,
+} from "../../../src/core/brain/page-lint.ts";
 import {
   isSchemaCompletenessRule,
   isSchemaNodeKind,
@@ -344,6 +354,21 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isRecallTelemetryStatus,
   },
   {
+    // Why the prompt-time recall hook failed. Minted because the error
+    // decision used to carry the retriever's RAW message and the hook
+    // copied it onto a synced continuity record that
+    // `brain_recall_telemetry` returns verbatim to a model - a SQLite or
+    // config failure names the index file or the config path, and the
+    // redactor strips secret-shaped tokens, not paths. Registered here
+    // because the value leaves TypeScript: it is persisted into that
+    // payload, and a member added to the object and forgotten in the list
+    // would be a fault no reader could narrow back.
+    name: "RECALL_INJECT_FAULT",
+    values: RECALL_INJECT_FAULT,
+    members: RECALL_INJECT_FAULTS,
+    guard: isRecallInjectFault,
+  },
+  {
     // C2. Why a retrieval narrowed or came back empty. Registered because
     // the values leave TypeScript twice over: they are declared as an
     // `enum` in the `brain_search` output schema, where an undeclared code
@@ -372,6 +397,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: SCHEMA_COMPLETENESS_RULE,
     members: SCHEMA_COMPLETENESS_RULES,
     guard: isSchemaCompletenessRule,
+  },
+  {
+    // A4. Why a written page was not linted. The values ride out of
+    // TypeScript in the `lint.skipped[]` array of all four note-write
+    // tools, where a caller reads the reason to decide whether the silence
+    // about that page means clean or means unread - so a value added here
+    // and forgotten in the list is a reason no reader can narrow.
+    name: "PAGE_LINT_SKIP_REASON",
+    values: PAGE_LINT_SKIP_REASON,
+    members: PAGE_LINT_SKIP_REASONS,
+    guard: isPageLintSkipReason,
   },
 ]);
 

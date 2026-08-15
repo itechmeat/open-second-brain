@@ -50,11 +50,18 @@ beforeEach(() => {
   bootstrapBrain(vault, { configPath });
 });
 
+/** Where the delivery side reads its records from. */
+function continuityDir(): string {
+  return join(vault, "Brain", "log", "continuity");
+}
+
 afterEach(() => {
-  try {
-    chmodSync(hookAuditDir(vault), 0o700);
-  } catch {
-    // The directory may never have been created; nothing to restore.
+  for (const dir of [hookAuditDir(vault), continuityDir()]) {
+    try {
+      chmodSync(dir, 0o700);
+    } catch {
+      // The directory may never have been created; nothing to restore.
+    }
   }
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
@@ -170,6 +177,45 @@ describe("recall channel coverage", () => {
     const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
     expect(entry).toBeDefined();
     expect(entry!.message).toContain(RECALL_CHANNEL.hook);
+  });
+
+  test("an unreadable delivery store is uncertain, and does not erase the whole check", () => {
+    // The delivery rollup used to run unguarded ahead of the per-channel
+    // loop, and the check is registered `failSoft`, so a store this pass
+    // could not open dropped EVERY finding - neither a silent channel nor
+    // an unmeasured one, which is exactly the undiagnosable silence this
+    // check exists to remove.
+    setRecallInject(true);
+    mkdirSync(hookAuditDir(vault), { recursive: true });
+    deliver(RECALL_CHANNEL.hook, 1);
+    chmodSync(continuityDir(), 0o000);
+
+    const result = run();
+    // Not a warning: a delivery count that could not be read cannot tell
+    // a silent channel from a working one.
+    expect(silentChannels(result)).toEqual([]);
+    const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain(RECALL_CHANNEL.hook);
+    expect(entry!.message.toLowerCase()).toContain("permission denied");
+  });
+
+  test("an install side that could not be read outranks a delivery side that could not either", () => {
+    // Both halves gone. The install reason is the one an operator acts
+    // on, and the entry must not claim the delivery count is readable.
+    setRecallInject(true);
+    const audit = hookAuditDir(vault);
+    mkdirSync(audit, { recursive: true });
+    deliver(RECALL_CHANNEL.hook, 1);
+    chmodSync(audit, 0o000);
+    chmodSync(continuityDir(), 0o000);
+
+    const result = run();
+    expect(silentChannels(result)).toEqual([]);
+    const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain(audit);
+    expect(entry!.message).not.toContain("delivery count is readable");
   });
 
   test("both codes are classified on exactly one side of the exit census", () => {

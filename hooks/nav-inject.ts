@@ -20,8 +20,6 @@
  *     or malformed cadence stamp is treated as "due" (absent), never a throw.
  */
 
-import { join } from "node:path";
-
 import {
   defaultConfigPath,
   resolveNavTierCadenceMinutes,
@@ -29,6 +27,7 @@ import {
   resolveVault,
 } from "../src/core/config.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
+import { hookAuditDir } from "../src/core/brain/paths.ts";
 import { buildNavmap, renderNavmap } from "../src/core/brain/navmap.ts";
 import {
   decideNavInject,
@@ -53,7 +52,7 @@ const MINUTE_MS = 60_000;
  */
 function auditDecision(vault: string, decision: NavInjectDecision): void {
   try {
-    appendAuditRecord(join(vault, ".open-second-brain", "hook-audit"), {
+    appendAuditRecord(hookAuditDir(vault), {
       timestamp: new Date().toISOString(),
       actor: "nav-inject",
       action: "nav_tier_decision",

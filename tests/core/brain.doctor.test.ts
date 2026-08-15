@@ -784,6 +784,61 @@ vault:
     expect(res.errors.filter((e) => e.code === "vault-include-missing-path")).toHaveLength(1);
   });
 
+  test("a bare-name include root that lives below the vault root is not a finding", () => {
+    // The grammar matches a slashless entry at ANY depth, which is what
+    // makes `include_paths: [Brain]` also admit a nested `projects/Brain`.
+    // Checking such a rule with existsSync at the vault root asks a
+    // question the rule never asked, and reported a WORKING allowlist as
+    // broken at error severity.
+    mkdirSync(join(tmp, "Notes", "Daily"), { recursive: true });
+    atomicWriteFileSync(join(tmp, "Notes", "Daily", "a.md"), "---\ntitle: a\n---\n");
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  include_paths:
+    - Daily
+`,
+    );
+    const res = runDoctor(tmp);
+    expect(res.errors.find((e) => e.code === "vault-include-missing-path")).toBeUndefined();
+    expect(res.errors.find((e) => e.code === "vault-include-admits-nothing")).toBeUndefined();
+  });
+
+  test("an allowlist that admits no file at all is an error naming the roots", () => {
+    // The failure the per-entry check was reaching for and could not see:
+    // every declared root can be spelled plausibly and still leave the
+    // index empty. Measured from the walk rather than inferred from the
+    // rules, so it catches a typo in a bare name too.
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  include_paths:
+    - Nowhere
+`,
+    );
+    const res = runDoctor(tmp);
+    const empty = res.errors.find((e) => e.code === "vault-include-admits-nothing");
+    expect(empty).toBeDefined();
+    expect(empty!.message).toContain("Nowhere");
+  });
+
+  test("declaring only include_paths does not lint the built-in exclusions", () => {
+    // The ignore side is inherited here, not written. Warning about one of
+    // its entries names a key the operator's config does not contain.
+    atomicWriteFileSync(
+      brainConfigPath(tmp),
+      `schema_version: 1
+vault:
+  include_paths:
+    - Brain
+`,
+    );
+    const res = runDoctor(tmp);
+    expect(res.warnings.find((w) => w.code === "vault-ignore-missing-path")).toBeUndefined();
+  });
+
   test("does NOT report when every include root resolves", () => {
     atomicWriteFileSync(
       brainConfigPath(tmp),

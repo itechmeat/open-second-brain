@@ -184,11 +184,11 @@ describe("o2b install --check", () => {
   });
 });
 
-describe("o2b install --check exit codes distinguish the verify states", () => {
-  function row(status: VerifyResult["status"], target = "unit"): VerifyResult {
-    return { target, status, details: [`${target}: ${status}`], fix_hint: null };
-  }
+function row(status: VerifyResult["status"], target = "unit"): VerifyResult {
+  return { target, status, details: [`${target}: ${status}`], fix_hint: null };
+}
 
+describe("o2b install --check exit codes distinguish the verify states", () => {
   test("a runtime proved unreachable does not exit 0", () => {
     const code = exitCodeForVerify([row("mcp-unreachable")]);
     expect(code).toBe(INSTALL_EXIT.mcpUnreachable);

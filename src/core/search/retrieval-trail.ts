@@ -37,6 +37,12 @@
  * channel travels into logs and MCP payloads: an FTS5 error echoes the
  * caller's own query back, and a SQLite error can name the index file.
  *
+ * An identifier may carry ONE namespace segment, because the cross-vault
+ * codes key on origin LABELS and a label is namespaced by construction
+ * (`profile/<name>`, `source/<alias>`). {@link RETRIEVAL_DETAIL_IDENTIFIER}
+ * is that grammar written once, so a reader, a writer and a test cannot
+ * each hold a different idea of what an identifier is.
+ *
  * ## Absent, not empty
  *
  * A healthy answer with rows in it carries no trail, so the envelope is
@@ -170,6 +176,26 @@ export function isRetrievalDegradationCode(value: unknown): value is RetrievalDe
  * without a reader noticing it is prose.
  */
 export type RetrievalDegradationDetail = Readonly<Record<string, string | number>>;
+
+/**
+ * What "an identifier" means for a {@link RetrievalDegradationDetail}
+ * string: an optional namespace segment, then the identifier body.
+ *
+ * The namespace is not a concession - it is the shape of the one detail
+ * value the pipeline computes rather than names, the cross-vault origin
+ * LABEL (`profile/<name>`, `source/<alias>`). The rejected alternative was
+ * to split the label into a kind and a name so the separator never
+ * appeared: that would break the join a caller makes between a trail entry
+ * and the rows beside it, which carry the whole label on `origin` and in
+ * their `origin:<label>` reason.
+ *
+ * Exactly one separator, never leading, is what keeps the widening from
+ * re-admitting what the rule exists to exclude: `/var/lib/index.sqlite`
+ * and `Brain/notes/a.md` both fail it, as does anything carrying
+ * whitespace or prose punctuation. It is stated as a pattern rather than
+ * as prose so the tests assert the rule itself instead of restating it.
+ */
+export const RETRIEVAL_DETAIL_IDENTIFIER = /^(?:[A-Za-z0-9_-]+\/)?[A-Za-z0-9_.:-]+$/u;
 
 /** One narrowing, as the pipeline recorded it. */
 export interface RetrievalDegradation {

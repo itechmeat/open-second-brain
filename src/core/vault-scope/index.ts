@@ -227,12 +227,26 @@ export interface VaultScope {
   /** Both lists, classified as `name | path`. */
   readonly rules: VaultScopeRules;
   readonly source: "_brain.yaml" | "defaults";
+  /**
+   * Which polarities the OPERATOR wrote, as opposed to inherited.
+   *
+   * `source` answers "did this vault have a config at all", and that was
+   * enough while `ignore_paths` was the only key: a `_brain.yaml` source
+   * meant every rule in the scope had been typed by someone. With two
+   * independent keys it stopped being enough. A vault that declares only
+   * `include_paths` still reports `source: "_brain.yaml"` while every
+   * exclusion comes from the built-in defaults, and a lint that reads
+   * `source` alone then warns about a default entry the operator has never
+   * seen, naming a key their config does not contain.
+   */
+  readonly declared: { readonly ignore: boolean; readonly include: boolean };
 }
 
 function buildScope(
   ignorePaths: ReadonlyArray<string>,
   includePaths: ReadonlyArray<string> | null,
   source: VaultScope["source"],
+  declaredIgnore: boolean = source === "_brain.yaml",
 ): VaultScope {
   const ignore = Object.freeze([...ignorePaths]);
   const include = includePaths === null ? null : Object.freeze([...includePaths]);
@@ -244,6 +258,7 @@ function buildScope(
       include: include === null ? null : Object.freeze(include.map(classifyVaultPathRule)),
     }),
     source,
+    declared: Object.freeze({ ignore: declaredIgnore, include: include !== null }),
   });
 }
 
@@ -271,7 +286,12 @@ export function resolveVaultScope(vault: string): VaultScope {
   const ignore = cfg.vault?.ignore_paths;
   const include = cfg.vault?.include_paths ?? null;
   if (ignore === undefined && include === null) return DEFAULT_SCOPE;
-  return buildScope(ignore ?? DEFAULT_VAULT_IGNORE_PATHS, include, "_brain.yaml");
+  return buildScope(
+    ignore ?? DEFAULT_VAULT_IGNORE_PATHS,
+    include,
+    "_brain.yaml",
+    ignore !== undefined,
+  );
 }
 
 // ----- walkVaultScope ------------------------------------------------------

@@ -149,5 +149,21 @@ function normaliseVaultPathEntry(entry: unknown, field: string, source: string |
       source,
     );
   }
+  // Reject a `..` segment for the same reason and a sharper one. The
+  // walkers only ever produce vault-relative paths with no upward segment,
+  // so a rule carrying one matches nothing they will ever hand it: on the
+  // ignore side that is an exclusion that silently excludes nothing, and on
+  // the include side it is an allowlist that admits nothing, which empties
+  // the whole index. The dead-root check cannot catch that one either,
+  // because `existsSync` on a climbing path resolves OUTSIDE the vault and
+  // answers true for a directory the vault does not contain. The parser is
+  // the only place that can see it, so it refuses here.
+  if (normalised.split("/").includes("..")) {
+    throw new BrainConfigError(
+      "must stay inside the vault; a '..' segment matches no path the walkers produce",
+      field,
+      source,
+    );
+  }
   return normalised;
 }

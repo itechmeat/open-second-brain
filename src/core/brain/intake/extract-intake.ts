@@ -37,7 +37,7 @@ import { validateEntityCategory, normalizeEntityName } from "../entities/canonic
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
-import { classifySourceOrigin, type SourceOrigin } from "./source-trust.ts";
+import { classifySourceOrigin, classifySourceTrust, type SourceOrigin } from "./source-trust.ts";
 
 /** One entity the agent extracted from a source. */
 export interface IntakeEntity {
@@ -171,15 +171,19 @@ function resolveIntakeOrigin(vault: string, provenance: Provenance): SourceOrigi
         "has no provenance to commit under",
     );
   }
-  const origins = sources.map((source) => classifySourceOrigin(vault, source));
-  if (origins.some((origin) => origin.trust === INTAKE_TRUST.untrusted)) {
-    return { trust: INTAKE_TRUST.untrusted };
-  }
-  const only = origins.length === 1 ? origins[0] : undefined;
-  return {
-    trust: INTAKE_TRUST.trusted,
-    ...(only?.contentHash !== undefined ? { contentHash: only.contentHash } : {}),
-  };
+  // One source is the only shape whose hash is kept, so it is the only shape
+  // that asks for one. Mapping the hashing classifier over every source read
+  // each of them in full and then discarded every digest but the first - and
+  // discarded that one too the moment there was more than one source.
+  const only = sources.length === 1 ? sources[0] : undefined;
+  if (only !== undefined) return classifySourceOrigin(vault, only);
+
+  // `some` rather than a full map: the first source outside the vault settles
+  // the whole intake, and nothing after it changes the answer.
+  const untrusted = sources.some(
+    (source) => classifySourceTrust(vault, source) === INTAKE_TRUST.untrusted,
+  );
+  return { trust: untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted };
 }
 
 /**

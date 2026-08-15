@@ -13,7 +13,10 @@ import { join } from "node:path";
 import { createProfile } from "../../../src/core/brain/portability/profiles.ts";
 import { addRecallSource } from "../../../src/core/brain/portability/recall-sources.ts";
 import { listSearchOrigins } from "../../../src/core/brain/portability/origins.ts";
-import { RETRIEVAL_DEGRADATION } from "../../../src/core/search/retrieval-trail.ts";
+import {
+  RETRIEVAL_DEGRADATION,
+  RETRIEVAL_DETAIL_IDENTIFIER,
+} from "../../../src/core/search/retrieval-trail.ts";
 import { searchAcrossVaults } from "../../../src/core/search/cross-vault.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
@@ -204,6 +207,48 @@ test("chain-stop gates on the normalized score, never raw: a sub-threshold top d
   const labels = new Set(outcome.results.map((r) => r.origin));
   expect(labels).toEqual(new Set(["local", "source/team"]));
   expect(outcome.chainStop).toBeUndefined();
+});
+
+/**
+ * The trail's `detail` rule is one rule for every lane, and these are the
+ * only codes whose identifiers are NAMESPACED: an origin label is
+ * `profile/<name>` or `source/<alias>`, the same string the results carry
+ * on `origin` and in their `origin:<label>` reason. A test that only ever
+ * exercises the trigram lane's `shadow_incomplete` cannot see that, which
+ * is how the rule and its writers came to disagree in silence.
+ */
+test("cross-vault detail values are identifiers under the trail's shared rule", async () => {
+  const other = join(tmp, "other-vault");
+  mkdirSync(join(other, "Brain"), { recursive: true });
+  writeMd(other, "Brain/notes/other-note.md", "# Other\n\nThe aviary keeper feeds the griffin.");
+  await indexVault(resolveSearchConfig({ vault: other, configPath }));
+  const bare = join(tmp, "bare-vault");
+  mkdirSync(join(bare, "Brain"), { recursive: true });
+  addRecallSource(configPath, active, "bare", bare);
+  addRecallSource(configPath, active, "team", external);
+  addRecallSource(configPath, active, "other", other);
+  withChainStop(0);
+
+  // "aviary" is absent from the active vault, so the union walks past it:
+  // source/bare cannot be read, source/team answers confidently, and
+  // source/other is deliberately skipped - one origin-failed entry and one
+  // chain-stopped entry, each keyed by a namespaced origin label.
+  const outcome = await searchAcrossVaults(configPath, active, { query: "aviary", limit: 10 });
+
+  const degraded = outcome.retrievalTrail?.degraded ?? [];
+  const codes = degraded.map((d) => d.code);
+  expect(codes).toContain(RETRIEVAL_DEGRADATION.crossVaultOriginFailed);
+  expect(codes).toContain(RETRIEVAL_DEGRADATION.crossVaultChainStopped);
+  const values = degraded.flatMap((d) => Object.values(d.detail ?? {}));
+  // The shape the trigram-only assertion could never reach.
+  expect(values.some((v) => typeof v === "string" && v.includes("/"))).toBe(true);
+  for (const value of values) {
+    if (typeof value === "number") {
+      expect(Number.isFinite(value)).toBe(true);
+      continue;
+    }
+    expect(value).toMatch(RETRIEVAL_DETAIL_IDENTIFIER);
+  }
 });
 
 test("chain-stop off (default) runs every origin bit-identically and records no chainStop", async () => {

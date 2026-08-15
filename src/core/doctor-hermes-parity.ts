@@ -92,9 +92,22 @@ interface ResolvedSide {
  * not applicable - which is correct there: OpenClaw hosts do not load the
  * Hermes plugin.
  */
-function pluginResolverPath(repoRoot: string | null | undefined): string {
-  const root = repoRoot ?? join(import.meta.dir, "..", "..");
-  return join(root, "plugins", "hermes", "config.py");
+/**
+ * The plugin resolver to compare against, or null when this invocation did
+ * not name a repository to check.
+ *
+ * An explicit root is REQUIRED, and that is the whole gate. `plugins/` ships
+ * inside the published package, so falling back to the installed package root
+ * made this check apply to every user of the CLI, including the large
+ * majority who never wire the Hermes gateway. On a machine with no Python
+ * interpreter that turned a plain `o2b doctor` into a permanent failure with
+ * a fix line telling the operator to install Python for a plugin they do not
+ * use. Every other plugin-surface check in this CLI is gated on `--repo` for
+ * the same reason; this one now matches them.
+ */
+function pluginResolverPath(repoRoot: string | null | undefined): string | null {
+  if (repoRoot === null || repoRoot === undefined || repoRoot === "") return null;
+  return join(repoRoot, "plugins", "hermes", "config.py");
 }
 
 function resolveCoreSide(configPath: string, cwd: string): ResolvedSide {
@@ -159,12 +172,12 @@ function resolvePluginSide(resolver: string, configPath: string, cwd: string): R
  * fails with that reason, because reporting "clean" on an unmeasured half is
  * the same false confidence the check was written to remove.
  *
- * Returns null - the check does not apply - only when the plugin is not part
- * of this installation at all.
+ * Returns null - the check does not apply - when this invocation named no
+ * repository to check, or when the named repository has no Hermes plugin.
  */
 export function checkHermesResolverParity(opts: ResolverParityOptions = {}): CheckResult | null {
   const resolver = pluginResolverPath(opts.repoRoot);
-  if (!existsSync(resolver)) return null;
+  if (resolver === null || !existsSync(resolver)) return null;
 
   const configPath = opts.config ?? defaultConfigPath();
   const cwd = opts.cwd ?? process.cwd();

@@ -15,8 +15,11 @@
  *     decision is never a silent fallback - abstain/error is an explicit,
  *     recorded outcome.
  *   - AUDITED: every decision (inject, abstain, error) writes exactly one
- *     structured, payload-safe audit line (counts, scores, reason - never the
- *     prompt text or recalled content).
+ *     structured audit line (counts, scores, classification - never the
+ *     prompt text or recalled content) to the LOCAL hook-audit trail, and
+ *     one recall-telemetry record onto the synced continuity log. The two
+ *     are deliberately not the same payload: only the local line may carry
+ *     a retriever's own message (see `recordDecision`).
  *   - FAIL-OPEN FOR THE SESSION: the hook process never blocks the user. It
  *     arms a self-watchdog ceiling and exits 0 on every path.
  *
@@ -32,6 +35,9 @@ import { hookAuditDir } from "../src/core/brain/paths.ts";
 import {
   decideRecallInject,
   defaultRecallRetriever,
+  RECALL_INJECT_FAULT,
+  recallInjectAuditDetails,
+  recallInjectTelemetryMetadata,
   type RecallInjectDecision,
 } from "../src/core/brain/recall-inject.ts";
 import {
@@ -68,7 +74,12 @@ function recordDecision(vault: string, decision: RecallInjectDecision): void {
       status: telemetryStatus(decision),
       durationMs: 0,
       resultCount: decision.kind === "inject" ? decision.noteCount : 0,
-      metadata: auditDetails(decision),
+      // Classifications and counts only. The two surfaces are NOT the
+      // same payload: this one is a continuity record that syncs and that
+      // `brain_recall_telemetry` returns verbatim to a model, so it takes
+      // the withholding projection while the local audit line below takes
+      // the one that still carries the retriever's own message.
+      metadata: recallInjectTelemetryMetadata(decision),
     }),
   );
 }
@@ -96,9 +107,15 @@ function telemetryStatus(decision: RecallInjectDecision): RecallTelemetryStatus 
 }
 
 /**
- * One payload-safe audit line per decision. Never throws (a hung filesystem
- * is exactly when this runs) and never records the prompt text or recalled
- * content - only the decision kind, reason, and bounded counts/scores.
+ * One audit line per decision. Never throws (a hung filesystem is exactly
+ * when this runs) and never records the prompt text or recalled content -
+ * only the decision kind, its classification, and bounded counts/scores.
+ *
+ * This line, unlike the telemetry record above, MAY carry the retriever's
+ * own message: the audit trail is local, unsynced operational evidence
+ * under `<vault>/.open-second-brain/hook-audit/`, and a SQLite or config
+ * message is precisely what an operator debugging a broken retriever
+ * needs. The withholding happens on the other surface, not here.
  */
 function auditDecision(vault: string, decision: RecallInjectDecision): void {
   try {
@@ -108,21 +125,11 @@ function auditDecision(vault: string, decision: RecallInjectDecision): void {
       action: "recall_inject_decision",
       target: "UserPromptSubmit",
       ok: decision.kind === "inject",
-      details: auditDetails(decision),
+      details: recallInjectAuditDetails(decision),
     });
   } catch {
     // best-effort: auditing must never disturb the fail-open contract
   }
-}
-
-function auditDetails(decision: RecallInjectDecision): Record<string, unknown> {
-  if (decision.kind === "inject") {
-    return { decision: "inject", note_count: decision.noteCount, top_score: decision.topScore };
-  }
-  if (decision.kind === "abstain") {
-    return { decision: "abstain", reason: decision.reason, top_score: decision.topScore };
-  }
-  return { decision: "error", reason: decision.reason };
 }
 
 async function main(): Promise<void> {
@@ -135,7 +142,10 @@ async function main(): Promise<void> {
     ceilingMs: resolveHookCeilingMs(),
     onExpire: () => {
       if (auditVault !== null) {
-        recordDecision(auditVault, { kind: "error", reason: "hook_ceiling_exceeded" });
+        recordDecision(auditVault, {
+          kind: "error",
+          fault: RECALL_INJECT_FAULT.hookCeilingExceeded,
+        });
       }
     },
   });

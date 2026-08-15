@@ -20,6 +20,7 @@ import {
 } from "../../../core/brain/link-graph/communities.ts";
 import { graphStats } from "../../../core/brain/link-graph/graph-index.ts";
 import { appendMetric } from "../../../core/brain/metrics.ts";
+import { brainConfigPath } from "../../../core/brain/paths.ts";
 import {
   createSafeguard,
   resolveSafeguardTimeoutMs,
@@ -73,20 +74,22 @@ function clustersStaleness(vault: string, nowMs: number): StalenessResult {
  * The wall-clock ceiling from `health.materialize_max_age_days`, in ms.
  *
  * A vault with no Brain config at all is the normal case for this verb -
- * `clusters run` works on any indexed vault - so an unloadable config
- * resolves the ceiling from the same defaults table an absent key
- * resolves from. That is not the gate quietly reporting clean: the
- * ceiling can only ever ADD staleness, so falling back to the default
- * cannot turn a `stale` verdict into a `fresh` one. It can only make the
- * ceiling looser than an operator who edited the key intended, and that
- * operator's config is broken in every other verb too, loudly.
+ * `clusters run` works on any indexed vault - so an ABSENT config resolves
+ * the ceiling from the defaults table, exactly as an absent key does.
+ *
+ * A config that exists and will not parse is a different answer and is not
+ * swallowed. The earlier reading here was that a default ceiling "can only
+ * make the ceiling looser than the operator intended", which is wrong in
+ * both directions: an operator who wrote 7 and typed it wrong silently gets
+ * 30, and the run then reports `skipped: "fresh"` and exits 0 over a vault
+ * whose configuration this verb could not read. Every other verb refuses
+ * that config loudly, and `--if-stale` was the one path that did not.
  */
 function materializeMaxAgeMs(vault: string): number {
-  try {
-    return resolveHealth(loadBrainConfig(vault)).materialize_max_age_days * MS_PER_DAY;
-  } catch {
+  if (!existsSync(brainConfigPath(vault))) {
     return BRAIN_HEALTH_DEFAULTS.materialize_max_age_days * MS_PER_DAY;
   }
+  return resolveHealth(loadBrainConfig(vault)).materialize_max_age_days * MS_PER_DAY;
 }
 
 /**

@@ -92,6 +92,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
+import { FileAlreadyExistsError } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
@@ -811,7 +812,14 @@ function compressInto(
   runId: string,
 ): void {
   if (existsSync(outPath)) {
-    throw new BrainSnapshotError(`refusing to overwrite an existing archive: ${outPath}`, runId);
+    // The refusal carries an EEXIST-shaped cause because the id allocator
+    // above ladders past a taken name and needs to recognise this as the
+    // collision it is. Without it the allocator sees an opaque snapshot
+    // failure, declines to retry, and aborts the destructive operation the
+    // snapshot exists to protect.
+    throw new BrainSnapshotError(`refusing to overwrite an existing archive: ${outPath}`, runId, {
+      cause: new FileAlreadyExistsError(outPath, { kind: "snapshot archive" }),
+    });
   }
   if (tools.zstd) {
     // `zstd -o` opens the destination itself and refuses an existing one.
@@ -851,6 +859,18 @@ const SUBPROCESS_MAX_BUFFER_BYTES = 256 * 1024 * 1024;
  * compressor writes to stdout and we own the destination file; when it
  * is null the compressor was given the destination itself.
  */
+/**
+ * The path a `-o <path>` compressor invocation was told to write.
+ *
+ * Read back off the argv rather than threaded separately, because the argv is
+ * what the process actually acted on: a second copy of the path could drift
+ * from the one the command used and then misclassify the failure.
+ */
+function destinationOf(args: ReadonlyArray<string>): string {
+  const flag = args.indexOf("-o");
+  return flag >= 0 ? (args[flag + 1] ?? "") : "";
+}
+
 function runCompressor(
   cmd: string,
   args: ReadonlyArray<string>,
@@ -872,7 +892,25 @@ function runCompressor(
   }
   if (r.status !== 0) {
     const stderr = (r.stderr ?? Buffer.from("")).toString("utf8").trim();
-    throw new BrainSnapshotError(`${cmd} exited with status ${r.status}: ${stderr}`, runId);
+    // `zstd -o` opens the destination itself and refuses one that already
+    // exists, and it reports that refusal the same way it reports every other
+    // failure: a non-zero status and a sentence. So when the command has
+    // ALREADY failed and the destination is now present, the failure is
+    // classified as a collision rather than left opaque.
+    //
+    // This is not the discredited "check existsSync after the throw and
+    // swallow" pattern: the error is thrown either way and nothing is
+    // retried here. Only its `cause` differs, which is what lets the id
+    // allocator ladder to the next name instead of aborting a destructive
+    // operation because a peer won the same second.
+    const lostRace = outPath === null && existsSync(destinationOf(args));
+    throw new BrainSnapshotError(
+      `${cmd} exited with status ${r.status}: ${stderr}`,
+      runId,
+      lostRace
+        ? { cause: new FileAlreadyExistsError(destinationOf(args), { kind: "snapshot archive" }) }
+        : undefined,
+    );
   }
   if (outPath === null) return;
   // Exclusive create. `wx` is what makes the gzip path refuse an

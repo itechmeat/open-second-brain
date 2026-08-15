@@ -16,6 +16,15 @@
  * that would hang becomes a `fail` with a "timed out" reason instead of
  * blocking the operator.
  *
+ * That timeout covers a probe that AWAITS. It cannot cover one that blocks
+ * the event loop, because the timer that would fire is queued behind the
+ * work it is meant to interrupt. {@link probeInstalledRuntimes} is the one
+ * probe that can: an adapter's `verify` is synchronous, and one of them
+ * shells out with a synchronous spawn. The limit is stated here rather than
+ * left for an operator to discover, and it is stated rather than papered
+ * over with an `await` that would move the call off the stack without
+ * making it interruptible.
+ *
  * The `unknown` member arrived with evidence-at-the-boundary (B5), and it
  * arrived because this docblock's own claim was false. `probeRuntimeAdapterWiring`
  * reported `pass` from in-process construction alone - it never touched
@@ -405,6 +414,14 @@ export async function probeRuntimeAdapterWiring(opts: ReadinessOptions): Promise
  * not parse, or a runtime CLI that cannot be spawned - is `unknown` for
  * that target with the thrown reason. It is emphatically not a skip: a
  * manifest we cannot read is not a machine with nothing installed.
+ */
+/**
+ * NOTE ON THE TIMEOUT: every `verify` here is synchronous, and
+ * `copilot-cli` verifies by spawning its own CLI synchronously. While that
+ * spawn runs, the event loop is blocked and the runner's timeout timer
+ * cannot fire, so this probe is the one the module-level timeout promise
+ * does not cover. Making it interruptible means an async adapter contract,
+ * which is a change to every adapter and belongs in its own unit.
  */
 export async function probeInstalledRuntimes(opts: ReadinessOptions): Promise<ReadinessVerdict> {
   registerAllAdapters();

@@ -152,6 +152,14 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "mechanical option, would silently widen the boundary they wrote",
   },
   {
+    code: "vault-include-admits-nothing",
+    reason:
+      "the allowlist as a whole matches no file in this vault, so the index would be empty. " +
+      "Which of the declared roots is wrong, and whether the answer is to fix a spelling, add " +
+      "a root or create the folder, is a question about what the operator meant to index; a " +
+      "mechanical repair would have to pick one of those on their behalf",
+  },
+  {
     code: "vault-ignore-missing-path",
     reason:
       "the ignore rule names a path that is not in this vault. It is usually a typo, but it can " +

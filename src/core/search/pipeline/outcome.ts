@@ -110,8 +110,15 @@ export interface OutcomeInput {
   readonly poolSize: number;
   /**
    * Typed degradations collected across the lanes, the counterpart of
-   * `warnings`. Mutable for the same reason: the access-recording failure
-   * below is appended here, after every lane has run.
+   * `warnings`. Mutable because it is the same sink every lane pushed into
+   * on the way here; nothing in THIS module appends to it.
+   *
+   * In particular the access-recording failure below stays a warning and
+   * gets no code. The vocabulary names what narrowed a RETRIEVAL, and that
+   * failure is a write on the recording side, after ranking, over rows the
+   * caller already has: giving it a code would tell a reader their answer
+   * was cut short when it is exactly the answer the index holds - and
+   * `searchTelemetryGaps` would file it as a recall gap.
    */
   readonly degraded: RetrievalDegradation[];
   /**

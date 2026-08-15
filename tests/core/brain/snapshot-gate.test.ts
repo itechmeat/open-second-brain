@@ -40,6 +40,8 @@ import {
   withDestructiveSnapshot,
 } from "../../../src/core/brain/snapshot-gate.ts";
 import { BrainSnapshotStoreError, listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { createSnapshot } from "../../../src/core/brain/snapshot.ts";
+import { isFileAlreadyExists } from "../../../src/core/fs-atomic.ts";
 import { brainDirs, snapshotPath, validateRunId } from "../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
@@ -302,12 +304,53 @@ describe("takeSnapshot and withDestructiveSnapshot share one archive path", () =
 
 describe("createUniqueSnapshot - the retry discriminator", () => {
   /**
-   * The creator is injected for the same reason `allocateAndCreate` takes
-   * one: it turns "a racing process claimed this id" into a deterministic,
-   * mock-free replay. The callback does exactly what the winner did -
-   * leaves the archive on disk - and then throws the collision the loser
-   * sees.
+   * The injected-creator tests below replay a collision with a synthetic
+   * typed error, which proves the LOOP but not the WIRE: they would keep
+   * passing if the real creator stopped producing a recognisable collision,
+   * and a snapshot gate that cannot recognise one aborts the destructive
+   * operation it exists to protect instead of laddering past a taken name.
+   * So this one drives the real `createSnapshot` against an archive a peer
+   * already wrote.
    */
+  test("the real creator's collision is recognisable to the discriminator", () => {
+    // The injected tests below prove the LOOP. This proves the WIRE: they
+    // would keep passing if `createSnapshot` stopped producing an error the
+    // discriminator recognises, and a gate that cannot recognise one aborts
+    // the destructive operation it exists to protect rather than laddering
+    // past a taken name.
+    const taken = "dream-2026-06-01-120000";
+    atomicWriteFileSync(snapshotPath(vault, taken), "a peer got here first");
+    let thrown: unknown;
+    try {
+      createSnapshot(vault, taken, { reason: "dream" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect(isFileAlreadyExists(thrown)).toBe(true);
+  });
+
+  test("ladders past a name a peer takes after the availability probe", () => {
+    // The gate's own probe skips a name already on disk, so the only way to
+    // reach the creator's collision is to let the peer win in the window the
+    // probe cannot see: the callback writes the winner's archive and then
+    // runs the REAL creator against it.
+    const base = "dream-2026-06-01-130000";
+    const calls: string[] = [];
+    const snapshot = createUniqueSnapshot(vault, base, (runId) => {
+      calls.push(runId);
+      if (calls.length === 1) {
+        atomicWriteFileSync(snapshotPath(vault, runId), "a peer got here first");
+      }
+      return createSnapshot(vault, runId, { reason: "dream" }).path;
+    });
+
+    expect(calls).toEqual([base, `${base}-2`]);
+    expect(snapshot.runId).toBe(`${base}-2`);
+    expect(readFileSync(snapshotPath(vault, base), "utf8")).toBe("a peer got here first");
+    expect(existsSync(snapshot.path)).toBe(true);
+  });
+
   test("retries the next run id on a typed collision", () => {
     const calls: string[] = [];
     const snapshot = createUniqueSnapshot(vault, "dream-2026-06-01-000000", (runId) => {

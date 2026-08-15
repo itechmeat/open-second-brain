@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -34,9 +34,20 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // The locked directory first: a 0-mode directory cannot be walked, so the
+  // vault removal below would fail on the test that creates one.
+  try {
+    chmodSync(join(vault, LOCKED_DIR), 0o755);
+  } catch {
+    // Only one test creates it.
+  }
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });
+
+/** A directory this vault denies itself, so `stat` answers with an errno. */
+const LOCKED_DIR = "Locked";
+const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 const handler = NER_TOOLS[0]!.handler;
 
@@ -99,6 +110,37 @@ describe("brain_intake_entities", () => {
 
   test("rejects an empty entities array with INVALID_PARAMS and writes nothing", async () => {
     await expect(handler(ctx, { entities: [] })).rejects.toThrow(MCPError);
+    expect(listEntities(vault)).toHaveLength(0);
+  });
+
+  /**
+   * The classifier refuses an unreadable source rather than calling it
+   * untrusted, and that refusal reaches the caller as an MCP error. Rethrown
+   * verbatim, the Node errno spells out `/home/<user>/<vault>/Locked/note.md`
+   * - an existence-and-permission oracle over the operator's filesystem,
+   * queried with a string the caller chose. The refusal is right; the
+   * operator's path in the answer is not.
+   */
+  test.skipIf(RUNNING_AS_ROOT)("an unreadable source fails without naming a path", async () => {
+    const locked = join(vault, LOCKED_DIR);
+    mkdirSync(locked, { recursive: true });
+    writeFileSync(join(locked, "note.md"), "bytes\n", "utf8");
+    chmodSync(locked, 0o000);
+    let thrown: unknown;
+    try {
+      await handler(ctx, {
+        source: `[[${LOCKED_DIR}/note.md]]`,
+        entities: [{ category: "concept", name: "Restaking" }],
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    const message = (thrown as Error).message;
+    expect(message).toContain(`${LOCKED_DIR}/note.md`);
+    expect(message).toContain("EACCES");
+    expect(message).not.toContain(vault);
+    expect(message).not.toContain("permission denied");
     expect(listEntities(vault)).toHaveLength(0);
   });
 

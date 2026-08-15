@@ -73,6 +73,51 @@ export interface RecallInjectOptions {
 
 export type RecallAbstainReason = "empty_prompt" | "no_matches" | "below_floor";
 
+/**
+ * Why an attempt failed, as a closed vocabulary rather than as prose.
+ *
+ * The error decision used to carry the retriever's RAW `Error.message`,
+ * and the hook copied it onto the recall-telemetry record - a synced
+ * continuity payload that `brain_recall_telemetry` returns verbatim to a
+ * model. A SQLite, store or config failure names the index file or the
+ * config path, and the shared redactor strips secret-shaped tokens, not
+ * paths. Every other producer in this tree already refuses exactly that:
+ * the trigram lane classifies its fault to a code, cross-vault replaces
+ * a failing origin's message with one, and the semantic phase carries a
+ * category.
+ *
+ * Three members because three things can fail, and each has a different
+ * repair: the corpus is too slow, the retriever is broken, or the host
+ * killed the hook before either could answer. The message itself is not
+ * discarded - it rides on {@link RecallInjectDecision.detail}, which
+ * only the local audit file is allowed to read.
+ */
+export const RECALL_INJECT_FAULT = Object.freeze({
+  /** Retrieval outlived {@link RECALL_INJECT_TIME_BUDGET_MS}. */
+  timeout: "timeout",
+  /** The retriever threw; `detail` carries what it said. */
+  retrieverFailed: "retriever_failed",
+  /** The hook's own self-watchdog fired before a decision was reached. */
+  hookCeilingExceeded: "hook_ceiling_exceeded",
+} as const);
+
+/** Closed union over {@link RECALL_INJECT_FAULT}. */
+export type RecallInjectFault = (typeof RECALL_INJECT_FAULT)[keyof typeof RECALL_INJECT_FAULT];
+
+/** Membership list; every surface renders its vocabulary from this array. */
+export const RECALL_INJECT_FAULTS: ReadonlyArray<RecallInjectFault> = Object.freeze([
+  RECALL_INJECT_FAULT.timeout,
+  RECALL_INJECT_FAULT.retrieverFailed,
+  RECALL_INJECT_FAULT.hookCeilingExceeded,
+]);
+
+/** Narrow a string read back off disk or across a tool boundary. */
+export function isRecallInjectFault(value: unknown): value is RecallInjectFault {
+  return (
+    typeof value === "string" && (RECALL_INJECT_FAULTS as ReadonlyArray<string>).includes(value)
+  );
+}
+
 export type RecallInjectDecision =
   | {
       readonly kind: "inject";
@@ -81,7 +126,18 @@ export type RecallInjectDecision =
       readonly topScore: number;
     }
   | { readonly kind: "abstain"; readonly reason: RecallAbstainReason; readonly topScore: number }
-  | { readonly kind: "error"; readonly reason: string };
+  | {
+      readonly kind: "error";
+      readonly fault: RecallInjectFault;
+      /**
+       * The originating message, for the LOCAL audit file only. Named
+       * `detail` rather than `reason` so the split is structural: a
+       * consumer reaching for a classification cannot reach this by
+       * accident, which is how the raw message got onto a synced payload
+       * in the first place.
+       */
+      readonly detail?: string;
+    };
 
 /** Typed error for a retrieval that exceeded the fixed time budget. */
 export class RecallInjectTimeoutError extends Error {
@@ -114,9 +170,13 @@ export async function decideRecallInject(
   try {
     resultSet = await withTimeBudget(retriever(query), timeBudgetMs);
   } catch (exc) {
+    if (exc instanceof RecallInjectTimeoutError) {
+      return Object.freeze({ kind: "error", fault: RECALL_INJECT_FAULT.timeout });
+    }
     return Object.freeze({
       kind: "error",
-      reason: exc instanceof RecallInjectTimeoutError ? "timeout" : errorReason(exc),
+      fault: RECALL_INJECT_FAULT.retrieverFailed,
+      detail: errorDetail(exc),
     });
   }
 
@@ -217,9 +277,62 @@ function renderNoteLine(note: { readonly title: string } & Omit<RecallCandidate,
   return `- "${note.title}" (${pointer}, ${note.searchType} ${note.score.toFixed(2)})${origin}`;
 }
 
-function errorReason(exc: unknown): string {
+/**
+ * The originating message, for the local audit file. Never reaches a
+ * telemetry payload - see {@link recallInjectTelemetryMetadata}.
+ */
+function errorDetail(exc: unknown): string {
   if (exc instanceof Error) return exc.message;
   return String(exc);
+}
+
+/**
+ * One decision as the metadata of a recall-telemetry record.
+ *
+ * Classifications and bounded numbers ONLY. This payload is appended to
+ * the continuity log, which syncs, and `brain_recall_telemetry` returns
+ * it verbatim to a model - so nothing shaped like a filesystem path or a
+ * provider sentence may appear here. Both the abstain reason and the
+ * error fault are members of closed vocabularies, which is what makes
+ * that rule checkable rather than a matter of care at each call site.
+ */
+export function recallInjectTelemetryMetadata(
+  decision: RecallInjectDecision,
+): Readonly<Record<string, unknown>> {
+  if (decision.kind === "inject") {
+    return Object.freeze({
+      decision: "inject",
+      note_count: decision.noteCount,
+      top_score: decision.topScore,
+    });
+  }
+  if (decision.kind === "abstain") {
+    return Object.freeze({
+      decision: "abstain",
+      reason: decision.reason,
+      top_score: decision.topScore,
+    });
+  }
+  return Object.freeze({ decision: "error", fault: decision.fault });
+}
+
+/**
+ * The same decision as a hook-audit line: everything the telemetry
+ * record carries, plus the originating message when there is one.
+ *
+ * The audit file is local, unsynced operational evidence under
+ * `<vault>/.open-second-brain/hook-audit/`, and the message is exactly
+ * what an operator debugging a broken retriever needs, so it stays HERE
+ * and only here. Derived from the telemetry projection rather than
+ * written out a second time: two hand-maintained shapes are how the
+ * message reached the synced payload to begin with.
+ */
+export function recallInjectAuditDetails(
+  decision: RecallInjectDecision,
+): Readonly<Record<string, unknown>> {
+  const safe = recallInjectTelemetryMetadata(decision);
+  if (decision.kind !== "error" || decision.detail === undefined) return safe;
+  return Object.freeze({ ...safe, detail: decision.detail });
 }
 
 /**
