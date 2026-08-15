@@ -34,6 +34,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
+import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
@@ -223,19 +224,32 @@ export function classifyPaths(
  * has been deleted is dropped from the manifest (so it will re-classify as
  * `new` if it ever reappears). Writes atomically and skips the write entirely
  * when nothing changed. Returns `true` when the manifest was rewritten.
+ *
+ * The read, the merge and the write are ONE critical section, held under the
+ * same sync lock every other Brain read-modify-write takes. Atomicity alone is
+ * not enough: `atomicWriteFileSync` renames a complete file into place, so no
+ * reader sees torn bytes, but two processes that both read the manifest before
+ * either wrote it would each write back a snapshot missing the other's entry.
+ * The batch planner dispatches sources across parallel subagents, so that
+ * overlap is the designed case rather than a rare one.
  */
 export function updateManifest(vault: string, paths: readonly string[]): boolean {
-  const entries: Record<string, string> = { ...readManifest(vault).entries };
-  for (const path of paths) {
-    const canonical = canonicalNotePath(path);
-    const abs = join(vault, canonical);
-    if (existsSync(abs)) {
-      entries[canonical] = hashPath(abs);
-    } else {
-      delete entries[canonical];
+  const handle = acquireLockSyncWithRetry(manifestPath(vault));
+  try {
+    const entries: Record<string, string> = { ...readManifest(vault).entries };
+    for (const path of paths) {
+      const canonical = canonicalNotePath(path);
+      const abs = join(vault, canonical);
+      if (existsSync(abs)) {
+        entries[canonical] = hashPath(abs);
+      } else {
+        delete entries[canonical];
+      }
     }
+    return writeManifestAtomic(vault, entries);
+  } finally {
+    handle.release();
   }
-  return writeManifestAtomic(vault, entries);
 }
 
 /** Recursively collect regular-file relative paths under `dir` (POSIX slashes). */

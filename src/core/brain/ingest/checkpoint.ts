@@ -29,6 +29,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
+import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -166,6 +167,12 @@ function sameSet(a: readonly string[], b: readonly string[]): boolean {
  * disabled, or the completed set (and hence the serialized bytes) unchanged. The
  * `updated_at` stamp is only bumped when the set actually grows, so a re-record
  * of an already-recorded set leaves the file byte-identical.
+ *
+ * The read, the union and the write are ONE critical section under the sync
+ * lock. A plan's items are dispatched to parallel subagents, so two of them
+ * finishing at once would otherwise each write back the completed set they
+ * read - and the later write would erase the earlier item, silently turning a
+ * done item back into pending work on the next resume.
  */
 export function recordCompleted(
   vault: string,
@@ -177,20 +184,26 @@ export function recordCompleted(
   if (!checkpointingEnabled()) return false;
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const prev = readCheckpoint(vault, planId);
-  const merged = new Set<string>(prev?.completed ?? []);
-  for (const p of paths) merged.add(canonicalNotePath(p));
-  const completed = [...merged].toSorted();
-  if (prev && sameSet(prev.completed, completed)) return false;
-  const next: IngestCheckpoint = {
-    schema_version: SCHEMA_VERSION,
-    plan_id: planId,
-    source_dir: canonicalNotePath(sourceDir),
-    completed,
-    updated_at: isoSecond(now),
-  };
-  atomicWriteFileSync(checkpointPath(vault, planId), serialize(next));
-  return true;
+  const path = checkpointPath(vault, planId);
+  const handle = acquireLockSyncWithRetry(path);
+  try {
+    const prev = readCheckpoint(vault, planId);
+    const merged = new Set<string>(prev?.completed ?? []);
+    for (const p of paths) merged.add(canonicalNotePath(p));
+    const completed = [...merged].toSorted();
+    if (prev && sameSet(prev.completed, completed)) return false;
+    const next: IngestCheckpoint = {
+      schema_version: SCHEMA_VERSION,
+      plan_id: planId,
+      source_dir: canonicalNotePath(sourceDir),
+      completed,
+      updated_at: isoSecond(now),
+    };
+    atomicWriteFileSync(path, serialize(next));
+    return true;
+  } finally {
+    handle.release();
+  }
 }
 
 /**

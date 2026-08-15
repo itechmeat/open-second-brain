@@ -27,6 +27,7 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { isFullSha } from "./reader.ts";
+import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 export interface GitCommitRecord {
@@ -174,6 +175,13 @@ function readRecords(vault: string, repoKey: string): ReadonlyArray<GitRecord> {
  * Append records, deduplicating commits by sha and tags by
  * (name, target) against everything already on disk AND earlier
  * entries of the same batch.
+ *
+ * The dedup read and the append are ONE critical section under the
+ * sync lock. Appending is atomic enough that no line is ever torn, but
+ * dedup is a read-modify-append: two processes ingesting overlapping
+ * history at once would both find a sha absent and both write it, so
+ * the store's identity guarantee holds only while the read and the
+ * append cannot interleave.
  */
 export function appendGitRecords(
   vault: string,
@@ -182,6 +190,19 @@ export function appendGitRecords(
 ): AppendGitRecordsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  const handle = acquireLockSyncWithRetry(commitsPath(vault, repoKey));
+  try {
+    return appendGitRecordsLocked(vault, repoKey, records);
+  } finally {
+    handle.release();
+  }
+}
+
+function appendGitRecordsLocked(
+  vault: string,
+  repoKey: string,
+  records: ReadonlyArray<GitRecord>,
+): AppendGitRecordsResult {
   const existing = readRecords(vault, repoKey);
   const seenShas = new Set<string>();
   // Tag identity is (name, target): a RETARGETED tag (same name, new

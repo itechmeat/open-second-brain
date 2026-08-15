@@ -116,6 +116,63 @@ export function acquireLockSync(target: string): LockHandle {
 }
 
 /**
+ * How long {@link acquireLockSyncWithRetry} keeps waiting, and the ceiling on
+ * one sleep between attempts.
+ *
+ * The budget is a WALL-CLOCK deadline rather than an attempt count because
+ * what a waiter queues behind is other writers' work, not other writers'
+ * sleeps: with n processes each folding one source into a shared file, the
+ * last arrival waits for up to n-1 whole critical sections. An attempt count
+ * bounds the number of naps, which is the wrong quantity.
+ *
+ * The sleep is JITTERED across `[1, RETRY_SLEEP_CEILING_MS]` rather than
+ * fixed. A fixed sleep makes contenders that started together retry in
+ * lockstep - they wake on the same tick, one wins, the rest sleep another
+ * whole tick - so the same budget buys far fewer real attempts.
+ *
+ * Five seconds is generous against a hold measured in milliseconds. Reaching
+ * it does not mean "busy", it means something is wrong - most likely a `.lock`
+ * left by a crashed process, which `brain doctor` reports via
+ * {@link scanStaleLocks} - so the deadline exists to make that surface as a
+ * loud `ELOCKED` instead of a hang.
+ */
+const LOCK_WAIT_BUDGET_MS = 5_000;
+const RETRY_SLEEP_CEILING_MS = 25;
+
+/**
+ * {@link acquireLockSync} with a bounded wait, for the shared files that
+ * PARALLEL processes write by design.
+ *
+ * The single-attempt policy above is justified by contention being rare -
+ * one operator, one MCP server, dream on cron. The ingest path breaks that
+ * premise on purpose: `ingest/batch-plan.ts` exists so a caller dispatches
+ * each batch as its own subagent, so several processes fold their result
+ * into the content manifest, the plan checkpoint and the git record store
+ * concurrently. There, an immediate `ELOCKED` would turn a millisecond
+ * overlap into a failed ingest.
+ *
+ * Waiting is bounded and still loud: only `ELOCKED` is retried, any other
+ * error propagates at once, and an expired budget rethrows the last
+ * `ELOCKED` (which names the lock file) rather than proceeding unlocked.
+ * Nothing is ever silently skipped.
+ */
+export function acquireLockSyncWithRetry(
+  target: string,
+  budgetMs: number = LOCK_WAIT_BUDGET_MS,
+): LockHandle {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    try {
+      return acquireLockSync(target);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "ELOCKED") throw err;
+      if (Date.now() >= deadline) throw err;
+      Bun.sleepSync(1 + Math.floor(Math.random() * RETRY_SLEEP_CEILING_MS));
+    }
+  }
+}
+
+/**
  * Walk `root` recursively and return every `.lock` file path. Used by
  * `brain_doctor` to surface stale locks left behind by a crashed
  * process.
