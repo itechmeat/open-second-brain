@@ -162,6 +162,18 @@ describe("the guard never rewrites an identifier", () => {
     expect(verdict.redacted).toBe(false);
   });
 
+  test("a URL credential under an identifier key is still scrubbed", () => {
+    // The one thing removed from an identifier, and not a collapse: the
+    // authority is not part of what the identifier identifies, so the
+    // reference still resolves to the same resource afterwards.
+    const verdict = redactForEgress("brain-continuity-export", {
+      source_path: "https://admin:hunter2@db.example.com/x",
+    });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.source_path).toBe(`https://${REDACTION_PLACEHOLDER}@db.example.com/x`);
+  });
+
   test("a real token in a value position is still redacted", () => {
     // The complement: identifier handling must not become a hole.
     const verdict = redactForEgress("brain-bank-export", { body: `paste ${VENDOR_TOKEN} here` });

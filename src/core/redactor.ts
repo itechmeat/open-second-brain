@@ -810,9 +810,20 @@ export function redactStructured(
       return PLACEHOLDER;
     }
     if (typeof value === "string" && (underIdentifierKey || isPathLikeValue(value))) {
-      // Checked, never rewritten: see the identifier section above.
+      // Checked, never collapsed: see the identifier section above.
       if (identifierCarriesSecret(value)) record(location);
-      return value;
+      // One exception, and it is not a collapse: a `user:pass@host`
+      // authority is not part of what an identifier identifies. Stripping
+      // it leaves the identifier pointing at the same resource, where
+      // replacing the identifier would point it at nothing. Without this,
+      // a URL under a key named `source_path` would be exempt from the
+      // credential pass that catches the same URL one key over.
+      const cleaned =
+        opts.redactInfra === true || opts.redactUrlCredentials === true
+          ? redactUrlCredentials(value)
+          : value;
+      if (cleaned !== value) redacted = true;
+      return cleaned;
     }
     if (typeof value === "string") {
       // Truncation comes from the scan, never from a substring test on the
