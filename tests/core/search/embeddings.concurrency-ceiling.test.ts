@@ -229,7 +229,8 @@ describe("the ceiling spans the process", () => {
     const second = new OpenAICompatProvider(ceilingCfg(server.url, { concurrency: 3 }));
 
     await first.embed(["a"]);
-    expect(second.embed(["b"])).rejects.toThrow(/embedding_concurrency/);
+    await expect(second.embed(["b"])).rejects.toThrow(SearchError);
+    await expect(second.embed(["b"])).rejects.toThrow(/embedding_concurrency/);
   });
 
   test("the zeroentropy provider is bounded the same way", async () => {
