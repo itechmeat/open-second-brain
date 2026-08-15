@@ -32,6 +32,22 @@ let home: string;
 let configPath: string;
 let savedVaultDir: string | undefined;
 
+/**
+ * What the canonical resolver answers, in the shape the install verb
+ * consumes it.
+ *
+ * `resolveVault` returns `string | null` and every caller decides what an
+ * unresolved vault means; `resolveInstallVault` answers `""` because
+ * `InstallEnv.vault` is typed `string` and both of its readers - `runCheck`
+ * and `loadPayload` - refuse an empty vault BY NAME rather than joining a
+ * path onto it. Collapsing the null here is what makes the comparison
+ * total, so a divergence between the two chains fails on the PATH rather
+ * than on the type.
+ */
+function canonical(): string {
+  return resolveVault(configPath) ?? "";
+}
+
 beforeEach(() => {
   configVault = mkdtempSync(join(tmpdir(), "osb-ivr-cfg-"));
   envVault = mkdtempSync(join(tmpdir(), "osb-ivr-env-"));
@@ -56,13 +72,13 @@ describe("o2b install shares the canonical vault chain", () => {
   test("VAULT_DIR wins over the config key, exactly as resolveVault does", () => {
     process.env["VAULT_DIR"] = envVault;
     expect(resolveInstallVault(null, configPath)).toBe(envVault);
-    expect(resolveInstallVault(null, configPath)).toBe(resolveVault(configPath));
+    expect(resolveInstallVault(null, configPath)).toBe(canonical());
   });
 
   test("the config key answers when VAULT_DIR is unset", () => {
     delete process.env["VAULT_DIR"];
     expect(resolveInstallVault(null, configPath)).toBe(configVault);
-    expect(resolveInstallVault(null, configPath)).toBe(resolveVault(configPath));
+    expect(resolveInstallVault(null, configPath)).toBe(canonical());
   });
 
   test("--vault outranks both - it is the operator naming the target directly", () => {
@@ -81,7 +97,7 @@ describe("o2b install shares the canonical vault chain", () => {
     process.env["VAULT_DIR"] = "~/some-vault";
     const resolved = resolveInstallVault(null, configPath);
     expect(resolved.startsWith("~")).toBe(false);
-    expect(resolved).toBe(resolveVault(configPath));
+    expect(resolved).toBe(canonical());
   });
 });
 
