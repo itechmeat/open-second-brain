@@ -25,8 +25,6 @@ import {
 import type { LinkOutputFormat } from "./brain/wikilink.ts";
 import type { ConfigDiscovery } from "./types.ts";
 
-const SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"] as const;
-
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
 /**
@@ -1100,9 +1098,10 @@ export function resolveSessionCaptureRoles(configPath?: string): SessionCaptureR
 /**
  * Inbound Telegram capture bot token (Knowledge intake suite, t_f8f5ef6a).
  * Order: `TELEGRAM_BOT_TOKEN` env -> `telegram_bot_token` config -> null.
- * The key contains "token", so {@link redactMapping} redacts it from any
- * config snapshot. `null` (the default) means the capture runner exits with
- * a typed error rather than starting; nothing runs without an explicit token.
+ * The key contains "token", so `redactConfigMapping` (src/core/egress)
+ * redacts it from any config snapshot. `null` (the default) means the
+ * capture runner exits with a typed error rather than starting; nothing
+ * runs without an explicit token.
  */
 export function resolveTelegramBotToken(configPath?: string): string | null {
   const env = process.env["TELEGRAM_BOT_TOKEN"]?.trim();
@@ -1127,20 +1126,6 @@ export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
     if (id.length > 0 && !ids.includes(id)) ids.push(id);
   }
   return ids;
-}
-
-/** Replace values for keys whose name suggests a secret with `[REDACTED]`. */
-export function redactMapping<T extends Record<string, unknown>>(data: T): Record<string, unknown> {
-  const redacted: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(data)) {
-    const lowered = key.toLowerCase();
-    if (SECRET_KEY_PARTS.some((part) => lowered.includes(part))) {
-      redacted[key] = "[REDACTED]";
-    } else {
-      redacted[key] = value;
-    }
-  }
-  return redacted;
 }
 
 function expandTilde(p: string): string {

@@ -118,6 +118,16 @@ import {
   PAGE_LINT_SKIP_REASONS,
 } from "../../../src/core/brain/page-lint.ts";
 import {
+  EGRESS_REDACTION,
+  EGRESS_REDACTION_STATUSES,
+  isEgressRedactionStatus,
+} from "../../../src/core/egress/registry.ts";
+import {
+  EGRESS_OUTCOME,
+  EGRESS_OUTCOMES,
+  isEgressOutcome,
+} from "../../../src/core/egress/guard.ts";
+import {
   isSchemaCompletenessRule,
   isSchemaNodeKind,
   SCHEMA_COMPLETENESS_RULE,
@@ -408,6 +418,29 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: PAGE_LINT_SKIP_REASON,
     members: PAGE_LINT_SKIP_REASONS,
     guard: isPageLintSkipReason,
+  },
+  {
+    // C1. What a given export path does about secrets on the way out.
+    // Registered because the value is the load-bearing field of a
+    // declaration that a source-reading census checks against the code:
+    // a status renamed here and left spelled the old way in the census
+    // would silently stop matching, and every entry would read as
+    // accounted for.
+    name: "EGRESS_REDACTION",
+    values: EGRESS_REDACTION,
+    members: EGRESS_REDACTION_STATUSES,
+    guard: isEgressRedactionStatus,
+  },
+  {
+    // C1. Released or refused at the export boundary. Registered
+    // separately from the status above because they answer different
+    // questions - what a PATH does in general, and what happened to ONE
+    // payload - and a guard that accepted both would let a refusal be
+    // read back as a policy.
+    name: "EGRESS_OUTCOME",
+    values: EGRESS_OUTCOME,
+    members: EGRESS_OUTCOMES,
+    guard: isEgressOutcome,
   },
 ]);
 

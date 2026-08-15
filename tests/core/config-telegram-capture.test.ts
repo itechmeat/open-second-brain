@@ -9,11 +9,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-  redactMapping,
-  resolveTelegramBotToken,
-  resolveTelegramCaptureAllowlist,
-} from "../../src/core/config.ts";
+import { resolveTelegramBotToken, resolveTelegramCaptureAllowlist } from "../../src/core/config.ts";
+import { redactConfigMapping } from "../../src/core/egress/guard.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 
 let tmp: string;
 const saved: Record<string, string | undefined> = {};
@@ -69,8 +67,11 @@ test("a numeric YAML token value degrades safely and never throws", () => {
   expect(resolveTelegramCaptureAllowlist(cfg("telegram_chat_allowlist: 100\n"))).toEqual(["100"]);
 });
 
-test("redactMapping hides the bot token but keeps the allowlist", () => {
-  const out = redactMapping({ telegram_bot_token: "secret", telegram_chat_allowlist: "100" });
-  expect(out["telegram_bot_token"]).toBe("[REDACTED]");
+test("redactConfigMapping hides the bot token but keeps the allowlist", () => {
+  const out = redactConfigMapping({
+    telegram_bot_token: "secret",
+    telegram_chat_allowlist: "100",
+  });
+  expect(out["telegram_bot_token"]).toBe(REDACTION_PLACEHOLDER);
   expect(out["telegram_chat_allowlist"]).toBe("100");
 });

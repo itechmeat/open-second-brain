@@ -13,6 +13,7 @@ import {
   slugify,
 } from "../../src/mcp/index.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -359,7 +360,9 @@ describe("tool calls", () => {
     // ones like config.vault_path.
     expect(JSON.stringify(s)).not.toContain(vault);
     expect(s.vault_exists).toBe(true);
-    expect(s.config.api_key).toBe("[REDACTED]");
+    // Was `[REDACTED]`: the key-name-only copy in config.ts is now the
+    // shared redactor's structured pass, and with it the one placeholder.
+    expect(s.config.api_key).toBe(REDACTION_PLACEHOLDER);
     expect(s.config_keys).toContain("vault_path");
   });
 

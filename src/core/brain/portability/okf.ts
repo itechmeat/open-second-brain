@@ -70,6 +70,14 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 export const OKF_SCHEMA_VERSION = "1";
 export const OKF_PRODUCER = "open-second-brain";
 
+/**
+ * Bundle-relative filename of the machine-readable manifest. Named
+ * because three sites spelled it as a literal and a fourth - the export
+ * verb, which re-serialises this one file after redacting the manifest
+ * tree - would have made four.
+ */
+export const OKF_MANIFEST_FILENAME = "okf.json";
+
 /** Vault-relative root the default (untrusted) import stages pages under. */
 export const OKF_REVIEW_REL = "OKF Review";
 
@@ -370,6 +378,16 @@ function renderIndex(manifest: OkfManifest): string {
 }
 
 /**
+ * Serialise a manifest to the exact bytes `okf.json` carries. Exported
+ * because the export verb redacts the manifest as a TREE - a pass over
+ * serialised JSON can eat a closing quote - and then has to re-render
+ * this one file from the redacted result.
+ */
+export function renderOkfManifest(manifest: OkfManifest): string {
+  return JSON.stringify(manifest, null, 2) + "\n";
+}
+
+/**
  * Build an OKF bundle write-plan from the vault. Pure and read-only:
  * returns the manifest plus every file to write. Content is
  * deterministic across runs (pages and log days are sorted); only
@@ -399,7 +417,7 @@ export function buildOkfBundle(vault: string): OkfBundle {
   };
 
   const files: OkfBundleFile[] = [
-    { path: "okf.json", contents: JSON.stringify(manifest, null, 2) + "\n" },
+    { path: OKF_MANIFEST_FILENAME, contents: renderOkfManifest(manifest) },
     { path: "index.md", contents: renderIndex(manifest) },
     { path: "log.md", contents: log.contents },
   ];
@@ -503,7 +521,7 @@ function asManifestPage(value: unknown): OkfManifestPage | null {
  * has). An unsupported schema or absent manifest throws {@link OkfError}.
  */
 export function readOkfBundle(dir: string): ParsedOkfBundle {
-  const manifestPath = join(dir, "okf.json");
+  const manifestPath = join(dir, OKF_MANIFEST_FILENAME);
   if (!existsSync(manifestPath)) {
     throw new OkfError(`not an OKF bundle: ${manifestPath} is missing`);
   }

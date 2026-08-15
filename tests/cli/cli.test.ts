@@ -13,6 +13,7 @@ import { join, resolve } from "node:path";
 
 import { BRAIN_INDEX_REL, BRAIN_ROOT_REL } from "../../src/core/brain/paths.ts";
 import { isReadinessStatus } from "../../src/core/doctor-readiness.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
@@ -373,7 +374,10 @@ describe("export-config", () => {
     const r = await runCli(["export-config", "--config", config, "--output", out]);
     expect(r.returncode).toBe(0);
     const data = JSON.parse(readFileSync(out, "utf8"));
-    expect(data.config.api_key).toBe("[REDACTED]");
+    // `[REDACTED]` until the key-name-only copy in config.ts was collapsed
+    // into the shared redactor; this is now the one placeholder spelling
+    // every redaction in the project emits.
+    expect(data.config.api_key).toBe(REDACTION_PLACEHOLDER);
     expect(data.config.vault_path).toBe("/tmp/vault");
   });
 });

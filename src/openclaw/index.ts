@@ -11,7 +11,8 @@
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
-import { discoverConfig, redactMapping, resolveAgentName } from "../core/config.ts";
+import { discoverConfig, resolveAgentName } from "../core/config.ts";
+import { redactConfigMapping } from "../core/egress/guard.ts";
 import { probeVaultDirectory } from "../core/vault-presence.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
@@ -77,7 +78,7 @@ export default definePluginEntry({
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
-          config: redactMapping(discovery.data),
+          config: redactConfigMapping(discovery.data),
           vault_path: vault,
           vault_exists: presence.unexaminable ?? presence.present,
         };

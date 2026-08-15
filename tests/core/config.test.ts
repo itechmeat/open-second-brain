@@ -8,7 +8,6 @@ import {
   defaultConfigPath,
   discoverConfig,
   parseSimpleYaml,
-  redactMapping,
   resolveAgentName,
   resolveExposeHostPaths,
   resolveLinkOutputFormat,
@@ -24,6 +23,8 @@ import {
   vaultStoreReference,
   VAULT_STORE_REF_PREFIX,
 } from "../../src/core/config.ts";
+import { redactConfigMapping } from "../../src/core/egress/guard.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -195,12 +196,20 @@ describe("setConfigValue", () => {
   });
 });
 
-describe("redactMapping", () => {
+describe("redactConfigMapping", () => {
+  // `redactMapping` lived in config.ts and matched five substrings against
+  // key NAMES only. It is now the shared redactor's structured pass,
+  // reached through the egress module, and it inspects values too.
   test("redacts secret-like keys", () => {
-    const out = redactMapping({ api_key: "abc", path: "/tmp/v", token: "xyz" });
-    expect(out["api_key"]).toBe("[REDACTED]");
-    expect(out["token"]).toBe("[REDACTED]");
+    const out = redactConfigMapping({ api_key: "abc", path: "/tmp/v", token: "xyz" });
+    expect(out["api_key"]).toBe(REDACTION_PLACEHOLDER);
+    expect(out["token"]).toBe(REDACTION_PLACEHOLDER);
     expect(out["path"]).toBe("/tmp/v");
+  });
+
+  test("redacts a credential value under a key name that suggests nothing", () => {
+    const out = redactConfigMapping({ scratch: "sk-live-9f8e7d6c5b4a32100112" });
+    expect(out["scratch"]).toBe(REDACTION_PLACEHOLDER);
   });
 });
 

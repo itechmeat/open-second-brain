@@ -15,11 +15,11 @@ import {
   ConfigReadError,
   defaultConfigPath,
   discoverConfig,
-  redactMapping,
   resolveMcpToolProfile,
   setConfigValue,
   validateTimezoneName,
 } from "../core/config.ts";
+import { EGRESS_OUTCOME, redactForEgress } from "../core/egress/guard.ts";
 import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
@@ -385,21 +385,37 @@ async function cmdDoctor(argv: string[]): Promise<number> {
   return failed === 0 && readinessFailed === 0 ? 0 : 1;
 }
 
+/**
+ * `o2b export-config --output <file>` - the machine-config snapshot an
+ * operator hands to someone else when reporting a problem, which is
+ * exactly why it is an egress path (registry entry `config-export`).
+ *
+ * It used to redact through a private copy in `config.ts` that matched
+ * five substrings against KEY NAMES and never inspected a value, so a
+ * credential stored under a name that copy did not recognise was written
+ * out in full. Both halves now come from the shared redactor, and a value
+ * the redactor could only partially scan refuses the write instead of
+ * producing a file that claims to be clean.
+ */
 async function cmdExportConfig(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
     config: { type: "string" },
     output: { type: "string", required: true },
   });
   const result = discoverConfig(flags["config"] as string | undefined);
-  const snapshot = {
+  const verdict = redactForEgress("config-export", {
     config_path: String(result.path),
     config_exists: result.exists,
-    config: redactMapping(result.data),
-  };
+    config: result.data as Record<string, unknown>,
+  });
+  if (verdict.outcome !== EGRESS_OUTCOME.released) {
+    process.stderr.write(`error: ${verdict.detail}\n`);
+    return 1;
+  }
   const output = String(flags["output"]);
   try {
     mkdirSync(resolve(output, ".."), { recursive: true });
-    writeFileSync(output, JSON.stringify(snapshot, sortedReplacer, 2) + "\n", "utf8");
+    writeFileSync(output, JSON.stringify(verdict.payload, sortedReplacer, 2) + "\n", "utf8");
   } catch (exc) {
     process.stderr.write(`error: failed to export config: ${(exc as Error).message ?? exc}\n`);
     return 1;

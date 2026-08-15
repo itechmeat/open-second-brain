@@ -32,7 +32,7 @@ var __toESM = (mod, isNodeMode, target) => {
 var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, mod), mod.exports);
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
-// node_modules/graceful-fs/polyfills.js
+// ../../../node_modules/graceful-fs/polyfills.js
 var require_polyfills = __commonJS((exports, module) => {
   var constants = __require("constants");
   var origCwd = process.cwd;
@@ -335,7 +335,7 @@ var require_polyfills = __commonJS((exports, module) => {
   }
 });
 
-// node_modules/graceful-fs/legacy-streams.js
+// ../../../node_modules/graceful-fs/legacy-streams.js
 var require_legacy_streams = __commonJS((exports, module) => {
   var Stream = __require("stream").Stream;
   module.exports = legacy;
@@ -432,7 +432,7 @@ var require_legacy_streams = __commonJS((exports, module) => {
   }
 });
 
-// node_modules/graceful-fs/clone.js
+// ../../../node_modules/graceful-fs/clone.js
 var require_clone = __commonJS((exports, module) => {
   module.exports = clone;
   var getPrototypeOf = Object.getPrototypeOf || function(obj) {
@@ -452,7 +452,7 @@ var require_clone = __commonJS((exports, module) => {
   }
 });
 
-// node_modules/graceful-fs/graceful-fs.js
+// ../../../node_modules/graceful-fs/graceful-fs.js
 var require_graceful_fs = __commonJS((exports, module) => {
   var fs = __require("fs");
   var polyfills = require_polyfills();
@@ -810,7 +810,7 @@ GFS4: `);
   }
 });
 
-// node_modules/retry/lib/retry_operation.js
+// ../../../node_modules/retry/lib/retry_operation.js
 var require_retry_operation = __commonJS((exports, module) => {
   function RetryOperation(timeouts, options) {
     if (typeof options === "boolean") {
@@ -939,7 +939,7 @@ var require_retry_operation = __commonJS((exports, module) => {
   };
 });
 
-// node_modules/retry/lib/retry.js
+// ../../../node_modules/retry/lib/retry.js
 var require_retry = __commonJS((exports) => {
   var RetryOperation = require_retry_operation();
   exports.operation = function(options) {
@@ -1023,7 +1023,7 @@ var require_retry = __commonJS((exports) => {
   };
 });
 
-// node_modules/signal-exit/signals.js
+// ../../../node_modules/signal-exit/signals.js
 var require_signals = __commonJS((exports, module) => {
   module.exports = [
     "SIGABRT",
@@ -1040,7 +1040,7 @@ var require_signals = __commonJS((exports, module) => {
   }
 });
 
-// node_modules/signal-exit/index.js
+// ../../../node_modules/signal-exit/index.js
 var require_signal_exit = __commonJS((exports, module) => {
   var process2 = global.process;
   var processOk = function(process3) {
@@ -1193,7 +1193,7 @@ var require_signal_exit = __commonJS((exports, module) => {
   var processEmit;
 });
 
-// node_modules/proper-lockfile/lib/mtime-precision.js
+// ../../../node_modules/proper-lockfile/lib/mtime-precision.js
 var require_mtime_precision = __commonJS((exports, module) => {
   var cacheSymbol = Symbol();
   function probe(file, fs, callback) {
@@ -1232,7 +1232,7 @@ var require_mtime_precision = __commonJS((exports, module) => {
   exports.getMtime = getMtime;
 });
 
-// node_modules/proper-lockfile/lib/lockfile.js
+// ../../../node_modules/proper-lockfile/lib/lockfile.js
 var require_lockfile = __commonJS((exports, module) => {
   var path = __require("path");
   var fs = require_graceful_fs();
@@ -1457,7 +1457,7 @@ var require_lockfile = __commonJS((exports, module) => {
   exports.getLocks = getLocks;
 });
 
-// node_modules/proper-lockfile/lib/adapter.js
+// ../../../node_modules/proper-lockfile/lib/adapter.js
 var require_adapter = __commonJS((exports, module) => {
   var fs = require_graceful_fs();
   function createSyncFs(fs2) {
@@ -1519,7 +1519,7 @@ var require_adapter = __commonJS((exports, module) => {
   };
 });
 
-// node_modules/proper-lockfile/index.js
+// ../../../node_modules/proper-lockfile/index.js
 var require_proper_lockfile = __commonJS((exports, module) => {
   var lockfile = require_lockfile();
   var { toPromise, toSync, toSyncOptions } = require_adapter();
@@ -1590,7 +1590,6 @@ var WIKI_LINK_FORMATS = Object.freeze([
 var SUFFIX_INDEX_MEMO = new WeakMap;
 
 // src/core/config.ts
-var SECRET_KEY_PARTS = ["key", "token", "secret", "password", "credential"];
 var UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze(["win32"]);
 
 class UnsupportedPlatformError extends Error {
@@ -1690,24 +1689,314 @@ function resolveAgentName(configPath) {
     return value;
   return "agent";
 }
-function redactMapping(data) {
-  const redacted = {};
-  for (const [key, value] of Object.entries(data)) {
-    const lowered = key.toLowerCase();
-    if (SECRET_KEY_PARTS.some((part) => lowered.includes(part))) {
-      redacted[key] = "[REDACTED]";
-    } else {
-      redacted[key] = value;
-    }
-  }
-  return redacted;
-}
 function expandTilde(p) {
   if (p === "~")
     return homedir();
   if (p.startsWith("~/"))
     return join(homedir(), p.slice(2));
   return p;
+}
+
+// src/core/redactor.ts
+var REDACTION_PLACEHOLDER = "***REDACTED***";
+var PLACEHOLDER = REDACTION_PLACEHOLDER;
+var PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
+var MAX_REDACTOR_INPUT = 1024 * 1024;
+var SCAN_TRUNCATED_TOKEN = "***SCAN_TRUNCATED***";
+var SCAN_TRUNCATED_MARKER = `
+
+${SCAN_TRUNCATED_TOKEN} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` + `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]
+`;
+function wasScanTruncated(text) {
+  return typeof text === "string" && text.includes(SCAN_TRUNCATED_TOKEN);
+}
+var PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
+var PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;
+var SECRET_KEYS = [
+  "api_key",
+  "token",
+  "access_token",
+  "refresh_token",
+  "bearer",
+  "secret",
+  "client_secret",
+  "authorization",
+  "private_key",
+  "password",
+  "passwd",
+  "pwd",
+  "credential",
+  "credentials",
+  "session_token"
+];
+var KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join("|");
+var SECRET_KEY_NAME_FRAGMENTS = ["key"];
+var SECRET_KEY_NAME_RE = new RegExp(`(?:${KEY_PATTERN}|${SECRET_KEY_NAME_FRAGMENTS.join("|")})`, "i");
+function isSecretKeyName(name) {
+  return typeof name === "string" && SECRET_KEY_NAME_RE.test(name);
+}
+var ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
+var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})(\\s*:\\s*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
+var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
+var BEARER_RE = /\b(Bearer\s+)([A-Za-z0-9._\-+/=]+)/gi;
+var IPV4_OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+var IPV4 = `${IPV4_OCTET}(?:\\.${IPV4_OCTET}){3}`;
+var BASIC_AUTH_URL_RE = /\b([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)([^\s/:@]+):([^\s/@]+)@/g;
+var IPV4_PORT_RE = new RegExp(`\\b${IPV4}:\\d{1,5}\\b`, "g");
+var FQDN_PORT_SOURCE_EXTS = "js|ts|tsx|jsx|py|json|rs|go|java|rb|php|c|cc|cpp|cxx|h|hpp|css|scss|sass|less|" + "html|htm|xml|yaml|yml|toml|ini|cfg|md|markdown|sh|bash|sql|vue|svelte|gradle|" + "kt|swift|scala|clj|ex|exs|erl|elm|dart|lua|pl|pm|r|jl|tf|lock|map|txt|csv|log";
+var FQDN_PORT_RE = new RegExp("\\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\\.)+(?!(" + FQDN_PORT_SOURCE_EXTS + "):\\d)[a-zA-Z]{2,63}:\\d{1,5}\\b", "g");
+var INTERNAL_HOST_RE = /\b(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+(?:internal|intranet|localdomain|local|lan|corp|home)\b/gi;
+var IPV6_RE = new RegExp("(?<![\\w:.])(?:" + "(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}" + "|" + "(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{0,4}" + "|" + "::(?:[0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4}" + ")(?![\\w:.])", "g");
+var IPV4_BARE_RE = new RegExp(`(?<![\\w.])${IPV4}(?![\\w.])`, "g");
+function isPrivateOrReservedIPv4(ip) {
+  const octets = ip.split(".");
+  const a = Number.parseInt(octets[0] ?? "", 10);
+  const b = Number.parseInt(octets[1] ?? "", 10);
+  if (a === 0 || a === 10 || a === 127)
+    return true;
+  if (a === 172 && b >= 16 && b <= 31)
+    return true;
+  if (a === 192 && b === 168)
+    return true;
+  if (a === 169 && b === 254)
+    return true;
+  if (a === 100 && b >= 64 && b <= 127)
+    return true;
+  if (a >= 224)
+    return true;
+  return false;
+}
+function isPrivateOrReservedIPv6(ip) {
+  const lower = ip.toLowerCase();
+  if (lower === "::" || lower === "::1")
+    return true;
+  if (/^fe[89ab]/.test(lower))
+    return true;
+  if (/^f[cd]/.test(lower))
+    return true;
+  return false;
+}
+var VENDOR_TOKEN_RE = new RegExp([
+  "\\b(?:sk|rk|pk)[-_][A-Za-z0-9._-]{3,200}",
+  "\\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{6,255}",
+  "\\bgithub_pat_[A-Za-z0-9_]{6,255}",
+  "\\bxox[baprs]-[A-Za-z0-9-]{6,200}",
+  "\\bAKIA[0-9A-Z]{16}\\b",
+  "\\bAIza[0-9A-Za-z._-]{10,100}",
+  "\\bglpat-[A-Za-z0-9_-]{6,100}"
+].join("|"), "g");
+var HIGH_ENTROPY_TOKEN_RE = /\b(?=[A-Za-z0-9_-]{24,200}\b)(?=[A-Za-z0-9_-]{0,199}[A-Za-z])(?=[A-Za-z0-9_-]{0,199}\d)[A-Za-z0-9_-]{24,200}\b/g;
+function redactBareTokens(text) {
+  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, PLACEHOLDER);
+}
+function redactUrlCredentials(text) {
+  return text.replace(BASIC_AUTH_URL_RE, (_m, scheme) => `${scheme}${PLACEHOLDER}@`);
+}
+function redactInfraTopology(text) {
+  let out = redactUrlCredentials(text);
+  out = out.replace(IPV4_PORT_RE, PLACEHOLDER);
+  out = out.replace(FQDN_PORT_RE, PLACEHOLDER);
+  out = out.replace(INTERNAL_HOST_RE, PLACEHOLDER);
+  out = out.replace(IPV6_RE, (match) => isPrivateOrReservedIPv6(match) ? match : PLACEHOLDER);
+  out = out.replace(IPV4_BARE_RE, (match) => isPrivateOrReservedIPv4(match) ? match : PLACEHOLDER);
+  return out;
+}
+function stripPrivateRegions(text) {
+  if (!text)
+    return text;
+  let output = "";
+  let cursor = 0;
+  PRIVATE_OPEN_TAG_RE.lastIndex = 0;
+  PRIVATE_CLOSE_TAG_RE.lastIndex = 0;
+  while (cursor < text.length) {
+    PRIVATE_OPEN_TAG_RE.lastIndex = cursor;
+    const openMatch = PRIVATE_OPEN_TAG_RE.exec(text);
+    if (!openMatch) {
+      output += text.slice(cursor);
+      break;
+    }
+    output += text.slice(cursor, openMatch.index);
+    output += PRIVATE_REGION_PLACEHOLDER;
+    let depth = 1;
+    let scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+    while (depth > 0) {
+      PRIVATE_OPEN_TAG_RE.lastIndex = scan;
+      PRIVATE_CLOSE_TAG_RE.lastIndex = scan;
+      const nextOpen = PRIVATE_OPEN_TAG_RE.exec(text);
+      const nextClose = PRIVATE_CLOSE_TAG_RE.exec(text);
+      if (!nextClose)
+        return output;
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1;
+        scan = PRIVATE_OPEN_TAG_RE.lastIndex;
+      } else {
+        depth -= 1;
+        scan = PRIVATE_CLOSE_TAG_RE.lastIndex;
+      }
+    }
+    cursor = scan;
+  }
+  return output;
+}
+function redactRawOutput(text, opts = {}) {
+  if (!text)
+    return text;
+  let out = text;
+  for (const literal of opts.literals ?? []) {
+    if (literal.length === 0)
+      continue;
+    out = out.split(literal).join(PLACEHOLDER);
+  }
+  const maxInput = opts.maxInput ?? MAX_REDACTOR_INPUT;
+  if (out.length > maxInput)
+    out = out.slice(0, maxInput) + SCAN_TRUNCATED_MARKER;
+  out = stripPrivateRegions(out);
+  out = out.replace(JSON_ENTRY_RE, (_match, keyPart, value) => {
+    if (value.startsWith('"'))
+      return `${keyPart}"${PLACEHOLDER}"`;
+    return `${keyPart}${PLACEHOLDER}`;
+  });
+  out = out.replace(ENV_RE, (_match, key, sep) => {
+    return `${key}${sep}${PLACEHOLDER}`;
+  });
+  out = out.replace(BEARER_RE, (_match, prefix) => `${prefix}${PLACEHOLDER}`);
+  out = out.replace(COLON_VALUE_RE, (match, key, sep, value) => {
+    if (value.includes(PLACEHOLDER))
+      return match;
+    if (value.startsWith('"') && value.endsWith('"')) {
+      return `${key}${sep}"${PLACEHOLDER}"`;
+    }
+    if (value.startsWith("'") && value.endsWith("'")) {
+      return `${key}${sep}'${PLACEHOLDER}'`;
+    }
+    return `${key}${sep}${PLACEHOLDER}`;
+  });
+  if (opts.redactTokens)
+    out = redactBareTokens(out);
+  if (opts.redactInfra)
+    out = redactInfraTopology(out);
+  else if (opts.redactUrlCredentials)
+    out = redactUrlCredentials(out);
+  return out;
+}
+function isPlainContainer(value) {
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+function redactStructured(input, opts = {}) {
+  let redacted = false;
+  let truncated = false;
+  const walk = (value, underSecretKey) => {
+    if (underSecretKey) {
+      if (value === null || value === undefined)
+        return value;
+      redacted = true;
+      return PLACEHOLDER;
+    }
+    if (typeof value === "string") {
+      const out = redactRawOutput(value, opts);
+      if (out !== value)
+        redacted = true;
+      if (wasScanTruncated(out) && !wasScanTruncated(value))
+        truncated = true;
+      return out;
+    }
+    if (Array.isArray(value))
+      return value.map((item) => walk(item, false));
+    if (typeof value === "object" && value !== null) {
+      if (!isPlainContainer(value))
+        return value;
+      const out = {};
+      for (const [key, child] of Object.entries(value)) {
+        out[key] = walk(child, isSecretKeyName(key));
+      }
+      return out;
+    }
+    return value;
+  };
+  return { value: walk(input, false), redacted, truncated };
+}
+
+// src/core/egress/registry.ts
+var EGRESS_REDACTION = Object.freeze({
+  sharedRedactor: "shared_redactor",
+  upstreamReadModel: "upstream_read_model",
+  noVaultContent: "no_vault_content"
+});
+var EGRESS_REDACTION_STATUSES = Object.freeze([
+  EGRESS_REDACTION.sharedRedactor,
+  EGRESS_REDACTION.upstreamReadModel,
+  EGRESS_REDACTION.noVaultContent
+]);
+var R = EGRESS_REDACTION;
+var EGRESS_SITES = Object.freeze({
+  "brain-bank-export": {
+    id: "brain-bank-export",
+    verb: "o2b brain bank-export",
+    module: "src/cli/brain/verbs/bank-export.ts",
+    redaction: R.sharedRedactor,
+    reason: "the widest export in the tree: preferences, the page graph, page contracts and " + "the sources dashboard composed into one file. Redaction runs over the bundle " + "TREE and the JSON is serialised afterwards, so a note whose text happens to " + "contain a credential assignment cannot mangle the document's own quoting."
+  },
+  "brain-graph-export": {
+    id: "brain-graph-export",
+    verb: "o2b brain graph-export",
+    module: "src/cli/brain/verbs/graph-export.ts",
+    redaction: R.sharedRedactor,
+    reason: "carries no page body, but does carry every page title, path and typed-relation " + "target - a credential pasted into a title left through here verbatim."
+  },
+  "brain-okf-export": {
+    id: "brain-okf-export",
+    verb: "o2b brain okf-export",
+    module: "src/cli/brain/verbs/okf-export.ts",
+    redaction: R.sharedRedactor,
+    reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise."
+  },
+  "brain-preference-export": {
+    id: "brain-preference-export",
+    verb: "o2b brain export",
+    module: "src/cli/brain/verbs/export.ts",
+    redaction: R.sharedRedactor,
+    reason: "preference principles are free text an agent wrote, and the llms-txt form is " + "meant to be pasted into a foreign prompt - the destination least likely to be " + "read before it is shared."
+  },
+  "config-export": {
+    id: "config-export",
+    verb: "o2b export-config",
+    module: "src/cli/main.ts",
+    redaction: R.sharedRedactor,
+    reason: "the machine-config snapshot an operator hands to someone else when reporting a " + "problem. It used a private copy that matched five substrings against KEY NAMES " + "and never inspected a value, so a credential stored under a name that copy did " + "not recognise was written out in full."
+  },
+  "brain-continuity-export": {
+    id: "brain-continuity-export",
+    verb: "o2b brain continuity export",
+    module: "src/cli/brain/verbs/continuity.ts",
+    redaction: R.upstreamReadModel,
+    reason: "the one path that already redacted. It consumes the continuity read model, " + "which drops `private` records and passes every string through the shared " + "redactor before the verb sees it (`continuity/redaction.ts`). A second pass here " + "would change its bytes without closing anything, so the coverage is declared " + "rather than duplicated. What it does NOT have is the truncation refusal the " + "other five gained: an oversized continuity record is marked in place by the " + "read model and exported carrying that marker."
+  },
+  "install-adapter-out": {
+    id: "install-adapter-out",
+    verb: "o2b install --out",
+    module: "src/cli/install/install.ts",
+    redaction: R.noVaultContent,
+    reason: "writes an adapter configuration rendered from install templates plus the " + "resolved config path. It reads no vault note and composes no vault content, so " + "there is no vault payload to scan. In population only because it names a " + "destination, which is the syntactic rule the census uses on purpose - deciding " + "'is this vault content' is what this entry is for, not what the sweep should " + "guess."
+  }
+});
+
+// src/core/egress/guard.ts
+var EGRESS_OUTCOME = Object.freeze({
+  released: "released",
+  refusedScanTruncated: "refused_scan_truncated"
+});
+var EGRESS_OUTCOMES = Object.freeze([
+  EGRESS_OUTCOME.released,
+  EGRESS_OUTCOME.refusedScanTruncated
+]);
+var EGRESS_REDACTION_OPTIONS = Object.freeze({
+  redactTokens: true,
+  redactUrlCredentials: true
+});
+var SCAN_WINDOW_MIB = MAX_REDACTOR_INPUT / (1024 * 1024);
+function redactConfigMapping(data) {
+  return redactStructured(data, EGRESS_REDACTION_OPTIONS).value;
 }
 
 // src/core/vault-presence.ts
@@ -2804,7 +3093,7 @@ var openclaw_default = definePluginEntry({
           config_path: discovery.path,
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
-          config: redactMapping(discovery.data),
+          config: redactConfigMapping(discovery.data),
           vault_path: vault,
           vault_exists: presence.unexaminable ?? presence.present
         };

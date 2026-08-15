@@ -30,6 +30,14 @@
  * downstream consumer detect that marker and demote/exclude the artifact
  * instead of trusting a partially-scanned payload.
  *
+ * `redactStructured` is the tree form, used at the export boundary and by
+ * every surface that hands a configuration mapping outside the vault. It
+ * redacts each string leaf and replaces any value whose KEY NAME declares
+ * a credential, because a serialised document cannot be scanned safely -
+ * the `key: value` pass runs to end of line and would eat a closing JSON
+ * quote - and because a bare token leaf carries no assignment shape for
+ * the value passes to see.
+ *
  * `normaliseTextField` is the shared input sanitiser for fields that
  * land in YAML frontmatter or single-line Markdown bullets. It strips
  * C0 control characters (except `\n` and `\t`), folds the unicode line
@@ -40,7 +48,18 @@
  * from repeats); a YAML-poisoning signal is worse than either.
  */
 
-const PLACEHOLDER = "***REDACTED***";
+/**
+ * The single replacement token every redaction in this project emits.
+ * Exported because it is now the ONE spelling: `src/core/config.ts` used
+ * to carry a private `redactMapping` that wrote `[REDACTED]` instead,
+ * matched five substrings against key names only, and never looked at a
+ * value - three answers to "is this a secret" where there should be one.
+ * That copy was collapsed into {@link redactStructured}, and its callers
+ * onto this token.
+ */
+export const REDACTION_PLACEHOLDER = "***REDACTED***";
+
+const PLACEHOLDER = REDACTION_PLACEHOLDER;
 
 export const PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
 
@@ -110,6 +129,35 @@ export const SECRET_KEYS: ReadonlyArray<string> = [
 ];
 
 const KEY_PATTERN = SECRET_KEYS.map((k) => k.replace(/[-_]/g, "[-_]?")).join("|");
+
+/**
+ * Credential field-identifier fragments matched ONLY against a mapping's
+ * key NAME, never against free text. `key` lives here rather than in
+ * {@link SECRET_KEYS} because a bare `key: value` line in prose is not a
+ * credential assignment and redacting every one of them would mangle
+ * ordinary text, while a configuration entry whose identifier contains
+ * `key` (`openai_key`, `keyfile`, `signing_key`) reliably is one. It is a
+ * field identifier, not a prose word - the same class as every other
+ * literal in this module.
+ */
+const SECRET_KEY_NAME_FRAGMENTS: ReadonlyArray<string> = ["key"];
+
+/**
+ * Matches anywhere inside an identifier, because configuration keys
+ * compose (`telegram_bot_token`, `openrouter_api_key`).
+ */
+const SECRET_KEY_NAME_RE = new RegExp(
+  `(?:${KEY_PATTERN}|${SECRET_KEY_NAME_FRAGMENTS.join("|")})`,
+  "i",
+);
+
+/**
+ * True when a mapping key's NAME declares its value to be a credential.
+ * Takes `unknown` so a key read back off disk needs no pre-check.
+ */
+export function isSecretKeyName(name: unknown): boolean {
+  return typeof name === "string" && SECRET_KEY_NAME_RE.test(name);
+}
 
 // `key=value` (env-style): value runs to whitespace or end of line.
 const ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
@@ -266,8 +314,23 @@ function redactBareTokens(text: string): string {
   return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, PLACEHOLDER);
 }
 
+/**
+ * The credential half of the infra pass, split out so a caller can take
+ * it WITHOUT the topology half. `user:pass@host` is a credential by any
+ * reading; a bare public IP or an internal FQDN is topology. An export of
+ * authored knowledge wants the first and not the second, because
+ * redacting every `host:port` in a knowledge bundle mangles legitimate
+ * references for a class of leak the operator already controls by
+ * choosing the destination.
+ */
+function redactUrlCredentials(text: string): string {
+  return text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
+}
+
 function redactInfraTopology(text: string): string {
-  let out = text.replace(BASIC_AUTH_URL_RE, (_m, scheme: string) => `${scheme}${PLACEHOLDER}@`);
+  // Credentials first, so the host that follows is still available to the
+  // host/port passes below - the order this pass has always run in.
+  let out = redactUrlCredentials(text);
   out = out.replace(IPV4_PORT_RE, PLACEHOLDER);
   out = out.replace(FQDN_PORT_RE, PLACEHOLDER);
   out = out.replace(INTERNAL_HOST_RE, PLACEHOLDER);
@@ -359,6 +422,15 @@ export interface RedactRawOutputOptions {
    * foreign credential passed as a positional argument.
    */
   readonly redactTokens?: boolean;
+  /**
+   * When `true`, scrub credentials embedded in a URL authority
+   * (`scheme://user:pass@host`) while leaving network topology alone.
+   * Implied by {@link redactInfra}, which takes the whole infra pass.
+   * The export boundary takes this half on its own: a URL password is a
+   * credential, whereas a `host:port` in an authored note is a reference
+   * a portable bundle has to keep.
+   */
+  readonly redactUrlCredentials?: boolean;
 }
 
 export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {}): string {
@@ -415,8 +487,88 @@ export function redactRawOutput(text: string, opts: RedactRawOutputOptions = {})
   if (opts.redactTokens) out = redactBareTokens(out);
 
   if (opts.redactInfra) out = redactInfraTopology(out);
+  else if (opts.redactUrlCredentials) out = redactUrlCredentials(out);
 
   return out;
+}
+
+// ----- Structured (mapping / tree) redaction --------------------------------
+
+/**
+ * Outcome of {@link redactStructured}: the transformed value plus the two
+ * facts a caller at a trust boundary has to act on.
+ */
+export interface StructuredRedaction {
+  /** The redacted value. Same shape as the input. */
+  readonly value: unknown;
+  /** True when any leaf changed - nothing was silently altered. */
+  readonly redacted: boolean;
+  /**
+   * True when some string was larger than the scan window, so only its
+   * prefix was examined. The value is NOT clean and NOT provably dirty;
+   * a caller about to hand it outside must refuse rather than report
+   * success. {@link wasScanTruncated} is the underlying reader.
+   */
+  readonly truncated: boolean;
+}
+
+/** Walked as data; anything else (Date, Map, class instance) passes through. */
+function isPlainContainer(value: object): boolean {
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
+}
+
+/**
+ * Redact a JSON-shaped value tree: every string leaf through
+ * {@link redactRawOutput}, and every value whose KEY NAME declares a
+ * credential ({@link isSecretKeyName}) replaced whole.
+ *
+ * This exists because redacting a SERIALISED document is unsafe. The
+ * `key: value` pass consumes to end of line, so a note body reading
+ * `my token: abc` inside a pretty-printed JSON string would lose the
+ * closing quote and the document would stop parsing. Redacting the tree
+ * and serialising afterwards has neither problem, and it is also the only
+ * way the key-name rule can fire at all - a bare `sk-…` leaf carries no
+ * assignment shape for the value passes to latch onto.
+ *
+ * `null` and `undefined` under a credential key are left alone on
+ * purpose: absence is not a secret, and stamping a placeholder over it
+ * would report a credential that is not configured as one that is.
+ */
+export function redactStructured(
+  input: unknown,
+  opts: RedactRawOutputOptions = {},
+): StructuredRedaction {
+  let redacted = false;
+  let truncated = false;
+
+  const walk = (value: unknown, underSecretKey: boolean): unknown => {
+    if (underSecretKey) {
+      if (value === null || value === undefined) return value;
+      redacted = true;
+      return PLACEHOLDER;
+    }
+    if (typeof value === "string") {
+      const out = redactRawOutput(value, opts);
+      if (out !== value) redacted = true;
+      // A payload that already quoted the marker is not evidence that
+      // THIS scan fell short.
+      if (wasScanTruncated(out) && !wasScanTruncated(value)) truncated = true;
+      return out;
+    }
+    if (Array.isArray(value)) return value.map((item) => walk(item, false));
+    if (typeof value === "object" && value !== null) {
+      if (!isPlainContainer(value)) return value;
+      const out: Record<string, unknown> = {};
+      for (const [key, child] of Object.entries(value)) {
+        out[key] = walk(child, isSecretKeyName(key));
+      }
+      return out;
+    }
+    return value;
+  };
+
+  return { value: walk(input, false), redacted, truncated };
 }
 
 // ----- Text-field normaliser ------------------------------------------------

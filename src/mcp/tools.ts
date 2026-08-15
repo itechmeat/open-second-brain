@@ -24,10 +24,10 @@
 import {
   ConfigReadError,
   discoverConfig,
-  redactMapping,
   resolveExposeHostPaths,
   vaultStoreReference,
 } from "../core/config.ts";
+import { redactConfigMapping } from "../core/egress/guard.ts";
 import type { ConfigDiscovery } from "../core/types.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
 import { computeBrainStatus } from "../core/brain/status.ts";
@@ -204,7 +204,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config_path: String(discovery.path),
     config_exists: discovery.exists,
     config_keys: configKeys,
-    config: broken === null ? redactMapping(discovery.data) : unresolved(broken),
+    config: broken === null ? redactConfigMapping(discovery.data) : unresolved(broken),
     vault_path: vaultPathField(ctx),
     // `boolean | { error }`. Both answerable cases keep their exact literal
     // - `true` when the directory is there, `false` when it is genuinely

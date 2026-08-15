@@ -169,7 +169,7 @@ Recommended behavior:
 - vault-portable config is backed up with the vault;
 - machine-local config can be regenerated with `o2b init --adopt-vault`;
 - `o2b export-config` writes a redacted machine snapshot into the vault;
-- secrets are excluded and represented as `[REDACTED]` only when needed.
+- secrets are excluded and represented as `***REDACTED***` only when needed.
 
 ## Vault layout
 
@@ -253,4 +253,12 @@ Open Second Brain must not store:
 - credentials;
 - connection strings containing secrets.
 
-If secret-like content appears in input, tools should redact it as `[REDACTED]` before writing.
+If secret-like content appears in input, tools should redact it as `***REDACTED***` before writing.
+
+Every path that writes vault content to a destination OUTSIDE the vault - the
+export verbs and `o2b export-config` - goes through `src/core/egress/guard.ts`
+and is declared in `src/core/egress/registry.ts`, with
+`tests/core/architecture/egress-census.test.ts` deriving the population from
+source so a new export path cannot ship undeclared. A payload the redactor
+could only partially scan refuses the write rather than producing a file that
+claims to be clean.
