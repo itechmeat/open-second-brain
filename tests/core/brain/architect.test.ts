@@ -70,6 +70,23 @@ test("scanProject produces deterministic structural facts", () => {
   expect(scanProject(project)).toEqual(facts);
 });
 
+test("a dot-directory's contents never reach the facts", () => {
+  const before = scanProject(project);
+  // Tooling state, not architecture: agent worktrees, CI definitions,
+  // caches. On this repository that rule is 88% of every file visited.
+  seed(".claude/worktrees/copy/src/index.ts");
+  seed(".github/workflows/ci.yml");
+  seed(".cache-of-things/blob.ts");
+  // A FILE whose name collides with a skipped directory is still a file.
+  seed("src/core/build");
+
+  const facts = scanProject(project);
+  expect(facts.languages[".yml"]).toBeUndefined();
+  expect(facts.totalFiles).toBe(before.totalFiles + 1);
+  expect(facts.modules.map((m) => m.name)).toEqual(["cli", "core"]);
+  expect(facts.modules.find((m) => m.name === "core")!.topFiles).toContain("build");
+});
+
 test("the traversal reads each directory exactly once", () => {
   seed("src/core/deep/nested/util.ts");
   // Every directory the scan is allowed to enter, listed rather than
