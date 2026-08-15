@@ -15,6 +15,9 @@
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { basename, extname, join, resolve } from "node:path";
 
+import type { ProgressCounter } from "../progress.ts";
+import type { Safeguard } from "../safeguard.ts";
+
 const SKIP_DIRS = new Set([
   ".git",
   "node_modules",
@@ -75,19 +78,57 @@ export interface ProjectFacts {
 
 const TOP_FILES_CAP = 20;
 
+/**
+ * The two stages of one architect run, in the order they run.
+ *
+ * Declared here rather than beside the renderer because this module is
+ * the leaf of the pair's import edge, and because the two names only mean
+ * anything together: `walk` is a counter with no denominator (the file
+ * count is not known until the walk ends), `render` has one (the note
+ * count is `1 + modules.length`, known the moment the walk is over).
+ */
+export const ARCHITECT_STAGE = Object.freeze({
+  walk: "walk",
+  render: "render",
+} as const);
+
+export interface ScanProjectOptions {
+  /**
+   * The ENCLOSING run's counter, not a sink of its own.
+   *
+   * A run has one terminator: a scan that opened and finished its own
+   * stream would report the operation as finished while the notes were
+   * still unwritten. A caller that only wants to watch a scan builds the
+   * counter itself - `progressCounter(OPERATION.architect, sink)` - and
+   * calls `finish()` when it is done with it, which is exactly what
+   * `generateArchDocs` does around this call.
+   */
+  readonly progress?: ProgressCounter;
+  /**
+   * Cooperative deadline, checked once per directory read. That is the
+   * walk's only natural boundary: everything between two `readdirSync`
+   * calls is a bounded loop over one directory's entries.
+   */
+  readonly safeguard?: Safeguard;
+}
+
 interface WalkStats {
   files: number;
   languages: Record<string, number>;
   paths: string[];
 }
 
-function walk(dir: string, stats: WalkStats, prefix: string): void {
+function walk(dir: string, stats: WalkStats, prefix: string, opts: ScanProjectOptions): void {
   let entries: string[];
   try {
     entries = readdirSync(dir);
   } catch {
     return;
   }
+  // One directory read, one boundary: the deadline is checked before the
+  // count is claimed, so a tripped scan never reports work it abandoned.
+  opts.safeguard?.checkpoint();
+  opts.progress?.advance(ARCHITECT_STAGE.walk);
   for (const entry of entries.toSorted()) {
     if (SKIP_DIRS.has(entry)) continue;
     const abs = join(dir, entry);
@@ -102,7 +143,7 @@ function walk(dir: string, stats: WalkStats, prefix: string): void {
     }
     if (stat.isSymbolicLink()) continue;
     if (stat.isDirectory()) {
-      walk(abs, stats, rel);
+      walk(abs, stats, rel, opts);
       continue;
     }
     stats.files += 1;
@@ -112,9 +153,9 @@ function walk(dir: string, stats: WalkStats, prefix: string): void {
   }
 }
 
-function statsFor(dir: string): WalkStats {
+function statsFor(dir: string, opts: ScanProjectOptions): WalkStats {
   const stats: WalkStats = { files: 0, languages: {}, paths: [] };
-  walk(dir, stats, "");
+  walk(dir, stats, "", opts);
   return stats;
 }
 
@@ -158,7 +199,7 @@ function readManifest(root: string): ManifestFact | null {
   }
 }
 
-function detectModules(root: string): ReadonlyArray<ModuleFact> {
+function detectModules(root: string, opts: ScanProjectOptions): ReadonlyArray<ModuleFact> {
   for (const base of ["src", "packages"]) {
     const baseDir = join(root, base);
     if (!existsSync(baseDir)) continue;
@@ -166,7 +207,7 @@ function detectModules(root: string): ReadonlyArray<ModuleFact> {
     if (dirs.length === 0) continue;
     return Object.freeze(
       dirs.map((name) => {
-        const stats = statsFor(join(baseDir, name));
+        const stats = statsFor(join(baseDir, name), opts);
         return Object.freeze({
           name,
           path: `${base}/${name}`,
@@ -178,7 +219,7 @@ function detectModules(root: string): ReadonlyArray<ModuleFact> {
     );
   }
   // Flat layout: the project root is the single module.
-  const stats = statsFor(root);
+  const stats = statsFor(root, opts);
   return Object.freeze([
     Object.freeze({
       name: "root",
@@ -211,17 +252,18 @@ function detectEntryPoints(root: string, manifest: ManifestFact | null): Readonl
 }
 
 /** Scan one project tree into deterministic structural facts. */
-export function scanProject(projectRoot: string): ProjectFacts {
+export function scanProject(projectRoot: string, opts: ScanProjectOptions = {}): ProjectFacts {
   const root = resolve(projectRoot);
   const manifest = readManifest(root);
-  const total = statsFor(root);
+  opts.progress?.start(ARCHITECT_STAGE.walk);
+  const total = statsFor(root, opts);
   const testLayout = TEST_LAYOUTS.find((layout) => existsSync(join(root, layout))) ?? null;
   return Object.freeze({
     root,
     name: manifest?.name ?? basename(root),
     manifest,
     entryPoints: detectEntryPoints(root, manifest),
-    modules: detectModules(root),
+    modules: detectModules(root, opts),
     testLayout,
     totalFiles: total.files,
     languages: Object.freeze(total.languages),

@@ -23,11 +23,21 @@ import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { repoKey as deriveRepoKey } from "../git/identity.ts";
+import { OPERATION, progressCounter, progressReasonForError } from "../progress.ts";
+import type { ProgressCounter, ProgressSink } from "../progress.ts";
 import { buildRegionDocument, mergeRegions } from "../regions.ts";
 import type { Region } from "../regions.ts";
-import { scanProject } from "./scan.ts";
+import type { Safeguard } from "../safeguard.ts";
+import { ARCHITECT_STAGE, scanProject } from "./scan.ts";
 import type { ModuleFact, ProjectFacts } from "./scan.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+
+export interface GenerateArchDocsOptions {
+  /** Where a caller watches the run. Absence means nobody asked. */
+  readonly onProgress?: ProgressSink;
+  /** Cooperative deadline, checked per directory read and per note. */
+  readonly safeguard?: Safeguard;
+}
 
 export interface GenerateArchDocsResult {
   readonly repoKey: string;
@@ -37,6 +47,18 @@ export interface GenerateArchDocsResult {
   readonly created: number;
   readonly updated: number;
   readonly unchanged: number;
+  /**
+   * The message of the first failure of the caller's progress sink, or
+   * `null` when there was none (and when no sink was supplied).
+   *
+   * An observer must not be able to destroy what it observes - a closed
+   * pipe cannot be allowed to abort a generation that is otherwise
+   * succeeding - but it must not vanish either, so the fault is carried
+   * out on the result the caller already reads and the sink is detached
+   * for the rest of the run. Only the first is reported: after it there
+   * is no attached sink left to fail again.
+   */
+  readonly progressFault: string | null;
 }
 
 /**
@@ -138,11 +160,43 @@ function upsertNote(
   return "updated";
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Generate or refresh architecture notes for one project tree. */
-export function generateArchDocs(vault: string, projectRoot: string): GenerateArchDocsResult {
+export function generateArchDocs(
+  vault: string,
+  projectRoot: string,
+  opts: GenerateArchDocsOptions = {},
+): GenerateArchDocsResult {
+  const progressFaults: string[] = [];
+  const progress = progressCounter(OPERATION.architect, opts.onProgress, {
+    onSinkError: (error) => progressFaults.push(errorMessage(error)),
+  });
+  try {
+    return generateRun(vault, projectRoot, opts, progress, progressFaults);
+  } catch (error) {
+    // A stop the operator asked for, or a deadline that elapsed, is a
+    // fact about the run - reported on the stream before the error
+    // travels on. Anything else is a failure, and a failure is its own
+    // report.
+    const reason = progressReasonForError(error);
+    if (reason !== null) progress.stop(reason);
+    throw error;
+  }
+}
+
+function generateRun(
+  vault: string,
+  projectRoot: string,
+  opts: GenerateArchDocsOptions,
+  progress: ProgressCounter,
+  progressFaults: ReadonlyArray<string>,
+): GenerateArchDocsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const facts = scanProject(projectRoot);
+  const facts = scanProject(projectRoot, { progress, safeguard: opts.safeguard });
   const key = deriveRepoKey(facts.root);
   const dir = join(vault, "Brain", "projects", "arch", key);
   mkdirSync(join(dir, "modules"), { recursive: true });
@@ -156,7 +210,13 @@ export function generateArchDocs(vault: string, projectRoot: string): GenerateAr
     else unchanged += 1;
   };
 
+  // The note count is known only now, and it is known exactly: one
+  // overview plus one note per detected module. Unlike the walk, this
+  // stage has a denominator.
+  progress.start(ARCHITECT_STAGE.render, 1 + facts.modules.length);
+
   const overviewPath = join(dir, "overview.md");
+  opts.safeguard?.checkpoint();
   tally(
     upsertNote(
       overviewPath,
@@ -164,11 +224,13 @@ export function generateArchDocs(vault: string, projectRoot: string): GenerateAr
       overviewRegions(facts, key),
     ),
   );
+  progress.advance(ARCHITECT_STAGE.render);
 
   const modulePaths: string[] = [];
   for (const module of facts.modules) {
     const path = join(dir, "modules", `${module.name}.md`);
     modulePaths.push(path);
+    opts.safeguard?.checkpoint();
     tally(
       upsertNote(
         path,
@@ -176,7 +238,9 @@ export function generateArchDocs(vault: string, projectRoot: string): GenerateAr
         moduleRegions(module),
       ),
     );
+    progress.advance(ARCHITECT_STAGE.render);
   }
+  progress.finish();
 
   return Object.freeze({
     repoKey: key,
@@ -186,5 +250,6 @@ export function generateArchDocs(vault: string, projectRoot: string): GenerateAr
     created,
     updated,
     unchanged,
+    progressFault: progressFaults[0] ?? null,
   });
 }
