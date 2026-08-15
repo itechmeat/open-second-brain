@@ -77,7 +77,18 @@ export function jittered(base: number): number {
   return Math.max(0, base + jitter);
 }
 
-/** A minimal counting semaphore for bounded batch concurrency. */
+/**
+ * A minimal counting semaphore for bounded concurrency.
+ *
+ * `release()` hands the freed permit DIRECTLY to the head of the waiter
+ * queue instead of returning it to the pool for the woken waiter to claim
+ * later. The pool form over-subscribes by one for every wakeup: between
+ * the `permits++` and the waiter's continuation there is a microtask in
+ * which a fresh `acquire()` sees a free permit and takes it, and the
+ * waiter then decrements past zero. Both run, and the ceiling reads one
+ * higher than configured. With a hand-off the permit is never observable
+ * as free, so the invariant holds for any interleaving.
+ */
 export class Semaphore {
   private permits: number;
   private readonly waiters: Array<() => void> = [];
@@ -89,13 +100,17 @@ export class Semaphore {
       this.permits--;
       return;
     }
+    // The releaser transfers its permit to this waiter, so the resumed
+    // acquirer must NOT decrement again.
     await new Promise<void>((res) => this.waiters.push(res));
-    this.permits--;
   }
   release(): void {
-    this.permits++;
     const next = this.waiters.shift();
-    if (next) next();
+    if (next) {
+      next();
+      return;
+    }
+    this.permits++;
   }
 }
 
