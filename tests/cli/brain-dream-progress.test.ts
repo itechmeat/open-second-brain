@@ -7,10 +7,12 @@
  *      pass runs, and stdout stays exactly what it was. A progress line
  *      on stdout would corrupt the payload `--json` callers parse, which
  *      is the whole reason the rail exists.
- *   2. An interrupted pass exits with the shell's signal convention
- *      rather than 0. `o2b search watch` exits 0 when interrupted because
- *      stopping is how that command ends; a consolidation pass stopped
- *      half-way did not do what it was asked.
+ *   2. The staged lifecycle carries the same stream: staging IS a dream
+ *      pass, so `o2b brain dream stage --progress` reports the same five
+ *      stages under the same operation name rather than nothing at all.
+ *   3. This verb does NOT advertise a cooperative interrupt. `dreamRun`
+ *      is synchronous end to end, so a signal handler cannot run while it
+ *      does; Ctrl-C keeps its default meaning and kills the process.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -19,12 +21,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { EXIT_INTERRUPTED } from "../../src/cli/interrupt.ts";
-import { PROGRESS_KIND, PROGRESS_SCHEMA } from "../../src/core/brain/progress.ts";
+import { EXIT_INTERRUPTED, interruptIsObservable } from "../../src/cli/interrupt.ts";
+import { PROGRESS_KIND } from "../../src/core/brain/progress.ts";
 import { OPERATION } from "../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { progressRecords } from "../helpers/progress-records.ts";
 
 let vault: string;
 let configHome: string;
@@ -57,23 +60,6 @@ afterEach(() => {
 
 const env = (): Record<string, string> => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
-/** Every progress record on a stderr stream, in order. */
-function progressRecords(stderr: string): ReadonlyArray<Record<string, unknown>> {
-  const out: Record<string, unknown>[] = [];
-  for (const line of stderr.split("\n")) {
-    if (!line.startsWith("{")) continue;
-    const parsed: unknown = JSON.parse(line);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      (parsed as { schema?: unknown }).schema === PROGRESS_SCHEMA
-    ) {
-      out.push(parsed as Record<string, unknown>);
-    }
-  }
-  return out;
-}
-
 describe("o2b brain dream --progress", () => {
   test("writes records to stderr and leaves stdout untouched", async () => {
     const plain = await runCli(["brain", "dream", "--dry-run", "--json"], { env: env() });
@@ -96,6 +82,22 @@ describe("o2b brain dream --progress", () => {
     expect(progressRecords(plain.stderr)).toHaveLength(0);
   });
 
+  test("is observed once, not once per entry point", async () => {
+    // The staged block and the inline pass each attach the rail, and
+    // `run` falls THROUGH the staged block to the inline pass. A staged
+    // attachment that did not exclude `run` would build two observers for
+    // one pass, and the stream would carry every record twice.
+    const watched = await runCli(["brain", "dream", "--dry-run", "--progress"], { env: env() });
+    const records = progressRecords(watched.stderr);
+    expect(records.length).toBeGreaterThan(0);
+    // One terminator for one run, and one `started` per distinct stage.
+    expect(records.filter((r) => r["kind"] === PROGRESS_KIND.finished)).toHaveLength(1);
+    const opened = records
+      .filter((r) => r["kind"] === PROGRESS_KIND.started)
+      .map((r) => r["stage"]);
+    expect(opened).toEqual([...new Set(opened)]);
+  });
+
   test("integers and identifiers only - no prose on the structured stream", async () => {
     const watched = await runCli(["brain", "dream", "--dry-run", "--progress"], { env: env() });
     for (const record of progressRecords(watched.stderr)) {
@@ -109,13 +111,53 @@ describe("o2b brain dream --progress", () => {
   });
 });
 
-describe("the interrupted exit code", () => {
-  test("is the shell's signal convention, not success", () => {
-    // Pinned as a constant rather than asserted through a real signal: a
-    // test that races a SIGINT against a sub-second pass would be a
-    // machine-speed lottery, which is the defect class this project has
-    // fixed twice. The reachability of the abort path is proved in the
-    // core test that drives a pre-aborted signal.
+describe("o2b brain dream stage --progress", () => {
+  test("watches the staged pass, which is a dream pass", async () => {
+    // `DreamStageOptions.onProgress` was declared and threaded through
+    // all three staged entry points with no caller able to ask: the verb
+    // parsed `--progress` for `stage` and ignored it, so an operator
+    // watching a staged pass saw nothing. This is the producer.
+    const watched = await runCli(["brain", "dream", "stage", "--json", "--progress"], {
+      env: env(),
+    });
+    expect(watched.returncode).toBe(0);
+
+    const records = progressRecords(watched.stderr);
+    expect(records.length).toBeGreaterThan(0);
+    // Staging IS a dream call, so the records name `dream` rather than a
+    // second operation reporting the same five stages under a new name.
+    expect(records.every((r) => r["operation"] === OPERATION.dream)).toBe(true);
+    expect(records[0]?.["kind"]).toBe(PROGRESS_KIND.started);
+    expect(records.at(-1)?.["kind"]).toBe(PROGRESS_KIND.finished);
+  });
+
+  test("stdout is untouched, as it is for the inline pass", async () => {
+    const plain = await runCli(["brain", "dream", "stage", "--json"], { env: env() });
+    const watched = await runCli(["brain", "dream", "stage", "--json", "--progress"], {
+      env: env(),
+    });
+    expect(plain.returncode).toBe(0);
+    expect(watched.returncode).toBe(0);
+    // Two runs of `stage` mint different run ids, so the comparison is of
+    // the payload's SHAPE rather than its bytes - the run id is the one
+    // field that is expected to differ.
+    expect(Object.keys(JSON.parse(watched.stdout) as object).toSorted()).toEqual(
+      Object.keys(JSON.parse(plain.stdout) as object).toSorted(),
+    );
+    expect(progressRecords(plain.stderr)).toHaveLength(0);
+  });
+});
+
+describe("stopping a dream pass", () => {
+  test("is not advertised as a cooperative interrupt, because it cannot be one", () => {
+    // `dreamRun` is synchronous end to end, so a signal handler cannot
+    // run while it does and `o2b brain dream` opens no handle. The
+    // keystroke keeps its default meaning - it kills the process - which
+    // is asserted where it belongs, in `interrupt-observability.test.ts`.
+    // What is pinned here is that this verb is not claiming otherwise.
+    expect(interruptIsObservable(OPERATION.dream)).toBe(false);
+    // And that the code a verb WOULD return is still not a success code,
+    // for the two verbs that can reach it.
     expect(EXIT_INTERRUPTED).toBe(130);
     expect(EXIT_INTERRUPTED).not.toBe(0);
   });

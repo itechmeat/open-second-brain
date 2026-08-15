@@ -25,7 +25,6 @@ import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
-  SafeguardAbortError,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import {
@@ -45,7 +44,6 @@ import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { listVaultPages, parseFrontmatter } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
-import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
@@ -267,12 +265,14 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         ? attachProgress({ command: "brain", argv: ["clusters"], jsonRequested: asJson })
         : null;
     reportProgressRefusal(observation);
-    const interrupt = onInterrupt();
+    // No interrupt handle: `detectCommunitiesRun` is synchronous end to
+    // end, so a signal handler cannot run while it does (see
+    // `interrupt.ts`). Leaving SIGINT alone keeps the keystroke lethal,
+    // which is the only way this pass can actually be stopped.
     try {
       const safeguard = createSafeguard({
         operation: OPERATION.clusters,
         timeoutMs: resolveSafeguardTimeoutMs(OPERATION.clusters, config ?? undefined),
-        signal: interrupt.signal,
       });
       const communities = detectCommunities(store, {
         ...(minSize !== undefined ? { minSize } : {}),
@@ -345,14 +345,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
         if (result.removed.length > 0) ok(`  removed stale: ${result.removed.join(", ")}`);
       }
       return 0;
-    } catch (exc) {
-      // A pass the operator stopped materialized no notes, so it cannot
-      // exit 0 - but it is not a failure either, and the catch below
-      // would report it as one.
-      if (exc instanceof SafeguardAbortError) return reportInterrupted(interrupt, exc, asJson);
-      throw exc;
     } finally {
-      interrupt.release();
       await store.close();
     }
   } catch (exc) {

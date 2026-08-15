@@ -58,6 +58,24 @@ export const PROGRESS_OUTCOME = Object.freeze({
   /**
    * The command's streams are buffered for the whole run, so a line would
    * surface only at the end. Refused rather than written into the buffer.
+   *
+   * NO SHIPPED COMMAND REACHES THIS TODAY, and the reason is worth being
+   * exact about rather than leaving a reader to discover by grep. The
+   * refusal is reached when a caller asks for JSON on a command `main`
+   * WRAPS in `withJsonFallback`. Both families that emit progress -
+   * `brain` and `search` - own their own JSON, so `ownsInternalJson` is
+   * true for them and `progressIsLegal` returns true unconditionally.
+   * Every production `attachProgress` call site is in one of those two.
+   *
+   * So this is not a stub waiting for a producer: it is the decision the
+   * rail must make, currently made the same way every time because the
+   * population asking is currently uniform. Deleting the branch would not
+   * remove a dead path, it would remove the check - and the first verb on
+   * a wrapped command to take `--progress` would then write its stream
+   * into an accumulator that releases at the end, which reads as though
+   * it had worked. `progress-report.test.ts` drives the branch directly
+   * and pins the reachability claim above, so the day that verb exists
+   * the claim fails instead of quietly going stale.
    */
   suppressedBufferedStream: "suppressed-buffered-stream",
 } as const);
@@ -117,9 +135,14 @@ export interface ProgressAttachment {
    */
   readonly sink: ProgressSink | undefined;
   /**
-   * Present only on a refusal, naming why. A caller rendering a `--json`
-   * payload carries it as a field, so the refusal is visible on the
-   * surface the caller actually reads.
+   * Present only on a refusal, naming why.
+   *
+   * Read by {@link reportProgressRefusal} and by nothing else. An earlier
+   * docblock here claimed a `--json` verb carries it as a payload field;
+   * none does, and none can today, because a refusal only happens on a
+   * command whose JSON is wrapped rather than rendered by the verb. The
+   * refusal reaches the operator on stderr, which is where it belongs and
+   * where the wording is written once.
    */
   readonly reason?: typeof PROGRESS_REASON.streamBuffered;
 }

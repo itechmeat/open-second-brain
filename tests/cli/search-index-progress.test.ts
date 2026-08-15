@@ -114,4 +114,37 @@ describe("o2b search reindex --progress", () => {
     }
     expect(progressRecords(plain.stderr)).toHaveLength(0);
   });
+
+  test("does not report finished until after the swap that makes the rebuild real", async () => {
+    // A rebuild is not over when its build is: `indexVault` used to own
+    // the counter and terminate it when the STAGING database was
+    // complete, while the two renames that put it live happened
+    // afterwards, outside any counter. A caller tailing the stream read
+    // `finished` for a rebuild that was not yet the index anyone would
+    // read - and if the rename then failed (ENOSPC, EPERM, a cross-device
+    // `dbPath`) the command exited non-zero after a terminator that said
+    // the run had finished.
+    const watched = await runCli(args("reindex", "--progress"));
+    expect(watched.returncode).toBe(0);
+    const records = progressRecords(watched.stderr);
+
+    const kinds = records.map((r) => String(r["kind"]));
+    const stages = records.map((r) => String(r["stage"]));
+    expect(kinds.at(-1)).toBe("finished");
+    // Exactly one terminator, and the swap is on the near side of it.
+    expect(kinds.filter((k) => k === "finished" || k === "stopped")).toHaveLength(1);
+    // The swap is COUNTED before the run is terminated: an `advanced` on
+    // the swap stage, then the terminator. (The terminator names `swap`
+    // too, because it closes the stage that was open.)
+    const swapDone = records.findIndex(
+      (r) => r["stage"] === "swap" && r["kind"] === "advanced" && r["completed"] === 1,
+    );
+    expect(swapDone).toBeGreaterThanOrEqual(0);
+    expect(swapDone).toBeLessThan(kinds.length - 1);
+
+    // And the wait for the writer lock is no longer silent: it can be the
+    // length of a competing rebuild, which is the state this release
+    // calls indistinguishable from a hang.
+    expect(stages[0]).toBe("lock");
+  });
 });

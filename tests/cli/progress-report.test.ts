@@ -2,11 +2,16 @@
  * The two things a long verb says about its own observation, written
  * once instead of once per verb (nothing-runs-unwatched, U1 + U3).
  *
- * Five verbs now attach the progress rail and listen for an interrupt.
- * Both facts they report - "you asked to watch and the stream cannot
- * carry it" and "the operator stopped this run" - are single facts with a
- * single wording, so they live beside the mechanisms that produce them
- * rather than being retyped at each call site.
+ * Six verbs attach the progress rail, and the two whose operation yields
+ * to the event loop also listen for an interrupt. Both facts they report -
+ * "you asked to watch and the stream cannot carry it" and "the operator
+ * stopped this run" - are single facts with a single wording, so they live
+ * beside the mechanisms that produce them rather than being retyped at
+ * each call site.
+ *
+ * The handles below name `reindex` because `onInterrupt` refuses any
+ * operation that cannot observe a signal; the reporting arm under test is
+ * the same one for every verb that reaches it.
  *
  * Neither is reachable through `o2b brain ...` or `o2b search ...`: both
  * families own their own JSON, so `main` never wraps them and the rail is
@@ -24,7 +29,7 @@ import {
   reportProgressRefusal,
 } from "../../src/cli/progress-rail.ts";
 import { PROGRESS_REASON } from "../../src/core/brain/progress.ts";
-import { SafeguardAbortError } from "../../src/core/brain/safeguard.ts";
+import { OPERATION, SafeguardAbortError } from "../../src/core/brain/safeguard.ts";
 
 /** Run `body` with both output streams captured. */
 function captured(body: () => void): { stdout: string; stderr: string } {
@@ -78,11 +83,26 @@ describe("a refused rail", () => {
     reportProgressRefusal(null, push);
     expect(written).toEqual([]);
   });
+
+  test("is unreachable from the two families that emit progress, and that is the claim", () => {
+    // `PROGRESS_OUTCOME.suppressedBufferedStream` documents itself as
+    // having no shipped producer. That is a claim about these two
+    // commands, so it is asserted rather than described: a verb outside
+    // `brain`/`search` growing `--progress` makes the refusal reachable,
+    // and the docblock that says otherwise must fail on the same day.
+    for (const command of ["brain", "search"]) {
+      for (const jsonRequested of [true, false]) {
+        expect(attachProgress({ command, argv: [], jsonRequested }, () => {}).outcome).toBe(
+          PROGRESS_OUTCOME.emitted,
+        );
+      }
+    }
+  });
 });
 
 describe("an interrupted run", () => {
   test("exits with the shell's signal convention rather than success", () => {
-    const handle = onInterrupt();
+    const handle = onInterrupt(OPERATION.reindex);
     try {
       const out = captured(() =>
         expect(reportInterrupted(handle, new SafeguardAbortError("bridges"), false)).toBe(
@@ -100,7 +120,7 @@ describe("an interrupted run", () => {
   });
 
   test("hands a --json caller a parseable refusal instead of a bare stream", () => {
-    const handle = onInterrupt();
+    const handle = onInterrupt(OPERATION.reindex);
     try {
       const out = captured(() => {
         reportInterrupted(handle, new SafeguardAbortError("clusters"), true);

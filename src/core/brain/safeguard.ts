@@ -28,8 +28,26 @@ import { discoverConfig } from "../config.ts";
  * It was a bare union until the progress spine needed to name the same
  * population - a run that carries a deadline is exactly a run worth
  * reporting on - and a second list would have drifted from this one.
- * Promoted to the four-piece vocabulary the census enforces so both the
- * timeout ladder and `ProgressEvent.operation` read from one place.
+ * Promoted to the four-piece vocabulary the census enforces so the
+ * surfaces that name an operation read from one place.
+ *
+ * `maintenance` is the one member that is a DISPATCHER rather than a
+ * pass, and it is worth being exact about what that costs it, because
+ * "one vocabulary, every surface" is not true of it:
+ *
+ *   - it never reaches `progressCounter`. The lane forwards the caller's
+ *     sink to its four sub-operations, so every record names the pass
+ *     that emitted it - a deliberate choice, asserted by
+ *     `brain-maintenance-progress.test.ts`, not an omission;
+ *   - it never reaches {@link resolveSafeguardTimeoutMs} either.
+ *     `laneSafeguard` builds one deadline per task from that task's own
+ *     operation, so there is no lane-wide budget to resolve and
+ *     `safeguard_timeout_maintenance_seconds` is a key nothing reads.
+ *     It is not documented in `docs/cli-reference.md` for that reason;
+ *   - it IS the operation the lane's interrupt handle is opened for
+ *     (`interruptIsObservable` in `src/cli/interrupt.ts`), because the
+ *     lane awaits between tasks and so is the level at which a Ctrl-C
+ *     can actually be seen. That is its one producer.
  */
 export const OPERATION = Object.freeze({
   dream: "dream",

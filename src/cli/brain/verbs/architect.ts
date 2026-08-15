@@ -18,9 +18,7 @@ import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
-  SafeguardAbortError,
 } from "../../../core/brain/safeguard.ts";
-import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 
@@ -43,7 +41,10 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
     flags["progress"] === true
       ? attachProgress({ command: "brain", argv: ["architect"], jsonRequested: asJson })
       : null;
-  const interrupt = onInterrupt();
+  // No interrupt handle: `generateRun` is synchronous end to end, so a
+  // signal handler cannot run while it does (see `interrupt.ts`). Leaving
+  // SIGINT alone keeps the keystroke lethal, and the plan-then-write
+  // restructure means a killed scan has written nothing.
   try {
     const { config, vault } = brainVerbContext(flags);
     reportProgressRefusal(observation);
@@ -51,7 +52,6 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
       safeguard: createSafeguard({
         operation: OPERATION.architect,
         timeoutMs: resolveSafeguardTimeoutMs(OPERATION.architect, config ?? undefined),
-        signal: interrupt.signal,
       }),
       ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
     });
@@ -85,16 +85,11 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
     }
     return 0;
   } catch (err) {
-    // A scan the operator stopped wrote nothing - the deadline is checked
-    // while planning only - so it is neither a success nor a failure.
-    if (err instanceof SafeguardAbortError) return reportInterrupted(interrupt, err, asJson);
     if (err instanceof RegionError) {
       return fail(
         `${err.message} - repair the sentinel markers (or delete the note to regenerate it)`,
       );
     }
     return fail(err instanceof Error ? err.message : String(err));
-  } finally {
-    interrupt.release();
   }
 }

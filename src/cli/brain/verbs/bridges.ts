@@ -29,7 +29,6 @@ import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
-  SafeguardAbortError,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import { loadSchemaPack } from "../../../core/brain/schema-pack.ts";
@@ -39,7 +38,6 @@ import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { parseFrontmatter } from "../../../core/vault.ts";
 import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
-import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
@@ -160,7 +158,11 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         ? attachProgress({ command: "brain", argv: ["bridges"], jsonRequested: asJson })
         : null;
     reportProgressRefusal(observation);
-    const interrupt = onInterrupt();
+    // No interrupt handle: `discoverBridgesRun` is synchronous end to end,
+    // so a signal handler cannot run while it does (see `interrupt.ts`).
+    // Leaving SIGINT alone keeps the keystroke lethal, which is the only
+    // way this scan can actually be stopped. Proposals are written in one
+    // atomic write after the scan, so a killed run leaves no half file.
     try {
       const dismissed = readDismissedBridges(vault);
       const report = discoverBridges(store, {
@@ -170,7 +172,6 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         safeguard: createSafeguard({
           operation: OPERATION.bridges,
           timeoutMs: resolveSafeguardTimeoutMs(OPERATION.bridges, config ?? undefined),
-          signal: interrupt.signal,
         }),
         ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
       });
@@ -210,14 +211,7 @@ export async function cmdBrainBridges(argv: string[]): Promise<number> {
         }
       }
       return 0;
-    } catch (exc) {
-      // A scan the operator stopped did not answer the question it was
-      // asked, so it cannot exit 0 - but it is not a failure either, and
-      // the catch below would report it as one.
-      if (exc instanceof SafeguardAbortError) return reportInterrupted(interrupt, exc, asJson);
-      throw exc;
     } finally {
-      interrupt.release();
       await store.close();
     }
   } catch (exc) {

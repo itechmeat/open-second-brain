@@ -47,12 +47,10 @@ import {
   createSafeguard,
   OPERATION,
   resolveSafeguardTimeoutMs,
-  SafeguardAbortError,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
-import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
 
@@ -205,11 +203,16 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   const { value: now, error: nowErr } = parseOptionalIsoDate(flags, "now");
   if (nowErr) return fail(nowErr);
 
-  const guard = (signal: AbortSignal) =>
+  // No signal: `dreamRun` is synchronous end to end, so a signal handler
+  // cannot run while it does (see `interrupt.ts`). The deadline is the
+  // only cooperative stop a dream pass has; SIGINT is left with its
+  // default meaning so the keystroke still kills the process, and every
+  // artifact a pass writes goes through `atomicWriteFileSync`, so being
+  // killed leaves no half-written note.
+  const guard = () =>
     createSafeguard({
       operation: OPERATION.dream,
       timeoutMs: resolveSafeguardTimeoutMs(OPERATION.dream, config ?? undefined),
-      signal,
     });
 
   if (wantsStep) {
@@ -239,16 +242,32 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     return 0;
   }
 
-  // The staged actions each run a dream pass of their own, so they get
-  // the same handle the inline run does. Cancellation that reached only
-  // one of the two entry points would be the half-wired mechanism this
-  // release exists to remove.
-  const stagedInterrupt = onInterrupt();
+  // The staged actions that RUN a pass watch the same five stages the
+  // inline run does. `DreamStageOptions` has declared `onProgress` and
+  // threaded it through all three of those entry points since U1; this is
+  // the caller that asks. A stream that reached only one of the two entry
+  // points would be the half-wired mechanism this release exists to
+  // remove.
+  //
+  // `discard` and `list` are excluded because they run no pass and have
+  // nothing to report, and `run` because it falls through this block to
+  // the inline pass below, which attaches its own. Attaching here for
+  // `run` too would build two observers for one pass and report a refusal
+  // twice.
+  const STAGED_PASSES = new Set(["stage", "validate", "apply"]);
+  const stagedObservation =
+    flags["progress"] === true && STAGED_PASSES.has(action)
+      ? attachProgress({ command: "brain", argv: ["dream", action], jsonRequested: asJson })
+      : null;
+  reportProgressRefusal(stagedObservation);
+  const stagedProgress =
+    stagedObservation?.sink !== undefined ? { onProgress: stagedObservation.sink } : {};
   try {
     if (action === "stage") {
       const bundle = stageDream(vault, {
         now: now ?? new Date(),
-        safeguard: guard(stagedInterrupt.signal),
+        safeguard: guard(),
+        ...stagedProgress,
         ...(agent ? { agentName: agent } : {}),
       });
       if (asJson) {
@@ -269,7 +288,8 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       const runId = positional[1]!;
       const stageOpts = {
         now: now ?? new Date(),
-        safeguard: guard(stagedInterrupt.signal),
+        safeguard: guard(),
+        ...stagedProgress,
         ...(agent ? { agentName: agent } : {}),
       };
       if (action === "validate") {
@@ -339,12 +359,6 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (exc) {
-    if (exc instanceof SafeguardAbortError) {
-      const code = stagedInterrupt.exitCode();
-      if (asJson) okJson({ ok: false, interrupted: true, message: exc.message });
-      else process.stderr.write(`${exc.message}\n`);
-      return code;
-    }
     const timedOut = exc instanceof SafeguardTimeoutError;
     if (asJson) {
       okJson({
@@ -355,8 +369,6 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 1;
     }
     return fail(`dream ${action} failed: ${(exc as Error).message ?? exc}`);
-  } finally {
-    stagedInterrupt.release();
   }
 
   // action === "run": the legacy inline pass.
@@ -407,29 +419,22 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       ? attachProgress({ command: "brain", argv: ["dream"], jsonRequested: asJson })
       : null;
   reportProgressRefusal(observation);
-  const interrupt = onInterrupt();
   let summary;
   try {
     summary = dream(vault, {
       ...(now !== null ? { now } : {}),
       dryRun: Boolean(flags["dry-run"]),
       ...(agent ? { agentName: agent } : {}),
-      safeguard: guard(interrupt.signal),
+      safeguard: guard(),
       ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
       ...(gates !== null ? { gates } : {}),
     });
   } catch (exc) {
-    // A pass the operator stopped did not do what it was asked, so it
-    // cannot exit 0 - but it is not a failure either, and reporting it as
-    // one would hide the difference the abort error exists to preserve.
-    if (exc instanceof SafeguardAbortError) return reportInterrupted(interrupt, exc, asJson);
     if (exc instanceof SafeguardTimeoutError && asJson) {
       okJson({ ok: false, timed_out: true, message: exc.message });
       return 1;
     }
     return fail(`dream failed: ${(exc as Error).message ?? exc}`);
-  } finally {
-    interrupt.release();
   }
   for (const w of summary.warnings ?? []) {
     process.stderr.write(`warning: ${w.code}: ${w.message}\n`);
