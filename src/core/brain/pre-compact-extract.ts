@@ -1,3 +1,36 @@
+/**
+ * Pre-compact continuity extraction: the labelled lines a host flushes
+ * before a context window is compacted, captured as `pre_compact_extract`
+ * continuity records without an LLM call.
+ *
+ * ## The recognizer is STRUCTURAL, and that is the whole point
+ *
+ * This used to carry a five-entry English word list (`decision:`,
+ * `commitment:`, `outcome:`, `rule:`, `open question:`) - the only prose
+ * recognizer left on any write path, and a direct contradiction of the
+ * rule its sibling {@link ../brain/fact-extract.ts} states in its own
+ * header: we cannot enumerate the world's languages, so a per-language
+ * phrase list is a defect, not a feature. A session captured in Russian,
+ * Japanese or Arabic extracted NOTHING, and the zero was indistinguishable
+ * from "this session recorded no decisions".
+ *
+ * What is recognised now is the SHAPE of a labelled line - an opening
+ * label, a colon, and a body - exactly as {@link ../graph/agent-scope.ts}
+ * treats an owner token: an opaque, language-neutral identifier, never a
+ * closed enum. The label itself becomes the record's `extract_type`,
+ * normalized to one token. English input is byte-identical to before
+ * (`Decision:` -> `decision`, `Open question:` -> `open_question`), so
+ * nothing downstream that reads those five values changes; every other
+ * script now scores on the same structure instead of scoring zero.
+ *
+ * Precision beats recall, the same trade the sibling extractor makes: the
+ * label may only carry letters, digits, spaces, `-` and `_`, must contain
+ * at least one letter (so `10:30` is a clock time, not a label), is capped
+ * at {@link LABEL_MAX_WORDS} words and {@link LABEL_MAX_CHARS} characters
+ * (so a prose sentence ending in a colon is not a label), and a line whose
+ * colon belongs to a URI scheme or a Windows path is refused outright.
+ */
+
 import { createHash } from "node:crypto";
 
 import {
@@ -10,13 +43,6 @@ import type {
   ContinuityRecord,
   ContinuitySourceRef,
 } from "./continuity/types.ts";
-
-export type PreCompactExtractType =
-  | "decision"
-  | "commitment"
-  | "outcome"
-  | "rule"
-  | "open_question";
 
 export interface PreCompactExtractInput {
   readonly sessionId: string;
@@ -52,20 +78,54 @@ export interface PreCompactExtractResult {
 }
 
 interface ExtractedLine {
-  readonly type: PreCompactExtractType;
+  /** Normalized label token - open vocabulary, never a closed enum. */
+  readonly type: string;
   readonly text: string;
   readonly line: number;
 }
 
-const LABELS: ReadonlyArray<readonly [RegExp, PreCompactExtractType]> = Object.freeze([
-  [/^(?:[-*]\s*)?decision\s*:\s*(.+)$/i, "decision"],
-  [/^(?:[-*]\s*)?commitment\s*:\s*(.+)$/i, "commitment"],
-  [/^(?:[-*]\s*)?outcome\s*:\s*(.+)$/i, "outcome"],
-  [/^(?:[-*]\s*)?rule\s*:\s*(.+)$/i, "rule"],
-  [/^(?:[-*]\s*)?open\s+question\s*:\s*(.+)$/i, "open_question"],
-]);
+/**
+ * A labelled line: an optional list bullet, a label built only from
+ * letters, digits, spaces, `-` and `_`, a colon, and a non-empty body.
+ * The label class is what makes this structural rather than lexical -
+ * it names no word in any language, only the characters a label may use.
+ */
+const LABELLED_LINE_RE = /^(?:[-*]\s*)?([\p{L}\p{N} _-]+?)\s*:\s*(\S.*)$/u;
+
+/**
+ * Lines whose colon is punctuation inside a locator rather than a label
+ * separator. A URI scheme (`https://`, `file:///`) and a Windows drive
+ * path (`C:\...`) both parse as `label: body` by shape alone, so they are
+ * refused BEFORE the shape test rather than patched afterwards.
+ */
+const LOCATOR_LINE_RE = /^(?:[-*]\s*)?[\p{L}][\p{L}\p{N}+.-]*:(?:\/\/|\\)/u;
+
+/** A label longer than this is prose that happens to end in a colon. */
+const LABEL_MAX_CHARS = 32;
+
+/** Likewise: real labels are one to three words ("open question"). */
+const LABEL_MAX_WORDS = 3;
 
 const DEFAULT_MAX_CHARS = 40_000;
+
+/**
+ * Reduce a raw label to the single token recorded as `extract_type`, or
+ * `null` when the candidate is not a label at all.
+ *
+ * NFC + case-fold + collapse each internal whitespace run to `_`, which is
+ * the same normalization {@link ../graph/agent-scope.ts} applies to an
+ * owner token, plus the word joiner that keeps `Open question` and
+ * `open_question` the same key. At least one letter is required so a clock
+ * time (`10:30`) or a numbered list (`1: ...`) is never read as a label.
+ */
+export function normalizePreCompactLabel(raw: string): string | null {
+  const trimmed = raw.normalize("NFC").trim();
+  if (trimmed.length === 0 || trimmed.length > LABEL_MAX_CHARS) return null;
+  if (!/\p{L}/u.test(trimmed)) return null;
+  const words = trimmed.split(/\s+/u);
+  if (words.length > LABEL_MAX_WORDS) return null;
+  return words.join("_").toLowerCase();
+}
 
 export function extractPreCompactRecords(
   vault: string,
@@ -145,14 +205,13 @@ function extractLines(text: string): ExtractedLine[] {
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!.trim();
     if (line.length === 0) continue;
-    for (const [pattern, type] of LABELS) {
-      const match = pattern.exec(line);
-      const value = match?.[1]?.trim();
-      if (value !== undefined && value.length > 0) {
-        items.push({ type, text: value, line: index + 1 });
-        break;
-      }
-    }
+    if (LOCATOR_LINE_RE.test(line)) continue;
+    const match = LABELLED_LINE_RE.exec(line);
+    if (match === null) continue;
+    const type = normalizePreCompactLabel(match[1]!);
+    const text = match[2]!.trim();
+    if (type === null || text.length === 0) continue;
+    items.push({ type, text, line: index + 1 });
   }
   return items;
 }

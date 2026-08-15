@@ -89,3 +89,72 @@ describe("pre-compact extraction", () => {
     expect(listContinuityRecords(vault, { kind: "pre_compact_extract" })).toHaveLength(1);
   });
 });
+
+describe("the label recognizer is structural, not a natural-language word list", () => {
+  test("recognises labelled lines in a non-Latin script and keeps the label verbatim", () => {
+    const result = extractPreCompactRecords(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      sessionId: "session-ru",
+      turnStart: "turn-1",
+      turnEnd: "turn-2",
+      text: [
+        "Решение: перейти на новый пул соединений.",
+        "決定: 明日リリースする。",
+        "- قرار: نشر الإصدار غدا.",
+      ].join("\n"),
+    });
+
+    expect(result.errors).toEqual([]);
+    expect(result.records.map((record) => record.payload["extract_type"])).toEqual([
+      "решение",
+      "決定",
+      "قرار",
+    ]);
+    expect(result.records[0]!.payload["text"]).toBe("перейти на новый пул соединений.");
+  });
+
+  test("a multi-word label collapses to one token, matching the English shape", () => {
+    const result = extractPreCompactRecords(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      sessionId: "session-multiword",
+      turnStart: "turn-1",
+      turnEnd: "turn-1",
+      text: [
+        "Open question: Should presets be configurable?",
+        "Открытый вопрос: кто владелец?",
+      ].join("\n"),
+    });
+    expect(result.records.map((record) => record.payload["extract_type"])).toEqual([
+      "open_question",
+      "открытый_вопрос",
+    ]);
+  });
+
+  test("structural non-labels are refused: URLs, paths, clock times and prose", () => {
+    const result = extractPreCompactRecords(vault, {
+      createdAt: "2026-05-20T17:00:00.000Z",
+      sessionId: "session-negative",
+      turnStart: "turn-1",
+      turnEnd: "turn-1",
+      text: [
+        "https://example.com/deploy",
+        "file:///var/log/deploy.log",
+        "C:\\Users\\dev\\notes.md",
+        "10:30 standup with the platform team",
+        "The one thing I would really like to say about all of this is: nothing",
+        "[[wiki link]]: not a label",
+      ].join("\n"),
+    });
+    expect(result.records).toEqual([]);
+  });
+
+  test("the module carries no natural-language word list", async () => {
+    const source = await Bun.file(
+      new URL("../../../src/core/brain/pre-compact-extract.ts", import.meta.url).pathname,
+    ).text();
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    for (const word of ["decision", "commitment", "outcome", "rule", "open question"]) {
+      expect(code.toLowerCase()).not.toContain(word);
+    }
+  });
+});
