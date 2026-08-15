@@ -51,6 +51,10 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
       files_scanned: res.references.filesScanned,
       inbound_files: [...res.references.inboundFiles],
       files_rewritten: res.references.filesRewritten,
+      rewrite_failures: res.references.rewriteFailures.map((f) => ({
+        path: f.path,
+        reason: f.reason,
+      })),
       basename: res.references.basename,
       index: {
         state: res.references.index.state,
@@ -71,10 +75,19 @@ function renderText(res: NoteLifecycleResult): string {
   const where = res.to === null ? res.from : `${res.from} -> ${res.to}`;
   const mode = res.applied ? res.action : `${res.action} (plan)`;
   const refs = res.references;
+  // A half-applied rename is the one outcome an operator must not scroll
+  // past, so it gets its own line naming every file that kept the old
+  // spelling - not a count, because the remedy is per file.
+  const split =
+    refs.rewriteFailures.length === 0
+      ? ""
+      : `  NOT rewritten (still naming ${res.from}):\n` +
+        refs.rewriteFailures.map((f) => `    ${f.path}: ${f.reason}\n`).join("");
   return (
     `${mode}: ${where}\n` +
     `  inbound references: ${refs.inboundFiles.length} file(s) of ${refs.filesScanned} scanned, ` +
     `${refs.filesRewritten} rewritten (basename: ${refs.basename})\n` +
+    split +
     `  recoverability: ${res.recoverability.state}` +
     (res.recoverability.blockers.length > 0 ? ` (${res.recoverability.blockers.join(", ")})` : "") +
     "\n" +

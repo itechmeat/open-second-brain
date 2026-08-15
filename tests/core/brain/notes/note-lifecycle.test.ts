@@ -115,7 +115,11 @@ describe("rename", () => {
 
   test("rewrites references that live inside Brain/, not only outside it", async () => {
     note("Projects/Old.md", "x\n");
-    note("Brain/log/2026-01-01.md", "- ref [[Projects/Old]]\n");
+    // A Brain artifact citing a note by path holds an ordinary
+    // reference: it dangles exactly like a user note's would, so it is
+    // in range. The append-only log is the one exception, and it has
+    // its own test below.
+    note("Brain/reports/weekly.md", "- ref [[Projects/Old]]\n");
 
     const res = await noteLifecycle(vault, {
       action: NOTE_LIFECYCLE_ACTION.rename,
@@ -124,7 +128,7 @@ describe("rename", () => {
       apply: true,
     });
 
-    expect(read("Brain/log/2026-01-01.md")).toContain("[[Projects/New]]");
+    expect(read("Brain/reports/weekly.md")).toContain("[[Projects/New]]");
     expect(res.references?.filesRewritten).toBe(1);
   });
 

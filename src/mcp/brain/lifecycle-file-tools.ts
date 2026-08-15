@@ -73,6 +73,14 @@ function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
         from: s.from,
         to: s.to,
       })),
+      // Non-empty means the operation is half-applied: the note is at
+      // `to` and these files still name `from`. Rendered on every
+      // response, empty included, so a caller reading the field is
+      // reading an answer rather than guessing from its absence.
+      rewrite_failures: res.references.rewriteFailures.map((f) => ({
+        path: f.path,
+        reason: f.reason,
+      })),
       basename: res.references.basename,
       index: {
         state: res.references.index.state,
