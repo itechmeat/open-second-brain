@@ -411,14 +411,23 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/notes/lifecycle.ts": {
     categories: [C.lifecycleMove, C.retentionDelete],
-    calls: ["unlinkSync"],
+    calls: ["copyFileSync", "linkSync", "renameSync", "unlinkSync"],
     reason:
       "the note-file rename / move / archive is a relocation whose write half is " +
-      "`atomicCreateFileSyncExclusive`, re-confirmed on disk before the source unlink - " +
-      "the same ordering the signal retire uses, copying rather than re-rendering so a " +
-      "note's own prose survives. The second `unlinkSync` is the delete, which runs " +
-      "inside `withDestructiveSnapshot` and reports a verdict saying the archive it took " +
-      "does not cover a note living outside `Brain/`.",
+      "`linkSync` - a second NAME for the source inode, re-confirmed on disk before the " +
+      "source name is dropped, which is the signal retire's ordering with the bytes " +
+      "never leaving the filesystem. It relinks rather than re-rendering, so a note's " +
+      "own prose AND its exact bytes survive whatever their encoding; reading it as " +
+      "UTF-8 and writing the string back replaced every unpaired byte with U+FFFD. " +
+      "`copyFileSync` with `COPYFILE_EXCL` is the `EXDEV` arm, for a vault with a mount " +
+      "point inside it, and has the same two properties that matter: byte-exact and " +
+      "refuse-if-present. `renameSync` completes the case-only rename, where the " +
+      "destination NAMES the source entry: the inode gets a third, private name, the " +
+      "source name goes, and the rename attaches the staged name to the destination - " +
+      "so the bytes are reachable under some name at every instant. The second " +
+      "`unlinkSync` is the delete, which runs inside `withDestructiveSnapshot` and " +
+      "reports a verdict saying the archive it took does not cover a note living " +
+      "outside `Brain/`.",
   },
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],
