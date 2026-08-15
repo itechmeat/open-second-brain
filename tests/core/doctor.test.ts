@@ -8,6 +8,7 @@ import {
   checkCodexManifest,
   checkConfigWriteable,
   checkHermesManifest,
+  checkHermesResolverParity,
   checkJsonManifest,
   checkOpenclawInstallability,
   checkOpenclawManifest,
@@ -16,14 +17,24 @@ import {
 } from "../../src/core/doctor.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 
+/** Env keys the resolver-parity tests must own outright. */
+const OWNED_ENV = ["VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG", "XDG_CONFIG_HOME", "PATH"] as const;
+
 let tmp: string;
+const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-doctor-test-"));
+  for (const key of OWNED_ENV) savedEnv[key] = process.env[key];
+  delete process.env["VAULT_DIR"];
 });
 
 afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
+  for (const [key, value] of Object.entries(savedEnv)) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
 });
 
 describe("checkVaultWriteable", () => {
@@ -128,6 +139,107 @@ describe("checkOpenclawInstallability", () => {
     writeFileSync(join(repo, "package.json"), JSON.stringify({ name: "test" }));
     const results = checkOpenclawInstallability(repo);
     expect(results.some((r) => !r.ok && r.name === "openclaw_package_json_extensions")).toBe(true);
+  });
+});
+
+describe("checkHermesResolverParity", () => {
+  /**
+   * A stand-in for `plugins/hermes/config.py`. The check under test is the
+   * COMPARISON, so each case pins what the plugin side answers rather than
+   * re-running the real resolver - whose agreement with the core is pinned,
+   * fixture row by fixture row, in `tests/python/test_resolver_parity.py`.
+   */
+  function stubPluginResolver(body: string): string {
+    const root = join(tmp, "checkout");
+    mkdirSync(join(root, "plugins", "hermes"), { recursive: true });
+    writeFileSync(join(root, "plugins", "hermes", "config.py"), body);
+    return root;
+  }
+
+  function writeConfig(vault: string): string {
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, `vault: "${vault}"\n`);
+    return cfg;
+  }
+
+  test("does not apply when the plugin is not part of the installation", () => {
+    const root = join(tmp, "no-plugin");
+    mkdirSync(root, { recursive: true });
+    expect(checkHermesResolverParity({ repoRoot: root, config: writeConfig("/v"), cwd: tmp })).toBe(
+      null,
+    );
+  });
+
+  test("passes when both resolvers name the same vault", () => {
+    const root = stubPluginResolver('def resolve_vault():\n    return "/agreed/vault"\n');
+    const r = checkHermesResolverParity({
+      repoRoot: root,
+      config: writeConfig("/agreed/vault"),
+      cwd: tmp,
+    });
+    expect(r?.ok).toBe(true);
+    expect(r?.message).toContain("/agreed/vault");
+  });
+
+  test("passes when both resolvers agree no vault is configured", () => {
+    const root = stubPluginResolver("def resolve_vault():\n    return None\n");
+    const cfg = join(tmp, "config.yaml");
+    writeFileSync(cfg, "agent_name: solo\n");
+    const r = checkHermesResolverParity({ repoRoot: root, config: cfg, cwd: tmp });
+    expect(r?.ok).toBe(true);
+    expect(r?.message.toLowerCase()).toContain("no vault");
+  });
+
+  test("fails, naming both answers, when the resolvers disagree", () => {
+    const root = stubPluginResolver("def resolve_vault():\n    return None\n");
+    const r = checkHermesResolverParity({
+      repoRoot: root,
+      config: writeConfig("/core/vault"),
+      cwd: tmp,
+    });
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toContain("disagree");
+    expect(r?.message).toContain("/core/vault");
+    expect(typeof r?.fix).toBe("string");
+  });
+
+  test("an unmeasurable plugin side is reported as such, never as clean", () => {
+    const root = stubPluginResolver(
+      'def resolve_vault():\n    raise RuntimeError("resolver is broken")\n',
+    );
+    const r = checkHermesResolverParity({
+      repoRoot: root,
+      config: writeConfig("/core/vault"),
+      cwd: tmp,
+    });
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toContain("could not be measured");
+    expect(r?.message).toContain("resolver is broken");
+  });
+
+  test("an absent Python interpreter is a could-not-measure, never a pass", () => {
+    const root = stubPluginResolver('def resolve_vault():\n    return "/agreed/vault"\n');
+    // An empty PATH falls back to the platform default, so point it at a
+    // directory that exists and holds nothing.
+    process.env["PATH"] = join(tmp, "empty-bin");
+    mkdirSync(process.env["PATH"], { recursive: true });
+    const r = checkHermesResolverParity({
+      repoRoot: root,
+      config: writeConfig("/agreed/vault"),
+      cwd: tmp,
+    });
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toContain("no Python interpreter available");
+  });
+
+  test("a core side that refuses the config is reported with its reason", () => {
+    const root = stubPluginResolver("def resolve_vault():\n    return None\n");
+    const cfg = join(tmp, "config.yaml");
+    mkdirSync(cfg);
+    const r = checkHermesResolverParity({ repoRoot: root, config: cfg, cwd: tmp });
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toContain("could not determine");
+    expect(r?.message).toContain("not a regular file");
   });
 });
 

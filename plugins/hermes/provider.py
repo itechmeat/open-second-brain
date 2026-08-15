@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import atexit
 import json
+import logging
 import os
-import re
 import shutil
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -28,6 +29,8 @@ from . import config
 from ._base import MemoryProvider
 from ._schemas import static_tool_schemas
 from .bridge import BrainBridge, BridgeError, McpBrainBridge
+
+logger = logging.getLogger(__name__)
 
 # Curated, memory-relevant subset of the full MCP tool surface. Schemas still
 # come from the live server's `tools/list`; only this name allowlist is kept
@@ -49,8 +52,54 @@ MEMORY_TOOLS: tuple[str, ...] = (
     "brain_pre_compact_extract",
 )
 
-# Config fields this provider owns, in the order the setup wizard shows them.
-_CONFIG_KEYS: tuple[str, ...] = ("vault", "agent_name", "timezone")
+class _ConfigField(NamedTuple):
+    """One config field the setup wizard collects and this provider persists."""
+
+    #: Key as it appears in the Open Second Brain config file.
+    key: str
+    #: Wizard-facing explanation of what the field controls.
+    description: str
+    #: Whether the provider is unusable without it.
+    required: bool
+    #: How the value is resolved once written, used to verify the write took.
+    resolve: Callable[[], str | None]
+    #: Written value -> the effective value it should resolve to.
+    normalize: Callable[[str], str]
+
+
+# The config surface, once. `get_config_schema()` and the write loop used to be
+# the same three keys written out twice, so a fourth field could half-land: the
+# wizard would collect it and the writer would drop it (or the reverse) with
+# nothing failing. Both are derived from this tuple, in the order the wizard
+# shows them.
+_CONFIG_FIELDS: tuple[_ConfigField, ...] = (
+    _ConfigField(
+        key="vault",
+        description="Path to the Obsidian vault whose Brain/ subtree stores memory.",
+        required=True,
+        resolve=config.resolve_vault,
+        normalize=config.expand_tilde,
+    ),
+    _ConfigField(
+        key="agent_name",
+        description="Agent identity recorded on every Brain write.",
+        required=False,
+        resolve=config.resolve_agent_name,
+        normalize=lambda value: value,
+    ),
+    _ConfigField(
+        key="timezone",
+        description="IANA timezone for daily and scheduled Brain operations.",
+        required=False,
+        resolve=config.resolve_timezone,
+        normalize=lambda value: value,
+    ),
+)
+
+_CONFIG_KEYS: tuple[str, ...] = tuple(field.key for field in _CONFIG_FIELDS)
+
+# Durable per-session transcript written under ``hermes_home``.
+SESSION_TRANSCRIPT_FILENAME = "session-transcript.jsonl"
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
@@ -162,12 +211,13 @@ def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> st
 class OpenSecondBrainMemoryProvider(MemoryProvider):
     """Open Second Brain as a first-class Hermes memory provider."""
 
-    PROVIDER_NAME = "open-second-brain"
+    PROVIDER_NAME = config.PLUGIN_NAME
 
     def __init__(self, bridge: BrainBridge | None = None) -> None:
         self._bridge_override = bridge
         self._bridge: BrainBridge | None = None
         self._bridge_shared = False
+        self._bridge_start_error: Exception | None = None
         self._hermes_home: str | None = None
         self._session_id: str = ""
         self._buffer: list[tuple[str, str]] = []
@@ -182,13 +232,38 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         return self.PROVIDER_NAME
 
     def is_available(self) -> bool:
-        """Activation eligibility without network calls: a vault is configured."""
-        return config.resolve_vault() is not None
+        """Activation eligibility without network calls: a vault is configured.
+
+        A present-but-unreadable config is NOT answered here. The host renders
+        this boolean as a setup badge, and ``False`` on that badge means "you
+        have not configured this yet" - which is the exact false statement
+        GitHub #130 reported, and the reason a permissions fault on the config
+        file was indistinguishable from a plugin nobody had set up. There is no
+        third value in the host contract, so the only honest response to "I
+        cannot tell" is to refuse: :class:`config.ConfigReadError` is logged
+        with the file it names and re-raised, which reaches the gateway log
+        carrying its own remedy instead of vanishing into a wrong badge.
+        """
+        try:
+            return config.resolve_vault() is not None
+        except config.ConfigReadError as exc:
+            logger.error("%s: cannot determine availability: %s", self.PROVIDER_NAME, exc)
+            raise
 
     def initialize(self, session_id: str, **kwargs: Any) -> None:
-        """Start the bridge to the TS core. Fail-soft: never break gateway boot."""
+        """Start the bridge to the TS core.
+
+        Fail-soft about the BRIDGE - a gateway boot must survive an ``o2b mcp``
+        that will not start - but not silent about it: the failure is logged
+        with a traceback and remembered, so a later tool call names it instead
+        of returning ``None`` forever with nothing anywhere saying why.
+
+        A configuration the resolver cannot read is a different matter and
+        propagates, for the reason :meth:`is_available` gives.
+        """
         self._session_id = session_id or ""
         self._hermes_home = kwargs.get("hermes_home")
+        self._bridge_start_error = None
         old_bridge = self._bridge
         old_bridge_shared = self._bridge_shared
         self._bridge = None
@@ -199,8 +274,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             # shared and intentionally remain alive for the gateway lifetime.
             try:
                 old_bridge.stop()
-            except Exception:  # noqa: BLE001
-                pass
+            except Exception:  # noqa: BLE001 - a stale child must not block re-init
+                logger.warning(
+                    "%s: could not stop the previous bridge", self.PROVIDER_NAME, exc_info=True
+                )
         if self._bridge_override is not None:
             self._bridge = self._bridge_override
         else:
@@ -216,8 +293,14 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         try:
             assert self._bridge is not None
             self._bridge.start()
-        except Exception:  # noqa: BLE001 - degrade to inert; tool calls surface errors
-            pass
+        except Exception as exc:  # noqa: BLE001 - boot survives; the failure is recorded
+            self._bridge_start_error = exc
+            logger.error(
+                "%s: bridge to the Open Second Brain core failed to start; "
+                "memory tool calls will be refused until it does",
+                self.PROVIDER_NAME,
+                exc_info=True,
+            )
 
     @staticmethod
     def _repo_root() -> str | None:
@@ -275,6 +358,15 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         try:
             tools = self._bridge.list_tools()
         except Exception:  # noqa: BLE001 - static fallback rather than a crash
+            # The fallback is right (Hermes needs a tool table now, and the
+            # vendored schemas are generated from the live ones), but it looks
+            # identical to a healthy listing. Say so, or a dead bridge hides
+            # behind a plausible tool list for the life of the gateway.
+            logger.warning(
+                "%s: live tools/list failed; serving vendored static schemas instead",
+                self.PROVIDER_NAME,
+                exc_info=True,
+            )
             return static_tool_schemas()
         filtered = []
         for t in tools:
@@ -300,26 +392,21 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """
         if self._bridge is None:
             raise BridgeError("memory provider not initialized")
+        if self._bridge_start_error is not None:
+            raise BridgeError(
+                "memory bridge failed to start: "
+                f"{type(self._bridge_start_error).__name__}: {self._bridge_start_error}"
+            )
         if tool_name not in MEMORY_TOOLS:
             # Enforce the curated surface at execution time, not just discovery.
             raise BridgeError(f"unsupported memory tool: {tool_name}")
         return self._as_tool_content(self._bridge.call_tool(tool_name, args or {}))
 
     def get_config_schema(self) -> list[dict[str, Any]]:
+        """The wizard's field list, derived from :data:`_CONFIG_FIELDS`."""
         return [
-            {
-                "key": "vault",
-                "description": "Path to the Obsidian vault whose Brain/ subtree stores memory.",
-                "required": True,
-            },
-            {
-                "key": "agent_name",
-                "description": "Agent identity recorded on every Brain write.",
-            },
-            {
-                "key": "timezone",
-                "description": "IANA timezone for daily and scheduled Brain operations.",
-            },
+            {"key": field.key, "description": field.description, "required": field.required}
+            for field in _CONFIG_FIELDS
         ]
 
     def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
@@ -328,26 +415,61 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         The bridge spawns ``o2b mcp``, which resolves the vault from this same
         file, so the provider's config must land here rather than under
         ``hermes_home`` (which scopes only provider-local state).
+
+        Three rules, each replacing a way this used to lie about what it did:
+
+        - A key the wizard did not send is left alone; a key it sent EMPTY is
+          unset. Skipping every falsy value meant a field the operator cleared
+          kept its old value and the wizard reported success.
+        - The write is verified by re-resolving. Writing ``vault`` into a file
+          that ``VAULT_DIR`` (or a project pointer, or an active profile)
+          shadows leaves the operator with a config they can read and a vault
+          they are not using; :class:`config.ConfigEffectError` names the
+          shadowing source instead.
+        - Values that cannot survive the read-back are refused, not encoded.
+          This used to JSON-encode them, which made a Windows path round-trip
+          through the plugin and read back as a DIFFERENT path in ``o2b``.
+
+        :raises config.ConfigReadError: the existing config cannot be read, so
+            a write would clobber content nothing has seen.
+        :raises config.ConfigValueError: a value cannot survive the read-back.
+        :raises config.ConfigEffectError: the write landed but does not take.
         """
-        path = config.config_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        existing = path.read_text(encoding="utf-8") if path.is_file() else ""
-        lines = existing.splitlines()
-        for key in _CONFIG_KEYS:
-            value = values.get(key)
-            if not value:
+        pending: dict[str, str | None] = {}
+        for field in _CONFIG_FIELDS:
+            if field.key not in values:
                 continue
-            # Serialize as a JSON scalar (valid YAML) so quotes, backslashes
-            # (Windows paths), and newlines cannot corrupt the shared config.
-            new_line = f"{key}: {json.dumps(str(value), ensure_ascii=False)}"
-            key_re = re.compile(rf"^\s*{re.escape(key)}\s*:")
-            for i, line in enumerate(lines):
-                if key_re.match(line):
-                    lines[i] = new_line
-                    break
-            else:
-                lines.append(new_line)
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            raw = values[field.key]
+            pending[field.key] = str(raw) if raw else None
+        if not pending:
+            return
+        path = config.set_config_values(pending)
+        self._verify_saved(pending, path)
+
+    @staticmethod
+    def _verify_saved(pending: dict[str, str | None], path: Path) -> None:
+        """Refuse loudly when a written key does not resolve to what was written."""
+        stored = config.parse_simple_yaml(path.read_text(encoding="utf-8"))
+        for field in _CONFIG_FIELDS:
+            if field.key not in pending:
+                continue
+            written = pending[field.key]
+            if not written:
+                if stored.get(field.key):
+                    raise config.ConfigEffectError(
+                        field.key, "", stored[field.key], "the key survived the unset"
+                    )
+                continue
+            effective = field.resolve()
+            expected = field.normalize(written)
+            if effective != expected:
+                raise config.ConfigEffectError(
+                    field.key,
+                    written,
+                    effective,
+                    config.shadowing_source(field.key)
+                    or "something ahead of the config file in the resolution chain wins",
+                )
 
     # -- lifecycle hooks -----------------------------------------------------
 
@@ -403,7 +525,9 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             try:
                 self._append_turn(user, assistant, sid)
             except Exception:  # noqa: BLE001 - a turn must never fail on capture
-                pass
+                logger.warning(
+                    "%s: capturing a turn failed; it is lost", self.PROVIDER_NAME, exc_info=True
+                )
 
         # Drop references to finished capture threads so the list cannot grow
         # unbounded across a long-lived session.
@@ -481,10 +605,12 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     def _safe_call(self, name: str, args: dict[str, Any]) -> Any:
         """Bridge call that degrades to ``None`` instead of breaking a turn."""
         if self._bridge is None:
+            logger.debug("%s: %s skipped, no bridge", self.PROVIDER_NAME, name)
             return None
         try:
             return self._bridge.call_tool(name, args)
         except Exception:  # noqa: BLE001 - lifecycle hooks must not raise into Hermes
+            logger.warning("%s: %s failed; degrading to no recall", self.PROVIDER_NAME, name)
             return None
 
     @staticmethod
@@ -528,7 +654,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """Append the raw turn to a transcript under hermes_home for durability."""
         if not self._hermes_home:
             return
-        path = Path(self._hermes_home) / "open-second-brain" / "session-transcript.jsonl"
+        path = Path(self._hermes_home) / config.PLUGIN_NAME / SESSION_TRANSCRIPT_FILENAME
         record = json.dumps(
             {"session_id": session_id, "user": user, "assistant": assistant},
             ensure_ascii=False,
@@ -538,7 +664,12 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             with path.open("a", encoding="utf-8") as handle:
                 handle.write(record + "\n")
         except OSError:
-            pass
+            logger.warning(
+                "%s: could not append the session transcript at %s",
+                self.PROVIDER_NAME,
+                path,
+                exc_info=True,
+            )
 
     def _flush_buffer(self, interrupted: bool = False) -> None:
         """Hand buffered turns to deterministic extraction, then clear the buffer.

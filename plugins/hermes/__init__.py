@@ -15,6 +15,7 @@ two. Shared config and reminder helpers live in ``config.py``.
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,8 @@ from . import config
 from .bridge import BrainBridge, FakeBrainBridge, McpBrainBridge
 from .cli import register_cli
 from .provider import OpenSecondBrainMemoryProvider
+
+logger = logging.getLogger(__name__)
 
 PLUGIN_NAME = config.PLUGIN_NAME
 
@@ -76,12 +79,31 @@ def _register_health_check(ctx: Any) -> None:
 
 
 def _register_memory_provider(ctx: Any) -> None:
+    """Hand the provider to the gateway, or say why there is none.
+
+    Plugin loading still survives a construction failure - one broken plugin
+    must not take the gateway down - but it no longer survives it silently.
+    Swallowing here produced the worst possible outcome: no provider, no
+    registration, and no diagnostic anywhere, so the host had nothing to show
+    and nothing to blame.
+    """
     method = getattr(ctx, "register_memory_provider", None)
-    if callable(method):
-        try:
-            method(OpenSecondBrainMemoryProvider())
-        except Exception:  # noqa: BLE001 - never break plugin loading
-            pass
+    if not callable(method):
+        logger.warning(
+            "%s: host context exposes no register_memory_provider(); "
+            "the memory provider is not registered",
+            PLUGIN_NAME,
+        )
+        return
+    try:
+        method(OpenSecondBrainMemoryProvider())
+    except Exception:  # noqa: BLE001 - never break plugin loading
+        logger.error(
+            "%s: memory provider could not be registered; "
+            "Open Second Brain memory is unavailable this session",
+            PLUGIN_NAME,
+            exc_info=True,
+        )
 
 
 def register(ctx: Any) -> None:

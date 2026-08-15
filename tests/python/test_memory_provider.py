@@ -7,6 +7,7 @@ the TypeScript core through a ``BrainBridge`` seam, which tests replace with a
 fake so no live Bun runtime is needed.
 """
 
+import contextlib
 import io
 import json
 import os
@@ -40,6 +41,7 @@ from plugins.hermes.bridge import (  # noqa: E402
     McpBrainBridge,
     resolve_request_timeout,
 )
+from plugins.hermes import provider as provider_module  # noqa: E402
 from plugins.hermes.provider import (  # noqa: E402
     MEMORY_TOOLS,
     OpenSecondBrainMemoryProvider,
@@ -273,17 +275,103 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
             provider.handle_tool_call("brain_dream", {})
         self.assertEqual(bridge.calls, [])  # never reached the bridge
 
-    def test_save_config_encodes_windows_path_safely(self):
+    def test_save_config_refuses_a_value_that_cannot_survive_read_back(self):
+        # This used to JSON-encode the value and assert it round-tripped
+        # through the PLUGIN's reader. It did - and `o2b` read the same line
+        # back as a different path, because the TypeScript parser strips
+        # quotes literally and unescapes nothing. The two sides now agree by
+        # refusing the value instead of storing one each side reads
+        # differently; `tests/python/test_resolver_parity.py` pins the reader
+        # half of that agreement.
         with tempfile.TemporaryDirectory() as tmp:
             cfg_path = Path(tmp) / "config.yaml"
             os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
             provider = self._provider(FakeBrainBridge())
             win = 'C:\\Users\\me\\My "Special" Vault'
-            provider.save_config({"vault": win}, tmp)
-            # Round-trips through the writer (JSON scalar) and the reader, even
-            # with backslashes and embedded quotes that would corrupt a raw
-            # interpolation. Asserted inside the tempdir so the file still exists.
-            self.assertEqual(cfg.resolve_vault(), win)
+            with self.assertRaises(cfg.ConfigValueError):
+                provider.save_config({"vault": win}, tmp)
+            self.assertFalse(cfg_path.exists())
+
+    def test_save_config_unsets_a_cleared_field(self):
+        # A wizard that clears a field must be able to unset it. Skipping
+        # falsy values kept the old value and reported success.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/v"\nagent_name: "old"\n', encoding="utf-8")
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            provider = self._provider(FakeBrainBridge())
+            provider.save_config({"agent_name": ""}, tmp)
+            text = cfg_path.read_text(encoding="utf-8")
+            self.assertNotIn("agent_name", text)
+            self.assertIn('vault: "/v"', text)
+            self.assertEqual(cfg.resolve_agent_name(), cfg.DEFAULT_AGENT)
+
+    def test_save_config_leaves_a_key_the_wizard_did_not_send(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('agent_name: "keep-me"\n', encoding="utf-8")
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            provider = self._provider(FakeBrainBridge())
+            provider.save_config({"vault": "/v"}, tmp)
+            self.assertEqual(cfg.resolve_agent_name(), "keep-me")
+
+    def test_save_config_refuses_when_the_environment_shadows_the_write(self):
+        # The exact case that produces a config the operator can read and a
+        # vault they are not using.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            os.environ["VAULT_DIR"] = "/elsewhere"
+            provider = self._provider(FakeBrainBridge())
+            with self.assertRaises(cfg.ConfigEffectError) as caught:
+                provider.save_config({"vault": "/v"}, tmp)
+            self.assertIn("VAULT_DIR", str(caught.exception))
+            # The write itself is not rolled back: the file holds what was asked
+            # for, and the error explains why it is not in force.
+            self.assertIn('vault: "/v"', cfg_path.read_text(encoding="utf-8"))
+
+    def test_save_config_replaces_the_line_the_reader_honours(self):
+        # Duplicate keys: the reader takes the last, so the writer must too.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/first"\nvault: "/second"\n', encoding="utf-8")
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            provider = self._provider(FakeBrainBridge())
+            provider.save_config({"vault": "/v"}, tmp)
+            self.assertEqual(cfg.resolve_vault(), "/v")
+            self.assertEqual(cfg_path.read_text(encoding="utf-8").count("vault:"), 1)
+
+    def test_config_schema_and_write_keys_come_from_one_structure(self):
+        provider = self._provider(FakeBrainBridge())
+        schema_keys = tuple(field["key"] for field in provider.get_config_schema())
+        self.assertEqual(schema_keys, provider_module._CONFIG_KEYS)
+
+    def test_is_available_refuses_rather_than_reporting_unconfigured(self):
+        # The reported symptom: a config that cannot be read looked exactly
+        # like a plugin nobody had set up.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_dir = Path(tmp) / "config.yaml"
+            cfg_dir.mkdir()
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_dir)
+            provider = self._provider(FakeBrainBridge())
+            with self.assertRaises(cfg.ConfigReadError) as caught:
+                provider.is_available()
+            self.assertIn(str(cfg_dir), str(caught.exception))
+            self.assertIn("chmod u+r", str(caught.exception))
+
+    def test_bridge_start_failure_is_named_by_the_next_tool_call(self):
+        # A provider whose bridge never started used to stay registered and
+        # answer every call with None, forever, with nothing saying why.
+        class RefusingBridge(FakeBrainBridge):
+            def start(self):
+                raise BridgeError("o2b mcp is not installed")
+
+        provider = self._provider(RefusingBridge())
+        with self.assertLogs("plugins.hermes.provider", level="ERROR"):
+            provider.initialize("s", hermes_home="/tmp/hh")
+        with self.assertRaises(BridgeError) as caught:
+            provider.handle_tool_call("brain_note", {"text": "hi"})
+        self.assertIn("o2b mcp is not installed", str(caught.exception))
 
 
 class ProviderStaticSchemaFallbackTests(unittest.TestCase):
@@ -450,6 +538,36 @@ class CliTests(unittest.TestCase):
         self.assertEqual(rc, 0)
         self.assertIn("/v", out)
         self.assertIn("cli-agent", out)
+
+    def test_unreadable_config_is_a_named_line_not_a_traceback(self):
+        # These two commands are what an operator is asked to run when the
+        # setup badge is already wrong (GitHub #130). `is_available` refuses
+        # rather than answering False for an unreadable config, which is right
+        # for the badge and useless here: a traceback would bury the one line
+        # naming the remedy. The exit code separates "could not read the
+        # config" from "read it, and it says not ready", which is exit 1.
+        if os.getuid() == 0:
+            self.skipTest("root ignores the mode bits this test relies on")
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/v"\n', encoding="utf-8")
+            cfg_path.chmod(0o000)
+            os.environ["OPEN_SECOND_BRAIN_CONFIG"] = str(cfg_path)
+            try:
+                for verb in ("config", "status"):
+                    with self.subTest(verb=verb):
+                        buf = io.StringIO()
+                        with contextlib.redirect_stderr(buf):
+                            rc, out = self._run([verb])
+                        self.assertEqual(rc, 2)
+                        self.assertIn("error:", buf.getvalue())
+                        self.assertIn(str(cfg_path), buf.getvalue())
+                        # The path this process actually looked at is printed
+                        # even when the file behind it is not readable.
+                        if verb == "config":
+                            self.assertIn(str(cfg_path), out)
+            finally:
+                cfg_path.chmod(0o600)
 
 
 class _RaisingBridge(FakeBrainBridge):
