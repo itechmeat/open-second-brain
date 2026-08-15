@@ -14,6 +14,18 @@
  * MCP server, dream runs from cron). When it does happen, we prefer a
  * loud typed error over a silent retry-then-still-fail loop.
  *
+ * ## Why this exists beside `reliability/lock.ts`
+ *
+ * `withFileLock` there is the general-purpose ladder and it is ASYNC -
+ * it awaits `proper-lockfile`. Every consumer of the waiting form here
+ * (`updateManifest`, `appendGitRecords`, `recordCompleted`,
+ * `generateRun`) is a synchronous function, and `ingestSource` above two
+ * of them is synchronous on the published SDK surface, so awaiting a
+ * lock would colour that function, its callers and the SDK contract.
+ * Two ladders, two reasons; a reader who finds this one and wonders why
+ * the other was not used is reading the right question, and this is the
+ * answer.
+ *
  * Stale-lock recovery: on normal process exit the cleanup hook unlinks
  * any still-held locks. On hard crash (SIGKILL, OOM, or the second
  * Ctrl-C that falls through to the default SIGINT disposition) the
