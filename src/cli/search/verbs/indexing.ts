@@ -25,6 +25,7 @@ import {
   SELF_HEAL_REINDEX_OUTCOME,
 } from "../../../core/maintenance/self-heal-reindex.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
+import { OPERATION } from "../../../core/brain/safeguard.ts";
 import { emitNextSteps } from "../../advisory-rail.ts";
 import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
 import {
@@ -49,7 +50,7 @@ import {
  * pass over a large vault is the same class of long write as a rebuild, so
  * one configurable deadline covers both.
  */
-const SAFEGUARD_OPERATION = "reindex";
+const SAFEGUARD_OPERATION = OPERATION.reindex;
 
 /** Terminal state both builders reach when the index covers every document. */
 const INDEX_BUILT = "search-index-built";
@@ -179,7 +180,7 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
 
   const verbose = flagBoolean(flags, "verbose");
   const observation = observeIndexRun(flags, "index");
-  const interrupt = onInterrupt();
+  const interrupt = onInterrupt(OPERATION.reindex);
   let stats: IndexStats;
   try {
     stats = await indexVault(cfg, {
@@ -215,12 +216,13 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
 /**
  * Rebuild the index from scratch.
  *
- * `--self-heal` marks the run as the automatic post-upgrade rebuild that
- * `ensureVaultCurrent` spawns detached, with every stream ignored because
- * there is no terminal to write to. It changes nothing about the rebuild;
- * it only makes the run's terminal outcome - success or the failure by
- * name - land on the `self_heal_reindex` metrics surface, which is the only
- * place such a run can be read from afterwards.
+ * `--self-heal <run-id>` marks the run as the automatic post-upgrade
+ * rebuild that `ensureVaultCurrent` spawns detached, with every stream
+ * ignored because there is no terminal to write to. It changes nothing
+ * about the rebuild; it only makes the run's terminal outcome - success or
+ * the failure by name - land on the `self_heal_reindex` metrics surface
+ * under the run id the parent minted, which is the only place such a run
+ * can be read from afterwards and the only thing its two rows pair on.
  */
 export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -233,7 +235,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     progress: { type: "boolean" },
     "cron-template": { type: "boolean" },
     interval: { type: "string" },
-    "self-heal": { type: "boolean" },
+    "self-heal": { type: "string" },
   });
   if (flagBoolean(flags, "cron-template")) {
     const intervalRaw = flagString(flags, "interval") ?? DEFAULT_CRON_INTERVAL;
@@ -249,11 +251,15 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
       throw err;
     }
   }
-  const cfg = resolveConfig(flags);
-  const selfHeal = flagBoolean(flags, "self-heal");
+  const selfHeal = flagString(flags, "self-heal");
   const startedAt = Date.now();
+  // Read before the config, and the config read is inside the recording:
+  // `resolveConfig` used to run outside it, so a self-heal child that died
+  // on an unresolvable `--config` left its parent's spawn row unpaired -
+  // evidence a reader was told to interpret as a child that vanished.
+  const cfg = resolveSelfHealConfig(flags, selfHeal, startedAt);
   const observation = observeIndexRun(flags, "reindex");
-  const interrupt = onInterrupt();
+  const interrupt = onInterrupt(OPERATION.reindex);
   let stats: IndexStats;
   try {
     stats = await reindexVault(cfg, {
@@ -276,10 +282,11 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     // database was abandoned and never swapped in, so this run left the
     // live index exactly as it found it - which is a rebuild that did not
     // happen, whoever asked for it to stop.
-    if (selfHeal) {
+    if (selfHeal !== undefined) {
       recordSelfHealOutcome(
         cfg.vault,
         SELF_HEAL_REINDEX_OUTCOME.failed,
+        selfHeal,
         Date.now() - startedAt,
         describeFailure(err),
       );
@@ -291,11 +298,53 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   } finally {
     interrupt.release();
   }
-  if (selfHeal) {
-    recordSelfHealOutcome(cfg.vault, SELF_HEAL_REINDEX_OUTCOME.completed, Date.now() - startedAt);
+  if (selfHeal !== undefined) {
+    recordSelfHealOutcome(
+      cfg.vault,
+      SELF_HEAL_REINDEX_OUTCOME.completed,
+      selfHeal,
+      Date.now() - startedAt,
+    );
   }
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
   return 0;
+}
+
+/**
+ * `resolveConfig`, with a self-heal child's failure recorded before it is
+ * rethrown.
+ *
+ * The vault comes off the `--vault` flag rather than the resolved config,
+ * because the config is the thing that just failed - and the parent always
+ * passes `--vault`, so the value is there for exactly the runs that own a
+ * spawn row. A child invoked WITHOUT `--vault` whose config will not
+ * resolve still records nothing: there is no vault to record into, and
+ * inventing one would write a row into a directory nobody asked about.
+ * That residue is named in `self-heal-reindex.ts`, case 3.
+ *
+ * The error is always rethrown, unchanged: this adds a row, it does not
+ * soften a failure.
+ */
+function resolveSelfHealConfig(
+  flags: SearchVerbFlags,
+  selfHealRunId: string | undefined,
+  startedAt: number,
+): ResolvedSearchConfig {
+  try {
+    return resolveConfig(flags);
+  } catch (err) {
+    const vault = flagString(flags, "vault");
+    if (selfHealRunId !== undefined && vault !== undefined) {
+      recordSelfHealOutcome(
+        vault,
+        SELF_HEAL_REINDEX_OUTCOME.failed,
+        selfHealRunId,
+        Date.now() - startedAt,
+        describeFailure(err),
+      );
+    }
+    throw err;
+  }
 }
 
 /**

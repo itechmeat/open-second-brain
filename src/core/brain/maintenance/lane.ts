@@ -26,10 +26,30 @@
  * would otherwise hand a permanently broken task the lease first on
  * every pass.
  *
- * `--force` bypasses the soft gates (window, busy, pressure) and the
- * streak refusal for an operator who wants the pass NOW; tasks run
- * stale-first (least-recently succeeded first, never-run before
- * everything) and every attempt is journaled.
+ * ## Two escapes, and why the narrow one exists
+ *
+ * A refusal is per task and the other tasks still run - but it stands
+ * until something clears it, and only a SUCCESS clears it. So there has
+ * to be a way to attempt the refused task again.
+ *
+ * `force` is the wide one: it bypasses the soft gates (window, busy,
+ * pressure) and every streak refusal, for an operator who wants the pass
+ * NOW. Making it the only way out was the defect: an operator whose
+ * reindex is deterministically broken had to run the whole heavy lane
+ * with their own window, busy and host-pressure protection switched off
+ * in order to retry one task.
+ *
+ * {@link RunMaintenanceOptions.retryTasks} is the narrow one: it bypasses
+ * the streak refusal for the tasks it NAMES and nothing else. Every gate
+ * the operator configured still decides, the lease still decides, and a
+ * task it does not name is still refused. It clears no state and writes
+ * no row of its own: the attempt's own outcome row is what ends the
+ * streak if it succeeds, and what deepens it if it does not, so a retry
+ * that keeps failing costs one lane slot per invocation the operator
+ * chose to make - not a standing exemption.
+ *
+ * Tasks run stale-first (least-recently succeeded first, never-run
+ * before everything) and every attempt is journaled.
  */
 
 import { listRecallTelemetry } from "../recall-telemetry.ts";
@@ -114,8 +134,17 @@ export interface MaintenanceTask {
 export interface RunMaintenanceOptions extends EvaluateGatesOptions {
   readonly holder: string;
   readonly tasks: ReadonlyArray<MaintenanceTask>;
-  /** Bypass window and busy gates - never the lease. */
+  /**
+   * Bypass the window, busy and pressure gates and every streak refusal -
+   * never the lease.
+   */
   readonly force?: boolean;
+  /**
+   * Task names to attempt past their streak refusal, this run only. Every
+   * gate still applies; a name that is not a registered task is the
+   * caller's to reject, because only the caller knows what it registered.
+   */
+  readonly retryTasks?: ReadonlyArray<string>;
   readonly leaseTtlMs?: number;
 }
 
@@ -250,10 +279,11 @@ export async function runMaintenance(
 
   try {
     const ordered = orderStaleFirst(vault, opts.tasks);
+    const retry = new Set(opts.retryTasks ?? []);
     const results: MaintenanceTaskResult[] = [];
     for (const task of ordered) {
       const refusal =
-        opts.force === true
+        opts.force === true || retry.has(task.name)
           ? undefined
           : refuseOnStreak(vault, task.name, policy.failure_streak_limit);
       if (refusal !== undefined) {
@@ -336,7 +366,9 @@ function refuseOnStreak(
   // out of it.
   const error =
     `refused: ${streak} consecutive journaled failures reached the ` +
-    `maintenance.failure_streak_limit of ${limit}; fix the cause, or re-run with --force to retry`;
+    `maintenance.failure_streak_limit of ${limit}; fix the cause, then re-run with ` +
+    `--retry ${task} to attempt this task alone with every other gate still in force, ` +
+    `or --force to run the whole lane past every soft gate`;
   return {
     result: { name: task, ok: false, duration_ms: 0, error, refused: true, failure_streak: streak },
     // No `ok` on the row: a refusal is not an attempt, and recording one

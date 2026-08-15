@@ -49,9 +49,16 @@ export const MAINTENANCE_HOST_PRESSURE_PERCENT_MAX = 1000;
  *
  * Three, and the two neighbouring values are why. At one, any transient
  * fault - a provider 503, a momentarily full disk, a lock lost to a
- * concurrent editor - becomes a standing refusal that only an operator
- * with `--force` can clear; that converts a self-healing outage into a
- * manual one. At five or ten, a deterministically broken task keeps
+ * concurrent editor - becomes a standing refusal an operator has to
+ * clear by hand; that converts a self-healing outage into a manual one.
+ * Three does not abolish that property, it only raises the bar: an
+ * outage spanning three scheduled runs reaches the limit too, and then
+ * the task is refused until an operator retries it. What makes that
+ * acceptable is the shape of the escape rather than the number - the
+ * refusal is per task, the other tasks keep running, and `--retry
+ * <task>` attempts the refused one without switching off the window,
+ * busy and host-pressure gates the operator configured. At five or ten,
+ * a deterministically broken task keeps
  * costing a full lane slot on every scheduled run for days, and because
  * the lane orders tasks stale-first a permanently failing task floats to
  * the FRONT of every pass - so it spends the lease before the healthy

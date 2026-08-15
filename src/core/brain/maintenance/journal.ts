@@ -131,17 +131,46 @@ export function listJournal(vault: string, limit?: number): MaintenanceJournalEn
  *     newest row that is not a failure - a transient fault therefore
  *     cannot accumulate into a permanent refusal;
  *   - only rows that record a completed ATTEMPT are counted. A gate
- *     refusal, a lease skip, and the `refused:streak` row this count
- *     itself produces are not attempts, so a refusal can never deepen the
- *     streak it reports.
+ *     refusal and a lease skip are not attempts, so they cannot deepen a
+ *     streak.
  *
  * A row that ran but recorded no outcome stops the walk as well: refusing
  * work on evidence this build cannot read is the wrong direction to err.
+ *
+ * ## Why a `refused:streak` row ends the walk by ADDING its own count
+ *
+ * This journal is a ring buffer ({@link MAINTENANCE_JOURNAL_CAP}), and a
+ * lane that writes several rows per pass retires roughly a hundred passes'
+ * history. Counted naively, a refused task's three `run/ok:false` rows are
+ * pushed off the tail by the very refusal rows they cause, and the count
+ * silently returns to zero - the refusal un-refusing itself on a schedule
+ * set by how chatty the journal is, with no event anywhere.
+ *
+ * So the refusal row is read as what it is: the journal's own durable
+ * record of the count that was reached. The walk stops there and returns
+ * the failures NEWER than it plus the number it recorded, which is the
+ * same total those rolled-off rows would have produced. It cannot inflate
+ * a streak - a refusal reproduces the number it was given, never one more
+ * - and it cannot outlive a recovery, because a success is newer than
+ * every refusal it follows and stops the walk first.
+ *
+ * Residual, stated rather than hidden: below the limit no refusal row
+ * exists, so a streak whose rows roll off is counted only from what is
+ * retained. That undercount errs toward RUNNING the task, which is the
+ * direction this function already errs in for an unreadable outcome.
  */
 export function consecutiveTaskFailures(vault: string, task: string): number {
   let streak = 0;
   for (const entry of listJournal(vault)) {
     if (entry.task !== task) continue;
+    if (entry.verdict === MAINTENANCE_VERDICT.refusedStreak) {
+      // A row from a build that did not record the number carries no
+      // evidence, so it is skipped rather than read as a zero.
+      if (Number.isInteger(entry.streak) && (entry.streak ?? 0) >= 0) {
+        return streak + (entry.streak ?? 0);
+      }
+      continue;
+    }
     if (entry.verdict !== MAINTENANCE_VERDICT.run) continue;
     if (entry.ok !== false) break;
     streak += 1;

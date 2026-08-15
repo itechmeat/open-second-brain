@@ -532,13 +532,16 @@ export const VERB_HELP: Record<string, string> = {
     "no-values record in Brain/log/secret-custody/. Protects against\n" +
     "context leakage and vault sync exposure - not against root.\n",
   maintenance:
-    "usage: o2b brain maintenance run [--force] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] | status [--limit N]  [--vault <path>] [--json]\n" +
+    "usage: o2b brain maintenance run [--force] [--retry <task>] [--window H-H] [--tz ZONE] [--busy-minutes N] [--busy-threshold N] | status [--limit N]  [--vault <path>] [--json]\n" +
     "Quiet-window, lease-guarded lane for heavy passes. run gates on the\n" +
     "local-time window (unset = always open), recent interactive query-rate\n" +
     "from recall telemetry, and an expiring SQLite lease no second worker\n" +
     "can grab, then executes dream, reindex, bridges, and clusters\n" +
-    "stale-first. --force bypasses\n" +
-    "the soft gates but never the lease. Every attempt - including gate\n" +
+    "stale-first. A task that has failed maintenance.failure_streak_limit\n" +
+    "times in a row is REFUSED by name (exit 7) while the others still run;\n" +
+    "--retry <task> attempts that one task with every gate still in force,\n" +
+    "and --force bypasses the soft gates and every refusal, never the\n" +
+    "lease. Every attempt - including gate\n" +
     "refusals - lands in a bounded journal; status renders lease + journal.\n",
   audit:
     "usage: o2b brain audit <pref-id> [--vault <path>] [--json]\n" +

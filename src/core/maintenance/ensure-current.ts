@@ -28,12 +28,17 @@ import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../search/schema.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import {
+  mintSelfHealRunId,
   recordSelfHealSpawn,
   SELF_HEAL_SPAWN,
   type SelfHealSpawnDecision,
 } from "./self-heal-reindex.ts";
 
-/** The flag that tells the child to record its own terminal outcome. */
+/**
+ * The flag that tells the child to record its own terminal outcome. It
+ * takes the run id this run's rows pair on, so the child never has to
+ * invent one the parent could not have written.
+ */
 const SELF_HEAL_FLAG = "--self-heal";
 
 export interface EnsureCurrentResult {
@@ -117,10 +122,30 @@ function o2bScriptPath(): string {
  * only exclusion in the system; this only thins the herd, and the loser of
  * a real race now records why it lost.
  *
+ * ## How wide that window is, measured, and what the probe therefore buys
+ *
+ * The window is a cold Bun start plus module load, flag parse and config
+ * resolution before `reindexVault` reaches its lock. Measured on a 400-note
+ * vault, spawn to lock-held was 710, 753, 723, 737, 710 ms over five runs.
+ * So the probe thins NOTHING among callers that probe inside those ~0.7 s:
+ * four parents released from one barrier all found the lock free and all
+ * spawned (measured 4/4).
+ *
+ * What it does buy is every caller that arrives AFTER a child has the lock,
+ * and on a real vault that is most of them: a rebuild that takes minutes is
+ * a minutes-long window in which each new `SessionStart` / `PostCompact`
+ * hook is a caller that now starts nothing (measured: a parent 1.5 s behind
+ * the first records `skipped_writer_lock`). The simultaneous burst this
+ * module's opening paragraph describes is exactly the case it does not
+ * help; closing that one needs a claim the parent can make before the
+ * spawn, which is a lock with its own staleness policy, not a probe.
+ * `tests/core/maintenance/self-heal-reindex.test.ts` pins both halves.
+ *
  * The child's streams stay ignored: it is detached and there is no terminal
  * to write to. Its terminal outcome goes to the `self_heal_reindex` metrics
- * surface instead, which the `--self-heal` flag arms - see
- * `self-heal-reindex.ts` for why the parent cannot record it.
+ * surface instead, which `--self-heal <run-id>` arms - the same run id this
+ * function records on the spawn row, so the two rows pair without a pid;
+ * see `self-heal-reindex.ts` for why the parent cannot record the outcome.
  */
 function startSelfHealReindex(
   vault: string,
@@ -142,6 +167,9 @@ function startSelfHealReindex(
     recordSelfHealSpawn(vault, SELF_HEAL_SPAWN.skippedWriterLock);
     return SELF_HEAL_SPAWN.skippedWriterLock;
   }
+  // Minted BEFORE the spawn: it is what the child is told to write on its
+  // own terminal row, so the pair exists whichever process writes first.
+  const runId = mintSelfHealRunId();
   const proc = Bun.spawn(
     [
       o2bScriptPath(),
@@ -152,6 +180,7 @@ function startSelfHealReindex(
       "--config",
       configPath,
       SELF_HEAL_FLAG,
+      runId,
     ],
     {
       stdin: "ignore",
@@ -160,7 +189,7 @@ function startSelfHealReindex(
     },
   );
   proc.unref();
-  recordSelfHealSpawn(vault, SELF_HEAL_SPAWN.spawned, proc.pid);
+  recordSelfHealSpawn(vault, SELF_HEAL_SPAWN.spawned, runId);
   return SELF_HEAL_SPAWN.spawned;
 }
 

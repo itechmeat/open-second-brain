@@ -27,19 +27,53 @@
  * ## Two rows, and what the pair means
  *
  * The parent records its SPAWN DECISION; the child records its own TERMINAL
- * OUTCOME, because nothing survives to await it. They pair on the child's
- * pid: the parent knows it at spawn, the child knows it as `process.pid`.
- * A spawn row with no terminal row beside it is therefore a child that
- * vanished - SIGKILL, OOM, a host that reaped the session's process group -
- * which is the one failure no in-child recording can report about itself.
+ * OUTCOME, because nothing survives to await it. They pair on a RUN ID the
+ * parent mints before the spawn and hands to the child on its command line
+ * ({@link mintSelfHealRunId}, `o2b search reindex --self-heal <run-id>`).
+ *
+ * The pid was the obvious pairing key and is the wrong one. A pid is
+ * machine-local, which this module forbids on a row two paragraphs down,
+ * and it is not even unique on one host: pids are reused, so over the life
+ * of a vault a peer's `{decision: spawned, pid: 4242}` and this device's
+ * `{outcome: completed, pid: 4242}` pair up and report a vanished child as
+ * a finished one. A run id identifies a RUN rather than a process, so it
+ * collides with nothing and stays true wherever the row is read.
+ *
+ * ## What an unpaired spawn row proves, and what it does not
+ *
+ * A spawn row with no terminal row beside it means exactly one thing: no
+ * terminal outcome was recorded for that run. Four states produce it, and
+ * only the first is the one the pair was built to catch:
+ *
+ *   1. the child vanished - SIGKILL, OOM, a host that reaped the session's
+ *      process group - which is the one failure no in-child recording can
+ *      report about itself;
+ *   2. the child is STILL RUNNING; a full reindex of a real vault takes
+ *      minutes and looks identical to (1) for that whole window - the
+ *      row's `runAt` is the only bound on how long it has been going;
+ *   3. the child died before it could arm the recording - `parseFlags`
+ *      refused its argv, or (only when no `--vault` reached it) its
+ *      configuration would not resolve. Everything after that point is
+ *      recorded: {@link recordSelfHealOutcome} is called on the config
+ *      failure path too;
+ *   4. the child ran and its own {@link append} failed - a read-only
+ *      vault, a full disk. That is deliberate (observability never fails
+ *      the pass it observes) and it is indistinguishable from (1) by
+ *      construction.
+ *
+ * A child that never started is distinguishable and correctly so: `Bun.spawn`
+ * throwing means no row of either kind is written and the caller's `errors`
+ * carries the reason.
  *
  * The rows live under `Brain/`, which is synced across devices, while the
  * index they describe is per-device and rebuildable. So a row states that a
  * self-heal ran on SOME device, never that this device's index is stale;
  * the authority on that is the index's own `schema_version`. Nothing
- * machine-local is written into a row - no db path, no host - because a
- * synced vault carries it to peers where it is false.
+ * machine-local is written into a row - no db path, no host, no pid -
+ * because a synced vault carries it to peers where it is false.
  */
+
+import { randomUUID } from "node:crypto";
 
 import { appendMetric, listMetrics } from "../brain/metrics.ts";
 
@@ -105,6 +139,18 @@ export function isSelfHealReindexOutcome(value: unknown): value is SelfHealReind
   );
 }
 
+/**
+ * Mint the id the two rows of one self-heal pair carry.
+ *
+ * A UUID and not a timestamp-plus-counter: the two rows are written by two
+ * processes on a vault that syncs to peers, so the only uniqueness that
+ * holds is the kind that needs no coordination. The `sh-` prefix keeps the
+ * value self-describing in a JSONL line an operator reads by eye.
+ */
+export function mintSelfHealRunId(): string {
+  return `sh-${randomUUID()}`;
+}
+
 /** One row, narrowed. Exactly one of `decision` / `outcome` is non-null. */
 export interface SelfHealReindexRow {
   /** ISO-8601 UTC instant the row describes. */
@@ -113,8 +159,8 @@ export interface SelfHealReindexRow {
   readonly decision: SelfHealSpawnDecision | null;
   /** Set on the child's terminal rows. */
   readonly outcome: SelfHealReindexOutcome | null;
-  /** The child's pid; `null` when no child was started. */
-  readonly pid: number | null;
+  /** What the two rows of one run pair on; `null` when no child was started. */
+  readonly runId: string | null;
   /** How long the child ran; `null` on a parent row. */
   readonly durationMs: number | null;
   /** The failure, by name; `null` on every row that is not a failure. */
@@ -129,27 +175,30 @@ export interface SelfHealReindexRow {
 export function recordSelfHealSpawn(
   vault: string,
   decision: SelfHealSpawnDecision,
-  pid: number | null = null,
+  runId: string | null = null,
 ): void {
   append(vault, {
     decision,
-    ...(pid === null ? {} : { pid }),
+    ...(runId === null ? {} : { run_id: runId }),
   });
 }
 
 /**
  * Record a child's terminal outcome. Called BY THE CHILD, in its own
- * process, because the parent `unref`ed it and is long gone.
+ * process, because the parent `unref`ed it and is long gone; `runId` is the
+ * one the parent minted and passed on the command line, which is what makes
+ * this row the answer to that parent's spawn row.
  */
 export function recordSelfHealOutcome(
   vault: string,
   outcome: SelfHealReindexOutcome,
+  runId: string,
   durationMs: number,
   error?: string,
 ): void {
   append(vault, {
     outcome,
-    pid: process.pid,
+    run_id: runId,
     duration_ms: durationMs,
     ...(error === undefined ? {} : { error }),
   });
@@ -184,7 +233,7 @@ export function readSelfHealReindexRows(
     const payload = record.payload;
     const rawDecision: unknown = payload["decision"];
     const rawOutcome: unknown = payload["outcome"];
-    const rawPid: unknown = payload["pid"];
+    const rawRunId: unknown = payload["run_id"];
     const rawDuration: unknown = payload["duration_ms"];
     const rawError: unknown = payload["error"];
     const decision = isSelfHealSpawnDecision(rawDecision) ? rawDecision : null;
@@ -195,7 +244,7 @@ export function readSelfHealReindexRows(
         runAt: record.run_at,
         decision,
         outcome,
-        pid: typeof rawPid === "number" ? rawPid : null,
+        runId: typeof rawRunId === "string" ? rawRunId : null,
         durationMs: typeof rawDuration === "number" ? rawDuration : null,
         error: typeof rawError === "string" ? rawError : null,
       }),

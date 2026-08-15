@@ -22,10 +22,12 @@ import {
   runMaintenance,
 } from "../../../../src/core/brain/maintenance/lane.ts";
 import {
+  appendJournal,
   consecutiveTaskFailures,
   listJournal,
   MAINTENANCE_JOURNAL_CAP,
   MAINTENANCE_VERDICT,
+  sweepJournal,
 } from "../../../../src/core/brain/maintenance/journal.ts";
 import {
   HOST_PRESSURE,
@@ -412,5 +414,85 @@ describe("the consecutive-failure streak", () => {
     const forced = await laneRun(false, true);
     expect(forced.tasks[0]!.refused).toBeUndefined();
     expect(forced.tasks[0]!.ok).toBe(false);
+  });
+
+  test("retrying one task runs it while every other gate still applies", async () => {
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await laneRun(false);
+    }
+    // Named: the refused task runs, and only that one - the second task's
+    // own refusal is untouched by a retry that does not name it.
+    const tasks = [
+      { name: TASK, run: async () => void 0 },
+      {
+        name: "dream",
+        run: async () => {
+          throw new Error("should not have been reached");
+        },
+      },
+    ];
+    appendJournal(vault, {
+      ts: NOW.toISOString(),
+      holder: "worker-a",
+      verdict: MAINTENANCE_VERDICT.refusedStreak,
+      task: "dream",
+      streak: MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT,
+    });
+
+    const retried = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      retryTasks: [TASK],
+      tasks,
+    });
+    expect(retried.tasks.find((t) => t.name === TASK)?.ok).toBe(true);
+    expect(retried.tasks.find((t) => t.name === "dream")?.refused).toBe(true);
+
+    // A retry is not a force: the window gate still closes on the same run.
+    const gated = await runMaintenance(vault, {
+      now: NOW,
+      holder: "worker-a",
+      retryTasks: [TASK],
+      window: { startHour: 10, endHour: 12, tz: "UTC" },
+      tasks: [
+        {
+          name: TASK,
+          run: async () => {
+            throw new Error("the window gate should have refused before this ran");
+          },
+        },
+      ],
+    });
+    expect(gated.verdict).toBe(MAINTENANCE_VERDICT.skippedWindow);
+    expect(gated.tasks).toEqual([]);
+  });
+
+  test("the streak survives the journal cap, because the refusal row carries it", async () => {
+    for (let i = 0; i < MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT; i++) {
+      // eslint-disable-next-line no-await-in-loop
+      await laneRun(false);
+    }
+    expect((await laneRun(false)).tasks[0]!.refused).toBe(true);
+
+    // The journal is a ring buffer. Trim it to the newest line - the same
+    // rewrite `sweepJournal` performs under the lease, only sooner - so
+    // every `run/ok:false` row that produced the streak is gone.
+    sweepJournal(vault, 1);
+    const kept = listJournal(vault);
+    expect(kept.length).toBe(1);
+    expect(kept[0]?.verdict).toBe(MAINTENANCE_VERDICT.refusedStreak);
+    expect(kept.some((e) => e.verdict === MAINTENANCE_VERDICT.run)).toBe(false);
+
+    // The refusal row records the count it refused on, so the streak does
+    // not silently reset itself as its evidence rolls off the cap.
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(MAINTENANCE_FAILURE_STREAK_LIMIT_DEFAULT);
+    expect((await laneRun(false)).tasks[0]!.refused).toBe(true);
+
+    // And a success still clears it: the walk stops at the newest row that
+    // is not a failure, which is newer than any carried refusal.
+    const forced = await laneRun(true, true);
+    expect(forced.tasks[0]!.ok).toBe(true);
+    expect(consecutiveTaskFailures(vault, TASK)).toBe(0);
   });
 });
