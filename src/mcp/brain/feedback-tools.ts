@@ -14,6 +14,7 @@ import {
   type AppendApplyEvidenceInput,
 } from "../../core/brain/apply-evidence.ts";
 import { dream, type DreamGateOverrides } from "../../core/brain/dream.ts";
+import type { ProgressSink } from "../../core/brain/progress.ts";
 import {
   DREAM_GATE_NAMES,
   DreamGateOverrideError,
@@ -339,6 +340,7 @@ function readDreamGates(args: Record<string, unknown>): DreamGateOverrides | und
 async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
   const action = args["action"] ?? "run";
   if (
@@ -481,11 +483,17 @@ async function toolBrainDream(
     });
   }
 
+  // The count-guard preview above is deliberately NOT reported on: it is
+  // a dry run whose only purpose is to decide whether the run below may
+  // happen at all, and a client that saw the same five stages twice
+  // would read the second pass as a restart. Progress describes the run
+  // the caller asked for.
   const summary = dream(ctx.vault, {
     dryRun,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),
+    ...(onProgress ? { onProgress } : {}),
   });
   const changeList = dreamChangeList(summary);
 

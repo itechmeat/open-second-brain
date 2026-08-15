@@ -14,6 +14,7 @@
 
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
+import type { ProgressSink } from "../core/brain/progress.ts";
 
 export type ToolScope = "full" | "writer" | "catalog";
 
@@ -80,8 +81,26 @@ export interface ToolDefinition {
    * for old clients without re-paying their schema in every list.
    */
   readonly hidden?: boolean;
+  /**
+   * The tool's implementation.
+   *
+   * The third parameter is per-REQUEST, which is exactly why it is a
+   * parameter and not a `ServerContext` field: the context is built once
+   * per server (`MCPServer.context`), while a progress token belongs to
+   * the single `tools/call` that carried it.
+   *
+   * It is optional in the type, and TypeScript lets a function of fewer
+   * parameters satisfy a type declaring more, so none of the registered
+   * tools needed editing to gain it - a handler that cannot report
+   * progress simply keeps its two-parameter signature. `undefined` means
+   * the client asked for no progress, or the transport could not carry
+   * it; in both cases the handler behaves exactly as it did before,
+   * because `onProgress` is the same optional-observer idiom the core
+   * options interfaces already use.
+   */
   readonly handler: (
     ctx: ServerContext,
     args: Record<string, unknown>,
+    onProgress?: ProgressSink,
   ) => Promise<unknown> | unknown;
 }

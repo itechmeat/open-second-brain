@@ -23,6 +23,15 @@ import {
   SERVER_NAME,
   SERVER_VERSION,
 } from "./protocol.ts";
+import type { JsonRpcNotification } from "./protocol.ts";
+import {
+  progressRefusal,
+  progressSink,
+  readProgressToken,
+  withProgressRefusal,
+  type ProgressRefusal,
+} from "./progress.ts";
+import { PROGRESS_REASON, type ProgressSink } from "../core/brain/progress.ts";
 import { listResources, listResourceTemplates, readResource } from "./resources.ts";
 import { buildToolTable, findTool } from "./tools.ts";
 import type {
@@ -55,6 +64,21 @@ export interface MCPServerRuntimeOptions {
    * injectable so tests get a deterministic directory.
    */
   readonly artifactRunId?: string;
+  /**
+   * How this transport writes a frame nobody asked for.
+   *
+   * Supplied by stdio, which owns a duplex newline-delimited stream and
+   * can interleave notifications with responses. NOT supplied by the
+   * HTTP transport, which answers one request with one response and
+   * closes it - and its absence is what makes a `tools/call` carrying a
+   * progress token refuse by name there instead of accepting the token
+   * and dropping the events.
+   *
+   * Synchronous, because the progress sink it feeds is: the long
+   * operations that emit are synchronous functions and cannot await a
+   * write inside their own loops.
+   */
+  readonly sendNotification?: (notification: JsonRpcNotification) => void;
 }
 
 export interface JsonRpcRequest {
@@ -87,6 +111,8 @@ export class MCPServer {
    * `mcp_route_latency` continuity record is emitted (fail-open).
    */
   private readonly routeMetricsEnabled: boolean;
+  /** See {@link MCPServerRuntimeOptions.sendNotification}. */
+  private readonly sendNotification: ((notification: JsonRpcNotification) => void) | undefined;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -102,6 +128,7 @@ export class MCPServer {
     this.tools = evaluated.tools;
     this.capabilityReport = evaluated.report;
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
+    this.sendNotification = runtimeOpts.sendNotification;
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
@@ -163,17 +190,23 @@ export class MCPServer {
    * here rather than in `handleToolsCall` is what makes it cover the CLI
    * bridge too, while leaving the many tests that call `tool.handler`
    * directly exactly as they were.
+   *
+   * `onProgress` is the per-request half of the same idea: one seam, so
+   * the request-scoped sink reaches every handler without editing any of
+   * the registrations. The CLI bridge passes none - a `callTool` has no
+   * client and therefore no token.
    */
   private async invokeToolHandler(
     tool: ToolDefinition,
     args: Record<string, unknown>,
+    onProgress?: ProgressSink,
   ): Promise<unknown> {
     assertKnownArguments(tool, args);
-    if (!this.routeMetricsEnabled) return tool.handler(this.context, args);
+    if (!this.routeMetricsEnabled) return tool.handler(this.context, args, onProgress);
     const start = performance.now();
     let status: McpRouteStatus = "ok";
     try {
-      return await tool.handler(this.context, args);
+      return await tool.handler(this.context, args, onProgress);
     } catch (exc) {
       status = "error";
       throw exc;
@@ -327,16 +360,28 @@ export class MCPServer {
       throw new MCPError(INVALID_PARAMS, "tools/call arguments must be an object");
     }
     const args = argsRaw as Record<string, unknown>;
+    // Read before the handler runs: a malformed token is a request
+    // defect, and refusing it after the work has been done would leave
+    // the caller unable to tell which half failed.
+    const token = readProgressToken(params);
+    const onProgress = progressSink(token, this.sendNotification);
+    // A token this transport cannot honour is refused by name on the way
+    // out - on the error envelope too, because a call that asked for
+    // progress and then failed still never got any.
+    const refusal: ProgressRefusal | undefined =
+      token !== undefined && onProgress === undefined
+        ? progressRefusal(token, PROGRESS_REASON.transportSingleResponse)
+        : undefined;
     try {
-      const structured = await this.invokeToolHandler(tool, args);
-      return buildMcpToolResult(tool, structured, this.artifactStore);
+      const structured = await this.invokeToolHandler(tool, args, onProgress);
+      return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
     } catch (exc) {
       if (exc instanceof MCPError) throw exc;
       const message = (exc as Error).message ?? String(exc);
       // ValueError/TypeError semantics in Python → tool-level error envelope.
       // OSError in Python → "filesystem error" prefix. We collapse both to a
       // single tool-level error since JS doesn't distinguish.
-      return toolError(message);
+      return withProgressRefusal(toolError(message), refusal);
     }
   }
 }

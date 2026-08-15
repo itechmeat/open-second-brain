@@ -10,7 +10,13 @@ import type { Readable, Writable } from "node:stream";
 
 import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
-import { INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
+import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protocol.ts";
+
+/**
+ * Any frame this transport writes: a response to a request, or a
+ * notification the server sent on its own initiative (today, progress).
+ */
+type OutboundFrame = JsonRpcResponse | JsonRpcNotification;
 
 export interface ServeStdioOptions {
   readonly stdin?: Readable;
@@ -31,9 +37,17 @@ export async function serveStdio(
   ioOpts: ServeStdioOptions = {},
   runtimeOpts: MCPServerRuntimeOptions = {},
 ): Promise<number> {
-  const server = new MCPServer(ctx, runtimeOpts);
   const stdin = ioOpts.stdin ?? process.stdin;
   const stdout = ioOpts.stdout ?? process.stdout;
+  // This transport owns a duplex stream, so it CAN write a frame nobody
+  // asked for - which is what lets a `tools/call` carrying a progress
+  // token be answered with live notifications instead of a refusal. Set
+  // after the caller's options so a transport fact cannot be overridden
+  // by a runtime option.
+  const server = new MCPServer(ctx, {
+    ...runtimeOpts,
+    sendNotification: (notification) => writeFrame(stdout, notification),
+  });
   const rl = createInterface({ input: stdin, crlfDelay: Infinity });
 
   for await (const rawLine of rl) {
@@ -70,10 +84,28 @@ export async function serveStdio(
   return 0;
 }
 
-function writeFrame(out: Writable, response: JsonRpcResponse): void {
-  let line = JSON.stringify(response);
-  if (line.includes("\n")) line = line.replace(/\n/g, " ");
-  out.write(line + "\n");
+/**
+ * One frame as the single line this protocol delimits by.
+ *
+ * Shared by both loops below so a notification and a response are framed
+ * by identical code: the format is the contract, and two copies of it
+ * could drift apart the moment one of them gained a case.
+ */
+function frameLine(frame: OutboundFrame): string {
+  const line = JSON.stringify(frame);
+  return line.includes("\n") ? line.replace(/\n/g, " ") : line;
+}
+
+/**
+ * Write one frame in ONE `write` call, terminator included.
+ *
+ * That single call is what keeps a progress notification from landing
+ * inside a response: `Writable.write` appends the whole string to the
+ * stream's queue atomically, so no other frame can be spliced between a
+ * frame's body and its newline.
+ */
+function writeFrame(out: Writable, frame: OutboundFrame): void {
+  out.write(frameLine(frame) + "\n");
 }
 
 /**
@@ -82,14 +114,22 @@ function writeFrame(out: Writable, response: JsonRpcResponse): void {
  * bypass the readline async iteration.
  *
  * Returns newline-joined output (one JSON-RPC frame per line, trailing newline).
+ *
+ * It carries notifications on the same terms as the real loop, and
+ * frames them through the same {@link frameLine}: a harness that dropped
+ * the unsolicited frames would report the progress feature as absent
+ * wherever it is used, which is the failure mode this release is about.
  */
 export async function serveStdioFromString(
   ctx: MCPServerOptions,
   input: string,
   opts: MCPServerRuntimeOptions = {},
 ): Promise<string> {
-  const server = new MCPServer(ctx, opts);
   const out: string[] = [];
+  const server = new MCPServer(ctx, {
+    ...opts,
+    sendNotification: (notification) => out.push(frameLine(notification)),
+  });
   for (const rawLine of input.split("\n")) {
     const line = rawLine.trim();
     if (!line) continue;
@@ -98,13 +138,13 @@ export async function serveStdioFromString(
       request = JSON.parse(line);
     } catch (exc) {
       out.push(
-        JSON.stringify(errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`)),
+        frameLine(errorResponse(null, PARSE_ERROR, `invalid JSON: ${(exc as Error).message}`)),
       );
       continue;
     }
     if (Array.isArray(request)) {
       out.push(
-        JSON.stringify(
+        frameLine(
           errorResponse(
             null,
             INVALID_REQUEST,
@@ -115,11 +155,17 @@ export async function serveStdioFromString(
       continue;
     }
     if (typeof request !== "object" || request === null) {
-      out.push(JSON.stringify(errorResponse(null, INVALID_REQUEST, "request must be an object")));
+      out.push(frameLine(errorResponse(null, INVALID_REQUEST, "request must be an object")));
       continue;
     }
+    // Sequential on purpose, and not a candidate for `Promise.all`: the
+    // frames this loop collects are ordered, and a request that emits
+    // progress must have its notifications land between its predecessor's
+    // response and its own. Running the calls in parallel would shuffle
+    // them.
+    // oxlint-disable-next-line no-await-in-loop
     const response = await server.handleRequest(request as Record<string, unknown>);
-    if (response !== null) out.push(JSON.stringify(response));
+    if (response !== null) out.push(frameLine(response));
   }
   return out.join("\n") + (out.length > 0 ? "\n" : "");
 }

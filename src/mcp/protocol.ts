@@ -19,6 +19,22 @@ export const METHOD_NOT_FOUND = -32601;
 export const INVALID_PARAMS = -32602;
 export const INTERNAL_ERROR = -32603;
 
+/**
+ * A frame the server writes without having been asked for it, addressed
+ * to no request id.
+ *
+ * It lives beside the constants rather than next to `JsonRpcResponse` in
+ * `server.ts` because the transports need the shape and the server needs
+ * it too: putting it in this leaf keeps the dependency direction
+ * downward and leaves `progress.ts` able to build a frame without
+ * importing the dispatcher that will send it.
+ */
+export interface JsonRpcNotification {
+  readonly jsonrpc: string;
+  readonly method: string;
+  readonly params?: unknown;
+}
+
 export class MCPError extends Error {
   readonly code: number;
   readonly data: unknown;
