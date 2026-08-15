@@ -31,7 +31,7 @@ describe("agent_id joins session_id on pack identity", () => {
       {
         baselineTokens: 100,
         packedTokens: 40,
-        method: "exact",
+        method: "tokenizer",
         sessionId: "s-1",
         agentId: "claude-dev-agent",
         packId: "pk-1",
@@ -46,7 +46,7 @@ describe("agent_id joins session_id on pack identity", () => {
   test("without agentId no agent_id key is written (byte-identical opt-out)", () => {
     const rec = emitTokenImpact(
       vault,
-      { baselineTokens: 100, packedTokens: 40, method: "exact", sessionId: "s-1" },
+      { baselineTokens: 100, packedTokens: 40, method: "tokenizer", sessionId: "s-1" },
       true,
     );
     expect(rec).not.toBeNull();
@@ -75,7 +75,7 @@ describe("clip-protected identity under an output budget", () => {
       {
         baselineTokens: 100,
         packedTokens: 40,
-        method: "exact",
+        method: "tokenizer",
         sessionId: "s-1",
         agentId: "claude-dev-agent",
         packId: "pk-1",
@@ -98,7 +98,7 @@ describe("clip-protected identity under an output budget", () => {
       {
         baselineTokens: 100,
         packedTokens: 40,
-        method: "exact",
+        method: "tokenizer",
         sessionId: "s-1",
         agentId: "claude-dev-agent",
       },

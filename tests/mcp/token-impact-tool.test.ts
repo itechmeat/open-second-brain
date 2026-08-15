@@ -117,7 +117,7 @@ describe("brain_token_impact record gating", () => {
     expect(records[0]!.payload["pack_id"]).toBe("receipt_1");
   });
 
-  test("method defaults to fallback when omitted", async () => {
+  test("method defaults to the heuristic label when omitted", async () => {
     writeConfig(true);
     const server = new MCPServer({ vault, configPath });
     await initialize(server);
@@ -126,7 +126,20 @@ describe("brain_token_impact record gating", () => {
       baseline_tokens: 10,
       packed_tokens: 4,
     });
-    expect(out["method"]).toBe("fallback");
+    expect(out["method"]).toBe("heuristic");
+  });
+
+  test("an adapter still posting the retired labels is translated, not rejected", async () => {
+    writeConfig(true);
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callTool(server, "brain_token_impact", {
+      operation: "record",
+      baseline_tokens: 10,
+      packed_tokens: 4,
+      method: "exact",
+    });
+    expect(out["method"]).toBe("tokenizer");
   });
 
   test("rejects a missing count", async () => {

@@ -3,12 +3,17 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
 import {
   emitTokenImpact,
+  isTokenCountMethod,
   listTokenImpact,
   listTokenImpactOutcomes,
+  normalizeTokenCountMethod,
   recordTokenImpactOutcome,
   summarizeTokenImpact,
+  TOKEN_COUNT_METHOD,
+  TOKEN_COUNT_METHODS,
 } from "../../../src/core/brain/token-impact.ts";
 
 let tmp: string;
@@ -27,10 +32,14 @@ afterEach(() => {
 describe("emitTokenImpact gating", () => {
   test("gate off writes nothing and returns null", () => {
     expect(
-      emitTokenImpact(vault, { baselineTokens: 100, packedTokens: 40, method: "exact" }, false),
+      emitTokenImpact(vault, { baselineTokens: 100, packedTokens: 40, method: "tokenizer" }, false),
     ).toBeNull();
     expect(
-      emitTokenImpact(vault, { baselineTokens: 100, packedTokens: 40, method: "exact" }, undefined),
+      emitTokenImpact(
+        vault,
+        { baselineTokens: 100, packedTokens: 40, method: "tokenizer" },
+        undefined,
+      ),
     ).toBeNull();
     expect(listTokenImpact(vault)).toHaveLength(0);
   });
@@ -44,7 +53,7 @@ describe("emitTokenImpact gating", () => {
         packId: "receipt_123",
         baselineTokens: 1000,
         packedTokens: 320,
-        method: "exact",
+        method: "tokenizer",
       },
       true,
     );
@@ -53,7 +62,7 @@ describe("emitTokenImpact gating", () => {
     expect(record!.payload).toMatchObject({
       host: "mcp",
       pack_id: "receipt_123",
-      method: "exact",
+      method: "tokenizer",
       baseline_tokens: 1000,
       packed_tokens: 320,
       delta_tokens: 680,
@@ -63,7 +72,7 @@ describe("emitTokenImpact gating", () => {
   test("delta is negative when the memory layer adds tokens", () => {
     const record = emitTokenImpact(
       vault,
-      { baselineTokens: 200, packedTokens: 260, method: "fallback" },
+      { baselineTokens: 200, packedTokens: 260, method: "heuristic" },
       true,
     );
     expect(record!.payload["delta_tokens"]).toBe(-60);
@@ -73,13 +82,13 @@ describe("emitTokenImpact gating", () => {
     expect(
       emitTokenImpact(
         vault,
-        { baselineTokens: 1, packedTokens: 0, method: "bogus" as "exact" },
+        { baselineTokens: 1, packedTokens: 0, method: "bogus" as "tokenizer" },
         true,
       ),
     ).toBeNull();
     // A negative count is also swallowed.
     expect(
-      emitTokenImpact(vault, { baselineTokens: -5, packedTokens: 0, method: "exact" }, true),
+      emitTokenImpact(vault, { baselineTokens: -5, packedTokens: 0, method: "tokenizer" }, true),
     ).toBeNull();
     expect(listTokenImpact(vault)).toHaveLength(0);
   });
@@ -90,14 +99,14 @@ describe("emitTokenImpact gating", () => {
       {
         baselineTokens: 500,
         packedTokens: 500,
-        method: "exact",
+        method: "tokenizer",
         modeledAvoidedInferences: 3,
         modeledTokensPerInference: 1200,
       },
       true,
     );
     expect(record!.payload).toMatchObject({
-      delta_tokens: 0, // exact ledger unaffected by the model
+      delta_tokens: 0, // the measured delta is unaffected by the model
       modeled_avoided_inferences: 3,
       modeled_tokens_per_inference: 1200,
       modeled_savings_tokens: 3600,
@@ -114,7 +123,7 @@ describe("token-impact privacy", () => {
         packId: "hash_abc",
         baselineTokens: 10,
         packedTokens: 4,
-        method: "fallback",
+        method: "heuristic",
       },
       true,
     );
@@ -137,7 +146,7 @@ describe("listTokenImpact", () => {
         createdAt: "2026-06-01T00:00:00.000Z",
         baselineTokens: 10,
         packedTokens: 1,
-        method: "exact",
+        method: "tokenizer",
       },
       true,
     );
@@ -147,7 +156,7 @@ describe("listTokenImpact", () => {
         createdAt: "2026-06-01T00:00:01.000Z",
         baselineTokens: 20,
         packedTokens: 2,
-        method: "fallback",
+        method: "heuristic",
         packId: "p2",
       },
       true,
@@ -155,36 +164,39 @@ describe("listTokenImpact", () => {
     const all = listTokenImpact(vault);
     expect(all).toHaveLength(2);
     expect(all[0]!.payload["baseline_tokens"]).toBe(20); // newest first
-    expect(listTokenImpact(vault, { method: "exact" })).toHaveLength(1);
+    expect(listTokenImpact(vault, { method: "tokenizer" })).toHaveLength(1);
     expect(listTokenImpact(vault, { packId: "p2" })).toHaveLength(1);
     expect(listTokenImpact(vault, { limit: 1 })).toHaveLength(1);
   });
 });
 
-describe("summarizeTokenImpact — exact vs modeled separation", () => {
+describe("summarizeTokenImpact — measured vs modeled separation", () => {
   test("splits the prompt-token delta by method and never folds in the model", () => {
-    emitTokenImpact(vault, { baselineTokens: 100, packedTokens: 30, method: "exact" }, true); // +70
-    emitTokenImpact(vault, { baselineTokens: 50, packedTokens: 80, method: "exact" }, true); // -30
+    emitTokenImpact(vault, { baselineTokens: 100, packedTokens: 30, method: "tokenizer" }, true); // +70
+    emitTokenImpact(vault, { baselineTokens: 50, packedTokens: 80, method: "tokenizer" }, true); // -30
     emitTokenImpact(
       vault,
       {
         baselineTokens: 200,
         packedTokens: 100,
-        method: "fallback",
+        method: "heuristic",
         modeledAvoidedInferences: 2,
         modeledTokensPerInference: 500,
       },
       true,
-    ); // +100 exact, 1000 modeled
+    ); // +100 measured, 1000 modeled
 
     const s = summarizeTokenImpact(vault);
     expect(s.total_samples).toBe(3);
-    // EXACT-type delta ledger.
+    // Prompt-token delta ledger.
     expect(s.prompt_token_delta.net_savings_tokens).toBe(140); // 70 - 30 + 100
     expect(s.prompt_token_delta.saved_tokens).toBe(170); // 70 + 100
     expect(s.prompt_token_delta.added_tokens).toBe(30);
-    expect(s.prompt_token_delta.by_method.exact).toEqual({ samples: 2, net_savings_tokens: 40 });
-    expect(s.prompt_token_delta.by_method.fallback).toEqual({
+    expect(s.prompt_token_delta.by_method.tokenizer).toEqual({
+      samples: 2,
+      net_savings_tokens: 40,
+    });
+    expect(s.prompt_token_delta.by_method.heuristic).toEqual({
       samples: 1,
       net_savings_tokens: 100,
     });
@@ -205,7 +217,7 @@ describe("summarizeTokenImpact — exact vs modeled separation", () => {
           createdAt: `2026-06-01T00:00:0${i}.000Z`,
           baselineTokens: 10,
           packedTokens: 0,
-          method: "exact",
+          method: "tokenizer",
         },
         true,
       );
@@ -228,7 +240,7 @@ describe("outcome calibration", () => {
       {
         baselineTokens: 0,
         packedTokens: 0,
-        method: "exact",
+        method: "tokenizer",
         modeledAvoidedInferences: 4,
         modeledTokensPerInference: 1000,
       },
@@ -260,9 +272,63 @@ describe("outcome calibration", () => {
 
 describe("durability across restarts", () => {
   test("aggregates are recomputed from disk (a fresh read sees prior samples)", () => {
-    emitTokenImpact(vault, { baselineTokens: 90, packedTokens: 10, method: "exact" }, true);
+    emitTokenImpact(vault, { baselineTokens: 90, packedTokens: 10, method: "tokenizer" }, true);
     // A brand-new summarize call reads only the on-disk continuity log.
     const s = summarizeTokenImpact(vault);
     expect(s.prompt_token_delta.net_savings_tokens).toBe(80);
+  });
+});
+
+describe("the ledger no longer claims exactness over caller-supplied integers", () => {
+  test("the method vocabulary names provenance, not accuracy", () => {
+    expect(TOKEN_COUNT_METHODS).toEqual(["tokenizer", "heuristic"]);
+    expect(TOKEN_COUNT_METHOD.tokenizer).toBe("tokenizer");
+    expect(TOKEN_COUNT_METHOD.heuristic).toBe("heuristic");
+    expect(isTokenCountMethod("exact")).toBe(false);
+    expect(isTokenCountMethod("fallback")).toBe(false);
+  });
+
+  test("records already on disk under the old labels are still classified, never dropped", () => {
+    // Exactly what the pre-rename code path wrote: the two values the
+    // guard now rejects. Dropping them out of the split would be a silent
+    // loss of a ledger an operator already has on disk.
+    appendContinuityRecord(vault, {
+      kind: "token_impact",
+      createdAt: "2026-05-01T10:00:00.000Z",
+      sourceRefs: [],
+      payload: { method: "tokenizer", baseline_tokens: 100, packed_tokens: 30, delta_tokens: 70 },
+    });
+    appendContinuityRecord(vault, {
+      kind: "token_impact",
+      createdAt: "2026-05-01T10:01:00.000Z",
+      sourceRefs: [],
+      payload: { method: "heuristic", baseline_tokens: 50, packed_tokens: 45, delta_tokens: 5 },
+    });
+
+    const s = summarizeTokenImpact(vault);
+    expect(s.total_samples).toBe(2);
+    expect(s.prompt_token_delta.by_method.tokenizer).toEqual({
+      samples: 1,
+      net_savings_tokens: 70,
+    });
+    expect(s.prompt_token_delta.by_method.heuristic).toEqual({
+      samples: 1,
+      net_savings_tokens: 5,
+    });
+    expect(normalizeTokenCountMethod("exact")).toBe(TOKEN_COUNT_METHOD.tokenizer);
+    expect(normalizeTokenCountMethod("fallback")).toBe(TOKEN_COUNT_METHOD.heuristic);
+    expect(normalizeTokenCountMethod("nonsense")).toBeNull();
+  });
+
+  test("no executable line still labels a caller's integers exact", async () => {
+    const source = await Bun.file(
+      new URL("../../../src/core/brain/token-impact.ts", import.meta.url).pathname,
+    ).text();
+    // Comments may (and do) explain the retired label; code may not use it
+    // for anything but the documented legacy read.
+    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    expect(code).not.toContain('"exact"');
+    expect(code).not.toContain('"fallback"');
+    expect(code).not.toContain("byMethod.exact");
   });
 });

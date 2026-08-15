@@ -183,6 +183,11 @@ import {
   STUB_SCAFFOLD_ACTIONS,
 } from "../../../src/mcp/brain/lifecycle-file-tools.ts";
 import {
+  isSessionAdapterId,
+  SESSION_ADAPTER_ID,
+  SESSION_ADAPTER_IDS,
+} from "../../../src/core/brain/sessions/types.ts";
+import {
   isVaultBackingState,
   isVaultBackingUndeterminedReason,
   VAULT_BACKING,
@@ -207,6 +212,11 @@ import {
   PROGRESS_REASONS,
 } from "../../../src/core/brain/progress.ts";
 import { isOperation, OPERATION, OPERATIONS } from "../../../src/core/brain/safeguard.ts";
+import {
+  isTokenCountMethod,
+  TOKEN_COUNT_METHOD,
+  TOKEN_COUNT_METHODS,
+} from "../../../src/core/brain/token-impact.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -640,6 +650,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isStubScaffoldAction,
   },
   {
+    // U10. How a token-impact sample's counts were PRODUCED. Promoted to
+    // the idiom when its members were renamed off `exact` / `fallback`:
+    // the ledger counts nothing, so labelling a caller's integer exact
+    // asserted a property nothing had checked. The guard is the boundary
+    // for a value arriving as an untyped MCP argument or read back out of
+    // a continuity payload written by an older build.
+    name: "TOKEN_COUNT_METHOD",
+    values: TOKEN_COUNT_METHOD,
+    members: TOKEN_COUNT_METHODS,
+    guard: isTokenCountMethod,
+  },
+  {
     // U1. What one progress tick says happened. `refused` and `stopped`
     // are the members that earn the vocabulary: an operation whose events
     // no transport could carry, and one the operator cancelled, are
@@ -713,6 +735,20 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: VAULT_BACKING_UNDETERMINED_REASON,
     members: VAULT_BACKING_UNDETERMINED_REASONS,
     guard: isVaultBackingUndeterminedReason,
+  },
+  {
+    // U7. The runtimes whose session adapters ship in this tree. It was a
+    // hand-written string union with a guard taking `string`, which is a
+    // guard that can only be called once the caller has already proved
+    // what it was asked to prove - and `--format` hands it a raw argv
+    // value. The registry it names is keyed by `string` and open to a
+    // caller's own adapter; this vocabulary is the closed half, and
+    // `tests/core/brain/sessions/adapter-registry.test.ts` locks it to
+    // the built-in registry's keys.
+    name: "SESSION_ADAPTER_ID",
+    values: SESSION_ADAPTER_ID,
+    members: SESSION_ADAPTER_IDS,
+    guard: isSessionAdapterId,
   },
 ]);
 

@@ -7,18 +7,31 @@
  * telemetry (`recall-telemetry.ts`, `gate-telemetry.ts`), but it could not
  * answer the core value-of-memory question: "how many prompt tokens did the
  * memory layer actually keep out of (or add to) the agent call?". This
- * surface is the durable ledger that measures exactly that.
+ * surface is the durable ledger for exactly that question.
  *
  * TWO STRICTLY SEPARATED LEDGERS, never conflated into one headline number:
  *
- *   1. EXACT prompt-token delta - the real, measured token cost the memory
- *      layer contributed. `delta_tokens = baseline_tokens - packed_tokens`
- *      (positive = tokens KEPT OUT of the prompt, negative = tokens ADDED).
- *      Each sample is labelled `method: "exact" | "fallback"` so a
- *      tokenizer-exact count (posted by a host that ran a real BPE
- *      tokenizer) is never silently averaged in with a heuristic
- *      `estimateTokens` fallback. The summary keeps a per-method split so
- *      the honesty of the number is always inspectable.
+ *   1. Prompt-token delta - the token cost the memory layer contributed.
+ *      `delta_tokens = baseline_tokens - packed_tokens` (positive = tokens
+ *      KEPT OUT of the prompt, negative = tokens ADDED).
+ *
+ *      This surface used to label each sample `method: "exact" |
+ *      "fallback"`, and the `"exact"` was a claim this module is in no
+ *      position to make. It COUNTS NOTHING: `baseline_tokens` and
+ *      `packed_tokens` are integers a caller posted, and nothing here
+ *      verifies where they came from. Calling one of them exact asserted a
+ *      property of a number the server never saw produced - and this repo
+ *      has no exact token count to offer anywhere: there is no BPE
+ *      tokenizer in the tree, only {@link ../brain/text/tokenizer.ts}'s
+ *      documented `ceil(utf8_bytes / 4)` heuristic.
+ *
+ *      So the vocabulary now names PROVENANCE instead of ACCURACY - see
+ *      {@link TOKEN_COUNT_METHOD}. A caller genuinely knows whether a
+ *      tokenizer produced its number; neither the caller nor this module
+ *      knows whether that number is exact for the model that will read the
+ *      prompt. The summary keeps the per-method split, so which lane a
+ *      figure came from stays inspectable; what it no longer does is
+ *      certify one lane as truth.
  *
  *   2. MODELED inference-avoidance - a counterfactual estimate of the
  *      inferences (repairs/retries) the memory layer avoided, valued at
@@ -57,8 +70,45 @@ import {
   type ContinuityRecord,
 } from "./continuity/types.ts";
 
-/** How the prompt-token counts on a sample were obtained. */
-export type TokenCountMethod = "exact" | "fallback";
+/**
+ * How the prompt-token counts on a sample were PRODUCED - never how
+ * accurate they are.
+ *
+ * Both members describe the caller's method, which the caller knows and
+ * this module cannot check. Neither asserts that the resulting integer
+ * matches what the model receiving the prompt will actually charge; see
+ * this module's header for why the former `exact` / `fallback` pair was a
+ * claim the ledger had no standing to make.
+ */
+export const TOKEN_COUNT_METHOD = Object.freeze({
+  /** The caller ran a tokenizer and reported its count. */
+  tokenizer: "tokenizer",
+  /** The caller estimated, e.g. through `estimateTokens`. */
+  heuristic: "heuristic",
+} as const);
+
+/** Closed union over {@link TOKEN_COUNT_METHOD}. */
+export type TokenCountMethod = (typeof TOKEN_COUNT_METHOD)[keyof typeof TOKEN_COUNT_METHOD];
+
+/** Membership list; every surface renders its vocabulary from this array. */
+export const TOKEN_COUNT_METHODS: ReadonlyArray<TokenCountMethod> = Object.freeze([
+  TOKEN_COUNT_METHOD.tokenizer,
+  TOKEN_COUNT_METHOD.heuristic,
+]);
+
+/**
+ * The labels this vocabulary replaced, mapped to their successors.
+ *
+ * A ledger written before the rename is on operators' disks right now.
+ * Letting the strict guard reject those rows would drop them out of the
+ * per-method split while still counting them in the totals - a silent,
+ * misleading loss - so the read path translates them explicitly instead.
+ * Writes only ever produce the current members.
+ */
+const LEGACY_TOKEN_COUNT_METHODS: Readonly<Record<string, TokenCountMethod>> = Object.freeze({
+  exact: TOKEN_COUNT_METHOD.tokenizer,
+  fallback: TOKEN_COUNT_METHOD.heuristic,
+});
 
 /** First-pass/repair/retry outcome posted to calibrate the modeled ledger. */
 export type TokenImpactOutcome = "first_pass" | "repair" | "retry";
@@ -80,7 +130,7 @@ export interface TokenImpactInput {
   readonly baselineTokens: number;
   /** Prompt-token cost the memory layer actually shipped. */
   readonly packedTokens: number;
-  /** Whether the counts are tokenizer-exact or a heuristic fallback estimate. */
+  /** How the caller produced the counts - provenance, not accuracy. */
   readonly method: TokenCountMethod;
   /** Modeled count of inferences (repairs/retries) the layer is estimated to have avoided. */
   readonly modeledAvoidedInferences?: number;
@@ -129,7 +179,7 @@ export interface TokenImpactMethodStats {
   readonly net_savings_tokens: number;
 }
 
-/** EXACT-type prompt-token delta ledger (real measurement). */
+/** Prompt-token delta ledger over the counts callers posted. */
 export interface PromptTokenDeltaSummary {
   readonly total_samples: number;
   /** Sum of `delta_tokens` over all samples (signed: + kept out, − added). */
@@ -141,8 +191,8 @@ export interface PromptTokenDeltaSummary {
   /** `net_savings_tokens / total_samples`, rounded to 1 dp; 0 for no samples. */
   readonly mean_savings_tokens: number;
   readonly by_method: {
-    readonly exact: TokenImpactMethodStats;
-    readonly fallback: TokenImpactMethodStats;
+    readonly tokenizer: TokenImpactMethodStats;
+    readonly heuristic: TokenImpactMethodStats;
   };
 }
 
@@ -178,7 +228,21 @@ export interface TokenImpactSummary {
 }
 
 export function isTokenCountMethod(value: unknown): value is TokenCountMethod {
-  return value === "exact" || value === "fallback";
+  return (
+    typeof value === "string" && (TOKEN_COUNT_METHODS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
+ * Narrow a method read back off disk or across a tool boundary, accepting
+ * the pre-rename labels through {@link LEGACY_TOKEN_COUNT_METHODS}.
+ * Returns `null` for anything else - the caller decides what an
+ * unclassifiable sample means, rather than being handed a default.
+ */
+export function normalizeTokenCountMethod(value: unknown): TokenCountMethod | null {
+  if (isTokenCountMethod(value)) return value;
+  if (typeof value !== "string") return null;
+  return LEGACY_TOKEN_COUNT_METHODS[value] ?? null;
 }
 
 export function isTokenImpactOutcome(value: unknown): value is TokenImpactOutcome {
@@ -199,7 +263,7 @@ export function emitTokenImpact<G>(
 ): ContinuityRecord | null {
   return emitGatedTelemetry(gate, () => {
     if (!isTokenCountMethod(input.method)) {
-      throw new TypeError("token impact: method must be 'exact' or 'fallback'");
+      throw new TypeError(`token impact: method must be one of ${TOKEN_COUNT_METHODS.join(" | ")}`);
     }
     const baseline = nonNegativeCount("baseline_tokens", input.baselineTokens);
     const packed = nonNegativeCount("packed_tokens", input.packedTokens);
@@ -235,7 +299,7 @@ export function emitTokenImpact<G>(
 /**
  * Record one first-pass/repair/retry outcome (the `/outcome` calibration
  * hook), gated and fail-open. Used only to calibrate the modeled ledger -
- * it never touches the exact prompt-token delta figures.
+ * it never touches the prompt-token delta figures.
  */
 export function recordTokenImpactOutcome<G>(
   vault: string,
@@ -313,7 +377,7 @@ export function listTokenImpactOutcomes(
 
 /**
  * Roll the two ledgers up into a single summary that keeps them strictly
- * separated: the EXACT prompt-token delta (with a per-method split) and the
+ * separated: the prompt-token delta (with a per-method split) and the
  * MODELED inference-avoidance figure (calibrated by posted outcomes). A
  * `limit` bounds only the raw list; `maxSamples` bounds aggregation.
  */
@@ -337,8 +401,8 @@ export function summarizeTokenImpact(
   let saved = 0;
   let added = 0;
   const byMethod = {
-    exact: { samples: 0, net: 0 },
-    fallback: { samples: 0, net: 0 },
+    tokenizer: { samples: 0, net: 0 },
+    heuristic: { samples: 0, net: 0 },
   };
   let modeledSamples = 0;
   let rawModeled = 0;
@@ -351,8 +415,10 @@ export function summarizeTokenImpact(
       if (delta > 0) saved += delta;
       else if (delta < 0) added += -delta;
     }
-    const method = payload["method"];
-    if (isTokenCountMethod(method) && delta !== null) {
+    // Legacy-aware so a pre-rename row is classified rather than dropped
+    // from the split while still counting toward the totals.
+    const method = normalizeTokenCountMethod(payload["method"]);
+    if (method !== null && delta !== null) {
       byMethod[method].samples += 1;
       byMethod[method].net += delta;
     }
@@ -376,13 +442,13 @@ export function summarizeTokenImpact(
       added_tokens: added,
       mean_savings_tokens: samples.length > 0 ? round1(net / samples.length) : 0,
       by_method: Object.freeze({
-        exact: Object.freeze({
-          samples: byMethod.exact.samples,
-          net_savings_tokens: byMethod.exact.net,
+        tokenizer: Object.freeze({
+          samples: byMethod.tokenizer.samples,
+          net_savings_tokens: byMethod.tokenizer.net,
         }),
-        fallback: Object.freeze({
-          samples: byMethod.fallback.samples,
-          net_savings_tokens: byMethod.fallback.net,
+        heuristic: Object.freeze({
+          samples: byMethod.heuristic.samples,
+          net_savings_tokens: byMethod.heuristic.net,
         }),
       }),
     }),
@@ -437,7 +503,7 @@ function resolveModeled(
     return null;
   }
   // Partial modeled input would otherwise default the missing field to 0 and
-  // look like an exact measurement. Require both together; the throw fail-opens
+  // look like a measurement. Require both together; the throw fail-opens
   // to null (emitGatedTelemetry swallows it), matching the "omit, don't invent"
   // honesty goal stated in this module's header.
   if (
@@ -471,7 +537,12 @@ function matchesFilter(record: ContinuityRecord, filter: TokenImpactFilter): boo
   const payload = record.payload;
   if (filter.host !== undefined && payload["host"] !== filter.host) return false;
   if (filter.packId !== undefined && payload["pack_id"] !== filter.packId) return false;
-  if (filter.method !== undefined && payload["method"] !== filter.method) return false;
+  if (
+    filter.method !== undefined &&
+    normalizeTokenCountMethod(payload["method"]) !== filter.method
+  ) {
+    return false;
+  }
   return true;
 }
 

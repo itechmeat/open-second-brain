@@ -37,7 +37,9 @@ import {
 } from "../../core/brain/mcp-route-metrics.ts";
 import {
   emitTokenImpact,
-  isTokenCountMethod,
+  normalizeTokenCountMethod,
+  TOKEN_COUNT_METHOD,
+  TOKEN_COUNT_METHODS,
   isTokenImpactOutcome,
   listTokenImpact,
   recordTokenImpactOutcome,
@@ -437,7 +439,7 @@ async function toolBrainTokenImpact(
         "brain_token_impact: record requires baseline_tokens and packed_tokens (non-negative integers)",
       );
     }
-    const method = coerceTokenCountMethod(args["method"]) ?? "fallback";
+    const method = coerceTokenCountMethod(args["method"]) ?? TOKEN_COUNT_METHOD.heuristic;
     const modeledAvoided = coerceNonNegativeTokenValue(
       "brain_token_impact",
       "modeled_avoided_inferences",
@@ -565,10 +567,17 @@ function tokenImpactFilter(args: Record<string, unknown>): TokenImpactFilter {
 function coerceTokenCountMethod(raw: unknown): TokenCountMethod | undefined {
   if (raw === undefined || raw === null) return undefined;
   const trimmed = typeof raw === "string" ? raw.trim() : raw;
-  if (!isTokenCountMethod(trimmed)) {
-    throw new MCPError(INVALID_PARAMS, "brain_token_impact: method must be exact or fallback");
+  // Legacy-aware: an adapter still posting the pre-rename `exact` /
+  // `fallback` labels is translated rather than rejected, so upgrading the
+  // server does not silently stop recording an existing caller's samples.
+  const method = normalizeTokenCountMethod(trimmed);
+  if (method === null) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_token_impact: method must be one of ${TOKEN_COUNT_METHODS.join(", ")}`,
+    );
   }
-  return trimmed;
+  return method;
 }
 
 function coerceTokenImpactOutcome(raw: unknown): TokenImpactOutcome | undefined {
@@ -1164,9 +1173,9 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         method: {
           type: "string",
-          enum: ["exact", "fallback"],
+          enum: [...TOKEN_COUNT_METHODS],
           description:
-            "How the counts were obtained: a real tokenizer (exact) or a heuristic estimate (fallback, the default). Also a list/summary filter.",
+            "How the CALLER produced the counts, never how accurate they are - the server counts nothing. Defaults to 'heuristic'. Also a list/summary filter.",
         },
         modeled_avoided_inferences: {
           type: "number",
