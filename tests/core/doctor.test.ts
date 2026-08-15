@@ -245,7 +245,13 @@ describe("checkHermesResolverParity", () => {
 
 describe("doctor aggregator", () => {
   test("returns at least the vault check", () => {
-    const results = doctor({ vault: tmp });
+    // `cwd` is pinned to the temp vault rather than left to default.
+    // Without it the aggregator walks up from the process's working
+    // directory, finds THIS repository, decides it is a code project and
+    // consults the codegraph partner - several seconds on any machine
+    // that has the binary, and nothing this test asserts on. The partner
+    // has its own tests; this one is about the aggregator returning.
+    const results = doctor({ vault: tmp, cwd: tmp });
     expect(results.length).toBeGreaterThan(0);
   });
 
