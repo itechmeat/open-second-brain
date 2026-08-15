@@ -136,7 +136,7 @@ describe("pruneEntityLabels", () => {
     expect(result.removed).toEqual([]);
     expect(result.snapshotRunId).toBeNull();
     expect(existsSync(junkPath)).toBe(true);
-    expect(listSnapshots(vault)).toHaveLength(0);
+    expect(listSnapshots(vault).snapshots).toHaveLength(0);
   });
 
   test("confirm removes the node and its edges behind a snapshot, doctor-clean", () => {
@@ -154,7 +154,7 @@ describe("pruneEntityLabels", () => {
 
     // Node file gone, snapshot recovery point written.
     expect(existsSync(junkPath)).toBe(false);
-    expect(listSnapshots(vault).length).toBeGreaterThan(0);
+    expect(listSnapshots(vault).snapshots.length).toBeGreaterThan(0);
 
     // No orphaned references remain: the inbound edge was stripped, so the
     // doctor reports neither a broken relation nor a malformed-label lint.
@@ -169,7 +169,7 @@ describe("pruneEntityLabels", () => {
     const result = pruneEntityLabels(vault, { confirm: true, now: NOW });
     expect(result.confirmed).toBe(false);
     expect(result.removed).toEqual([]);
-    expect(listSnapshots(vault)).toHaveLength(0);
+    expect(listSnapshots(vault).snapshots).toHaveLength(0);
   });
 });
 

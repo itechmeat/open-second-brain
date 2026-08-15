@@ -20,7 +20,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -132,6 +140,57 @@ describe("recovery-point liveness", () => {
     archive("dream-20260101T000000Z", RECOVERY_POINT_LIVENESS_WINDOW_DAYS + 100);
     archive("dream-20260531T000000Z", 1);
     expect(stale(run())).toEqual([]);
+  });
+
+  test("a history whose ONLY archive cannot be stat'ed is uncertain, not an empty history", () => {
+    // The directory is populated and enumerable; the archive inside it is
+    // not readable by this user - the shape a vault synced with preserved
+    // ownership takes. Reporting "no state-changing pass has ever run"
+    // here is the silence this check exists to remove.
+    const dir = snapshotsDir(vault);
+    mkdirSync(dir, { recursive: true });
+    symlinkSync(join(dir, "nothing-here.tar.zst"), join(dir, `dangling${SNAPSHOT_ARCHIVE_SUFFIX}`));
+
+    const result = run();
+    expect(stale(result)).toEqual([]);
+    const entry = result.uncertain.find((e) => e.code === RECOVERY_POINT_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("dangling");
+    expect(entry!.message).toContain(SCHEDULE_UNOBSERVABLE_CLAUSE);
+  });
+
+  test("an unreadable archive beside a readable one is reported alongside the age", () => {
+    // The measured age is the newest READABLE archive's, and the entry
+    // nobody could stat may be newer - so the number is an upper bound and
+    // the reader is told the listing was partial.
+    archive("dream-20260531T000000Z", 1);
+    const dir = snapshotsDir(vault);
+    symlinkSync(join(dir, "nothing-here.tar.zst"), join(dir, `dangling${SNAPSHOT_ARCHIVE_SUFFIX}`));
+
+    const result = run();
+    const entry = result.uncertain.find((e) => e.code === RECOVERY_POINT_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("dangling");
+  });
+
+  test("an archive whose run id does not validate is named, not swallowed", () => {
+    const dir = snapshotsDir(vault);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, `not a run id!${SNAPSHOT_ARCHIVE_SUFFIX}`), "x");
+
+    const result = run();
+    const entry = result.uncertain.find((e) => e.code === RECOVERY_POINT_UNMEASURED_CODE);
+    expect(entry).toBeDefined();
+    expect(entry!.message).toContain("not a run id!");
+  });
+
+  test("a file in the directory that is not an archive at all is not a skipped entry", () => {
+    // A sidecar manifest, a store archive, or an operator's stray note is
+    // not a recovery point that could not be read - it is not a recovery
+    // point. Reporting it would train the reader to ignore the code.
+    archive("dream-20260531T000000Z", 1);
+    writeFileSync(join(snapshotsDir(vault), "README.txt"), "mine");
+    expect(run().uncertain).toEqual([]);
   });
 
   test("an unreadable snapshots directory is uncertain, never clean and never stale", () => {

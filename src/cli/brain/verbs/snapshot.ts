@@ -4,6 +4,7 @@ import {
   extractSnapshotToTemp,
   type ExtractSnapshotResult,
   type SnapshotInfo,
+  type SnapshotListing,
 } from "../../../core/brain/snapshot.ts";
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
@@ -17,6 +18,7 @@ import { brainVerbContext, fail, ok, parse, usageError } from "../helpers.ts";
 import {
   renderDerivedStoreCoverage,
   renderSnapshotListingFailure,
+  renderSnapshotListingSkips,
   SNAPSHOT_UNKNOWN_LABEL,
 } from "../snapshot-render.ts";
 
@@ -84,12 +86,19 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
   // failure of the listing, not a listing of nothing - so it is reported
   // before either output shape, and neither the empty-history line below
   // nor an empty `--json` array can stand in for it.
-  let all: SnapshotInfo[];
+  let listing: SnapshotListing;
   try {
-    all = listSnapshots(vault);
+    listing = listSnapshots(vault);
   } catch (exc) {
     if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
     throw exc;
+  }
+  const all = listing.snapshots;
+  // Same rule one level down: an archive that is on disk and could not be
+  // described is missing from every count below, so the incompleteness is
+  // said out loud rather than left to be inferred from a shorter table.
+  if (listing.skipped.length > 0) {
+    process.stderr.write(renderSnapshotListingSkips(listing.skipped) + "\n");
   }
 
   // The reason filter compares against what the SIDECAR recorded, so a
@@ -100,7 +109,11 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
 
   if (flags["json"]) {
     process.stdout.write(
-      JSON.stringify({ total: snaps.length, snapshots: snaps.map(renderLogJson) }, null, 2) + "\n",
+      JSON.stringify(
+        { total: snaps.length, snapshots: snaps.map(renderLogJson), skipped: listing.skipped },
+        null,
+        2,
+      ) + "\n",
     );
     return 0;
   }
@@ -109,7 +122,14 @@ export async function cmdBrainSnapshotLog(argv: string[]): Promise<number> {
     // Zero, not an error: the directory was read (an unreadable one was
     // reported above) and the answer is none. The filter is echoed so an
     // operator who mistyped a valid reason can see which one was applied.
-    ok(reason === undefined ? "no snapshots available" : `no snapshots with reason '${reason}'`);
+    // "None" is qualified when archives were skipped, because "no
+    // snapshots available" over a directory holding archives nobody could
+    // describe is the sentence this listing must never print.
+    const none =
+      listing.skipped.length > 0
+        ? "no snapshots could be listed (see the warning above; the directory is not empty)"
+        : "no snapshots available";
+    ok(reason === undefined ? none : `no snapshots with reason '${reason}'`);
     return 0;
   }
   ok(LOG_COLUMNS.join("\t"));
@@ -175,13 +195,19 @@ export async function cmdBrainSnapshotDiff(argv: string[]): Promise<number> {
   }
   const [a, b] = positional;
   // Same reason as the log verb: "snapshot not found" over a directory
-  // nobody could read names the wrong cause.
-  let snaps: SnapshotInfo[];
+  // nobody could read names the wrong cause. And an archive that could not
+  // be described is exactly the archive an operator is most likely to be
+  // asking about here, so it is named before the not-found line below.
+  let listing: SnapshotListing;
   try {
-    snaps = listSnapshots(vault);
+    listing = listSnapshots(vault);
   } catch (exc) {
     if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
     throw exc;
+  }
+  const snaps = listing.snapshots;
+  if (listing.skipped.length > 0) {
+    process.stderr.write(renderSnapshotListingSkips(listing.skipped) + "\n");
   }
   if (!snaps.some((s) => s.run_id === a)) {
     process.stderr.write(

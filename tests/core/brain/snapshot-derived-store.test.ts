@@ -243,7 +243,7 @@ describe("listSnapshots and pruneSnapshots over a covered snapshot", () => {
     await seedDerivedStore();
     createSnapshot(vault, "dream-list-covered", { reason: DREAM, derivedStore: COVERED });
 
-    const [info] = listSnapshots(vault);
+    const [info] = listSnapshots(vault).snapshots;
     expect(info?.derived_store?.included).toBe(true);
     expect(info?.store_archive_path).toBe(snapshotStorePath(vault, "dream-list-covered"));
   });
@@ -258,7 +258,7 @@ describe("listSnapshots and pruneSnapshots over a covered snapshot", () => {
     delete parsed["derived_store"];
     writeFileSync(sidecar, JSON.stringify(parsed, null, 2) + "\n");
 
-    const [info] = listSnapshots(vault);
+    const [info] = listSnapshots(vault).snapshots;
     // `null` is UNKNOWN. An `excluded` record would claim a check ran.
     expect(info?.derived_store).toBeNull();
     expect(readManifestSidecar(vault, runId)).not.toBeNull();

@@ -29,18 +29,26 @@
  * search index is a poor substitute: it is derived and rebuildable, so a
  * stale index costs a rebuild rather than a memory.
  *
- * ## The three states, and why an empty history is not one of them
+ * ## The four states, and why an empty history is not one of them
  *
- * {@link listSnapshots} already draws exactly the distinction this check
- * needs, and it is reused rather than re-implemented:
+ * {@link listSnapshots} draws the distinctions this check needs, and they
+ * are reused rather than re-implemented:
  *
- *   - an ABSENT directory is an empty history and returns `[]`. No
- *     state-changing pass has ever run, so there is no schedule to have
- *     missed and no artifact to be stale. Reporting here would be
- *     reporting an expectation nobody set.
+ *   - an ABSENT directory is an empty history: no archives and nothing
+ *     skipped. No state-changing pass has ever run, so there is no
+ *     schedule to have missed and no artifact to be stale. Reporting here
+ *     would be reporting an expectation nobody set.
  *   - a POPULATED directory gives a newest mtime, which is measurable.
  *   - a directory that IS there and cannot be enumerated throws, and that
  *     is neither answer - it reaches the uncertain stream naming why.
+ *   - an ARCHIVE that is named in the directory and could not be described
+ *     - a `stat` that failed, a run id this build will not accept - is
+ *     reported to the same stream, whether or not other archives survived.
+ *     When none did, the vault has a history nobody could read and that is
+ *     emphatically not "no pass has ever run"; when some did, the measured
+ *     age is the newest READABLE one's and the entry nobody could stat may
+ *     be newer, so the number is an upper bound and the reader is told the
+ *     listing was partial.
  *
  * ## Not the durability gate
  *
@@ -55,7 +63,12 @@
  */
 
 import { msToWholeDays } from "../time.ts";
-import { listSnapshots } from "../snapshot.ts";
+import {
+  describeSnapshotEntrySkip,
+  listSnapshots,
+  type SnapshotEntrySkip,
+  type SnapshotInfo,
+} from "../snapshot.ts";
 import { snapshotsDir } from "../paths.ts";
 import type { DoctorIssue } from "../types.ts";
 import type { DoctorCheck, DoctorCheckContext, DoctorFindings } from "./check.ts";
@@ -64,7 +77,13 @@ import { pushUncertain } from "./uncertain-stream.ts";
 /** The newest recovery point is older than the window. */
 export const RECOVERY_POINT_STALE_CODE = "recovery-point-stale";
 
-/** The recovery-point history exists and could not be enumerated. */
+/**
+ * The recovery-point history is there and some or all of it could not be
+ * read - the directory refused enumeration, or an archive inside it could
+ * not be described. One code for both because the consequence is one
+ * thing: the age reported here is not the age of the newest recovery
+ * point, and the message says which of the two happened.
+ */
 export const RECOVERY_POINT_UNMEASURED_CODE = "recovery-point-unmeasured";
 
 /**
@@ -106,13 +125,23 @@ type RecoveryPointAge =
   /** The history is there and could not be read. */
   | { readonly kind: "unreadable"; readonly reason: string };
 
-function newestRecoveryPoint(ctx: DoctorCheckContext): RecoveryPointAge {
-  let infos;
-  try {
-    infos = listSnapshots(ctx.vault);
-  } catch (err) {
-    return { kind: "unreadable", reason: describe(err) };
-  }
+/**
+ * How many skipped entries are named before the message stops listing
+ * them. Three, because the sentence has to stay readable next to the
+ * clause it shares a line with, and the count that precedes them is the
+ * fact a reader acts on - the names are there so the first one can be
+ * looked at without another command.
+ */
+const MAX_NAMED_SKIPS = 3;
+
+/** `<name> (<reason>: <detail>)` for the first few, then a count. */
+function describeSkips(skipped: ReadonlyArray<SnapshotEntrySkip>): string {
+  const named = skipped.slice(0, MAX_NAMED_SKIPS).map(describeSnapshotEntrySkip).join(", ");
+  const rest = skipped.length - Math.min(skipped.length, MAX_NAMED_SKIPS);
+  return rest > 0 ? `${named}, and ${rest} more` : named;
+}
+
+function newestRecoveryPoint(infos: ReadonlyArray<SnapshotInfo>, now: Date): RecoveryPointAge {
   if (infos.length === 0) return { kind: "empty" };
   let newest = infos[0]!;
   let newestMs = Date.parse(newest.created_at);
@@ -131,24 +160,62 @@ function newestRecoveryPoint(ctx: DoctorCheckContext): RecoveryPointAge {
   }
   return {
     kind: "measured",
-    days: msToWholeDays(ctx.now.getTime() - newestMs),
+    days: msToWholeDays(now.getTime() - newestMs),
     runId: newest.run_id,
   };
+}
+
+/** One uncertain entry, worded once, for every way this check came up short. */
+function unmeasured(ctx: DoctorCheckContext, out: DoctorFindings, what: string): void {
+  pushUncertain(out.uncertain, {
+    code: RECOVERY_POINT_UNMEASURED_CODE,
+    path: snapshotsDir(ctx.vault),
+    message: `${what}. Note that ${SCHEDULE_UNOBSERVABLE_CLAUSE}`,
+  });
 }
 
 export const recoveryPointLivenessCheck: DoctorCheck = {
   failSoft: true,
   run(ctx: DoctorCheckContext, out: DoctorFindings): void {
-    const age = newestRecoveryPoint(ctx);
+    let listing;
+    try {
+      listing = listSnapshots(ctx.vault);
+    } catch (err) {
+      unmeasured(
+        ctx,
+        out,
+        `the recovery-point history exists and could not be read (${describe(err)}), so the age ` +
+          "of the newest one is unknown",
+      );
+      return;
+    }
+
+    const age = newestRecoveryPoint(listing.snapshots, ctx.now);
+    if (listing.skipped.length > 0) {
+      // Reported whether or not any archive survived, because the two
+      // shapes are wrong in different directions: with none left there is
+      // a history nobody could read, and with some left the age below is
+      // only the newest READABLE one's.
+      unmeasured(
+        ctx,
+        out,
+        age.kind === "measured"
+          ? `${listing.skipped.length} archive(s) in the recovery-point history could not be ` +
+              `read - ${describeSkips(listing.skipped)} - so the age reported below is that of ` +
+              "the newest READABLE recovery point and an entry skipped here may be newer"
+          : `the recovery-point history is populated and no archive in it could be read - ` +
+              `${describeSkips(listing.skipped)} - so whether a recovery point exists at all is ` +
+              "unknown. This is NOT a vault that has never taken one",
+      );
+    }
     if (age.kind === "empty") return;
     if (age.kind === "unreadable") {
-      pushUncertain(out.uncertain, {
-        code: RECOVERY_POINT_UNMEASURED_CODE,
-        path: snapshotsDir(ctx.vault),
-        message:
-          `the recovery-point history exists and could not be read (${age.reason}), so the age ` +
-          `of the newest one is unknown. Note that ${SCHEDULE_UNOBSERVABLE_CLAUSE}`,
-      });
+      unmeasured(
+        ctx,
+        out,
+        `the recovery-point history exists and could not be read (${age.reason}), so the age ` +
+          "of the newest one is unknown",
+      );
       return;
     }
     if (age.days <= RECOVERY_POINT_LIVENESS_WINDOW_DAYS) return;

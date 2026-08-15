@@ -295,6 +295,77 @@ export interface SnapshotInfo {
 }
 
 /**
+ * Why one `.snapshots/` entry could not become a {@link SnapshotInfo}.
+ *
+ * Both members describe an entry that IS an archive by name - the suffix
+ * matched - and could not be turned into a listing row. A file that is not
+ * an archive at all (a sidecar manifest, a store archive, an operator's
+ * stray note) is not in this vocabulary: it is not a recovery point that
+ * could not be read, it is not a recovery point.
+ */
+export const SNAPSHOT_ENTRY_SKIP_REASON = Object.freeze({
+  /** The name carries the archive suffix and the run id inside it does not validate. */
+  runIdUnparseable: "run_id_unparseable",
+  /** The archive is named in the directory and could not be stat'ed. */
+  entryUnreadable: "entry_unreadable",
+} as const);
+
+export type SnapshotEntrySkipReason =
+  (typeof SNAPSHOT_ENTRY_SKIP_REASON)[keyof typeof SNAPSHOT_ENTRY_SKIP_REASON];
+
+export const SNAPSHOT_ENTRY_SKIP_REASONS: ReadonlyArray<SnapshotEntrySkipReason> = Object.freeze(
+  Object.values(SNAPSHOT_ENTRY_SKIP_REASON),
+);
+
+export function isSnapshotEntrySkipReason(value: unknown): value is SnapshotEntrySkipReason {
+  return (
+    typeof value === "string" &&
+    (SNAPSHOT_ENTRY_SKIP_REASONS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/** One archive-shaped entry that is missing from {@link SnapshotListing.snapshots}. */
+export interface SnapshotEntrySkip {
+  /** Directory entry name, as `readdir` reported it. */
+  readonly name: string;
+  /** Absolute path of that entry. */
+  readonly path: string;
+  readonly reason: SnapshotEntrySkipReason;
+  /** The underlying failure, in the words of whatever refused. */
+  readonly detail: string;
+}
+
+/**
+ * One skipped entry as a phrase, spelled once for every surface that
+ * reports one: the doctor's uncertain stream and both CLI listings say the
+ * same thing about the same file, and a second wording would be a second
+ * claim about it.
+ */
+export function describeSnapshotEntrySkip(skip: SnapshotEntrySkip): string {
+  return `${skip.name} (${skip.reason}: ${skip.detail})`;
+}
+
+/**
+ * What {@link listSnapshots} found: the recovery points it could describe,
+ * and the archive-shaped entries it could not.
+ *
+ * Two fields rather than one array because "these are the recovery points"
+ * and "this listing is complete" are two different facts, and the second
+ * one used to have no wire at all: every per-entry failure was dropped, so
+ * a directory full of archives nobody could stat answered exactly like a
+ * vault that had never taken one. Callers that only count archives read
+ * {@link snapshots}; callers that tell an operator what their vault
+ * contains have to read {@link skipped} too, and the compiler now makes
+ * them look at it.
+ */
+export interface SnapshotListing {
+  /** Newest-first by archive mtime. */
+  readonly snapshots: SnapshotInfo[];
+  /** Empty when every archive-shaped entry became a row. */
+  readonly skipped: ReadonlyArray<SnapshotEntrySkip>;
+}
+
+/**
  * Why a prune did not remove what it was asked to.
  *
  * One member, and it is the one that mattered: `snapshots.retention_count`
@@ -369,7 +440,14 @@ export interface PruneSnapshotsResult {
    * so.
    */
   readonly failed: ReadonlyArray<string>;
-  /** How many archives are still on disk when the prune returns. */
+  /**
+   * How many archives the listing could DESCRIBE when the prune returns.
+   *
+   * An entry `listSnapshots` had to skip - a run id that will not validate,
+   * a `stat` that failed - is still on disk and is not in this count, and
+   * is not a prune candidate either: this function removes what it can
+   * name. {@link SnapshotListing.skipped} is where those are reported.
+   */
   readonly retained: number;
   /** Why nothing was pruned, or `null` when the prune ran. */
   readonly refusal: SnapshotPruneRefusal | null;
@@ -1099,20 +1177,31 @@ function runArchiveProducer(cmd: string, args: ReadonlyArray<string>, runId: str
 // ----- listSnapshots / pruneSnapshots --------------------------------------
 
 /**
- * Enumerate `.snapshots/*.tar.zst` in newest-first order (by mtime).
- * Files outside the canonical naming pattern are silently skipped so
- * a stray text file in the dir doesn't poison the listing.
+ * Enumerate `.snapshots/*.tar.zst` in newest-first order (by mtime),
+ * alongside the archive-shaped entries that could not be described.
  *
- * A directory that is not there is an empty history and returns `[]`: no
- * snapshot has ever been taken, which is a real answer. A directory that
- * IS there and cannot be enumerated throws
- * {@link BrainSnapshotListingError} instead, because the two are
- * different facts and `[]` for both is what let the listing surfaces
- * print "no snapshots available" over a read that never happened.
+ * Files outside the canonical naming pattern are skipped and NOT reported:
+ * a sidecar manifest, a store archive or a stray text file is not a
+ * recovery point, so naming it would be noise.
+ *
+ * The three answers this returns are three different facts:
+ *
+ *   - a directory that is not there is an empty history: no snapshot has
+ *     ever been taken, and both fields are empty.
+ *   - a directory that IS there and cannot be enumerated throws
+ *     {@link BrainSnapshotListingError}, because `[]` for that too is what
+ *     let the listing surfaces print "no snapshots available" over a read
+ *     that never happened.
+ *   - an archive that is named in the directory and cannot be turned into
+ *     a row - an unvalidatable run id, or a `stat` that failed - lands in
+ *     {@link SnapshotListing.skipped}. It used to be dropped with a bare
+ *     `continue`, which put a populated history nobody could stat and a
+ *     vault that never took one on the same wire; the caller decides what
+ *     to say about it, but it can no longer fail to know.
  */
-export function listSnapshots(vault: string): SnapshotInfo[] {
+export function listSnapshots(vault: string): SnapshotListing {
   const dirs = brainDirs(vault);
-  if (!existsSync(dirs.snapshots)) return [];
+  if (!existsSync(dirs.snapshots)) return { snapshots: [], skipped: [] };
   let entries: string[];
   try {
     entries = readdirSync(dirs.snapshots);
@@ -1120,22 +1209,38 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
     throw new BrainSnapshotListingError(dirs.snapshots, err);
   }
   const infos: SnapshotInfo[] = [];
+  const skipped: SnapshotEntrySkip[] = [];
   for (const name of entries) {
     if (!name.endsWith(SNAPSHOT_ARCHIVE_SUFFIX)) continue;
     const runId = name.slice(0, -SNAPSHOT_ARCHIVE_SUFFIX.length);
-    // The `.snapshots/` dir is ours, so a malformed run_id here would
-    // indicate manual tampering — we keep the listing tolerant and
-    // skip rather than throw.
+    const full = join(dirs.snapshots, name);
+    // The `.snapshots/` dir is ours, so a malformed run_id here indicates
+    // manual tampering — the listing stays tolerant and keeps describing
+    // the archives it can, but the entry is carried out rather than
+    // dropped: an operator hunting a recovery point they know they took
+    // needs to be told the file is there under a name this build will not
+    // accept.
     try {
       validateRunId(runId);
-    } catch {
+    } catch (err) {
+      skipped.push({
+        name,
+        path: full,
+        reason: SNAPSHOT_ENTRY_SKIP_REASON.runIdUnparseable,
+        detail: err instanceof Error ? err.message : String(err),
+      });
       continue;
     }
-    const full = join(dirs.snapshots, name);
     let st;
     try {
       st = statSync(full);
-    } catch {
+    } catch (err) {
+      skipped.push({
+        name,
+        path: full,
+        reason: SNAPSHOT_ENTRY_SKIP_REASON.entryUnreadable,
+        detail: err instanceof Error ? err.message : String(err),
+      });
       continue;
     }
     const sidecar = manifestSidecarPath(vault, runId);
@@ -1166,7 +1271,7 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
   // non-timestamped id and we still want them to land where the
   // operator's mental model expects (most recent first).
   infos.sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at));
-  return infos;
+  return { snapshots: infos, skipped };
 }
 
 /**
@@ -1214,11 +1319,11 @@ export function pruneSnapshots(
     return Object.freeze({
       deleted: Object.freeze([]),
       failed: Object.freeze([]),
-      retained: listSnapshots(vault).length,
+      retained: listSnapshots(vault).snapshots.length,
       refusal: SNAPSHOT_PRUNE_REFUSAL.belowRetentionFloor,
     });
   }
-  const all = listSnapshots(vault);
+  const all = listSnapshots(vault).snapshots;
   if (all.length <= retentionCount) {
     return Object.freeze({
       deleted: Object.freeze([]),

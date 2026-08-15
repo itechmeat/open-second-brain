@@ -18,9 +18,11 @@
  */
 
 import type { BrainManifestDerivedStore } from "../../core/brain/manifest.ts";
-import type {
-  BrainSnapshotListingError,
-  RestoreDerivedStoreResult,
+import {
+  describeSnapshotEntrySkip,
+  type BrainSnapshotListingError,
+  type RestoreDerivedStoreResult,
+  type SnapshotEntrySkip,
 } from "../../core/brain/snapshot.ts";
 
 /**
@@ -98,4 +100,23 @@ export function renderDerivedStoreRestore(outcome: RestoreDerivedStoreResult): s
  */
 export function renderSnapshotListingFailure(err: BrainSnapshotListingError): string {
   return `${err.message}; an unreadable snapshots directory is not an empty history`;
+}
+
+/**
+ * Wording for archives that ARE in the directory and are missing from the
+ * listing below.
+ *
+ * Both listing surfaces need it for the same reason they need the sentence
+ * above: a listing that quietly drops the archives it could not describe
+ * reads exactly like a vault that never had them, and an operator hunting
+ * the recovery point they took last week would act on the wrong one. It
+ * does not fail the verb - the rows that survived are still the answer to
+ * the question asked - so it goes to stderr while the listing goes to
+ * stdout, and both `--json` payloads carry the same entries as data.
+ */
+export function renderSnapshotListingSkips(skipped: ReadonlyArray<SnapshotEntrySkip>): string {
+  return (
+    `warning: ${skipped.length} archive(s) in the snapshots directory could not be listed, so ` +
+    `this listing is INCOMPLETE: ${skipped.map(describeSnapshotEntrySkip).join(", ")}`
+  );
 }

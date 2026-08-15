@@ -4,6 +4,7 @@ import {
   extractSnapshotToTemp,
   type ExtractSnapshotResult,
   type SnapshotInfo,
+  type SnapshotListing,
 } from "../../../core/brain/snapshot.ts";
 import { restoreSnapshotWithRecoveryPoint } from "../../../core/brain/snapshot-gate.ts";
 import {
@@ -14,7 +15,6 @@ import {
   readManifestSidecar,
   renderManifestDriftJson,
   renderManifestDriftMarkdown,
-  type BrainManifestDerivedStore,
 } from "../../../core/brain/manifest.ts";
 import { diffBrainTrees } from "../../../core/brain/snapshot-diff.ts";
 import { renderDiffJson, renderDiffMarkdown } from "../../../core/brain/snapshot-diff-render.ts";
@@ -35,6 +35,7 @@ import {
   renderDerivedStoreCoverage,
   renderDerivedStoreRestore,
   renderSnapshotListingFailure,
+  renderSnapshotListingSkips,
   renderSnapshotReason,
 } from "../snapshot-render.ts";
 
@@ -56,9 +57,9 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
   if (!flags["list"] && positional.length < 1)
     return fail("brain rollback requires a <run_id> argument (or --list to enumerate snapshots)");
 
-  let snaps: SnapshotInfo[];
+  let listing: SnapshotListing;
   try {
-    snaps = listSnapshots(vault);
+    listing = listSnapshots(vault);
   } catch (exc) {
     // A directory nobody could read must never be rendered as a vault
     // with no recovery points: that is the answer an operator would act
@@ -66,14 +67,29 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     if (exc instanceof BrainSnapshotListingError) return fail(renderSnapshotListingFailure(exc));
     throw exc;
   }
+  const snaps: SnapshotInfo[] = listing.snapshots;
+  // One archive nobody could describe is the same failure one level down:
+  // it is absent from the list an operator picks a run id out of, and from
+  // the `snapshot not found` sentence below. Named rather than dropped.
+  if (listing.skipped.length > 0) {
+    process.stderr.write(renderSnapshotListingSkips(listing.skipped) + "\n");
+  }
 
   if (flags["list"]) {
     if (flags["json"]) {
+      // The payload stays the bare array it has always been - re-nesting
+      // it to carry the skipped entries would break every script reading
+      // this verb, for a fact the warning above has already stated and
+      // that `o2b brain snapshot log --json` carries as data.
       process.stdout.write(JSON.stringify(snaps, null, 2) + "\n");
       return 0;
     }
     if (snaps.length === 0) {
-      ok("no snapshots available");
+      ok(
+        listing.skipped.length > 0
+          ? "no snapshots could be listed (see the warning above; the directory is not empty)"
+          : "no snapshots available",
+      );
       return 0;
     }
     ok("run_id\tcreated_at\treason\tsize_bytes\tderived_store");

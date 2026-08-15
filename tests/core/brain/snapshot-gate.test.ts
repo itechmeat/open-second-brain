@@ -78,7 +78,7 @@ describe("withDestructiveSnapshot", () => {
       BRAIN_SNAPSHOT_REASON.deleteBySource,
       () => {
         // The snapshot archive must already exist by the time op runs.
-        archiveCountWhenOpRan = listSnapshots(vault).length;
+        archiveCountWhenOpRan = listSnapshots(vault).snapshots.length;
         return "result-value";
       },
       { now: new Date("2026-06-01T00:00:00Z") },
@@ -93,9 +93,9 @@ describe("withDestructiveSnapshot", () => {
 
   test("op runs after the snapshot exists (order proven)", () => {
     let order: string[] = [];
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     withDestructiveSnapshot(vault, BRAIN_SNAPSHOT_REASON.entityPrune, () => {
-      order.push(`snapshots=${listSnapshots(vault).length}`);
+      order.push(`snapshots=${listSnapshots(vault).snapshots.length}`);
     });
     expect(order).toEqual([`snapshots=${before + 1}`]);
   });
@@ -138,18 +138,18 @@ describe("withDestructiveSnapshot", () => {
       }),
     ).toThrow(BrainSnapshotStoreError);
     expect(opRan).toBe(false);
-    expect(listSnapshots(vault)).toHaveLength(0);
+    expect(listSnapshots(vault).snapshots).toHaveLength(0);
   });
 
   test("op error propagates but the snapshot is retained as recovery point", () => {
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     expect(() =>
       withDestructiveSnapshot(vault, BRAIN_SNAPSHOT_REASON.deleteBySource, () => {
         throw new Error("op blew up");
       }),
     ).toThrow("op blew up");
     // The snapshot survives - it is the recovery point.
-    expect(listSnapshots(vault).length).toBe(before + 1);
+    expect(listSnapshots(vault).snapshots.length).toBe(before + 1);
   });
 
   test("prunes to the configured retention after a successful op", () => {
@@ -163,7 +163,7 @@ describe("withDestructiveSnapshot", () => {
         now: new Date(`2026-06-0${i + 1}T00:00:00Z`),
       });
     }
-    expect(listSnapshots(vault).length).toBe(2);
+    expect(listSnapshots(vault).snapshots.length).toBe(2);
   });
 
   test("mints unique run ids when the base id already exists", () => {
@@ -211,7 +211,7 @@ describe("withDestructiveSnapshot", () => {
 
   test("stamps the reason it was given into the snapshot's sidecar", () => {
     const out = withDestructiveSnapshot(vault, BRAIN_SNAPSHOT_REASON.entityPrune, () => undefined);
-    const listed = listSnapshots(vault).find((s) => s.run_id === out.snapshot.runId);
+    const listed = listSnapshots(vault).snapshots.find((s) => s.run_id === out.snapshot.runId);
     expect(listed?.reason).toBe(BRAIN_SNAPSHOT_REASON.entityPrune);
   });
 });
@@ -280,7 +280,7 @@ describe("takeSnapshot and withDestructiveSnapshot share one archive path", () =
     const snap = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual);
     expect(snap.runId).toMatch(/^manual-/);
     expect(existsSync(snap.path)).toBe(true);
-    expect(listSnapshots(vault).find((s) => s.run_id === snap.runId)?.reason).toBe(
+    expect(listSnapshots(vault).snapshots.find((s) => s.run_id === snap.runId)?.reason).toBe(
       BRAIN_SNAPSHOT_REASON.manual,
     );
   });
@@ -294,7 +294,7 @@ describe("takeSnapshot and withDestructiveSnapshot share one archive path", () =
     process.env["PATH"] = emptyDir;
     try {
       expect(() => takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual)).toThrow();
-      expect(listSnapshots(vault)).toHaveLength(0);
+      expect(listSnapshots(vault).snapshots).toHaveLength(0);
     } finally {
       process.env["PATH"] = savedPath;
       rmSync(emptyDir, { recursive: true, force: true });

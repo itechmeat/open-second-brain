@@ -171,7 +171,7 @@ describe("the retention pass behind a recovery point cannot evict it", () => {
     expect(existsSync(point.path)).toBe(true);
     expect(point.prune?.deleted).not.toContain(point.path);
     expect(existsSync(stale)).toBe(false);
-    expect(listSnapshots(vault).map((s) => s.run_id)).toEqual([point.runId]);
+    expect(listSnapshots(vault).snapshots.map((s) => s.run_id)).toEqual([point.runId]);
   });
 
   test("an equal-millisecond mtime does not decide it either", () => {
@@ -223,7 +223,7 @@ describe("the retention pass behind a recovery point cannot evict it", () => {
     // so a vault configured with zero takes no recovery point and runs no
     // destructive operation until the operator fixes the value.
     expect(() => takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual)).toThrow(BrainConfigError);
-    expect(listSnapshots(vault)).toEqual([]);
+    expect(listSnapshots(vault).snapshots).toEqual([]);
   });
 
   test("the gate refuses to run the operation when the point is not on disk", () => {
@@ -245,7 +245,7 @@ describe("the retention pass behind a recovery point cannot evict it", () => {
       vault,
       BRAIN_SNAPSHOT_REASON.deleteBySource,
       () => {
-        archivesWhenOpRan = listSnapshots(vault).length;
+        archivesWhenOpRan = listSnapshots(vault).snapshots.length;
         return 1;
       },
       { now: new Date("2026-06-01T00:00:00Z") },

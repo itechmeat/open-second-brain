@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync,
 } from "node:fs";
@@ -16,9 +17,11 @@ import {
   BrainSnapshotListingError,
   BrainSnapshotToolingMissingError,
   createSnapshot,
+  isSnapshotEntrySkipReason,
   listSnapshots,
   pruneSnapshots,
   restoreSnapshot,
+  SNAPSHOT_ENTRY_SKIP_REASON,
 } from "../../src/core/brain/snapshot.ts";
 import { brainDirs, snapshotPath } from "../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -150,7 +153,7 @@ describe("listSnapshots", () => {
     const newT = new Date("2026-05-15T00:00:00Z");
     utimesSync(c, newT, newT);
 
-    const list = listSnapshots(vault);
+    const list = listSnapshots(vault).snapshots;
     expect(list).toHaveLength(3);
     expect(list[0]!.run_id).toBe("dream-2026-05-14-090000");
     expect(list[1]!.run_id).toBe("dream-2026-05-14-080000");
@@ -162,7 +165,46 @@ describe("listSnapshots", () => {
   });
 
   test("returns [] when .snapshots/ is empty", () => {
-    expect(listSnapshots(vault)).toEqual([]);
+    expect(listSnapshots(vault).snapshots).toEqual([]);
+  });
+
+  test("an empty history skips nothing, so the two fields cannot be confused", () => {
+    expect(listSnapshots(vault)).toEqual({ snapshots: [], skipped: [] });
+  });
+
+  test("an archive that cannot be stat'ed is carried out, not dropped", () => {
+    // The failure the swallow hid: a populated history in which nothing
+    // survives both filters used to answer exactly like a vault that had
+    // never taken a recovery point.
+    createSnapshot(vault, "dream-readable", { reason: DREAM });
+    const dir = brainDirs(vault).snapshots;
+    symlinkSync(join(dir, "nowhere.tar.zst"), join(dir, "dream-dangling.tar.zst"));
+
+    const listing = listSnapshots(vault);
+    expect(listing.snapshots.map((s) => s.run_id)).toEqual(["dream-readable"]);
+    expect(listing.skipped).toHaveLength(1);
+    expect(listing.skipped[0]!.name).toBe("dream-dangling.tar.zst");
+    expect(listing.skipped[0]!.reason).toBe(SNAPSHOT_ENTRY_SKIP_REASON.entryUnreadable);
+    expect(isSnapshotEntrySkipReason(listing.skipped[0]!.reason)).toBe(true);
+    expect(listing.skipped[0]!.detail.length).toBeGreaterThan(0);
+  });
+
+  test("an archive whose run id does not validate is carried out under its own reason", () => {
+    writeFileSync(join(brainDirs(vault).snapshots, "not a run id!.tar.zst"), "x");
+    const listing = listSnapshots(vault);
+    expect(listing.snapshots).toEqual([]);
+    expect(listing.skipped.map((s) => s.reason)).toEqual([
+      SNAPSHOT_ENTRY_SKIP_REASON.runIdUnparseable,
+    ]);
+  });
+
+  test("a file that is not an archive is skipped silently, because it is not one", () => {
+    createSnapshot(vault, "dream-readable", { reason: DREAM });
+    writeFileSync(join(brainDirs(vault).snapshots, "README.txt"), "mine");
+    // The sidecar manifest createSnapshot just wrote is in this directory
+    // too, and neither it nor the note is a recovery point that could not
+    // be read.
+    expect(listSnapshots(vault).skipped).toEqual([]);
   });
 
   test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
@@ -175,7 +217,7 @@ describe("listSnapshots", () => {
       const snapshots = brainDirs(vault).snapshots;
       chmodSync(snapshots, 0o000);
       try {
-        expect(() => listSnapshots(vault)).toThrow(BrainSnapshotListingError);
+        expect(() => listSnapshots(vault).snapshots).toThrow(BrainSnapshotListingError);
         try {
           listSnapshots(vault);
         } catch (err) {
@@ -186,7 +228,7 @@ describe("listSnapshots", () => {
       }
       // And the same directory, readable again, still lists its archive:
       // the throw is about the read, not about the snapshot.
-      expect(listSnapshots(vault)).toHaveLength(1);
+      expect(listSnapshots(vault).snapshots).toHaveLength(1);
     },
   );
 
@@ -200,7 +242,7 @@ describe("listSnapshots", () => {
     createSnapshot(vault, "dream-legacy", { reason: DREAM });
     rmSync(manifestSidecarPath(vault, "dream-legacy"), { force: true });
 
-    const list = listSnapshots(vault);
+    const list = listSnapshots(vault).snapshots;
     const byId = new Map(list.map((s) => [s.run_id, s]));
     expect(byId.get("dream-with-sidecar")!.manifest_path).toBe(sidecar);
     expect(byId.get("dream-legacy")!.manifest_path).toBeNull();
@@ -224,13 +266,13 @@ describe("pruneSnapshots", () => {
       const t = new Date(ts[i]!);
       utimesSync(p, t, t);
     }
-    const before = listSnapshots(vault);
+    const before = listSnapshots(vault).snapshots;
     expect(before).toHaveLength(5);
 
     const res = pruneSnapshots(vault, 3);
     expect(res.deleted).toHaveLength(2);
 
-    const after = listSnapshots(vault);
+    const after = listSnapshots(vault).snapshots;
     expect(after).toHaveLength(3);
     expect(after.map((s) => s.run_id)).toEqual([
       "dream-e-000000",
@@ -243,7 +285,7 @@ describe("pruneSnapshots", () => {
     createSnapshot(vault, "dream-only", { reason: DREAM });
     const res = pruneSnapshots(vault, 10);
     expect(res.deleted).toEqual([]);
-    expect(listSnapshots(vault)).toHaveLength(1);
+    expect(listSnapshots(vault).snapshots).toHaveLength(1);
   });
 
   test("removes sidecar manifest alongside the archive", () => {

@@ -270,7 +270,7 @@ describe("deleteBySource - D1 snapshot gate", () => {
     expect(existsSync(plan.snapshotPath!)).toBe(true);
 
     // A snapshot archive exists and is listed by the engine.
-    const snaps = listSnapshots(vault);
+    const snaps = listSnapshots(vault).snapshots;
     expect(snaps.some((s) => s.run_id === plan.snapshotRunId)).toBe(true);
 
     // The archive is restorable: it contains the files that were deleted.
@@ -297,16 +297,16 @@ describe("deleteBySource - D1 snapshot gate", () => {
 
   test("dry-run takes NO snapshot", () => {
     seedContaminatedVault();
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     const plan = deleteBySource(vault, SOURCE, { now: NOW });
     expect(plan.snapshotRunId).toBeNull();
     expect(plan.snapshotPath).toBeNull();
-    expect(listSnapshots(vault).length).toBe(before);
+    expect(listSnapshots(vault).snapshots.length).toBe(before);
   });
 
   test("confirm with nothing to delete takes NO snapshot (no-op stays a no-op)", () => {
     // A pristine vault with no derived material for this source.
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     const plan = deleteBySource(vault, "imports/does-not-exist.md", {
       confirm: true,
       now: NOW,
@@ -314,7 +314,7 @@ describe("deleteBySource - D1 snapshot gate", () => {
     expect(plan.deleted).toEqual([]);
     expect(plan.snapshotRunId).toBeNull();
     expect(plan.snapshotPath).toBeNull();
-    expect(listSnapshots(vault).length).toBe(before);
+    expect(listSnapshots(vault).snapshots.length).toBe(before);
   });
 });
 

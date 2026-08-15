@@ -188,15 +188,15 @@ describe("a rollback keeps what it discards", () => {
     // restore's deletion, which is what makes this recoverable at all.
     expect(out.recoveryPoint.runId.startsWith(BRAIN_SNAPSHOT_REASON.manual)).toBe(true);
     expect(existsSync(out.recoveryPoint.path)).toBe(true);
-    expect(listSnapshots(vault).map((s) => s.run_id)).toContain(out.recoveryPoint.runId);
+    expect(listSnapshots(vault).snapshots.map((s) => s.run_id)).toContain(out.recoveryPoint.runId);
   });
 
   test("the recovery point is taken after extraction, so a corrupt archive mints nothing", () => {
     // Ordering matters: a rollback that cannot read its target must not
     // leave an archive of a tree it never touched.
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     expect(() => restoreSnapshotWithRecoveryPoint(vault, "manual-absent", { now: NOW })).toThrow();
-    expect(listSnapshots(vault).length).toBe(before);
+    expect(listSnapshots(vault).snapshots.length).toBe(before);
   });
 
   test("a direct restore says it proved nothing rather than staying silent", () => {
@@ -257,7 +257,7 @@ describe("the dream pass runs behind the gate, not beside it", () => {
   test("the archive still carries the dream run id, not a second id of its own", () => {
     seedSignal("tidy");
     const summary = dream(vault, { now: NOW, agentName: "tester" });
-    const ids = listSnapshots(vault).map((s) => s.run_id);
+    const ids = listSnapshots(vault).snapshots.map((s) => s.run_id);
     expect(ids).toContain(summary.run_id);
     // Exactly one archive per run. A gate that minted its own id beside
     // dream's would leave two, and the workrun would name neither.
@@ -279,7 +279,7 @@ describe("the dream pass runs behind the gate, not beside it", () => {
   test("a dry run still takes no snapshot at all", () => {
     seedSignal("tidy");
     dream(vault, { now: NOW, dryRun: true, agentName: "tester" });
-    expect(listSnapshots(vault)).toEqual([]);
+    expect(listSnapshots(vault).snapshots).toEqual([]);
   });
 });
 
@@ -301,7 +301,7 @@ describe("the prune has a floor and says what it did", () => {
     expect(result.refusal).toBe(SNAPSHOT_PRUNE_REFUSAL.belowRetentionFloor);
     expect(result.deleted).toEqual([]);
     // The whole point: the archives are still there.
-    expect(listSnapshots(vault).length).toBe(3);
+    expect(listSnapshots(vault).snapshots.length).toBe(3);
   });
 
   test("the floor is the smallest retention that keeps a way back", () => {

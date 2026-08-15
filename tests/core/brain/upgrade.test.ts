@@ -205,11 +205,11 @@ describe("planUpgrade", () => {
 
 describe("applyUpgrade", () => {
   test("nothing to do → no snapshot, no log row", () => {
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     const res = applyUpgrade(vault, { agent: "claude-vps-agent" });
     expect(res.files_updated).toEqual([]);
     expect(res.run_id).toBe("");
-    expect(listSnapshots(vault).length).toBe(before);
+    expect(listSnapshots(vault).snapshots.length).toBe(before);
   });
 
   test("pending update → snapshot, files rewritten, idempotent re-run", () => {
@@ -218,7 +218,7 @@ describe("applyUpgrade", () => {
     expect(res.run_id.startsWith("upgrade-")).toBe(true);
     expect(res.files_updated).toContain("Brain/_BRAIN.md");
     // Snapshot exists with the upgrade prefix.
-    const snaps = listSnapshots(vault);
+    const snaps = listSnapshots(vault).snapshots;
     expect(snaps.some((s) => s.run_id === res.run_id)).toBe(true);
     // The live file is now the canonical template body.
     expect(readFileSync(brainManualPath(vault), "utf8")).not.toBe("stale operator copy\n");
@@ -244,9 +244,9 @@ describe("applyUpgrade", () => {
 
   test("malformed _brain.yaml refuses to apply (no snapshot taken)", () => {
     atomicWriteFileSync(brainConfigPath(vault), "not: a valid: brain yaml\n");
-    const before = listSnapshots(vault).length;
+    const before = listSnapshots(vault).snapshots.length;
     expect(() => applyUpgrade(vault, { agent: "claude" })).toThrow(/upgrade aborted/);
-    expect(listSnapshots(vault).length).toBe(before);
+    expect(listSnapshots(vault).snapshots.length).toBe(before);
   });
 
   test("can rollback to upgrade-<ts> snapshot to undo the apply", () => {
@@ -259,7 +259,7 @@ describe("applyUpgrade", () => {
     // the snapshot exists and the upgrade actually changed bytes.
     const afterBytes = readFileSync(brainManualPath(vault), "utf8");
     expect(afterBytes).not.toBe(beforeBytes);
-    expect(listSnapshots(vault).some((s) => s.run_id === res.run_id)).toBe(true);
+    expect(listSnapshots(vault).snapshots.some((s) => s.run_id === res.run_id)).toBe(true);
   });
 });
 

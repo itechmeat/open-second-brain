@@ -16,12 +16,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
-import { createSnapshot } from "../../src/core/brain/snapshot.ts";
+import { createSnapshot, SNAPSHOT_ENTRY_SKIP_REASON } from "../../src/core/brain/snapshot.ts";
 import { manifestSidecarPath } from "../../src/core/brain/manifest.ts";
 import { brainDirs, snapshotPath } from "../../src/core/brain/paths.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../src/core/brain/types.ts";
@@ -174,7 +174,31 @@ describe("brain snapshot log", () => {
   test("an empty snapshots directory exits zero under --json too", async () => {
     const r = await snapshotLog("--json");
     expect(r.returncode).toBe(0);
-    expect(JSON.parse(r.stdout)).toEqual({ total: 0, snapshots: [] });
+    // `skipped` is empty rather than absent: a consumer reading it to
+    // decide whether the listing is complete must not have to tell an old
+    // build's silence from this build's "nothing was skipped".
+    expect(JSON.parse(r.stdout)).toEqual({ total: 0, snapshots: [], skipped: [] });
+  });
+
+  test("an archive nobody could describe is named on stderr and carried in --json", async () => {
+    seedSnapshots();
+    // A dangling symlink under the archive suffix: `readdir` names it,
+    // `stat` refuses it. Dropped silently, this listing would print one
+    // fewer row and claim to be the history.
+    const dir = brainDirs(vault).snapshots;
+    symlinkSync(join(dir, "nowhere.tar.zst"), join(dir, "dream-gone.tar.zst"));
+
+    const text = await snapshotLog();
+    expect(text.returncode).toBe(0);
+    expect(text.stderr).toContain("INCOMPLETE");
+    expect(text.stderr).toContain("dream-gone.tar.zst");
+
+    const r = await snapshotLog("--json");
+    const payload = JSON.parse(r.stdout) as {
+      skipped: ReadonlyArray<{ name: string; reason: string }>;
+    };
+    expect(payload.skipped.map((s) => s.name)).toEqual(["dream-gone.tar.zst"]);
+    expect(payload.skipped[0]!.reason).toBe(SNAPSHOT_ENTRY_SKIP_REASON.entryUnreadable);
   });
 
   test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(

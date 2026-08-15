@@ -70,7 +70,7 @@ describe("createSnapshot stamps the reason into the sidecar", () => {
     expect(readManifestSidecar(vault, runId)?.snapshot_reason).toBe(
       BRAIN_SNAPSHOT_REASON.entityPrune,
     );
-    const listed = listSnapshots(vault).find((s) => s.run_id === runId);
+    const listed = listSnapshots(vault).snapshots.find((s) => s.run_id === runId);
     expect(listed?.reason).toBe(BRAIN_SNAPSHOT_REASON.entityPrune);
   });
 
@@ -96,7 +96,7 @@ describe("createSnapshot stamps the reason into the sidecar", () => {
     // for provenance nothing recorded.
     unlinkSync(manifestSidecarPath(vault, runId));
 
-    const listed = listSnapshots(vault).find((s) => s.run_id === runId);
+    const listed = listSnapshots(vault).snapshots.find((s) => s.run_id === runId);
     expect(listed).toBeDefined();
     expect(listed!.reason).toBeNull();
     expect(listed!.manifest_path).toBeNull();
@@ -121,7 +121,7 @@ describe("createSnapshot stamps the reason into the sidecar", () => {
     expect(manifest!.snapshot_reason_unreadable).toBe(true);
     expect(Object.keys(manifest!.files).length).toBeGreaterThan(0);
     // The listing still refuses to name a provenance it cannot read.
-    expect(listSnapshots(vault).find((s) => s.run_id === runId)!.reason).toBeNull();
+    expect(listSnapshots(vault).snapshots.find((s) => s.run_id === runId)!.reason).toBeNull();
   });
 });
 
