@@ -22,8 +22,11 @@ no surprise, no hallucinated memory.
 
 ## Vault layout
 
-The agent owns one top-level directory in the vault: `Brain/`, so the
-agent's entire write contract is "I touch only `Brain/`".
+The agent owns one top-level directory for its own artefacts: `Brain/`.
+Everything it generates unprompted lives there. The one surface that
+writes user space is the note-lifecycle family, which acts on a path the
+caller names and can move a note to a second top-level directory,
+`Archive/` — see [architecture.md](architecture.md#vault-layout).
 
 ```text
 <vault>/
@@ -685,13 +688,15 @@ event to the archive that would undo it.
 
 Every snapshot now carries a typed reason from one closed vocabulary
 (`BRAIN_SNAPSHOT_REASON`): `dream`, `upgrade`, `import-claude-memory`,
-`delete-by-source`, `entity-prune` for the five destructive call sites,
-plus four members with **no producer in this release** —
-`session-boundary`, `plan-boundary`, `decision-boundary` for boundaries a
-later release may snapshot at, and `manual`, because nothing takes a
-recovery point on demand: no CLI verb and no MCP tool does, and the
+`delete-by-source`, `entity-prune`, `note-delete` for the six destructive
+call sites, plus `manual` for the recovery point a rollback takes of the
+live tree it is about to discard (`restoreSnapshotWithRecoveryPoint` in
+`snapshot-gate.ts`, reached from `o2b brain rollback`). Three members have
+**no producer in this release** — `session-boundary`, `plan-boundary` and
+`decision-boundary`, for boundaries a later release may snapshot at. No
+CLI verb and no MCP tool mints a recovery point *on demand*: the
 take-snapshot entry point is reached only by the destructive-operation
-gate. The reason is required by
+gate, the rollback's own recovery point included. The reason is required by
 `createSnapshot`, doubles as the run-id prefix so the filename and the
 recorded provenance can never disagree, and is stamped into the manifest
 sidecar as an additive `snapshot_reason` key **at the existing schema
@@ -724,8 +729,9 @@ snapshot is a separate decision about retention pressure and about what
 an operator does with a point nothing was going to overwrite. The
 vocabulary carries all four members anyway so this build can read a
 sidecar a later release writes and replicates back — which also means
-`snapshot log --reason manual` is a valid filter over a history that,
-in this release, no local operation can add to.
+`snapshot log --reason manual` is a valid filter over the recovery points
+`o2b brain rollback` takes of the tree it replaces. Those are local
+archives and the operator's way back out of a rollback, not foreign ones.
 
 ### Read-only inspectors over the snapshot family
 
@@ -991,7 +997,11 @@ semantic_weight·cosine + link_boost + recency_boost + entity_boost)`
   `1 - L2² / 2` on unit-normalised vectors; link boost rewards
   candidates that other candidates reference via `[[wikilink]]` /
   markdown link (capped at 0.03) or share a tag with (capped at
-  0.02); recency is a configurable Weibull decay curve on `mtime`
+  0.02); recency is a configurable Weibull decay curve on the content's
+  authoring instant — `authored_at` when the document declares one the
+  reading clock can already have observed, and storage `mtime` otherwise,
+  so a batch of historical conversations imported today ages from when it
+  was said rather than from when it was written to disk
   (`search_recency_shape` / `search_recency_scale` /
   `search_recency_amplitude`, v0.20.0), defaulting close to the prior
   step function and flooring effectively-stale content to zero; entity

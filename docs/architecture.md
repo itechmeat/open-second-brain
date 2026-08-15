@@ -173,11 +173,22 @@ Recommended behavior:
 
 ## Vault layout
 
-The agent owns one directory in the vault: `Brain/`. The write
-contract stays simple ("agent writes only under `Brain/`").
-User-authored notes (daily journals, weekly notes) live wherever the
-operator names them; the agent reads those paths only when they are
-listed in `notes.read_paths`.
+The agent owns one directory in the vault for its own artefacts:
+`Brain/`. User-authored notes (daily journals, weekly notes) live
+wherever the operator names them; the agent reads those paths only when
+they are listed in `notes.read_paths`.
+
+Two operations reach user space, both of them operator-invoked and named
+here rather than implied. `brain_note_lifecycle` moves, renames, archives
+and deletes a note at a path the caller supplies, and rewrites inbound
+`[[wikilink]]` references to it across the vault. Its `archive` action
+moves the note to `Archive/<original path>` — a second top-level
+directory, because the note is user content and `Brain/` is refused for
+every note path, source and destination alike. **An operator whose backup
+rule covers only `Brain/` should extend it to `Archive/`.** The rewrite
+pass never writes outside the vault, never writes a path `vault.ignore_paths`
+or `vault.include_paths` excludes, and never rewrites `Brain/log/`, which
+is an append-only record of what was said at a time.
 
 ```text
 Brain/
@@ -197,8 +208,10 @@ Brain/
 ```
 
 This layout is intentionally agent-owned: every artefact Open Second
-Brain writes lives under `Brain/`. User-authored content elsewhere in
-the vault is read-only to the agent and stays under operator control.
+Brain generates lives under `Brain/`. User-authored content elsewhere in
+the vault stays under operator control and is read-only to the agent's
+own passes; the note-lifecycle verbs above are the one surface that
+writes it, and they act only on a path the caller named.
 
 ## Brain layer
 

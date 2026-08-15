@@ -50,7 +50,7 @@ against them at request time instead.
 
 ## Tool Highlights
 
-The full server currently advertises 79 tools; the 18 deprecated predecessor
+The full server currently advertises 110 tools; the 18 deprecated predecessor
 names were removed in 1.0.0 and now answer a precise INVALID_PARAMS tombstone
 (see "Consolidated views and deprecated aliases" below). The table highlights
 the operator-facing core,

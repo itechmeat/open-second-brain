@@ -9,7 +9,7 @@ Use this skill when a user asks an agent to use, configure, inspect, or maintain
 
 ## Layout
 
-Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent writes lives under it.
+Open Second Brain owns one top-level directory in the vault: `Brain/`. Everything the agent generates on its own lives under it. The exception is the note-lifecycle family (`brain_note_lifecycle`, `brain_scaffold_stub`), which acts on a user-note path the caller names and can move a note to a second top-level directory, `Archive/`.
 
 - **`Brain/`** - agent-writable observing memory. Taste signals, accreted preferences (unconfirmed → confirmed → retired), evidence log, snapshots. Operations go through MCP tools `brain_feedback`, `brain_apply_evidence`, `brain_dream`, `brain_brief`, `brain_query`, `brain_doctor` - see the `brain-memory` skill for the calling protocol. CLI counterparts: `o2b brain *`.
 - **User-authored notes** - the operator's daily journal, weekly notes, project notes, etc. Folder names are operator-chosen. The agent reads these paths only when they appear under `notes.read_paths` in `Brain/_brain.yaml`; the agent never writes to them.

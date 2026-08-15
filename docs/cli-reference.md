@@ -817,6 +817,29 @@ o2b search check              Pre-flight diagnostics: vault, index directory, SQ
                               the absence of a fault is never reported as a pass.
                               --json adds an integrity object; without the flag the output is
                               unchanged and no index_state cell is touched
+                              --no-probe skips the live embedding-provider call. The probe is on by
+                              default, as it has been in every release that resolved a key; the flag
+                              exists so a diagnostic can be run with no network at all.
+
+                              Exit codes. `0` clean. `1` a machine fault or a condemned index, and it
+                              keeps precedence: a provider verdict never masks one. `5` the embedding
+                              provider is configured and was proved unreachable - it answered, and it
+                              refused. `6` the probe did not complete, by its own clock or by the
+                              outer budget; "I could not find out" is not "it is broken", and the two
+                              are separate codes for that reason.
+
+                              Code `5` is a behaviour change, and a breaking one: this verb exited `0`
+                              over a provider it had already proved unreachable, so a script gating on
+                              the exit code read it as healthy. It is deliberately the same number
+                              `o2b install --check` uses for the same condition, and a test asserts the
+                              two cannot drift. A provider that is not configured still exits `0` -
+                              absent is not broken.
+
+                              The `--json` key `provider_reachable` (a boolean, or null when unknown)
+                              is replaced by `provider_probe`, a string from a closed vocabulary:
+                              not-configured, reachable, unreachable, timed-out, skipped. The boolean
+                              had to answer four questions with two values, so a provider that refused
+                              and one that never answered were the same `false`.
 o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
                               --base-url U --model M --env-key K (K is the env var NAME holding the key);
                               persisted to Brain/search/embedding-providers.json, resolved after built-ins
