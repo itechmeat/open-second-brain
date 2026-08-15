@@ -1689,6 +1689,16 @@ function resolveAgentName(configPath) {
     return value;
   return "agent";
 }
+function resolveConfigFlag(envKey, configKey, configPath) {
+  const env = process.env[envKey]?.trim();
+  const raw = env || discoverConfig(configPath).data[configKey]?.trim();
+  return raw === "true" || raw === "1";
+}
+var PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED";
+var PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled";
+function resolvePartnerCodegraphDisabled(configPath) {
+  return resolveConfigFlag(PARTNER_CODEGRAPH_DISABLED_ENV, PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY, configPath);
+}
 function expandTilde(p) {
   if (p === "~")
     return homedir();
@@ -2233,29 +2243,43 @@ function findCodeProjects(opts) {
   }
   return found;
 }
+function isCodegraphUnanswered(result) {
+  return result.ok === false && "unanswered" in result;
+}
+function partnerEnv() {
+  return process.env;
+}
 function defaultWhichCodegraph() {
   if (typeof Bun !== "undefined" && typeof Bun.which === "function") {
-    const found = Bun.which(CODEGRAPH_CLI.bin);
+    const found = Bun.which(CODEGRAPH_CLI.bin, { PATH: partnerEnv()["PATH"] });
     return found ?? null;
   }
   return null;
 }
 var CODEGRAPH_PROJECT_PATH_USAGE_TOKEN = /\[path\]/;
 var HELP_FLAG = "--help";
-function defaultDetectProjectPathSupport() {
+var CODEGRAPH_PARTNER_TIMEOUT_MS = 1e4;
+function timedOut(proc) {
+  return proc.exitedDueToTimeout === true;
+}
+function defaultDetectProjectPathSupport(timeoutMs = CODEGRAPH_PARTNER_TIMEOUT_MS) {
   try {
     const proc = Bun.spawnSync({
       cmd: [CODEGRAPH_CLI.bin, CODEGRAPH_CLI.statusSubcommand, HELP_FLAG],
       stdout: "pipe",
-      stderr: "pipe"
+      stderr: "pipe",
+      env: partnerEnv(),
+      timeout: timeoutMs
     });
+    if (timedOut(proc))
+      return false;
     const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
     return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
   } catch {
     return false;
   }
 }
-function defaultRunStatusJson(projectPath) {
+function defaultRunStatusJson(projectPath, timeoutMs = CODEGRAPH_PARTNER_TIMEOUT_MS) {
   try {
     const proc = Bun.spawnSync({
       cmd: [
@@ -2265,8 +2289,12 @@ function defaultRunStatusJson(projectPath) {
         projectPath
       ],
       stdout: "pipe",
-      stderr: "pipe"
+      stderr: "pipe",
+      env: partnerEnv(),
+      timeout: timeoutMs
     });
+    if (timedOut(proc))
+      return { ok: false, unanswered: true, waitedMs: timeoutMs };
     const stdout = new TextDecoder().decode(proc.stdout).trim();
     const stderr = new TextDecoder().decode(proc.stderr).trim();
     if (!proc.success) {
@@ -2292,7 +2320,7 @@ function defaultRunStatusJson(projectPath) {
 }
 function checkCodegraph(opts, deps) {
   if (opts.disabled)
-    return null;
+    return codegraphDisabledResult();
   const projects = findCodeProjects(opts);
   if (projects.length === 0)
     return null;
@@ -2302,18 +2330,32 @@ function checkCodegraph(opts, deps) {
     return null;
   }
   if (projects.length === 1) {
-    return evaluateProjectStatus(projects[0], deps);
+    return evaluateProjectStatus(projects[0], deps).result;
   }
-  const detectFn = deps?.detectProjectPathSupport ?? defaultDetectProjectPathSupport;
+  const detectFn = deps?.detectProjectPathSupport ?? (() => defaultDetectProjectPathSupport(partnerTimeout(deps)));
   if (!detectFn()) {
-    const first = evaluateProjectStatus(projects[0], deps);
+    const first = evaluateProjectStatus(projects[0], deps).result;
     return {
       name: "code_graph",
       ok: first.ok,
-      message: `${first.message}; note: codegraph CLI has no per-query project_path support - reported 1 of ${projects.length} discovered projects only`
+      message: `${first.message}; note: codegraph CLI did not report per-query project_path support - reported 1 of ${projects.length} discovered projects only`
     };
   }
-  const results = projects.map((project) => evaluateProjectStatus(project, deps));
+  const results = [];
+  let unanswered = false;
+  for (const project of projects) {
+    if (unanswered) {
+      results.push({
+        name: "code_graph",
+        ok: false,
+        message: `code project at ${project}: not consulted - ${CODEGRAPH_CLI.bin} did not answer for ` + "an earlier project in this workspace, so nothing is claimed here about this index"
+      });
+      continue;
+    }
+    const evaluated = evaluateProjectStatus(project, deps);
+    unanswered = evaluated.unanswered;
+    results.push(evaluated.result);
+  }
   const header = `${projects.length} code projects:`;
   return {
     name: "code_graph",
@@ -2322,41 +2364,62 @@ function checkCodegraph(opts, deps) {
 `)
   };
 }
+function partnerTimeout(deps) {
+  return deps?.timeoutMs ?? CODEGRAPH_PARTNER_TIMEOUT_MS;
+}
+function codegraphDisabledResult() {
+  return {
+    name: "code_graph",
+    ok: true,
+    message: `check disabled by ${PARTNER_CODEGRAPH_DISABLED_ENV} / ` + `${PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY}: ${CODEGRAPH_CLI.bin} was not consulted, ` + "so nothing is claimed here about any index"
+  };
+}
 function evaluateProjectStatus(project, deps) {
   const indexDir = join2(project, ".codegraph");
   let indexed;
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
   } catch (exc) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: index directory unreadable: ${exc.message ?? exc}`,
       fix: `chmod u+rx "${indexDir}"`
-    };
+    });
   }
   if (!indexed) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`
+    });
+  }
+  const runFn = deps?.runStatusJson ?? ((path) => defaultRunStatusJson(path, partnerTimeout(deps)));
+  const status = runFn(project);
+  if (isCodegraphUnanswered(status)) {
+    return {
+      result: {
+        name: "code_graph",
+        ok: false,
+        message: `code project at ${project}: ${CODEGRAPH_CLI.bin} ` + `${CODEGRAPH_CLI.statusSubcommand} did not answer within ${status.waitedMs}ms and was ` + "stopped, so NOTHING is claimed here about this index - a probe that did not complete " + "is not an index that failed",
+        fix: `${CODEGRAPH_CLI.bin} ${CODEGRAPH_CLI.statusSubcommand} ${CODEGRAPH_CLI.statusJsonFlag} ${project}`
+      },
+      unanswered: true
     };
   }
-  const runFn = deps?.runStatusJson ?? defaultRunStatusJson;
-  const status = runFn(project);
   if (!status.ok) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: codegraph status failed: ${status.error}`
-    };
+    });
   }
   if (!status.data.initialized) {
-    return {
+    return answered({
       name: "code_graph",
       ok: false,
       message: `code project at ${project}: not indexed (run: ${codegraphInitCommand(project)})`
-    };
+    });
   }
   const nodes = status.data.nodeCount ?? 0;
   const files = status.data.fileCount ?? 0;
@@ -2369,11 +2432,14 @@ function evaluateProjectStatus(project, deps) {
     indexRoot: resolveRealpath(status.data.worktreeMismatch?.indexRoot ?? status.data.projectPath ?? null),
     worktreeRoot: resolveRealpath(status.data.worktreeMismatch?.worktreeRoot ?? project)
   });
-  return {
+  return answered({
     name: "code_graph",
     ok: true,
     message: health.ok ? base : `${base}; graph-health: ${summarizeGraphHealth(health)} - run: o2b partner codegraph report`
-  };
+  });
+}
+function answered(result) {
+  return { result, unanswered: false };
 }
 function resolveRealpath(value) {
   if (!value)
@@ -2682,6 +2748,16 @@ function checkOpenclawInstallability(repoRoot) {
   }
   return results;
 }
+function codegraphCheckDisabled(opts) {
+  const explicit = opts.partner?.codegraph?.disabled;
+  if (explicit !== undefined)
+    return explicit;
+  try {
+    return resolvePartnerCodegraphDisabled(opts.config ?? undefined);
+  } catch {
+    return false;
+  }
+}
 function doctor(opts) {
   const results = [];
   results.push(checkVaultWriteable(opts.vault));
@@ -2699,7 +2775,7 @@ function doctor(opts) {
     cwd: opts.cwd ?? process.cwd(),
     vault: opts.vault,
     scanExtraPaths: opts.partner?.codegraph?.scanExtraPaths,
-    disabled: opts.partner?.codegraph?.disabled
+    disabled: codegraphCheckDisabled(opts)
   });
   if (cg)
     results.push(cg);
