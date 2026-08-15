@@ -357,9 +357,43 @@ function isContentAddress(run: string): boolean {
   return CONTENT_ADDRESS_RE.test(run);
 }
 
+/**
+ * A base64 credential: the shape `HIGH_ENTROPY_TOKEN_RE` cannot see,
+ * because its class excludes `+` and `/`. An AWS secret access key
+ * (`wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY`) splits into sub-runs of
+ * 13, 21 and 5 under that class - each below the 24-gate - so it passed
+ * verbatim while its paired `AKIA…` id was caught, leaking the half that
+ * matters.
+ *
+ * Narrow on purpose, because this class of run is also what long paths
+ * and embedded blobs look like:
+ *   - the MAXIMAL run is 32 to 64 characters (a blob runs to thousands
+ *     and is left whole; a shorter run is not a credential);
+ *   - it carries at least one `+`, `/` or `=`, since a pure-alphanumeric
+ *     run is already {@link HIGH_ENTROPY_TOKEN_RE}'s job;
+ *   - it mixes upper, lower and digit;
+ *   - it neither starts nor ends with `/`, so a rooted path cannot match
+ *     from its first character.
+ *
+ * What remains reachable is a long extension-less mixed-case path inside
+ * prose - a `.`, `-` or `_` anywhere in it breaks the run - and at an
+ * egress boundary that copy is recoverable where a leaked key is not.
+ */
+const BASE64_SECRET_RE = new RegExp(
+  "(?<![A-Za-z0-9+/=])" +
+    "(?=[A-Za-z0-9+/=]{32,64}(?![A-Za-z0-9+/=]))" +
+    "(?=[A-Za-z0-9+/=]{0,63}[a-z])" +
+    "(?=[A-Za-z0-9+/=]{0,63}[A-Z])" +
+    "(?=[A-Za-z0-9+/=]{0,63}\\d)" +
+    "(?=[A-Za-z0-9+/=]{0,63}[+/=])" +
+    "[A-Za-z0-9+=][A-Za-z0-9+/=]{30,62}[A-Za-z0-9+=]",
+  "g",
+);
+
 function redactBareTokens(text: string): string {
   return text
     .replace(VENDOR_TOKEN_RE, PLACEHOLDER)
+    .replace(BASE64_SECRET_RE, PLACEHOLDER)
     .replace(HIGH_ENTROPY_TOKEN_RE, (run: string) => (isContentAddress(run) ? run : PLACEHOLDER));
 }
 
