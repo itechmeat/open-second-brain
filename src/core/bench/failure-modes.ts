@@ -10,7 +10,8 @@
  *
  * ## 1. Proactive know-to-ask, with a false-fire term
  *
- * Measured by driving {@link decideRecallInject} - an explicitly I/O-free
+ * Measured by driving `decideRecallInject`
+ * (`src/core/brain/recall-inject.ts`) - an explicitly I/O-free
  * function with an injectable retriever - over a controlled vault. Two
  * things must be said plainly about what this measures.
  *
@@ -24,9 +25,10 @@
  * there to score.
  *
  * Second, THE PRESSURE IS ON THE FLOOR, NOT THE GATE.
- * {@link evaluateSurfacingGate} fails open by design: every non-empty,
- * non-duplicate, non-slash, non-shell prompt retrieves, so its false-fire
- * rate is ~1 by construction and scoring it would be theatre. The only
+ * `evaluateSurfacingGate` (`src/core/search/surfacing-gate.ts`) fails open
+ * by design: every non-empty, non-duplicate, non-slash, non-shell prompt
+ * retrieves, so its false-fire rate is ~1 by construction and scoring it
+ * would be theatre. The only
  * discriminating bound in the decision core is
  * `RECALL_INJECT_CONFIDENCE_FLOOR`, so that is where the anti-gaming term
  * bites: {@link scoreProactiveRecall} counts a false fire exactly as
@@ -105,7 +107,7 @@ export function isRecallFailure(value: unknown): value is RecallFailure {
 }
 
 /**
- * The retriever the bench hands to {@link decideRecallInject}: the shipped
+ * The retriever the bench hands to `decideRecallInject`: the shipped
  * search pipeline over the disposable fixture vault.
  *
  * Mirrors `defaultRecallRetriever`, which adapts `searchAcrossVaults` the
