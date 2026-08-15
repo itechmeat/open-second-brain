@@ -22,7 +22,7 @@
 import { Semaphore } from "./embeddings/http-util.ts";
 import { search } from "./search.ts";
 import { SearchError } from "./types.ts";
-import type { ResolvedSearchConfig } from "./types.ts";
+import type { ResolvedSearchConfig, SearchOutcome } from "./types.ts";
 
 /** Default rank depth for hit@k / reciprocal rank. */
 export const BENCHMARK_DEFAULT_K = 5;
@@ -235,7 +235,7 @@ export async function runRecallBenchmark(
     dataset.queries.map(async (q): Promise<RecallBenchmarkQueryResult> => {
       const depth = q.k ?? k;
       await queryGate.acquire();
-      let outcome;
+      let outcome: SearchOutcome;
       try {
         outcome = await search(config, {
           query: q.query,
