@@ -35,6 +35,7 @@ import {
   SEMANTIC_VECTOR_CODE,
 } from "./capability-tier.ts";
 import { sha256Hex } from "../integrity/digest.ts";
+import { parseAuthoredAtSeconds } from "./authored-at.ts";
 import { chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
@@ -256,18 +257,24 @@ function aliasesFromFrontmatter(frontmatter: Record<string, unknown>): string[] 
 
 /**
  * The note's `authored_at` frontmatter instant as unix seconds, or null
- * when undeclared or unparseable (conversation chronology, S1). Tolerant
- * by design: a malformed value never fails indexing, it just leaves the
- * document with no turn instant so it ranks byte-identically. A value at
- * or before the Unix epoch is treated as absent (the import layer's "no
- * timestamp" sentinel), never a real authoring instant.
+ * when undeclared, unparseable, or not usable as an authoring instant
+ * (conversation chronology, S1). Tolerant by design: a malformed value never
+ * fails indexing, it just leaves the document with no turn instant so it
+ * ranks byte-identically.
+ *
+ * This key is read off EVERY indexed markdown file - not only the artifacts
+ * session import and the inbox backfill write - so the rule that decides
+ * what counts as an authoring instant lives in `authored-at.ts` and is
+ * enforced HERE, at the boundary that fills the column, rather than being
+ * re-derived by each consumer of it. See {@link usableAuthoredAtSeconds} for
+ * the two refusals (pre-epoch sentinel, and an instant later than the moment
+ * the indexer read the file).
  */
-function authoredAtFromFrontmatter(frontmatter: Record<string, unknown>): number | null {
-  const raw = frontmatter["authored_at"];
-  if (typeof raw !== "string") return null;
-  const ms = Date.parse(raw.trim());
-  if (!Number.isFinite(ms) || ms <= 0) return null;
-  return Math.floor(ms / 1000);
+function authoredAtFromFrontmatter(
+  frontmatter: Record<string, unknown>,
+  nowMs: number,
+): number | null {
+  return parseAuthoredAtSeconds(frontmatter["authored_at"], nowMs);
 }
 
 const UTF8_FATAL = new TextDecoder("utf-8", { fatal: true });
@@ -386,7 +393,11 @@ async function indexInto(
           mtime: mtimeSec,
           size: file.stat.size,
           pageType: pageTypeFromFrontmatter(frontmatter),
-          authoredAt: authoredAtFromFrontmatter(frontmatter),
+          // `t0` - the instant this run started - is the reading clock the
+          // "not later than the read" refusal measures against. One clock
+          // for the whole run, so two files with the same declared instant
+          // resolve identically however long the run takes.
+          authoredAt: authoredAtFromFrontmatter(frontmatter, t0),
           // The event anchor is materialised HERE, on the same pass that
           // already holds the parsed frontmatter and the body, so the
           // query side never re-scans a candidate's body. It is a pure

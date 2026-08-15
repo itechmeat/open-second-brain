@@ -9,15 +9,17 @@
  * testable and substitutable.
  *
  * Freshness is measured from the authoring instant the document declares
- * (`documents.authored_at`), falling back to the filesystem mtime the
- * indexer recorded. The fallback is not decoration: only session import
- * and the inbox backfill stamp `authored_at`, so for every other
- * ingestion path the column is NULL and the freshness prior is exactly
- * what it was before. See {@link freshnessAnchorSeconds}.
+ * (`documents.authored_at`) when that instant is usable, falling back to
+ * the filesystem mtime the indexer recorded. Any indexed note can populate
+ * that column - the indexer reads the frontmatter key off every markdown
+ * file - so the fallback is not a niche path, and "usable" is enforced here
+ * rather than assumed. See {@link freshnessAnchorSeconds} and
+ * `authored-at.ts`.
  */
 
 import { clamp01 } from "../math.ts";
 import { PAGE_TIER_DEFAULT, tierWeight, type PageTier } from "../brain/page-meta/tier.ts";
+import { usableAuthoredAtSeconds } from "./authored-at.ts";
 import { weibullDecay, DEFAULT_RECENCY, type WeibullRecencyOptions } from "./recency.ts";
 import { scoreSessionFocusTarget } from "./session-focus.ts";
 import { rrfFuse, DEFAULT_RRF_K, type FusionMode } from "./fusion.ts";
@@ -244,15 +246,25 @@ function recencyBoost(anchorSeconds: number, nowMs: number, opts: WeibullRecency
  * `authored_at` answers it: a conversation imported today whose turns
  * happened a year ago is a year old, however new its file is.
  *
- * The named limit: `authored_at` is stamped by session import (only for
- * turns that carried a usable timestamp) and by the inbox backfill.
- * NOTHING else writes the column, so for every other ingestion path it is
- * NULL and this resolves to `mtime` - the pre-existing behaviour, exactly.
- * That is the honest size of this layer: it corrects imported
- * conversations and leaves a hand-written vault untouched.
+ * The real exposure: the indexer reads `authored_at` off the frontmatter of
+ * EVERY indexed markdown file (`authoredAtFromFrontmatter`), so any note in
+ * the vault can populate the column, not only the artifacts session import
+ * and the inbox backfill write. A vault whose notes declare no `authored_at`
+ * still resolves to `mtime` for every candidate - the pre-existing behaviour,
+ * exactly - but that is a property of the CORPUS, not a limit on who can
+ * reach this layer.
+ *
+ * Which is why the anchor is not the declared value but the USABLE one: an
+ * instant later than the query clock cannot be an authoring instant, and
+ * taken at face value it pinned the document at the top of the decay curve
+ * permanently (`weibullDecay` returns its full amplitude for a non-positive
+ * age). Such a document falls back to `mtime` - the storage fact is the only
+ * instant left, and it is exactly where the same note sat before this layer
+ * existed. Clamping to now instead would hold it at maximum freshness
+ * forever, which is the defect and not its fix.
  */
-function freshnessAnchorSeconds(authoredAt: number | null | undefined, mtime: number): number {
-  return authoredAt ?? mtime;
+function freshnessAnchorSeconds(usableAuthoredAt: number | null, mtime: number): number {
+  return usableAuthoredAt ?? mtime;
 }
 
 interface Candidate {
@@ -533,10 +545,14 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
     // the prior points at "now" and the query points at the past, so
     // leaving it undamped would fight the layer below. Damped, never
     // removed - `recencyAmplitude: 0` stays the only off switch.
-    // Age runs from the authoring instant when the record declares one
-    // (D1) - see `freshnessAnchorSeconds` for why, and for the limit.
+    // Age runs from the authoring instant when the record declares a usable
+    // one (D1) - see `freshnessAnchorSeconds` for why, and for what "usable"
+    // rules out. Resolved ONCE per candidate: the freshness prior, the
+    // reported field and the chronology tie-break must not disagree about
+    // whether this row carries an authoring instant.
+    const authoredAt = usableAuthoredAtSeconds(hyd.authoredAt, nowMs);
     const recency =
-      recencyBoost(freshnessAnchorSeconds(hyd.authoredAt, c.mtime), nowMs, recencyOpts) *
+      recencyBoost(freshnessAnchorSeconds(authoredAt, c.mtime), nowMs, recencyOpts) *
       recMul *
       temporalDamping;
     // Relevance term: reciprocal-rank-fused when in rrf mode, otherwise
@@ -631,9 +647,11 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
         linkBoost,
         recencyBoost: recency,
         // Conversation chronology (S1): expose the authoring instant only
-        // when the note carries one, so a note with no turn instant keeps
-        // the byte-identical result shape.
-        ...(hyd.authoredAt != null ? { authoredAt: hyd.authoredAt } : {}),
+        // when the note carries a usable one, so a note with no turn instant
+        // keeps the byte-identical result shape - and a note whose declared
+        // instant the ranker refused does not hand a consumer, as an
+        // authoring instant, a value the ranking itself would not trust.
+        ...(authoredAt !== null ? { authoredAt } : {}),
         searchType: c.searchType,
         reasons: buildReasons({
           reuseBoost,
@@ -714,8 +732,11 @@ export function rankResults(inputs: RankerInputs, opts: RankerOptions): BrainSea
       const bTemporal = b.breakdown?.temporal ?? 0;
       if (aTemporal !== bTemporal) return bTemporal - aTemporal;
     }
-    const aAuthored = inputs.hydrated.get(a.chunkId)?.authoredAt ?? null;
-    const bAuthored = inputs.hydrated.get(b.chunkId)?.authoredAt ?? null;
+    // Read off the RESULT, not the hydrated row: the result carries the
+    // usable instant this run resolved, so a row whose declared instant was
+    // refused above cannot win the rung the refusal exists to protect.
+    const aAuthored = a.authoredAt ?? null;
+    const bAuthored = b.authoredAt ?? null;
     if (aAuthored !== null && bAuthored !== null && aAuthored !== bAuthored) {
       return bAuthored - aAuthored;
     }
