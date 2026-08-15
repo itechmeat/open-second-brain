@@ -59,7 +59,7 @@ writes, and a metric record is a summary, not a report.
 | --- | --- | --- |
 | `index` | every non-empty index run | `added`, `updated`, `deleted`, `alias_resolved`, `relation_violations`, `tier_drift` |
 | `bridge_discovery` | `o2b brain bridges discover`, MCP `brain_bridges`, maintenance lane | `proposals`, `scanned_candidates`, `vec_available`, `dismissed_total`, `min_similarity`, `max_proposals`, `lane` (lane runs) |
-| `communities` | `o2b brain clusters run`, MCP `brain_clusters`, maintenance lane | `communities`, `sizes`, `written`, `removed`, `min_size`, `lane` (lane runs) |
+| `communities` | `o2b brain clusters run`, MCP `brain_clusters`, maintenance lane | run record: `communities`, `sizes`, `written`, `removed`, `min_size`, `lane` (lane runs), `batches` / `failed_batches` (batched runs). Freshness record (`--if-stale` only, since v1.46.0): `freshness`, `freshness_reason`, `newest_input_ms`, `oldest_output_ms`, `oldest_output_age_ms` |
 | `recall_benchmark` | `o2b brain benchmark run`, MCP `brain_benchmark` | `total`, `k`, `expand`, `hit_at_k`, `mrr`, `misses` |
 | `self_tuning` | `o2b brain tune run`, MCP `brain_tune` | `chosen`, `evaluated`, `best_mrr`, `dataset_hash` |
 | `dream_stage` | `o2b brain dream stage` / `apply`, MCP `brain_dream` (since 1.0.0) | `action` (`stage`/`apply`), `run_id`, `proposals`, `sources`, `changed`; apply adds `new_unconfirmed`, `confirmed`, `retired` counts |

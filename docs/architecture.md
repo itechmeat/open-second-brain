@@ -133,6 +133,11 @@ with backup/sync. It describes:
 - schema version + dream / retire / confidence / snapshot thresholds;
 - optional `notes.read_paths` (user-authored folders the agent may read);
 - optional `temporal:`, `link_graph:`, `guardrails:`, `discipline_report:` tuning blocks;
+- an optional `health:` block tuning the semantic lints, the remediation
+  step cap, the `silence_before` watermark, and the derived-page freshness
+  ceiling (`materialize_max_age_days`, default 30 days). Its day and count
+  keys must each be a positive integer; a zero or a fraction is an explicit
+  config error at load, never a clamped default;
 - optional `integrity:` gates (`owner_scope_delivery`, `embedding_abi`,
   `pack_validity_seconds`) that decide where a mismatch is reported and
   where it is refused;

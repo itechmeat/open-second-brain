@@ -41,6 +41,17 @@ against the adapter's real `verify()` output by
 `tests/docs/install-verify-conformance.test.ts`, so it cannot drift
 from the code.
 
+### Exit code 5 (since v1.46.0)
+
+This is currently the only target whose verify can exit `5`. Because it
+asks `copilot mcp list` rather than reading a file, it is the one adapter
+that can prove a runtime unreachable, and that verdict is now its own exit
+code instead of sharing `0` with `not-installed`. A script that gates on
+`o2b install --check` and treated a zero exit as "everything is fine" will
+now see a failure here where it previously saw success. The full table of
+codes is in
+[`docs/cli-reference.md`](../docs/cli-reference.md#o2b-install-exit-codes).
+
 ## Uninstall
 
 ```bash

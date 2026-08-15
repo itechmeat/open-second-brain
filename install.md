@@ -66,8 +66,11 @@ o2b install --check
 ```
 
 `o2b install --check` is the runtime-install health check
-(per-target managed-block / MCP-ping verification). Exit code is
-`0` for ok / not-installed, `3` if any target reports drift.
+(per-target managed-block / MCP verification). Exit code is `0` when every
+target is ok or not installed, `3` if any target reports drift, and `5` if a
+target is configured but proved unreachable. The `5` is new in v1.46.0: that
+case used to exit `0`, so a script gating on the exit status treated a runtime
+it had proved unreachable as healthy. `docs/cli-reference.md` lists every code.
 
 ## Uninstall
 

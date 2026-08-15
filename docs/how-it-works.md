@@ -839,6 +839,16 @@ populate the `semantic_health` report (see `brain_health` below):
 | `concept-gap`                    | an entity recurs across ≥ `health.concept_gap_min_frequency` corpus entries with no covering preference topic                                |
 | `stale-claim`                    | a confirmed preference's newest evidence is older than `health.stale_claim_max_age_days`                                                     |
 
+That table is a selection, not the registry. Later releases added codes
+that are documented alongside the feature that produces them in
+`docs/cli-reference.md` - for example `symlink-escape`,
+`entity-label-malformed`, `brain-root-absent`, and the v1.46.0
+`recall-channel-silent` / `recall-channel-unmeasured` pair. The complete
+enumeration lives in the source (`src/core/brain/diagnostics.ts` for codes
+with a registered next command, `src/core/brain/doctor-exits.ts` for those
+without) and is CI-enforced by `tests/core/brain/doctor-exit-census.test.ts`,
+which fails on a code that appears in neither table.
+
 With `--strict`, warnings demote `ok` to `false` so CI can gate on
 hygiene. `brain_doctor` itself stays read-only — auto-modifying state on
 a plain doctor run would break the "explicit-driven" invariant. The
@@ -1052,6 +1062,15 @@ components (`keywordScore`, `semanticScore`, `linkBoost`,
 live in the CLI's `--verbose` output only, to keep the agent context
 small. Index-management verbs (`index`, `reindex`, `check`) are
 CLI-only.
+
+Since v1.46.0 both surfaces also report why an answer narrowed. A search
+that returned fewer rows than it might have, or none at all, carries a
+`retrieval_trail` naming the lanes that degraded and - when nothing
+degraded and nothing matched - what the corpus can honestly be said to
+hold. The codes are a closed vocabulary and the human transcript names the
+cause on its no-results line instead of printing a bare `(no results)`.
+The vocabulary is in
+[`cli-reference.md`](cli-reference.md#the-retrieval-trail-since-v1460).
 
 Full design and migration notes:
 [`docs/plans/2026-05-16-brain-search-design.md`](plans/2026-05-16-brain-search-design.md)

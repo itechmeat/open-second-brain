@@ -611,6 +611,63 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
 
 `brain_feedback`'s `scope` argument stays optional. When the vault declares `feedback.default_scope` in `Brain/_brain.yaml`, a call that omits `scope` records the signal under that default category; an explicit `scope` always wins, and with no default configured a scope-less call stays scope-less. The same effective scope is reused for a `force_confirmed: true` preference so the preference and its signal share one scope. The configured value is validated against the same constraints as any signal `scope` (non-empty after trim, single-line, at most 128 characters).
 
+## Write-time page lint (since v1.46.0)
+
+The four note-write tools - `brain_create_note`, `brain_update_note`,
+`brain_append_note` and `brain_write_batch` - can now return a top-level
+`lint` key carrying ranked findings about exactly the pages that call
+committed.
+
+This closes a real hole rather than adding a nicety. Document validation
+used to run only under `strict` on `brain_create_note`; update, append and
+every batch operation committed with NO document validation at all and
+returned a hardcoded success flag. Callers will therefore now see findings
+on pages that used to be accepted in silence. The lint is not a new
+policy: it runs the same error-severity validator a strict create runs,
+plus the merged-link and broken-Brain-wikilink detectors the doctor
+already reports, so a strict create and a linted update agree on what a
+valid document is.
+
+**The key is absent when there is nothing to say, and that absence means
+clean.** A receipt for a clean write is byte-identical to the one that
+shipped before. Because absence carries that meaning, a lint that could
+not run reports itself rather than going quiet: the report then carries an
+`unavailable` object (`code: "page-lint-unavailable"`, plus a message
+composed from an errno code, never a path) with all counters at zero.
+
+The report's shape:
+
+- `findings` - ranked errors first, then by page, code and location, and
+  capped at 25 entries. Each finding carries `severity` (`error` or
+  `warning`), `code`, `page` (the vault-relative file), `path` (the
+  location WITHIN the document: `body`, `frontmatter`, `tags`, or a link
+  target), `message`, and `next_command` where the code has a registered
+  exit.
+- `total` / `returned` / `truncated` - findings detected, findings
+  carried, and whether the cap dropped any. A capped list can never be
+  read as a complete one.
+- `skipped` - written pages that were not linted, each with a `page`, a
+  `reason` from the closed set `page-over-byte-cap`, `page-unreadable`,
+  `page-lint-failed`, and a `detail` carrying the measurement or the errno
+  code. A page too large to validate, or one the lint threw on, lands here
+  rather than vanishing - and one page's failure never discards the
+  findings already collected for the others.
+
+The lint runs AFTER the commit and reads what is on disk. It never gates
+the write, and it never throws. A call that authored no bytes - a
+`brain_create_note` with `if_exists: "skip"` that skipped, a log-only
+batch - names no page and so carries no lint key.
+
+Three write paths are deliberately outside this envelope, stated rather
+than implied. `brain_write_session` keeps its own `errors[]` channel and
+its own correction prompt: it validates BEFORE committing and refuses,
+which is a different contract from an advisory computed after the fact,
+and folding it in would give one tool two error channels. The write-session
+engine and source distillation write through their own lexical validation
+and bypass the note-write path entirely. Log appends (`brain_note`,
+`brain_apply_evidence`) name no note path and are not linted, because the
+log line is machine-composed rather than authored.
+
 ## Safety notes
 
 - The vault path is bound to the server instance at startup. Tools cannot
@@ -828,3 +885,43 @@ Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default
   caller overwrite a key it never named. `template_variables` keys are
   unaffected: they are not frontmatter keys and never become a line of a
   file.
+- Since v1.46.0 `brain_intake_entities` requires bytes behind the source it
+  cites. An extraction whose `source` names no file this vault holds is
+  committed to the quarantine lane, where it used to land its entities
+  active. The tool's response reports the lane it actually committed in as
+  `trust` (`trusted` or `untrusted`), so a caller told only which ids it
+  created is no longer left to guess whether it can read them back.
+  Quarantine is one-way, which is why the shape gate that decides "could
+  this identity be ours at all" errs toward the operator's own notes: an
+  identity is trusted only when it is shaped like a location inside this
+  vault AND that location holds a readable file. An unreadable file is not
+  a verdict - only "nothing is there" answers the trust question, and a
+  permission denial or an I/O failure is refused with the vault-relative
+  identity and the errno code rather than quarantining the operator's own
+  note over a `chmod`. **What this does not buy, stated plainly:** a caller
+  forced to name a real file can still name an unrelated one. This removes
+  a free bypass - a plausible-looking string no longer suffices - and makes
+  the claim auditable afterwards through the SHA-256 of the cited bytes
+  recorded beside a trusted intake. It does not make the claim true, and
+  nothing on this side of the boundary can: there is no unforgeable caller
+  identity in the MCP surface.
+- Since v1.46.0 `brain_search` carries a `retrieval_trail` key on any answer
+  that narrowed or came back empty: `retrieved` (rows handed back, which
+  `total` does not state), `pool`, a `degraded` array over a closed
+  vocabulary of stable identifiers, and an `empty` corpus statement on a
+  zero-result answer no degradation accounts for. Every `degraded[].detail`
+  carries identifiers and integers only, never a provider message, a
+  filesystem path, or the query text. The response schema declares the code
+  enum, so a build emitting a code outside the vocabulary fails its own
+  contract rather than handing a client a value it cannot interpret. The
+  key is absent - never null - on a healthy answer, so an existing
+  consumer's bytes are unchanged. The vocabulary and the matching CLI
+  surface are in [`cli-reference.md`](cli-reference.md).
+- Since v1.46.0 every `recall_telemetry` record carries a `channel` naming
+  the seam it came through (`mcp`, `cli`, `hook`). It is stamped by the emit
+  site and is not a tool argument, so no caller can claim a channel it did
+  not use. `brain_recall_telemetry` `list` and `summary` accept it as a
+  read filter and `summary` returns a `by_channel` rollup; an unrecognised
+  value is `INVALID_PARAMS` naming the accepted set. Records predating the
+  field carry no channel and fall into no bucket - see
+  [`observability.md`](observability.md).

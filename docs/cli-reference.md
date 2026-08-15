@@ -10,6 +10,7 @@ Most verbs accept `--vault <path>` and `--config <path>`; the values default to 
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
+o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes, --check verifies (see "Exit codes" below)
 o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
 o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
@@ -23,6 +24,39 @@ o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 o2b update                    Update Open Second Brain across all detected runtimes; --target <name> / --dry-run / --force / --json
 ```
+
+### `o2b install` exit codes
+
+Every code the verb can return, in one table. A CI script that gates on
+`o2b install --check` should branch on these rather than on the printed
+table:
+
+| Code | Meaning |
+| ---- | -------- |
+| `0`  | Success, or `--check` found no drift. A target the operator never installed reports `not-installed` and still exits `0` |
+| `1`  | I/O or runtime error during `--apply` |
+| `2`  | Usage error: unknown `--target`, a bad `--format` value, or a vault that is not configured |
+| `3`  | `--check` found drift in at least one target |
+| `4`  | `--apply` hit a user-modified managed block; re-run with `--force` to overwrite it |
+| `5`  | `--check` found a runtime it proved unreachable (since v1.46.0) |
+
+Code `5` is a behaviour change, and a breaking one for any script that
+treated a zero exit as "everything is fine". Before v1.46.0 a
+`mcp-unreachable` verdict shared exit `0` with `not-installed`, so
+`o2b install --check` reported success for a runtime whose own adapter had
+just failed to reach it - the one verify state backed by a live query
+rather than a file read. The two answers no longer share a code.
+
+Drift outranks unreachable when both are present, and the order is the
+operator's repair order rather than a severity ranking: a runtime can be
+unreachable BECAUSE its config drifted, so `--apply` is the first move
+and a liveness verdict taken over a wrong config means nothing.
+
+`mcp-unreachable` is reachable only from an adapter that asks a runtime CLI
+whether the servers are registered. Today `copilot-cli` is the one target
+that can produce it - see [`install/copilot-cli.md`](../install/copilot-cli.md).
+Every other adapter verifies off disk, so it can report `ok`, `drift`, or
+`not-installed` but never `mcp-unreachable`.
 
 ## Brain (observing memory)
 
@@ -129,7 +163,7 @@ created - the journal records whether each target pre-existed.
 ```text
 o2b brain context-pack        Existing budgeted context pack; add --receipt to emit a context receipt, --telemetry to emit redacted recall telemetry, --cache-stable for stable ordering diagnostics, and --dedup-repeated for repeated-context reference hints
 o2b brain context-receipts    list [--trigger context_pack|pre_compress] [--host <name>] [--session-id <id>] [--limit <n>] [--json]; show <receipt-id> [--json]
-o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress] [--status ok|empty|error|timeout] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]
+o2b brain recall-telemetry    list|summary [--mode search|context_pack|pre_compress|query] [--status ok|empty|error|timeout] [--channel mcp|cli|hook] [--host <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json] - --channel is a read filter on list and summary only; gate-list, gate-summary and cost refuse it by name rather than ignoring it
 o2b brain generation-reports  record <write_session|context_pack|dream_stage> --ref <id> --agent <name> --prompt <text> [--enable] [--provider <p>] [--model <m>] [--finish-reason <r>] [--latency-ms <n>] [--input-tokens <n>] [--output-tokens <n>] [--cached-tokens <n>] [--total-tokens <n>] [--scope <s>] [--source <id[=path]>...] [--created-at <iso>] [--json]; list|summary [--handoff <kind>] [--agent <name>] [--since <iso>] [--until <iso>] [--limit <n>] [--json]; show <report-id> [--json] - record is gated (default off) by --enable or generation_trace_enabled; stores prompt_hash + counts only
 o2b brain context-presets     show [tight-context|long-context] --json; suggest --model <name> --context-window <tokens> --json; diff <preset-id> [current-value flags] [--override <path>...] --json
 o2b brain pre-compact-extract --session-id <id> --turn-start <id> --turn-end <id> --text <bounded-text> [--host <name>] [--max-chars <n>] [--json]
@@ -245,7 +279,7 @@ The schema pack gains four additive ontology fields (`labels`, `link_constraints
 
 ```text
 o2b brain bridges             discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target> - embedding-near link proposals over the vec index, reviewable artifact, accept writes one related: wikilink
-o2b brain clusters            run [--min-size N] [--batch-size N] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run; --batch-size materializes in chunks with isolated, reported per-batch failures
+o2b brain clusters            run [--min-size N] [--batch-size N] [--if-stale] | list - graph-wide community detection; derived digests under Brain/clusters/, regenerated per run; --batch-size materializes in chunks with isolated, reported per-batch failures; --if-stale recomputes only when the freshness verdict is not `fresh` (see "Materialization freshness" below)
 o2b brain vitals               [--orphan-threshold N] - aggregate governance scorecard over confirmed preferences: domain_diversity (scope entropy), connectivity_index (mean evidenced_by count), orphan_preferences (below threshold, default 2), gap_pressure (open concept-gap findings ÷ preference count, reused from doctor); records the vault_vitals metric
 o2b brain benchmark           run --dataset <path> [--k N] [--expand] - hit@k + MRR against the live hybrid recall; records the recall_benchmark metric
 o2b brain tune                run --dataset <path> [--k N] | status | reset - bounded self-tuning grid judged by the benchmark; persisted to Brain/search/tuning.json
@@ -520,6 +554,95 @@ outside the vault`), the prefixes in force, and the registered exit for
 `write-binding-refused`. An absent block, or a block without `path_prefixes`,
 is inert: every write path behaves byte-identically to before the key existed.
 
+### Materialization freshness (since v1.46.0)
+
+`o2b brain clusters run --if-stale` recomputes only when the derived
+digests under `Brain/clusters/` are not fresh. It used to answer that
+question with a boolean derived purely from file times: outputs newer than
+every input meant fresh, and anything else fell through to a recompute.
+Two states were folded into one by that shape. An output the walker could
+not stat looked exactly like an output that was simply out of date, and a
+materialization stayed "fresh" forever as long as nobody touched an input,
+however old the digest or however much the code that produced it had
+changed underneath it.
+
+The verdict is now three-state, and each state is a distinct answer:
+
+| `freshness` | Meaning | `freshness_reason` |
+| ----------- | ------- | ------------------ |
+| `fresh`     | outputs are current; `--if-stale` skips the run | `null` |
+| `stale`     | outputs must be recomputed | `not_materialized`, `input_newer`, or `ceiling_exceeded` |
+| `unknown`   | the measurement itself failed; the run recomputes AND names which half could not be read | `outputs_unreadable` or `inputs_unreadable` |
+
+The stale reasons are: `not_materialized` (nothing has been written yet),
+`input_newer` (an input note is newer than the oldest output), and
+`ceiling_exceeded` (the new wall-clock rung, below). The whole
+`freshness_reason` vocabulary is closed - those five values plus `null`.
+
+**New config key `health.materialize_max_age_days`.** A wall-clock ceiling
+on a derived artifact's age, default `30`. Past it, `--if-stale`
+recomputes even when no input note has moved, so a materialization cannot
+outlive a release cycle by sitting untouched. It must be a positive
+integer; `0`, a negative, a fraction, and a non-number are each refused at
+config load with `health.materialize_max_age_days must be a positive
+integer` rather than clamped to a default. An age exactly equal to the
+ceiling is not past it. Absent `health:` block, or absent key, means the
+default. A `Brain/_brain.yaml` that does not parse now fails the run
+loudly instead of quietly falling back and reporting a skip.
+
+`--json` carries `communities` and `skipped: "fresh"` on a skip, and adds
+a `staleness` object (`state`, `reason`) on an `unknown` verdict, where
+the run proceeds but says what it could not measure. A plain `stale`
+verdict adds no key: the recompute is the answer. Every `--if-stale` run
+records the verdict to the `communities` metric surface (see
+[`metrics.md`](metrics.md)); before this only skips were recorded, so the
+runs that mattered were the ones nothing measured.
+
+### Recall channel coverage (since v1.46.0)
+
+Recall telemetry records now carry a `channel` naming the seam the recall
+came through, from the closed set `mcp`, `cli`, `hook`. It is a fact about
+the emitting seam rather than an argument, so no caller can set it: the
+MCP handlers stamp `mcp`, `o2b brain context-pack --telemetry` stamps
+`cli`, and the prompt-time recall-inject hook stamps `hook`. Every emit
+site is required to name one, and that requirement is enforced when the
+code is built rather than at run time - there is no runtime rejection to
+observe, and no record is written without a channel.
+
+Read it back with `--channel` on `o2b brain recall-telemetry list` and
+`summary`, and in the `by_channel` rollup that `summary` prints and
+carries under `--json`. `by_channel` omits a channel with no record rather
+than reporting it as `0`, so absence of a bucket means "nothing measured
+here", never "measured zero".
+
+Records written before v1.46.0 carry no channel. They still count toward
+`total`, `by_mode`, `by_status`, and the gap counts, but they land in no
+`by_channel` bucket and `--channel <any>` excludes them. Nothing is
+back-filled: a continuity record is historical and guessing its seam would
+be inventing the fact the field exists to record.
+
+`o2b brain doctor` crosses those counts against whether a channel is
+installed at all, over a 30-day window, and reports two codes:
+
+- `recall-channel-silent` (warning) - the channel is installed and
+  expected to deliver, and recorded nothing in the window. Installed and
+  quiet is a different condition from never installed, and only the first
+  is worth telling you about. Today only `hook` can raise it, because MCP
+  and CLI telemetry are per-call opt-ins with no persisted install state:
+  an absence there means nobody requested a record. Its next command is
+  `o2b brain recall-telemetry summary --channel <channel> --since <iso>`.
+- `recall-channel-unmeasured` - one half of that cross could not be read:
+  the recall-inject config gate would not resolve, the hook audit root
+  denied the walk, or the telemetry records themselves could not be
+  opened. It rides the doctor's `uncertain` stream rather than the issue
+  streams, so it renders as an `[UNSURE]` line and does not affect the
+  exit code, and it carries no next command by design - the finding is
+  that a reading failed, and no single `o2b` invocation repairs that.
+
+An installed channel that delivered at least once reports nothing, and a
+channel nothing asked to run reports nothing. The check is fail-soft: it
+can never fail the doctor pass it rides on.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
@@ -548,12 +671,54 @@ Long-running operations (dream, `o2b search index | reindex`, bridges discover, 
 
 Single scope policy for every vault walker: `vault.ignore_paths` excludes, and the optional `vault.include_paths` allowlist narrows. A path is in scope when it is not excluded AND, if an allowlist is declared, under one of its roots. Absent, the allowlist changes nothing; an empty one is refused at parse time, because a list admitting no path is an off switch on indexing rather than a boundary. A dead include root is an error-severity `vault-include-missing-path` doctor finding — unlike a dead exclusion, it can leave the index empty.
 
+Both keys share one grammar: a value with no slash is a bare name matched
+at any depth, a value with a slash is a vault-relative path matched
+exactly.
+
 ```text
 o2b vault status              Walks the vault under the active policy; reports include / exclude counts, the declared include roots, and which rule or polarity refused each excluded path
-o2b vault inspect <relpath>   Point-check one vault-relative path; reports the scope verdict and which polarity refused it, the matched rule, source, whether the search index would accept the path, whether it exists on disk, and the write-binding verdict (none declared | admits | refuses)
+o2b vault inspect <relpath>   Point-check one vault-relative path; reports the scope verdict and which polarity refused it, the matched rule, source, whether the search index would admit the path, whether it exists on disk, and the write-binding verdict (none declared | admits | refuses)
 o2b vault profile <sub>       Manage named multi-vault profiles (since v0.22.0): list | create <name> <vault> | switch <name>; pointer-based activation in profiles.json
 o2b vault map [show]          Print the resolved vault-map role tokens -> folders (since v0.22.0), merging an optional Brain/_vault-map.yaml over defaults; read-only
 ```
+
+### Index admission joins the scope walk (since v1.46.0)
+
+Scope is one question and index admission is another, and until v1.46.0 the
+two walkers disagreed: the search indexer refused lane-owned paths and
+`o2b vault status` did not, so status reported index coverage for files the
+indexer skips. The scope walker now applies the same admission filter the
+search walker has always applied, so the two answer alike.
+
+This changes the counts `o2b vault status` prints for a vault that holds
+the overwrite-only operational-state lane at `Brain/state/` - the one lane
+admission refuses today, because its rows are read directly and are
+deliberately never surfaced through FTS, vector, or graph recall. The
+filter applies whether or not the vault declares `vault.include_paths`; a
+vault with no `Brain/state/` directory counts exactly as before.
+
+A refused lane path appears under `excluded` with the reason
+`not-admitted`, beside the two scope reasons that already existed. The
+`reason` field on each excluded entry is that closed set:
+
+| `reason`       | Refused by |
+| -------------- | ---------- |
+| `ignored`      | a `vault.ignore_paths` rule |
+| `not-included` | an allowlist is declared and the path is under none of its roots |
+| `not-admitted` | index admission, with no scope rule involved - `rule` and `kind` are `null` |
+
+The walk records one entry per refused subtree root rather than one per
+descendant, so `Brain/state` appears once and its files are not enumerated
+separately. That is the same rule an ignore exclusion already followed.
+
+`o2b vault inspect <relpath>` reports the two verdicts SEPARATELY, because
+a path can be perfectly in scope and still never be indexed. `--json`
+carries `status` plus `reason` for the scope verdict (`ignored`,
+`not-included`, or `null`) and `index_admitted` plus `index_refusal` for
+the admission verdict (`exact-state-lane`, or `null` when the path is
+admitted). The human transcript prints an `index: not indexed (<reason>)`
+line under an included path whose admission was refused, and prints
+nothing there when the path is admitted.
 
 ## Discipline (daily logging cron)
 
@@ -600,6 +765,8 @@ o2b search "<query>"          Hybrid full-text + semantic search across the vaul
                               assessment (what the trust gate evaluated, surfaced and excluded, with
                               reasons); with the gate off it says so and names the switch that enables it
                               --json for structured output (includes reasons[])
+                              --json carries retrieval_trail when the answer narrowed or came back
+                              empty; the human transcript names the cause on the no-results line
                               total is the pre-truncation ranked pool, not the number of rows returned
                               CJK text is expanded for FTS recall without polluting returned content
 o2b search feedback           Record explicit recall feedback for one result
@@ -660,6 +827,80 @@ o2b search rerank-fit         Per-store reranker fit check (read-only diagnostic
                               inverted (negative) with a disable/swap recommendation; a rerankerless
                               vault reports inapplicable. --max-queries N --top-k K --json
 ```
+
+### The retrieval trail (since v1.46.0)
+
+A search that came back with nothing used to say only `(no results)`,
+which is the same sentence for an exhausted corpus and for an embedding
+provider that could not answer. `o2b search --json` and the MCP
+`brain_search` tool now carry a `retrieval_trail` key recording what the
+retrieval actually did:
+
+- `retrieved` - rows handed back, whether they rode `results` or `cards`.
+  This is not `total`, which is the size of the ranked pool the window was
+  cut from.
+- `pool` - that ranked pool size, the same number `total` reports.
+- `degraded` - the narrowings, in pipeline order. Each entry is a `code`
+  plus an optional `detail` object carrying identifiers and integers only,
+  never a provider message, a filesystem path, or your query text.
+- `empty` - present only on a zero-result answer that no degradation
+  accounts for, carrying `state`, `reason`, and `unknown_reason` when the
+  state is `unknown`. When a lane degraded, that degradation IS the
+  explanation, and claiming the corpus holds nothing would be a stronger
+  statement than the search can support.
+
+The key is **absent** on a healthy answer - rows came back and nothing
+narrowed them - so an existing consumer's payload is unchanged.
+
+`degraded[].code` is a CLOSED vocabulary. Every member is a stable
+identifier safe to branch on, and each names its own lane in its own name,
+so there is no separate lane field that could drift from it:
+
+| Code | The narrowing it reports |
+| ---- | ------------------------ |
+| `keyword-fts-match-empty` | the query tokenised to an empty FTS match, so the keyword lane never ran |
+| `keyword-trigram-lane-fault` | the trigram candidate lane could not be read; `detail.fault` carries that lane's own classification |
+| `semantic-embeddings-absent` | the index holds no compatible embedding |
+| `semantic-vec-extension-unavailable` | sqlite-vec is not loaded on this machine |
+| `semantic-capability-blocked` | the configured semantic capability blocks the vector lane; `detail.tier` names the rung |
+| `semantic-provider-unavailable` | the embedding provider could not answer; `detail.category` carries the error category |
+| `semantic-empty-query-vector` | the provider answered with an empty query vector |
+| `semantic-structured-lanes-skipped` | a structured semantic lane was requested while semantic search is off |
+| `semantic-embedding-abi-drift` | the index carries embeddings written by another build; `detail.fields` counts the contradicted ABI fields |
+| `hybrid-degraded` | hybrid recall was asked for and the semantic lane did not run, so this answer is keyword-only |
+| `rank-cap-truncated-pool` | the rank cap truncated the candidate pool; `detail.cap` is the cap that bit |
+| `relevance-floor-dropped-rows` | the relevance floor dropped ranked rows; `detail.dropped` counts them |
+| `scope-filters-dropped-rows` | visibility, ownership, or session / project scope dropped ranked rows; `detail.dropped` against `detail.before` |
+| `cross-vault-origin-failed` | a cross-vault origin could not be searched; `detail.origin` is the origin label |
+| `cross-vault-chain-stopped` | an origin answered confidently and the remaining origins were deliberately not searched; `detail.skipped` counts them |
+
+Members are not invented for conditions nothing reports, so every code
+above has a producer on the search path today. `hybrid-degraded` is the
+umbrella over the five `semantic-*` codes: they say why the lane did not
+run, it says what the caller received.
+
+The human transcript names the cause instead of printing a bare
+no-results line. The first degradation wins, because the lanes push in
+pipeline order and the earliest narrowing produced the ones after it:
+
+```text
+(no results: the sqlite-vec extension is not loaded, so the semantic lane could not run)
+```
+
+With nothing degraded, the corpus statement answers instead - and that is
+a claim about this vault's index, not about your query. `state` is
+`not_found`, `unknown`, or `did_not_happen`; an `unknown` state prints its
+named reason in brackets (`index-absent`, `index-stale`,
+`coverage-divergent`, `coverage-unavailable`, `index-instant-unusable`,
+`embeddings-incomplete`):
+
+```text
+(no results: unknown [index-stale] - <the verdict's own reason>)
+```
+
+With neither a degradation nor a corpus statement, the line is exactly
+what it always was. The English sentences belong to the transcript alone;
+the machine surfaces carry codes.
 
 Embedding providers (since v0.36.0): `embedding_provider` accepts the
 built-in `openai-compat`, the offline `local` feature-hashing embedder
