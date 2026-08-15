@@ -25,6 +25,16 @@
  * would be a second set of rules for the archives an operator later has
  * to reason about as one family.
  *
+ * ## The snapshot is not the verdict
+ *
+ * A recovery point covers the top-level entries under `Brain/` and, on
+ * request, the derived store. It has never covered anything else, so an
+ * operation reaching past that is protected for part of what it destroys
+ * and reported as if it were protected for all of it. Every result here
+ * therefore carries a {@link RecoverabilityVerdict} beside the archive:
+ * the archive says what was taken, the verdict says what it is worth.
+ * See `gates/recoverability.ts`.
+ *
  * The engine module stays untouched; this sibling only composes its
  * public functions.
  */
@@ -33,6 +43,12 @@ import { existsSync } from "node:fs";
 
 import { loadSnapshotRetentionSafe } from "./policy.ts";
 import { isFileAlreadyExists } from "../fs-atomic.ts";
+import {
+  classifyRecoverability,
+  DEFAULT_DESTRUCTIVE_BLAST_RADIUS,
+  type DestructiveBlastRadius,
+  type RecoverabilityVerdict,
+} from "./gates/recoverability.ts";
 import { collisionCandidateName, snapshotPath, validateRunId } from "./paths.ts";
 import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
 import { compactRunStamp } from "./time.ts";
@@ -49,6 +65,17 @@ export interface DestructiveSnapshot {
 export interface WithDestructiveSnapshotResult<T> {
   readonly snapshot: DestructiveSnapshot;
   readonly result: T;
+  /**
+   * What the recovery point above is actually worth for THIS operation.
+   *
+   * The snapshot alone was never the answer: it covers the top-level
+   * entries under `Brain/` and, on request, the derived store, and an
+   * operation whose blast radius leaves that is protected for part of
+   * what it destroys and nothing else. Reporting the archive path with no
+   * verdict beside it reads as full coverage to every caller, which is
+   * the misleading success this gate exists to prevent.
+   */
+  readonly recoverability: RecoverabilityVerdict;
 }
 
 /** Options of both entry points here, since both mint one run id. */
@@ -59,6 +86,21 @@ export interface WithDestructiveSnapshotOptions {
    * its own clock stays that way across the recovery point it takes.
    */
   readonly now?: Date;
+  /**
+   * What the operation is about to destroy. Absent means
+   * {@link DEFAULT_DESTRUCTIVE_BLAST_RADIUS} - the Brain tree - because
+   * that is the premise of being behind this gate at all. A caller that
+   * reaches further declares it and gets a qualified verdict instead of a
+   * clean one.
+   */
+  readonly blastRadius?: DestructiveBlastRadius;
+  /**
+   * True when this snapshot carried the derived SQLite store. Absent
+   * means it did not: `snapshots.include_derived_store` is opt-in, so the
+   * default install archives the Markdown tree only, and assuming
+   * otherwise would claim coverage over an index no archive holds.
+   */
+  readonly derivedStoreArchived?: boolean;
 }
 
 /** Upper bound on distinct run ids tried before giving up. */
@@ -111,6 +153,17 @@ export function createUniqueSnapshot(
       lostRace = err;
     }
   }
+  // Deliberately untyped, and the reason is worth stating because every
+  // other failure out of this module carries a `BrainSnapshotError` with
+  // a run id on it. A typed snapshot error IDENTIFIES an archive - that
+  // is what its `runId` field is for, and what a caller narrows on to
+  // report or retry against one. This failure is precisely the case where
+  // no run id was reserved, so the typed shape could only be filled with
+  // a candidate that does not exist and never will. There is also no
+  // caller branch to enable: after `maxAttempts` laddered candidates the
+  // remedy is the same one an unwritable archive gets - abort, and let the
+  // operator look at `.snapshots/`. A distinguishable type buys nothing
+  // and would have to lie about a run id to exist at all.
   throw new Error(
     `could not reserve a unique snapshot run id from "${baseRunId}" after ${maxAttempts} attempts`,
     lostRace === undefined ? undefined : { cause: lostRace },
@@ -174,14 +227,20 @@ export function takeSnapshot(
 }
 
 /**
- * Run `op` behind a pre-operation snapshot. Returns the recovery point
- * alongside the operation's result. See the module header for the
- * abort / retain failure semantics.
+ * Run `op` behind a pre-operation snapshot. Returns the recovery point,
+ * the operation's result, and the verdict saying what that recovery point
+ * is worth for this particular blast radius. See the module header for
+ * the abort / retain failure semantics.
+ *
+ * `op` receives the recovery point it is protected by, so an operation
+ * that needs the reserved run id - to name a workrun, a log file, or a
+ * staged bundle after the same id - does not have to mint a second one
+ * and hope the two agree.
  */
 export function withDestructiveSnapshot<T>(
   vault: string,
   reason: BrainSnapshotReason,
-  op: () => T,
+  op: (snapshot: DestructiveSnapshot) => T,
   opts: WithDestructiveSnapshotOptions = {},
 ): WithDestructiveSnapshotResult<T> {
   // The one snapshot path, shared with the standalone entry point. A
@@ -192,7 +251,22 @@ export function withDestructiveSnapshot<T>(
   // Run the destructive operation. If it throws, the error propagates and
   // the archive above stays exactly where it is: it is the recovery point
   // the caller now needs.
-  const result = op();
+  const result = op(snapshot);
 
-  return { snapshot, result };
+  return { snapshot, result, recoverability: recoverabilityOf(opts) };
+}
+
+/**
+ * The verdict for a snapshot that WAS taken. Split out because both
+ * entry points need it and because a caller reaching past this module -
+ * an operation that cannot be gated at all, such as the prune that
+ * destroys recovery points - has to be able to build the same verdict
+ * with `recoveryPoint: false` from the same vocabulary.
+ */
+function recoverabilityOf(opts: WithDestructiveSnapshotOptions): RecoverabilityVerdict {
+  return classifyRecoverability({
+    recoveryPoint: true,
+    blastRadius: opts.blastRadius ?? DEFAULT_DESTRUCTIVE_BLAST_RADIUS,
+    derivedStoreArchived: opts.derivedStoreArchived === true,
+  });
 }

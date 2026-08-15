@@ -145,6 +145,17 @@ import {
   SCHEMA_NODE_KIND,
   SCHEMA_NODE_KINDS,
 } from "../../../src/mcp/registry-guard.ts";
+import {
+  isRecoverabilityBlocker,
+  isRecoverabilityState,
+  isRecoveryCoverage,
+  RECOVERABILITY_BLOCKER,
+  RECOVERABILITY_BLOCKERS,
+  RECOVERABILITY_STATE,
+  RECOVERABILITY_STATES,
+  RECOVERY_COVERAGE,
+  RECOVERY_COVERAGES,
+} from "../../../src/core/brain/gates/recoverability.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -477,6 +488,40 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: PREFERENCE_RESTORE_FAILURE,
     members: PREFERENCE_RESTORE_FAILURES,
     guard: isPreferenceRestoreFailure,
+  },
+  {
+    // R1a. Three vocabularies for one gate, by the same rule U2 states at
+    // :228-232: what a recovery point is worth, which regions of the vault
+    // an archive actually holds, and what stops a region being provable
+    // are three disjoint sets, so they are a namespace rather than an
+    // abstraction. The state replaced a `throw`-or-`DestructiveSnapshot`
+    // pair that had no way to say "a recovery point exists and it does not
+    // cover all of this" - which is what `--include-originals` needed to
+    // say while it reported a snapshot path instead.
+    name: "RECOVERABILITY_STATE",
+    values: RECOVERABILITY_STATE,
+    members: RECOVERABILITY_STATES,
+    guard: isRecoverabilityState,
+  },
+  {
+    // R1a. Registered separately because the regions are read back off a
+    // gate result and switched over by the destructive-site registry: a
+    // guard that also accepted a state would let `partial` be read as a
+    // region of the vault an archive holds.
+    name: "RECOVERY_COVERAGE",
+    values: RECOVERY_COVERAGE,
+    members: RECOVERY_COVERAGES,
+    guard: isRecoveryCoverage,
+  },
+  {
+    // R1a. These values leave TypeScript: they ride out in the
+    // `recoverability.blockers[]` array of the delete-by-source response,
+    // where a caller reads them to decide whether the deletion it just
+    // authorised is reversible.
+    name: "RECOVERABILITY_BLOCKER",
+    values: RECOVERABILITY_BLOCKER,
+    members: RECOVERABILITY_BLOCKERS,
+    guard: isRecoverabilityBlocker,
   },
 ]);
 
