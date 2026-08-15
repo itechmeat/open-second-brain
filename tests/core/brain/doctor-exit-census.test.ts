@@ -190,6 +190,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "orphan-evidence",
   "principle-corrupted",
   "recall-channel-silent",
+  "recovery-point-stale",
   "schema-version-unknown",
   "stale-claim",
   "stale-dependency",

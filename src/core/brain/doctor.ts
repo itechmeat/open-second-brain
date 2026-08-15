@@ -70,6 +70,7 @@ import {
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
 import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
+import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
@@ -163,6 +164,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   vaultMarkerProbe,
   staleLockProbe,
   recallChannelCoverageCheck,
+  recoveryPointLivenessCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------

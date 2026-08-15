@@ -204,6 +204,15 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "is lost by leaving it reported",
   },
   {
+    code: "recovery-point-unmeasured",
+    reason:
+      "the recovery-point history is there and the walk over it was refused. What repairs that " +
+      "depends on why - a permission an operator has to decide to grant, a directory owned by " +
+      "another user after a sync that preserved ownership, or storage that has started failing - " +
+      "and the archives themselves must never be removed to make a listing succeed, since they " +
+      "are the only way back from a mistake",
+  },
+  {
     code: "recall-channel-unmeasured",
     reason:
       "the finding is that the install side of a recall channel could not be READ - a config gate " +
