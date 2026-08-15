@@ -306,7 +306,11 @@ export interface TimezoneValidationResult {
 /** Validate an IANA timezone name without normalising or trimming it. */
 export function validateTimezoneName(name: string): TimezoneValidationResult {
   try {
-    new Intl.DateTimeFormat("en-US", { timeZone: name });
+    // Constructing the formatter IS the validation - it throws a
+    // RangeError on an unknown zone. Called rather than `new`-ed because
+    // the instance is discarded either way, and `new` for its side effect
+    // reads as an accident.
+    Intl.DateTimeFormat("en-US", { timeZone: name });
     return { ok: true, error: null };
   } catch (exc) {
     return { ok: false, error: (exc as Error).message ?? String(exc) };
@@ -1020,6 +1024,42 @@ export function resolveHookStrictEnabled(configPath?: string): boolean {
   return resolveConfigFlag(
     "OPEN_SECOND_BRAIN_HOOK_STRICT_ENABLED",
     "hook_strict_enabled",
+    configPath,
+  );
+}
+
+/**
+ * Env var and config key of the codegraph partner-check switch. Named
+ * rather than inlined because the doctor QUOTES them: the line it prints
+ * for a check it did not run has to tell the operator which switch turned
+ * it off, and a hand-copied spelling there would drift from the one that
+ * is actually read.
+ */
+export const PARTNER_CODEGRAPH_DISABLED_ENV = "OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED";
+export const PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled";
+
+/**
+ * Codegraph partner-check switch (nothing-runs-unwatched, U12). Default
+ * OFF, so `o2b doctor` consults the partner exactly as it always has.
+ *
+ * It is an env var plus a config key - the shape every other boolean gate
+ * in this file takes - rather than a CLI flag, for two reasons. The
+ * property being expressed belongs to a MACHINE ("the partner CLI is
+ * installed here and asking it costs seconds against a cold HOME"), not to
+ * one invocation, so it wants a place to be written down once. And
+ * `doctor()` has three callers - the CLI, the MCP `vault_health` tool and
+ * the OpenClaw extension - of which a flag would reach one; the other two
+ * take no arguments an operator controls.
+ *
+ * The switch gates the DOCTOR's automatic consultation only. `o2b partner
+ * codegraph report` is the operator asking the partner directly, and an
+ * answer they asked for is never suppressed by a switch about background
+ * cost.
+ */
+export function resolvePartnerCodegraphDisabled(configPath?: string): boolean {
+  return resolveConfigFlag(
+    PARTNER_CODEGRAPH_DISABLED_ENV,
+    PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY,
     configPath,
   );
 }

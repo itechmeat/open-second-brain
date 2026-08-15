@@ -58,6 +58,56 @@ that can produce it - see [`install/copilot-cli.md`](../install/copilot-cli.md).
 Every other adapter verifies off disk, so it can report `ok`, `drift`, or
 `not-installed` but never `mcp-unreachable`.
 
+### `o2b doctor` exit codes
+
+| Code | Meaning |
+| ---- | -------- |
+| `0`  | Every check passed, and with `--readiness` every probe answered |
+| `1`  | At least one check FAILED, or with `--readiness` at least one probe proved its surface broken |
+| `6`  | With `--readiness`: no check failed, and at least one probe could not find out |
+
+Code `6` is a behaviour change for `--readiness` runs and is deliberately
+the number `o2b search check` already spends on a probe that did not
+complete; a test asserts the two cannot drift. A probe that exceeded its
+per-check budget used to be counted as a failure and exit `1`, so the same
+healthy machine exited `0` when idle and `1` when loaded - the verdict was
+a property of the load average rather than of the installation. Such a
+probe now reports `unknown` with the elapsed budget as its reason, and an
+unmeasured surface is not folded into the `0` that would claim it was
+checked either. A proved failure outranks an unmeasured probe, so `1`
+never hides behind `6`.
+
+The `--json` shape gains `readiness_summary` (`probes`, `failed`,
+`unknown`) beside the existing `readiness` array whenever `--readiness` is
+passed, so a caller reads the same three-way answer the exit code carries;
+`ok` is read off that exit code, and being two-valued it means only "not
+established as healthy" when false.
+
+### The codegraph partner check
+
+`o2b doctor` consults the optional [codegraph](https://github.com/colbymchenry/codegraph)
+partner when its CLI is on PATH and the working directory is a code
+project, by spawning `codegraph status -j <repo>` once per discovered
+project. That costs about 0.7 s against a warm `HOME` and about 5 s
+against a cold one, because the partner caches under `HOME`.
+
+`partner_codegraph_disabled: "true"` in the config file, or
+`OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED=true` in the environment,
+turns that consultation off. Default off, so the doctor behaves exactly as
+before unless the switch is set. It is a config key rather than a flag
+because the fact it records ("the partner is installed on this machine and
+asking it costs seconds") is a property of a machine, and because the
+three callers of the doctor include the MCP `vault_health` tool and the
+OpenClaw extension, which take no flags. `o2b partner codegraph report` is
+unaffected: an answer the operator asked for directly is never suppressed
+by a switch about background cost.
+
+A doctor run with the switch on still prints a `code_graph` line saying
+which switch silenced it, so a check that did not run is distinguishable
+from one that ran and passed. A machine with no codegraph CLI, and a
+directory that is not a code project, still both print nothing at all -
+those two remain indistinguishable from each other in the doctor's output.
+
 ## Brain (observing memory)
 
 ```text
@@ -358,7 +408,7 @@ not be read.
 ### Trusted recall and memory write surface (since v1.35.0)
 
 ```text
-o2b doctor                    gains --readiness: four functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure exits non-zero and an unknown does not; without the flag output stays byte-identical
+o2b doctor                    gains --readiness: four functional probes (model-inference key resolvable, embedding provider loadable with model and dims, runtime-adapter construction, installed runtimes verified off disk through each adapter's own verify) with per-check timeouts and outcomes pass, fail with a reason, skipped-not-configured, or unknown-could-not-measure; a failure and an unmeasured probe exit with different non-zero codes (see "`o2b doctor` exit codes" below); without the flag output stays byte-identical
 o2b brain morning-brief       renders recalled items as one chronological Recent activity timeline with a per-item structural type marker and a relative age label; the underlying JSON data arrays are unchanged
 ```
 

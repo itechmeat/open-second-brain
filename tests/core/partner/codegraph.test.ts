@@ -149,13 +149,18 @@ describe("checkCodegraph", () => {
     expect(r).toBeNull();
   });
 
-  test("null when disabled", () => {
+  test("disabled reports the switch that silenced it, rather than nothing at all", () => {
+    // It used to return null, which made a check the operator turned off
+    // indistinguishable from a machine with no codegraph on it (U12).
     const repo = makeRepo(join(tmp, "repo"));
     const r = checkCodegraph(
       { cwd: repo, vault: join(tmp, "vault"), disabled: true },
       { whichCodegraph: () => "/usr/bin/codegraph" },
     );
-    expect(r).toBeNull();
+    expect(r).not.toBeNull();
+    expect(r!.ok).toBe(true);
+    expect(r!.message).toContain("disabled");
+    expect(r!.message).toContain("OPEN_SECOND_BRAIN_PARTNER_CODEGRAPH_DISABLED");
   });
 
   test("code project + no CLI -> skipped (codegraph is optional)", () => {

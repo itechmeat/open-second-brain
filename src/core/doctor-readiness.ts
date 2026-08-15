@@ -13,8 +13,22 @@
  * stays byte-identical. Each probe reports exactly one member of
  * {@link READINESS_STATUS} so an unconfigured surface is never mistaken
  * for a passing one. Every probe runs under a per-check timeout: a probe
- * that would hang becomes a `fail` with a "timed out" reason instead of
- * blocking the operator.
+ * that would hang becomes an `unknown` with a "timed out" reason instead
+ * of blocking the operator.
+ *
+ * That reason used to be a `fail`, and the correction is unit U12 of
+ * nothing-runs-unwatched. A probe whose budget elapsed has not found the
+ * surface broken; it has found out nothing at all, which is what `unknown`
+ * says and what `fail` cannot. The consequence was measurable rather than
+ * theoretical: on a loaded machine `o2b doctor --readiness` exited 1 -
+ * "this installation is broken" - for the same system that exited 0 when
+ * the box was idle, so the verdict was a property of the load average.
+ * `search/provider-probe.ts` had already drawn the line one release
+ * earlier for the embedding provider: only a surface that ANSWERED with a
+ * refusal is a fault, and a budget that elapsed is one of the ways of
+ * saying "I could not find out". The same rule now holds here, and an
+ * exception escaping a probe body is classified the same way for the same
+ * reason - it is evidence about the probe, not about the surface.
  *
  * That timeout covers a probe that AWAITS. It cannot cover one that blocks
  * the event loop, because the timer that would fire is queued behind the
@@ -98,6 +112,18 @@ export class ReadinessTimeoutError extends Error {
  * about the probe's own reach, never a guess about the surface. Both
  * carry a non-empty detail - see {@link runReadinessProbes}, which
  * enforces it rather than trusting each probe to remember.
+ *
+ * A budget that elapsed is `unknown`, not a fifth member. `PROVIDER_PROBE`
+ * in `search/provider-probe.ts` does spell `timed-out` separately, and the
+ * shapes look alike enough to invite copying it - but that vocabulary has
+ * no "could not measure" member for it to collapse into, so `timed-out`
+ * IS its way of saying that. Here the member already exists, and its
+ * meaning - "the probe could not measure; the detail says what stopped
+ * it" - is exactly what an elapsed budget reports. A `timed-out` member
+ * beside it would be a second spelling of one fact, split by the
+ * particular way the measurement was cut short, which every caller would
+ * then have to remember to treat identically. The cause is not lost: it is
+ * in the detail, which is never empty and which names the budget.
  */
 export const READINESS_STATUS = Object.freeze({
   /** The probe ran and the surface answered correctly. */
@@ -143,11 +169,13 @@ export interface ReadinessReport {
   /** Count of probes whose status is `fail`. Drives the non-zero exit code. */
   readonly failed: number;
   /**
-   * Count of probes that could not measure. Deliberately NOT folded into
-   * `failed`: an unmeasured surface is not a broken one, and the doctor's
-   * uncertain stream sets the precedent that uncertainty is reported and
-   * excluded from the exit code. It is counted separately so a caller
-   * cannot read "0 failed" as "everything was checked".
+   * Count of probes that could not measure - an unreadable install
+   * manifest, an elapsed budget, a probe body that threw. Deliberately NOT
+   * folded into `failed`: an unmeasured surface is not a broken one, and a
+   * caller must never read "0 failed" as "everything was checked". It is
+   * not folded into a silent 0 either - the CLI spends a distinct exit
+   * code on it (`DOCTOR_EXIT.probeIncomplete` in `cli/main.ts`), because
+   * both silences say something this run did not establish.
    */
   readonly unknown: number;
 }
@@ -521,10 +549,12 @@ export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
 
 /**
  * Run every readiness probe under its per-check timeout and aggregate the
- * outcomes. A probe that throws or times out becomes a `fail` with a
- * reason rather than aborting the run, so one broken surface never hides
- * the others. `probes` is injectable for testing the timeout and
- * aggregation paths deterministically; it defaults to {@link DEFAULT_PROBES}.
+ * outcomes. A probe that throws or times out becomes an `unknown` with a
+ * reason rather than aborting the run, so one unreadable surface never
+ * hides the others and none of them is reported as broken on the strength
+ * of a measurement that never completed. `probes` is injectable for
+ * testing the timeout and aggregation paths deterministically; it defaults
+ * to {@link DEFAULT_PROBES}.
  */
 export async function runReadinessProbes(
   opts: ReadinessOptions,
@@ -540,11 +570,14 @@ export async function runReadinessProbes(
       try {
         verdict = await withReadinessTimeout(() => probe.fn(opts), timeoutMs, probe.name);
       } catch (err) {
+        // Neither arm has heard from the surface: one budget elapsed, one
+        // probe body threw. Both are reported as what they are - a
+        // measurement that did not complete - with the cause in the detail.
         const detail =
           err instanceof ReadinessTimeoutError
-            ? `timed out after ${timeoutMs}ms`
-            : `probe error: ${(err as Error).message}`;
-        verdict = { status: READINESS_STATUS.fail, detail };
+            ? `timed out after ${timeoutMs}ms, so nothing was established about this surface`
+            : `probe error, so nothing was established about this surface: ${(err as Error).message}`;
+        verdict = { status: READINESS_STATUS.unknown, detail };
       }
       return {
         name: probe.name,

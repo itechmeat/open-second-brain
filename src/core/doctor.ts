@@ -18,6 +18,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 
+import { resolvePartnerCodegraphDisabled } from "./config.ts";
 import { statOrAbsent } from "./fs-utils.ts";
 import { checkCodegraph } from "./partner/codegraph.ts";
 import type { CheckResult } from "./types.ts";
@@ -385,10 +386,48 @@ export interface DoctorOptions {
   readonly cwd?: string;
   readonly partner?: {
     readonly codegraph?: {
+      /**
+       * Turn the partner check off for this call. Left undefined - which
+       * is what every caller in the tree passes - the switch is resolved
+       * from the operator's environment and config by
+       * {@link resolvePartnerCodegraphDisabled}, so the option has a
+       * producer for all three callers of {@link doctor} rather than
+       * being settable only in principle.
+       */
       readonly disabled?: boolean;
       readonly scanExtraPaths?: ReadonlyArray<string>;
     };
   };
+}
+
+/**
+ * Whether the operator turned the codegraph partner check off.
+ *
+ * An explicit caller option wins; otherwise the env var / config key pair
+ * decides. A config that is PRESENT but unreadable makes that pair
+ * unknowable, and this caller absorbs the {@link ConfigReadError} rather
+ * than propagating it - the same trade `appendLogEvent` documents for the
+ * device id, and for the same reason. `doctor()` exists to REPORT what an
+ * install looks like; raising here would destroy the whole report,
+ * including the `config_writeable` check that names the unreadable file
+ * and prints the chmod that fixes it. The condition is not swallowed
+ * anywhere else: every other caller of the config propagates it, the CLI
+ * reports it by name, and the doctor's own config check reports it as a
+ * failure whenever a config path was given.
+ *
+ * The fallback is the value that changes nothing - the check runs, exactly
+ * as it did before the switch existed - never an invented "disabled" that
+ * would silently stop consulting the partner on the strength of a file
+ * nobody could read.
+ */
+function codegraphCheckDisabled(opts: DoctorOptions): boolean {
+  const explicit = opts.partner?.codegraph?.disabled;
+  if (explicit !== undefined) return explicit;
+  try {
+    return resolvePartnerCodegraphDisabled(opts.config ?? undefined);
+  } catch {
+    return false;
+  }
 }
 
 export function doctor(opts: DoctorOptions): CheckResult[] {
@@ -407,7 +446,7 @@ export function doctor(opts: DoctorOptions): CheckResult[] {
     cwd: opts.cwd ?? process.cwd(),
     vault: opts.vault,
     scanExtraPaths: opts.partner?.codegraph?.scanExtraPaths,
-    disabled: opts.partner?.codegraph?.disabled,
+    disabled: codegraphCheckDisabled(opts),
   });
   if (cg) results.push(cg);
   return results;

@@ -15,6 +15,10 @@
 import { existsSync, readdirSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
+import {
+  PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY,
+  PARTNER_CODEGRAPH_DISABLED_ENV,
+} from "../config.ts";
 import type { CheckResult } from "../types.ts";
 import { isDir, statOrAbsent } from "../fs-utils.ts";
 import { assessGraphHealth, summarizeGraphHealth } from "./codegraph-health.ts";
@@ -193,11 +197,28 @@ export interface CodegraphCheckOptions {
   readonly disabled?: boolean;
 }
 
+/**
+ * The lookup path and environment the partner is resolved and run against.
+ *
+ * Both are read from `process.env` AT CALL TIME and passed explicitly,
+ * because `Bun.which` and `Bun.spawn*` otherwise resolve a command against
+ * the PATH this process was STARTED with. A long-lived process that
+ * updated its own PATH - the MCP server, a host embedding this module,
+ * a test standing up a fake partner - would find the binary the snapshot
+ * named and never the one the environment now points at, and would report
+ * that stale binary's answer as this machine's state.
+ */
+function partnerEnv(): Readonly<Record<string, string | undefined>> {
+  return process.env;
+}
+
 export function defaultWhichCodegraph(): string | null {
   if (typeof Bun !== "undefined" && typeof (Bun as { which?: unknown }).which === "function") {
-    const found = (Bun as unknown as { which: (cmd: string) => string | null }).which(
-      CODEGRAPH_CLI.bin,
-    );
+    const found = (
+      Bun as unknown as {
+        which: (cmd: string, opts?: { PATH?: string | undefined }) => string | null;
+      }
+    ).which(CODEGRAPH_CLI.bin, { PATH: partnerEnv()["PATH"] });
     return found ?? null;
   }
   return null;
@@ -223,6 +244,7 @@ export function defaultDetectProjectPathSupport(): boolean {
       cmd: [CODEGRAPH_CLI.bin, CODEGRAPH_CLI.statusSubcommand, HELP_FLAG],
       stdout: "pipe",
       stderr: "pipe",
+      env: partnerEnv(),
     });
     const help = new TextDecoder().decode(proc.stdout) + new TextDecoder().decode(proc.stderr);
     return CODEGRAPH_PROJECT_PATH_USAGE_TOKEN.test(help);
@@ -242,6 +264,7 @@ export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult
       ],
       stdout: "pipe",
       stderr: "pipe",
+      env: partnerEnv(),
     });
     const stdout = new TextDecoder().decode(proc.stdout).trim();
     const stderr = new TextDecoder().decode(proc.stderr).trim();
@@ -270,20 +293,29 @@ export function defaultRunStatusJson(projectPath: string): CodegraphStatusResult
 }
 
 /**
- * Doctor-grade check for codegraph partnership. Returns `null` (skip,
- * no doctor output) when the current scope is not a code project, when the
- * user has explicitly disabled the check, or when the codegraph CLI is not
- * installed — codegraph is an optional partner OSB never installs, so its
- * absence must not fail doctor.
+ * Doctor-grade check for codegraph partnership. Returns `null` (skip, no
+ * doctor output) when the current scope is not a code project or when the
+ * codegraph CLI is not installed — codegraph is an optional partner OSB
+ * never installs, so its absence must not fail doctor.
  *
  * Non-null results carry a single `code_graph` `CheckResult` describing
- * one of three states: `not_indexed`, `ok`, or `error`.
+ * one of four states: `disabled`, `not_indexed`, `ok`, or `error`.
+ *
+ * `disabled` reports itself instead of returning null, because the switch
+ * that produces it would otherwise be a setting that silently does
+ * nothing visible: an operator who turned the check off, one whose machine
+ * has no codegraph, and one standing in a directory that is not a code
+ * project would all read the same empty report. Those two remaining
+ * silences are NOT distinguished here, and saying so is the honest form of
+ * this docblock: separating them means emitting a `code_graph` line on
+ * every machine without the partner, CI included, which is a change to the
+ * base doctor output rather than to this switch.
  */
 export function checkCodegraph(
   opts: CodegraphCheckOptions,
   deps?: CodegraphCheckDeps,
 ): CheckResult | null {
-  if (opts.disabled) return null;
+  if (opts.disabled) return codegraphDisabledResult();
 
   const projects = findCodeProjects(opts);
   if (projects.length === 0) return null;
@@ -325,6 +357,30 @@ export function checkCodegraph(
     name: "code_graph",
     ok: results.every((r) => r.ok),
     message: [header, ...results.map((r) => `- ${r.message}`)].join("\n"),
+  };
+}
+
+/**
+ * The `disabled` arm.
+ *
+ * `ok` is a two-valued field and this state is neither of its two
+ * meanings, so the message carries what the flag cannot: which switch
+ * turned the check off, and that nothing was asked of the partner. `true`
+ * is the lesser wrong of the two - `false` would fail `o2b doctor` for an
+ * operator who deliberately asked it to leave the partner alone, turning
+ * a preference into a defect. Giving the doctor a third stream so this
+ * state stops borrowing `ok` at all is a change to every consumer of
+ * {@link CheckResult} (the CLI, the MCP payload, the OpenClaw extension)
+ * and is named here rather than smuggled in with a switch.
+ */
+function codegraphDisabledResult(): CheckResult {
+  return {
+    name: "code_graph",
+    ok: true,
+    message:
+      `check disabled by ${PARTNER_CODEGRAPH_DISABLED_ENV} / ` +
+      `${PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY}: ${CODEGRAPH_CLI.bin} was not consulted, ` +
+      "so nothing is claimed here about any index",
   };
 }
 

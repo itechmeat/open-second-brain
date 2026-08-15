@@ -299,9 +299,10 @@ describe("runReadinessProbes", () => {
     expect(report.unknown).toBe(1);
   });
 
-  test("a probe that exceeds the per-check timeout is a fail, not a hang", async () => {
-    // An injected probe that sleeps past a tiny budget must surface as a
-    // fail with a "timed out" reason rather than blocking the run.
+  test("a probe that exceeds the per-check timeout does not hang, and is not a failure", async () => {
+    // An injected probe that sleeps past a tiny budget must surface with a
+    // "timed out" reason rather than blocking the run - and that reason is a
+    // fact about the probe's reach, never about the surface it was pointed at.
     const slowProbe = {
       name: "slow_unit_probe",
       fn: () =>
@@ -313,9 +314,57 @@ describe("runReadinessProbes", () => {
       { vault: tmp, config: configPath, perCheckTimeoutMs: 5 },
       [slowProbe],
     );
-    expect(report.failed).toBe(1);
-    expect(report.probes[0]!.status).toBe("fail");
+    expect(report.failed).toBe(0);
+    expect(report.unknown).toBe(1);
+    expect(report.probes[0]!.status).toBe(READINESS_STATUS.unknown);
     expect(report.probes[0]!.detail.toLowerCase()).toContain("timed out");
+  });
+
+  test("a probe that did not answer is distinguishable from one that ran and failed", async () => {
+    // The two run in the same batch so the comparison is between two
+    // verdicts of one report, not between two runs of one probe.
+    const slowProbe = {
+      name: "slow_unit_probe",
+      fn: () =>
+        new Promise<{ status: "pass"; detail: string }>((resolve) =>
+          setTimeout(() => resolve({ status: "pass", detail: "eventually" }), 100),
+        ),
+    };
+    const brokenProbe = {
+      name: "broken_unit_probe",
+      fn: async () => ({
+        status: READINESS_STATUS.fail,
+        detail: "the surface answered, and the answer was a refusal",
+      }),
+    };
+    const report = await runReadinessProbes(
+      { vault: tmp, config: configPath, perCheckTimeoutMs: 5 },
+      [slowProbe, brokenProbe],
+    );
+    const [timedOut, broken] = report.probes;
+    expect(timedOut!.status).not.toBe(broken!.status);
+    expect(timedOut!.status).toBe(READINESS_STATUS.unknown);
+    expect(broken!.status).toBe(READINESS_STATUS.fail);
+    // Nor is the unanswered probe folded into the healthy answer.
+    expect(timedOut!.status).not.toBe(READINESS_STATUS.pass);
+    expect(report.failed).toBe(1);
+    expect(report.unknown).toBe(1);
+  });
+
+  test("a probe that throws claims nothing about the surface it could not read", async () => {
+    // An exception escaping a probe body is evidence about the probe, not
+    // about the surface: the run never got an answer to classify.
+    const throwingProbe = {
+      name: "throwing_unit_probe",
+      fn: async (): Promise<{ status: "pass"; detail: string }> => {
+        throw new Error("EACCES: permission denied");
+      },
+    };
+    const report = await runReadinessProbes({ vault: tmp, config: configPath }, [throwingProbe]);
+    expect(report.probes[0]!.status).toBe(READINESS_STATUS.unknown);
+    expect(report.probes[0]!.detail).toContain("EACCES");
+    expect(report.failed).toBe(0);
+    expect(report.unknown).toBe(1);
   });
 
   test("exposes a sane default per-check timeout constant", () => {

@@ -281,6 +281,45 @@ function writeSearchInitBlock(vault: string, configPath: string, stream: Advisor
   );
 }
 
+/**
+ * Every code `o2b doctor` can return, named once so the returns below and
+ * the tests read the same table.
+ *
+ * `probeIncomplete` carries the value `o2b search check` already spends on
+ * a probe that did not complete, so one number means one thing across this
+ * CLI; the assertion that they agree lives in the tests. It exists because
+ * the other two numbers were both wrong for that finding. A readiness
+ * probe whose budget elapsed used to be counted as a failure and exit 1,
+ * which made a loaded machine report a healthy installation as broken;
+ * classifying it honestly (see `READINESS_STATUS.unknown`) would otherwise
+ * have moved it into the 0 that says the opposite. A run that could not
+ * find out is neither, and now says so.
+ */
+export const DOCTOR_EXIT = Object.freeze({
+  ok: 0,
+  failed: 1,
+  probeIncomplete: 6,
+} as const);
+
+export type DoctorExit = (typeof DOCTOR_EXIT)[keyof typeof DOCTOR_EXIT];
+
+/**
+ * The exit this run earned, from the counts rather than from what was
+ * printed.
+ *
+ * Precedence follows `exitCodeForCheck` in `search/verbs/check.ts`: a
+ * PROVED failure keeps the generic code even when a probe also failed to
+ * complete, so the specific code never masks the more basic finding.
+ */
+export function doctorExitCode(
+  failedChecks: number,
+  readiness: ReadinessReport | null,
+): DoctorExit {
+  if (failedChecks > 0 || (readiness?.failed ?? 0) > 0) return DOCTOR_EXIT.failed;
+  if ((readiness?.unknown ?? 0) > 0) return DOCTOR_EXIT.probeIncomplete;
+  return DOCTOR_EXIT.ok;
+}
+
 async function cmdDoctor(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, {
     vault: { type: "string" },
@@ -305,7 +344,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     if (parity) results.push(parity);
   } catch (exc) {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
-    return 1;
+    return DOCTOR_EXIT.failed;
   }
   const failed = results.filter((r) => !r.ok).length;
 
@@ -318,14 +357,23 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       readiness = await runReadinessProbes({ vault, config, cwd: process.cwd() });
     } catch (exc) {
       process.stderr.write(`error: doctor readiness failed: ${(exc as Error).message ?? exc}\n`);
-      return 1;
+      // The readiness run itself did not complete, so it established
+      // nothing about readiness - but a base check that already failed is a
+      // proved fault and outranks it, exactly as inside `doctorExitCode`.
+      return failed > 0 ? DOCTOR_EXIT.failed : DOCTOR_EXIT.probeIncomplete;
     }
   }
-  const readinessFailed = readiness?.failed ?? 0;
+  const exitCode = doctorExitCode(failed, readiness);
 
   if (flags["json"]) {
     const payload = {
-      ok: failed === 0 && readinessFailed === 0,
+      // Read off the same exit code the process returns, so the two
+      // surfaces of one command cannot give contradictory answers. It is
+      // two-valued and so cannot distinguish a proved failure from a run
+      // that could not find out - `false` means only "not established as
+      // healthy". WHICH of the two it was is in `readiness_summary`, in
+      // each probe's own `status`, and in the exit code itself.
+      ok: exitCode === DOCTOR_EXIT.ok,
       checks: results.map((r) => ({
         name: r.name,
         ok: r.ok,
@@ -340,12 +388,20 @@ async function cmdDoctor(argv: string[]): Promise<number> {
               detail: p.detail,
               duration_ms: p.durationMs,
             })),
+            // The counts the human shape has always printed on its summary
+            // line, so a caller reading JSON is not the only one who has to
+            // reduce the array to learn that something went unmeasured.
+            readiness_summary: {
+              probes: readiness.probes.length,
+              failed: readiness.failed,
+              unknown: readiness.unknown,
+            },
           }
         : {}),
       summary: { total: results.length, failed },
     };
     process.stdout.write(JSON.stringify(payload, sortedReplacer, 2) + "\n");
-    return failed === 0 && readinessFailed === 0 ? 0 : 1;
+    return exitCode;
   }
 
   for (const r of results) {
@@ -354,13 +410,13 @@ async function cmdDoctor(argv: string[]): Promise<number> {
     // operator can fix it without leaving the doctor output.
     if (!r.ok && r.fix) process.stdout.write(`       fix: ${r.fix}\n`);
   }
-  // Scriptable aggregate: a summary line plus the 0/1 exit make `o2b doctor`
-  // usable as a setup/CI gate.
+  // Scriptable aggregate: a summary line plus the {@link DOCTOR_EXIT} code
+  // make `o2b doctor` usable as a setup/CI gate.
   process.stdout.write(`\ndoctor: ${results.length} checks, ${failed} failed\n`);
 
   if (readiness) {
     process.stdout.write(
-      `\nreadiness: ${readiness.probes.length} probes, ${readinessFailed} failed` +
+      `\nreadiness: ${readiness.probes.length} probes, ${readiness.failed} failed` +
         (readiness.unknown > 0 ? `, ${readiness.unknown} unknown\n` : `\n`),
     );
     for (const p of readiness.probes) {
@@ -382,7 +438,7 @@ async function cmdDoctor(argv: string[]): Promise<number> {
       process.stdout.write(`[${tag}] ${p.name}: ${p.detail}\n`);
     }
   }
-  return failed === 0 && readinessFailed === 0 ? 0 : 1;
+  return exitCode;
 }
 
 /**
@@ -662,7 +718,9 @@ async function cmdMcp(argv: string[]): Promise<number> {
     process.stderr.write(
       `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
     );
-    await new Promise<void>((resolve) => handle.server.once("close", resolve));
+    // `closed` rather than `resolve`: this module imports `resolve` from
+    // `node:path`, and shadowing it here hid that import inside the closure.
+    await new Promise<void>((closed) => handle.server.once("close", closed));
     return 0;
   }
 
