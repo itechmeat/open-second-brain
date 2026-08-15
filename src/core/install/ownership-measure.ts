@@ -46,9 +46,17 @@ export interface MeasureDataOwnershipOptions {
   readonly configPath?: string;
   /** Targets the install registry knows, from the caller that owns the registry. */
   readonly adapterTargets: ReadonlyArray<string>;
-  /** Process environment; injected so the outbound checks are testable. */
-  readonly env?: Readonly<Record<string, string | undefined>>;
 }
+
+/**
+ * There is deliberately no `env` option.
+ *
+ * `resolveSearchConfig` and `resolveTelegramBotToken` read `process.env`
+ * themselves, so an injected environment would reach one of the four
+ * checks and not the other three - a record measured against two
+ * different environments, reported as one. Tests set `process.env`
+ * instead, which is the environment the statement is actually about.
+ */
 
 /**
  * Where the index resolved, and whether that is inside the vault.
@@ -122,7 +130,6 @@ function searchOutbound(search: ResolvedSearchConfig): {
  * all three are reported as such rather than defaulted.
  */
 export function measureDataOwnership(opts: MeasureDataOwnershipOptions): DataOwnership {
-  const env = opts.env ?? process.env;
   let search: ResolvedSearchConfig | null = null;
   let searchFailure = "";
   try {
@@ -151,7 +158,7 @@ export function measureDataOwnership(opts: MeasureDataOwnershipOptions): DataOwn
     };
   }
 
-  const research = resolveResearchPoolEnv(env);
+  const research = resolveResearchPoolEnv(process.env);
 
   const outbound: Record<OutboundServiceId, OutboundMeasurement> = {
     [OUTBOUND_SERVICE.embedding]: fromSearch.embedding,

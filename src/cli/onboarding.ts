@@ -199,7 +199,6 @@ export function buildOnboardingChecklist(
     vault,
     ...(opts.configPath === undefined ? {} : { configPath: opts.configPath }),
     adapterTargets: defaultRegistry.targets(),
-    ...(opts.env === undefined ? {} : { env: opts.env }),
   });
 
   return { vault, steps, notices, complete, data_ownership };

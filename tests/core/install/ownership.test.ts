@@ -441,12 +441,7 @@ describe("the measurements the statement is composed from", () => {
   test("the Telegram bot token and a research key are each an account that was checked", () => {
     process.env["TELEGRAM_BOT_TOKEN"] = "123:abc";
     process.env["TAVILY_API_KEY"] = "tvly-x";
-    const record = measureDataOwnership({
-      vault: tempVault,
-      configPath,
-      adapterTargets: ["cursor"],
-      env: process.env,
-    });
+    const record = measured();
     const state = (id: string) =>
       record.outbound_services.find((s) => s.id === id)?.state ?? "missing";
     expect(state(OUTBOUND_SERVICE.telegram)).toBe(OUTBOUND_STATE.configured);
