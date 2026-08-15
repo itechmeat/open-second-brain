@@ -132,8 +132,8 @@ describe("token-impact privacy", () => {
     expect(record.payload.pack_id).toBe("hash_abc");
     expect(record.sourceRefs).toEqual([]);
     // No free-text prompt/recall keys smuggled in.
-    expect(Object.keys(record.payload).sort()).toEqual(
-      ["baseline_tokens", "delta_tokens", "method", "pack_id", "packed_tokens"].sort(),
+    expect(Object.keys(record.payload).toSorted()).toEqual(
+      ["baseline_tokens", "delta_tokens", "method", "pack_id", "packed_tokens"].toSorted(),
     );
   });
 });

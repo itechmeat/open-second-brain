@@ -53,6 +53,36 @@ function fixture(): BenchFixture {
   return loadBenchFixture(FIXTURE_PATH);
 }
 
+/**
+ * The degenerate retriever a gaming implementation ships: hand back your
+ * best note whatever was asked. Paired with a floor of 0 it is the
+ * "always inject" arm - not a stub, but the real shape of the strategy
+ * the scorer has to be able to rank below a selective one.
+ */
+async function alwaysConfident(): Promise<RecallResultSet> {
+  return Object.freeze({
+    candidates: Object.freeze([
+      Object.freeze({
+        path: "Brain/notes/pgbouncer.md",
+        title: "Connection pooling",
+        score: 1,
+        searchType: "keyword",
+        startLine: 1,
+        endLine: 3,
+      }),
+    ]),
+    total: 1,
+  });
+}
+
+/** Both rates share one denominator, so their sum is what ranks strategies. */
+function totalFailureRate(score: {
+  know_to_ask_failure_rate: number;
+  false_fire_rate: number;
+}): number {
+  return score.know_to_ask_failure_rate + score.false_fire_rate;
+}
+
 describe("the committed failure-mode fixture", () => {
   test("runs green and reports all four metrics", async () => {
     const report = await runMemoryBench({ fixture: fixture(), runsDir });
@@ -127,23 +157,6 @@ describe("metric 1: proactive know-to-ask, with the anti-gaming term", () => {
     const prompts = loaded.questions.filter((q) => q.category === "proactive_recall");
     expect(prompts.length).toBeGreaterThan(0);
 
-    // The degenerate strategy a gaming implementation ships: hand back
-    // your best note whatever was asked, and put the floor on the ground.
-    const alwaysConfident = async (): Promise<RecallResultSet> =>
-      Object.freeze({
-        candidates: Object.freeze([
-          Object.freeze({
-            path: "Brain/notes/pgbouncer.md",
-            title: "Connection pooling",
-            score: 1,
-            searchType: "keyword",
-            startLine: 1,
-            endLine: 3,
-          }),
-        ]),
-        total: 1,
-      });
-
     const shipped: Array<RecallFailure | null> = [];
     const always: Array<RecallFailure | null> = [];
     for (const question of prompts) {
@@ -178,9 +191,7 @@ describe("metric 1: proactive know-to-ask, with the anti-gaming term", () => {
     expect(alwaysScore.know_to_ask_failure_rate).toBe(0);
     expect(alwaysScore.false_fire_rate).toBeGreaterThan(0);
     // Shared denominator, so the total failure rate is what ranks them.
-    const total = (s: { know_to_ask_failure_rate: number; false_fire_rate: number }): number =>
-      s.know_to_ask_failure_rate + s.false_fire_rate;
-    expect(total(alwaysScore)).toBeGreaterThan(total(shippedScore));
+    expect(totalFailureRate(alwaysScore)).toBeGreaterThan(totalFailureRate(shippedScore));
   }, 60_000);
 
   test("the anti-gaming pressure is on the confidence floor, not on the gate", () => {

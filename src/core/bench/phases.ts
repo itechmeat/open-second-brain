@@ -273,14 +273,7 @@ function retrieveWriteFidelity(
   };
   const first = extractPreCompactRecords(vault, input);
   const second = extractPreCompactRecords(vault, input);
-  // Both levels count as provenance: the record envelope carries `id`,
-  // `kind`, `createdAt` and `sourceRefs`, and the payload carries the
-  // session/turn/hash keys. A fixture asks for either by name.
-  const keysOf = (record: ContinuityRecord): ReadonlyArray<string> => [
-    ...Object.keys(record),
-    ...Object.keys(record.payload),
-  ];
-  const provenance = new Set<string>(first.records.flatMap(keysOf));
+  const provenance = new Set<string>(first.records.flatMap(provenanceKeys));
   return {
     id: question.id,
     latency_ms: Date.now() - startedAt,
@@ -288,13 +281,24 @@ function retrieveWriteFidelity(
     // Present on EVERY record, not on any: a provenance field that
     // survives only sometimes has not survived.
     provenance_keys: [...provenance].filter((key) =>
-      first.records.every((record) => keysOf(record).includes(key)),
+      first.records.every((record) => provenanceKeys(record).includes(key)),
     ),
     dedup_stable:
       first.records.length > 0 &&
       JSON.stringify(first.records.map((r) => r.id)) ===
         JSON.stringify(second.records.map((r) => r.id)),
   };
+}
+
+/**
+ * Every provenance name one extracted record carries.
+ *
+ * Both levels count: the record envelope carries `id`, `kind`,
+ * `createdAt` and `sourceRefs`, and the payload carries the
+ * session/turn/hash keys. A fixture asks for either by name.
+ */
+function provenanceKeys(record: ContinuityRecord): ReadonlyArray<string> {
+  return [...Object.keys(record), ...Object.keys(record.payload)];
 }
 
 /**
