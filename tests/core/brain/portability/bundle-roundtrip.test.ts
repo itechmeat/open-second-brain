@@ -286,12 +286,23 @@ describe("bank bundle preference round-trip", () => {
     const result = importBankBundle(dest, legacy, { mode: "skip" });
     expect(result.schema).toBe(BANK_BUNDLE_SCHEMA_VERSION);
     expect(result.graph.created).toContain("Notes.md");
-    expect(result.preferences.restored).toEqual([]);
-    expect(result.preferences.failed.length).toBe(1);
-    expect(result.preferences.failed[0]!.reason).toBe(
-      PREFERENCE_RESTORE_FAILURE.missingTrialWindow,
+    // The rule is confirmed, so its trial window is inert and derivable
+    // from the row's own `confirmed_at`. Refusing it would have discarded
+    // recoverable data over a moot field - and a bank bundle IS the backup,
+    // so there is no re-export to supply what the projection never carried.
+    // The derivation is reported rather than passed off as carried data;
+    // `tests/core/brain/portability/legacy-bundle-restore.test.ts` owns the
+    // full rule, including the `unconfirmed` row that is still refused.
+    expect(result.preferences.restored).toEqual(["pref-alpha-rule"]);
+    expect(result.preferences.failed).toEqual([]);
+    expect(result.preferences.derived.length).toBe(1);
+    expect(result.preferences.derived[0]!.field).toBe("unconfirmed_until");
+    expect(existsSync(preferencePath(dest, "alpha-rule"))).toBe(true);
+    // `revision` is absent-as-zero, which is behind every later write and
+    // ahead of nothing - so a legacy row never rewinds the destination.
+    expect(readFileSync(preferencePath(dest, "alpha-rule"), "utf8")).toContain(
+      "unconfirmed_until:",
     );
-    expect(existsSync(preferencePath(dest, "alpha-rule"))).toBe(false);
   });
 
   test("a malformed row fails per-entry and never counts as carried-and-restored", () => {

@@ -32,6 +32,22 @@
  *      restore, so prose it did not derive from those fields does not
  *      survive. {@link PREFERENCE_FIELDS_NOT_RESTORED} says so in the
  *      result rather than leaving the caller to discover it.
+ *   4. **What IS reconstructed is named too.** A bundle taken before the
+ *      trial window entered the export projection carries none, and a bank
+ *      bundle IS the backup - if the source vault is gone there is no
+ *      re-export to fall back on. A row whose window is inert (any status
+ *      but `unconfirmed`) restores on a window derived from its own
+ *      `confirmed_at` / `created_at`, listed in `derived`; a row whose
+ *      deadline is still live is refused, because inventing one would
+ *      re-date a promotion. See {@link resolveTrialWindow}.
+ *   5. **A contention the restore CREATES is reported.** `topic` is written
+ *      verbatim, and the dream pass indexes topics through a fold, so an
+ *      imported spelling can contend with a local one for a single topic
+ *      key - a state in which consolidation for that key plans nothing and
+ *      the inbox grows. The restore neither rewrites the topic (the vault
+ *      would then record something the bundle did not say) nor refuses the
+ *      row (a backup-recovery path is the worst place for a new failure
+ *      mode); it names the collision. See {@link RestoredTopicKeyCollision}.
  *
  * The audit records the transition the txn derived (`create` /
  * `promote` / `update`) with {@link PREFERENCE_RESTORE_AUDIT_REASON} as
@@ -40,7 +56,8 @@
  * came from, which is strictly more than a `restore` op could carry.
  */
 
-import type { ExportedPreferenceRow } from "../export.ts";
+import { collectExportRows, type ExportedPreferenceRow } from "../export.ts";
+import { topicKey } from "../dream-plan.ts";
 import {
   BrainCollisionError,
   BRAIN_COLLISION_KIND,
@@ -76,9 +93,12 @@ export const PREFERENCE_RESTORE_FAILURE = Object.freeze({
   /** The row is not a preference record: a field is missing or mistyped. */
   malformedRow: "malformed_row",
   /**
-   * The row predates the trial window being exported. Restoring it would
-   * mean inventing an `unconfirmed_until`, which re-dates the rule's
-   * promotion deadline - so the row is refused and named instead.
+   * The row predates the trial window being exported AND its deadline is
+   * still live - an `unconfirmed` rule, whose `unconfirmed_until` decides
+   * when it expires. Restoring it would mean inventing a deadline, which
+   * re-dates the rule's promotion - so the row is refused and named
+   * instead. A row whose window is inert derives one; see
+   * {@link resolveTrialWindow}.
    */
   missingTrialWindow: "missing_trial_window",
   /** The vault is ahead of the bundle, or diverges at the same revision. */
@@ -114,6 +134,56 @@ export function isPreferenceRestoreFailure(value: unknown): value is PreferenceR
 export const PREFERENCE_FIELDS_NOT_RESTORED: ReadonlyArray<keyof ExportedPreferenceRow> =
   Object.freeze(["body"]);
 
+/**
+ * The row field a derived trial window was read from. Closed vocabulary:
+ * these values travel out of TypeScript in the bank-import result and its
+ * `--json` rendering, so an operator reads them to decide whether to accept
+ * the restored value.
+ */
+export const TRIAL_WINDOW_DERIVED_FROM = Object.freeze({
+  confirmedAt: "confirmed_at",
+  createdAt: "created_at",
+} as const);
+
+export type TrialWindowDerivedFrom =
+  (typeof TRIAL_WINDOW_DERIVED_FROM)[keyof typeof TRIAL_WINDOW_DERIVED_FROM];
+
+/**
+ * One carried row that landed on a value the bundle did not carry, and
+ * where that value came from. Reported so a restore that reconstructed
+ * something says so, rather than presenting a derived field as one the
+ * backup contained.
+ */
+export interface PreferenceRestoreDerivation {
+  readonly id: string;
+  /** Position in the carried section, matching {@link PreferenceRestoreFailureRecord}. */
+  readonly index: number;
+  readonly field: keyof ExportedPreferenceRow;
+  /** The value written. */
+  readonly value: string;
+  readonly derivedFrom: TrialWindowDerivedFrom;
+}
+
+/**
+ * Two or more preferences whose topics fold onto one dream-pass topic key
+ * after a restore - the destination's own rules and the bundle's rows taken
+ * together.
+ *
+ * The restore writes `topic` VERBATIM (see {@link toRestoreRow}), so an
+ * import can create a contention the dream pass then refuses to plan
+ * through. Reported here for the same reason the dream pass reports it:
+ * the pass plans nothing for a contended key, and an operator who is never
+ * told will see consolidation stop and the inbox grow with no cause named.
+ */
+export interface RestoredTopicKeyCollision {
+  /** The folded key the claimants share. */
+  readonly key: string;
+  /** The distinct raw topics claiming it, in code-unit order. */
+  readonly topics: ReadonlyArray<string>;
+  /** The ids of every claiming preference, in code-unit order. */
+  readonly prefIds: ReadonlyArray<string>;
+}
+
 /** One carried row that did not land, and why. */
 export interface PreferenceRestoreFailureRecord {
   /** The row's preference id, or `null` when it carried no usable one. */
@@ -133,6 +203,17 @@ export interface PreferenceRestoreResult {
   readonly failed: ReadonlyArray<PreferenceRestoreFailureRecord>;
   /** Exported fields a restore cannot reconstruct; see the constant. */
   readonly fieldsNotRestored: ReadonlyArray<keyof ExportedPreferenceRow>;
+  /**
+   * Rows that landed on a field the bundle did not carry, and where the
+   * value came from. A subset of `restored`, never of `failed`.
+   */
+  readonly derived: ReadonlyArray<PreferenceRestoreDerivation>;
+  /**
+   * Folded topic keys that more than one raw topic now claims in the
+   * destination vault as a result of this restore. Empty for a restore that
+   * created none - the ordinary case.
+   */
+  readonly topicKeyCollisions: ReadonlyArray<RestoredTopicKeyCollision>;
 }
 
 export interface RestorePreferencesOptions {
@@ -229,6 +310,62 @@ function readSlug(row: Record<string, unknown>): string {
   return id.slice(PREFERENCE_ID_PREFIX.length);
 }
 
+/** The trial window a row will be written with, and where it came from. */
+interface ResolvedTrialWindow {
+  readonly value: string;
+  /** Absent when the row carried the field itself - nothing was derived. */
+  readonly derivedFrom?: TrialWindowDerivedFrom;
+}
+
+/**
+ * The trial window to write for a row, derived only where the row's own
+ * fields determine it.
+ *
+ * A bundle written before `unconfirmed_until` entered the export projection
+ * carries no window at all, and a bank bundle IS the backup: when the source
+ * vault is gone there is no re-export and no way to supply the field. So the
+ * question is not whether to refuse, but for which rows a refusal is the
+ * honest answer.
+ *
+ * Exactly one consumer reads the field - `planAutoRetires`, and only while a
+ * preference is `unconfirmed`, where it is the expiry deadline. For every
+ * other status the window is inert: the rule has already left its trial, and
+ * `confirmed_at` (not `unconfirmed_until`) records when. For those rows the
+ * window is derived CLOSED at the instant the row itself records - the exact
+ * convention the force-confirmed writer already uses when it creates a rule
+ * that skips the trial - so nothing is re-dated and no deadline is invented.
+ *
+ * An `unconfirmed` row is refused. Its deadline is live, it is not a function
+ * of any field the row carries, and a fabricated one would silently move a
+ * promotion - the class of defect this release exists to remove.
+ */
+function resolveTrialWindow(
+  record: Record<string, unknown>,
+  status: BrainPreferenceStatus,
+  created_at: string,
+): ResolvedTrialWindow {
+  const carried = record["unconfirmed_until"];
+  if (typeof carried === "string" && carried.trim() !== "") return { value: carried };
+  if (carried !== undefined && carried !== null && typeof carried !== "string") {
+    throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.malformedRow, "unconfirmed_until");
+  }
+  if (status === BRAIN_PREFERENCE_STATUS.unconfirmed) {
+    throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.missingTrialWindow, "unconfirmed_until");
+  }
+  const confirmedAt = optionalText(record, "confirmed_at");
+  if (confirmedAt !== null) {
+    return { value: confirmedAt, derivedFrom: TRIAL_WINDOW_DERIVED_FROM.confirmedAt };
+  }
+  return { value: created_at, derivedFrom: TRIAL_WINDOW_DERIVED_FROM.createdAt };
+}
+
+/** An exported row mapped to a write input, plus what had to be derived. */
+export interface RestoreRowMapping {
+  readonly input: WritePreferenceInput;
+  /** Fields the row did not carry and the restore reconstructed. */
+  readonly derived: ReadonlyArray<Omit<PreferenceRestoreDerivation, "id" | "index">>;
+}
+
 /**
  * Reverse of `collectExportRows`' projection: an exported row becomes the
  * write input the audited transaction takes. Every field the projection
@@ -236,10 +373,20 @@ function readSlug(row: Record<string, unknown>): string {
  * {@link PREFERENCE_FIELDS_NOT_RESTORED} - there is no third option, and
  * the bundle round-trip test asserts exactly that.
  *
+ * `topic` is written VERBATIM. The dream pass indexes topics through a fold
+ * (`topicKey`), so a bundle spelling a topic differently from a rule the
+ * destination already owns can create a contention that stops consolidation
+ * for that key. Rewriting the topic to the local spelling would make the
+ * vault record something the bundle did not say, and refusing the row would
+ * add a failure mode to the one path whose purpose is recovering a backup.
+ * So the restore writes what the bundle declared and REPORTS the collision -
+ * see {@link RestoredTopicKeyCollision}, which is also the only place the
+ * two call sites are reconciled.
+ *
  * Throws {@link RowShapeError} for a row the guard refuses, so the caller
  * reports it per-entry instead of aborting the run.
  */
-export function toWritePreferenceInput(row: unknown): WritePreferenceInput {
+export function toRestoreRow(row: unknown): RestoreRowMapping {
   if (row === null || typeof row !== "object" || Array.isArray(row)) {
     throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.malformedRow, "row");
   }
@@ -249,22 +396,19 @@ export function toWritePreferenceInput(row: unknown): WritePreferenceInput {
   const principle = requireText(record, "principle");
   const created_at = requireText(record, "created_at");
   const status = readStatus(record);
-  // Checked AFTER the structural fields so `missing_trial_window` means
+  // Resolved AFTER the structural fields so `missing_trial_window` means
   // what it says - an otherwise-complete row from a bundle written
   // before the window was exported - rather than doubling as the first
   // complaint about a row that is malformed in several ways at once.
-  const trialWindow = record["unconfirmed_until"];
-  if (trialWindow === undefined || trialWindow === null || trialWindow === "") {
-    throw new RowShapeError(PREFERENCE_RESTORE_FAILURE.missingTrialWindow, "unconfirmed_until");
-  }
+  const trialWindow = resolveTrialWindow(record, status, created_at);
   const scope = optionalText(record, "scope");
   const aliases = record["aliases"] === null ? [] : optionalStrings(record, "aliases");
-  return {
+  const input: WritePreferenceInput = {
     slug,
     topic,
     principle,
     created_at,
-    unconfirmed_until: requireText(record, "unconfirmed_until"),
+    unconfirmed_until: trialWindow.value,
     status,
     evidenced_by: optionalStrings(record, "evidenced_by"),
     confirmed_at: optionalText(record, "confirmed_at"),
@@ -282,6 +426,19 @@ export function toWritePreferenceInput(row: unknown): WritePreferenceInput {
     extraTags: optionalStrings(record, "tags"),
     ...(scope !== null ? { scope } : {}),
     ...(aliases.length > 0 ? { aliases } : {}),
+  };
+  return {
+    input,
+    derived:
+      trialWindow.derivedFrom === undefined
+        ? []
+        : [
+            {
+              field: "unconfirmed_until",
+              value: trialWindow.value,
+              derivedFrom: trialWindow.derivedFrom,
+            },
+          ],
   };
 }
 
@@ -308,17 +465,24 @@ export function restorePreferences(
   const clock = opts.now !== undefined ? { now: opts.now } : {};
   const restored: string[] = [];
   const failed: PreferenceRestoreFailureRecord[] = [];
+  const derived: PreferenceRestoreDerivation[] = [];
+  // The destination's topics BEFORE this run, so a row that overwrites a
+  // rule of the same id replaces its claim rather than contending with it.
+  const priorTopics = new Map<string, string>();
+  for (const existing of collectExportRows(vault)) priorTopics.set(existing.id, existing.topic);
+  const restoredTopics = new Map<string, string>();
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
     const id = rowId(row);
-    let input: WritePreferenceInput;
+    let mapping: RestoreRowMapping;
     try {
-      input = toWritePreferenceInput(row);
+      mapping = toRestoreRow(row);
     } catch (exc) {
       failed.push(failure(id, index, exc));
       continue;
     }
+    const { input } = mapping;
     try {
       const result = writePreferenceTxn(
         vault,
@@ -329,6 +493,9 @@ export function restorePreferences(
         { agent, reason: PREFERENCE_RESTORE_AUDIT_REASON, ...clock },
       );
       restored.push(result.id);
+      restoredTopics.set(result.id, input.topic);
+      // Only a row that LANDED can have been restored on a derived value.
+      for (const d of mapping.derived) derived.push({ id: result.id, index, ...d });
     } catch (exc) {
       failed.push(failure(id, index, exc));
     }
@@ -339,7 +506,59 @@ export function restorePreferences(
     restored: Object.freeze(restored),
     failed: Object.freeze(failed),
     fieldsNotRestored: PREFERENCE_FIELDS_NOT_RESTORED,
+    derived: Object.freeze(derived),
+    topicKeyCollisions: collisionsAfterRestore(priorTopics, restoredTopics),
   });
+}
+
+/**
+ * Folded topic keys claimed by more than one raw spelling once this restore
+ * has landed. Byte-identical spellings are NOT a collision: that is the
+ * ordinary "one topic, two rules" case the dream pass has always handled,
+ * and reporting it here would be this unit inventing a finding it did not
+ * cause - the same line `TopicKeyContention` draws.
+ */
+function collisionsAfterRestore(
+  priorTopics: ReadonlyMap<string, string>,
+  restoredTopics: ReadonlyMap<string, string>,
+): ReadonlyArray<RestoredTopicKeyCollision> {
+  if (restoredTopics.size === 0) return Object.freeze([]);
+  const claimants = new Map<string, Map<string, Set<string>>>();
+  const add = (id: string, topic: string): void => {
+    const key = topicKey(topic);
+    if (key === "") return;
+    const byTopic = claimants.get(key) ?? new Map<string, Set<string>>();
+    const ids = byTopic.get(topic) ?? new Set<string>();
+    ids.add(id);
+    byTopic.set(topic, ids);
+    claimants.set(key, byTopic);
+  };
+  for (const [id, topic] of priorTopics) {
+    // A restored row REPLACED the rule of the same id: its old topic is no
+    // longer on disk and cannot be a claimant.
+    if (restoredTopics.has(id)) continue;
+    add(id, topic);
+  }
+  for (const [id, topic] of restoredTopics) add(id, topic);
+
+  const out: RestoredTopicKeyCollision[] = [];
+  for (const [key, byTopic] of [...claimants.entries()].toSorted(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
+    if (byTopic.size < 2) continue;
+    // At least one claimant must come from THIS restore - a contention the
+    // destination already had is not something the import created.
+    const ids = [...byTopic.values()].flatMap((set) => [...set]);
+    if (!ids.some((id) => restoredTopics.has(id))) continue;
+    out.push(
+      Object.freeze({
+        key,
+        topics: Object.freeze([...byTopic.keys()].toSorted()),
+        prefIds: Object.freeze(ids.toSorted()),
+      }),
+    );
+  }
+  return Object.freeze(out);
 }
 
 /** The row's declared id when it has a usable one, `null` otherwise. */

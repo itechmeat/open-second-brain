@@ -125,11 +125,39 @@ describe("o2b brain bank-export / bank-import", () => {
     expect(existsSync(join(vault, "Brain", "preferences", "pref-carried-rule.md"))).toBe(true);
   });
 
-  test("bank-import exits non-zero when a carried preference cannot be restored", async () => {
+  test("bank-import restores a legacy row whose trial window is inert, and says so", async () => {
+    // The shape every bundle taken before the trial window entered the
+    // export projection has. The rule is confirmed, so the window is inert
+    // and derivable from the row's own `confirmed_at`: refusing it would
+    // exit 1 on a backup that is the only copy left of these rules.
     await bootstrap();
     const row = preferenceRow();
     delete row["unconfirmed_until"];
+    delete row["revision"];
     const bundleFile = join(tmp, "legacy-prefs.json");
+    writeFileSync(
+      bundleFile,
+      JSON.stringify({ schema: "1", graph: { nodes: [] }, preferences: [row] }),
+    );
+    const imp = await runCli(["brain", "bank-import", bundleFile], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(imp.returncode).toBe(0);
+    expect(imp.stdout).toContain("unconfirmed_until derived from confirmed_at");
+    expect(existsSync(join(vault, "Brain", "preferences", "pref-carried-rule.md"))).toBe(true);
+  });
+
+  test("bank-import exits non-zero when a carried preference cannot be restored", async () => {
+    // The one row whose deadline is live: an `unconfirmed` rule. Its
+    // `unconfirmed_until` is not a function of anything the row carries, so
+    // it is refused rather than invented - and a refused rule is a partial
+    // import, which the exit code has to say.
+    await bootstrap();
+    const row = preferenceRow();
+    delete row["unconfirmed_until"];
+    row["status"] = "unconfirmed";
+    row["confirmed_at"] = null;
+    const bundleFile = join(tmp, "legacy-trial-prefs.json");
     writeFileSync(
       bundleFile,
       JSON.stringify({ schema: "1", graph: { nodes: [] }, preferences: [row] }),

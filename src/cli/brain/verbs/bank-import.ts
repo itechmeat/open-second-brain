@@ -80,10 +80,28 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
     for (const failure of p.failed) {
       lines.push(`  ${failure.id ?? `#${failure.index}`}: ${failure.reason} (${failure.detail})`);
     }
+    // A value the bundle did not carry is reported as derived, never folded
+    // into the restored count as if the backup had contained it.
+    for (const d of p.derived) {
+      lines.push(`  ${d.id}: ${d.field} derived from ${d.derivedFrom} (${d.value})`);
+    }
+    // A contention this import created: the dream pass plans nothing for a
+    // topic key two spellings claim, so an operator who is not told here
+    // sees consolidation stop with no cause named.
+    for (const collision of p.topicKeyCollisions) {
+      lines.push(
+        `  topic key '${collision.key}' is claimed by ${collision.topics.join(", ")} ` +
+          `(${collision.prefIds.join(", ")}); consolidation plans nothing until one owner remains`,
+      );
+    }
     process.stdout.write(lines.join("\n") + "\n");
   }
   // A refused preference is a partial import, not a clean one: the caller
-  // asked for the bundle's rules and did not get all of them. The graph
-  // half keeps its own per-entry tolerance and does not gate the code.
+  // asked for the bundle's rules and did not get all of them. A row restored
+  // on a DERIVED value did land, so it does not gate the code - it is
+  // reported above instead, as is a topic-key collision the import created:
+  // both are states an operator must see, neither is a rule left on the
+  // floor. The graph half keeps its own per-entry tolerance and does not
+  // gate the code either.
   return result.preferences.failed.length > 0 ? 1 : 0;
 }
