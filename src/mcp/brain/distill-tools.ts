@@ -59,13 +59,31 @@ export const DISTILL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: TOOL,
     // The guarantee is stated here, in the idiom `brain_intake_entities` uses:
     // a caller choosing a tool reads this, and a write that quarantines what it
-    // just wrote must say so where the choice is made. The parameter-by-
-    // parameter recital the description used to open with was dropped to make
-    // room within `TOOL_DESCRIPTION_MAX` - every one of those facts is already
-    // in the `inputSchema` property descriptions below, and the guarantee was
-    // nowhere.
+    // just wrote must say so where the choice is made.
+    //
+    // It is stated CONDITIONALLY, and the condition is named. This sentence
+    // used to assert that the page was "excluded from ordinary reads", which
+    // was false on a default install: the exclusion is `trustGateAdjuster`,
+    // which `search/pipeline/post-rank.ts` mounts only when
+    // `recall.retrievalTrustGateEnabled` is set, and that flag falls back to
+    // `false`. The marker is written correctly and `classifyRetrievalTrust`
+    // reads it correctly - nothing mounts the gate.
+    //
+    // Making it true by default was the other option and is not taken here.
+    // Flipping the flag turns on three signals at once, changes the search
+    // result shape (the trust receipts stop being null), the cache slot key and
+    // the explain envelope - a release-wide decision that does not belong to a
+    // tool description. Mounting a partial gate for this one signal would
+    // exclude pages with no receipt to say so, which is the silent drop this
+    // project forbids. So the limit is admitted instead, with the setting
+    // named, and `tests/cli/distill-trust-lane.test.ts` proves both halves:
+    // the default returns the page, the setting stops returning it.
+    //
+    // Note the asymmetry with `brain_intake_entities`, whose quarantine holds
+    // by DEFAULT: it works through `status: quarantine` plus the entity page
+    // status scope, which nothing gates. The same words mean less here.
     description:
-      "Distill one source into atomic claims with block-level provenance; runs no model. Writes one idempotent page citing each claim as `[[source#^block]]`. The page is marked `untrusted_source` and excluded from ordinary reads unless `source_path` names a file that exists; `trust` reports the lane.",
+      "Distill one source into atomic claims; runs no model. Writes one idempotent page citing each claim as `[[source#^block]]`. A source outside this vault is marked `untrusted_source`, which ordinary reads still return unless `search_trust_gate_enabled` is on. `trust` names the lane.",
     inputSchema: {
       type: "object",
       properties: {

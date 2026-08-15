@@ -58,11 +58,19 @@ function parseClaims(raw: string): DistillClaim[] {
 }
 
 /**
- * What the success line adds when the page was quarantined. The token is the
- * frontmatter key itself rather than a sentence, so the operator can grep for
- * the same string on disk - and a trusted run's line stays exactly as it was.
- * Silence here would report one success sentence for two different outcomes,
- * one of which no ordinary read will ever return.
+ * What the success line adds when the page was marked untrusted. The token is
+ * the frontmatter key itself rather than a sentence, so the operator can grep
+ * for the same string on disk - and a trusted run's line stays exactly as it
+ * was. Silence here would report one success sentence for two different
+ * outcomes.
+ *
+ * The marker is a MARKER, not a guarantee that the page is out of reach. The
+ * exclusion it feeds is the retrieval trust gate, which
+ * `search/pipeline/post-rank.ts` mounts only when `search_trust_gate_enabled`
+ * is set - a flag that falls back to `false`. This comment used to claim "no
+ * ordinary read will ever return" it, which is false on a default install; see
+ * the argument in `src/mcp/brain/distill-tools.ts` for why the answer is to
+ * state the condition rather than to flip the flag from here.
  */
 function untrustedNote(trust: IntakeTrust): string {
   return trust === INTAKE_TRUST.untrusted ? ` [${UNTRUSTED_SOURCE_FRONTMATTER_KEY}]` : "";
