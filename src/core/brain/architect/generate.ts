@@ -19,9 +19,21 @@
  *
  * One run is one critical section: every note is planned, then written,
  * with the sync lock held across both. Planning before writing is what
- * makes a corrupted-sentinel abort leave NO half-refreshed prefix on
- * disk, and the lock is what stops two runs on the same repo from
- * reading the same "before" state and erasing each other.
+ * makes a corrupted-sentinel abort - and an elapsed deadline - leave NO
+ * half-refreshed prefix on disk, and the lock is what stops two runs on
+ * the same repo from reading the same "before" state and erasing each
+ * other's merge.
+ *
+ * Planning does NOT cover a failure of the writing itself. Planning
+ * removes the error class that arises while DECIDING a note's bytes; an
+ * ENOSPC, EACCES or EIO on the k-th of N notes arises while placing them,
+ * and leaves k-1 refreshed beside the rest. No filesystem swaps N files
+ * into place at once, so that state is reachable and cannot be rolled
+ * back. What makes it survivable is that the loop is idempotent - every
+ * note's bytes are a function of the scanned facts plus the prose already
+ * outside its regions - so a re-run repairs any prefix. What makes it
+ * actionable is {@link ArchWriteError}, which names the note that failed
+ * and how far the run got.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -54,6 +66,19 @@ export interface GenerateArchDocsResult {
   readonly dir: string;
   readonly overviewPath: string;
   readonly modulePaths: ReadonlyArray<string>;
+  /**
+   * What this run did to the notes: how many it wrote for the first time,
+   * how many it rewrote, and how many it found already correct. They sum
+   * to `1 + modulePaths.length` and go out on the CLI's JSON envelope.
+   *
+   * Each one is the verdict of a READ - `planNote` compares what is on
+   * disk against what the facts say - so the three are only true of the
+   * disk if that read and the write that follows it are one critical
+   * section. They are consequently what a concurrent run can falsify:
+   * two runs whose reads both preceded either write both report having
+   * created the same note. That is the property
+   * `architect-concurrent-runs.test.ts` holds down.
+   */
   readonly created: number;
   readonly updated: number;
   readonly unchanged: number;
@@ -190,6 +215,46 @@ function planNote(path: string, head: string, regions: ReadonlyArray<Region>): P
   return { path, text: merged, disposition: NOTE_DISPOSITION.updated };
 }
 
+/**
+ * A note could not be written, part-way through the write loop.
+ *
+ * The notes before it are already renamed into place and the notes after
+ * it still hold their previous bytes. `rename(2)` is atomic per file and
+ * nothing swaps N files at once, so this partial state is reachable and
+ * cannot be undone by the loop that produced it. It is repairable, not
+ * recoverable in place: one run is a pure function of the scanned facts
+ * plus the prose outside each note's regions, so re-running once the
+ * cause is fixed rewrites every note, the untouched suffix included.
+ *
+ * The counts are the reason this type exists. The native errno names a
+ * temp file the caller never asked for - `atomicWriteFileSync` writes a
+ * sibling and renames it - and says nothing about how much of the tree
+ * already moved, which is the one fact an operator needs to know a
+ * re-run is not optional.
+ */
+export class ArchWriteError extends Error {
+  /** The note whose write failed. */
+  readonly path: string;
+  /** Notes whose new bytes are already on disk. */
+  readonly written: number;
+  /** Notes still holding their previous bytes, this one included. */
+  readonly pending: number;
+
+  constructor(path: string, written: number, pending: number, cause: unknown) {
+    super(
+      `failed to write architecture note ${path} after refreshing ` +
+        `${written} of ${written + pending} note(s): ${errorMessage(cause)} - ` +
+        "the tree is partially refreshed; fix the cause and re-run, which " +
+        "rewrites every note and preserves prose outside the regions",
+      { cause },
+    );
+    this.name = "ArchWriteError";
+    this.path = path;
+    this.written = written;
+    this.pending = pending;
+  }
+}
+
 /** How many of `plans` ended in `disposition`. */
 function countOf(plans: ReadonlyArray<PlannedNote>, disposition: NoteDisposition): number {
   return plans.filter((plan) => plan.disposition === disposition).length;
@@ -205,9 +270,13 @@ function modulePath(dir: string, module: ModuleFact): string {
  * interleaved.
  *
  * The deadline is checked while PLANNING only. A run that stops at a
- * checkpoint has therefore written nothing at all, and the write loop is
- * the cheap part (7.9 ms of a 396 ms run on this repository) that must
- * not be left half-done.
+ * checkpoint has therefore written nothing at all, and the write loop -
+ * the cheap part, 7.9 ms of a 396 ms run on this repository - is allowed
+ * to finish rather than being interrupted between two notes.
+ *
+ * A write that FAILS is the case a deadline policy cannot reach. The loop
+ * cannot un-rename the notes already placed, so it reports how far it got
+ * instead of implying it got nowhere: see {@link ArchWriteError}.
  */
 function renderNotes(
   dir: string,
@@ -236,8 +305,17 @@ function renderNotes(
     );
   }
 
+  const toWrite = plans.filter((plan) => plan.text !== null).length;
+  let written = 0;
   for (const plan of plans) {
-    if (plan.text !== null) atomicWriteFileSync(plan.path, plan.text);
+    if (plan.text !== null) {
+      try {
+        atomicWriteFileSync(plan.path, plan.text);
+      } catch (error) {
+        throw new ArchWriteError(plan.path, written, toWrite - written, error);
+      }
+      written += 1;
+    }
     // A note is complete when its bytes are on disk, or when they were
     // already the right bytes - so an unchanged note advances too.
     progress.advance(ARCHITECT_STAGE.render);
@@ -337,6 +415,16 @@ function generateRun(
   // this one did not. It cannot stop an operator editing a note in the
   // same millisecond - nothing here can - but that race was never the
   // one the module could do something about.
+  //
+  // What the race costs is worth naming exactly, because the answer is
+  // not torn bytes and a byte comparison will therefore never find it.
+  // One run's output is a pure function of the facts plus the prose
+  // outside each region, so two runs on one repo compute the same bytes
+  // and whichever writes last leaves the same file either way. The loss
+  // lands in the REPORT: each run planned from a state the other had
+  // already replaced, so both tell the operator they created notes only
+  // one of them created. `architect-concurrent-runs.test.ts` is the
+  // discriminating test, and the tally is its instrument.
   const handle = acquireLockSyncWithRetry(dir);
   let plans: ReadonlyArray<PlannedNote>;
   try {

@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
+import { ArchWriteError, generateArchDocs } from "../../../src/core/brain/architect/generate.ts";
 import { ARCHITECT_STAGE, scanProject } from "../../../src/core/brain/architect/scan.ts";
 import { PROGRESS_KIND } from "../../../src/core/brain/progress.ts";
 import { RegionError } from "../../../src/core/brain/regions.ts";
@@ -238,6 +239,55 @@ test("a corrupted note aborts the run before any note is written", () => {
   // The overview is written first, so a run that wrote as it went would
   // have left it updated next to a module note it could not repair.
   expect(readFileSync(first.overviewPath, "utf8")).toBe(overviewBefore);
+});
+
+/**
+ * Planning removes the error class that arises while DECIDING a note's
+ * bytes. It cannot remove the one that arises while PLACING them, and the
+ * module docblock no longer claims otherwise: this is the mid-loop write
+ * failure, and it does leave a refreshed prefix beside stale notes.
+ *
+ * The failure is injected with a real errno rather than a mocked writer -
+ * `modules/` is made read-only, so `atomicWriteFileSync`'s temp file
+ * cannot be created there. The overview lives one directory up and is
+ * written first, so exactly one note is refreshed before the loop stops.
+ */
+test("a write that fails part-way through reports the prefix it already refreshed", () => {
+  const first = generateArchDocs(vault, project);
+  const coreNote = first.modulePaths.find((p) => p.endsWith("core.md"))!;
+  const coreBefore = readFileSync(coreNote, "utf8");
+  const overviewBefore = readFileSync(first.overviewPath, "utf8");
+  seed("src/core/added.ts"); // overview.md AND core.md must both change
+
+  chmodSync(join(first.dir, "modules"), 0o555);
+  let caught: unknown = null;
+  try {
+    generateArchDocs(vault, project);
+  } catch (error) {
+    caught = error;
+  }
+  chmodSync(join(first.dir, "modules"), 0o755);
+
+  expect(caught).toBeInstanceOf(ArchWriteError);
+  const failure = caught as ArchWriteError;
+  expect(failure.path).toBe(coreNote);
+  // The overview is on disk; `core.md` and nothing after it are not.
+  expect(failure.written).toBe(1);
+  expect(failure.pending).toBe(1);
+  expect(failure.message).toContain("re-run");
+  expect(failure.cause).toBeDefined();
+
+  // The half-refreshed tree the counts describe, observed directly.
+  expect(readFileSync(first.overviewPath, "utf8")).not.toBe(overviewBefore);
+  expect(readFileSync(coreNote, "utf8")).toBe(coreBefore);
+  // A failed write is not a leaked lock.
+  expect(existsSync(`${first.dir}.lock`)).toBe(false);
+
+  // And the repair the message promises is real: with the cause gone, one
+  // ordinary re-run rewrites the suffix the failure left stale.
+  const repaired = generateArchDocs(vault, project);
+  expect(repaired.updated).toBe(1);
+  expect(readFileSync(coreNote, "utf8")).toContain("added.ts");
 });
 
 test("module_paths follows the scan's module order, not the write order", () => {
