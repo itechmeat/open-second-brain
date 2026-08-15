@@ -39,9 +39,20 @@ export interface GenerateArchDocsResult {
   readonly unchanged: number;
 }
 
+/**
+ * Codepoint order, not `localeCompare`: ICU collation varies with the
+ * runtime locale, so a collator-based tie-break renders different bytes
+ * for the same tree on two hosts - and byte-identical regeneration is
+ * this module's whole contract. Every other ordering in the scanner
+ * already uses plain `toSorted()`; this is the one that did not.
+ */
+function compareStable(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 function languagesLine(languages: Readonly<Record<string, number>>): string {
   const entries = Object.entries(languages).toSorted(
-    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0]),
+    (a, b) => b[1] - a[1] || compareStable(a[0], b[0]),
   );
   if (entries.length === 0) return "none detected";
   return entries

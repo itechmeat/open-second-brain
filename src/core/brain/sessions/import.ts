@@ -136,7 +136,8 @@ export function resolveEventInstant(
 
 export interface ImportSessionResult {
   readonly file: string;
-  readonly format: SessionAdapterId;
+  /** Id of the adapter that parsed the file; a registry key, not a union. */
+  readonly format: string;
   readonly turns_scanned: number;
   readonly signals_created: number;
   readonly signals_deduped: number;
@@ -542,7 +543,7 @@ export async function importSession(
  * the caller, not here), then a per-adapter default, finally
  * `opts.agent`.
  */
-function agentLabelForTurn(turn: SessionTurn, adapter: SessionAdapterId, fallback: string): string {
+function agentLabelForTurn(turn: SessionTurn, adapter: string, fallback: string): string {
   void turn; // reserved for future per-turn role-aware fallback
   return getAdapter(adapter).defaultAgent.trim() || fallback;
 }

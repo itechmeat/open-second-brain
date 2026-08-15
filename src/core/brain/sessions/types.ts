@@ -14,7 +14,42 @@
  * entry — no other code path needs to change.
  */
 
-export type SessionAdapterId = "claude" | "codex" | "hermes" | "opencode" | "grok";
+/**
+ * The runtimes whose adapters ship in this tree.
+ *
+ * Closed, because it is what `--format` is validated against: a value that
+ * arrives as a raw CLI string is either one of these or a typo, and
+ * {@link isSessionAdapterId} is the boundary between the two. The registry
+ * itself is keyed by `string` and open to a caller's own adapter
+ * (`createSessionAdapterRegistry`), so this vocabulary answers "which
+ * runtimes ship here", not "which adapters can exist" - and
+ * `tests/core/brain/sessions/adapter-registry.test.ts` locks the two
+ * together for the built-in registry.
+ */
+export const SESSION_ADAPTER_ID = Object.freeze({
+  claude: "claude",
+  codex: "codex",
+  hermes: "hermes",
+  opencode: "opencode",
+  grok: "grok",
+} as const);
+
+export type SessionAdapterId = (typeof SESSION_ADAPTER_ID)[keyof typeof SESSION_ADAPTER_ID];
+
+/** The shipped adapter ids, in registry order. */
+export const SESSION_ADAPTER_IDS: ReadonlyArray<SessionAdapterId> = Object.freeze([
+  SESSION_ADAPTER_ID.claude,
+  SESSION_ADAPTER_ID.codex,
+  SESSION_ADAPTER_ID.hermes,
+  SESSION_ADAPTER_ID.opencode,
+  SESSION_ADAPTER_ID.grok,
+]);
+
+export function isSessionAdapterId(value: unknown): value is SessionAdapterId {
+  return (
+    typeof value === "string" && (SESSION_ADAPTER_IDS as ReadonlyArray<string>).includes(value)
+  );
+}
 
 export interface SessionToolCall {
   /** Tool name as emitted by the runtime, e.g. `brain_feedback`. */
@@ -38,7 +73,14 @@ export interface SessionTurn {
 }
 
 export interface SessionAdapter {
-  readonly id: SessionAdapterId;
+  /**
+   * Registry key. `string` rather than {@link SessionAdapterId} so that
+   * registering an adapter is the ONE change adding a runtime requires -
+   * a union here would make every new adapter a change to this file too,
+   * and would put a test's own adapter outside the type system entirely.
+   * The shipped adapters carry ids from {@link SESSION_ADAPTER_ID}.
+   */
+  readonly id: string;
   /** Default `agent` label stamped on imported signals for this runtime. */
   readonly defaultAgent: string;
   /**

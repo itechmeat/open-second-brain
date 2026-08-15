@@ -114,6 +114,64 @@ test("regeneration preserves operator edits outside regions and refreshes facts 
   expect(second.updated).toBeGreaterThanOrEqual(1);
 });
 
+/**
+ * The renderer must not consult the host's collation.
+ *
+ * Two children generate the same fixture and their overview bytes are
+ * compared. `LC_ALL` alone cannot prove this: measured on this runtime,
+ * `new Intl.Collator().resolvedOptions().locale` stays `en-US` whatever
+ * `LC_ALL` says, so an env-only test would pass against a collator-based
+ * tie-break too. The second child therefore installs a reversed collation
+ * on `String.prototype.localeCompare` before importing the generator -
+ * that is the collation difference the environment could not supply, and
+ * it is exactly what a differently-collating host would do to a
+ * `localeCompare` tie-break.
+ */
+const COLLATION_CHILD = `
+if (process.env["O2B_TEST_REVERSE_COLLATION"] === "1") {
+  Object.defineProperty(String.prototype, "localeCompare", {
+    value(other) { return other < this ? -1 : other > this ? 1 : 0; },
+    configurable: true,
+    writable: true,
+  });
+}
+const { readFileSync } = await import("node:fs");
+const { generateArchDocs } = await import(process.env["O2B_TEST_GENERATE"]);
+const res = generateArchDocs(process.env["O2B_TEST_VAULT"], process.env["O2B_TEST_PROJECT"]);
+process.stdout.write(readFileSync(res.overviewPath, "utf8"));
+`;
+
+function renderUnderCollation(locale: string, reversed: boolean): string {
+  const childVault = join(tmp, `vault-${locale}-${reversed ? "rev" : "plain"}`);
+  mkdirSync(join(childVault, "Brain"), { recursive: true });
+  const child = Bun.spawnSync([process.execPath, "-e", COLLATION_CHILD], {
+    env: {
+      ...process.env,
+      LC_ALL: locale,
+      LANG: locale,
+      O2B_TEST_REVERSE_COLLATION: reversed ? "1" : "0",
+      O2B_TEST_GENERATE: join(import.meta.dir, "../../../src/core/brain/architect/generate.ts"),
+      O2B_TEST_VAULT: childVault,
+      O2B_TEST_PROJECT: project,
+    },
+  });
+  const stderr = new TextDecoder().decode(child.stderr);
+  expect({ locale, code: child.exitCode, stderr }).toEqual({ locale, code: 0, stderr: "" });
+  return new TextDecoder().decode(child.stdout);
+}
+
+test("the language tie-break does not depend on the host collation", () => {
+  // Equal counts, so ONLY the tie-break decides their order.
+  seed("src/core/one.aaa");
+  seed("src/core/two.aab");
+
+  const plain = renderUnderCollation("C", false);
+  const reversed = renderUnderCollation("tr_TR.UTF-8", true);
+
+  expect(reversed).toBe(plain);
+  expect(plain).toContain(".aaa (1)");
+});
+
 test("unchanged project regenerates byte-identically", () => {
   const first = generateArchDocs(vault, project);
   const before = readFileSync(first.overviewPath, "utf8");
