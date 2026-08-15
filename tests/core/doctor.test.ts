@@ -256,7 +256,15 @@ describe("doctor aggregator", () => {
     expect(results.some((r) => r.name === "code_graph")).toBe(false);
   });
 
-  test("omits code_graph when partner.codegraph.disabled is true", () => {
+  test("reports code_graph as deliberately not consulted when the check is disabled", () => {
+    // This test asserted OMISSION until the switch gained a producer.
+    // Omission was the wrong report: an operator who turned the check
+    // off, one whose machine has no codegraph, and one standing outside
+    // a code project all read the same empty result, so a setting that
+    // had just taken effect was indistinguishable from one that had done
+    // nothing. The line says the partner was not consulted and that
+    // nothing is therefore claimed about any index - which is the only
+    // honest thing to say about a check that did not run.
     const repo = join(tmp, "myrepo");
     mkdirSync(join(repo, ".git"), { recursive: true });
     writeFileSync(join(repo, "package.json"), "{}\n");
@@ -267,7 +275,11 @@ describe("doctor aggregator", () => {
       cwd: repo,
       partner: { codegraph: { disabled: true } },
     });
-    expect(results.some((r) => r.name === "code_graph")).toBe(false);
+    const codeGraph = results.find((r) => r.name === "code_graph");
+    expect(codeGraph).toBeDefined();
+    // Not a failure: a deliberate operator choice must not fail a doctor.
+    expect(codeGraph?.ok).toBe(true);
+    expect(codeGraph?.message).toContain("was not consulted");
   });
 
   test("includes code_graph for a code project only when codegraph is installed", () => {

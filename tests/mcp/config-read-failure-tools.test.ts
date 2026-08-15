@@ -26,6 +26,7 @@ import { join } from "node:path";
 
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\napi_key: "secret"\n`;
 
@@ -48,6 +49,15 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // `vault_health` runs the full doctor, which consults the codegraph
+  // partner whenever that binary is on PATH. The partner's cache lives
+  // under HOME and this suite mandates a clean one, so each consultation
+  // costs seconds: these tests failed on bun's default budget on any
+  // workstation with codegraph installed and passed on CI, where the
+  // binary is absent. Nothing here asserts anything about the partner, so
+  // the cost is removed rather than the ceiling raised.
+  savedEnv[PARTNER_CODEGRAPH_DISABLED_ENV] = process.env[PARTNER_CODEGRAPH_DISABLED_ENV];
+  process.env[PARTNER_CODEGRAPH_DISABLED_ENV] = "true";
 });
 
 afterEach(() => {

@@ -27,6 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\nagent_name: "vps-agent"\n`;
 
@@ -51,6 +52,13 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // `vault_health` runs the full doctor, which consults the codegraph
+  // partner whenever that binary is on PATH. The partner's cache lives
+  // under HOME and this suite mandates a clean one, so each consultation
+  // costs seconds. Nothing here asserts anything about the partner, so
+  // the cost is removed rather than the ceiling raised.
+  savedEnv[PARTNER_CODEGRAPH_DISABLED_ENV] = process.env[PARTNER_CODEGRAPH_DISABLED_ENV];
+  process.env[PARTNER_CODEGRAPH_DISABLED_ENV] = "true";
 });
 
 afterEach(() => {

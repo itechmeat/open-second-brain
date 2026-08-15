@@ -14,6 +14,7 @@ import {
 } from "../../src/mcp/index.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -24,6 +25,15 @@ beforeEach(() => {
     savedEnv[k] = process.env[k];
     delete process.env[k];
   }
+  // `vault_health` runs the full doctor, which consults the codegraph
+  // partner whenever that binary is on PATH. The partner's cache lives
+  // under HOME and this suite mandates a clean one, so each consultation
+  // costs seconds: these tests failed on bun's default budget on any
+  // workstation with codegraph installed and passed on CI, where the
+  // binary is absent. Nothing here asserts anything about the partner, so
+  // the cost is removed rather than the ceiling raised.
+  savedEnv[PARTNER_CODEGRAPH_DISABLED_ENV] = process.env[PARTNER_CODEGRAPH_DISABLED_ENV];
+  process.env[PARTNER_CODEGRAPH_DISABLED_ENV] = "true";
 });
 
 afterEach(() => {
