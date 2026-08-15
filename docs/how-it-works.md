@@ -1218,7 +1218,16 @@ notes under `Brain/projects/arch/<repo-key>/`. Generated content
 lives between paired `<!-- o2b:begin <id> -->` / `<!-- o2b:end <id>
 -->` sentinels: regeneration replaces only generated bodies, operator
 prose outside regions survives byte-for-byte, and corrupted markers
-fail closed before any write. The same release also closes the
+fail closed before any write - every note of a run is decided before
+the first one is written, so an abort leaves no half-refreshed
+prefix. The tree is walked exactly once, and the walk enters no
+dot-directory and no build or dependency output (`node_modules`,
+`dist`, `build`, `out`, `coverage`, `vendor`, `target`, `venv`,
+`__pycache__`); architecture notes describe source, not tooling
+state. A run reports its two stages - `walk`, a counter with no
+denominator, and `render`, which knows its note count - through the
+progress spine, and honours a safeguard deadline at each directory
+read. The same release also closes the
 observability gap v0.39.0 left open: `brain_query` now emits opt-in
 recall telemetry with a kind-only payload, so the supplied preference
 id, topic, or timestamp never lands in a continuity record.
