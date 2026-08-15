@@ -59,6 +59,11 @@ import {
   SNAPSHOT_STORE_EXCLUSION,
   SNAPSHOT_STORE_EXCLUSION_REASONS,
 } from "../../../src/core/brain/manifest.ts";
+import {
+  isSnapshotPruneRefusal,
+  SNAPSHOT_PRUNE_REFUSAL,
+  SNAPSHOT_PRUNE_REFUSALS,
+} from "../../../src/core/brain/snapshot.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
 import {
   isTriggerStatus,
@@ -522,6 +527,19 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: RECOVERABILITY_BLOCKER,
     members: RECOVERABILITY_BLOCKERS,
     guard: isRecoverabilityBlocker,
+  },
+  {
+    // B1. One member, and the census does not care how many: what it
+    // asserts is that the guard accepts it and rejects everything else.
+    // The value rides out of TypeScript in the prune report the
+    // destructive gate returns and the CLI prints, and it exists because
+    // a configured retention of zero used to make the most destructive
+    // operation in the snapshot module remove every archive in the vault
+    // without a word.
+    name: "SNAPSHOT_PRUNE_REFUSAL",
+    values: SNAPSHOT_PRUNE_REFUSAL,
+    members: SNAPSHOT_PRUNE_REFUSALS,
+    guard: isSnapshotPruneRefusal,
   },
 ]);
 

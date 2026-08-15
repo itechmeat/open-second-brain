@@ -93,6 +93,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
 import { FileAlreadyExistsError } from "../fs-atomic.ts";
+import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
 import { runIntegrityCheck } from "../search/store/lifecycle.ts";
@@ -293,9 +294,65 @@ export interface SnapshotInfo {
   readonly reason: BrainSnapshotReason | null;
 }
 
+/**
+ * Why a prune did not remove what it was asked to.
+ *
+ * One member, and it is the one that mattered: `snapshots.retention_count`
+ * is operator-supplied, and a zero silently removed every recovery point
+ * in the vault on the next dream. A refusal is a value here rather than a
+ * throw because the prune runs as a hygiene step behind every snapshot -
+ * throwing would fail the operation the snapshot was protecting, which
+ * trades a real guarantee for a tidy directory.
+ */
+export const SNAPSHOT_PRUNE_REFUSAL = Object.freeze({
+  /** The requested retention is under {@link SNAPSHOT_RETENTION_FLOOR}. */
+  belowRetentionFloor: "below_retention_floor",
+} as const);
+
+/** Closed union over {@link SNAPSHOT_PRUNE_REFUSAL}. */
+export type SnapshotPruneRefusal =
+  (typeof SNAPSHOT_PRUNE_REFUSAL)[keyof typeof SNAPSHOT_PRUNE_REFUSAL];
+
+/** Membership list, in declaration order. */
+export const SNAPSHOT_PRUNE_REFUSALS: ReadonlyArray<SnapshotPruneRefusal> = Object.freeze(
+  Object.values(SNAPSHOT_PRUNE_REFUSAL),
+);
+
+/**
+ * `unknown` rather than `string`: the value rides out of TypeScript in
+ * the prune report a caller may persist or print, and the vocabulary
+ * census probes every guard with `null`, `42` and `{}`.
+ */
+export function isSnapshotPruneRefusal(value: unknown): value is SnapshotPruneRefusal {
+  return (
+    typeof value === "string" && (SNAPSHOT_PRUNE_REFUSALS as ReadonlyArray<string>).includes(value)
+  );
+}
+
+/**
+ * The smallest retention {@link pruneSnapshots} will act on.
+ *
+ * One, because one archive is the difference between a vault with a way
+ * back and a vault without one. A retention of zero is a configuration
+ * that asks the most destructive operation in this module to leave
+ * nothing behind, and obeying it silently is what made it dangerous.
+ */
+export const SNAPSHOT_RETENTION_FLOOR = 1;
+
 export interface PruneSnapshotsResult {
   /** Vault-relative path of each deleted archive. */
   readonly deleted: ReadonlyArray<string>;
+  /**
+   * Archives the prune tried and failed to remove. Previously swallowed
+   * whole: a permission error left the archive in place and reported a
+   * clean prune, so retention silently stopped working and nothing said
+   * so.
+   */
+  readonly failed: ReadonlyArray<string>;
+  /** How many archives are still on disk when the prune returns. */
+  readonly retained: number;
+  /** Why nothing was pruned, or `null` when the prune ran. */
+  readonly refusal: SnapshotPruneRefusal | null;
 }
 
 /**
@@ -335,6 +392,33 @@ export interface RestoreSnapshotResult {
   /** Number of regular files restored under `Brain/` (excluding the excluded entries). */
   readonly restored_files: number;
   readonly derived_store: RestoreDerivedStoreResult;
+  /**
+   * What the LIVE tree's recoverability was worth at the moment it was
+   * discarded - not the archive's. A restore deletes every top-level
+   * entry under `Brain/` and, before this field existed, said nothing
+   * about the state it destroyed doing so. Without a
+   * {@link RestoreSnapshotOptions.beforeDiscard} this reads `unproven`,
+   * which is the honest answer and the reason `restoreSnapshotWithRecoveryPoint`
+   * exists.
+   */
+  readonly recoverability: RecoverabilityVerdict;
+}
+
+export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
+  /**
+   * Called once, AFTER the archive has been extracted into a temp
+   * directory and BEFORE the first live entry is removed. That ordering
+   * is the whole contract: extraction can fail on a corrupt or missing
+   * archive, and a rollback that never touched the tree must not leave a
+   * recovery point of it; and once extraction has succeeded the bytes
+   * being restored are already off the archive, so a retention pass
+   * triggered by the recovery point cannot break the restore in flight.
+   *
+   * Injected rather than called directly because the recovery point is
+   * minted by `snapshot-gate.ts`, which composes THIS module - taking
+   * `takeSnapshot` from there would make the pair a cycle.
+   */
+  readonly beforeDiscard?: () => void;
 }
 
 // ----- Tooling detection ---------------------------------------------------
@@ -1039,9 +1123,22 @@ export function listSnapshots(vault: string): SnapshotInfo[] {
 }
 
 /**
- * Delete all but the `retention_count` newest archives. Returns the
- * paths that were deleted, vault-relative. Idempotent — a second run
- * on the same dir returns `deleted: []`.
+ * Delete all but the `retention_count` newest archives. Returns what it
+ * removed, what resisted removal, how many archives survive, and - when
+ * it declined to run at all - why. Idempotent: a second run on the same
+ * directory removes nothing.
+ *
+ * This is the most destructive operation in the module, and it cannot be
+ * gated on taking a recovery point: gating the thing that destroys
+ * recovery points on making one is circular. It gets a floor and a named
+ * refusal instead. Below {@link SNAPSHOT_RETENTION_FLOOR} nothing is
+ * removed and the refusal travels back, because a configured retention of
+ * zero asks this function to leave a vault with no way back, and it used
+ * to comply on every snapshot and every dream without saying a word.
+ *
+ * A removal that fails is REPORTED rather than swallowed. It used to be
+ * silently skipped, so a permission problem stopped retention working and
+ * every prune still read as clean.
  */
 export function pruneSnapshots(vault: string, retentionCount: number): PruneSnapshotsResult {
   // Vault-identity write guard (context-integrity-gates, Unit J). This is
@@ -1049,24 +1146,39 @@ export function pruneSnapshots(vault: string, retentionCount: number): PruneSnap
   // archives - and it was the only one of the three without the guard
   // its `createSnapshot` and `restoreSnapshot` siblings carry.
   assertVaultIdentityForWrite(vault);
-  if (!Number.isInteger(retentionCount) || retentionCount < 0) {
-    throw new Error(
-      `pruneSnapshots: retentionCount must be a non-negative integer; got ${retentionCount}`,
-    );
+  if (!Number.isInteger(retentionCount)) {
+    throw new Error(`pruneSnapshots: retentionCount must be an integer; got ${retentionCount}`);
+  }
+  if (retentionCount < SNAPSHOT_RETENTION_FLOOR) {
+    // Refused, not obeyed, and not thrown: see the docblock.
+    return Object.freeze({
+      deleted: Object.freeze([]),
+      failed: Object.freeze([]),
+      retained: listSnapshots(vault).length,
+      refusal: SNAPSHOT_PRUNE_REFUSAL.belowRetentionFloor,
+    });
   }
   const all = listSnapshots(vault);
   if (all.length <= retentionCount) {
-    return { deleted: [] };
+    return Object.freeze({
+      deleted: Object.freeze([]),
+      failed: Object.freeze([]),
+      retained: all.length,
+      refusal: null,
+    });
   }
   const victims = all.slice(retentionCount);
   const deleted: string[] = [];
+  const failed: string[] = [];
   for (const v of victims) {
     try {
       rmSync(v.path, { force: true });
       deleted.push(v.path);
     } catch {
-      // Best-effort: a snapshot we can't delete (permission error)
-      // stays put. The next dream run will try again.
+      // The archive stays put and the caller is told which one, so a
+      // recurring permission problem is visible instead of being
+      // rediscovered when retention has quietly stopped working.
+      failed.push(v.path);
     }
     // Remove the matching sidecar manifest and derived-store archive if
     // present. Independent try/catch per companion so a missing one (a
@@ -1082,7 +1194,12 @@ export function pruneSnapshots(vault: string, retentionCount: number): PruneSnap
       }
     }
   }
-  return { deleted };
+  return Object.freeze({
+    deleted: Object.freeze(deleted),
+    failed: Object.freeze(failed),
+    retained: all.length - deleted.length,
+    refusal: null,
+  });
 }
 
 // ----- restoreSnapshot -----------------------------------------------------
@@ -1211,18 +1328,27 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
  *   1. Locate the archive.
  *   2. Extract into a sibling temp dir.
  *   3. Verify the extracted tree contains a `Brain/` root.
- *   4. For each top-level entry under the extracted `Brain/` (which
+ *   4. Run {@link RestoreSnapshotOptions.beforeDiscard}, the seam where
+ *      a recovery point of the tree about to be discarded is taken.
+ *   5. For each top-level entry under the extracted `Brain/` (which
  *      excludes {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES} by virtue of how
  *      the archive was written), remove the corresponding live entry and
  *      copy the extracted one into place.
- *   5. Swap the derived store, when and only when the manifest says the
+ *   6. Swap the derived store, when and only when the manifest says the
  *      snapshot included one.
- *   6. Clean up the temp dir.
+ *   7. Clean up the temp dir.
+ *
+ * Step 5 is a data-loss operation with the strongest confirmation ladder
+ * in the codebase in front of it and, until step 4 existed, nothing at
+ * all behind it: an operator who rolled back to the wrong run id had no
+ * way back. Callers that want one use `restoreSnapshotWithRecoveryPoint`
+ * in `snapshot-gate.ts`; callers that do not get a `recoverability`
+ * verdict saying so rather than silence.
  */
 export function restoreSnapshot(
   vault: string,
   runId: string,
-  opts: SnapshotStoreOptions = {},
+  opts: RestoreSnapshotOptions = {},
 ): RestoreSnapshotResult {
   const dirs = brainDirsForWrite(vault);
 
@@ -1258,6 +1384,12 @@ export function restoreSnapshot(
     const liveEntries = existsSync(dirs.brain)
       ? readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e))
       : [];
+
+    // The last moment at which the live tree still exists. A throw here
+    // propagates and nothing has been removed yet, which is the same
+    // abort-before-the-operation rule the destructive gate applies.
+    opts.beforeDiscard?.();
+
     for (const name of liveEntries) {
       const target = join(dirs.brain, name);
       try {
@@ -1279,9 +1411,17 @@ export function restoreSnapshot(
       cpSync(from, to, { recursive: true });
       restoredFiles += countFiles(to);
     }
+    const derivedStore = restoreDerivedStore(vault, runId, opts);
     return {
       restored_files: restoredFiles,
-      derived_store: restoreDerivedStore(vault, runId, opts),
+      derived_store: derivedStore,
+      // What the DISCARDED tree was worth, not the archive's. The live
+      // derived store is replaced only when the archive carried one, so
+      // it joins the blast radius exactly when it was actually swapped.
+      recoverability: classifyRecoverability({
+        recoveryPoint: opts.beforeDiscard !== undefined,
+        blastRadius: { brainTopLevel: true, derivedStore: derivedStore.replaced },
+      }),
     };
   } finally {
     ext.cleanup();

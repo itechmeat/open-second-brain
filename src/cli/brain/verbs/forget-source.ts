@@ -91,6 +91,7 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
         audit_record_id: plan.auditRecordId,
         snapshot_run_id: plan.snapshotRunId,
         snapshot_path: plan.snapshotPath,
+        recoverability: plan.recoverability,
       });
       return 0;
     }
@@ -112,6 +113,15 @@ export async function cmdBrainForgetSource(argv: string[]): Promise<number> {
       if (plan.snapshotRunId) {
         ok(`  recovery point: snapshot ${plan.snapshotRunId}`);
         if (plan.snapshotPath) info(`    ${plan.snapshotPath}`);
+        // Printed whenever the archive does not cover the whole
+        // deletion, which is exactly the `--include-originals` case: the
+        // line above used to be the operator's last word on the subject.
+        if (plan.recoverability.blockers.length > 0) {
+          info(
+            `    coverage: ${plan.recoverability.state} ` +
+              `(not covered: ${plan.recoverability.blockers.join(", ")})`,
+          );
+        }
       }
       return 0;
     }

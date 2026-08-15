@@ -58,6 +58,11 @@ import { BRAIN_SOURCE_KIND } from "./ingest/ingest.ts";
 import { manifestPath, readManifest, writeManifestAtomic } from "./ingest/content-manifest.ts";
 import { appendContinuitySourceInvalidation } from "./continuity/store.ts";
 import { isoSecond } from "./time.ts";
+import {
+  classifyRecoverability,
+  type DestructiveBlastRadius,
+  type RecoverabilityVerdict,
+} from "./gates/recoverability.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -115,11 +120,25 @@ export interface SourceCleanupPlan {
   /**
    * Run id of the pre-deletion snapshot taken behind the D1 gate, or
    * null when none was taken (a dry run, or a confirmed run with nothing
-   * to delete). This is the recovery point the operator can roll back to.
+   * to delete). This is the recovery point the operator can roll back to
+   * FOR THE PART OF THE DELETION IT COVERS - see {@link recoverability}.
    */
   readonly snapshotRunId: string | null;
   /** Absolute path of the snapshot archive, paired with {@link snapshotRunId}. */
   readonly snapshotPath: string | null;
+  /**
+   * What that recovery point is actually worth for this run.
+   *
+   * `--include-originals` is the reason this field exists. An original is
+   * only ever returned when it lies OUTSIDE `Brain/` (see
+   * {@link findOriginals}), and the snapshot archive holds top-level
+   * entries under `Brain/` and nothing else. So a confirmed run with that
+   * flag deletes files no archive has ever held while reporting a
+   * `snapshotRunId` beside them - a response that reads as fully
+   * reversible and is not. The verdict names the uncovered lane instead
+   * of leaving the caller to infer it.
+   */
+  readonly recoverability: RecoverabilityVerdict;
   /** Total referencing pages + originals (the reported blast radius). */
   readonly blastRadius: number;
 }
@@ -500,6 +519,16 @@ export function deleteBySource(
   const manifestKey = readManifest(vault).entries[canonical] !== undefined ? canonical : null;
   const blastRadius = derived.length + mentions.length + originals.length;
 
+  /**
+   * The lanes this run actually destroys, in the regions the archive is
+   * defined over. `mentions` are reported and never deleted, so they are
+   * not in it; the manifest entry is a `Brain/` index artifact, so it is.
+   */
+  const destroyed: DestructiveBlastRadius = {
+    brainTopLevel: derived.length > 0 || manifestKey !== null,
+    outsideBrainRoot: includeOriginals && originals.length > 0,
+  };
+
   if (!confirm) {
     return Object.freeze({
       source: canonical,
@@ -514,6 +543,10 @@ export function deleteBySource(
       auditRecordId: null,
       snapshotRunId: null,
       snapshotPath: null,
+      // A dry run destroys nothing, so it promises nothing. Reporting the
+      // coverage the confirmed run WOULD have would be a claim about an
+      // archive that does not exist yet.
+      recoverability: classifyRecoverability({ recoveryPoint: false, blastRadius: {} }),
       blastRadius,
     });
   }
@@ -587,17 +620,23 @@ export function deleteBySource(
 
   let snapshotRunId: string | null = null;
   let snapshotArchivePath: string | null = null;
+  let recoverability: RecoverabilityVerdict;
   if (hasWork) {
     const gated = withDestructiveSnapshot(
       vault,
       BRAIN_SNAPSHOT_REASON.deleteBySource,
       runDeletion,
-      { now: opts.now },
+      { now: opts.now, blastRadius: destroyed },
     );
     snapshotRunId = gated.snapshot.runId;
     snapshotArchivePath = gated.snapshot.path;
+    recoverability = gated.recoverability;
   } else {
     runDeletion();
+    // No work means no snapshot AND nothing destroyed. The classifier
+    // says `nothing_at_risk` for that, which is neither the alarm of
+    // `unproven` nor the false comfort of `covered`.
+    recoverability = classifyRecoverability({ recoveryPoint: false, blastRadius: destroyed });
   }
 
   return Object.freeze({
@@ -613,6 +652,7 @@ export function deleteBySource(
     auditRecordId,
     snapshotRunId,
     snapshotPath: snapshotArchivePath,
+    recoverability,
     blastRadius,
   });
 }

@@ -2,10 +2,10 @@ import {
   BrainSnapshotListingError,
   listSnapshots,
   extractSnapshotToTemp,
-  restoreSnapshot,
   type ExtractSnapshotResult,
   type SnapshotInfo,
 } from "../../../core/brain/snapshot.ts";
+import { restoreSnapshotWithRecoveryPoint } from "../../../core/brain/snapshot-gate.ts";
 import {
   BRAIN_MANIFEST_SIDECAR_SINCE_VERSION,
   buildManifest,
@@ -165,7 +165,11 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = restoreSnapshot(vault, runId);
+    // The gated entry point: it archives the live tree - the state this
+    // rollback is about to discard - before the first entry is removed.
+    // An operator who picked the wrong run id used to have no way back
+    // from behind the strongest confirmation ladder in the codebase.
+    result = restoreSnapshotWithRecoveryPoint(vault, runId);
   } catch (exc) {
     return fail(`rollback failed: ${(exc as Error).message ?? exc}`);
   }
@@ -174,6 +178,10 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
     const body: Record<string, string> = {
       run_id: runId,
       restored_files: String(result.restored_files),
+      // The archive of what this rollback threw away, in the same log
+      // line as the rollback itself, so the way back is discoverable
+      // from the record of the step that made it necessary.
+      discarded_state_snapshot: result.recoveryPoint.runId,
     };
     if (drift && forceRollback) body["drift_overridden"] = "true";
     appendLogEvent(vault, {
@@ -194,11 +202,14 @@ export async function cmdBrainRollback(argv: string[]): Promise<number> {
       reason: target.reason,
       restored_files: result.restored_files,
       derived_store: result.derived_store,
+      discarded_state_snapshot: result.recoveryPoint.runId,
+      recoverability: result.recoverability,
     });
   } else {
     ok(
       `restored: ${runId} (${result.restored_files} files, reason ${renderSnapshotReason(target.reason)})`,
     );
+    ok(`discarded state saved as: ${result.recoveryPoint.runId}`);
     // Always printed, in all three shapes. A restore that silently says
     // nothing about the derived store is exactly the silence this
     // feature exists to remove: the operator cannot tell a store that

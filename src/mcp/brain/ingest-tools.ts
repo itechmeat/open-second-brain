@@ -112,6 +112,15 @@ function serializePlan(plan: SourceCleanupPlan): Record<string, unknown> {
     // absolute archive path) so the response stays free of host paths; the
     // archive lives at the deterministic `Brain/.snapshots/<run_id>.tar.zst`.
     snapshot_run_id: plan.snapshotRunId,
+    // What that run id is worth. `include_originals` deletes files that
+    // are outside `Brain/` by construction and therefore outside every
+    // archive ever taken; reporting the run id with nothing beside it
+    // told a caller the deletion was reversible when half of it was not.
+    recoverability: {
+      state: plan.recoverability.state,
+      coverage: [...plan.recoverability.coverage],
+      blockers: [...plan.recoverability.blockers],
+    },
   };
 }
 

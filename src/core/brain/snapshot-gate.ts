@@ -50,9 +50,16 @@ import {
   type RecoverabilityVerdict,
 } from "./gates/recoverability.ts";
 import { collisionCandidateName, snapshotPath, validateRunId } from "./paths.ts";
-import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
+import {
+  createSnapshot,
+  pruneSnapshots,
+  restoreSnapshot,
+  type PruneSnapshotsResult,
+  type RestoreSnapshotOptions,
+  type RestoreSnapshotResult,
+} from "./snapshot.ts";
 import { compactRunStamp } from "./time.ts";
-import type { BrainSnapshotReason } from "./types.ts";
+import { BRAIN_SNAPSHOT_REASON, type BrainSnapshotReason } from "./types.ts";
 
 /** The recovery point minted for a destructive operation. */
 export interface DestructiveSnapshot {
@@ -60,6 +67,17 @@ export interface DestructiveSnapshot {
   readonly runId: string;
   /** Absolute path of the snapshot archive. */
   readonly path: string;
+  /**
+   * What the retention pass behind this snapshot removed, or `null` when
+   * the pass itself failed (the warning on stderr is the other half of
+   * that answer).
+   *
+   * Carried rather than discarded because retention is the one
+   * destructive operation nobody authorises: it runs on every snapshot
+   * and every dream, and it used to trim archives - the operator's only
+   * way back - with no report of any kind.
+   */
+  readonly prune: PruneSnapshotsResult | null;
 }
 
 export interface WithDestructiveSnapshotResult<T> {
@@ -101,6 +119,18 @@ export interface WithDestructiveSnapshotOptions {
    * otherwise would claim coverage over an index no archive holds.
    */
   readonly derivedStoreArchived?: boolean;
+  /**
+   * An EXTRA availability test the reserved run id must also pass.
+   *
+   * The dream pass names its workrun after the same id as its archive,
+   * so a candidate free in `.snapshots/` is not necessarily free for it.
+   * That used to be a second collision ladder in `dream.ts` with its own
+   * bound and its own error message, laddering the same
+   * {@link collisionCandidateName} sequence as this one - two rules for
+   * one id. Absent means the archive directory is the only claim on the
+   * name.
+   */
+  readonly available?: (runId: string) => boolean;
 }
 
 /** Upper bound on distinct run ids tried before giving up. */
@@ -128,6 +158,11 @@ const MAX_SNAPSHOT_ID_ATTEMPTS = 64;
  * deterministic replay rather than as two processes that may or may not
  * overlap. {@link takeSnapshot} passes the real {@link createSnapshot}.
  *
+ * `available` is the caller's EXTRA claim on the name, for a run id that
+ * has to be free somewhere else too. It exists so there is one ladder
+ * rather than two: the dream pass had its own copy, over the same
+ * candidate sequence, with a different bound.
+ *
  * Caveat worth stating rather than hiding: `createSnapshot` today flattens
  * its own "refusing to overwrite an existing archive" into an untyped
  * `BrainSnapshotError`, so a genuinely lost race reaches the operator as
@@ -141,13 +176,15 @@ export function createUniqueSnapshot(
   baseRunId: string,
   create: (runId: string) => string,
   maxAttempts: number = MAX_SNAPSHOT_ID_ATTEMPTS,
+  available: (runId: string) => boolean = () => true,
 ): DestructiveSnapshot {
   let lostRace: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const candidate = collisionCandidateName(baseRunId, attempt);
     if (existsSync(snapshotPath(vault, candidate))) continue;
+    if (!available(candidate)) continue;
     try {
-      return { runId: candidate, path: create(candidate) };
+      return { runId: candidate, path: create(candidate), prune: null };
     } catch (err) {
       if (!isFileAlreadyExists(err)) throw err;
       lostRace = err;
@@ -165,7 +202,9 @@ export function createUniqueSnapshot(
   // operator look at `.snapshots/`. A distinguishable type buys nothing
   // and would have to lie about a run id to exist at all.
   throw new Error(
-    `could not reserve a unique snapshot run id from "${baseRunId}" after ${maxAttempts} attempts`,
+    `could not reserve a unique snapshot run id from "${baseRunId}" after ${maxAttempts} ` +
+      "attempts; every candidate was already claimed, in Brain/.snapshots/ or by the caller's " +
+      "own claim on the name - prune the archive directory, or check that it is readable",
     lostRace === undefined ? undefined : { cause: lostRace },
   );
 }
@@ -187,6 +226,12 @@ export function createUniqueSnapshot(
  * A prune failure is a warning, never a throw - the recovery point exists,
  * and refusing the caller's operation because a cleanup pass could not run
  * would trade a real guarantee for a tidy directory.
+ *
+ * What the prune DID travels back on the result, and a refusal is
+ * announced on stderr rather than absorbed. A retention that silently
+ * declined to run - or that removed nine archives - is the same silence
+ * whether it came from a bad configuration or a permission error, and
+ * neither used to reach anyone.
  */
 export function takeSnapshot(
   vault: string,
@@ -211,10 +256,24 @@ export function takeSnapshot(
     vault,
     baseRunId,
     (runId) => createSnapshot(vault, runId, { reason, now }).path,
+    MAX_SNAPSHOT_ID_ATTEMPTS,
+    opts.available,
   );
 
+  let prune: PruneSnapshotsResult | null = null;
   try {
-    pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));
+    prune = pruneSnapshots(vault, loadSnapshotRetentionSafe(vault));
+    if (prune.refusal !== null) {
+      process.stderr.write(
+        `warning: snapshot retention after ${snapshot.runId} declined to run ` +
+          `(${prune.refusal}); ${prune.retained} archive(s) kept\n`,
+      );
+    }
+    for (const path of prune.failed) {
+      process.stderr.write(
+        `warning: snapshot retention after ${snapshot.runId} could not remove ${path}\n`,
+      );
+    }
   } catch (err) {
     process.stderr.write(
       `warning: snapshot prune after ${snapshot.runId} failed (the recovery point is intact): ${
@@ -223,7 +282,7 @@ export function takeSnapshot(
     );
   }
 
-  return snapshot;
+  return { ...snapshot, prune };
 }
 
 /**
@@ -269,4 +328,59 @@ function recoverabilityOf(opts: WithDestructiveSnapshotOptions): RecoverabilityV
     blastRadius: opts.blastRadius ?? DEFAULT_DESTRUCTIVE_BLAST_RADIUS,
     derivedStoreArchived: opts.derivedStoreArchived === true,
   });
+}
+
+/** What a gated restore returns: the restore, plus what it saved first. */
+export interface RestoreWithRecoveryPointResult extends RestoreSnapshotResult {
+  /** The archive of the live tree, taken immediately before it was discarded. */
+  readonly recoveryPoint: DestructiveSnapshot;
+}
+
+/**
+ * Restore an archive over `Brain/`, having first archived the live tree
+ * the restore is about to discard.
+ *
+ * A rollback deletes every live top-level entry under `Brain/`. The
+ * ladder in front of it is the strongest in this codebase - a manifest
+ * drift refusal, `--yes` in non-interactive mode, a `--force-rollback`
+ * recorded in the log - and behind it there was nothing at all: an
+ * operator who picked the wrong run id had no way back.
+ *
+ * The recovery point is minted with {@link BRAIN_SNAPSHOT_REASON.manual},
+ * which was declared as "an operator asking for a recovery point with no
+ * operation behind it" and had no producer since it was written. That is
+ * exactly this: the operation behind it belongs to the archive being
+ * restored, not to the tree being saved.
+ *
+ * Two orderings are load-bearing and neither is incidental. The point is
+ * taken AFTER extraction, so a corrupt or missing archive leaves no
+ * archive of a tree the restore never touched, and so the retention pass
+ * behind it cannot evict bytes the restore still needs. And the point
+ * lands in `.snapshots/`, which the restore's own deletion excludes -
+ * that exclusion is what makes this recoverable rather than a snapshot
+ * the next step erases.
+ */
+export function restoreSnapshotWithRecoveryPoint(
+  vault: string,
+  runId: string,
+  opts: RestoreSnapshotOptions & WithDestructiveSnapshotOptions = {},
+): RestoreWithRecoveryPointResult {
+  let recoveryPoint: DestructiveSnapshot | null = null;
+  const result = restoreSnapshot(vault, runId, {
+    ...opts,
+    beforeDiscard: () => {
+      recoveryPoint = takeSnapshot(vault, BRAIN_SNAPSHOT_REASON.manual, opts);
+    },
+  });
+  if (recoveryPoint === null) {
+    // Unreachable while `restoreSnapshot` honours its own contract, and
+    // a throw rather than a fabricated value because the alternative is
+    // reporting a recovery point that does not exist - which is the
+    // failure this whole unit is about.
+    throw new Error(
+      `restoreSnapshotWithRecoveryPoint: restore of "${runId}" completed without taking the ` +
+        "recovery point it was asked for",
+    );
+  }
+  return { ...result, recoveryPoint };
 }

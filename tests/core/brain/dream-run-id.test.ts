@@ -9,6 +9,14 @@
  * archives, a permission problem that makes every probe look occupied -
  * spun forever with no output. A bound turns that into a loud failure that
  * names the id it started from.
+ *
+ * B1 consolidated the two ladders into one. `dream` had its OWN copy of
+ * this walk, over the same candidate sequence, with its own bound and its
+ * own error text, beside the identical ladder inside the destructive
+ * gate; the workrun directory is now an extra availability claim the
+ * caller hands the gate rather than a second rule. The behaviour under
+ * test is unchanged - same sequence, same bound - and the failure message
+ * is the gate's, which is why the assertion below moved with it.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -77,6 +85,8 @@ describe("dream run-id allocation", () => {
 
   test("fails loudly once the bound is exhausted instead of spinning", () => {
     occupyRunIds(64);
-    expect(() => dream(vault, { now: NOW })).toThrow(/could not reserve a unique dream run id/);
+    expect(() => dream(vault, { now: NOW })).toThrow(
+      /could not reserve a unique snapshot run id from "dream-/,
+    );
   });
 });

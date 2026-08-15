@@ -69,12 +69,7 @@ import type { DreamOptions, DreamRunSummary, DreamWarning } from "./dream-types.
 import { openWorkrun, WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
 import { buildIntentReview } from "./intent-review.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
-import {
-  brainDirsForWrite,
-  collisionCandidateName,
-  dreamWorkrunPath,
-  snapshotPath,
-} from "./paths.ts";
+import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
 import {
@@ -83,7 +78,7 @@ import {
   resolveRollupThresholds,
   type RollupLadderPlan,
 } from "./rollup-ladder.ts";
-import { createSnapshot, pruneSnapshots } from "./snapshot.ts";
+import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { compactRunStamp, isoDate } from "./time.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import type { BrainConfig } from "./types.ts";
@@ -190,63 +185,82 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
 
   // ---- Execute --------------------------------------------------------
 
-  // Snapshot must succeed before any mutation. If it fails, the
-  // function throws and nothing changes on disk.
+  // The pre-run recovery point and every mutation behind it now run
+  // through `withDestructiveSnapshot`, the gate whose own header names
+  // an inline `createSnapshot` as the anti-pattern it exists to prevent.
+  // This module used to be that anti-pattern: it minted its own run id
+  // through a second collision ladder, took its own archive, and pruned
+  // retention afterwards with a third copy of the warning text. The
+  // wrapper owns all three now, and the run id it reserves is the one
+  // the workrun, the log and the rollup targets are named after.
   let snapshotPathStr: string | undefined;
   // Honor an already-expired deadline BEFORE spending snapshot I/O.
   opts.safeguard?.checkpoint();
-  if (!dryRun) {
-    const baseRunId = runId;
-    runId = nextAvailableDreamRunId(vault, runId);
-    // The rollup plan (and each envelope's target_path) was built with the
-    // pre-collision runId; if the collision check corrected it, rebuild the
-    // plan so every target_path embeds the final run_id.
-    if (rollupPlan.fired && runId !== baseRunId) {
-      rollupPlan = buildRollupPlan(vault, cfg, scan.preferences.length, runId);
-    }
-    // `now` rather than wall clock: the pass is byte-reproducible given
-    // its injected clock, and the snapshot audit line must not be the one
-    // thing that breaks that.
-    snapshotPathStr = createSnapshot(vault, runId, {
-      reason: BRAIN_SNAPSHOT_REASON.dream,
-      now,
-    }).path;
-  }
 
   // v0.12.0 Brain Integrity Suite: durable workrun for the dream pass.
   // Opened lazily on the mutation path (no workrun on dry-run or
   // no-op early-return). The handle is null until the exec branch
   // claims it; it is finalised immediately before the summary is built.
   let workrun: WorkrunHandle | null = null;
-  opts.safeguard?.checkpoint();
   let exec: DreamApplyResult;
   if (dryRun) {
     // Dry-run still reports the move list so the caller's summary is
     // accurate, but it does not touch disk.
+    opts.safeguard?.checkpoint();
     exec = { moved: plannedSignalMoveIds(plan), gatedRetires: [], healEnriched: 0 };
   } else {
-    workrun = openWorkrun(vault, runId);
-    // Truthful checkpoints (no-dead-ends, Unit E). A marker means every
-    // durable effect attributed to that phase is already on disk, so a
-    // crash leaves a journal whose last marker names work that genuinely
-    // finished. Cluster and close are the only two phases whose work
-    // provably ends here: clustering is pure planning that produces no
-    // file at all, and close's single artifact - the pre-run snapshot -
-    // was written just above. Every other marker moved down to the point
-    // where that phase's writes land; see the emission notes there.
-    workrun.checkpoint(WORKRUN_PHASE.clusterComplete);
-    workrun.checkpoint(WORKRUN_PHASE.closeComplete);
-    exec = applyDreamPlan({
+    const baseRunId = runId;
+    const gated = withDestructiveSnapshot(
       vault,
-      cfg,
-      now,
-      plan,
-      refresh,
-      agentName: opts.agentName,
-      wikilinkToRun,
-      healEnrichEnabled,
-      workrun,
-    });
+      BRAIN_SNAPSHOT_REASON.dream,
+      (snapshot) => {
+        runId = snapshot.runId;
+        // The rollup plan (and each envelope's target_path) was built with
+        // the pre-collision runId; if the ladder corrected it, rebuild the
+        // plan so every target_path embeds the final run_id.
+        if (rollupPlan.fired && runId !== baseRunId) {
+          rollupPlan = buildRollupPlan(vault, cfg, scan.preferences.length, runId);
+        }
+        opts.safeguard?.checkpoint();
+        const handle = openWorkrun(vault, runId);
+        // Truthful checkpoints (no-dead-ends, Unit E). A marker means every
+        // durable effect attributed to that phase is already on disk, so a
+        // crash leaves a journal whose last marker names work that genuinely
+        // finished. Cluster and close are the only two phases whose work
+        // provably ends here: clustering is pure planning that produces no
+        // file at all, and close's single artifact - the pre-run snapshot -
+        // was written by the gate before this callback ran. Every other
+        // marker moved down to the point where that phase's writes land;
+        // see the emission notes there.
+        handle.checkpoint(WORKRUN_PHASE.clusterComplete);
+        handle.checkpoint(WORKRUN_PHASE.closeComplete);
+        const applied = applyDreamPlan({
+          vault,
+          cfg,
+          now,
+          plan,
+          refresh,
+          agentName: opts.agentName,
+          wikilinkToRun,
+          healEnrichEnabled,
+          workrun: handle,
+        });
+        return { applied, handle };
+      },
+      {
+        // `now` rather than wall clock: the pass is byte-reproducible given
+        // its injected clock, and the snapshot audit line must not be the
+        // one thing that breaks that.
+        now,
+        // The dream run id names the workrun as well as the archive, so a
+        // candidate free in `.snapshots/` is not enough. This is the claim
+        // that used to live in a second ladder in this module.
+        available: (candidate) => !existsSync(dreamWorkrunPath(vault, candidate)),
+      },
+    );
+    snapshotPathStr = gated.snapshot.path;
+    exec = gated.result.applied;
+    workrun = gated.result.handle;
   }
 
   // Post-mutation safeguard checkpoint: every state-changing write for
@@ -278,17 +292,11 @@ export function dream(vault: string, opts: DreamOptions = {}): DreamRunSummary {
       workrun,
     });
 
-    // Prune snapshots after the run so the new archive itself counts
-    // toward retention.
-    try {
-      pruneSnapshots(vault, cfg.snapshots.retention_count);
-    } catch (err) {
-      // Pruning is a hygiene step; failure should not turn a
-      // successful dream run into an error. The next run will retry.
-      // Surface so an operator can spot a recurring disk/permission
-      // issue instead of wondering why retention stopped.
-      process.stderr.write(`warning: prune snapshots failed: ${(err as Error).message}\n`);
-    }
+    // Retention already ran inside the gate, immediately after the
+    // archive was written. The set of survivors is the same either way -
+    // this run creates no further archives - and the gate is where the
+    // refusal and the removal list are reported, so a second prune here
+    // would be a second rule for one directory.
     regenerateActiveQuiet(vault, { now });
     regenerateLessonsQuiet(vault, { now });
   }
@@ -406,40 +414,4 @@ function formatRunId(d: Date): string {
   // constant rather than a literal, so the archive's filename and the
   // provenance stamped into its sidecar are one string.
   return `${BRAIN_SNAPSHOT_REASON.dream}-${compactRunStamp(d)}`;
-}
-
-/**
- * Upper bound on distinct run ids probed. Two dream passes in the same
- * second is already unusual; sixty-four is a decade of them.
- */
-const MAX_DREAM_RUN_ID_ATTEMPTS = 64;
-
-/**
- * First run id free in BOTH the snapshot directory and the workrun
- * directory, laddering `-2`, `-3`, ... through the shared
- * {@link collisionCandidateName}.
- *
- * This is a probe, not a reservation: the archive and the workrun are
- * written later by two different subsystems, so there is no single create
- * to fuse the probe with and `allocateAndCreate` does not fit. What it
- * does have now is a bound. Unbounded, a directory that answered "taken"
- * for every candidate - a stale `.snapshots/` never pruned, a permission
- * problem that makes every probe look occupied - span the loop forever
- * with no output at all, which is the worst way for a pass to fail.
- */
-function nextAvailableDreamRunId(vault: string, baseRunId: string): string {
-  for (let attempt = 1; attempt <= MAX_DREAM_RUN_ID_ATTEMPTS; attempt++) {
-    const candidate = collisionCandidateName(baseRunId, attempt);
-    if (
-      !existsSync(snapshotPath(vault, candidate)) &&
-      !existsSync(dreamWorkrunPath(vault, candidate))
-    ) {
-      return candidate;
-    }
-  }
-  throw new Error(
-    `could not reserve a unique dream run id from "${baseRunId}" after ` +
-      `${MAX_DREAM_RUN_ID_ATTEMPTS} attempts; prune Brain/.snapshots/ and ` +
-      "Brain/log/dream-runs/, or check that both are readable",
-  );
 }

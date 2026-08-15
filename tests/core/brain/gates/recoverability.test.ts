@@ -336,6 +336,18 @@ describe("the two pre-existing call sites return byte-identical payloads", () =>
         '  "auditRecordId": "ctn_20260601000000_a68bcc9d65569947",',
         '  "snapshotRunId": "delete-by-source-2026-06-01-000000",',
         '  "snapshotPath": "<vault>/Brain/.snapshots/delete-by-source-2026-06-01-000000.tar.zst",',
+        // The one key B1 added, and the only difference from the payload
+        // measured against the pre-R1a tree. It is here rather than
+        // absent because a deliberate change to a response shape must be
+        // deliberate: the byte comparison is what forced it to be typed
+        // out rather than to slip in.
+        '  "recoverability": {',
+        '    "state": "covered",',
+        '    "coverage": [',
+        '      "brain_top_level"',
+        "    ],",
+        '    "blockers": []',
+        "  },",
         '  "blastRadius": 3',
         "}",
       ].join("\n"),
