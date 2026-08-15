@@ -66,6 +66,18 @@ export const REMOVAL_CALLS: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
+ * What the census records when a module reaches an fs namespace through
+ * a COMPUTED member - `fs[call](path)`. Which call that is is a runtime
+ * fact, so the site is reported under this token rather than resolved to
+ * a name the census would be guessing at.
+ *
+ * Not a `node:fs` name, and deliberately unspellable as one: a site that
+ * needs it has to declare it, and the declaration is where the module
+ * says which calls that expression can actually reach.
+ */
+export const FS_UNRESOLVED_CALL = "fs[]";
+
+/**
  * Shortest reason the census accepts. Set where a real argument fits and
  * a placeholder does not: "cleanup" and "not needed" are both under it.
  */
@@ -361,6 +373,35 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "occupying a path the Brain tree requires to be a directory, immediately before " +
         "creating it. The plan naming that file is returned on every dry run, so the " +
         "operator sees the exact removal before authorising it.",
+    },
+
+    // --- Reached from the gate, but not lexically inside it --------------
+    "src/core/brain/source-cleanup.ts": {
+      calls: ["rmSync"],
+      recovery: Object.freeze({
+        recoveryPoint: true,
+        blastRadius: Object.freeze({ brainTopLevel: true, outsideBrainRoot: true }),
+      }),
+      reason:
+        "`removeFile` is reached only from `runDeletion`, which `deleteBySource` hands to " +
+        "`withDestructiveSnapshot` BY NAME - so the archive exists before any removal, but the " +
+        "census sees a helper rather than a gated block and this entry is that claim written " +
+        "down. The one ungated call of `runDeletion` is the no-work branch, where the derived, " +
+        "originals and manifest lists are all empty and the loops remove nothing. Recovery is " +
+        "PARTIAL rather than covered because `--include-originals` removes the imported file " +
+        "outside `Brain/`, which no archive has ever held.",
+    },
+    "src/core/brain/notes/lifecycle.ts": {
+      calls: ["renameSync", "unlinkSync"],
+      recovery: UNARCHIVED_OUTSIDE,
+      reason:
+        "the note MOVE, which is a relink and not a copy: `linkSync` attaches the inode to the " +
+        "destination name and the name is re-confirmed on disk before the source name is " +
+        "dropped, so the bytes are reachable under two names at that instant and under one at " +
+        "every other. The case-only rename cannot use that order - unlinking the source would " +
+        "remove the destination with it - so it stages a third private name for the same inode " +
+        "first. A note lives outside `Brain/` by construction, which is why no archive covers " +
+        "it and why the DELETE arm of the same module is behind the gate instead.",
     },
 
     // --- Outside the vault entirely --------------------------------------

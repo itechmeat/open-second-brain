@@ -4,10 +4,19 @@
  * ATOF JSONL or ATIF v1.7 documents. Mapping decisions live in
  * docs/brainstorm/memory-observability-suite/atof-atif-mapping.md.
  *
- * Privacy: the exporter consumes the continuity read-model, which
- * drops `private` records and never un-masks redacted text. No new
- * emission paths - this verb only reads JSONL and writes export files
- * into `--out`.
+ * Privacy: the exporter consumes the continuity read-model, which drops
+ * `private` records and never un-masks redacted text, and then hands the
+ * loaded records to the shared egress guard before rendering.
+ *
+ * The second pass is not redundant. The read model's upstream redaction
+ * runs at WRITE time with the redactor's default options, so
+ * `redactTokens` and `redactUrlCredentials` are both off - the two the
+ * export boundary turns on precisely because a false negative there is
+ * unrecoverable. A vendor key, a bare high-entropy token and a
+ * `user:pass@host` URL all left through here verbatim while every other
+ * export verb redacted them. Write-time coverage also says nothing about
+ * a record already on disk or appended by another writer: the read model
+ * never re-scans. Scanning what this verb actually READ answers both.
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -19,6 +28,11 @@ import {
   rankByUsageDecay,
 } from "../../../core/brain/continuity/usage-signal.ts";
 import { renderAtofEvents } from "../../../core/brain/continuity/export-atof.ts";
+import {
+  EGRESS_OUTCOME,
+  EGRESS_REDACTION_NOTICE,
+  redactForEgress,
+} from "../../../core/egress/guard.ts";
 import {
   countSessionlessRecords,
   renderAtifTrajectories,
@@ -58,10 +72,15 @@ function exportContinuity(argv: string[]): number {
   const outDir = resolve(typeof flags["out"] === "string" ? flags["out"].trim() : ".");
 
   const vault = brainVerbContext(flags).vault;
-  const records = loadNormalizedContinuityRecords(vault, {
+  const loaded = loadNormalizedContinuityRecords(vault, {
     ...(session !== undefined && session !== "" ? { sessionId: session } : {}),
     ...(month !== undefined ? { since: `${month}-01`, until: `${month}-31T23:59:59.999Z` } : {}),
   });
+  // Before the directory is created: a refusal leaves no trace of a write
+  // that did not happen.
+  const verdict = redactForEgress("brain-continuity-export", loaded);
+  if (verdict.outcome !== EGRESS_OUTCOME.released) return fail(verdict.detail);
+  const records = verdict.payload;
 
   mkdirSync(outDir, { recursive: true });
   const written: string[] = [];
@@ -79,6 +98,9 @@ function exportContinuity(argv: string[]): number {
       written.push(path);
     }
   }
+
+  // stderr, so stdout stays byte-identical and parseable.
+  if (verdict.redacted) process.stderr.write(EGRESS_REDACTION_NOTICE);
 
   if (flags["json"] === true) {
     process.stdout.write(

@@ -25,18 +25,77 @@
  * because those are the shapes that made an earlier census read as clean
  * over sites it could not see.
  *
+ * ### Six shapes that used to be invisible
+ *
+ * A reviewer dropped six modules into `src/core/brain/` and this census
+ * returned a clean sweep over all of them; each one also typechecks, so
+ * none was a strawman. They are fixtures in "the census can fail" now,
+ * and the detector answers each of them:
+ *
+ *   - `import fs from "node:fs"` - a DEFAULT import, which the old
+ *     binding regex could not express (it read `* as` and `{...}` only);
+ *   - `import { promises as fsp } from "node:fs"` - a binding whose
+ *     imported name is `promises`, i.e. a namespace reached through a
+ *     named import rather than a specifier;
+ *   - `import { rmSync } from "fs"` - the bare specifier, which is the
+ *     same module as `node:fs` and was excluded by requiring the prefix;
+ *   - `const { rmSync } = await import("node:fs")` - a dynamic import,
+ *     which is not an import STATEMENT and so matched nothing;
+ *   - `fs[call](p)` - a computed member on an fs namespace, which the
+ *     literal `.rmSync(` probe cannot see. It is reported under
+ *     {@link FS_UNRESOLVED_CALL} rather than resolved, because which call
+ *     it makes is a runtime fact;
+ *   - `probe.mts` - a module the tree walk skipped, because it filtered
+ *     on `.ts`.
+ *
+ * The lesson generalises past the six: the detector reads a LEXED view of
+ * each module (comments and string/regex literal bodies blanked, offsets
+ * preserved), so a removal named in a comment is not a site and a site is
+ * not hidden by a quote inside a regular expression.
+ *
+ * ## Gating is per SITE, not per file
+ *
+ * `gated` used to be a file-level boolean: any file containing the string
+ * `withDestructiveSnapshot(` - including in a comment - exempted every
+ * removal in it. That is not the guarantee this file's header claims. A
+ * removal is gated when it sits INSIDE the argument list of a
+ * `withDestructiveSnapshot(...)` call, and the containment is measured
+ * from the lexed view by matching parentheses.
+ *
+ * Lexical containment is deliberately the whole of it. A module that
+ * hands the gate a function BY NAME - `withDestructiveSnapshot(v, r,
+ * runDeletion)` - is making a claim about reachability that nothing
+ * syntactic can check, so it declares that claim in
+ * {@link DESTRUCTIVE_SITES} like every other unproved recovery story. The
+ * census is stricter under this rule, never looser: extracting a removal
+ * into a helper moves it OUT of the gated set.
+ *
  * ## The narrowing, stated rather than hidden
  *
  * The design's population rule also named "an atomic write in overwrite
- * mode". That clause is NOT in the rule below, and the reason is
- * measured rather than asserted: `the overwrite class is large` at the
- * bottom of this file counts the modules it would add. An atomic
- * overwrite replaces bytes the same module authored and can regenerate;
- * a removal is the case where the bytes are gone and no producer will
- * emit them again. Every overwrite site is already held, categorised,
- * by the write-site census. Widening this population would have meant
- * writing filler reasons for the difference, and a filler reason is
- * worse than no census.
+ * mode". That clause is NOT in the rule below, and what follows is what
+ * the exclusion does and does not buy - previously stated as two claims
+ * that a reviewer falsified:
+ *
+ *   - it is NOT true that "an atomic overwrite replaces bytes the same
+ *     module authored and can regenerate". `page-dedup.ts` rewrites
+ *     wikilinks across user-authored notes through `atomicWriteFileSync`;
+ *     no producer regenerates a sentence a person wrote;
+ *   - it is NOT true that "every overwrite site is already held by the
+ *     write-site census". That census registers the sites that BYPASS a
+ *     shared writer (its own header, `:38-41`); a module that uses one is
+ *     compliant there and appears in no registry at all.
+ *
+ * So the honest statement is a narrower one: this census holds the sites
+ * where bytes CEASE TO EXIST, and an overwrite through a shared writer is
+ * held by neither census. `the overwrite class is unheld by either
+ * census` at the bottom of this file measures that gap rather than
+ * asserting it is empty, and `the overwrite class is large` measures why
+ * it is not closed by pasting reasons into this registry. Closing it
+ * needs a population rule that can tell a regenerable derivation from
+ * user prose, which is a different unit of work; leaving the old claim
+ * standing while it is known to be false is the one option this file
+ * cannot take.
  *
  * ## What this file deliberately does NOT do
  *
@@ -63,6 +122,7 @@ import {
   DESTRUCTIVE_SITE_MIN_REASON_LENGTH,
   DESTRUCTIVE_SITES,
   destructiveSiteRecoverability,
+  FS_UNRESOLVED_CALL,
   REMOVAL_CALLS,
 } from "../../../src/core/brain/destructive-sites.ts";
 import {
@@ -77,9 +137,12 @@ const BRAIN_ROOT = join(REPO_ROOT, "src", "core", "brain");
 /** The gate a site routes through instead of declaring its own story. */
 const GATE_CALL = "withDestructiveSnapshot";
 
+/** Every TypeScript module extension the runtime will load and run. */
+const MODULE_EXTENSIONS: ReadonlyArray<string> = Object.freeze([".ts", ".mts", ".cts", ".tsx"]);
+
 /**
  * The shared writers whose presence marks the overwrite class. Used only
- * by the narrowing measurement at the bottom - never by the population.
+ * by the narrowing measurements at the bottom - never by the population.
  */
 const OVERWRITE_CALLS: ReadonlyArray<string> = Object.freeze([
   "atomicWriteFileSync",
@@ -88,21 +151,194 @@ const OVERWRITE_CALLS: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * Every `node:fs` / `node:fs/promises` import statement, in both binding
- * forms and both quote styles. GLOBAL, so a module's SECOND statement is
- * read too. `import type` does not match - a type cannot be called.
+ * The write-site census's registry, read as TEXT rather than imported.
+ *
+ * It is a `const` inside a test file, so there is nothing to import; and
+ * the question asked of it here is only whether a path appears in it,
+ * which the text answers exactly. Reading it at all is what keeps "the
+ * other census holds those sites" a measurement instead of a claim.
  */
-const FS_IMPORT_RE =
-  /import\s*(?:\*\s*as\s+([A-Za-z_$][\w$]*)|\{([^}]*)\})\s*from\s*["']node:fs(?:\/promises)?["']/g;
+const WRITE_SITE_CENSUS = readFileSync(
+  join(REPO_ROOT, "tests", "core", "architecture", "write-site-census.test.ts"),
+  "utf8",
+);
 
-/** Longest name first, so a prefix cannot shadow the longer name after it. */
-function alternation(names: ReadonlyArray<string>): string {
-  return [...names].toSorted((a, b) => b.length - a.length).join("|");
+// ----- Lexing ---------------------------------------------------------------
+
+/**
+ * Two views of one module, both the same LENGTH as the source so every
+ * offset still points at the same character.
+ *
+ * `withoutComments` keeps string literals, because an import's specifier
+ * IS a string and the binding detector has to read it. `code` blanks the
+ * body of every string, template and regex literal too, and is what the
+ * call and gate detectors run over: a `rmSync(` inside a quoted example
+ * is not a call, and a comment naming the gate does not gate anything.
+ */
+interface SourceViews {
+  readonly withoutComments: string;
+  readonly code: string;
 }
 
-function callRe(names: ReadonlyArray<string>): RegExp {
-  return new RegExp(String.raw`\b(${alternation(names)})\s*\(`, "g");
+/** Characters after which a `/` opens a regex rather than divides. */
+const REGEX_PRECEDING = new Set([
+  "",
+  "(",
+  ",",
+  "=",
+  ":",
+  "[",
+  "!",
+  "&",
+  "|",
+  "?",
+  "{",
+  "}",
+  ";",
+  "+",
+  "-",
+  "*",
+  "%",
+  "~",
+  "^",
+  "<",
+  ">",
+]);
+
+/** Keywords after which a `/` opens a regex, e.g. `return /x/.test(s)`. */
+const REGEX_PRECEDING_KEYWORDS = new Set([
+  "return",
+  "typeof",
+  "instanceof",
+  "in",
+  "of",
+  "case",
+  "do",
+  "else",
+  "yield",
+  "await",
+  "void",
+  "delete",
+  "new",
+]);
+
+function regexCanStart(text: string, at: number, prev: string): boolean {
+  if (REGEX_PRECEDING.has(prev)) return true;
+  const before = text.slice(0, at).trimEnd();
+  const word = /[A-Za-z_$][\w$]*$/.exec(before);
+  return word !== null && REGEX_PRECEDING_KEYWORDS.has(word[0]);
 }
+
+function lex(text: string): SourceViews {
+  const n = text.length;
+  const withoutComments = [...text];
+  const code = [...text];
+  const blank = (arr: string[], from: number, to: number): void => {
+    for (let k = Math.max(from, 0); k < Math.min(to, n); k++) {
+      if (arr[k] !== "\n") arr[k] = " ";
+    }
+  };
+  // Top of the stack is the current mode. A template literal pushes
+  // `template`; a `${` inside one pushes `code` back on, with its own
+  // brace counter, so an interpolated expression is read as code.
+  const modes: string[] = ["code"];
+  const braces: number[] = [0];
+  let prev = "";
+  let i = 0;
+  while (i < n) {
+    const c = text[i]!;
+    if (modes[modes.length - 1] === "template") {
+      if (c === "\\") {
+        blank(code, i, i + 2);
+        i += 2;
+        continue;
+      }
+      if (c === "`") {
+        modes.pop();
+        prev = "`";
+        i += 1;
+        continue;
+      }
+      if (c === "$" && text[i + 1] === "{") {
+        modes.push("code");
+        braces.push(0);
+        prev = "{";
+        i += 2;
+        continue;
+      }
+      blank(code, i, i + 1);
+      i += 1;
+      continue;
+    }
+    const next = text[i + 1];
+    if (c === "/" && next === "/") {
+      let end = text.indexOf("\n", i);
+      if (end === -1) end = n;
+      blank(withoutComments, i, end);
+      blank(code, i, end);
+      i = end;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      const close = text.indexOf("*/", i + 2);
+      const end = close === -1 ? n : close + 2;
+      blank(withoutComments, i, end);
+      blank(code, i, end);
+      i = end;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      let j = i + 1;
+      while (j < n && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
+      blank(code, i + 1, j);
+      prev = c;
+      i = j + 1;
+      continue;
+    }
+    if (c === "`") {
+      modes.push("template");
+      i += 1;
+      continue;
+    }
+    if (c === "/" && regexCanStart(text, i, prev)) {
+      let j = i + 1;
+      let inClass = false;
+      while (j < n) {
+        const e = text[j]!;
+        if (e === "\\") {
+          j += 2;
+          continue;
+        }
+        if (e === "\n") break;
+        if (e === "[") inClass = true;
+        else if (e === "]") inClass = false;
+        else if (e === "/" && !inClass) break;
+        j += 1;
+      }
+      blank(code, i + 1, j);
+      prev = "/";
+      i = j + 1;
+      continue;
+    }
+    if (c === "{") {
+      braces[braces.length - 1]! += 1;
+    } else if (c === "}") {
+      if (braces[braces.length - 1] === 0 && modes.length > 1) {
+        modes.pop();
+        braces.pop();
+        prev = "}";
+        i += 1;
+        continue;
+      }
+      braces[braces.length - 1]! -= 1;
+    }
+    if (!/\s/.test(c)) prev = c;
+    i += 1;
+  }
+  return { withoutComments: withoutComments.join(""), code: code.join("") };
+}
+
+// ----- Binding detection ----------------------------------------------------
 
 interface CensusFile {
   readonly path: string;
@@ -111,20 +347,20 @@ interface CensusFile {
 
 interface CensusRow {
   readonly path: string;
-  /** Removal calls this file makes directly, by their `node:fs` name. */
-  readonly calls: ReadonlyArray<string>;
-  /** Whether the module routes through the destructive gate. */
-  readonly gated: boolean;
+  /** Removal calls inside a `withDestructiveSnapshot(...)` argument list. */
+  readonly gatedCalls: ReadonlyArray<string>;
+  /** Removal calls that are not, by their `node:fs` name, sorted. */
+  readonly ungatedCalls: ReadonlyArray<string>;
 }
 
-/** Every `.ts` file under `src/core/brain/`, at any depth, path + text. */
+/** Every TypeScript module under `src/core/brain/`, at any depth. */
 function readBrainTree(): CensusFile[] {
   const files: CensusFile[] = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const abs = join(dir, entry.name);
       if (entry.isDirectory()) walk(abs);
-      else if (entry.name.endsWith(".ts")) {
+      else if (MODULE_EXTENSIONS.some((ext) => entry.name.endsWith(ext))) {
         files.push({
           path: relative(REPO_ROOT, abs).split("\\").join("/"),
           text: readFileSync(abs, "utf8"),
@@ -140,64 +376,184 @@ function readBrainTree(): CensusFile[] {
 interface FsImports {
   /** Local binding -> the `node:fs` name it was imported under. */
   readonly bindings: ReadonlyMap<string, string>;
-  /** Local names of namespace imports, e.g. `fs` in `import * as fs`. */
+  /** Locals that hold an fs MODULE object: `* as fs`, a default, a
+   * dynamic import's binding, or a named `promises`. */
   readonly namespaces: ReadonlySet<string>;
 }
 
-function fsImports(text: string): FsImports {
+/**
+ * Every static import of the fs module, in every binding form and both
+ * quote styles, with or without the `node:` prefix. GLOBAL, so a module's
+ * second statement is read too. `import type` does not match - a type
+ * cannot be called.
+ */
+const FS_STATIC_IMPORT_RE =
+  /\bimport\s+(?!type\b)([^;]*?)\s*from\s*["'](?:node:)?fs(?:\/promises)?["']/g;
+
+/**
+ * The dynamic forms. `import()` and `require()` bind the same module
+ * object; the difference from the statement form is only that the
+ * binding is on the left of an `=`.
+ */
+const FS_DYNAMIC_IMPORT_RE =
+  /\b(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:await\s+)?(?:import|require)\s*\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)/g;
+
+/** The named import whose binding is a module object, not a function. */
+const FS_NAMESPACE_MEMBER = "promises";
+
+/** Record one `{ a, b as c }` clause's bindings. */
+function readBraceClause(
+  clause: string,
+  imports: {
+    bindings: Map<string, string>;
+    namespaces: Set<string>;
+  },
+): void {
+  for (const raw of clause.replaceAll(/[{}]/g, "").split(",")) {
+    const specifier = raw.trim();
+    if (specifier.length === 0) continue;
+    // `{ type Foo }` and `{ type Foo as Bar }` bind nothing callable.
+    if (/^type\s/.test(specifier)) continue;
+    const [imported, local] = specifier.split(/\s+as\s+/).map((part) => part.trim());
+    if (imported === undefined || imported.length === 0) continue;
+    const bound = local !== undefined && local.length > 0 ? local : imported;
+    if (imported === FS_NAMESPACE_MEMBER) imports.namespaces.add(bound);
+    else imports.bindings.set(bound, imported);
+  }
+}
+
+function fsImports(withoutComments: string): FsImports {
   const bindings = new Map<string, string>();
   const namespaces = new Set<string>();
-  for (const match of text.matchAll(FS_IMPORT_RE)) {
-    const namespace = match[1];
-    if (namespace !== undefined) {
-      namespaces.add(namespace);
+  const acc = { bindings, namespaces };
+  for (const match of withoutComments.matchAll(FS_STATIC_IMPORT_RE)) {
+    // One clause, which may be `* as ns`, `{ ... }`, `def`, or
+    // `def, { ... }` - every combination the grammar allows.
+    let clause = match[1]!.trim();
+    const brace = clause.indexOf("{");
+    if (brace !== -1) {
+      readBraceClause(clause.slice(brace), acc);
+      clause = clause.slice(0, brace).replace(/,\s*$/, "").trim();
+    }
+    if (clause.length === 0) continue;
+    const asNamespace = /^\*\s*as\s+([A-Za-z_$][\w$]*)$/.exec(clause);
+    if (asNamespace !== null) {
+      namespaces.add(asNamespace[1]!);
       continue;
     }
-    for (const raw of match[2]!.split(",")) {
-      const [imported, local] = raw
-        .trim()
-        .split(/\s+as\s+/)
-        .map((part) => part.trim());
-      if (imported === undefined || imported.length === 0) continue;
-      bindings.set(local !== undefined && local.length > 0 ? local : imported, imported);
-    }
+    const asDefault = /^([A-Za-z_$][\w$]*)$/.exec(clause);
+    if (asDefault !== null) namespaces.add(asDefault[1]!);
+  }
+  for (const match of withoutComments.matchAll(FS_DYNAMIC_IMPORT_RE)) {
+    const target = match[1]!.trim();
+    if (target.startsWith("{")) readBraceClause(target, acc);
+    else namespaces.add(target);
   }
   return { bindings, namespaces };
 }
 
 const REMOVAL_SET: ReadonlySet<string> = new Set(REMOVAL_CALLS);
 
-/** The removal calls this module makes directly, by their `node:fs` name. */
-function removalCalls(text: string, imported: FsImports): Set<string> {
-  const direct = new Set<string>();
+/** Longest name first, so a prefix cannot shadow the longer name after it. */
+function alternation(names: ReadonlyArray<string>): string {
+  return [...names].toSorted((a, b) => b.length - a.length).join("|");
+}
+
+/** One removal call: which `node:fs` name, and where in the module. */
+interface RemovalSite {
+  readonly call: string;
+  readonly index: number;
+}
+
+/** Every removal this module makes directly, with its offset. */
+function removalSites(code: string, imported: FsImports): RemovalSite[] {
+  const sites: RemovalSite[] = [];
   const locals = [...imported.bindings.keys()];
   if (locals.length > 0) {
-    for (const match of text.matchAll(callRe(locals))) {
-      const name = imported.bindings.get(match[1]!.replace(/\s+/g, ""));
-      if (name !== undefined && REMOVAL_SET.has(name)) direct.add(name);
+    for (const match of code.matchAll(
+      new RegExp(String.raw`\b(${alternation(locals)})\s*\(`, "g"),
+    )) {
+      const name = imported.bindings.get(match[1]!);
+      if (name !== undefined && REMOVAL_SET.has(name)) {
+        sites.push({ call: name, index: match.index });
+      }
     }
   }
   for (const namespace of imported.namespaces) {
-    const re = new RegExp(
-      String.raw`\b${namespace}\s*\.\s*(${alternation(REMOVAL_CALLS)})\s*\(`,
-      "g",
-    );
-    for (const match of text.matchAll(re)) direct.add(match[1]!.replace(/\s+/g, ""));
+    // `fs.rmSync(`, and `fs.promises.rm(` - the second is the same
+    // module object one member deeper.
+    const member = String.raw`\b${namespace}\s*\.\s*(?:${FS_NAMESPACE_MEMBER}\s*\.\s*)?`;
+    for (const match of code.matchAll(
+      new RegExp(String.raw`${member}(${alternation(REMOVAL_CALLS)})\s*\(`, "g"),
+    )) {
+      sites.push({ call: match[1]!, index: match.index });
+    }
+    // A computed member: which call it makes is a runtime fact, so it is
+    // REPORTED rather than resolved. Declaring it is the only way past.
+    for (const match of code.matchAll(
+      new RegExp(String.raw`\b${namespace}\s*(?:\.\s*${FS_NAMESPACE_MEMBER}\s*)?\[`, "g"),
+    )) {
+      sites.push({ call: FS_UNRESOLVED_CALL, index: match.index });
+    }
   }
-  return direct;
+  return sites;
 }
 
-function classify(file: CensusFile): CensusRow | null {
-  const calls = removalCalls(file.text, fsImports(file.text));
-  if (calls.size === 0) return null;
+/** `[start, end)` of every `withDestructiveSnapshot(...)` argument list. */
+function gateSpans(code: string): Array<readonly [number, number]> {
+  const spans: Array<readonly [number, number]> = [];
+  for (const match of code.matchAll(new RegExp(String.raw`\b${GATE_CALL}\s*\(`, "g"))) {
+    const open = match.index + match[0].length - 1;
+    let depth = 0;
+    let end = code.length;
+    for (let j = open; j < code.length; j++) {
+      const ch = code[j];
+      if (ch === "(") depth += 1;
+      else if (ch === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          end = j + 1;
+          break;
+        }
+      }
+    }
+    spans.push([match.index, end]);
+  }
+  return spans;
+}
+
+/**
+ * A module and its lexed views. Lexing is the expensive step and the
+ * result depends only on the text, so every file is read through this
+ * once and the whole suite reuses it.
+ */
+interface CensusSource extends CensusFile {
+  readonly views: SourceViews;
+}
+
+function lexed(file: CensusFile): CensusSource {
+  return { ...file, views: lex(file.text) };
+}
+
+function classify(file: CensusFile | CensusSource): CensusRow | null {
+  const views = "views" in file ? file.views : lex(file.text);
+  const sites = removalSites(views.code, fsImports(views.withoutComments));
+  if (sites.length === 0) return null;
+  const spans = gateSpans(views.code);
+  const gated = new Set<string>();
+  const ungated = new Set<string>();
+  for (const site of sites) {
+    const inside = spans.some(([from, to]) => site.index >= from && site.index < to);
+    (inside ? gated : ungated).add(site.call);
+  }
   return {
     path: file.path,
-    calls: [...calls].toSorted(),
-    gated: new RegExp(String.raw`\b${GATE_CALL}\s*\(`).test(file.text),
+    gatedCalls: [...gated].toSorted(),
+    ungatedCalls: [...ungated].toSorted(),
   };
 }
 
-function census(files: ReadonlyArray<CensusFile>): CensusRow[] {
+function census(files: ReadonlyArray<CensusSource>): CensusRow[] {
   const rows: CensusRow[] = [];
   for (const file of files) {
     const row = classify(file);
@@ -206,44 +562,49 @@ function census(files: ReadonlyArray<CensusFile>): CensusRow[] {
   return rows;
 }
 
-const BRAIN_TREE = readBrainTree();
+const BRAIN_TREE = readBrainTree().map(lexed);
 const ROWS = census(BRAIN_TREE);
+/** The rows that owe a declaration: at least one removal is not gated. */
+const UNGATED_ROWS = ROWS.filter((row) => row.ungatedCalls.length > 0);
 
 describe("destructive-site census", () => {
   test("every removal site is routed through the gate or declares its recovery", () => {
-    const unaccounted = ROWS.filter((row) => !row.gated && !(row.path in DESTRUCTIVE_SITES)).map(
-      (row) => `${row.path} [${row.calls.join(",")}]`,
+    const unaccounted = UNGATED_ROWS.filter((row) => !(row.path in DESTRUCTIVE_SITES)).map(
+      (row) => `${row.path} [${row.ungatedCalls.join(",")}]`,
     );
     // Named, not counted: the failure has to say which file.
     expect(unaccounted).toEqual([]);
   });
 
-  test("a gated site does not also carry a declaration", () => {
+  test("a site whose every removal is gated does not also carry a declaration", () => {
     // Two answers to one question is the drift this census exists to
     // stop: the gate would move and the entry would stay, saying
     // something about a routing that no longer exists.
-    const both = ROWS.filter((row) => row.gated && row.path in DESTRUCTIVE_SITES).map(
-      (row) => row.path,
-    );
+    const both = ROWS.filter(
+      (row) => row.ungatedCalls.length === 0 && row.path in DESTRUCTIVE_SITES,
+    ).map((row) => row.path);
     expect(both).toEqual([]);
   });
 
   test("no declaration outlives the site it accounts for", () => {
-    const present = new Set(ROWS.filter((row) => !row.gated).map((row) => row.path));
+    const present = new Set(UNGATED_ROWS.map((row) => row.path));
     const stale = Object.keys(DESTRUCTIVE_SITES).filter((path) => !present.has(path));
     expect(stale).toEqual([]);
   });
 
-  test("each declaration names exactly the calls its site makes", () => {
+  test("each declaration names exactly the ungated calls its site makes", () => {
     // A new KIND of removal inside an already-declared module is a new
-    // decision, not one the existing argument already covered.
+    // decision, not one the existing argument already covered. A removal
+    // that MOVED inside the gate is the same drift from the other side:
+    // the entry would keep claiming a story for a site that no longer
+    // needs one.
     const drifted: string[] = [];
     for (const row of ROWS) {
       const entry = DESTRUCTIVE_SITES[row.path];
       if (entry === undefined) continue;
-      if (entry.calls.join(",") !== row.calls.join(",")) {
+      if (entry.calls.join(",") !== row.ungatedCalls.join(",")) {
         drifted.push(
-          `${row.path}: declared [${entry.calls.join(",")}] found [${row.calls.join(",")}]`,
+          `${row.path}: declared [${entry.calls.join(",")}] found [${row.ungatedCalls.join(",")}]`,
         );
       }
     }
@@ -312,16 +673,28 @@ describe("destructive-site census", () => {
     // the measurement, not an order of magnitude under it.
     expect(BRAIN_TREE.length).toBeGreaterThan(250);
     expect(ROWS.length).toBeGreaterThan(28);
-    expect(ROWS.filter((row) => row.gated).length).toBeGreaterThan(1);
+    expect(ROWS.filter((row) => row.gatedCalls.length > 0).length).toBeGreaterThan(1);
     expect(Object.keys(DESTRUCTIVE_SITES).length).toBeGreaterThan(25);
   });
 });
 
+/** Replaces bytes through a shared writer, and removes none. */
+function overwritesThroughASharedWriter(file: CensusSource): boolean {
+  if (classify(file) !== null) return false;
+  return OVERWRITE_CALLS.some((call) =>
+    new RegExp(String.raw`\b${call}\s*\(`).test(file.views.code),
+  );
+}
+
 describe("the census can fail", () => {
-  /** Run the real census over the real tree plus one synthetic module. */
+  /**
+   * Run the real census over the real tree plus one synthetic module.
+   * The real tree's rows are the ones the suite already computed, so a
+   * fixture measures the intruder rather than re-lexing 300 files.
+   */
   function unaccountedWith(intruder: CensusFile): string[] {
-    return census([...BRAIN_TREE, intruder])
-      .filter((row) => !row.gated && !(row.path in DESTRUCTIVE_SITES))
+    return [...ROWS, ...census([lexed(intruder)])]
+      .filter((row) => row.ungatedCalls.length > 0 && !(row.path in DESTRUCTIVE_SITES))
       .map((row) => row.path);
   }
 
@@ -330,6 +703,10 @@ describe("the census can fail", () => {
    * its own: a detector that saw only the first `node:fs` statement, in
    * the one binding form and the one quote style, would leave these
    * unreachable by construction and still report a clean sweep.
+   *
+   * The last six are the reviewer's, reproduced verbatim in shape. All
+   * of them typecheck, which is why "no real module writes it that way"
+   * was never an answer.
    */
   const INTRUDER_SHAPES: ReadonlyArray<readonly [string, string]> = Object.freeze([
     ["a plain named import", 'import { unlinkSync } from "node:fs";\nunlinkSync("x");\n'],
@@ -341,6 +718,36 @@ describe("the census can fail", () => {
     ["a namespace import", 'import * as fs from "node:fs";\nfs.renameSync("a", "b");\n'],
     ["the promise API", 'import { rm } from "node:fs/promises";\nawait rm("x");\n'],
     ["a single-quoted specifier", "import { rmSync } from 'node:fs';\nrmSync('x');\n"],
+    ["a default import", 'import fs from "node:fs";\nfs.rmSync("x");\n'],
+    [
+      "a default import beside a named one",
+      'import fs, { readFileSync } from "node:fs";\nvoid readFileSync;\nfs.unlinkSync("x");\n',
+    ],
+    [
+      "the promises member of node:fs",
+      'import { promises as fsp } from "node:fs";\nawait fsp.rm("x");\n',
+    ],
+    [
+      "the promises member of a namespace",
+      'import * as fs from "node:fs";\nawait fs.promises.rm("x");\n',
+    ],
+    ["the bare `fs` specifier", 'import { rmSync } from "fs";\nrmSync("x");\n'],
+    [
+      "a dynamic import with destructuring",
+      'const { rmSync } = await import("node:fs");\nrmSync("x");\n',
+    ],
+    [
+      "a dynamic import bound as a namespace",
+      'const fs = await import("node:fs");\nfs.rmSync("x");\n',
+    ],
+    [
+      "a computed member on a namespace",
+      'import * as fs from "node:fs";\nconst call = "rmSync";\nfs[call]("x");\n',
+    ],
+    [
+      "a removal after a regex holding an unbalanced quote",
+      'import { rmSync } from "node:fs";\nconst q = /["]/;\nvoid q;\nrmSync("x");\n',
+    ],
   ]);
 
   for (const [shape, source] of INTRUDER_SHAPES) {
@@ -349,6 +756,19 @@ describe("the census can fail", () => {
       expect(unaccountedWith({ path, text: source })).toEqual([path]);
     });
   }
+
+  test("a module the tree walk must not skip by extension", () => {
+    // `probe.mts` ran, removed files, and was invisible because the walk
+    // filtered on `.ts`. Asserted on the WALK rather than on `classify`,
+    // because the walk is where the bypass lived.
+    const names = new Set(BRAIN_TREE.map((file) => file.path));
+    expect(names.size).toBe(BRAIN_TREE.length);
+    for (const ext of MODULE_EXTENSIONS) {
+      const path = `src/core/brain/zzsub/probe${ext}`;
+      const text = 'import { rmSync } from "node:fs";\nrmSync("x");\n';
+      expect(unaccountedWith({ path, text })).toEqual([path]);
+    }
+  });
 
   test("a new unlinkSync added to an already-declared module is reported as drift", () => {
     // The other half of the guarantee: a module already in the registry
@@ -361,8 +781,8 @@ describe("the census can fail", () => {
       path,
       text: 'import { rmSync, unlinkSync } from "node:fs";\nrmSync("x");\nunlinkSync("y");\n',
     });
-    expect(withExtra?.calls).toEqual(["rmSync", "unlinkSync"]);
-    expect(withExtra?.calls.join(",") === declared?.calls.join(",")).toBe(false);
+    expect(withExtra?.ungatedCalls).toEqual(["rmSync", "unlinkSync"]);
+    expect(withExtra?.ungatedCalls.join(",") === declared?.calls.join(",")).toBe(false);
   });
 
   test("a type-only fs import is not a removal site", () => {
@@ -372,6 +792,30 @@ describe("the census can fail", () => {
       classify({
         path: "src/core/brain/synthetic-types-only.ts",
         text: 'import type { RmOptions } from "node:fs";\nexport type T = RmOptions;\n',
+      }),
+    ).toBeNull();
+  });
+
+  test("an inline type specifier is not a removal site either", () => {
+    expect(
+      classify({
+        path: "src/core/brain/synthetic-inline-type.ts",
+        text: 'import { type RmOptions } from "node:fs";\nexport type T = RmOptions;\n',
+      }),
+    ).toBeNull();
+  });
+
+  test("a removal named only inside a string or a comment is not a site", () => {
+    // The other direction of the lexer: it must not INVENT sites, or the
+    // registry fills with entries for prose.
+    expect(
+      classify({
+        path: "src/core/brain/synthetic-mentions.ts",
+        text:
+          'import { readFileSync } from "node:fs";\n' +
+          "// rmSync(x) is what this module deliberately does not do\n" +
+          'export const doc = "unlinkSync(p)";\n' +
+          "void readFileSync;\n",
       }),
     ).toBeNull();
   });
@@ -386,15 +830,64 @@ describe("the census can fail", () => {
     expect(unaccountedWith({ path, text })).toEqual([]);
   });
 
+  test("a removal OUTSIDE the gate in a gated module is still reported", () => {
+    // The per-file boolean this replaced: one `withDestructiveSnapshot(`
+    // anywhere in the file exempted every removal in it.
+    const path = "src/core/brain/synthetic-half-gated.ts";
+    const text =
+      'import { rmSync, unlinkSync } from "node:fs";\n' +
+      'import { withDestructiveSnapshot } from "./snapshot-gate.ts";\n' +
+      'withDestructiveSnapshot(v, r, () => rmSync("x"));\n' +
+      "export function elsewhere(p: string): void {\n  unlinkSync(p);\n}\n";
+    const row = classify({ path, text });
+    expect(row?.gatedCalls).toEqual(["rmSync"]);
+    expect(row?.ungatedCalls).toEqual(["unlinkSync"]);
+    expect(unaccountedWith({ path, text })).toEqual([path]);
+  });
+
+  test("a gate named only in a comment gates nothing", () => {
+    const path = "src/core/brain/synthetic-comment-gate.ts";
+    const text =
+      'import { rmSync } from "node:fs";\n' +
+      "// This module is reached from withDestructiveSnapshot(vault, reason, op).\n" +
+      "export function sweep(p: string): void {\n  rmSync(p);\n}\n";
+    expect(classify({ path, text })?.ungatedCalls).toEqual(["rmSync"]);
+    expect(unaccountedWith({ path, text })).toEqual([path]);
+  });
+
+  test("a function handed to the gate BY NAME is not lexically gated", () => {
+    // The deliberate strictness, pinned so it is a decision rather than
+    // an accident: `source-cleanup.ts` is this shape, and it declares.
+    const path = "src/core/brain/synthetic-by-reference.ts";
+    const text =
+      'import { rmSync } from "node:fs";\n' +
+      'import { withDestructiveSnapshot } from "./snapshot-gate.ts";\n' +
+      'const op = (): void => rmSync("x");\n' +
+      "withDestructiveSnapshot(v, r, op);\n";
+    expect(classify({ path, text })?.ungatedCalls).toEqual(["rmSync"]);
+  });
+
   test("the overwrite class is large, which is why the rule stops at removals", () => {
     // The measurement behind the narrowing in this file's header. These
     // modules replace bytes they themselves authored; adding them would
     // roughly quadruple the registry and force a reason per entry that
     // no one could write honestly.
-    const overwriteOnly = BRAIN_TREE.filter((file) => classify(file) === null).filter((file) =>
-      OVERWRITE_CALLS.some((call) => new RegExp(String.raw`\b${call}\s*\(`).test(file.text)),
-    );
+    const overwriteOnly = BRAIN_TREE.filter(overwritesThroughASharedWriter);
     expect(overwriteOnly.length).toBeGreaterThan(50);
     expect(overwriteOnly.length).toBeGreaterThan(ROWS.length);
+  });
+
+  test("the overwrite class is unheld by either census", () => {
+    // The falsified claim, kept as a measurement so it cannot quietly
+    // revert to "already held". A module that overwrites THROUGH a
+    // shared writer is compliant in the write-site census, which
+    // registers only the sites that bypass one, and it removes nothing,
+    // so it is out of population here. Both censuses are silent about
+    // it, and this asserts that the set is non-empty rather than naming
+    // a file whose fate belongs to another unit.
+    const unheld = BRAIN_TREE.filter(overwritesThroughASharedWriter)
+      .filter((file) => !WRITE_SITE_CENSUS.includes(file.path))
+      .map((file) => file.path);
+    expect(unheld.length).toBeGreaterThan(0);
   });
 });

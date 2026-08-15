@@ -149,6 +149,15 @@ describe("egress site census", () => {
     // The complement: a module that calls the guard but is declared as
     // something weaker would leave the registry describing a gap that is
     // no longer there, and the next reader would re-open a closed hole.
+    //
+    // This test once made a leak unfixable. `brain-continuity-export` was
+    // declared `upstream_read_model` while its upstream redacted with the
+    // redactor's DEFAULT options, and adding the guard call that closed
+    // the leak failed HERE. The bug was never the assertion - it was
+    // reading a failure as "remove the call" instead of "flip the
+    // declaration". The unverifiable status is gone, so the only weaker
+    // status left is `no_vault_content`, and a module that both composes
+    // no vault content and scans it is a contradiction worth failing on.
     const understated = ENTRIES.filter(
       (entry) =>
         entry.redaction !== EGRESS_REDACTION.sharedRedactor &&

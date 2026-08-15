@@ -15,8 +15,9 @@
  * table to account for it. It also checks the declaration against the
  * source rather than trusting it: an entry claiming
  * {@link EGRESS_REDACTION.sharedRedactor} whose module no longer calls
- * `redactForEgress` fails, and so does one that understates a module that
- * does.
+ * `redactForEgress` fails, and so does one that declares LESS than its
+ * module does - the answer to which is to flip the declaration, never to
+ * remove the call.
  *
  * A `reason` is required on every entry, not only on the unredacted ones.
  * "It redacts" says nothing about WHAT leaves and what a reader should
@@ -24,12 +25,23 @@
  * actually needs.
  */
 
-/** What a given egress path does about secrets on the way out. */
+/**
+ * What a given egress path does about secrets on the way out.
+ *
+ * There used to be a third status, `upstream_read_model` - "something
+ * upstream already redacted this". It is gone, and its removal is a
+ * finding rather than a tidy-up: the one entry that claimed it was
+ * leaking a vendor key, a bare high-entropy token and a `user:pass@host`
+ * URL, because its upstream redacted at write time with the redactor's
+ * DEFAULT options rather than the export boundary's. A status whose truth
+ * cannot be read out of the module it describes is a place for a leak to
+ * live, and the census that checks declarations against source could not
+ * check that one. Every remaining status is decidable from the module's
+ * own text.
+ */
 export const EGRESS_REDACTION = Object.freeze({
   /** Every outbound byte goes through `redactForEgress`. */
   sharedRedactor: "shared_redactor",
-  /** Redacted before the verb sees it, by the read model it consumes. */
-  upstreamReadModel: "upstream_read_model",
   /** The destination carries no vault content, so there is nothing to scan. */
   noVaultContent: "no_vault_content",
 } as const);
@@ -38,7 +50,6 @@ export type EgressRedactionStatus = (typeof EGRESS_REDACTION)[keyof typeof EGRES
 
 export const EGRESS_REDACTION_STATUSES: ReadonlyArray<EgressRedactionStatus> = Object.freeze([
   EGRESS_REDACTION.sharedRedactor,
-  EGRESS_REDACTION.upstreamReadModel,
   EGRESS_REDACTION.noVaultContent,
 ]);
 
@@ -129,15 +140,16 @@ export const EGRESS_SITES = Object.freeze({
     id: "brain-continuity-export",
     verb: "o2b brain continuity export",
     module: "src/cli/brain/verbs/continuity.ts",
-    redaction: R.upstreamReadModel,
+    redaction: R.sharedRedactor,
     reason:
-      "the one path that already redacted. It consumes the continuity read model, " +
-      "which drops `private` records and passes every string through the shared " +
-      "redactor before the verb sees it (`continuity/redaction.ts`). A second pass here " +
-      "would change its bytes without closing anything, so the coverage is declared " +
-      "rather than duplicated. What it does NOT have is the truncation refusal the " +
-      "other five gained: an oversized continuity record is marked in place by the " +
-      "read model and exported carrying that marker.",
+      "was declared as covered by its read model, which was wrong in both directions. " +
+      "The upstream call redacts at WRITE time with the redactor's DEFAULT options, so " +
+      "`redactTokens` and `redactUrlCredentials` were both off and a vendor key, a bare " +
+      "high-entropy token and a `user:pass@host` URL all left through here verbatim - " +
+      "the two flags the export boundary exists to turn on. Write-time coverage also " +
+      "says nothing about a record already on disk or appended by another writer, since " +
+      "the read model never re-scans. The verb now scans what it READ, which answers " +
+      "both, and gains the truncation refusal the other five already had.",
   },
   "install-adapter-out": {
     id: "install-adapter-out",
