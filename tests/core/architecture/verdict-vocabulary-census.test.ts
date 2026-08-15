@@ -46,13 +46,19 @@
  *      that reads the membership list or the object.
  *
  * All four, because all four is exactly what {@link auditVocabulary}
- * audits. A frozen object with no guard has no guard to check, and
- * demanding one would report `DREAM_STEP_RUNNABLE` and
- * `DREAM_GATE_NAMES` - deliberate SUBSETS of their objects, listing the
- * runnable steps rather than every step - as drift that is not drift.
- * That is also why there is no exemption list here: a construct with all
- * four pieces has nothing to be excused from, and an empty escape hatch
- * is an invitation rather than a policy.
+ * audits: two of its seven checks ask what the guard accepts, and an
+ * object with no guard is one whose values never have to survive the
+ * round trip through a string that the guard exists to police.
+ * Widening the rule to three pieces would also enrol lists that are
+ * curated ORDERINGS rather than membership - `DREAM_STEP_RUNNABLE` (the
+ * steps that can be run on their own) and `DREAM_GATE_NAMES` (the gates
+ * an operator may override). Both name every member of their object
+ * today; the day one of them does not - a step that cannot run alone, a
+ * gate that is not overridable - that is a correct divergence, and a
+ * census that reported it as drift would be teaching contributors to
+ * ignore it. That is also why there is no exemption list here: a
+ * construct with all four pieces has nothing to be excused from, and an
+ * empty escape hatch is an invitation rather than a policy.
  *
  * ## What the scan cannot see, stated rather than implied
  *
@@ -1534,7 +1540,7 @@ describe("the scan sees the shapes it claims to", () => {
         "  return ZZS.includes(value as string);\n}\n",
     ],
     [
-      "a deliberate SUBSET list with no guard, as DREAM_STEP_RUNNABLE is",
+      "a curated ordering with no guard, as DREAM_STEP_RUNNABLE is",
       OBJECT + DERIVED + "export const ZZ_RUNNABLE: ReadonlyArray<Zz> = Object.freeze([ZZ.a]);\n",
     ],
     [
