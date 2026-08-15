@@ -46,7 +46,11 @@ async function toolBrainIngestSource(
   const summary = coerceStr(args, "summary", true)!;
   const planId = coerceStr(args, "plan_id", false) ?? undefined;
   const preExtract = coerceBoolOptional(args, "pre_extract") ?? false;
-  const parsed = parseExtractionIntakeArgs(args, TOOL);
+  // This tool names its source as `source_path` and hands it to the pipeline
+  // itself, so `source` is not part of its contract. Declaring that stops the
+  // shared parser building a provenance out of an argument this schema never
+  // declared and this handler never read.
+  const parsed = parseExtractionIntakeArgs(args, TOOL, "absent");
   const agent =
     parsed.agent && parsed.agent.trim().length > 0
       ? parsed.agent

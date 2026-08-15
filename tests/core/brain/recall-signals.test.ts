@@ -26,6 +26,7 @@ import {
   emitRecallTelemetry,
   RECALL_SIGNALS_DIVERSITY_MAX_ROWS,
   RECALL_SIGNALS_UNMEASURED_CARDS,
+  RECALL_CHANNEL,
 } from "../../../src/core/brain/recall-telemetry.ts";
 import { clipPayloadToBudget } from "../../../src/core/brain/continuity/store.ts";
 import type { BrainSearchResult } from "../../../src/core/search/search-result.ts";
@@ -175,6 +176,7 @@ describe("recall telemetry record", () => {
   const base = {
     createdAt: CREATED_AT,
     host: "unit",
+    channel: RECALL_CHANNEL.cli,
     mode: "search" as const,
     status: "ok" as const,
     durationMs: 4,
@@ -185,7 +187,7 @@ describe("recall telemetry record", () => {
     const record = emitRecallTelemetry(vault, base);
 
     expect(JSON.stringify(record.payload)).toBe(
-      '{"host":"unit","mode":"search","status":"ok","duration_ms":4,"result_count":1,' +
+      '{"host":"unit","channel":"cli","mode":"search","status":"ok","duration_ms":4,"result_count":1,' +
         '"top_artifacts":[],"gaps":[]}',
     );
     expect("signals" in record.payload).toBe(false);

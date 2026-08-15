@@ -12,7 +12,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -23,12 +23,37 @@ import {
   intakeExtraction,
   IntakeValidationError,
   type ExtractionIntake,
+  type IntakeOptions,
 } from "../../../../src/core/brain/intake/extract-intake.ts";
+import type { Provenance } from "../../../../src/core/brain/provenance/provenance.ts";
 
 let vault: string;
 let configHome: string;
 
 const NOW = new Date("2026-06-13T12:00:00Z");
+
+const DEFAULT_SOURCE = "Articles/restaking-primer.md";
+
+/**
+ * Every intake must cite a source, and a source is trusted only when its file
+ * is on disk (GitHub #160). These helpers seed the file and build the
+ * provenance so each test below states the source it means rather than the
+ * plumbing that makes it real.
+ */
+function seed(rel: string): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, `bytes of ${rel}\n`, "utf8");
+}
+
+function citing(rel: string): Provenance {
+  seed(rel);
+  return { level: "stated", sources: [`[[${rel}]]`], premises: [] };
+}
+
+function opts(agent: string, rel = DEFAULT_SOURCE): IntakeOptions {
+  return { agent, now: NOW, provenance: citing(rel) };
+}
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-intake-vault-"));
@@ -53,7 +78,7 @@ const SAMPLE: ExtractionIntake = {
 
 describe("intakeExtraction - happy path", () => {
   test("creates the extracted entities and reports their ids", () => {
-    const res = intakeExtraction(vault, SAMPLE, { agent: "ingest-agent", now: NOW });
+    const res = intakeExtraction(vault, SAMPLE, opts("ingest-agent"));
     expect(res.entitiesCreated).toHaveLength(2);
     expect(res.entitiesUpdated).toHaveLength(0);
     expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
@@ -62,7 +87,7 @@ describe("intakeExtraction - happy path", () => {
   });
 
   test("applies the typed relations onto the from-entity", () => {
-    const res = intakeExtraction(vault, SAMPLE, { agent: "ingest-agent", now: NOW });
+    const res = intakeExtraction(vault, SAMPLE, opts("ingest-agent"));
     expect(res.relationsApplied).toBe(1);
     const restaking = getEntity(vault, { category: "concept", query: "Restaking" });
     const related = restaking?.relations.find((r) => r.relation === "related");
@@ -70,15 +95,7 @@ describe("intakeExtraction - happy path", () => {
   });
 
   test("stamps the provenance Sources section into a newly created entity body", () => {
-    intakeExtraction(vault, SAMPLE, {
-      agent: "ingest-agent",
-      now: NOW,
-      provenance: {
-        level: "stated",
-        sources: ["[[Articles/restaking-primer.md]]"],
-        premises: [],
-      },
-    });
+    intakeExtraction(vault, SAMPLE, opts("ingest-agent"));
     const restaking = getEntity(vault, { category: "concept", query: "Restaking" });
     expect(restaking?.body).toContain("## Sources");
     expect(restaking?.body).toContain("[[Articles/restaking-primer.md]]");
@@ -87,8 +104,8 @@ describe("intakeExtraction - happy path", () => {
 
 describe("intakeExtraction - idempotency", () => {
   test("a second identical intake creates nothing new and does not duplicate", () => {
-    intakeExtraction(vault, SAMPLE, { agent: "ingest-agent", now: NOW });
-    const second = intakeExtraction(vault, SAMPLE, { agent: "ingest-agent", now: NOW });
+    intakeExtraction(vault, SAMPLE, opts("ingest-agent"));
+    const second = intakeExtraction(vault, SAMPLE, opts("ingest-agent"));
     expect(second.entitiesCreated).toHaveLength(0);
     expect(second.entitiesUpdated).toHaveLength(2);
     expect(listEntities(vault, { category: "concept" })).toHaveLength(2);
@@ -98,16 +115,8 @@ describe("intakeExtraction - idempotency", () => {
   });
 
   test("does not clobber an existing entity body on update", () => {
-    intakeExtraction(vault, SAMPLE, {
-      agent: "ingest-agent",
-      now: NOW,
-      provenance: { level: "stated", sources: ["[[Articles/a.md]]"], premises: [] },
-    });
-    intakeExtraction(vault, SAMPLE, {
-      agent: "ingest-agent",
-      now: NOW,
-      provenance: { level: "stated", sources: ["[[Articles/b.md]]"], premises: [] },
-    });
+    intakeExtraction(vault, SAMPLE, opts("ingest-agent", "Articles/a.md"));
+    intakeExtraction(vault, SAMPLE, opts("ingest-agent", "Articles/b.md"));
     const restaking = getEntity(vault, { category: "concept", query: "Restaking" });
     // First source is preserved; the update did not overwrite the body.
     expect(restaking?.body).toContain("[[Articles/a.md]]");
@@ -117,9 +126,7 @@ describe("intakeExtraction - idempotency", () => {
 describe("intakeExtraction - validation refuses malformed payloads with no partial write", () => {
   test("rejects an empty entity name", () => {
     const bad: ExtractionIntake = { entities: [{ category: "concept", name: "  " }] };
-    expect(() => intakeExtraction(vault, bad, { agent: "a", now: NOW })).toThrow(
-      IntakeValidationError,
-    );
+    expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 
@@ -131,9 +138,7 @@ describe("intakeExtraction - validation refuses malformed payloads with no parti
       ],
       relations: [{ from: "A", relation: "causes", to: "B" }],
     };
-    expect(() => intakeExtraction(vault, bad, { agent: "a", now: NOW })).toThrow(
-      IntakeValidationError,
-    );
+    expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 
@@ -142,9 +147,7 @@ describe("intakeExtraction - validation refuses malformed payloads with no parti
       entities: [{ category: "concept", name: "A" }],
       relations: [{ from: "A", relation: "related", to: "Ghost" }],
     };
-    expect(() => intakeExtraction(vault, bad, { agent: "a", now: NOW })).toThrow(
-      IntakeValidationError,
-    );
+    expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 
@@ -153,17 +156,13 @@ describe("intakeExtraction - validation refuses malformed payloads with no parti
       entities: [{ category: "concept", name: "A" }],
       relations: [{ from: "A", relation: "related", to: "A" }],
     };
-    expect(() => intakeExtraction(vault, bad, { agent: "a", now: NOW })).toThrow(
-      IntakeValidationError,
-    );
+    expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 
   test("rejects an invalid entity category", () => {
     const bad: ExtractionIntake = { entities: [{ category: "Has Space", name: "A" }] };
-    expect(() => intakeExtraction(vault, bad, { agent: "a", now: NOW })).toThrow(
-      IntakeValidationError,
-    );
+    expect(() => intakeExtraction(vault, bad, opts("a"))).toThrow(IntakeValidationError);
     expect(listEntities(vault)).toHaveLength(0);
   });
 });

@@ -18,7 +18,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -28,7 +28,7 @@ import { parseFrontmatter } from "../../../../src/core/vault.ts";
 import { getEntity, listEntities } from "../../../../src/core/brain/entities/registry.ts";
 import { BRAIN_ENTITY_STATUS } from "../../../../src/core/brain/entities/types.ts";
 import { intakeExtraction } from "../../../../src/core/brain/intake/extract-intake.ts";
-import { classifySourceTrust } from "../../../../src/core/brain/intake/source-trust.ts";
+import { classifySourceOrigin } from "../../../../src/core/brain/intake/source-trust.ts";
 import { ingestSource } from "../../../../src/core/brain/ingest/ingest.ts";
 import {
   classifyRetrievalTrust,
@@ -47,6 +47,28 @@ const NOW = new Date("2026-06-13T12:00:00Z");
 const EXTRACTION = { entities: [{ category: "concept", name: "Restaking" }] };
 const TRUSTED_SOURCE = "Articles/primer.md";
 const UNTRUSTED_SOURCE = "https://example.com/a";
+/** Fixture bytes for the trusted source; its digest is pinned below. */
+const TRUSTED_SOURCE_BYTES = "the source bytes\n";
+const TRUSTED_SOURCE_HASH = "75622f215577918221541bf29f17c2b262326c06a68bc29912f5a78c36edb934";
+
+/**
+ * Trust now requires the named file to exist (GitHub #160), so every trusted
+ * case here seeds its source. That is the ONE change to the pinned bytes
+ * below: a trusted intake also records the digest of what it read.
+ */
+function seed(rel: string, contents = TRUSTED_SOURCE_BYTES): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, contents, "utf8");
+}
+
+function provenanceCiting(source: string): {
+  readonly level: "stated";
+  readonly sources: readonly string[];
+  readonly premises: readonly string[];
+} {
+  return { level: "stated", sources: [`[[${source}]]`], premises: [] };
+}
 
 /**
  * Bytes the pre-change code wrote for a trusted intake, captured from the
@@ -65,6 +87,9 @@ const GOLDEN_TRUSTED_ENTITY_PAGE =
   'created_at: "2026-06-13T12:00:00Z"\n' +
   'updated_at: "2026-06-13T12:00:00Z"\n' +
   "tags: [brain, brain/entity]\n" +
+  // The one line this unit adds to the pre-change bytes: the audit digest of
+  // the source the extraction was classified against (GitHub #160).
+  `source_content_hash: ${TRUSTED_SOURCE_HASH}\n` +
   "---\n" +
   "\n" +
   "# Restaking\n" +
@@ -107,11 +132,13 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
 });
 
-describe("classifySourceTrust", () => {
-  test("a vault-relative source identity is trusted", () => {
-    expect(classifySourceTrust(vault, TRUSTED_SOURCE)).toBe(INTAKE_TRUST.trusted);
-    expect(classifySourceTrust(vault, "notes/deep/nested.md")).toBe(INTAKE_TRUST.trusted);
-    expect(classifySourceTrust(vault, "[[Articles/primer.md]]")).toBe(INTAKE_TRUST.trusted);
+describe("classifySourceOrigin", () => {
+  test("a vault-relative source identity with a file behind it is trusted", () => {
+    seed(TRUSTED_SOURCE);
+    seed("notes/deep/nested.md");
+    expect(classifySourceOrigin(vault, TRUSTED_SOURCE).trust).toBe(INTAKE_TRUST.trusted);
+    expect(classifySourceOrigin(vault, "notes/deep/nested.md").trust).toBe(INTAKE_TRUST.trusted);
+    expect(classifySourceOrigin(vault, "[[Articles/primer.md]]").trust).toBe(INTAKE_TRUST.trusted);
   });
 
   test("a source identity carrying a URI scheme is untrusted", () => {
@@ -122,41 +149,43 @@ describe("classifySourceTrust", () => {
       "//example.com/a",
       "[[https://example.com/a]]",
     ]) {
-      expect(classifySourceTrust(vault, source)).toBe(INTAKE_TRUST.untrusted);
+      expect(classifySourceOrigin(vault, source).trust).toBe(INTAKE_TRUST.untrusted);
     }
   });
 
   test("a source identity that leaves the vault is untrusted", () => {
-    expect(classifySourceTrust(vault, "../outside/x.md")).toBe(INTAKE_TRUST.untrusted);
-    expect(classifySourceTrust(vault, "/etc/passwd")).toBe(INTAKE_TRUST.untrusted);
+    expect(classifySourceOrigin(vault, "../outside/x.md").trust).toBe(INTAKE_TRUST.untrusted);
+    expect(classifySourceOrigin(vault, "/etc/passwd").trust).toBe(INTAKE_TRUST.untrusted);
   });
 
   test("an empty source identity is untrusted - absence is not authority", () => {
-    expect(classifySourceTrust(vault, "")).toBe(INTAKE_TRUST.untrusted);
-    expect(classifySourceTrust(vault, "   ")).toBe(INTAKE_TRUST.untrusted);
+    expect(classifySourceOrigin(vault, "").trust).toBe(INTAKE_TRUST.untrusted);
+    expect(classifySourceOrigin(vault, "   ").trust).toBe(INTAKE_TRUST.untrusted);
   });
 });
 
 describe("intakeExtraction - the trusted path did not move", () => {
-  test("an intake with no trust declared writes the pre-change bytes", () => {
+  test("an intake citing a real vault source writes the pre-change bytes", () => {
+    seed(TRUSTED_SOURCE);
     intakeExtraction(vault, EXTRACTION, {
       agent: "ingest-agent",
       now: NOW,
-      provenance: { level: "stated", sources: [`[[${TRUSTED_SOURCE}]]`], premises: [] },
+      provenance: provenanceCiting(TRUSTED_SOURCE),
     });
     const entity = getEntity(vault, { category: "concept", query: "Restaking" })!;
     expect(readFileSync(entity.path, "utf8")).toBe(GOLDEN_TRUSTED_ENTITY_PAGE);
   });
 
-  test("an intake declared trusted writes the same bytes as one declaring nothing", () => {
-    intakeExtraction(vault, EXTRACTION, {
+  // The declared-trust option that used to be asserted here is gone: it let
+  // the caller name the lane, which is the switch GitHub #160 is about.
+  test("the intake reports the lane it committed in", () => {
+    seed(TRUSTED_SOURCE);
+    const res = intakeExtraction(vault, EXTRACTION, {
       agent: "ingest-agent",
       now: NOW,
-      provenance: { level: "stated", sources: [`[[${TRUSTED_SOURCE}]]`], premises: [] },
-      trust: INTAKE_TRUST.trusted,
+      provenance: provenanceCiting(TRUSTED_SOURCE),
     });
-    const entity = getEntity(vault, { category: "concept", query: "Restaking" })!;
-    expect(readFileSync(entity.path, "utf8")).toBe(GOLDEN_TRUSTED_ENTITY_PAGE);
+    expect(res.trust).toBe(INTAKE_TRUST.trusted);
   });
 });
 
@@ -165,8 +194,7 @@ describe("intakeExtraction - the untrusted path", () => {
     intakeExtraction(vault, EXTRACTION, {
       agent: "ingest-agent",
       now: NOW,
-      provenance: { level: "stated", sources: [`[[${UNTRUSTED_SOURCE}]]`], premises: [] },
-      trust: INTAKE_TRUST.untrusted,
+      provenance: provenanceCiting(UNTRUSTED_SOURCE),
     });
   }
 
@@ -200,14 +228,24 @@ describe("intakeExtraction - the untrusted path", () => {
   });
 
   test("a trusted intake leaves the gate's verdict clean", () => {
-    intakeExtraction(vault, EXTRACTION, { agent: "ingest-agent", now: NOW });
+    seed(TRUSTED_SOURCE);
+    intakeExtraction(vault, EXTRACTION, {
+      agent: "ingest-agent",
+      now: NOW,
+      provenance: provenanceCiting(TRUSTED_SOURCE),
+    });
     const entity = getEntity(vault, { category: "concept", query: "Restaking" })!;
     const [meta] = parseFrontmatter(entity.path);
     expect(classifyRetrievalTrust(meta).quarantined).toBe(false);
   });
 
   test("an entity that already exists is not downgraded by a later untrusted mention", () => {
-    intakeExtraction(vault, EXTRACTION, { agent: "operator", now: NOW });
+    seed(TRUSTED_SOURCE);
+    intakeExtraction(vault, EXTRACTION, {
+      agent: "operator",
+      now: NOW,
+      provenance: provenanceCiting(TRUSTED_SOURCE),
+    });
     untrustedIntake();
     const entity = getEntity(vault, { category: "concept", query: "Restaking" });
     expect(entity).not.toBeNull();
@@ -221,6 +259,7 @@ describe("ingestSource derives trust from the source identity", () => {
   const INPUT = { summary: "An overview.", extraction: EXTRACTION };
 
   test("a vault-relative source writes the pre-change summary bytes", () => {
+    seed(TRUSTED_SOURCE);
     const res = ingestSource(
       vault,
       { ...INPUT, sourcePath: TRUSTED_SOURCE },
@@ -247,6 +286,7 @@ describe("ingestSource derives trust from the source identity", () => {
   });
 
   test("a scraped URL and a local file are no longer indistinguishable", () => {
+    seed(TRUSTED_SOURCE);
     const local = ingestSource(
       vault,
       { ...INPUT, sourcePath: TRUSTED_SOURCE },

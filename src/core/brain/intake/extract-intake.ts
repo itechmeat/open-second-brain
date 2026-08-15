@@ -21,14 +21,15 @@
  * source that first introduced it without being clobbered on every later
  * mention.
  *
- * Trust: the caller may declare where the material came from
- * ({@link IntakeOptions.trust}); when it does not, the trust is DERIVED from
- * the sources the provenance cites, through the same structural classifier
- * both callers use (see {@link resolveIntakeTrust} for why the undeclared
- * case cannot simply read as trusted). An untrusted intake writes in the
- * registry's quarantine lane: the entities it introduces land quarantined and
- * marked, and they are records of what an untrusted source claimed rather
- * than edits to what the operator already holds.
+ * Trust: DERIVED here, once, from the sources the provenance cites, through
+ * the one classifier every caller shares. It is deliberately not an argument.
+ * A caller-declared trust used to win over the derivation, which made the
+ * classification something an argument could set - and the caller is the agent
+ * that read the material being classified, so that argument was the switch a
+ * hostile page needed. An untrusted intake writes in the registry's quarantine
+ * lane: the entities it introduces land quarantined and marked, and they are
+ * records of what an untrusted source claimed rather than edits to what the
+ * operator already holds.
  */
 
 import { isKnownRelation, normalizeRelation } from "../../graph/relation-vocab.ts";
@@ -36,7 +37,7 @@ import { validateEntityCategory, normalizeEntityName } from "../entities/canonic
 import { relateEntities, upsertEntity } from "../entities/registry.ts";
 import { renderProvenanceSection, type Provenance } from "../provenance/provenance.ts";
 import { INTAKE_TRUST, type IntakeTrust } from "../trust/untrusted-provenance.ts";
-import { classifySourceTrust } from "./source-trust.ts";
+import { classifySourceOrigin, type SourceOrigin } from "./source-trust.ts";
 
 /** One entity the agent extracted from a source. */
 export interface IntakeEntity {
@@ -67,15 +68,15 @@ export interface IntakeOptions {
   readonly agent: string;
   /** Injected clock for deterministic stamps. */
   readonly now: Date;
-  /** When set, its Sources section is stamped into newly created entity bodies. */
-  readonly provenance?: Provenance;
   /**
-   * Whether the material this extraction came from carries the vault's own
-   * authority. Both in-repo callers declare it, deriving it from the source
-   * identity through `classifySourceTrust`. Absent → derived here from the
-   * cited provenance; see {@link resolveIntakeTrust}.
+   * Where this extraction came from. REQUIRED, and required to cite at least
+   * one source: its Sources section is stamped into newly created entity
+   * bodies, and it is the only thing this primitive can classify. It used to
+   * be optional, and an intake citing nothing read as trusted - unreachable
+   * only because the one caller that could produce it guarded the case
+   * itself, which nothing enforced for the next caller.
    */
-  readonly trust?: IntakeTrust;
+  readonly provenance: Provenance;
 }
 
 export interface IntakeResult {
@@ -85,6 +86,12 @@ export interface IntakeResult {
   readonly entitiesUpdated: readonly string[];
   /** Count of relations applied (idempotent; an already-linked edge is a no-op). */
   readonly relationsApplied: number;
+  /**
+   * The lane this intake committed in. Returned so the MCP boundary reports
+   * the verdict this primitive actually used instead of classifying the same
+   * source a second time and reporting an answer that could disagree.
+   */
+  readonly trust: IntakeTrust;
 }
 
 /** A typed extraction failed structural validation; nothing was written. */
@@ -137,32 +144,42 @@ function validateIntake(intake: ExtractionIntake): void {
 }
 
 /**
- * The trust this intake commits under.
+ * The origin this intake commits under, classified HERE and nowhere else.
  *
- * A declared trust wins: the caller classified the identity it actually read
- * from, which is more than this primitive can see. When nothing is declared,
- * the CITED sources decide, through the one structural classifier - reading
- * an undeclared trust as trusted would have made "the caller forgot" and "the
- * operator wrote it" the same answer, and a hostile page is exactly the input
- * that arrives with a source cited and no classification done. Several
+ * The cited sources decide, through the one structural classifier. Several
  * sources resolve conservatively: an extraction drawn from a mixed batch
  * cannot be split back apart afterwards, so one source outside the vault
  * makes the whole intake untrusted.
  *
- * An intake that cites NO source and declares no trust is the one case this
- * function cannot decide, and it keeps the pre-change verdict so a caller
- * that never knew about trust behaves identically. That is deliberately not
- * where the question is answered: nothing here can ask the caller what it
- * read, so the MCP boundary - which can - refuses an intake that names no
- * source at all rather than routing an unanswerable one down either lane.
+ * The content hash is recorded only when the intake cites exactly ONE trusted
+ * source. With several, there is no single set of bytes this extraction came
+ * from, and stamping the first one would record a file the entities may have
+ * nothing to do with - a misleading audit record is worse than none, because
+ * only the second can be read as "not recorded".
+ *
+ * An intake citing NO source throws instead of picking a lane. It cannot be
+ * classified, and both lanes are wrong for it: trusting it makes the omission
+ * itself the way in, while quarantining it punishes a caller for a question
+ * nobody asked. The remedy is to name a source, so the caller is told to.
  */
-function resolveIntakeTrust(vault: string, opts: IntakeOptions): IntakeTrust {
-  if (opts.trust !== undefined) return opts.trust;
-  const sources = opts.provenance?.sources ?? [];
-  if (sources.length === 0) return INTAKE_TRUST.trusted;
-  return sources.every((source) => classifySourceTrust(vault, source) === INTAKE_TRUST.trusted)
-    ? INTAKE_TRUST.trusted
-    : INTAKE_TRUST.untrusted;
+function resolveIntakeOrigin(vault: string, provenance: Provenance): SourceOrigin {
+  const sources = provenance.sources;
+  if (sources.length === 0) {
+    throw new IntakeValidationError(
+      "intake provenance must cite at least one source - entities are committed under the " +
+        "provenance of the material they were extracted from, so an intake that names none " +
+        "has no provenance to commit under",
+    );
+  }
+  const origins = sources.map((source) => classifySourceOrigin(vault, source));
+  if (origins.some((origin) => origin.trust === INTAKE_TRUST.untrusted)) {
+    return { trust: INTAKE_TRUST.untrusted };
+  }
+  const only = origins.length === 1 ? origins[0] : undefined;
+  return {
+    trust: INTAKE_TRUST.trusted,
+    ...(only?.contentHash !== undefined ? { contentHash: only.contentHash } : {}),
+  };
 }
 
 /**
@@ -176,9 +193,12 @@ export function intakeExtraction(
   opts: IntakeOptions,
 ): IntakeResult {
   validateIntake(intake);
+  // Before any write, like the payload validation above: an intake that
+  // cannot be classified must not leave half its entities behind.
+  const origin = resolveIntakeOrigin(vault, opts.provenance);
 
-  const provenanceSection = opts.provenance ? renderProvenanceSection(opts.provenance) : "";
-  const untrustedOrigin = resolveIntakeTrust(vault, opts) === INTAKE_TRUST.untrusted;
+  const provenanceSection = renderProvenanceSection(opts.provenance);
+  const untrustedOrigin = origin.trust === INTAKE_TRUST.untrusted;
 
   const entitiesCreated: string[] = [];
   const entitiesUpdated: string[] = [];
@@ -201,6 +221,7 @@ export function intakeExtraction(
       ...(entity.confidence !== undefined ? { confidence: entity.confidence } : {}),
       ...(bodyOnCreate !== undefined ? { bodyOnCreate } : {}),
       ...(untrustedOrigin ? { untrustedOrigin } : {}),
+      ...(origin.contentHash !== undefined ? { sourceContentHash: origin.contentHash } : {}),
     });
     if (res.created) entitiesCreated.push(res.entity.id);
     else entitiesUpdated.push(res.entity.id);
@@ -224,5 +245,5 @@ export function intakeExtraction(
     relationsApplied += 1;
   }
 
-  return { entitiesCreated, entitiesUpdated, relationsApplied };
+  return { entitiesCreated, entitiesUpdated, relationsApplied, trust: origin.trust };
 }

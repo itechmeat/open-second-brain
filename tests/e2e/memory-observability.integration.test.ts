@@ -17,6 +17,7 @@ import { packContext } from "../../src/core/brain/context-pack.ts";
 import { CONTINUITY_SCHEMA_VERSION } from "../../src/core/brain/continuity/types.ts";
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
 
 let tmp: string;
 let vault: string;
@@ -46,7 +47,7 @@ test("telemetry -> schema-stamped records -> ATOF/ATIF export -> bench report", 
   const report = packContext(vault, {
     maxTokens: 500,
     receipt: { host: "e2e", trigger: "context_pack", sessionId: "e2e-session" },
-    telemetry: { host: "e2e", sessionId: "e2e-session" },
+    telemetry: { host: "e2e", channel: RECALL_CHANNEL.cli, sessionId: "e2e-session" },
   });
   expect(report.receiptId).toBeDefined();
   expect(report.telemetryId).toBeDefined();

@@ -18,6 +18,7 @@ import { emitGatedTelemetry } from "../../../src/core/brain/continuity/emit.ts";
 import { packContext } from "../../../src/core/brain/context-pack.ts";
 import { buildPreCompressPack } from "../../../src/core/brain/pre-compress-pack.ts";
 import { captureSessionLifecycleEvent } from "../../../src/core/brain/session-lifecycle.ts";
+import { RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
 
 let vault: string;
 
@@ -108,7 +109,7 @@ describe("fail-open: a broken continuity store never fails the primary operation
     blockContinuityWrites();
     const report = packContext(vault, {
       maxTokens: 500,
-      telemetry: { host: "test" },
+      telemetry: { host: "test", channel: RECALL_CHANNEL.cli },
       receipt: { host: "test", trigger: "context_pack" },
     });
     expect(report.items.length).toBe(1);
@@ -121,7 +122,7 @@ describe("fail-open: a broken continuity store never fails the primary operation
     blockContinuityWrites();
     const pack = buildPreCompressPack(vault, {
       topK: 3,
-      telemetry: { host: "test" },
+      telemetry: { host: "test", channel: RECALL_CHANNEL.cli },
     });
     expect(pack.text.length).toBeGreaterThanOrEqual(0);
     expect(pack.telemetryId).toBeUndefined();

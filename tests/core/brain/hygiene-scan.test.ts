@@ -17,7 +17,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { appendClaimEvent } from "../../../src/core/brain/truth/store.ts";
-import { emitRecallTelemetry } from "../../../src/core/brain/recall-telemetry.ts";
+import { emitRecallTelemetry, RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
 import {
   computeSourceStamp,
   formatSourceStampFrontmatter,
@@ -98,6 +98,7 @@ describe("usefulness detector", () => {
     writePref("too-young", "2026-06-01T00:00:00Z");
     emitRecallTelemetry(vault, {
       host: "test",
+      channel: RECALL_CHANNEL.cli,
       mode: "context_pack",
       status: "ok",
       durationMs: 5,

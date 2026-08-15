@@ -50,6 +50,26 @@ export type IntakeTrust = (typeof INTAKE_TRUST)[keyof typeof INTAKE_TRUST];
 export const UNTRUSTED_SOURCE_FRONTMATTER_KEY = UNTRUSTED_SOURCE_TAG;
 
 /**
+ * The frontmatter key recording the SHA-256 of the source bytes a trusted
+ * intake was classified against.
+ *
+ * An AUDIT RECORD, not a gate. Nothing in this release reads it back, and that
+ * is deliberate rather than unfinished: the same shape as the preference
+ * content hash in `content-hash.ts`, which is written on promotion and only
+ * ever compared to report drift, never to refuse a read. Recording the digest
+ * costs one frontmatter line and answers, later, which bytes the caller
+ * claimed this extraction came from - a question that had no answer at all
+ * while trust was decided from a path string. Turning it into a gate would be
+ * a second decision (what does a changed source mean for entities already
+ * written?) and is not made here.
+ *
+ * Declared beside {@link UNTRUSTED_SOURCE_FRONTMATTER_KEY} because the two
+ * travel together: the same writer merges both into the same extras map, so
+ * one place owns both spellings.
+ */
+export const SOURCE_CONTENT_HASH_FRONTMATTER_KEY = "source_content_hash";
+
+/**
  * Does this frontmatter declare untrusted provenance? Tolerant of the
  * boolean the writer emits and of the string form a hand edit or a YAML
  * round-trip can leave behind.
@@ -67,4 +87,15 @@ export function hasUntrustedSourceMarker(meta: Readonly<Record<string, unknown>>
  */
 export function untrustedSourceFrontmatter(trust: IntakeTrust): FrontmatterMap {
   return trust === INTAKE_TRUST.untrusted ? { [UNTRUSTED_SOURCE_FRONTMATTER_KEY]: true } : {};
+}
+
+/**
+ * The frontmatter fragment recording the source content hash, when there is
+ * one. An absent hash adds NOTHING rather than an empty key: a page whose
+ * source had no bytes to hash should not carry a field claiming it was
+ * hashed, and the page then stays byte-identical to one written before this
+ * record existed.
+ */
+export function sourceContentHashFrontmatter(contentHash: string | undefined): FrontmatterMap {
+  return contentHash === undefined ? {} : { [SOURCE_CONTENT_HASH_FRONTMATTER_KEY]: contentHash };
 }

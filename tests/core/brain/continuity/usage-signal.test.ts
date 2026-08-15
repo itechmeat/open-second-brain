@@ -15,7 +15,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { emitRecallTelemetry } from "../../../../src/core/brain/recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  RECALL_CHANNEL,
+} from "../../../../src/core/brain/recall-telemetry.ts";
 import { appendContinuityRecord } from "../../../../src/core/brain/continuity/store.ts";
 import { loadNormalizedContinuityRecords } from "../../../../src/core/brain/continuity/read-model.ts";
 import {
@@ -92,6 +95,7 @@ describe("deriveUsageSignals + usageForRecord", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-10T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,
@@ -101,6 +105,7 @@ describe("deriveUsageSignals + usageForRecord", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-12T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,
@@ -121,6 +126,7 @@ describe("deriveUsageSignals + usageForRecord", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-12T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,
@@ -143,6 +149,7 @@ describe("deriveUsageSignals + usageForRecord", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-12T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,
@@ -171,6 +178,7 @@ describe("rankByUsageDecay", () => {
     emitRecallTelemetry(vault, {
       createdAt: "2026-06-13T00:00:00.000Z",
       host: "t",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "ok",
       durationMs: 1,

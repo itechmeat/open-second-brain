@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
 import { recordHostMemoryWrite } from "../../../src/core/brain/host-memory-write.ts";
-import { emitRecallTelemetry } from "../../../src/core/brain/recall-telemetry.ts";
+import { emitRecallTelemetry, RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
 import {
   computeMemoryCostMeter,
   summarizeMemoryWrites,
@@ -38,6 +38,7 @@ function read(createdAt: string, mode: "search" | "context_pack" | "query"): voi
   emitRecallTelemetry(vault, {
     createdAt,
     host: "unit-test",
+    channel: RECALL_CHANNEL.cli,
     mode,
     status: "ok",
     durationMs: 1,

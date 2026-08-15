@@ -25,7 +25,10 @@ import {
   listJournal,
   MAINTENANCE_JOURNAL_CAP,
 } from "../../../../src/core/brain/maintenance/journal.ts";
-import { emitRecallTelemetry } from "../../../../src/core/brain/recall-telemetry.ts";
+import {
+  emitRecallTelemetry,
+  RECALL_CHANNEL,
+} from "../../../../src/core/brain/recall-telemetry.ts";
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 
@@ -94,6 +97,7 @@ describe("evaluateGates", () => {
     for (let i = 0; i < 5; i++) {
       emitRecallTelemetry(vault, {
         host: "claude-code",
+        channel: RECALL_CHANNEL.cli,
         mode: "search",
         status: "ok",
         durationMs: 12,

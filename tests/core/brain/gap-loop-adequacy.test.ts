@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { emitRecallTelemetry } from "../../../src/core/brain/recall-telemetry.ts";
+import { emitRecallTelemetry, RECALL_CHANNEL } from "../../../src/core/brain/recall-telemetry.ts";
 import { assessRecallAdequacy } from "../../../src/core/brain/recall-adequacy.ts";
 import {
   normalizeQueryTerms,
@@ -64,6 +64,7 @@ function seedStructuralGap(topic: string, times: number): void {
   for (let i = 0; i < times; i++) {
     emitRecallTelemetry(vault, {
       host: "test",
+      channel: RECALL_CHANNEL.cli,
       mode: "search",
       status: "empty",
       durationMs: 0,

@@ -9,7 +9,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -40,8 +40,20 @@ afterEach(() => {
 
 const handler = NER_TOOLS[0]!.handler;
 
+/**
+ * A cited source is trusted only when the file it names is really there
+ * (GitHub #160), so every intake below that expects its entities in the
+ * canonical registry seeds the note it claims to have read.
+ */
+function seed(rel: string): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, `bytes of ${rel}\n`, "utf8");
+}
+
 describe("brain_intake_entities", () => {
   test("intakes agent-supplied entities into the registry", async () => {
+    seed("Notes/scaling.md");
     const res = await handler(ctx, {
       source: "[[Notes/scaling.md]]",
       entities: [
@@ -60,6 +72,7 @@ describe("brain_intake_entities", () => {
   });
 
   test("applies typed relations between extracted entities", async () => {
+    seed("Notes/restaking.md");
     const res = await handler(ctx, {
       source: "[[Notes/restaking.md]]",
       entities: [
@@ -74,6 +87,7 @@ describe("brain_intake_entities", () => {
   });
 
   test("cites the source wikilink in a newly created entity body", async () => {
+    seed("Articles/eth-roadmap.md");
     await handler(ctx, {
       entities: [{ category: "concept", name: "Sharding" }],
       source: "[[Articles/eth-roadmap.md]]",
@@ -89,8 +103,12 @@ describe("brain_intake_entities", () => {
   });
 
   test("translates an unknown relation into INVALID_PARAMS with no partial write", async () => {
+    // A real source, so the refusal under test is the relation vocabulary and
+    // not the source contract checked before it.
+    seed("Notes/scaling.md");
     await expect(
       handler(ctx, {
+        source: "[[Notes/scaling.md]]",
         entities: [
           { category: "concept", name: "A" },
           { category: "concept", name: "B" },

@@ -47,6 +47,7 @@ import { ENTITY_STATUS_SCOPE, entityStatusInScope } from "./status-scope.ts";
 import {
   INTAKE_TRUST,
   UNTRUSTED_SOURCE_FRONTMATTER_KEY,
+  sourceContentHashFrontmatter,
   untrustedSourceFrontmatter,
 } from "../trust/untrusted-provenance.ts";
 import {
@@ -94,6 +95,23 @@ export interface UpsertEntityInput {
    * about trust.
    */
   readonly untrustedOrigin?: boolean;
+  /**
+   * SHA-256 of the bytes of the source this record was extracted from, as
+   * classified by `intake/source-trust.ts`.
+   *
+   * An AUDIT RECORD, not a gate: nothing in this release reads it back, and
+   * that is the point rather than an omission - see
+   * `SOURCE_CONTENT_HASH_FRONTMATTER_KEY` in
+   * `../trust/untrusted-provenance.ts`. Stamped only when this
+   * upsert CREATES the record, alongside {@link bodyOnCreate}, so the digest
+   * and the `## Sources` citation always describe the SAME source; a later
+   * mention would otherwise overwrite the hash while leaving the citation of
+   * a different file in the body, and the page would misdescribe both.
+   *
+   * Absent → nothing is written, leaving the page byte-identical to one from
+   * before this record existed.
+   */
+  readonly sourceContentHash?: string;
 }
 
 export interface UpsertEntityResult {
@@ -527,10 +545,15 @@ export function upsertEntity(vault: string, input: UpsertEntityInput): UpsertEnt
     updated_at: stamp,
     tags: ["brain", "brain/entity"],
   };
-  const marker = untrustedSourceFrontmatter(
-    untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted,
-  );
-  writeEntityFile(path, fields, marker, input.body ?? input.bodyOnCreate ?? `# ${name}`, {
+  // Both records the lane writes on creation: the marker the retrieval gate
+  // reads, and the audit digest of the bytes this record was extracted from.
+  // Merged in one map so a page cannot carry one without the other having had
+  // its chance.
+  const extrasOnCreate: FrontmatterMap = {
+    ...untrustedSourceFrontmatter(untrusted ? INTAKE_TRUST.untrusted : INTAKE_TRUST.trusted),
+    ...sourceContentHashFrontmatter(input.sourceContentHash),
+  };
+  writeEntityFile(path, fields, extrasOnCreate, input.body ?? input.bodyOnCreate ?? `# ${name}`, {
     overwrite: false,
   });
   const entity = parseEntityFile(path);

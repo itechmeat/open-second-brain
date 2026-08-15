@@ -25,10 +25,15 @@
  * the surface where "no source was named at all" can still be handed back to
  * the caller with an exit, and testing it apart from the classifier would
  * split one rule across two files.
+ *
+ * The shape gate is all this file pins. Trust also requires the named file to
+ * exist (GitHub #160), so every identity asserted trusted below is seeded on
+ * disk first; the existence rule itself is pinned in
+ * `source-trust-existence.test.ts`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -37,7 +42,7 @@ import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { getEntity, listEntities } from "../../../../src/core/brain/entities/registry.ts";
 import { BRAIN_ENTITY_STATUS } from "../../../../src/core/brain/entities/types.ts";
 import { intakeExtraction } from "../../../../src/core/brain/intake/extract-intake.ts";
-import { classifySourceTrust } from "../../../../src/core/brain/intake/source-trust.ts";
+import { classifySourceOrigin } from "../../../../src/core/brain/intake/source-trust.ts";
 import { INTAKE_TRUST } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
 import { NER_TOOLS } from "../../../../src/mcp/brain/ner-tools.ts";
 import { MCPError } from "../../../../src/mcp/protocol.ts";
@@ -54,6 +59,17 @@ const COLON_NOTE = "Meeting: Q3 planning.md";
 
 const handler = NER_TOOLS[0]!.handler;
 
+/** Give an identity the bytes the trust decision now requires behind it. */
+function seed(rel: string): void {
+  const abs = join(vault, rel);
+  mkdirSync(join(abs, ".."), { recursive: true });
+  writeFileSync(abs, "the source bytes\n", "utf8");
+}
+
+function trustOf(source: string): string {
+  return classifySourceOrigin(vault, source).trust;
+}
+
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-polarity-vault-"));
   configHome = mkdtempSync(join(tmpdir(), "o2b-polarity-cfg-"));
@@ -68,7 +84,7 @@ afterEach(() => {
   rmSync(configHome, { recursive: true, force: true });
 });
 
-describe("classifySourceTrust - an identity that establishes nothing is not trusted", () => {
+describe("classifySourceOrigin - an identity that establishes nothing is not trusted", () => {
   test("a bare host, with or without a path, is untrusted", () => {
     for (const source of [
       "evil.com/article",
@@ -77,37 +93,52 @@ describe("classifySourceTrust - an identity that establishes nothing is not trus
       "example.co.uk/posts/1",
       "[[evil.com/article]]",
     ]) {
-      expect(classifySourceTrust(vault, source)).toBe(INTAKE_TRUST.untrusted);
+      expect(trustOf(source)).toBe(INTAKE_TRUST.untrusted);
     }
   });
 
   test("a scheme in front of a note-shaped path does not buy trust", () => {
     for (const source of ["file:/etc/passwd.md", "https://example.com/a.md", "//evil.com/x.md"]) {
-      expect(classifySourceTrust(vault, source)).toBe(INTAKE_TRUST.untrusted);
+      expect(trustOf(source)).toBe(INTAKE_TRUST.untrusted);
     }
   });
 });
 
-describe("classifySourceTrust - a colon in a filename is not a scheme", () => {
+describe("classifySourceOrigin - a colon in a filename is not a scheme", () => {
   test("a vault note whose name carries a colon stays trusted", () => {
+    for (const source of [
+      COLON_NOTE,
+      "Meetings/Meeting: Q3 planning.md",
+      "Meetings/Q3: planning/notes.md",
+    ]) {
+      seed(source);
+    }
     for (const source of [
       COLON_NOTE,
       `[[${COLON_NOTE}]]`,
       "Meetings/Meeting: Q3 planning.md",
       "Meetings/Q3: planning/notes.md",
     ]) {
-      expect(classifySourceTrust(vault, source)).toBe(INTAKE_TRUST.trusted);
+      expect(trustOf(source)).toBe(INTAKE_TRUST.trusted);
     }
   });
 
-  test("the ordinary vault-relative identities are unchanged", () => {
+  // These three identities used to be asserted trusted in a vault where none
+  // of them existed, which is exactly the hole GitHub #160 reports: the shape
+  // alone decided, so a caller relaying a hostile page's instruction could
+  // name any plausible path and land its extraction active. They are seeded
+  // here because the shape is now a necessary condition rather than a
+  // sufficient one - the paired assertion that the unseeded form is
+  // quarantined lives in `source-trust-existence.test.ts`.
+  test("the ordinary vault-relative identities are unchanged once they exist", () => {
     for (const source of [
       "Articles/primer.md",
       "notes/deep/nested.md",
       "Code/widget.ts",
       "readme.md",
     ]) {
-      expect(classifySourceTrust(vault, source)).toBe(INTAKE_TRUST.trusted);
+      seed(source);
+      expect(trustOf(source)).toBe(INTAKE_TRUST.trusted);
     }
   });
 });
@@ -124,6 +155,7 @@ describe("intakeExtraction derives trust from the source it was given", () => {
   });
 
   test("one untrusted source among several makes the whole intake untrusted", () => {
+    seed("Articles/primer.md");
     intakeExtraction(vault, EXTRACTION, {
       agent: "claude",
       now: NOW,
@@ -136,14 +168,18 @@ describe("intakeExtraction derives trust from the source it was given", () => {
     expect(getEntity(vault, { category: "concept", query: "Restaking" })).toBeNull();
   });
 
-  test("a declared trust still wins over the derivation", () => {
-    intakeExtraction(vault, EXTRACTION, {
+  // The caller-declared trust option that used to short-circuit this
+  // derivation is gone. It existed only to suppress a second classification
+  // the tool had already done, and while it existed the classification was an
+  // argument - which is the switch this whole unit refuses to hand over.
+  test("the trust the intake committed under is reported back to its caller", () => {
+    seed("Articles/primer.md");
+    const res = intakeExtraction(vault, EXTRACTION, {
       agent: "claude",
       now: NOW,
-      provenance: { level: "stated", sources: ["[[evil.com/article]]"], premises: [] },
-      trust: INTAKE_TRUST.trusted,
+      provenance: { level: "stated", sources: ["[[Articles/primer.md]]"], premises: [] },
     });
-    expect(getEntity(vault, { category: "concept", query: "Restaking" })).not.toBeNull();
+    expect(res.trust).toBe(INTAKE_TRUST.trusted);
   });
 });
 
@@ -166,6 +202,7 @@ describe("brain_intake_entities - the boundary that can still ask", () => {
   });
 
   test("a vault note whose name carries a colon is not quarantined", async () => {
+    seed(COLON_NOTE);
     await handler(ctx, {
       entities: [{ category: "concept", name: "Layer 2s" }],
       source: `[[${COLON_NOTE}]]`,

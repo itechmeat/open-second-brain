@@ -34,7 +34,7 @@ import { isoSecond } from "../time.ts";
 import { sourcePagePath } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { intakeExtraction, type ExtractionIntake } from "../intake/extract-intake.ts";
-import { classifySourceTrust } from "../intake/source-trust.ts";
+import { normalizeSourceIdentity } from "../intake/source-trust.ts";
 import { untrustedSourceFrontmatter } from "../trust/untrusted-provenance.ts";
 import {
   renderProvenanceSection,
@@ -115,22 +115,27 @@ export function ingestSource(
 ): IngestSourceResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
-  const canonicalSource = canonicalNotePath(input.sourcePath);
+  // The SAME normaliser the trust classifier uses. This used to be a bare
+  // `canonicalNotePath`, which left a caller-supplied `[[Articles/x.md]]`
+  // wrapped: the summary page then wrote `[[[[Articles/x.md]]]]` and keyed on
+  // a different identity hash than the bare spelling of the same source,
+  // producing two summary pages for one source against this pipeline's
+  // documented idempotency.
+  const canonicalSource = normalizeSourceIdentity(input.sourcePath);
   const preExtract = opts.preExtract === true ? runPreExtract(vault, canonicalSource) : undefined;
   const sourceLink = `[[${canonicalSource}]]`;
   const provenance: Provenance = { level: "stated", sources: [sourceLink], premises: [] };
-  // Derived per source, not stamped uniformly: until this unit every source
-  // carried the same provenance regardless of where it came from, which made
-  // a scraped URL and a file in the operator's own vault indistinguishable at
-  // the moment they entered the brain.
-  const trust = classifySourceTrust(vault, canonicalSource);
 
+  // The intake classifies the cited source itself and reports the lane back.
+  // It used to be classified here as well and handed down as an argument,
+  // which meant the same source was read twice and the second answer could be
+  // overridden by the caller - see `intake/extract-intake.ts`.
   const intake = intakeExtraction(vault, input.extraction, {
     agent: opts.agent,
     now: opts.now,
     provenance,
-    trust,
   });
+  const trust = intake.trust;
   const connections = intake.entitiesUpdated;
   const allEntities = [...intake.entitiesCreated, ...intake.entitiesUpdated];
 
