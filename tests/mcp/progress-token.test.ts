@@ -68,6 +68,18 @@ function dreamCall(id: number, token?: string | number): JsonObject {
   };
 }
 
+/**
+ * One response frame with the two members a rerun cannot reproduce
+ * removed: `run_id` is derived from the wall clock, and `content` is that
+ * same structured payload rendered, so it carries the id a second time.
+ */
+function stripRunId(frame: JsonObject | undefined): string {
+  const clone = JSON.parse(JSON.stringify(frame)) as Record<string, any>;
+  delete clone["result"]["content"];
+  delete clone["result"]["structuredContent"]["run_id"];
+  return JSON.stringify(clone);
+}
+
 function lines(out: string): JsonObject[] {
   return out
     .split("\n")
@@ -123,14 +135,7 @@ describe("stdio carries a progress token", () => {
       ),
     ).find((f) => f["id"] === 2);
 
-    // `run_id` is wall-clock derived; everything else must match.
-    const strip = (frame: JsonObject | undefined): string => {
-      const clone = JSON.parse(JSON.stringify(frame)) as JsonObject;
-      delete (clone["result"] as JsonObject)["content"];
-      delete ((clone["result"] as JsonObject)["structuredContent"] as JsonObject)["run_id"];
-      return JSON.stringify(clone);
-    };
-    expect(strip(withToken)).toBe(strip(without));
+    expect(stripRunId(withToken)).toBe(stripRunId(without));
   });
 
   test("no token produces no notification frames at all", async () => {

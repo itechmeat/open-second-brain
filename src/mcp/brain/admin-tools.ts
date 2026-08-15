@@ -31,6 +31,7 @@ import {
 } from "../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
 import { createSafeguard, resolveSafeguardTimeoutMs } from "../../core/brain/safeguard.ts";
+import type { ProgressSink } from "../../core/brain/progress.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal } from "../../core/brain/maintenance/journal.ts";
 import { runMaintenance, type DailyWindow } from "../../core/brain/maintenance/lane.ts";
@@ -249,6 +250,7 @@ async function toolBrainSecrets(
 async function toolBrainMaintenance(
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "run" && op !== "status") {
@@ -299,6 +301,11 @@ async function toolBrainMaintenance(
       operation,
       timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
     });
+  // The lane is a dispatcher over four long operations, not a fifth one,
+  // so it forwards the caller's sink to each task rather than counting
+  // tasks itself: every event names the operation that emitted it, which
+  // is what tells a reader which of the four the lane is currently in.
+  const laneProgress = onProgress ? { onProgress } : {};
   const result = await runMaintenance(ctx.vault, {
     now,
     holder: `${agent}@${process.pid}`,
@@ -308,13 +315,16 @@ async function toolBrainMaintenance(
       {
         name: "dream",
         run: async () => {
-          dream(ctx.vault, { now, safeguard: laneSafeguard("dream") });
+          dream(ctx.vault, { now, safeguard: laneSafeguard("dream"), ...laneProgress });
         },
       },
       {
         name: "reindex",
         run: async () => {
-          await indexVault(searchConfig, { safeguard: laneSafeguard("reindex") });
+          await indexVault(searchConfig, {
+            safeguard: laneSafeguard("reindex"),
+            ...laneProgress,
+          });
         },
       },
       // Same lane contract as the CLI verb (link-recall-intelligence):
@@ -329,6 +339,7 @@ async function toolBrainMaintenance(
             const report = discoverBridges(store, {
               dismissed: readDismissedBridges(ctx.vault),
               safeguard: laneSafeguard("bridges"),
+              ...laneProgress,
             });
             writeBridgeProposals(ctx.vault, report, { now });
             try {
@@ -355,7 +366,10 @@ async function toolBrainMaintenance(
         run: async () => {
           const store = await Store.open(searchConfig, { mode: "read" });
           try {
-            const communities = detectCommunities(store, { safeguard: laneSafeguard("clusters") });
+            const communities = detectCommunities(store, {
+              safeguard: laneSafeguard("clusters"),
+              ...laneProgress,
+            });
             const materialized = materializeClusterNotes(ctx.vault, communities, { store, now });
             try {
               appendMetric(ctx.vault, {

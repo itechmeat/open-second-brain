@@ -25,6 +25,14 @@ import {
   materializeClusterNotes,
 } from "../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
+import {
+  createSafeguard,
+  OPERATION,
+  resolveSafeguardTimeoutMs,
+  type Operation,
+  type Safeguard,
+} from "../../core/brain/safeguard.ts";
+import type { ProgressSink } from "../../core/brain/progress.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { createTriggers } from "../../core/brain/triggers/store.ts";
 import {
@@ -86,6 +94,22 @@ function toolBrainForesight(
 // ----- brain_labels (t_7a41f42d) ---------------------------------------------
 
 /**
+ * A cooperative deadline for one graph sweep, resolved exactly as the
+ * maintenance lane resolves it (`admin-tools.ts`): per-operation key,
+ * then global, then the built-in default.
+ *
+ * These two tools ran with no deadline at all while the lane's copies of
+ * the same calls carried one, so the identical sweep was bounded when a
+ * cron started it and unbounded when an agent did.
+ */
+function graphSafeguard(ctx: ServerContext, operation: Operation): Safeguard {
+  return createSafeguard({
+    operation,
+    timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
+  });
+}
+
+/**
  * Bridge discovery over the vec index: discover regenerates the
  * reviewable proposals artifact, accept writes one related wikilink,
  * dismiss persists a pair suppression, list reads the artifact back.
@@ -93,6 +117,7 @@ function toolBrainForesight(
 async function toolBrainBridges(
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "discover" && op !== "list" && op !== "accept" && op !== "dismiss") {
@@ -171,6 +196,8 @@ async function toolBrainBridges(
       ...(max !== undefined ? { maxProposals: max as number } : {}),
       ...(minSimilarity !== undefined ? { minSimilarity } : {}),
       dismissed,
+      safeguard: graphSafeguard(ctx, OPERATION.bridges),
+      ...(onProgress ? { onProgress } : {}),
     });
     writeBridgeProposals(ctx.vault, report, { now });
     try {
@@ -205,6 +232,7 @@ async function toolBrainBridges(
 async function toolBrainClusters(
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
   const op = args["operation"];
   if (op !== "run" && op !== "list") {
@@ -249,10 +277,11 @@ async function toolBrainClusters(
   const store = await Store.open(searchConfig, { mode: "read" });
   const now = new Date();
   try {
-    const communities = detectCommunities(
-      store,
-      minSize !== undefined ? { minSize: minSize as number } : {},
-    );
+    const communities = detectCommunities(store, {
+      ...(minSize !== undefined ? { minSize: minSize as number } : {}),
+      safeguard: graphSafeguard(ctx, OPERATION.clusters),
+      ...(onProgress ? { onProgress } : {}),
+    });
     const materialized = materializeClusterNotes(ctx.vault, communities, {
       store,
       now,
