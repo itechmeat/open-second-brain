@@ -113,9 +113,34 @@ minutes is `brain_dream`, `brain_bridges`, `brain_clusters` and
 list. `brain_maintenance` is a dispatcher over the other four
 operations and forwards the sink to each task, so its events name the
 task that emitted them (`dream`, `reindex`, `bridges`, `clusters`) rather
-than the lane. Every one of those four also runs under a cooperative
-deadline resolved from `safeguard_timeout_<operation>_seconds`, then
-`safeguard_timeout_seconds`, then the built-in default.
+than the lane. Two more reach a consolidation pass without carrying its
+name and report on the same terms: `brain_brief` with `view: "operator"`,
+whose operator summary runs a dry-run pass, and
+`brain_review_candidates`, whose projection is that same dry run
+reshaped.
+
+**Which tools are bounded.** Every call that reaches one of those long
+operations runs under a cooperative deadline resolved from
+`safeguard_timeout_<operation>_seconds`, then `safeguard_timeout_seconds`,
+then the built-in default. Bounded and observed are the same population,
+with one stated exception — the row below marked **none**:
+
+| tool | long operation it reaches | deadline | reports |
+| --- | --- | --- | --- |
+| `brain_dream` (`run`) | `dream`, twice when `expect`/`strict` asks for a guard preview | `dream` — one budget for the whole call, preview included | yes |
+| `brain_dream` (`stage`/`validate`/`apply`) | `dream`, through the staged bundle | `dream` | yes |
+| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | **none** — the step functions take no guard | no |
+| `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
+| `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
+| `brain_maintenance` (`run`) | all four, sequentially | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
+| `brain_brief` (`view: "operator"`) | `dream`, dry run | `dream` | yes |
+| `brain_review_candidates` | `dream`, dry run | `dream` | yes |
+
+The deadline is cooperative, not preemptive: `dream()` and the graph
+sweeps are synchronous, so nothing can interrupt them from outside — past
+the deadline the operation's next checkpoint throws, at a boundary where
+writes are already atomic. Setting `safeguard_timeout_dream_seconds: 0`
+disables the deadline for every row above whose budget is `dream`.
 
 ## Tool Highlights
 

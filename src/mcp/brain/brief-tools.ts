@@ -48,8 +48,10 @@ import {
   coercePositiveInteger,
   dispatchByView,
   localizeEnvelope,
+  toolSafeguard,
 } from "./shared.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
+import { OPERATION } from "../../core/brain/safeguard.ts";
 
 async function toolBrainMorningBrief(
   ctx: ServerContext,
@@ -365,6 +367,11 @@ async function toolBrainOperatorSummary(
       // so it is the slow half of an operator summary on a large vault.
       dreamSummary = dream(ctx.vault, {
         dryRun: true,
+        // A dry run is still a full synchronous pass over the Brain tree,
+        // so it is bounded on the same terms as `brain_dream` itself -
+        // the budget the operator set for `dream` governs every MCP call
+        // that reaches one, not just the tool that carries its name.
+        safeguard: toolSafeguard(ctx, OPERATION.dream),
         ...(onProgress !== undefined ? { onProgress } : {}),
       });
     } catch (err) {

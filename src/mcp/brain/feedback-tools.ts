@@ -65,7 +65,13 @@ import {
   type ObservedUseEntry,
 } from "../../core/brain/observed-use.ts";
 import { coerceStr, coerceBool, coerceIsoDate } from "../coerce.ts";
-import { enforceCountGuard, readCountGuardArgs, vaultRelativeSafe } from "./shared.ts";
+import {
+  enforceCountGuard,
+  readCountGuardArgs,
+  toolSafeguard,
+  vaultRelativeSafe,
+} from "./shared.ts";
+import { OPERATION } from "../../core/brain/safeguard.ts";
 
 /**
  * Build the slug used in the signal / preference filename. We never let
@@ -411,7 +417,17 @@ async function toolBrainDream(
       throw new MCPError(INVALID_PARAMS, `brain_dream action=${action}: run_id is required`);
     }
     const now = nowDate ?? new Date();
-    const stageOpts = { now, ...(agent ? { agentName: agent } : {}) };
+    // The staged lifecycle runs the same consolidation pass `action=run`
+    // does - `stage` previews it, `apply` promotes from it - so it is
+    // bounded and reported on the same terms. Without the sink a client
+    // that sent a progressToken for `action: "stage"` would be told
+    // nothing and see nothing for the whole pass.
+    const stageOpts = {
+      now,
+      safeguard: toolSafeguard(ctx, OPERATION.dream),
+      ...(agent ? { agentName: agent } : {}),
+      ...(onProgress ? { onProgress } : {}),
+    };
     switch (action) {
       case "stage": {
         const bundle = stageDream(ctx.vault, stageOpts);
@@ -463,11 +479,20 @@ async function toolBrainDream(
   }
 
   const { expect, strict } = readCountGuardArgs(args);
+  // One deadline for the whole tool call, not one per pass. `dream()` is
+  // synchronous, so an unbounded call blocks the server's event loop for
+  // its entire duration and the client cannot even time out and reissue;
+  // what has to be bounded is therefore the call, and a guarded run is
+  // two passes over the same tree. Sharing the guard means a slow preview
+  // spends the run's budget - which is the honest reading of a budget the
+  // operator set for this operation.
+  const safeguard = toolSafeguard(ctx, OPERATION.dream);
   // Only pay for a preview pass when a guard is actually requested; otherwise
   // the run is byte-identical to before.
   if (expect !== null || strict) {
     const preview = dream(ctx.vault, {
       dryRun: true,
+      safeguard,
       ...(nowDate ? { now: nowDate } : {}),
       ...(agent ? { agentName: agent } : {}),
       // Preview the run being guarded, overrides and all.
@@ -490,6 +515,7 @@ async function toolBrainDream(
   // the caller asked for.
   const summary = dream(ctx.vault, {
     dryRun,
+    safeguard,
     ...(nowDate ? { now: nowDate } : {}),
     ...(agent ? { agentName: agent } : {}),
     ...(gates !== undefined ? { gates } : {}),

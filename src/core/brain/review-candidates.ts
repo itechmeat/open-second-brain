@@ -18,6 +18,7 @@ import { join, relative } from "node:path";
 
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream } from "./dream.ts";
+import type { DreamOptions } from "./dream-types.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import { brainDirs } from "./paths.ts";
 import { scoreSignalNovelty, sortByNovelty, type SignalNoveltyEntry } from "./surprisal.ts";
@@ -82,6 +83,21 @@ export interface BuildReviewCandidatesOptions {
    * unembedded indexes leave the report unchanged.
    */
   readonly searchConfig?: ResolvedSearchConfig;
+  /**
+   * Cooperative deadline for the dry-run pass below. The projection is
+   * read-only, but the pass it projects walks the whole Brain tree
+   * synchronously, so a caller that must not be held indefinitely - the
+   * MCP server, whose event loop this blocks - passes the same budget it
+   * would pass to `dream` directly.
+   */
+  readonly safeguard?: DreamOptions["safeguard"];
+  /**
+   * Emitted at the same boundaries `safeguard` is checked at. A run worth
+   * bounding is a run worth reporting on, and the pass behind this
+   * projection is the same five stages `dream` emits - a caller who asked
+   * to watch the pass that decides these candidates watches that one.
+   */
+  readonly onProgress?: DreamOptions["onProgress"];
 }
 
 /** Active inbox signal files as (id, relPath) refs. */
@@ -102,6 +118,8 @@ export async function buildReviewCandidates(
   const summary = dream(vault, {
     dryRun: true,
     ...(opts.now ? { now: opts.now } : {}),
+    ...(opts.safeguard !== undefined ? { safeguard: opts.safeguard } : {}),
+    ...(opts.onProgress !== undefined ? { onProgress: opts.onProgress } : {}),
   });
 
   let signalNovelty: ReadonlyArray<SignalNoveltyEntry> | undefined;

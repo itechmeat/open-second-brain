@@ -14,6 +14,16 @@
  * bound on how long it could hold the server. They now resolve the budget
  * the same way the lane does.
  *
+ * `brain_dream` was the fourth tool `docs/mcp.md` said was bounded and
+ * the one that was not: the commit that added the deadlines and wrote
+ * that sentence never touched `feedback-tools.ts`, and this file asserted
+ * the deadline for two of the four it names. All four are asserted here
+ * now, in both halves - bounded and observed - because the gap survived
+ * exactly as long as the test covered half the population the prose did.
+ * The lane is the one that does not abort the call: it converts a tripped
+ * deadline into a `timed_out` row per task, which is where its deadline
+ * is visible.
+ *
  * The deadline is exercised through a clock that jumps past any budget on
  * its second reading, which is what `createSafeguard` compares against:
  * the alternative - waiting out a real budget - is measured in the
@@ -157,7 +167,100 @@ test("brain_clusters run aborts once its deadline has passed", async () => {
   }
 });
 
-test("a live clock leaves both tools running to completion", async () => {
+test("brain_dream run aborts once its deadline has passed", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  try {
+    const result = await callRaw(server, "brain_dream", { action: "run", dry_run: true });
+    expect(result.isError).toBe(true);
+    expect(result.content![0]!.text).toContain("safeguard timeout");
+    expect(result.content![0]!.text).toContain("dream");
+  } finally {
+    restore();
+  }
+});
+
+test("brain_dream stage aborts once its deadline has passed", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  try {
+    const result = await callRaw(server, "brain_dream", { action: "stage" });
+    expect(result.isError).toBe(true);
+    expect(result.content![0]!.text).toContain("safeguard timeout");
+    expect(result.content![0]!.text).toContain("dream");
+  } finally {
+    restore();
+  }
+});
+
+test("brain_maintenance names the task whose deadline tripped", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  let payload: { tasks: Array<{ name: string; ok: boolean; timed_out?: boolean }> };
+  try {
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 4,
+      method: "tools/call",
+      params: { name: "brain_maintenance", arguments: { operation: "run", force: true } },
+    })) as { result?: { isError?: boolean; structuredContent?: unknown } };
+    expect(res.result!.isError).toBe(false);
+    payload = res.result!.structuredContent as typeof payload;
+  } finally {
+    restore();
+  }
+  // The lane converts a tripped deadline into a per-task row rather than
+  // an aborted tool call, so the deadline is visible as `timed_out`.
+  const dreamTask = payload.tasks.find((t) => t.name === "dream");
+  expect(dreamTask).toBeDefined();
+  expect(dreamTask!.timed_out).toBe(true);
+});
+
+test("brain_review_candidates aborts once its deadline has passed", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  try {
+    const result = await callRaw(server, "brain_review_candidates", {});
+    expect(result.isError).toBe(true);
+    expect(result.content![0]!.text).toContain("safeguard timeout");
+    expect(result.content![0]!.text).toContain("dream");
+  } finally {
+    restore();
+  }
+});
+
+test("brain_brief view=operator names the deadline its dream pass tripped", async () => {
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  let payload: { dream_error?: string };
+  try {
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 5,
+      method: "tools/call",
+      params: { name: "brain_brief", arguments: { view: "operator" } },
+    })) as { result?: { isError?: boolean; structuredContent?: unknown } };
+    // The brief reports the missing half rather than failing the whole
+    // dashboard, so the deadline is visible as `dream_error`, not isError.
+    expect(res.result!.isError).toBe(false);
+    payload = res.result!.structuredContent as typeof payload;
+  } finally {
+    restore();
+  }
+  expect(payload.dream_error).toContain("safeguard timeout");
+});
+
+test("a live clock leaves all four tools running to completion", async () => {
   writeLinkedGroup();
   await indexVault(
     makeConfig({ vault, dbPath: join(vault, ".open-second-brain", "brain.sqlite") }),
@@ -169,6 +272,10 @@ test("a live clock leaves both tools running to completion", async () => {
   expect(bridges.isError).toBe(false);
   const clusters = await callRaw(server, "brain_clusters", { operation: "run" });
   expect(clusters.isError).toBe(false);
+  const dreamed = await callRaw(server, "brain_dream", { action: "run", dry_run: true });
+  expect(dreamed.isError).toBe(false);
+  const lane = await callRaw(server, "brain_maintenance", { operation: "run", force: true });
+  expect(lane.isError).toBe(false);
 });
 
 // ---------------------------------------------------------------------------
@@ -239,6 +346,44 @@ test("brain_clusters reports its sweeps under a progress token", async () => {
 
   expect((await callWithToken(server, "brain_clusters", { operation: "run" })).isError).toBe(false);
   expect(operationsIn(frames)).toEqual(new Set(["clusters"]));
+});
+
+test("brain_dream reports its consolidation pass under a progress token", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect(
+    (await callWithToken(server, "brain_dream", { action: "run", dry_run: true })).isError,
+  ).toBe(false);
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+});
+
+test("brain_dream stage reports the pass it runs under a progress token", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect((await callWithToken(server, "brain_dream", { action: "stage" })).isError).toBe(false);
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+});
+
+test("brain_review_candidates reports the pass behind its projection", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect((await callWithToken(server, "brain_review_candidates", {})).isError).toBe(false);
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+});
+
+test("brain_brief view=operator reports its dry-run pass", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect((await callWithToken(server, "brain_brief", { view: "operator" })).isError).toBe(false);
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
 });
 
 test("brain_maintenance forwards the sink to every task it dispatches", async () => {

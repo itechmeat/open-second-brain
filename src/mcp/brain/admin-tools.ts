@@ -30,8 +30,8 @@ import {
   materializeClusterNotes,
 } from "../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
-import { createSafeguard, resolveSafeguardTimeoutMs } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
+import { toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal } from "../../core/brain/maintenance/journal.ts";
 import { runMaintenance, type DailyWindow } from "../../core/brain/maintenance/lane.ts";
@@ -295,12 +295,11 @@ async function toolBrainMaintenance(
   });
   // Same per-task deadlines as the CLI lane (t_06784b8d): one fresh
   // cooperative safeguard per task, budget resolved per-op -> global
-  // -> default.
+  // -> default. The lane is the only surface that wants a guard PER
+  // TASK rather than per call, so it names the shared factory four
+  // times instead of holding one guard.
   const laneSafeguard = (operation: "dream" | "reindex" | "bridges" | "clusters") =>
-    createSafeguard({
-      operation,
-      timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
-    });
+    toolSafeguard(ctx, operation);
   // The lane is a dispatcher over four long operations, not a fifth one,
   // so it forwards the caller's sink to each task rather than counting
   // tasks itself: every event names the operation that emitted it, which

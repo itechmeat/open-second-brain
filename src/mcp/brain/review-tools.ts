@@ -13,8 +13,11 @@ import { loadTemporalConfigSafe } from "../../core/brain/policy.ts";
 import { buildIntentReview } from "../../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../../core/brain/retention.ts";
 import { buildReviewCandidates } from "../../core/brain/review-candidates.ts";
+import { OPERATION } from "../../core/brain/safeguard.ts";
+import type { ProgressSink } from "../../core/brain/progress.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceIsoDate } from "../coerce.ts";
+import { toolSafeguard } from "./shared.ts";
 
 async function toolBrainIntentReview(
   ctx: ServerContext,
@@ -59,6 +62,7 @@ async function toolBrainRetention(
 async function toolBrainReviewCandidates(
   ctx: ServerContext,
   args: Record<string, unknown>,
+  onProgress?: ProgressSink,
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
   // Surprisal annotation (t_fddfe64a) is best-effort: a resolvable
@@ -74,6 +78,11 @@ async function toolBrainReviewCandidates(
     searchConfig = undefined;
   }
   const report = await buildReviewCandidates(ctx.vault, {
+    // The projection is read-only, but it runs a full dry-run
+    // consolidation pass to produce it - the same pass, and so the same
+    // budget, as `brain_dream`.
+    safeguard: toolSafeguard(ctx, OPERATION.dream),
+    ...(onProgress ? { onProgress } : {}),
     ...(nowDate ? { now: nowDate } : {}),
     ...(searchConfig !== undefined ? { searchConfig } : {}),
   });

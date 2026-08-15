@@ -25,13 +25,7 @@ import {
   materializeClusterNotes,
 } from "../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
-import {
-  createSafeguard,
-  OPERATION,
-  resolveSafeguardTimeoutMs,
-  type Operation,
-  type Safeguard,
-} from "../../core/brain/safeguard.ts";
+import { OPERATION } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { createTriggers } from "../../core/brain/triggers/store.ts";
@@ -70,7 +64,7 @@ import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceBool } from "../coerce.ts";
-import { coercePositiveInteger } from "./shared.ts";
+import { coercePositiveInteger, toolSafeguard } from "./shared.ts";
 
 /** Forward-looking projection envelope; read-only fold. */
 function toolBrainForesight(
@@ -92,22 +86,6 @@ function toolBrainForesight(
 }
 
 // ----- brain_labels (t_7a41f42d) ---------------------------------------------
-
-/**
- * A cooperative deadline for one graph sweep, resolved exactly as the
- * maintenance lane resolves it (`admin-tools.ts`): per-operation key,
- * then global, then the built-in default.
- *
- * These two tools ran with no deadline at all while the lane's copies of
- * the same calls carried one, so the identical sweep was bounded when a
- * cron started it and unbounded when an agent did.
- */
-function graphSafeguard(ctx: ServerContext, operation: Operation): Safeguard {
-  return createSafeguard({
-    operation,
-    timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
-  });
-}
 
 /**
  * Bridge discovery over the vec index: discover regenerates the
@@ -196,7 +174,7 @@ async function toolBrainBridges(
       ...(max !== undefined ? { maxProposals: max as number } : {}),
       ...(minSimilarity !== undefined ? { minSimilarity } : {}),
       dismissed,
-      safeguard: graphSafeguard(ctx, OPERATION.bridges),
+      safeguard: toolSafeguard(ctx, OPERATION.bridges),
       ...(onProgress ? { onProgress } : {}),
     });
     writeBridgeProposals(ctx.vault, report, { now });
@@ -279,7 +257,7 @@ async function toolBrainClusters(
   try {
     const communities = detectCommunities(store, {
       ...(minSize !== undefined ? { minSize: minSize as number } : {}),
-      safeguard: graphSafeguard(ctx, OPERATION.clusters),
+      safeguard: toolSafeguard(ctx, OPERATION.clusters),
       ...(onProgress ? { onProgress } : {}),
     });
     const materialized = materializeClusterNotes(ctx.vault, communities, {

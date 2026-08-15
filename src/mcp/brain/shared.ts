@@ -18,6 +18,12 @@ import {
   type CountGuardOptions,
 } from "../../core/brain/count-guard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
+import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  type Operation,
+  type Safeguard,
+} from "../../core/brain/safeguard.ts";
 
 /**
  * Read the shared `--expect` / `--strict` count-guard arguments from an MCP
@@ -51,6 +57,26 @@ export function enforceCountGuard(opts: CountGuardOptions): void {
     if (err instanceof CountGuardError) throw new MCPError(INVALID_PARAMS, err.message);
     throw err;
   }
+}
+
+/**
+ * A cooperative deadline for one long MCP operation, resolved through the
+ * documented ladder: `safeguard_timeout_<operation>_seconds`, then
+ * `safeguard_timeout_seconds`, then the built-in default.
+ *
+ * One factory rather than one per domain module. Three had grown - the
+ * maintenance lane's, the graph tools', and none at all for `brain_dream`
+ * - and the gap was invisible precisely because each module answered the
+ * question locally. `docs/mcp.md` states the ladder once; this is the one
+ * place that implements it for the MCP surface, so a tool that reaches a
+ * long operation and forgets the deadline is a missing call to a named
+ * helper rather than a missing copy of a three-line idiom.
+ */
+export function toolSafeguard(ctx: ServerContext, operation: Operation): Safeguard {
+  return createSafeguard({
+    operation,
+    timeoutMs: resolveSafeguardTimeoutMs(operation, ctx.configPath ?? undefined),
+  });
 }
 
 export const ISO_DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;

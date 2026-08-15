@@ -246,19 +246,6 @@ export const loadSnapshotDerivedStorePolicySafe = makeAbsentTolerantLoader<Brain
 );
 
 /**
- * Load + resolve `active.most_applied`, falling back to
- * `BRAIN_MOST_APPLIED_DEFAULTS` when the config file is absent, so a vault
- * that has never run `brain init` still renders its most-applied section
- * over the documented window. Read by `active.md` and by the digest, which
- * report the same section and must agree on its window.
- *
- * An unreadable config raises: the section is the operator's own list of
- * the rules they lean on, and re-windowing it silently would change WHICH
- * rules appear while the digest looks entirely healthy. Both callers have
- * a channel for the raise - the CLI verb reports `digest failed: …`, the
- * MCP tool returns the error - so neither has to guess a window.
- */
-/**
  * Load + resolve the `maintenance:` block, falling back to
  * `BRAIN_MAINTENANCE_DEFAULTS` when the config file is absent — which
  * leaves the host-pressure gate unconfigured, exactly as an operator who
@@ -274,6 +261,19 @@ export const loadMaintenanceConfigSafe = makeAbsentTolerantLoader(
   BRAIN_MAINTENANCE_DEFAULTS,
 );
 
+/**
+ * Load + resolve `active.most_applied`, falling back to
+ * `BRAIN_MOST_APPLIED_DEFAULTS` when the config file is absent, so a vault
+ * that has never run `brain init` still renders its most-applied section
+ * over the documented window. Read by `active.md` and by the digest, which
+ * report the same section and must agree on its window.
+ *
+ * An unreadable config raises: the section is the operator's own list of
+ * the rules they lean on, and re-windowing it silently would change WHICH
+ * rules appear while the digest looks entirely healthy. Both callers have
+ * a channel for the raise - the CLI verb reports `digest failed: …`, the
+ * MCP tool returns the error - so neither has to guess a window.
+ */
 export const loadActiveMostAppliedSafe = makeAbsentTolerantLoader(
   resolveMostApplied,
   BRAIN_MOST_APPLIED_DEFAULTS,
