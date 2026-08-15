@@ -21,11 +21,20 @@
  *     result.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+
+// Every test here spawns `o2b`, and a test that overruns leaves its spawn
+// running past `afterEach`: the late `chmod` in `withUnreadableConfig`
+// restores the NEXT test's config file, so the next test reads a config it
+// made unreadable and fails for a reason that has nothing to do with it.
+// The budget is what stops one slow spawn from being reported as two bugs.
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CLI_ENTRY = join(REPO_ROOT, "src", "cli", "main.ts");

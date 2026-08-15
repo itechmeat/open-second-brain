@@ -1,9 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
 let tempDir: string;
 let vault: string;
