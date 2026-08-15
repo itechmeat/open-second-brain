@@ -19,6 +19,7 @@
  * pins the key set of all four.
  */
 
+import type { DataOwnership } from "../../core/install/ownership.ts";
 import type {
   ApplyResult,
   DetectResult,
@@ -36,6 +37,17 @@ import type {
  * announce a change that took nothing away.
  */
 export const INSTALL_JSON_SCHEMA_VERSION = 1;
+
+/**
+ * The machine-readable half of the ownership close.
+ *
+ * Named once, for the reason `NEXT_COMMAND_KEY` is: the CLI renderer and
+ * anything that reads the payload back must not drift on the spelling.
+ * NOT `handoff` - that name already means the operator-readable session
+ * notes under `Brain/handoffs/`, and one word for two records is how a
+ * field becomes unsearchable.
+ */
+export const DATA_OWNERSHIP_KEY = "data_ownership";
 
 /**
  * Serialise one `--json` payload.
@@ -156,8 +168,8 @@ export function renderApplyResult(result: ApplyResult): string {
  * a re-nesting would have broken to announce a change that took nothing
  * away.
  */
-export function renderApplyJson(result: ApplyResult): string {
-  return installJson({ ...result });
+export function renderApplyJson(result: ApplyResult, ownership: DataOwnership): string {
+  return installJson({ ...result, [DATA_OWNERSHIP_KEY]: ownership });
 }
 
 export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {
@@ -174,6 +186,12 @@ export function renderVerifyTable(rows: ReadonlyArray<VerifyResult>): string {
   return lines.join("\n");
 }
 
-export function renderVerifyJson(rows: ReadonlyArray<VerifyResult>): string {
-  return installJson({ targets: rows });
+export function renderVerifyJson(
+  rows: ReadonlyArray<VerifyResult>,
+  ownership: DataOwnership | null,
+): string {
+  return installJson({
+    targets: rows,
+    ...(ownership === null ? {} : { [DATA_OWNERSHIP_KEY]: ownership }),
+  });
 }

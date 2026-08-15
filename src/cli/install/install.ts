@@ -35,6 +35,9 @@ import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/all.ts";
 
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
+import { buildDataOwnership, renderDataOwnership } from "../../core/install/ownership.ts";
+import type { DataOwnership } from "../../core/install/ownership.ts";
+import { resolveSearchConfig } from "../../core/search/index.ts";
 import { InstallError } from "../../core/install/types.ts";
 import type { ApplyOpts, InstallEnv, VerifyResult } from "../../core/install/types.ts";
 import {
@@ -185,6 +188,37 @@ function loadPayload(args: ParsedInstallArgs, env: InstallEnv) {
   });
 }
 
+/**
+ * The data-ownership close, for a run that established something.
+ *
+ * Built here rather than inside a renderer so BOTH surfaces consume one
+ * value: the human block and the `data_ownership` JSON field are two views
+ * of this record, which is what stops them being added separately - the
+ * failure mode the install verb already had, where the human `--check`
+ * table is pinned byte-for-byte against the install documents and the JSON
+ * twin was pinned by nothing.
+ *
+ * Whether a networked embedding endpoint is configured is resolved here
+ * because it decides one clause of the statement: "no service to cancel"
+ * is a false blanket claim on a vault whose text has been sent to a cloud
+ * provider. A search config that will not resolve answers `false` - the
+ * clause is added only on evidence, never on a failure to look.
+ */
+function ownershipFor(env: InstallEnv, configPath: string): DataOwnership {
+  let networked = false;
+  try {
+    const semantic = resolveSearchConfig({ vault: env.vault, configPath }).semantic;
+    networked = semantic.provider !== "local" && semantic.provider !== "disabled";
+  } catch {
+    // A config that will not resolve is not evidence of a cloud account.
+  }
+  return buildDataOwnership({
+    vault: env.vault,
+    adapterTargets: defaultRegistry.targets(),
+    networkedEmbeddingProvider: networked,
+  });
+}
+
 export async function cmdInstall(argv: string[]): Promise<number> {
   let args: ParsedInstallArgs;
   try {
@@ -263,10 +297,15 @@ function runTarget(args: ParsedInstallArgs): number {
 
   try {
     const result = adapter.apply(plan, payload, env, opts);
+    // An apply that returned changed the machine, so the close fires
+    // unconditionally here - unlike verify, where exit 0 also covers a
+    // runtime nobody installed.
+    const ownership = ownershipFor(env, args.config);
     if (args.json) {
-      process.stdout.write(renderApplyJson(result));
+      process.stdout.write(renderApplyJson(result, ownership));
     } else {
       process.stdout.write(renderApplyResult(result));
+      process.stdout.write(renderDataOwnership(ownership));
     }
     return INSTALL_EXIT.ok;
   } catch (e) {
@@ -310,10 +349,16 @@ function runCheck(args: ParsedInstallArgs): number {
   }
   const results: VerifyResult[] = [];
   for (const a of targets) results.push(a.verify(env));
+  // Exit 0 is NOT the trigger. `not-installed` is also 0, deliberately -
+  // the operator never asked for that runtime - so a close fired on the
+  // code would be the entire output of a run where the install did
+  // nothing, congratulating an operator on a brain nothing points at.
+  const ownership = results.some((r) => r.status === "ok") ? ownershipFor(env, args.config) : null;
   if (args.json) {
-    process.stdout.write(renderVerifyJson(results));
+    process.stdout.write(renderVerifyJson(results, ownership));
   } else {
     process.stdout.write(renderVerifyTable(results));
+    if (ownership !== null) process.stdout.write(renderDataOwnership(ownership));
   }
   return exitCodeForVerify(results);
 }
