@@ -6,19 +6,29 @@
 
 import { Database } from "bun:sqlite";
 
+import { RETRIEVAL_DEGRADATION } from "../retrieval-trail.ts";
+import type { RetrievalDegradation } from "../retrieval-trail.ts";
 import type { KeywordHit } from "./keyword.ts";
 
 /**
- * What the lane returns: the candidates it gathered plus the warnings its
- * caller owes the query. Same shape as the keyword lane's own outcome,
- * because the two fill the same candidate pool.
+ * What the lane returns: the candidates it gathered, the warnings its
+ * caller owes the query, and the same faults as machine codes. Same shape
+ * as the keyword lane's own outcome, because the two fill the same
+ * candidate pool.
  */
 export interface TrigramCandidateOutcome {
   readonly hits: KeywordHit[];
   readonly warnings: ReadonlyArray<string>;
+  /**
+   * The typed half of {@link warnings}: the classification below survives
+   * to the caller instead of being destroyed by the sentence it is
+   * interpolated into.
+   */
+  readonly degraded: ReadonlyArray<RetrievalDegradation>;
 }
 
 const NO_WARNINGS: ReadonlyArray<string> = Object.freeze([]);
+const NO_DEGRADATIONS: ReadonlyArray<RetrievalDegradation> = Object.freeze([]);
 
 /**
  * Total ordering for the top-K cut, for the reason the keyword lane's
@@ -77,6 +87,19 @@ function degradeWarning(fault: TrigramFault): string {
 }
 
 /**
+ * The same fault as a machine code. The classification is what the caller
+ * actually needs, and it already existed here: until the retrieval trail
+ * it survived only as far as the sentence above, where the last typed
+ * step of this lane was interpolated away.
+ */
+function degradation(fault: TrigramFault): RetrievalDegradation {
+  return Object.freeze({
+    code: RETRIEVAL_DEGRADATION.keywordTrigramLaneFault,
+    detail: Object.freeze({ fault }),
+  });
+}
+
+/**
  * Trigram candidate lookup over the `chunk_trigram` FTS5 shadow (v9).
  * Returns bm25-ordered keyword hits whose content matches the trigram
  * query - a strict superset of exact substring matches for the query's
@@ -111,6 +134,7 @@ export function trigramCandidates(
       return {
         hits: rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 })),
         warnings: NO_WARNINGS,
+        degraded: NO_DEGRADATIONS,
       };
     }
     const rows = db
@@ -123,10 +147,18 @@ export function trigramCandidates(
     return {
       hits: rows.map((r) => ({ chunkId: r.chunk_id, documentId: r.document_id, bm25: r.bm25 })),
       warnings: NO_WARNINGS,
+      degraded: NO_DEGRADATIONS,
     };
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    if (isMissingTrigramTable(msg)) return { hits: [], warnings: NO_WARNINGS };
-    return { hits: [], warnings: Object.freeze([degradeWarning(classifyTrigramFault(msg))]) };
+    if (isMissingTrigramTable(msg)) {
+      return { hits: [], warnings: NO_WARNINGS, degraded: NO_DEGRADATIONS };
+    }
+    const fault = classifyTrigramFault(msg);
+    return {
+      hits: [],
+      warnings: Object.freeze([degradeWarning(fault)]),
+      degraded: Object.freeze([degradation(fault)]),
+    };
   }
 }

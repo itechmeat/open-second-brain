@@ -49,6 +49,7 @@ import { collectCandidateSignals } from "../../../src/core/search/pipeline/candi
 import { Store } from "../../../src/core/search/store.ts";
 import { planTrigramPrefilter } from "../../../src/core/search/trigram-prefilter.ts";
 import type { KeywordHit } from "../../../src/core/search/store.ts";
+import type { RetrievalDegradationSink } from "../../../src/core/search/retrieval-trail.ts";
 import type { BrainSearchResult } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
@@ -232,6 +233,7 @@ test("assembleRankedResults orders on the injected instant, not the process cloc
       temporalIntentActive: false,
       declaredEventTimeMs: () => null,
     });
+    const degradationSink: RetrievalDegradationSink = [];
     const input = {
       store,
       config,
@@ -251,6 +253,9 @@ test("assembleRankedResults orders on the injected instant, not the process cloc
       declaredEventTimeMs: () => null,
       limit: ids.length,
       nowMs,
+      // The assembly names its own narrowings on this sink; this fixture
+      // asserts ranking order, so it hands over one and ignores it.
+      degraded: degradationSink,
     } as const;
 
     const realNow = Date.now;

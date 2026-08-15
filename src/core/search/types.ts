@@ -23,6 +23,7 @@ import type {
   MemoryTrustAssessment,
   RetrievalDecisionTrace,
 } from "../brain/trust/retrieval-receipts.ts";
+import type { RetrievalTrail } from "./retrieval-trail.ts";
 
 export type { VaultIgnoreRule };
 export type { BrainSearchResult, ScoreBreakdown, TrustMetadata };
@@ -893,6 +894,18 @@ export interface SearchOutcome {
    * (see {@link QuerySurface}) and never alters ranking.
    */
   readonly surface?: QuerySurface;
+  /**
+   * Why this retrieval narrowed, and why it is empty when it is
+   * (evidence-at-the-boundary, C2). Present only when a lane degraded or
+   * no row came back: a healthy non-empty answer carries no trail, so its
+   * serialized shape is byte-identical to the pre-change one.
+   *
+   * Machine-readable by construction - closed codes plus identifiers and
+   * integers - and the only place the pipeline's degradation signals are
+   * stated as anything other than free-form English on
+   * {@link SearchOutcome.warnings}.
+   */
+  readonly retrievalTrail?: RetrievalTrail;
 }
 
 /**

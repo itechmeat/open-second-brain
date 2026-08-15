@@ -91,7 +91,13 @@ export interface FilterContext {
 }
 
 export interface FilteredPool {
-  /** Row count before visibility scoping, for the backfill decision. */
+  /**
+   * Row count before visibility scoping, for the backfill decision - and,
+   * since evidence-at-the-boundary C2, for the retrieval trail: the gap
+   * between this and `visible` is the only evidence that an owner,
+   * visibility or session scope removed the answer rather than the vault
+   * holding no match.
+   */
   readonly preVisibility: number;
   readonly visible: ReadonlyArray<BrainSearchResult>;
 }

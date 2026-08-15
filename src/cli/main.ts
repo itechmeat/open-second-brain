@@ -24,6 +24,7 @@ import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
 import { ensureVaultCurrent } from "../core/maintenance/ensure-current.ts";
 import { doctor } from "../core/doctor.ts";
+import { checkHermesResolverParity } from "../core/doctor-hermes-parity.ts";
 import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
@@ -293,11 +294,15 @@ async function cmdDoctor(argv: string[]): Promise<number> {
 
   let results;
   try {
-    results = doctor({
-      vault,
-      config,
-      repoRoot: (flags["repo"] as string | undefined) ?? null,
-    });
+    const repoRoot = (flags["repo"] as string | undefined) ?? null;
+    results = doctor({ vault, config, repoRoot });
+    // Appended here rather than inside `doctor()` because it spawns a Python
+    // interpreter to run the plugin's own resolver, and `core/doctor.ts` is
+    // bundled into the OpenClaw artifact, which refuses a Python reference.
+    // See the module docblock: OpenClaw has no Hermes plugin, so the check is
+    // meaningless there, and this verb is the surface that owns the question.
+    const parity = checkHermesResolverParity({ config, repoRoot });
+    if (parity) results.push(parity);
   } catch (exc) {
     process.stderr.write(`error: doctor failed: ${(exc as Error).message ?? exc}\n`);
     return 1;

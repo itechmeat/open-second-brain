@@ -13,9 +13,11 @@ import {
 } from "./capability-tier.ts";
 import { classifyEmbeddingError } from "./embeddings/openai-compat.ts";
 import { makeProvider } from "./embeddings/provider.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
 import { Store } from "./store.ts";
 import { EMBEDDING_QUOTA_MESSAGE, SearchError } from "./types.ts";
 import type { SemanticCapability, SemanticCapabilityTier } from "./capability-tier.ts";
+import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import type { ResolvedSearchConfig, SearchErrorCode, SearchOptions } from "./types.ts";
 
 export interface SemanticPolicy {
@@ -90,6 +92,13 @@ interface SemanticPhaseOutcome {
   readonly attempted: boolean;
   readonly hits: ReturnType<Store["semanticTopK"]>;
   readonly warnings: string[];
+  /**
+   * The typed half of {@link warnings} (evidence-at-the-boundary, C2).
+   * Every arm below that returns `attempted: false` names why it did, so
+   * a caller served keyword-only can tell an unconfigured provider from a
+   * quota-exhausted one without matching on a sentence.
+   */
+  readonly degraded: RetrievalDegradationSink;
 }
 
 export async function runSemanticPhase(
@@ -99,11 +108,13 @@ export async function runSemanticPhase(
   opts: { limit: number; pathPrefix: string | undefined; explicit: boolean },
 ): Promise<SemanticPhaseOutcome> {
   const warnings: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
 
   const counts = store.counts();
   if (counts.embeddings === 0) {
     warnings.push("no compatible embeddings; run: o2b search index --embeddings");
-    return { attempted: false, hits: [], warnings };
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticEmbeddingsAbsent);
+    return { attempted: false, hits: [], warnings, degraded };
   }
 
   if (!store.vecLoaded()) {
@@ -114,7 +125,8 @@ export async function runSemanticPhase(
       );
     }
     warnings.push("sqlite-vec unavailable, semantic disabled this session");
-    return { attempted: false, hits: [], warnings };
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticVecExtensionUnavailable);
+    return { attempted: false, hits: [], warnings, degraded };
   }
   // What the OPERATOR CONFIGURED, from the one shared resolver
   // (provenance-at-the-boundary, F1). The two runtime guards above stay
@@ -136,7 +148,12 @@ export async function runSemanticPhase(
     const label = await semanticCapabilityLabel(capability.code);
     if (opts.explicit) throw new SearchError(BLOCKED_TIER_ERROR_CODE[capability.tier], label);
     warnings.push(label);
-    return { attempted: false, hits: [], warnings };
+    // The rung is already a closed vocabulary; the label is a registry
+    // sentence, which is exactly what the trail must not carry.
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticCapabilityBlocked, {
+      tier: capability.tier,
+    });
+    return { attempted: false, hits: [], warnings, degraded };
   }
 
   let queryVec: number[];
@@ -165,17 +182,24 @@ export async function runSemanticPhase(
           ? e.message
           : String(e);
     warnings.push(`embedding provider unavailable [${cls.category}]: ${detail}`);
-    return { attempted: false, hits: [], warnings };
+    // The category is the classification the warning already computed and
+    // then buried in prose; the provider's own message stays out of the
+    // trail, which travels into logs and MCP payloads.
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticProviderUnavailable, {
+      category: cls.category,
+    });
+    return { attempted: false, hits: [], warnings, degraded };
   }
 
   if (queryVec.length === 0) {
     warnings.push("embedding provider returned an empty vector; semantic skipped");
-    return { attempted: false, hits: [], warnings };
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticEmptyQueryVector);
+    return { attempted: false, hits: [], warnings, degraded };
   }
 
   const hits = store.semanticTopK(queryVec, {
     limit: opts.limit,
     pathPrefix: opts.pathPrefix,
   });
-  return { attempted: true, hits, warnings };
+  return { attempted: true, hits, warnings, degraded };
 }

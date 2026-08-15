@@ -109,7 +109,6 @@
 
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import type { ClaimNode } from "./claim-graph.ts";
-import type { IndexStatusSnapshot } from "../search/types.ts";
 
 /** The three answers a negative recall can honestly give. */
 export const NEGATIVE_RECALL_STATE = Object.freeze({
@@ -290,22 +289,30 @@ export const COVERAGE_DIGEST_FIELDS = Object.freeze([
 export type CoverageDigestField = (typeof COVERAGE_DIGEST_FIELDS)[number];
 
 /**
- * The index facts a coverage receipt is built from - structurally a
- * subset of {@link IndexStatusSnapshot}, so a real snapshot is passed
- * straight through and a test builds only the fields that matter.
+ * The index facts a coverage receipt is built from - structurally the
+ * subset of the search layer's `IndexStatusSnapshot` this module reads,
+ * so a real snapshot is passed straight through and a test builds only
+ * the fields that matter.
+ *
+ * Declared here rather than `Pick`ed off that type, because this module
+ * is the one the retrieval trail's vocabulary reaches for and the search
+ * layer's own type aggregate now names the trail: a type import back into
+ * `search/types.ts` would close that loop and fail the import-cycle
+ * ratchet. Nothing is lost by declaring it - the tie is still checked
+ * where it matters, at the call site that assigns a real snapshot to this
+ * type, which stops compiling the moment either side renames a field.
  */
-export type CoverageIndexSnapshot = Pick<
-  IndexStatusSnapshot,
-  | "indexPath"
-  | "exists"
-  | "schemaVersion"
-  | "documents"
-  | "chunks"
-  | "embeddings"
-  | "embeddingSignature"
-  | "lastIndexedAt"
-  | "staleEmbeddings"
->;
+export interface CoverageIndexSnapshot {
+  readonly indexPath: string;
+  readonly exists: boolean;
+  readonly schemaVersion: number | null;
+  readonly documents: number;
+  readonly chunks: number;
+  readonly embeddings: number;
+  readonly embeddingSignature: string | null;
+  readonly lastIndexedAt: string | null;
+  readonly staleEmbeddings: number;
+}
 
 /** The two universes a negative is judged against. */
 export interface CoverageScope {

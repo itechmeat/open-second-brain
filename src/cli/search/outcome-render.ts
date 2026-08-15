@@ -13,6 +13,10 @@ import {
   type ExplainRequest,
 } from "../../core/search/explain-envelope.ts";
 import { formatLinePointer } from "../../core/search/line-numbering.ts";
+import {
+  describeRetrievalDegradation,
+  retrievalTrailEnvelope,
+} from "../../core/search/retrieval-trail.ts";
 import type { DuplicatePassageLocation } from "../../core/search/search-result.ts";
 import {
   ELLIPSIS,
@@ -26,7 +30,8 @@ import {
 const BULLET = "  •  ";
 
 /** What an empty result set renders as, in both disclosure modes. */
-const NO_RESULTS = "(no results)";
+const NO_RESULTS_LABEL = "no results";
+const NO_RESULTS = `(${NO_RESULTS_LABEL})`;
 
 /** Longest snippet body shown per hit before it is elided. */
 const SNIPPET_MAX_CHARS = 140;
@@ -139,11 +144,44 @@ export function jsonForOutcome(o: SearchOutcome, options: ExplainRequest = EXPLA
     ...(o.cards ? { cards: o.cards.map(serializeSearchCard) } : {}),
     ...(o.evidencePack ? { evidence_pack: serializeEvidencePack(o.evidencePack) } : {}),
     ...(o.surface !== undefined ? { surface: o.surface } : {}),
+    // Retrieval trail (evidence-at-the-boundary, C2): why this answer
+    // narrowed, and why it is empty when it is. Absent - never null - on a
+    // healthy non-empty answer, so that payload is byte-identical to the
+    // pre-change one.
+    ...retrievalTrailEnvelope(o),
     // Retrieval receipts (task F): the trace and the trust assessment the
     // gate already built, appended only when --explain asks. Absent, never
     // null, otherwise.
     ...explainEnvelope(o, options),
   };
+}
+
+/**
+ * The empty-result line: bare, or naming what the retrieval trail
+ * attributes the empty to.
+ *
+ * The first degradation wins, because the lanes push in pipeline order
+ * and the earliest narrowing is the one that produced the ones after it.
+ * With nothing degraded the corpus statement is the answer - which is a
+ * claim about this vault's index, not about the query - and with neither
+ * the line is exactly what it always was.
+ *
+ * This is the only caller of the English mapping in the tree: the machine
+ * surfaces carry codes.
+ */
+function noResultsLine(o: SearchOutcome): string {
+  const trail = o.retrievalTrail;
+  if (trail === undefined) return NO_RESULTS;
+  const first = trail.degraded[0];
+  if (first !== undefined) {
+    return `(${NO_RESULTS_LABEL}: ${describeRetrievalDegradation(first.code)})`;
+  }
+  if (trail.empty === undefined) return NO_RESULTS;
+  const why =
+    trail.empty.unknownReason !== undefined
+      ? `${trail.empty.state} [${trail.empty.unknownReason}]`
+      : trail.empty.state;
+  return `(${NO_RESULTS_LABEL}: ${why} - ${trail.empty.reason})`;
 }
 
 /**
@@ -188,7 +226,7 @@ export function renderOutcomeHuman(
   // drills a hit with `o2b search expand --chunk <chunk_id>`.
   if (o.cards !== undefined) {
     const lines: string[] = [];
-    if (o.cards.length === 0) lines.push(NO_RESULTS);
+    if (o.cards.length === 0) lines.push(noResultsLine(o));
     o.cards.forEach((c, i) => {
       lines.push(`[${i + 1}] ${c.pointer}${BULLET}${c.score.toFixed(2)}${originSuffix(c.origin)}`);
       lines.push(`    ${c.snippet}`);
@@ -205,7 +243,7 @@ export function renderOutcomeHuman(
   }
   const lines: string[] = [];
   if (o.results.length === 0) {
-    lines.push(NO_RESULTS);
+    lines.push(noResultsLine(o));
   }
   o.results.forEach((r, i) => {
     const score = r.score.toFixed(2);

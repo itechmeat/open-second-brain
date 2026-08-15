@@ -7,6 +7,8 @@
 import { detectHybridDegrade } from "../enrich.ts";
 import { runSemanticPhase, semanticPoolSize } from "../semantic-phase.ts";
 import { contradictedAbiFields, formatEmbeddingAbiDrift } from "../store.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
+import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import type { SemanticPolicy } from "../semantic-phase.ts";
 import type { Store } from "../store.ts";
 import type { ResolvedSearchConfig } from "../types.ts";
@@ -28,16 +30,20 @@ export interface SemanticLaneOutcome {
   readonly hits: ReturnType<Store["semanticTopK"]>;
   readonly attempted: boolean;
   readonly warnings: string[];
+  /** The typed half of {@link warnings} (evidence-at-the-boundary, C2). */
+  readonly degraded: RetrievalDegradationSink;
 }
 
 export async function runSemanticLane(input: SemanticLaneInput): Promise<SemanticLaneOutcome> {
   const { store, config, policy, query, semanticLaneQuery, limit, pathPrefix } = input;
   const warnings: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
   let hits: ReturnType<Store["semanticTopK"]> = [];
   let attempted = false;
 
   if (semanticLaneQuery !== null && !policy.wantSemantic) {
     warnings.push("semantic structured lanes skipped: semantic search is disabled");
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticStructuredLanesSkipped);
   }
   if (policy.wantSemantic) {
     const semOutcome = await runSemanticPhase(store, config, semanticLaneQuery ?? query, {
@@ -48,6 +54,7 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
     attempted = semOutcome.attempted;
     hits = semOutcome.hits;
     for (const w of semOutcome.warnings) warnings.push(w);
+    for (const d of semOutcome.degraded) degraded.push(d);
     // Embedding-ABI drift on the QUERY path (context-integrity-gates,
     // Unit E). The read open already ran the gated comparison; until
     // now nothing on this path looked at the result, so under the
@@ -64,7 +71,15 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
     // operator goes looking.
     if (attempted) {
       const contradicted = contradictedAbiFields(store.embeddingAbiMismatches());
-      if (contradicted.length > 0) warnings.push(formatEmbeddingAbiDrift(contradicted));
+      if (contradicted.length > 0) {
+        warnings.push(formatEmbeddingAbiDrift(contradicted));
+        // The field NAMES stay in the operator-facing warning, where they
+        // are actionable; the trail states how many contradicted, because
+        // a count is the part a machine reads.
+        noteDegradation(degraded, RETRIEVAL_DEGRADATION.semanticEmbeddingAbiDrift, {
+          fields: contradicted.length,
+        });
+      }
     }
   }
 
@@ -78,7 +93,10 @@ export async function runSemanticLane(input: SemanticLaneInput): Promise<Semanti
     semanticAttempted: attempted,
     keywordHitCount: input.keywordHitCount,
   });
-  if (degrade !== null) warnings.push(degrade);
+  if (degrade !== null) {
+    warnings.push(degrade);
+    noteDegradation(degraded, RETRIEVAL_DEGRADATION.hybridDegraded);
+  }
 
-  return { hits, attempted, warnings };
+  return { hits, attempted, warnings, degraded };
 }

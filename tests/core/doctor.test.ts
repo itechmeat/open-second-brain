@@ -8,13 +8,13 @@ import {
   checkCodexManifest,
   checkConfigWriteable,
   checkHermesManifest,
-  checkHermesResolverParity,
   checkJsonManifest,
   checkOpenclawInstallability,
   checkOpenclawManifest,
   checkVaultWriteable,
   doctor,
 } from "../../src/core/doctor.ts";
+import { checkHermesResolverParity } from "../../src/core/doctor-hermes-parity.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 
 /** Env keys the resolver-parity tests must own outright. */

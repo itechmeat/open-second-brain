@@ -19,6 +19,8 @@ import { applyExactStateBarrier, type FrontmatterCache } from "../result-filters
 import { semanticPoolSize } from "../semantic-phase.ts";
 import { applyTemporalBridge } from "../temporal-bridge.ts";
 import { applyPoolFilters, resolvePoolFilters, type FilterContext } from "./pool-filters.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "../retrieval-trail.ts";
+import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import type { CandidateSignals } from "./candidate-signals.ts";
 import type { DuplicatePassageLocation } from "../search-result.ts";
 import type { HydratedChunk, KeywordHit, SemanticHit, Store } from "../store.ts";
@@ -74,6 +76,15 @@ export interface AssemblyInput {
    * reading taken at an arbitrary later point in the pipeline.
    */
   readonly nowMs: number;
+  /**
+   * Typed degradation sink (evidence-at-the-boundary, C2), threaded like
+   * the pipeline's `warnings` array. This stage computed three recall
+   * narrowings and reported none of them: the cap that truncated the
+   * pool, the relevance floor that dropped ranked rows, and the scope
+   * filters that removed them - the last being why a query answered under
+   * an owner or session scope used to look exactly like an empty vault.
+   */
+  readonly degraded: RetrievalDegradationSink;
 }
 
 interface Assembly {
@@ -83,6 +94,8 @@ interface Assembly {
   readonly capHit: boolean;
   /** Rows the exact-duplicate merge folded into a higher-ranked row. */
   readonly mergedAway: number;
+  /** Ranked rows the caller's relevance floor removed. */
+  readonly floorDropped: number;
 }
 
 /** The location record a merged-away duplicate leaves on its survivor. */
@@ -259,8 +272,11 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
     // Relevance floor (Search & Recall Quality Suite): drop
     // sub-threshold candidates BEFORE diversity so the rerank works over
     // the qualified set only. No-op when the floor is 0.
+    let floorDropped = 0;
     if (scoreFloor > 0) {
-      ranked = ranked.filter((r) => r.score >= scoreFloor);
+      const qualified = ranked.filter((r) => r.score >= scoreFloor);
+      floorDropped = ranked.length - qualified.length;
+      ranked = qualified;
     }
     // Diversity rerank (v0.13.0). No-op when lambda >= 1 or < 2 results.
     if (mmrActive) {
@@ -276,9 +292,14 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       ...applyPoolFilters(ranked, filters, filterContext),
       capHit,
       mergedAway: merge.mergedAway,
+      floorDropped,
     };
   };
 
+  // The cap the FINAL assembly ran under: the backfill below may widen it,
+  // and reporting the first cap would name a number that no longer bound
+  // the answer.
+  let effectiveCap = rankLimit;
   let assembled = assemble(rankLimit);
   // Two phases can leave fewer than `limit` rows out of a pool that was
   // capped at `limit`, while more qualifying matches sit deeper in the
@@ -306,9 +327,44 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
       limit * POOL_LIMIT_MULTIPLIER,
       POOL_MIN_WIDTH,
     );
-    if (wideCap > rankLimit) assembled = assemble(wideCap);
+    if (wideCap > rankLimit) {
+      assembled = assemble(wideCap);
+      effectiveCap = wideCap;
+    }
   }
+  noteAssemblyNarrowings(input.degraded, assembled, effectiveCap);
   return assembled.visible;
+}
+
+/**
+ * Name what this stage removed, once, against the assembly that actually
+ * produced the answer. Recorded here rather than inside `assemble` because
+ * that closure can run twice for one query, and a caller reading two
+ * identical codes would think two separate things narrowed the pool.
+ */
+function noteAssemblyNarrowings(
+  sink: RetrievalDegradationSink,
+  assembled: Assembly,
+  cap: number,
+): void {
+  if (assembled.capHit) {
+    noteDegradation(sink, RETRIEVAL_DEGRADATION.rankCapTruncatedPool, { cap });
+  }
+  if (assembled.floorDropped > 0) {
+    noteDegradation(sink, RETRIEVAL_DEGRADATION.relevanceFloorDroppedRows, {
+      dropped: assembled.floorDropped,
+    });
+  }
+  // `preVisibility` is the row count before visibility, ownership and the
+  // composite session/project scope ran. The difference is the answer to
+  // "did a scope remove my results", which nothing could ask before.
+  const scoped = assembled.preVisibility - assembled.visible.length;
+  if (scoped > 0) {
+    noteDegradation(sink, RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows, {
+      dropped: scoped,
+      before: assembled.preVisibility,
+    });
+  }
 }
 
 function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResult[] {

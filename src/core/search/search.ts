@@ -18,7 +18,11 @@ import { isCacheEligible, persistCachedOutcome, probeQueryCache } from "./pipeli
 import { collectCandidateSignals } from "./pipeline/candidate-signals.ts";
 import { createEventTimeResolver, filterCandidatesInRange } from "./pipeline/event-time.ts";
 import { runKeywordLane } from "./pipeline/keyword-lane.ts";
-import { buildSearchOutcome, emptyOutcome } from "./pipeline/outcome.ts";
+import {
+  buildSearchOutcome,
+  corpusStatementForEmptyWindow,
+  emptyOutcome,
+} from "./pipeline/outcome.ts";
 import { applyPostRankPhases } from "./pipeline/post-rank.ts";
 import { resolveQueryShape } from "./pipeline/query-shape.ts";
 import {
@@ -32,6 +36,7 @@ import { runSemanticLane } from "./pipeline/semantic-lane.ts";
 import { openReadOrSelfHeal } from "./pipeline/store-open.ts";
 import { resolveEffectiveWeights } from "./pipeline/weights.ts";
 import type { CacheProbe } from "./pipeline/cache-slot.ts";
+import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 import type { FrontmatterCache } from "./result-filters.ts";
 import { Store } from "./store.ts";
 import type { ResolvedSearchConfig, SearchOptions, SearchOutcome } from "./types.ts";
@@ -69,6 +74,11 @@ export async function search(
       : await openReadOrSelfHeal(effectiveConfig);
   try {
     const warnings: string[] = [];
+    // The typed sink that rides beside `warnings` (evidence-at-the-boundary,
+    // C2): every lane that pushes a sentence below also pushes a code, so a
+    // caller can tell an exhausted corpus from a broken embedder without
+    // matching on prose.
+    const degraded: RetrievalDegradationSink = [];
     // Shared across every frontmatter-reading stage below (Plan 1, 1.3)
     // so a candidate path already read by one stage is not re-read
     // and re-parsed by the next.
@@ -127,6 +137,7 @@ export async function search(
     });
     let keywordHits = keywordLane.hits;
     for (const w of keywordLane.warnings) warnings.push(w);
+    for (const d of keywordLane.degraded) degraded.push(d);
 
     const { weightProfile, activeLearned } = resolveEffectiveWeights(
       effectiveConfig,
@@ -146,6 +157,7 @@ export async function search(
     });
     let semanticHits = semanticLane.hits;
     for (const w of semanticLane.warnings) warnings.push(w);
+    for (const d of semanticLane.degraded) degraded.push(d);
 
     // Typed-edge relational arm (t_09b7ccea): a fourth RRF arm, engaged
     // only for a relationship-shaped query under rrf fusion.
@@ -187,7 +199,21 @@ export async function search(
     const idsList = retry.ids;
 
     if (idsList.length === 0) {
-      return finalize(emptyOutcome({ store, opts, query, pathPrefix, warnings, routedSurface }));
+      // Nothing to rank, so this answer owes an explanation: the lanes
+      // either named why, or the corpus statement does.
+      const corpus = await corpusStatementForEmptyWindow(() => effectiveConfig, 0, degraded);
+      return finalize(
+        emptyOutcome({
+          store,
+          opts,
+          query,
+          pathPrefix,
+          warnings,
+          routedSurface,
+          degraded,
+          corpus,
+        }),
+      );
     }
 
     const hydrated = store.hydrateChunks(idsList);
@@ -226,6 +252,7 @@ export async function search(
       hydrated,
       signals,
       relationalRankedChunkIds: relational.rankedChunkIds,
+      degraded,
       weightProfile,
       sessionFocus,
       semanticEnabled: policy.wantSemantic && semanticLane.attempted,
@@ -267,6 +294,15 @@ export async function search(
       relationalReach: relational.reachByChunk,
     });
 
+    // The window can be empty even though candidates were ranked - a scope
+    // filter or a relevance floor may have taken every row - so the same
+    // question is asked here as on the zero-candidate path above.
+    const corpus = await corpusStatementForEmptyWindow(
+      () => effectiveConfig,
+      results.length,
+      degraded,
+    );
+
     return finalize(
       buildSearchOutcome({
         store,
@@ -281,6 +317,8 @@ export async function search(
         trustReceipts: postRank.trustReceipts,
         frontmatterCache,
         poolSize,
+        degraded,
+        corpus,
       }),
     );
   } finally {

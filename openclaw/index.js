@@ -2412,7 +2412,7 @@ function buildReminder(agent, target) {
 
 // src/core/vault.ts
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname5, join as join4, relative } from "node:path";
+import { dirname as dirname6, join as join4, relative as relative2 } from "node:path";
 
 // src/core/integrity/degradation.ts
 var DEGRADATION_CODE = Object.freeze({
@@ -2455,6 +2455,13 @@ function emitDegradationNotice(sink, input) {
   const notice = degradationNotice(input);
   sink.push(notice);
   return notice;
+}
+
+// src/core/path-safety.ts
+import { dirname as dirname5, posix, relative, resolve as resolve4, sep } from "node:path";
+function vaultRelative(target, vault) {
+  const rel = relative(resolve4(vault), resolve4(target));
+  return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
 // src/core/vault.ts
@@ -2618,7 +2625,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
       continue;
     if (skipFiles.has(entry.name.toLowerCase()))
       continue;
-    const rel = relative(root, full);
+    const rel = relative2(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p)))
       continue;
@@ -2764,13 +2771,6 @@ function deriveRuntimeAgentName(runtimeId, operatorName) {
   if (match)
     return `${runtimeId}-${match[1]}-agent`;
   return `${runtimeId}-${base}`;
-}
-
-// src/core/path-safety.ts
-import { dirname as dirname6, posix, relative as relative2, resolve as resolve4, sep } from "node:path";
-function vaultRelative(target, vault) {
-  const rel = relative2(resolve4(vault), resolve4(target));
-  return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
 // src/openclaw/index.ts

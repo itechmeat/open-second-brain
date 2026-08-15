@@ -14,6 +14,8 @@
 import type { KeywordHit, Store } from "./store.ts";
 import { containsCjk, tokenizeCjkSearchText } from "./cjk-tokenizer.ts";
 import { keywordTopKWithFtsSafety, type SafeKeywordOutcome } from "./fts-safety.ts";
+import { RETRIEVAL_DEGRADATION, noteDegradation } from "./retrieval-trail.ts";
+import type { RetrievalDegradationSink } from "./retrieval-trail.ts";
 
 const FTS5_OPERATOR_TOKENS = new Set(["AND", "OR", "NOT", "NEAR"]);
 
@@ -63,6 +65,16 @@ export interface RunFtsOptions {
    * recall; absent/empty leaves the query byte-identical.
    */
   readonly expandedTerms?: ReadonlyArray<string>;
+  /**
+   * Optional typed degradation sink (evidence-at-the-boundary, C2), the
+   * counterpart of the warnings the outcome already returns. An empty
+   * FTS match is the one condition here that produced neither a hit nor a
+   * word, so a caller that wants to distinguish "nothing to match on"
+   * from "nothing matched" hands one in. Absent leaves the call
+   * byte-identical, which is what the term-verification and second-pass
+   * callers want: they ask about a derived term, not about the query.
+   */
+  readonly degraded?: RetrievalDegradationSink;
 }
 
 export function runFtsQueryDetailed(
@@ -74,7 +86,15 @@ export function runFtsQueryDetailed(
     opts.expandedTerms && opts.expandedTerms.length > 0
       ? buildExpandedFtsMatch(rawQuery, opts.expandedTerms)
       : buildFtsMatch(rawQuery);
-  if (match === "") return Object.freeze({ hits: [], warnings: Object.freeze([]) });
+  if (match === "") {
+    // The purest silent empty in the pipeline: every token was dropped,
+    // so no lookup ran at all and the caller was handed the same empty
+    // list a vault with no match hands back.
+    if (opts.degraded !== undefined) {
+      noteDegradation(opts.degraded, RETRIEVAL_DEGRADATION.keywordFtsMatchEmpty);
+    }
+    return Object.freeze({ hits: [], warnings: Object.freeze([]) });
+  }
   return keywordTopKWithFtsSafety(store, match, opts);
 }
 

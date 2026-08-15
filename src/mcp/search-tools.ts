@@ -15,7 +15,6 @@ import {
   EMBEDDING_QUOTA_MESSAGE,
   evaluateSurfacingGate,
   expandHit,
-  indexRootCoverage,
   indexStatus,
   resolveSearchConfig,
   search,
@@ -38,15 +37,17 @@ import {
 } from "../core/config.ts";
 import { assessRecallAdequacy } from "../core/brain/recall-adequacy.ts";
 import {
-  classifyNegativeRecall,
   NEGATIVE_RECALL_STATE,
   NEGATIVE_RECALL_UNKNOWN_REASONS,
-  type CoverageIndexSnapshot,
-  type CoverageScope,
   type NegativeRecallState,
   type NegativeRecallVerdict,
 } from "../core/brain/negative-recall.ts";
-import { resolveNoteRoots } from "../core/brain/notes/note-walk.ts";
+import {
+  RETRIEVAL_DEGRADATION_CODES,
+  RETRIEVAL_TRAIL_KEY,
+  retrievalTrailEnvelope,
+} from "../core/search/retrieval-trail.ts";
+import { probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import {
@@ -219,6 +220,21 @@ const SEARCH_INPUT_SCHEMA: Record<string, unknown> = {
   required: ["query"],
   additionalProperties: false,
 };
+
+/**
+ * The negative-recall states a zero-result `brain_search` can report.
+ *
+ * The same two-of-three narrowing {@link RECALL_GATE_NEGATIVE_STATES}
+ * makes, for the same reason: the probe behind the trail supplies neither
+ * retraction evidence nor an assertion of non-occurrence, so
+ * `did_not_happen` is not a claim this surface has grounds for. Declaring
+ * it would leave a client unable to tell "this surface cannot say that"
+ * from "it did not happen".
+ */
+export const SEARCH_NEGATIVE_STATES: ReadonlyArray<NegativeRecallState> = Object.freeze([
+  NEGATIVE_RECALL_STATE.notFound,
+  NEGATIVE_RECALL_STATE.unknown,
+]);
 
 const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
@@ -394,6 +410,46 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
       },
     },
     retrieval_trace_unavailable: { type: "string" },
+    // Retrieval trail (evidence-at-the-boundary, C2). Declared for the
+    // same reason the receipts above are: this schema does not set
+    // `additionalProperties: false`, so an undeclared key would validate
+    // silently. The `code` enum is the enforcement - the server validates
+    // every response against this schema, so emitting a code that is not
+    // in `RETRIEVAL_DEGRADATION` fails the contract loudly instead of
+    // handing a client a value it cannot interpret. Same rule as
+    // {@link RECALL_GATE_NEGATIVE_STATES}.
+    [RETRIEVAL_TRAIL_KEY]: {
+      type: "object",
+      required: ["retrieved", "pool", "degraded"],
+      properties: {
+        // Rows handed back, which `total` does not state: that is the
+        // ranked pool the window was cut from.
+        retrieved: { type: "integer" },
+        pool: { type: "integer" },
+        degraded: {
+          type: "array",
+          items: {
+            type: "object",
+            required: ["code"],
+            properties: {
+              code: { type: "string", enum: [...RETRIEVAL_DEGRADATION_CODES] },
+              // Identifiers and integers only, by the vocabulary's own
+              // rule; open-keyed because each code names its own fields.
+              detail: { type: "object" },
+            },
+          },
+        },
+        empty: {
+          type: "object",
+          required: ["state", "reason"],
+          properties: {
+            state: { type: "string", enum: [...SEARCH_NEGATIVE_STATES] },
+            reason: { type: "string" },
+            unknown_reason: { type: "string", enum: [...NEGATIVE_RECALL_UNKNOWN_REASONS] },
+          },
+        },
+      },
+    },
     telemetry_id: { type: "string" },
   },
 };
@@ -917,6 +973,11 @@ async function toolBrainSearch(
     // Absent on the generic path, so the default response stays
     // byte-identical.
     ...(outcome.surface !== undefined ? { surface: outcome.surface } : {}),
+    // Retrieval trail (evidence-at-the-boundary, C2): why this answer
+    // narrowed and why it is empty when it is, through the same seam the
+    // CLI payload uses so both surfaces name one key with one body.
+    // Absent - never null - on a healthy non-empty answer.
+    ...retrievalTrailEnvelope(outcome),
     // Retrieval receipts (what-the-index-already-knew, task F): the
     // decision trace and the trust assessment every gated search already
     // built and no surface serialized. Under `explain` only, absent -
@@ -947,9 +1008,25 @@ function searchRecallSignals(
   return deriveRecallSignals(outcome.results);
 }
 
+/**
+ * The recall-telemetry gaps for one search.
+ *
+ * `no_matching_context` is the shared gap every producer in this tree
+ * emits for an empty answer (`context-pack`, `pre-compress-pack`,
+ * `brain_query`), so it stays. What used to be missing is WHY: this
+ * function answered the same question as the retrieval trail from the same
+ * outcome and invented its own free strings to do it. It now emits the
+ * trail's codes, so a gap histogram and a search response name one
+ * vocabulary rather than two.
+ */
 function searchTelemetryGaps(outcome: SearchOutcome): ReadonlyArray<string> {
   const gaps = new Set<string>();
+  const trail = outcome.retrievalTrail;
   if (outcome.total === 0) gaps.add("no_matching_context");
+  for (const degradation of trail?.degraded ?? []) gaps.add(degradation.code);
+  // The corpus statement's `unknown` half is a gap in its own right: it
+  // says the index could not answer, not that the vault holds nothing.
+  if (trail?.empty?.unknownReason !== undefined) gaps.add(trail.empty.unknownReason);
   for (const term of outcome.evidencePack?.missingTerms ?? []) {
     gaps.add(`missing_term:${term}`);
   }
@@ -1043,59 +1120,23 @@ async function toolBrainRecallGate(
 }
 
 /**
- * Both root sets unresolved. Handed to the classifier when the index
- * facts could not be read at all, which it reports as
- * `unknown`/`coverage-unavailable` - deliberately not as an absent index
- * and never as an exhaustively searched one.
- */
-const UNRESOLVED_COVERAGE_SCOPE: CoverageScope = Object.freeze({
-  authorizedRoots: Object.freeze([]),
-  indexedRoots: Object.freeze([]),
-});
-
-/**
  * The corpus statement behind a zero-result recall attempt.
  *
- * Gathers the two universes the verdict is judged against - what the
- * index holds (`indexStatus`) and which authorized note roots it actually
- * reached (`indexRootCoverage` over `resolveNoteRoots`) - and hands them
- * to the pure classifier.
+ * The gathering itself lives in `core/search/pipeline/outcome.ts` since
+ * evidence-at-the-boundary C2, because the search pipeline owes the same
+ * answer on its own zero-result path and two copies of it would drift.
+ * This gate keeps its own wiring - a vault plus a config path, resolved
+ * inside the probe's guard so a resolution failure is reported as
+ * `coverage-unavailable` like every other unreadable input.
  *
  * It supplies no retraction evidence and asserts nothing, which is why
  * this surface declares only {@link RECALL_GATE_NEGATIVE_STATES}: a gate
- * that reads no claim graph has no grounds for `did_not_happen`, and
- * inventing grounds on the zero-result path is a design decision taken
- * separately from this wiring.
- *
- * Every read is attempted before anything is committed to, so a failure
- * anywhere leaves BOTH inputs unresolved rather than half-resolved: a
- * partially gathered picture is exactly the material a misleading
- * `not_found` would be built from. The failure is not swallowed either;
- * it surfaces as the named `coverage-unavailable` reason, which is the
- * whole point of the unit.
+ * that reads no claim graph has no grounds for `did_not_happen`.
  */
 async function assessNegativeRecall(ctx: ServerContext): Promise<NegativeRecallVerdict> {
-  let snapshot: CoverageIndexSnapshot | null = null;
-  let scope: CoverageScope = UNRESOLVED_COVERAGE_SCOPE;
-  try {
-    const config = resolveSearchConfig({
-      vault: ctx.vault,
-      configPath: ctx.configPath ?? undefined,
-    });
-    const status = await indexStatus(config);
-    const authorizedRoots = resolveNoteRoots(ctx.vault);
-    // Skip the second open when there is nothing it could answer: no
-    // index to read, or no note root the operator authorized.
-    const indexedRoots =
-      status.exists && authorizedRoots.length > 0
-        ? (await indexRootCoverage(config, authorizedRoots)).rootsWithDocuments
-        : [];
-    snapshot = status;
-    scope = { authorizedRoots, indexedRoots };
-  } catch {
-    // Deliberately empty: the unresolved defaults above ARE the report.
-  }
-  return classifyNegativeRecall({ snapshot, scope });
+  return probeRetrievalCorpus(() =>
+    resolveSearchConfig({ vault: ctx.vault, configPath: ctx.configPath ?? undefined }),
+  );
 }
 
 /**

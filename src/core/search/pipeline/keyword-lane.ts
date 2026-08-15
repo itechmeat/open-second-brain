@@ -7,6 +7,7 @@
 
 import { runFtsQueryDetailed } from "../fts.ts";
 import { buildQueryPlan } from "../query-plan.ts";
+import type { RetrievalDegradationSink } from "../retrieval-trail.ts";
 import { DEFAULT_EXPANSION, deriveExpansionTerms, tokenizeForExpansion } from "../synonyms.ts";
 import { isLowSelectivity, planTrigramPrefilter } from "../trigram-prefilter.ts";
 import type { KeywordHit, Store } from "../store.ts";
@@ -45,15 +46,22 @@ export interface KeywordLaneOutcome {
   /** The base plan, or a re-plan carrying the derived expansion terms. */
   readonly plan: QueryPlan;
   readonly warnings: string[];
+  /**
+   * The typed half of {@link warnings} (evidence-at-the-boundary, C2):
+   * one code per narrowing, pushed where the sentence is pushed.
+   */
+  readonly degraded: RetrievalDegradationSink;
 }
 
 export function runKeywordLane(input: KeywordLaneInput): KeywordLaneOutcome {
   const { store, recall, keywordQuery, limit, pathPrefix } = input;
   const warnings: string[] = [];
+  const degraded: RetrievalDegradationSink = [];
 
   const kwOutcome = runFtsQueryDetailed(store, keywordQuery, {
     limit: limit * recall.poolMultiplier,
     pathPrefix,
+    degraded,
   });
   let hits = kwOutcome.hits;
   for (const w of kwOutcome.warnings) warnings.push(w);
@@ -80,10 +88,10 @@ export function runKeywordLane(input: KeywordLaneInput): KeywordLaneOutcome {
   // their bm25). Skipped for short/CJK/low-selectivity queries and when
   // disabled - leaving hits byte-identical.
   if (recall.trigramPrefilterEnabled && store.chunkCount() >= recall.trigramPrefilterMinChunks) {
-    mergeTrigramCandidates(input, hits, warnings);
+    mergeTrigramCandidates(input, hits, warnings, degraded);
   }
 
-  return { hits, plan, warnings };
+  return { hits, plan, warnings, degraded };
 }
 
 /**
@@ -128,6 +136,7 @@ function mergeTrigramCandidates(
   input: KeywordLaneInput,
   hits: KeywordHit[],
   warnings: string[],
+  degraded: RetrievalDegradationSink,
 ): void {
   const { store, recall, query, limit, pathPrefix } = input;
   const trigramPlan = planTrigramPrefilter(query);
@@ -138,6 +147,7 @@ function mergeTrigramCandidates(
     pathPrefix,
   });
   for (const w of outcome.warnings) warnings.push(w);
+  for (const d of outcome.degraded) degraded.push(d);
   const cand = outcome.hits;
   if (cand.length === 0) return;
   if (isLowSelectivity(cand.length, corpus, recall.trigramPrefilterMaxSelectivity)) return;
