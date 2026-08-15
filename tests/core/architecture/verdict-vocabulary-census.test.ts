@@ -183,6 +183,22 @@ import {
   STUB_SCAFFOLD_ACTIONS,
 } from "../../../src/mcp/brain/lifecycle-file-tools.ts";
 import {
+  isVaultBackingState,
+  isVaultBackingUndeterminedReason,
+  VAULT_BACKING,
+  VAULT_BACKING_STATES,
+  VAULT_BACKING_UNDETERMINED_REASON,
+  VAULT_BACKING_UNDETERMINED_REASONS,
+} from "../../../src/core/vault-backing.ts";
+import {
+  isSelfHealReindexOutcome,
+  isSelfHealSpawnDecision,
+  SELF_HEAL_REINDEX_OUTCOME,
+  SELF_HEAL_REINDEX_OUTCOMES,
+  SELF_HEAL_SPAWN,
+  SELF_HEAL_SPAWN_DECISIONS,
+} from "../../../src/core/maintenance/self-heal-reindex.ts";
+import {
   isProgressKind,
   isProgressReason,
   PROGRESS_KIND,
@@ -653,6 +669,50 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: OPERATION,
     members: OPERATIONS,
     guard: isOperation,
+  },
+  {
+    // U5. What the parent did about a reindex it found necessary. The
+    // values leave TypeScript into `Brain/metrics/self_heal_reindex.jsonl`,
+    // a file that is synced to peer devices and read back by a build that
+    // may not be the one that wrote it - so the guard is the boundary
+    // between this release and a row it does not understand.
+    name: "SELF_HEAL_SPAWN",
+    values: SELF_HEAL_SPAWN,
+    members: SELF_HEAL_SPAWN_DECISIONS,
+    guard: isSelfHealSpawnDecision,
+  },
+  {
+    // U5. Registered separately from the decision above because the two
+    // are answered by different processes to different questions - whether
+    // a child was started, and what a started child ended as - and one
+    // guard over both would let a refusal to start be read back off the
+    // same file as a rebuild that finished.
+    name: "SELF_HEAL_REINDEX_OUTCOME",
+    values: SELF_HEAL_REINDEX_OUTCOME,
+    members: SELF_HEAL_REINDEX_OUTCOMES,
+    guard: isSelfHealReindexOutcome,
+  },
+  {
+    // A2. What filesystem backs the vault path. `undetermined` is the
+    // member that earns the vocabulary: the alternative design classified
+    // the HOST as local / cloud sandbox / ephemeral, and every signal that
+    // classifier reads is one-way, so a negative container marker would
+    // have bought a positive durability verdict on every modern container
+    // that does not ship one.
+    name: "VAULT_BACKING",
+    values: VAULT_BACKING,
+    members: VAULT_BACKING_STATES,
+    guard: isVaultBackingState,
+  },
+  {
+    // A2. Why the backing probe reached no verdict. Separate from the
+    // state for the reason MATERIALIZE_UNKNOWN_REASON is separate from its
+    // freshness: one guard over both would let `path_unreadable` be read
+    // back off a payload everywhere a survival verdict is expected.
+    name: "VAULT_BACKING_UNDETERMINED_REASON",
+    values: VAULT_BACKING_UNDETERMINED_REASON,
+    members: VAULT_BACKING_UNDETERMINED_REASONS,
+    guard: isVaultBackingUndeterminedReason,
   },
 ]);
 
