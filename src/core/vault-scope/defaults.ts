@@ -1,15 +1,38 @@
 /**
- * Shared constants and rule types for the Vault Scope module.
+ * Shared constants, rule types and the path-coverage predicate for the
+ * Vault Scope module.
  *
  * Split out of `index.ts` so `src/core/brain/policy.ts` can read the
  * default exclusion set without dragging in the resolver — the
  * resolver imports `policy.ts`, which would otherwise create a
  * module-initialisation cycle.
  *
+ * That cycle-safety is why {@link pathCovers} lives here rather than in
+ * any of the five modules that used to carry a private copy: this leaf
+ * reaches nothing but the path constants, so the write-binding grammar,
+ * the index-admission lane check, the note walker, the search indexer
+ * and the snapshot manifest can all import it without closing a loop.
+ *
  * Anchored in docs/plans/2026-05-19-vault-scope-design.md §5.
  */
 
 import { BRAIN_SNAPSHOTS_REL } from "../brain/paths.ts";
+
+/**
+ * The ONE separator this grammar knows. Every path it is handed is
+ * vault-relative POSIX: the walkers build theirs by joining directory
+ * entries with `/`, and `inspectPath` converts the native separator
+ * before it hands anything over.
+ *
+ * A backslash is DELIBERATELY not a separator. On POSIX it is an
+ * ordinary filename character, so splitting on it reads structure into
+ * a name: a prefix of `Projects` would cover the literal one-segment
+ * filename `Projects\evil.md`, which lands at the vault ROOT. Callers
+ * that can receive a host path refuse a backslash-bearing one outright
+ * (`brain/notes/create-note.ts`, `assertHostPathSeparators`) rather
+ * than letting this module guess which reading was meant.
+ */
+const POSIX_SEP = "/";
 
 export interface VaultIgnoreRule {
   /** Entry exactly as written in `Brain/_brain.yaml`. */
@@ -59,4 +82,55 @@ function normaliseRawRule(raw: string): string {
   s = s.replace(/\/+/g, "/");
   s = s.replace(/\/+$/g, "");
   return s;
+}
+
+// ----- path coverage -------------------------------------------------------
+
+/**
+ * Canonical form of a vault-relative POSIX path: no empty segments (so
+ * no leading, trailing or repeated slash) and no `.` segments.
+ *
+ * Returns the empty string for a path that carries no segments at all
+ * (`""`, `.`, `/`, `///`). That is the vault ROOT, not a usable prefix —
+ * a declaration that normalises to it would cover the whole vault, and
+ * the block parsers refuse it rather than letting a typo widen a
+ * boundary.
+ *
+ * `..` is left alone: it is a segment like any other here. Resolving it
+ * would be traversal, and the callers that can receive an untrusted path
+ * reject it before this module ever sees it.
+ */
+export function normalisePathSegments(raw: string): string {
+  const segments: string[] = [];
+  for (const segment of raw.split(POSIX_SEP)) {
+    if (segment === "" || segment === ".") continue;
+    segments.push(segment);
+  }
+  return segments.join(POSIX_SEP);
+}
+
+/**
+ * Whether `relPath` lies at or under `prefix`, SEGMENT-WISE.
+ *
+ * Segment-wise is the whole point. A character-prefix test would let a
+ * prefix of `Notes` cover `Notes-archive/x.md`, so every declaration
+ * would silently reach a folder the operator never named — the same
+ * failure whether the prefix is a write binding, an indexed root, a
+ * lane boundary or a snapshot exclusion.
+ *
+ * `prefix` must ALREADY be canonical; only `relPath` is normalised. A
+ * prefix that kept its trailing slash therefore covers nothing, which is
+ * the honest answer: `Notes/` is a declaration this grammar cannot
+ * express, and reading it as `Notes` would be a guess. Every caller
+ * normalises its prefixes at the boundary where they are declared.
+ *
+ * The empty prefix covers the vault root and nothing else, because a
+ * normalised target never starts with a separator. That is deliberate:
+ * an empty prefix is a declaration that named no folder, and it must not
+ * degrade into match-everything.
+ */
+export function pathCovers(prefix: string, relPath: string): boolean {
+  const target = normalisePathSegments(relPath);
+  if (target === prefix) return true;
+  return target.startsWith(prefix + POSIX_SEP);
 }

@@ -59,6 +59,7 @@ import { appendMetric } from "../brain/metrics.ts";
 import { throwIfAborted } from "../brain/safeguard.ts";
 import { extractEntities } from "./entities.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
+import { pathCovers } from "../vault-scope/defaults.ts";
 
 import {
   acquireWriterLock,
@@ -1267,7 +1268,10 @@ export async function indexRootCoverage(
     const withDocuments: string[] = [];
     const withoutDocuments: string[] = [];
     for (const root of roots) {
-      const reached = paths.some((path) => path === root || path.startsWith(`${root}/`));
+      // Segment-wise: a root of `Notes` is not reached by a document in
+      // `Notes-archive/`. Roots arrive from `resolveNoteRoots`, which
+      // normalises them, and indexed paths are what the walker wrote.
+      const reached = paths.some((path) => pathCovers(root, path));
       (reached ? withDocuments : withoutDocuments).push(root);
     }
     return Object.freeze({

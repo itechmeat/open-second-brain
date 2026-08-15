@@ -1,35 +1,26 @@
 /**
  * The prefix grammar of the write binding, and nothing else.
  *
- * This module IMPORTS NOTHING, deliberately. It is the cycle-safe home
- * shared by the two layers that must agree on what a declared prefix
- * means — the `_brain.yaml` block parser
+ * This module is the cycle-safe home shared by the two layers that must
+ * agree on what a declared prefix means — the `_brain.yaml` block parser
  * (`brain/policy/blocks/write-binding.ts`) and the runtime matcher
- * (`./index.ts`) — in exactly the shape `vault-scope/defaults.ts`
- * already uses for the ignore-rule grammar.
+ * (`./index.ts`).
  *
  * The split is load-bearing rather than tidy: the matcher reads the
  * configuration through `brain/policy.ts`, which reaches the block
  * parser, so a parser that imported the matcher would close a cycle and
  * make the initialisation order of both undefined.
+ *
+ * It imports exactly one module, `vault-scope/defaults.ts`, and that is
+ * the only import it may ever grow: that leaf reaches nothing but the
+ * path constants, so it cannot reach `brain/policy.ts` and cannot close
+ * the loop this file exists to prevent. The rules the grammar is built
+ * on — POSIX separators, segment-wise coverage — are not specific to
+ * write bindings, and this module carried the only copy that ever
+ * explained them while four other modules re-derived them in silence.
  */
 
-/**
- * The ONE separator this grammar knows. Declarations are POSIX, and so
- * is every path the matcher is handed: `inspectPath` returns its
- * segments joined with `/` on both platforms (on Windows it converts the
- * native separator first, on POSIX there is nothing to convert).
- *
- * A backslash is DELIBERATELY not a separator here. On POSIX it is an
- * ordinary filename character, so splitting on it made the matcher read
- * structure into a name: a binding on `Projects` admitted the literal
- * one-segment filename `Projects\evil.md`, which lands at the vault
- * ROOT. The caller-named write envelope
- * (`brain/notes/create-note.ts`, `assertHostPathSeparators`) refuses a
- * backslash-bearing path outright rather than reinterpreting it, so the
- * matcher never has to guess which reading the caller meant.
- */
-const POSIX_SEP = "/";
+import { normalisePathSegments, pathCovers } from "../vault-scope/defaults.ts";
 
 /**
  * Canonical form of one declared prefix: no `./` segments, no repeated
@@ -41,23 +32,18 @@ const POSIX_SEP = "/";
  * a typo silently widen the boundary.
  */
 export function normaliseWriteBindingPrefix(raw: string): string {
-  const segments: string[] = [];
-  for (const segment of raw.split(POSIX_SEP)) {
-    if (segment === "" || segment === ".") continue;
-    segments.push(segment);
-  }
-  return segments.join(POSIX_SEP);
+  return normalisePathSegments(raw);
 }
 
 /**
- * Whether `relPath` lies at or under `prefix`, SEGMENT-WISE.
+ * Whether `relPath` lies at or under a declared binding `prefix`.
  *
- * Segment-wise is the whole point. A character-prefix test would let a
- * binding on `Projects` admit `ProjectsArchive/`, so the declaration
- * would silently cover a folder the operator never named.
+ * Segment-wise, via the shared predicate: a character-prefix test would
+ * let a binding on `Projects` admit `ProjectsArchive/`, so the
+ * declaration would silently cover a folder the operator never named.
+ * The block parser normalises every declared prefix, which is the
+ * precondition {@link pathCovers} states.
  */
 export function writeBindingPrefixCovers(prefix: string, relPath: string): boolean {
-  const target = normaliseWriteBindingPrefix(relPath);
-  if (target === prefix) return true;
-  return target.startsWith(prefix + POSIX_SEP);
+  return pathCovers(prefix, relPath);
 }

@@ -16,6 +16,7 @@
  */
 
 import { BRAIN_STATE_REL } from "../brain/paths.ts";
+import { pathCovers } from "./defaults.ts";
 
 export interface AdmissionVerdict {
   /** True when the path may enter the search index. */
@@ -27,17 +28,16 @@ export interface AdmissionVerdict {
 const ADMIT: AdmissionVerdict = Object.freeze({ admit: true });
 
 /**
- * Is `relPath` inside the given lane root, treating the root as a path
- * boundary? `Brain/state` and `Brain/state/x.md` are inside; `Brain/stateful`
- * and `Brain/state-notes.md` are NOT (they merely share a name prefix).
+ * Decide whether a vault-relative POSIX path may be admitted to the index.
+ *
+ * Lane membership is the shared {@link pathCovers} question, treating the
+ * lane root as a path boundary: `Brain/state` and `Brain/state/x.md` are
+ * inside; `Brain/stateful` and `Brain/state-notes.md` are NOT (they merely
+ * share a name prefix). `BRAIN_STATE_REL` is built with `posix.join`, so it
+ * already satisfies the canonical-prefix precondition.
  */
-function isUnder(relPath: string, root: string): boolean {
-  return relPath === root || relPath.startsWith(`${root}/`);
-}
-
-/** Decide whether a vault-relative POSIX path may be admitted to the index. */
 export function admitToIndex(relPath: string): AdmissionVerdict {
-  if (isUnder(relPath, BRAIN_STATE_REL)) {
+  if (pathCovers(BRAIN_STATE_REL, relPath)) {
     return Object.freeze({ admit: false, reason: "exact-state-lane" });
   }
   return ADMIT;

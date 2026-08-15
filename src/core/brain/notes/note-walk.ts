@@ -22,7 +22,9 @@
  *   - `.md` files only; `.git` / `node_modules` and friends fall out of
  *     the shared `vault.ignore_paths` defaults.
  *   - Include-narrowing: a file is yielded only when its vault-relative
- *     path sits under one of the resolved roots.
+ *     path sits under one of the resolved roots, segment-wise via the
+ *     shared {@link pathCovers} — a root of `Notes` must not reach
+ *     `Notes-archive/`.
  *
  * Size cap is an option, not a fixed rule: `scanInline` reads file bytes
  * and passes a 1 MiB cap so oversize files are reported and skipped; the
@@ -37,6 +39,7 @@ import { BRAIN_ROOT_REL } from "../paths.ts";
 import { loadNotesConfigSafe } from "../policy.ts";
 import { loadVaultMap, resolveTokens } from "../portability/role-tokens.ts";
 import { matchIgnore, resolveVaultScope, type VaultIgnoreRule } from "../../vault-scope/index.ts";
+import { pathCovers } from "../../vault-scope/defaults.ts";
 
 /** One markdown file discovered by {@link walkMarkdownFiles}. */
 export interface NoteWalkFile {
@@ -153,7 +156,9 @@ export function* walkMarkdownFiles(
       if (!entry.isFile()) continue;
       if (!entry.name.endsWith(".md")) continue;
 
-      const underRoot = roots.some((p) => relPosix === p || relPosix.startsWith(p + "/"));
+      // Roots arrive through `normalisePrefix`, which is what satisfies
+      // the canonical-prefix precondition of `pathCovers`.
+      const underRoot = roots.some((root) => pathCovers(root, relPosix));
       if (!underRoot) continue;
 
       const file: NoteWalkFile = { absPath: full, relPath: relPosix };
