@@ -7,7 +7,11 @@
  */
 
 import { formatDegradationNotice } from "../../../core/integrity/degradation.ts";
-import { createSafeguard, resolveSafeguardTimeoutMs } from "../../../core/brain/safeguard.ts";
+import {
+  createSafeguard,
+  resolveSafeguardTimeoutMs,
+  SafeguardAbortError,
+} from "../../../core/brain/safeguard.ts";
 import {
   chunkWindowDiagnosticCode,
   indexVault,
@@ -22,6 +26,12 @@ import {
 } from "../../../core/maintenance/self-heal-reindex.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextSteps } from "../../advisory-rail.ts";
+import { onInterrupt, reportInterrupted } from "../../interrupt.ts";
+import {
+  attachProgress,
+  reportProgressRefusal,
+  type ProgressAttachment,
+} from "../../progress-rail.ts";
 import { CronTemplateError, renderCronTemplate } from "../../search-cron-template.ts";
 import {
   flagBoolean,
@@ -60,11 +70,39 @@ const EVENT_ANCHORS_PENDING = "event-anchors-pending";
 /** Default flush cadence for the generated `reindex --cron-template`. */
 const DEFAULT_CRON_INTERVAL = "30m";
 
+/** Top-level command both builders live under, for the rails. */
+const SEARCH_COMMAND = "search";
+
 function reindexSafeguard(flags: SearchVerbFlags): ReturnType<typeof createSafeguard> {
   return createSafeguard({
     operation: SAFEGUARD_OPERATION,
     timeoutMs: resolveSafeguardTimeoutMs(SAFEGUARD_OPERATION, flagString(flags, "config")),
   });
+}
+
+/**
+ * Attach the progress rail for one builder run, and say at once when the
+ * stream cannot carry it.
+ *
+ * Progress is opt-in: attaching a sink by default would change the stderr
+ * of every existing invocation, and the older stream on this very command
+ * - `--verbose` - is opt-in for the same reason. The two are different
+ * channels answering different questions and both are additive, so
+ * neither suppresses the other.
+ *
+ * Written once for both builders: they take the same decision from the
+ * same flags, and two copies would be two chances for one of them to
+ * observe a run the other would not.
+ */
+function observeIndexRun(flags: SearchVerbFlags, verb: string): ProgressAttachment | null {
+  if (!flagBoolean(flags, "progress")) return null;
+  const attachment = attachProgress({
+    command: SEARCH_COMMAND,
+    argv: [verb],
+    jsonRequested: flagBoolean(flags, "json"),
+  });
+  reportProgressRefusal(attachment);
+  return attachment;
 }
 
 /**
@@ -134,23 +172,41 @@ export async function cmdSearchIndex(argv: ReadonlyArray<string>): Promise<numbe
     "force-cost": { type: "boolean" },
     concurrency: { type: "string" },
     verbose: { type: "boolean" },
+    progress: { type: "boolean" },
     json: { type: "boolean" },
   });
   const cfg = resolveConfig(flags);
 
   const verbose = flagBoolean(flags, "verbose");
-  const stats = await indexVault(cfg, {
-    safeguard: reindexSafeguard(flags),
-    embeddings: flagBoolean(flags, "embeddings"),
-    force: flagBoolean(flags, "force"),
-    forceCost: flagBoolean(flags, "force-cost"),
-    onFile: (e) => {
-      if (verbose) {
-        const msg = e.message ? ` ${e.message}` : "";
-        process.stderr.write(`${e.kind}\t${e.path}${msg}\n`);
-      }
-    },
-  });
+  const observation = observeIndexRun(flags, "index");
+  const interrupt = onInterrupt();
+  let stats: IndexStats;
+  try {
+    stats = await indexVault(cfg, {
+      safeguard: reindexSafeguard(flags),
+      embeddings: flagBoolean(flags, "embeddings"),
+      force: flagBoolean(flags, "force"),
+      forceCost: flagBoolean(flags, "force-cost"),
+      // The cancellation seam `indexVault` already declares and checks -
+      // between files and between embed batches, never mid-write - with
+      // nothing production-side to trip it until now.
+      signal: interrupt.signal,
+      onFile: (e) => {
+        if (verbose) {
+          const msg = e.message ? ` ${e.message}` : "";
+          process.stderr.write(`${e.kind}\t${e.path}${msg}\n`);
+        }
+      },
+      ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
+    });
+  } catch (err) {
+    if (err instanceof SafeguardAbortError) {
+      return reportInterrupted(interrupt, err, flagBoolean(flags, "json"));
+    }
+    throw err;
+  } finally {
+    interrupt.release();
+  }
 
   reportIndexRun(stats, cfg, argv, flagBoolean(flags, "json"));
   return 0;
@@ -174,6 +230,7 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
     concurrency: { type: "string" },
     json: { type: "boolean" },
     verbose: { type: "boolean" },
+    progress: { type: "boolean" },
     "cron-template": { type: "boolean" },
     interval: { type: "string" },
     "self-heal": { type: "boolean" },
@@ -195,21 +252,30 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
   const cfg = resolveConfig(flags);
   const selfHeal = flagBoolean(flags, "self-heal");
   const startedAt = Date.now();
+  const observation = observeIndexRun(flags, "reindex");
+  const interrupt = onInterrupt();
   let stats: IndexStats;
   try {
     stats = await reindexVault(cfg, {
       safeguard: reindexSafeguard(flags),
       embeddings: flagBoolean(flags, "embeddings"),
       forceCost: flagBoolean(flags, "force-cost"),
+      signal: interrupt.signal,
       onFile: flagBoolean(flags, "verbose")
         ? (e) => process.stderr.write(`${e.kind}\t${e.path}\n`)
         : undefined,
+      ...(observation?.sink !== undefined ? { onProgress: observation.sink } : {}),
     });
   } catch (err) {
     // The only report a self-heal run's failure ever gets. Recorded before
     // the rethrow so the row exists whatever the caller's stderr is
     // pointed at, and the rethrow is unchanged so an operator running this
     // by hand still sees the error and the exit code they always saw.
+    //
+    // A stopped rebuild is recorded here too, and correctly: the staging
+    // database was abandoned and never swapped in, so this run left the
+    // live index exactly as it found it - which is a rebuild that did not
+    // happen, whoever asked for it to stop.
     if (selfHeal) {
       recordSelfHealOutcome(
         cfg.vault,
@@ -218,7 +284,12 @@ export async function cmdSearchReindex(argv: ReadonlyArray<string>): Promise<num
         describeFailure(err),
       );
     }
+    if (err instanceof SafeguardAbortError) {
+      return reportInterrupted(interrupt, err, flagBoolean(flags, "json"));
+    }
     throw err;
+  } finally {
+    interrupt.release();
   }
   if (selfHeal) {
     recordSelfHealOutcome(cfg.vault, SELF_HEAL_REINDEX_OUTCOME.completed, Date.now() - startedAt);
