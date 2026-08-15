@@ -6,7 +6,15 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -160,10 +168,85 @@ test("run --if-stale skips when outputs are already fresh (t_845fe240)", async (
   ]);
   expect(second.returncode).toBe(0);
   expect(JSON.parse(second.stdout)).toMatchObject({ skipped: "fresh" });
-  const skipMetric = listMetrics(vault, { surface: "communities" }).some(
-    (m) => (m.payload as { skipped?: string }).skipped === "fresh",
+  // B4: the metric carries the verdict and its reason, not a
+  // `skipped: "fresh"` that only ever gets written on one of the three
+  // outcomes and therefore records nothing about the other two.
+  const freshness = listMetrics(vault, { surface: "communities" }).map(
+    (m) => (m.payload as { freshness?: string }).freshness,
   );
-  expect(skipMetric).toBe(true);
+  expect(freshness).toContain("fresh");
+});
+
+test("run --if-stale recomputes when the wall-clock ceiling is exceeded (B4)", async () => {
+  await index();
+  await runCli(["brain", "clusters", "run", "--vault", vault]);
+  // Move BOTH the inputs and the outputs into the distant past: nothing
+  // is newer than anything else, so the only thing that can make this
+  // stale is the ceiling. Before B4 this was fresh forever.
+  const ancient = Date.now() / 1000 - 400 * 24 * 60 * 60;
+  for (const rel of ["team-a.md", "team-b.md", "team-c.md", "team-d.md"]) {
+    utimesSync(join(vault, rel), ancient, ancient);
+  }
+  const clustersDir = join(vault, "Brain", "clusters");
+  for (const f of readdirSync(clustersDir)) {
+    utimesSync(join(clustersDir, f), ancient, ancient);
+  }
+  const r = await runCli(["brain", "clusters", "run", "--vault", vault, "--if-stale", "--json"]);
+  expect(r.returncode).toBe(0);
+  expect(JSON.parse(r.stdout).skipped).toBeUndefined();
+  const metrics = listMetrics(vault, { surface: "communities" }).map((m) => m.payload);
+  expect(metrics).toContainEqual(
+    expect.objectContaining({ freshness: "stale", freshness_reason: "ceiling_exceeded" }),
+  );
+});
+
+test("run --if-stale reads the ceiling from the health block (B4)", async () => {
+  await index();
+  await runCli(["brain", "clusters", "run", "--vault", vault]);
+  const ancient = Date.now() / 1000 - 400 * 24 * 60 * 60;
+  for (const rel of ["team-a.md", "team-b.md", "team-c.md", "team-d.md"]) {
+    utimesSync(join(vault, rel), ancient, ancient);
+  }
+  const clustersDir = join(vault, "Brain", "clusters");
+  for (const f of readdirSync(clustersDir)) {
+    utimesSync(join(clustersDir, f), ancient, ancient);
+  }
+  // A ceiling the ancient outputs are still inside of: same filesystem
+  // state as the test above, opposite verdict, so the verdict really is
+  // coming from the config and not from a constant in the module.
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\nhealth:\n  materialize_max_age_days: 3650\n",
+  );
+  const r = await runCli(["brain", "clusters", "run", "--vault", vault, "--if-stale", "--json"]);
+  expect(r.returncode).toBe(0);
+  expect(JSON.parse(r.stdout)).toMatchObject({ skipped: "fresh" });
+});
+
+test("run --if-stale recomputes and names the reason when freshness is unknown (B4)", async () => {
+  await index();
+  const first = await runCli(["brain", "clusters", "run", "--vault", vault, "--json"]);
+  const written = (JSON.parse(first.stdout) as { written: string[] }).written;
+  expect(written).toHaveLength(1);
+  // Replace the materialized note with a listable-but-unstattable entry
+  // of the SAME name: the directory walk still reports one output, and
+  // the stat still fails. Before B4 that was reported as "not
+  // materialized" - the same answer as an empty output directory.
+  const notePath = join(vault, written[0]!);
+  rmSync(notePath);
+  symlinkSync(join(vault, "Brain", "clusters", "no-such-target"), notePath);
+  const r = await runCli(["brain", "clusters", "run", "--vault", vault, "--if-stale", "--json"]);
+  expect(r.returncode).toBe(0);
+  const parsed = JSON.parse(r.stdout) as {
+    skipped?: string;
+    staleness?: { state: string; reason: string };
+  };
+  expect(parsed.skipped).toBeUndefined();
+  expect(parsed.staleness).toEqual({ state: "unknown", reason: "outputs_unreadable" });
+  const metrics = listMetrics(vault, { surface: "communities" }).map((m) => m.payload);
+  expect(metrics).toContainEqual(
+    expect.objectContaining({ freshness: "unknown", freshness_reason: "outputs_unreadable" }),
+  );
 });
 
 test("run --if-stale recomputes after an input note changes (t_845fe240)", async () => {

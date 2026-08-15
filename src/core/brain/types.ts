@@ -1869,6 +1869,14 @@ export interface BrainHealthConfig {
   /** Maximum auto-safe steps a single remediation run applies. Positive integer. */
   readonly remediation_step_cap?: number;
   /**
+   * Wall-clock ceiling (days) on a materialized artifact's age before
+   * the `--if-stale` fast-path recomputes it even though no input moved.
+   * Positive integer. Without it the freshness gate is purely
+   * content-relative, so an artifact materialized once is fresh for the
+   * rest of the vault's life.
+   */
+  readonly materialize_max_age_days?: number;
+  /**
    * Acknowledge-before watermark. When set, advisory concept-gap and
    * batch-inflation findings entirely older than this instant are hidden
    * from the semantic-health report and verdict. Date-only `YYYY-MM-DD`
@@ -1886,6 +1894,7 @@ export interface ResolvedBrainHealthConfig {
   readonly concept_gap_min_frequency: number;
   readonly stale_claim_max_age_days: number;
   readonly remediation_step_cap: number;
+  readonly materialize_max_age_days: number;
   /** Acknowledge-before watermark, or `null` when the feature is off. */
   readonly silence_before: string | null;
 }

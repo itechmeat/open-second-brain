@@ -75,6 +75,28 @@ import {
   GRAPH_HEALTH_CODES,
   isGraphHealthCode,
 } from "../../../src/core/partner/codegraph-health.ts";
+import {
+  isRecallChannel,
+  isRecallTelemetryMode,
+  isRecallTelemetryStatus,
+  RECALL_CHANNEL,
+  RECALL_CHANNELS,
+  RECALL_TELEMETRY_MODE,
+  RECALL_TELEMETRY_MODES,
+  RECALL_TELEMETRY_STATUS,
+  RECALL_TELEMETRY_STATUSES,
+} from "../../../src/core/brain/recall-telemetry.ts";
+import {
+  isMaterializeFreshness,
+  isMaterializeStaleReason,
+  isMaterializeUnknownReason,
+  MATERIALIZE_FRESHNESS,
+  MATERIALIZE_FRESHNESS_STATES,
+  MATERIALIZE_STALE_REASON,
+  MATERIALIZE_STALE_REASONS,
+  MATERIALIZE_UNKNOWN_REASON,
+  MATERIALIZE_UNKNOWN_REASONS,
+} from "../../../src/core/brain/staleness.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -232,6 +254,66 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     values: GRAPH_HEALTH_CODES,
     members: GRAPH_HEALTH_CODE_LIST,
     guard: isGraphHealthCode,
+  },
+  {
+    // B4. Three vocabularies for one gate, because the verdict, the
+    // reason an artifact is out of date, and the reason no verdict could
+    // be reached are three disjoint sets. The verdict replaced a boolean
+    // `fresh`, which is exactly the shape that forced a failed
+    // measurement to be reported as one of the two real answers.
+    name: "MATERIALIZE_FRESHNESS",
+    values: MATERIALIZE_FRESHNESS,
+    members: MATERIALIZE_FRESHNESS_STATES,
+    guard: isMaterializeFreshness,
+  },
+  {
+    // B4. Registered separately from the verdict: a stale reason is only
+    // ever paired with `stale`, and a guard that accepted both sets
+    // would let a persisted `unknown` reason be read back as a claim
+    // that the outputs are merely out of date.
+    name: "MATERIALIZE_STALE_REASON",
+    values: MATERIALIZE_STALE_REASON,
+    members: MATERIALIZE_STALE_REASONS,
+    guard: isMaterializeStaleReason,
+  },
+  {
+    // B4. These values leave TypeScript: the `--if-stale` fast-path
+    // writes the reason into the `communities` metric payload and into
+    // its `--json` output, so a rename here with the reader left alone
+    // is the copy-drift this census exists for.
+    name: "MATERIALIZE_UNKNOWN_REASON",
+    values: MATERIALIZE_UNKNOWN_REASON,
+    members: MATERIALIZE_UNKNOWN_REASONS,
+    guard: isMaterializeUnknownReason,
+  },
+  {
+    // C1. The transport a recall record arrived on. Registered because
+    // the doctor check that crosses it against an install state switches
+    // over it with no default arm, and because the value is persisted
+    // into the continuity log and copied into a tool-schema enum - both
+    // routes out of TypeScript this census exists to pin.
+    name: "RECALL_CHANNEL",
+    values: RECALL_CHANNEL,
+    members: RECALL_CHANNELS,
+    guard: isRecallChannel,
+  },
+  {
+    // C1. Not new - the guard was a hand-rolled equality chain, so
+    // `query` was added to the union and three copies of the list went
+    // stale, one of them a tool-schema enum that then rejected a mode
+    // the server itself records.
+    name: "RECALL_TELEMETRY_MODE",
+    values: RECALL_TELEMETRY_MODE,
+    members: RECALL_TELEMETRY_MODES,
+    guard: isRecallTelemetryMode,
+  },
+  {
+    // C1. The same conversion, and the vocabulary the injecting hook's
+    // three decisions map onto.
+    name: "RECALL_TELEMETRY_STATUS",
+    values: RECALL_TELEMETRY_STATUS,
+    members: RECALL_TELEMETRY_STATUSES,
+    guard: isRecallTelemetryStatus,
   },
 ]);
 

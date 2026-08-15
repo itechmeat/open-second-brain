@@ -25,8 +25,18 @@ import {
   resolveSafeguardTimeoutMs,
   SafeguardTimeoutError,
 } from "../../../core/brain/safeguard.ts";
-import { evaluateStaleness } from "../../../core/brain/staleness.ts";
-import { isoSecond } from "../../../core/brain/time.ts";
+import {
+  BRAIN_HEALTH_DEFAULTS,
+  loadBrainConfig,
+  resolveHealth,
+} from "../../../core/brain/policy.ts";
+import {
+  evaluateStaleness,
+  MATERIALIZE_FRESHNESS,
+  stalenessReason,
+  type StalenessResult,
+} from "../../../core/brain/staleness.ts";
+import { isoSecond, MS_PER_DAY } from "../../../core/brain/time.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { Store } from "../../../core/search/store.ts";
 import { SearchError } from "../../../core/search/types.ts";
@@ -46,7 +56,7 @@ const CLUSTERS_DIR_REL = join("Brain", "clusters");
  * inputs) for the `--if-stale` fast-path. Cluster notes are excluded from the
  * input set so an output never counts as its own input.
  */
-function clustersStaleness(vault: string): ReturnType<typeof evaluateStaleness> {
+function clustersStaleness(vault: string, nowMs: number): StalenessResult {
   const clustersDir = join(vault, CLUSTERS_DIR_REL);
   const inputs = listVaultPages(vault)
     .map((p) => p.path)
@@ -56,7 +66,52 @@ function clustersStaleness(vault: string): ReturnType<typeof evaluateStaleness> 
         .filter((f) => f.endsWith(".md"))
         .map((f) => join(clustersDir, f))
     : [];
-  return evaluateStaleness(inputs, outputs);
+  return evaluateStaleness(inputs, outputs, { nowMs, maxAgeMs: materializeMaxAgeMs(vault) });
+}
+
+/**
+ * The wall-clock ceiling from `health.materialize_max_age_days`, in ms.
+ *
+ * A vault with no Brain config at all is the normal case for this verb -
+ * `clusters run` works on any indexed vault - so an unloadable config
+ * resolves the ceiling from the same defaults table an absent key
+ * resolves from. That is not the gate quietly reporting clean: the
+ * ceiling can only ever ADD staleness, so falling back to the default
+ * cannot turn a `stale` verdict into a `fresh` one. It can only make the
+ * ceiling looser than an operator who edited the key intended, and that
+ * operator's config is broken in every other verb too, loudly.
+ */
+function materializeMaxAgeMs(vault: string): number {
+  try {
+    return resolveHealth(loadBrainConfig(vault)).materialize_max_age_days * MS_PER_DAY;
+  } catch {
+    return BRAIN_HEALTH_DEFAULTS.materialize_max_age_days * MS_PER_DAY;
+  }
+}
+
+/**
+ * Record what the freshness gate concluded, on every `--if-stale` run
+ * rather than only on the skip. A metric written only when the answer is
+ * `fresh` records nothing about the two answers an operator would
+ * actually want to see in a dashboard: how often the fast-path does the
+ * work anyway, and how often it could not tell.
+ */
+function recordFreshness(vault: string, staleness: StalenessResult, runAt: string): void {
+  try {
+    appendMetric(vault, {
+      surface: "communities",
+      runAt,
+      payload: {
+        freshness: staleness.state,
+        freshness_reason: stalenessReason(staleness),
+        newest_input_ms: staleness.newestInputMs,
+        oldest_output_ms: staleness.oldestOutputMs,
+        oldest_output_age_ms: staleness.oldestOutputAgeMs,
+      },
+    });
+  } catch {
+    // Metrics are observability, not correctness.
+  }
 }
 
 export async function cmdBrainClusters(argv: string[]): Promise<number> {
@@ -140,27 +195,33 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
     }
 
     // Staleness fast-path (t_845fe240): when the materialized cluster notes are
-    // already newer than every input note, skip the recompute entirely. Opt-in
-    // so the default behavior is unchanged; records a freshness-skip metric.
+    // already newer than every input note and inside the configured wall-clock
+    // ceiling, skip the recompute entirely. Opt-in so the default behavior is
+    // unchanged; records the verdict as a metric on every run.
+    //
+    // B4: the gate skips ONLY on `fresh`. On `unknown` it recomputes AND says
+    // which measurement failed - recomputing silently would be as dishonest as
+    // skipping silently, because the operator asked for a fast-path and is
+    // entitled to know it could not be evaluated.
+    let freshnessNotice: Record<string, unknown> = {};
     if (flags["if-stale"] === true) {
-      const staleness = clustersStaleness(vault);
-      if (staleness.fresh) {
-        try {
-          appendMetric(vault, {
-            surface: "communities",
-            runAt: isoSecond(new Date()),
-            payload: {
-              skipped: "fresh",
-              newest_input_ms: staleness.newestInputMs ?? 0,
-              oldest_output_ms: staleness.oldestOutputMs ?? 0,
-            },
-          });
-        } catch {
-          // Metrics are observability, not correctness.
-        }
+      const evaluatedAt = new Date();
+      const staleness = clustersStaleness(vault, evaluatedAt.getTime());
+      recordFreshness(vault, staleness, isoSecond(evaluatedAt));
+      if (staleness.state === MATERIALIZE_FRESHNESS.fresh) {
         if (asJson) okJson({ communities: 0, skipped: "fresh" });
         else ok("clusters run: outputs already fresh - skipped (--if-stale)");
         return 0;
+      }
+      if (staleness.state === MATERIALIZE_FRESHNESS.unknown) {
+        const reason = staleness.unknownReason;
+        // In `--json` the notice rides the result object: a bare line on
+        // stdout would corrupt the document the caller is parsing.
+        if (asJson) {
+          freshnessNotice = { staleness: { state: staleness.state, reason } };
+        } else {
+          ok(`clusters run: freshness unknown (${reason}) - recomputing`);
+        }
       }
     }
 
@@ -177,6 +238,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
           okJson({
             communities: 0,
             reason: "index not built",
+            ...freshnessNotice,
             ...nextCommandField("search-index-missing"),
           });
         } else ok("clusters run: search index not initialised");
@@ -240,6 +302,7 @@ export async function cmdBrainClusters(argv: string[]): Promise<number> {
           written: result.written,
           removed: result.removed,
           ...(result.batches ? { batches: result.batches } : {}),
+          ...freshnessNotice,
         });
       } else if (communities.length === 0) {
         ok("clusters run: no communities at the current threshold");

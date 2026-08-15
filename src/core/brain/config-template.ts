@@ -332,13 +332,21 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
   },
   {
     key: "health",
-    doc: ["Semantic-health detectors and the remediation step cap."],
+    doc: [
+      "Semantic-health detectors, the remediation step cap, and the",
+      "wall-clock ceiling past which a materialized artifact is stale.",
+    ],
     emit: "commented-default",
     keys: [
       def("contradiction_jaccard", H.contradiction_jaccard),
       def("concept_gap_min_frequency", H.concept_gap_min_frequency),
       def("stale_claim_max_age_days", H.stale_claim_max_age_days),
       def("remediation_step_cap", H.remediation_step_cap),
+      def("materialize_max_age_days", H.materialize_max_age_days, [
+        "Wall-clock ceiling on a derived artifact's age for the",
+        "`--if-stale` fast-path: past this, `o2b brain clusters run`",
+        "recomputes even when no input note has moved.",
+      ]),
       example("silence_before", "2026-01-01", [
         "Baseline watermark: findings older than this instant are silenced.",
         "Unset by default; `o2b brain health --silence-before` writes it.",

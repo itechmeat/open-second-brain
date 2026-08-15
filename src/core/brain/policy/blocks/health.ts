@@ -1,8 +1,14 @@
 /**
- * The `health:` block — the semantic-health detector thresholds and the
- * remediation step cap.
+ * The `health:` block — the semantic-health detector thresholds, the
+ * remediation step cap, and the wall-clock ceiling past which a
+ * materialized artifact stops counting as fresh.
  *
- * One reason to change: what the health detectors are tuned by.
+ * One reason to change: what the health knobs are tuned by. The
+ * materialize ceiling lives here rather than in a block of its own
+ * because it answers the same operator question as
+ * `stale_claim_max_age_days` — how old is too old before this vault
+ * stops trusting something it derived — and a one-key block would put
+ * a second answer to that question in a second place.
  */
 
 import type { BrainConfig, BrainHealthConfig, ResolvedBrainHealthConfig } from "../../types.ts";
@@ -17,6 +23,7 @@ const POSITIVE_INT_KEYS = [
   "concept_gap_min_frequency",
   "stale_claim_max_age_days",
   "remediation_step_cap",
+  "materialize_max_age_days",
 ] as const;
 
 /**
@@ -33,12 +40,22 @@ const POSITIVE_INT_KEYS = [
  *     evidence before a confirmed preference is flagged stale.
  *   - `remediation_step_cap: 20` - a single `doctor --remediate` run
  *     applies at most 20 auto-safe repairs.
+ *   - `materialize_max_age_days: 30` - a derived artifact stops being
+ *     fresh a month after it was written even if no input moved. Chosen
+ *     short enough that the "fresh forever" defect it closes cannot
+ *     outlive a release cycle - the algorithm that produced the artifact
+ *     changes between releases, and the mtime comparison cannot see
+ *     that - and long enough that `--if-stale` is still a useful
+ *     fast-path in a vault being worked in daily. Deliberately NOT the
+ *     180 of `stale_claim_max_age_days`, which would leave half a year
+ *     of the same defect.
  */
 export const BRAIN_HEALTH_DEFAULTS: ResolvedBrainHealthConfig = Object.freeze({
   contradiction_jaccard: 0.5,
   concept_gap_min_frequency: 3,
   stale_claim_max_age_days: 180,
   remediation_step_cap: 20,
+  materialize_max_age_days: 30,
   silence_before: null,
 }) as ResolvedBrainHealthConfig;
 
@@ -56,6 +73,8 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
     stale_claim_max_age_days:
       h.stale_claim_max_age_days ?? BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days,
     remediation_step_cap: h.remediation_step_cap ?? BRAIN_HEALTH_DEFAULTS.remediation_step_cap,
+    materialize_max_age_days:
+      h.materialize_max_age_days ?? BRAIN_HEALTH_DEFAULTS.materialize_max_age_days,
     silence_before: h.silence_before ?? BRAIN_HEALTH_DEFAULTS.silence_before,
   };
 }
@@ -67,6 +86,7 @@ export function resolveHealth(cfg: BrainConfig): ResolvedBrainHealthConfig {
  *     concept_gap_min_frequency: 3 # positive integer
  *     stale_claim_max_age_days: 180
  *     remediation_step_cap: 20
+ *     materialize_max_age_days: 30
  *     silence_before: "2026-01-01" # ISO date/timestamp (watermark)
  */
 export function parseHealthBlock(ctx: BlockParseContext): BrainHealthConfig | undefined {

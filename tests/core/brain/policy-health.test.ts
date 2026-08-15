@@ -26,6 +26,7 @@ describe("BRAIN_HEALTH_DEFAULTS", () => {
     expect(BRAIN_HEALTH_DEFAULTS.concept_gap_min_frequency).toBe(3);
     expect(BRAIN_HEALTH_DEFAULTS.stale_claim_max_age_days).toBe(180);
     expect(BRAIN_HEALTH_DEFAULTS.remediation_step_cap).toBe(20);
+    expect(BRAIN_HEALTH_DEFAULTS.materialize_max_age_days).toBe(30);
     expect(BRAIN_HEALTH_DEFAULTS.silence_before).toBeNull();
   });
 });
@@ -69,15 +70,28 @@ describe("health config block", () => {
         `  contradiction_jaccard: 0.7\n` +
         `  concept_gap_min_frequency: 5\n` +
         `  stale_claim_max_age_days: 90\n` +
-        `  remediation_step_cap: 4\n`,
+        `  remediation_step_cap: 4\n` +
+        `  materialize_max_age_days: 7\n`,
     );
     expect(resolveHealth(config)).toEqual({
       contradiction_jaccard: 0.7,
       concept_gap_min_frequency: 5,
       stale_claim_max_age_days: 90,
       remediation_step_cap: 4,
+      materialize_max_age_days: 7,
       silence_before: null,
     });
+  });
+
+  test("materialize_max_age_days rides the shared positive-integer loop", () => {
+    // One tuple entry buys the parse, the range check and the
+    // unknown-key exemption; this pins that it really did.
+    const { config, warnings } = validate(HEAD + `health:\n  materialize_max_age_days: 14\n`);
+    expect(resolveHealth(config).materialize_max_age_days).toBe(14);
+    expect(warnings).toEqual([]);
+    expect(() => validate(HEAD + `health:\n  materialize_max_age_days: 0\n`)).toThrow(
+      BrainConfigError,
+    );
   });
 
   test("partial block → missing fields fall back to defaults", () => {
