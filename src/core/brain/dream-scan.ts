@@ -49,7 +49,19 @@ const SCAN_STAGE = "scan";
  * tree needs a deadline and something to say while it does.
  */
 export interface ScanBrainOptions {
-  /** Cooperative deadline; checked once per file read. */
+  /**
+   * Cooperative deadline; checked once per file read and once per
+   * directory.
+   *
+   * `dream()` DOES pass this one, and the asymmetry with `onProgress`
+   * below is deliberate rather than an oversight. A deadline is about the
+   * wall-clock the work costs, and the work costs the same inside a pass
+   * as it does on its own: the scan is where a large `Brain/` tree is
+   * read, so a pass whose scan was unguarded would sit past its budget
+   * with the next checkpoint hundreds of files away. A stream, by
+   * contrast, is about who is speaking, and inside a pass that is the
+   * pass.
+   */
   readonly safeguard?: Safeguard;
   /**
    * Where this scan reports, when it is the whole run.
@@ -82,13 +94,13 @@ function markdownFilesIn(dir: string): string[] {
  * the `active` flag they stamp on each record, so they share this walk.
  */
 function collectSignals(
-  dir: string,
+  files: ReadonlyArray<string>,
   active: boolean,
   signals: SignalRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
 ): void {
-  for (const full of markdownFilesIn(dir)) {
+  for (const full of files) {
     walk.step();
     // Belief lifecycle suite (t_7d5a3589): a tombstoned signal is
     // excluded from the dream pass so it is never re-clustered.
@@ -102,12 +114,12 @@ function collectSignals(
 }
 
 function collectPreferences(
-  dir: string,
+  files: ReadonlyArray<string>,
   preferences: PreferenceRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
 ): void {
-  for (const full of markdownFilesIn(dir)) {
+  for (const full of files) {
     walk.step();
     const rawMeta = parseFrontmatter(full)[0];
     if (isTombstoned(rawMeta)) continue;
@@ -127,12 +139,12 @@ function collectPreferences(
 }
 
 function collectRetired(
-  dir: string,
+  files: ReadonlyArray<string>,
   retired: RetiredRecord[],
   corrupted: CorruptedEntry[],
   walk: DirectoryWalk,
 ): void {
-  for (const full of markdownFilesIn(dir)) {
+  for (const full of files) {
     walk.step();
     // Retired files we only need for topic + id (for supersede
     // bookkeeping) plus the optional `user_rejected_reason` that
@@ -172,7 +184,6 @@ function collectRetired(
  */
 export function scanBrain(vault: string, opts: ScanBrainOptions = {}): ScanResult {
   const progress = progressCounter(OPERATION.dream, opts.onProgress);
-  progress.start(SCAN_STAGE);
   return withProgress(progress, () => scanBrainRun(vault, opts, progress));
 }
 
@@ -182,6 +193,20 @@ function scanBrainRun(
   progress: ProgressCounter,
 ): ScanResult {
   const dirs = brainDirs(vault);
+  // The four listings are `readdirSync` with no parse, so front-loading
+  // them costs a directory read each and buys the stage its denominator:
+  // the file count IS the unit this stage ticks in, and a reader watching
+  // a bare counter cannot tell a scan a tenth of the way through from one
+  // about to finish. The stage still opens before the first checkpoint,
+  // so an already-elapsed guard leaves a stream that spoke once.
+  const inbox = markdownFilesIn(dirs.inbox);
+  const processed = markdownFilesIn(dirs.processed);
+  const preferenceFiles = markdownFilesIn(dirs.preferences);
+  const retiredFiles = markdownFilesIn(dirs.retired);
+  progress.start(
+    SCAN_STAGE,
+    inbox.length + processed.length + preferenceFiles.length + retiredFiles.length,
+  );
   const signals: SignalRecord[] = [];
   const preferences: PreferenceRecord[] = [];
   const retired: RetiredRecord[] = [];
@@ -205,10 +230,10 @@ function scanBrainRun(
   // The tick stays per file - a directory is not a unit of work a reader
   // can count.
   const collectors: ReadonlyArray<() => void> = [
-    () => collectSignals(dirs.inbox, true, signals, corrupted, walk),
-    () => collectSignals(dirs.processed, false, signals, corrupted, walk),
-    () => collectPreferences(dirs.preferences, preferences, corrupted, walk),
-    () => collectRetired(dirs.retired, retired, corrupted, walk),
+    () => collectSignals(inbox, true, signals, corrupted, walk),
+    () => collectSignals(processed, false, signals, corrupted, walk),
+    () => collectPreferences(preferenceFiles, preferences, corrupted, walk),
+    () => collectRetired(retiredFiles, retired, corrupted, walk),
   ];
   for (const collect of collectors) {
     opts.safeguard?.checkpoint();

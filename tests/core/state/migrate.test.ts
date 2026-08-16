@@ -22,11 +22,13 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -43,6 +45,7 @@ import {
   MIGRATION_SOURCE_TYPE,
   planStateMigration,
   planStateRollback,
+  renderRollbackPlan,
   ROLLBACK_REFUSAL,
   StateMigrationError,
   type MigrationPlan,
@@ -270,6 +273,62 @@ describe("state migration refuses before it commits", () => {
     expect(refusal?.found).toContain("EACCES");
   });
 
+  test("a destination that reaches the vault through a symlink, which resolve() cannot see", () => {
+    // `resolve` is a string operation: it collapses `..` and knows
+    // nothing about links, so a destination whose parent is a link INTO
+    // the vault passed every prefix test while landing the whole state
+    // tree inside the vault being migrated.
+    const vault = seedVault();
+    const link = join(tempDir(), "link");
+    symlinkSync(join(vault, "Brain"), link);
+    const dest = join(link, "state");
+
+    const p = plan(vault, dest);
+    const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.reservedNamespace);
+    expect(refusal?.path).toBe(dest);
+    expect(refusal?.found).toContain(vault);
+    expect(existsSync(dest)).toBe(false);
+  });
+
+  test("a directory in the state tree that cannot be listed, as a refusal not a stack", () => {
+    const vault = seedVault();
+    const locked = surfacePath(vault, STATE_SURFACE_ID.metrics);
+    chmodSync(locked, 0o000);
+    try {
+      const p = plan(vault, join(tempDir(), "moved"), { writerLockHeldAt: () => true });
+      const refusal = p.refusals.find(
+        (r) => r.code === MIGRATION_REFUSAL.unreadableSurface && r.path === locked,
+      );
+      expect(refusal?.found).toContain("EACCES");
+      // The headline contract: an unreadable directory is one refusal
+      // among all of them, not a throw that leaves the rest uncomputed.
+      expect(refusalCodes(p)).toContain(MIGRATION_REFUSAL.writerLockHeld);
+      expect(p.manifest.entries.map((e) => e.relative_path)).toContain(
+        ".open-second-brain/brain.sqlite",
+      );
+      expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+    } finally {
+      chmodSync(locked, 0o755);
+    }
+  });
+
+  test("a surface root that is a DANGLING symlink reaches the symlink refusal", () => {
+    // `statSync` follows the link and reports the missing target as
+    // ENOENT, so the surface read as `absent` and the migration skipped
+    // it in silence - the one outcome a refusal-shaped module must not
+    // have. Deeper in the tree the same link is caught by name.
+    const vault = seedVault();
+    const metrics = surfacePath(vault, STATE_SURFACE_ID.metrics);
+    rmSync(metrics, { recursive: true, force: true });
+    symlinkSync(join(vault, "nowhere"), metrics);
+
+    const p = plan(vault, join(tempDir(), "moved"));
+    const refusal = p.refusals.find(
+      (r) => r.code === MIGRATION_REFUSAL.symlink && r.path === metrics,
+    );
+    expect(refusal?.found).toContain("nowhere");
+  });
+
   test("every refusal is collected, so one run tells the operator all of it", () => {
     const vault = seedVault();
     symlinkSync("/etc/hostname", join(surfacePath(vault, STATE_SURFACE_ID.metrics), "link"));
@@ -318,6 +377,80 @@ describe("state migration apply", () => {
     expect(onDisk.digest).toBe(p.manifest.digest);
     const { digest, ...bound } = onDisk;
     expect(digest).toBe(sha256Hex(canonicalJson(bound)));
+  });
+
+  /**
+   * The module's stated core guarantee, driven by a REAL mid-copy failure
+   * rather than a mocked one: the bytes of the third bound file change
+   * after the plan measured them, so its copy lands, fails the digest
+   * check, and aborts the pass with two files already at the destination.
+   */
+  test("a copy that fails half way unwinds the destination and leaves the source as it was", () => {
+    const vault = seedVault();
+    const dest = join(tempDir(), "moved");
+    const p = plan(vault, dest);
+    const before = p.manifest.entries.map((e) =>
+      readFileSync(join(vault, e.relative_path), "utf8"),
+    );
+    writeFileSync(join(vault, "Brain/log/2026-08-16.md"), "# today, rewritten after the plan\n");
+
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+
+    // Nothing of ours is left at the destination, not even the directory
+    // skeleton `mkdirSync` created on the way down: the identical command
+    // is retried, not refused with `destination_occupied`.
+    expect(existsSync(dest)).toBe(false);
+    expect(plan(vault, dest).refusals).toEqual([]);
+    // And the source is exactly as the run found it - the one file this
+    // test rewrote aside, which is the failure it drove.
+    p.manifest.entries.forEach((entry, at) => {
+      expect(existsSync(join(vault, entry.relative_path))).toBe(true);
+      if (entry.relative_path === "Brain/log/2026-08-16.md") return;
+      expect(readFileSync(join(vault, entry.relative_path), "utf8")).toBe(before[at]!);
+    });
+  });
+
+  test("a file that appeared at the destination after the plan is never overwritten", () => {
+    const vault = seedVault();
+    const dest = join(tempDir(), "moved");
+    const p = plan(vault, dest);
+    // `destination_occupied` was measured before the operator read the
+    // plan. What arrives afterwards used to be copied over AND then
+    // deleted by the unwind, which cannot tell a file it created from one
+    // it clobbered.
+    const theirs = join(dest, "Brain/metrics/recall.jsonl");
+    write(theirs, "SOMEONE-ELSES-FILE\n");
+
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+    expect(readFileSync(theirs, "utf8")).toBe("SOMEONE-ELSES-FILE\n");
+    expect(tree(dest)).toEqual(["Brain/metrics/recall.jsonl"]);
+    for (const entry of p.manifest.entries) {
+      expect(existsSync(join(vault, entry.relative_path))).toBe(true);
+    }
+  });
+
+  test("a source it cannot remove says the bytes are safe and names the manifest", () => {
+    const vault = seedVault();
+    const dest = join(tempDir(), "moved");
+    const p = plan(vault, dest);
+    // Readable and traversable, but not writable: every file lands and
+    // verifies, and the unlink pass is the thing that fails.
+    const metrics = surfacePath(vault, STATE_SURFACE_ID.metrics);
+    chmodSync(metrics, 0o500);
+    try {
+      let caught: unknown;
+      try {
+        applyStateMigration(p);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(StateMigrationError);
+      expect((caught as Error).message).toContain(join(dest, MIGRATION_MANIFEST_FILE));
+      expect((caught as Error).message).toContain("rollback");
+      expect(readFileSync(join(dest, "Brain/metrics/recall.jsonl"), "utf8")).toBe("{}\n");
+    } finally {
+      chmodSync(metrics, 0o755);
+    }
   });
 });
 
@@ -397,6 +530,101 @@ describe("state rollback", () => {
     expect(p.refusals).toEqual([]);
     const result = applyStateRollback(p);
     expect(result.restored).toContain("Brain/metrics/recall.jsonl");
+  });
+
+  test("a source path that appeared between the plan and the apply is never overwritten", () => {
+    const { vault, dest } = migrated();
+    const p = planStateRollback({ destination: dest });
+    expect(p.refusals).toEqual([]);
+    // The plan cleared this entry against an empty source path. The
+    // operator wrote there while reading it, and the apply used to copy
+    // straight over them.
+    const target = join(vault, "Brain/metrics/recall.jsonl");
+    write(target, "OPERATOR-WROTE-THIS-AFTER-PLANNING\n");
+
+    const result = applyStateRollback(p);
+    expect(readFileSync(target, "utf8")).toBe("OPERATOR-WROTE-THIS-AFTER-PLANNING\n");
+    expect(result.restored).not.toContain("Brain/metrics/recall.jsonl");
+    expect(result.refused.map((r) => r.code)).toContain(ROLLBACK_REFUSAL.sourceDiverged);
+    expect(existsSync(join(dest, "Brain/metrics/recall.jsonl"))).toBe(true);
+    expect(result.manifest_removed).toBe(false);
+    expect(existsSync(join(dest, MIGRATION_MANIFEST_FILE))).toBe(true);
+  });
+
+  test("one entry it cannot read is refused by name and the rest still go back", () => {
+    const { vault, dest } = migrated();
+    // The source path recreated as a DIRECTORY: reading it for a digest
+    // fails with EISDIR, which used to abort the whole plan and take
+    // every other restorable entry with it.
+    mkdirSync(join(vault, "Brain/metrics/recall.jsonl"), { recursive: true });
+
+    const p = planStateRollback({ destination: dest });
+    const refusal = p.refusals.find((r) => r.code === ROLLBACK_REFUSAL.unreadable);
+    expect(refusal?.relative_path).toBe("Brain/metrics/recall.jsonl");
+    expect(refusal?.found).toContain("EISDIR");
+    expect(p.restore.map((e) => e.relative_path)).toContain("Brain/log/2026-08-16.md");
+
+    const result = applyStateRollback(p);
+    expect(result.restored).toContain("Brain/log/2026-08-16.md");
+    expect(existsSync(join(dest, "Brain/metrics/recall.jsonl"))).toBe(true);
+    expect(result.manifest_removed).toBe(false);
+  });
+
+  test("a directory the prune cannot look inside is left alone, not judged empty", () => {
+    const { dest } = migrated();
+    // Listable, but its children cannot be stat'ed. Reading that as
+    // "empty" made the `rmdir` below throw ENOTEMPTY out of a rollback
+    // that had in fact succeeded.
+    const opaque = join(dest, "Brain/metrics/extra");
+    write(join(opaque, "keep.jsonl"), "not ours\n");
+    chmodSync(opaque, 0o444);
+    try {
+      const result = applyStateRollback(planStateRollback({ destination: dest }));
+      expect(result.restored).toContain("Brain/metrics/recall.jsonl");
+      expect(existsSync(opaque)).toBe(true);
+    } finally {
+      chmodSync(opaque, 0o755);
+    }
+  });
+
+  test("refuses a source root that is no longer there rather than recreating it", () => {
+    const { vault, dest } = migrated();
+    const renamed = `${vault}-renamed`;
+    renameSync(vault, renamed);
+    temps.push(renamed);
+
+    let caught: unknown;
+    try {
+      planStateRollback({ destination: dest });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(StateMigrationError);
+    expect((caught as Error).message).toContain(vault);
+    expect((caught as Error).message).toContain("--to");
+    // The dead path stays dead, and the only copies stay where they are.
+    expect(existsSync(vault)).toBe(false);
+    expect(existsSync(join(dest, ".open-second-brain/brain.sqlite"))).toBe(true);
+    expect(existsSync(join(dest, MIGRATION_MANIFEST_FILE))).toBe(true);
+  });
+
+  test("--to restores into the vault's new location and still reports the recorded root", () => {
+    const { vault, dest } = migrated();
+    const renamed = `${vault}-renamed`;
+    renameSync(vault, renamed);
+    temps.push(renamed);
+
+    const p = planStateRollback({ destination: dest, vault: renamed });
+    expect(p.source).toBe(renamed);
+    expect(p.manifest.source_root).toBe(vault);
+    expect(renderRollbackPlan(p)).toContain(vault);
+
+    const result = applyStateRollback(p);
+    expect(result.restored).toContain(".open-second-brain/brain.sqlite");
+    expect(readFileSync(join(renamed, ".open-second-brain/brain.sqlite"), "utf8")).toBe(
+      "index-bytes",
+    );
+    expect(existsSync(vault)).toBe(false);
   });
 
   test("refuses a manifest whose own digest does not verify", () => {

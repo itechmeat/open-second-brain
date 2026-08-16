@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Registry } from "./registry.ts";
 import { buildPayload } from "./payload.ts";
+import { payloadAsWritten } from "./payload-host.ts";
 import { InstallError } from "./types.ts";
 import type {
   ApplyOpts,
@@ -89,7 +90,25 @@ export function runUpdate(registry: Registry, env: InstallEnv, opts: UpdateOptio
       continue;
     }
 
-    const currentHash = computePayloadHash(payload);
+    // Hashed over the payload as this TARGET receives it, not the
+    // canonical one. `buildPayload` answers "what does this vault, agent
+    // name and timezone produce"; the adapter then adds the host
+    // dimensions (`--tool-profile`, `--host-target`) before writing. A
+    // hash of the first is blind to every change in the second, which is
+    // how "up-to-date, payload unchanged" was reported for a target whose
+    // `install.tool_profile` had just changed in `_brain.yaml` and whose
+    // `--check` was simultaneously reporting drift.
+    let currentHash: string;
+    try {
+      currentHash = computePayloadHash(payloadAsWritten(adapter.target, payload, env));
+    } catch (exc) {
+      results.push({
+        target: adapter.target,
+        status: "error",
+        error: `Failed to resolve the payload for ${adapter.target}: ${(exc as Error).message}`,
+      });
+      continue;
+    }
     const previous = manifest.installs[adapter.target];
     if (previous?.payload_hash === currentHash && !opts.force) {
       results.push({ target: adapter.target, status: "up-to-date", reason: "payload unchanged" });

@@ -20,7 +20,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
@@ -31,6 +31,11 @@ import {
   setCodexRunner,
   type CodexRunner,
 } from "../../../src/core/install/adapters/codex.ts";
+import {
+  resetCopilotRunner,
+  setCopilotRunner,
+  type CopilotRunner,
+} from "../../../src/core/install/adapters/copilot-cli.ts";
 import {
   buildFrictionMatrix,
   diffFrictionRows,
@@ -48,6 +53,11 @@ import {
   type HostProbeRunner,
 } from "../../../src/core/install/host-probe.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../../../src/core/install/json-merge.ts";
+import {
+  carriesHostDimensions,
+  payloadForHost,
+  TOOL_PROFILE_FLAG,
+} from "../../../src/core/install/payload-host.ts";
 import { buildPayload } from "../../../src/core/install/payload.ts";
 import {
   INSTALL_TARGET_IDS,
@@ -55,37 +65,60 @@ import {
   TOOL_CEILING_KIND,
   type InstallTargetId,
 } from "../../../src/core/runtime/host-facts.ts";
-import type { ApplyOpts, InstallEnv } from "../../../src/core/install/types.ts";
+import type {
+  ApplyOpts,
+  InstallAdapter,
+  InstallEnv,
+  SessionPathsResult,
+} from "../../../src/core/install/types.ts";
 
 let vault: string;
 let home: string;
 
 /**
- * The apply below is real, and two adapters shell out to a host binary on
- * their primary path. The host PROBE is injected per case, but the runner
- * an adapter uses to REGISTER is a separate seam, and `codex` happens to
- * be installed on some developer machines and on none of the CI runners.
- * Left alone, this suite would exercise the subprocess branch here and the
- * file-fallback branch there, and report both as the same pass - a test
- * whose meaning depends on the machine proves whichever thing that machine
- * happened to do. Both branches have their own coverage in the adapters'
- * own suites; this one pins the fallback so the friction matrix is the
- * only variable.
+ * The apply below is REAL, and every mutation seam an adapter owns must be
+ * injected before it runs. The rule, not the instance: the host probe is a
+ * read-only seam this suite stages per case, but each subprocess-driven
+ * adapter carries a SEPARATE seam for the commands that CHANGE the
+ * machine, and any of those left on its default runner will spawn the
+ * operator's real host binary against the operator's real registration.
+ *
+ * That is not hypothetical. `codex` was pinned here and `copilot` was not,
+ * so on a machine with the Copilot CLI installed this file ran four rounds
+ * of `copilot mcp remove` + `copilot mcp add` against the developer's own
+ * registration, pointing it at a `/tmp/osb-friction-v-*` vault that
+ * `afterEach` then deleted - and CI, where no `copilot` exists, reported
+ * a clean pass.
+ *
+ * Pinning them absent also makes the suite deterministic: a runner that
+ * exists on some developer machines and on no CI runner would exercise the
+ * subprocess branch here and the file-fallback branch there and report
+ * both as the same pass. Both branches have their own coverage in the
+ * adapters' own suites; this one pins the fallback so the friction matrix
+ * is the only variable.
  */
 const ABSENT_CODEX: CodexRunner = {
   available: () => false,
   run: () => ({ exitCode: 1, stdout: "", stderr: "codex is not on PATH" }),
 };
 
+const ABSENT_COPILOT: CopilotRunner = {
+  available: () => false,
+  run: () => ({ exitCode: 1, stdout: "", stderr: "copilot is not on PATH" }),
+  list: () => ({ ok: false, names: [] }),
+};
+
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "osb-friction-v-"));
   home = mkdtempSync(join(tmpdir(), "osb-friction-h-"));
   setCodexRunner(ABSENT_CODEX);
+  setCopilotRunner(ABSENT_COPILOT);
 });
 
 afterEach(() => {
   resetHostProbeRunner();
   resetCodexRunner();
+  resetCopilotRunner();
   for (const dir of [vault, home]) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -330,6 +363,16 @@ describe("a target that declares a host probe stops claiming a handshake it neve
   });
 
   test("the binary answers but the host has nothing registered: that is not ok", () => {
+    // Every mutation runner is pinned absent above, so each of these
+    // installs landed in its adapter's FILE fallback and that file was
+    // just compared and found correct. The shared rule
+    // (`probeRefutedVerdict`) reads a refuting probe over a matching
+    // artifact as a host that has not reloaded it, so the verdict is
+    // `mcp-unreachable` and the repair is a restart - never `drift`,
+    // which would tell the operator to rewrite bytes that are already
+    // right. The host-is-the-only-record half of that rule is driven in
+    // `tests/core/install/adapters/copilot-cli.test.ts`, where the
+    // subprocess branch has an artifact-free registration to refute.
     for (const target of PROBE_BEARING) {
       setHostProbeRunner(answeringRunner([]));
       const { status, details } = detailsAfterInstall(target);
@@ -342,5 +385,115 @@ describe("a target that declares a host probe stops claiming a handshake it neve
     setHostProbeRunner(answeringRunner([OSB_KEY_FULL, OSB_KEY_WRITER]));
     const { details } = detailsAfterInstall("cursor");
     expect(details).toContain(NO_HANDSHAKE_NOTE);
+  });
+});
+
+// ---------- The cells that must describe the real artifact ----------
+
+describe("the tool-profile cell describes the registration this target writes", () => {
+  /** Targets whose generated registration carries no MCP command line. */
+  const NOT_CARRIED: ReadonlyArray<InstallTargetId> = INSTALL_TARGET_IDS.filter(
+    (target) => !carriesHostDimensions(target),
+  );
+
+  test("the population is not empty, and it is the declared one", () => {
+    // Derived from the declaration the write path uses, so a target that
+    // starts routing through `payloadForHost` moves between the two cases
+    // below rather than escaping both.
+    expect(NOT_CARRIED.toSorted()).toEqual(["aider", "generic", "pi"]);
+  });
+
+  test("a target that writes no command line says so instead of naming a profile", () => {
+    // It used to resolve the ladder anyway and print, for example,
+    // `generic tool-profile minimal / resolved from user-config` beside a
+    // `--target generic --apply` whose args carry no `--tool-profile` at
+    // all - a cell contradicting the artifact it claims to describe.
+    for (const target of NOT_CARRIED) {
+      const answer = cell(frictionRowFor(target, input()), FRICTION_DIMENSION.toolProfile);
+      expect(`${target}: ${answer.value}`).toBe(`${target}: not carried`);
+      expect(answer.detail ?? "").toContain("no MCP command line");
+    }
+  });
+
+  test("a target that does write one names the profile its payload carries", () => {
+    const shared = input();
+    for (const target of INSTALL_TARGET_IDS.filter(carriesHostDimensions)) {
+      const answer = cell(frictionRowFor(target, shared), FRICTION_DIMENSION.toolProfile);
+      const written = payloadForHost(target, shared.payload, shared.env);
+      const index = written.full.args.indexOf(TOOL_PROFILE_FLAG);
+      const carried = index === -1 ? "none" : written.full.args[index + 1];
+      expect(`${target}: ${answer.value}`).toBe(`${target}: ${carried}`);
+    }
+  });
+});
+
+describe("the session cells ask the adapter, not the fact table", () => {
+  /** An adapter that answers a DIFFERENT session store than its row. */
+  function withSessionPaths(
+    adapter: InstallAdapter,
+    answer: SessionPathsResult | null,
+  ): InstallAdapter {
+    return { ...adapter, sessionPaths: () => answer };
+  }
+
+  test("an adapter that answers null is reported as declaring nothing", () => {
+    // `codex` declares four roots in `RUNTIME_FACTS`. A matrix reading the
+    // table directly would print them however the adapter answered, which
+    // is what made `InstallAdapter.sessionPaths` a required member with
+    // ten implementations and no caller anywhere in `src/`.
+    const shared = input();
+    const codex = shared.adapters.find((a) => a.target === "codex")!;
+    const silent = withSessionPaths(codex, null);
+    const row = frictionRowFor("codex", { ...shared, adapters: [silent] });
+    expect(cell(row, FRICTION_DIMENSION.sessionTranscripts).value).toBe("none declared");
+    expect(cell(row, FRICTION_DIMENSION.sessionParser).value).toBe("none ships");
+  });
+
+  test("the roots printed are the ones the adapter resolved", () => {
+    const shared = input();
+    for (const adapter of shared.adapters) {
+      const answered = adapter.sessionPaths(shared.env);
+      const roots = cell(
+        frictionRowFor(adapter.target, shared),
+        FRICTION_DIMENSION.sessionTranscripts,
+      );
+      if (answered === null) {
+        expect(`${adapter.target}: ${roots.value}`).toBe(`${adapter.target}: none declared`);
+        continue;
+      }
+      for (const root of answered.roots) expect(roots.detail ?? "").toContain(root.path);
+    }
+  });
+});
+
+describe("an unreadable _brain.yaml is reported, not thrown", () => {
+  beforeEach(() => {
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\ninstall:\n  tool_profile: [broken\n",
+    );
+  });
+
+  test("the matrix still answers every row, and names the refusal in the cells", () => {
+    // `--friction` is documented as a report that never exits non-zero.
+    // Once `plan()` began resolving the tool profile, a vault whose config
+    // will not parse turned it into an uncaught `BrainConfigError` stack
+    // trace - `runFriction` catches only usage and payload errors.
+    const rows = buildFrictionMatrix(input()).rows;
+    expect(rows.length).toBe(INSTALL_TARGET_IDS.length);
+    const unresolved = rows.filter((row) => row.cells.some((c) => c.value === "unresolved"));
+    expect(unresolved.length).toBeGreaterThan(0);
+    for (const row of unresolved) {
+      const named = row.cells.filter((c) => c.value === "unresolved");
+      for (const c of named) expect(c.detail ?? "").toContain("_brain.yaml");
+    }
+  });
+
+  test("the refusal is stated, never replaced by a default profile", () => {
+    const row = frictionRowFor("cursor", input());
+    const profile = cell(row, FRICTION_DIMENSION.toolProfile);
+    expect(profile.value).toBe("unresolved");
+    expect(profile.value).not.toBe("catalog");
   });
 });

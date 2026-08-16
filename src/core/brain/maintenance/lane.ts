@@ -73,6 +73,22 @@ export const MAINTENANCE_LEASE_TTL_MS = 30 * 60 * 1000;
 export const MAINTENANCE_BUSY_THRESHOLD = 5;
 /** Default busy lookback window in minutes. */
 export const MAINTENANCE_BUSY_MINUTES = 10;
+/**
+ * Ceilings for the two busy-gate knobs, beside the defaults they bound
+ * rather than in whichever surface first needed them.
+ *
+ * A day is the longest lookback that still describes "recent interactive
+ * use"; past that the gate answers a different question than the one it
+ * was built for. Ten thousand queries in that day is well past any real
+ * traffic and is the point at which a number stops being a threshold and
+ * starts being a typo.
+ *
+ * They live here because BOTH front doors have to refuse the same
+ * values. They were an MCP-only constant, so `--busy-minutes 100000` was
+ * accepted on the CLI and refused over MCP - one lane, two contracts.
+ */
+export const MAINTENANCE_BUSY_MINUTES_MAX = 24 * 60;
+export const MAINTENANCE_BUSY_THRESHOLD_MAX = 10_000;
 
 export interface DailyWindow {
   /** Local hour [0..23] the window opens (inclusive). */

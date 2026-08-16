@@ -25,6 +25,7 @@
  */
 
 import { readLines } from "./read-lines.ts";
+import { SESSION_TIMESTAMP_UNKNOWN } from "./types.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface ClaudeBlock {
@@ -64,7 +65,7 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
   const timestamp =
     typeof o["timestamp"] === "string" && o["timestamp"].length > 0
       ? o["timestamp"]
-      : new Date(0).toISOString();
+      : SESSION_TIMESTAMP_UNKNOWN;
 
   const message = o["message"];
   if (message === null || typeof message !== "object") {

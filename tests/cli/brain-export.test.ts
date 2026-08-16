@@ -3,7 +3,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -190,9 +198,20 @@ describe("the format vocabulary is the only dispatch", () => {
 });
 
 describe("brain export --format transcripts-jsonl", () => {
+  interface TranscriptFixture {
+    /** Turn id of the first line - the `turn_id` a record carries. */
+    readonly uuid?: string;
+    /** Basename of the transcript, which becomes the record's `session_id`. */
+    readonly file?: string;
+    /** Text of the user turn, for the cases that put something in it. */
+    readonly text?: string;
+  }
+
   /** A two-turn Claude Code transcript under a fresh directory. */
-  function transcriptDir(uuid = "u-1"): string {
-    const dir = join(tmp, `transcripts-${uuid}`);
+  function transcriptDir(opts: TranscriptFixture = {}): string {
+    const uuid = opts.uuid ?? "u-1";
+    const file = opts.file ?? "session.jsonl";
+    const dir = join(tmp, `transcripts-${uuid}-${file}`);
     mkdirSync(dir, { recursive: true });
     const lines = [
       {
@@ -202,7 +221,7 @@ describe("brain export --format transcripts-jsonl", () => {
         type: "user",
         uuid,
         timestamp: "2026-08-01T10:00:00.000Z",
-        message: { role: "user", content: "what does this verb do" },
+        message: { role: "user", content: opts.text ?? "what does this verb do" },
       },
       {
         parentUuid: uuid,
@@ -214,11 +233,7 @@ describe("brain export --format transcripts-jsonl", () => {
         message: { role: "assistant", content: "it exports the corpus" },
       },
     ];
-    writeFileSync(
-      join(dir, "session.jsonl"),
-      lines.map((l) => JSON.stringify(l)).join("\n") + "\n",
-      "utf8",
-    );
+    writeFileSync(join(dir, file), lines.map((l) => JSON.stringify(l)).join("\n") + "\n", "utf8");
     return dir;
   }
 
@@ -256,7 +271,7 @@ describe("brain export --format transcripts-jsonl", () => {
     // Transcripts are the highest-risk corpus in the vault's orbit: a key
     // pasted into a prompt is recorded verbatim, and an identifier cannot
     // be redacted without renaming what it identifies. So the export stops.
-    const dir = transcriptDir("sk-live-9f2ba7c1d4e8");
+    const dir = transcriptDir({ uuid: "sk-live-9f2ba7c1d4e8" });
     const out = join(tmp, "corpus.jsonl");
     const r = await runCli(
       [
@@ -296,5 +311,165 @@ describe("brain export --format transcripts-jsonl", () => {
     expect(r.returncode).toBe(0);
     expect(r.stdout).toBe("");
     expect(r.stderr).toContain("1 transcript");
+  });
+
+  test("a secret-shaped FILENAME is refused without the refusal printing it", async () => {
+    // The one path whose entire purpose is not letting this value out was
+    // the path that wrote it to stderr - into CI logs and shell
+    // scrollback - because the refusal prefixed the guard's sentence with
+    // the record's `session_id`, which IS the transcript's basename. The
+    // guard's own message is careful about exactly this: "(Locations, not
+    // values: the identifier is the secret.)"
+    const secret = "sk-live-9f2ba7c1d4e8.jsonl";
+    const dir = transcriptDir({ file: secret });
+    const out = join(tmp, "corpus.jsonl");
+    const r = await runCli(
+      [
+        "brain",
+        "export",
+        "--format",
+        EXPORT_FORMAT.transcriptsJsonl,
+        "--transcripts",
+        dir,
+        "--out",
+        out,
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("refused to write");
+    expect(r.stderr).toContain("session_id");
+    // Neither the whole filename nor the credential inside it.
+    expect(r.stderr).not.toContain(secret);
+    expect(r.stderr).not.toContain("sk-live-9f2ba7c1d4e8");
+    // Still locatable: the runtime and the instant it started are not
+    // identifiers and are safe to name.
+    expect(r.stderr).toContain("claude");
+    expect(r.stderr).toContain("2026-08-01T10:00:00.000Z");
+    expect(existsSync(out)).toBe(false);
+    expect(r.stdout).toBe("");
+  });
+
+  test("the refusal still names the transcript when the name is not the secret", async () => {
+    // The complement: withholding the name unconditionally would make
+    // every ordinary refusal harder to act on for no gain.
+    const dir = transcriptDir({ uuid: "sk-live-9f2ba7c1d4e8", file: "ordinary.jsonl" });
+    const r = await runCli(
+      ["brain", "export", "--format", EXPORT_FORMAT.transcriptsJsonl, "--transcripts", dir],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("ordinary.jsonl");
+  });
+
+  test("a BARE high-entropy filename is refused, not exported under exit 0", async () => {
+    // Vendor-prefixed refused the whole run; an unprefixed 24-character
+    // mixed run in the same position exported verbatim. `session_id` is a
+    // foreign harness's filename, so "ids are long mixed runs by
+    // construction" - an argument about ids this vault generates - does
+    // not carry over to it.
+    const dir = transcriptDir({ file: "Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5.jsonl" });
+    const out = join(tmp, "corpus.jsonl");
+    const r = await runCli(
+      [
+        "brain",
+        "export",
+        "--format",
+        EXPORT_FORMAT.transcriptsJsonl,
+        "--transcripts",
+        dir,
+        "--out",
+        out,
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("session_id");
+    expect(r.stderr).not.toContain("Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5");
+    expect(existsSync(out)).toBe(false);
+  });
+
+  test("the transcript branch REDACTS a key pasted into a turn, and says so", async () => {
+    // Every existing test on this branch pinned a REFUSAL. Nothing asserted
+    // that the released corpus is redacted at all, and nothing covered the
+    // notice that tells the operator the copy no longer matches the source.
+    // The payload is the shape a key actually takes in a transcript:
+    // a prefixed environment assignment, which the key-name pass could not
+    // see at all until the `\b` at the front of it was replaced.
+    const dir = transcriptDir({ text: "run `export ANTHROPIC_API_KEY=hunter2secretvalue` first" });
+    const r = await runCli(
+      ["brain", "export", "--format", EXPORT_FORMAT.transcriptsJsonl, "--transcripts", dir],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout).not.toContain("hunter2secretvalue");
+    expect(r.stdout).toContain("***REDACTED***");
+    // The variable name survives, so the line still says what was removed.
+    expect(r.stdout).toContain("ANTHROPIC_API_KEY");
+    expect(r.stderr).toContain("no longer matches the vault byte for byte");
+  });
+
+  test("an existing --out is refused before the corpus is read", async () => {
+    // The check used to sit after the handler, so `--out` naming a file
+    // that already exists read, hashed and redacted a whole machine's
+    // transcripts and then refused over a flag knowable from argv alone.
+    // A source that does not exist is what makes the ordering visible:
+    // whichever check runs first is the one that speaks.
+    const out = join(tmp, "corpus.jsonl");
+    writeFileSync(out, "existing bytes\n", "utf8");
+    const r = await runCli(
+      [
+        "brain",
+        "export",
+        "--format",
+        EXPORT_FORMAT.transcriptsJsonl,
+        "--transcripts",
+        join(tmp, "no-such-transcripts"),
+        "--out",
+        out,
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("--force");
+    expect(r.stderr).not.toContain("no-such-transcripts");
+    expect(readFileSync(out, "utf8")).toBe("existing bytes\n");
+  });
+
+  test("a zero-byte transcript does not abort the run", async () => {
+    const dir = transcriptDir();
+    writeFileSync(join(dir, "flushed-nothing.jsonl"), "", "utf8");
+    const r = await runCli(
+      ["brain", "export", "--format", EXPORT_FORMAT.transcriptsJsonl, "--transcripts", dir],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    expect(r.stdout.trimEnd().split("\n").length).toBe(1);
+  });
+
+  test("--out receives the corpus and stdout stays empty", async () => {
+    const dir = transcriptDir();
+    const out = join(tmp, "corpus.jsonl");
+    const r = await runCli(
+      [
+        "brain",
+        "export",
+        "--format",
+        EXPORT_FORMAT.transcriptsJsonl,
+        "--transcripts",
+        dir,
+        "--out",
+        out,
+      ],
+      { env: { OPEN_SECOND_BRAIN_CONFIG: config } },
+    );
+    expect(r.returncode).toBe(0);
+    const written = readFileSync(out, "utf8");
+    expect(written.trimEnd().split("\n").length).toBe(1);
+    expect(JSON.parse(written.trimEnd()) as { session_id: string }).toMatchObject({
+      session_id: "session.jsonl",
+    });
+    // The spool is consumed by the rename, never left beside the target.
+    expect(readdirSync(tmp).filter((n) => n.includes("o2b-transcripts-"))).toEqual([]);
   });
 });

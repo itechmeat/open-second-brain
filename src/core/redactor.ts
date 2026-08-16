@@ -5,7 +5,8 @@
  * The redactor catches six secret-bearing keys in four assignment
  * shapes:
  *
- *   key=value                     env-style assignments
+ *   key=value                     env-style assignments, including a
+ *                                 prefixed name (`ANTHROPIC_API_KEY=…`)
  *   key: value                    YAML / log lines / single-line `key: token`
  *   "key": "value"                JSON object entries
  *   Authorization: Bearer <token> HTTP authorization header (special case)
@@ -163,7 +164,28 @@ export function isSecretKeyName(name: unknown): boolean {
 }
 
 // `key=value` (env-style): value runs to whitespace or end of line.
-const ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
+//
+// The key may be the SUFFIX of a longer identifier, and the boundary here
+// has to say so explicitly. `\b` was what stood in this position, and `_`
+// is a word character, so the boundary never fired after one:
+// `export ANTHROPIC_API_KEY=…` and `MY_DB_PASSWORD=…` - the single most
+// common shape a credential takes in a shell line, a `.env` file or an
+// agent transcript - both passed through this pass untouched while the
+// unprefixed `API_KEY=…` was caught. What still came out redacted in the
+// common cases came out that way through the vendor-prefix rule on the
+// VALUE (`sk-…`, `ghp_…`), not through this key-name pass, so a
+// non-vendor secret under a prefixed name left verbatim.
+//
+// `(?<![A-Za-z0-9])` is the replacement: the key may begin at the start of
+// the identifier or immediately after a `_` / `-` separator, which is how
+// a prefixed environment variable is spelled, and nowhere else. It stays
+// deliberately narrow at both ends. `--max-tokens=4096` keeps its value,
+// because `token` there is followed by `s` rather than by the assignment.
+// `MYTOKEN=…` also keeps its value, because `TOKEN` starts mid-identifier
+// with no separator in front of it - the same under-match `\b` already
+// had, left in place rather than widened into every word that happens to
+// end in a secret name.
+const ENV_RE = new RegExp(`(?<![A-Za-z0-9])(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
 
 // `key: value` outside of JSON quoting. Excludes the `"key": ...` JSON
 // shape and the `Authorization: Bearer X` header (handled below).
@@ -779,6 +801,24 @@ function identifierCarriesSecret(value: string): boolean {
 }
 
 /**
+ * The FULL detector set applied to one string: a vendor prefix anywhere in
+ * it, or a high-entropy run that is not one of the identifier shapes this
+ * boundary hands through unchanged.
+ *
+ * One predicate rather than two copies, because the two positions that ask
+ * for it - a mapping key name, and an identifier a foreign runtime named -
+ * are asking the same question and must not drift into answering it
+ * differently.
+ */
+function carriesBareCredential(value: string): boolean {
+  if (identifierCarriesSecret(value)) return true;
+  for (const match of value.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
+    if (!isPreservedIdentifier(match[0])) return true;
+  }
+  return false;
+}
+
+/**
  * Does a mapping KEY carry a credential? The full detector set, because a
  * key name is authored vocabulary rather than a generated identity: a
  * 24-character mixed run in key position is anomalous where the same run
@@ -787,11 +827,33 @@ function identifierCarriesSecret(value: string): boolean {
  * position at all.
  */
 function keyNameCarriesSecret(name: string): boolean {
-  if (identifierCarriesSecret(name)) return true;
-  for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
-    if (!isPreservedIdentifier(match[0])) return true;
-  }
-  return false;
+  return carriesBareCredential(name);
+}
+
+/**
+ * Does an identifier VALUE that a FOREIGN runtime named carry a
+ * credential? The full detector set again, and the reason is that
+ * {@link identifierCarriesSecret}'s narrowing does not reach here.
+ *
+ * That narrowing - vendor prefixes only, because "record ids, slugs and
+ * build ids are long mixed runs BY CONSTRUCTION" - is an argument about
+ * identities THIS vault generates, whose construction this code knows.
+ * `session_id` and `turn_id` on a transcript record are neither: they are
+ * a foreign harness's filename and a foreign harness's turn uuid, and
+ * nothing in this build constrains their shape. A bare high-entropy run
+ * in one of them is therefore not "an id by construction", it is an
+ * unexplained secret-shaped string, and treating it as the former let a
+ * transcript named `Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5.jsonl` export verbatim under
+ * exit 0 while its vendor-prefixed sibling refused the whole run.
+ *
+ * Opt-in ({@link RedactStructuredOptions.foreignIdentifiers}) rather than
+ * the default, because the narrowing is still correct everywhere the
+ * identifiers ARE vault-authored: turning this on for the preference and
+ * OKF exports would refuse them over their own content addresses and
+ * container ids.
+ */
+function foreignIdentifierCarriesSecret(value: string): boolean {
+  return carriesBareCredential(value);
 }
 
 /** Bound on the reported list, so a refusal message stays readable. */
@@ -827,6 +889,23 @@ export interface StructuredRedaction {
   readonly secretIdentifiers: ReadonlyArray<string>;
 }
 
+/**
+ * {@link redactStructured}'s options: the raw-scan policy every string leaf
+ * is scanned under, plus the one decision that only exists for a tree.
+ */
+export interface RedactStructuredOptions extends RedactRawOutputOptions {
+  /**
+   * When `true`, an IDENTIFIER value is judged by the full bare-token
+   * detector ({@link foreignIdentifierCarriesSecret}) instead of by vendor
+   * prefixes alone. Off by default, and set only by a boundary whose
+   * identifiers were named OUTSIDE this vault - the transcript corpus,
+   * whose `session_id` is a foreign harness's filename and whose `turn_id`
+   * is its turn uuid. See {@link foreignIdentifierCarriesSecret} for why
+   * the default narrowing is right everywhere else.
+   */
+  readonly foreignIdentifiers?: boolean;
+}
+
 /** Walked as data; anything else (Date, Map, class instance) passes through. */
 function isPlainContainer(value: object): boolean {
   const proto = Object.getPrototypeOf(value) as object | null;
@@ -852,7 +931,7 @@ function isPlainContainer(value: object): boolean {
  */
 export function redactStructured(
   input: unknown,
-  opts: RedactRawOutputOptions = {},
+  opts: RedactStructuredOptions = {},
 ): StructuredRedaction {
   let redacted = false;
   let truncated = false;
@@ -875,7 +954,16 @@ export function redactStructured(
     }
     if (typeof value === "string" && (underIdentifierKey || isPathLikeValue(value))) {
       // Checked, never collapsed: see the identifier section above.
-      if (identifierCarriesSecret(value)) record(location);
+      //
+      // The wider detector is applied only under an identifier KEY, never
+      // to a leaf that merely looks path-shaped: `foreignIdentifiers` is a
+      // statement about where a NAME came from, and a path-shaped run of
+      // prose carries no such provenance.
+      const secretShaped =
+        opts.foreignIdentifiers === true && underIdentifierKey
+          ? foreignIdentifierCarriesSecret(value)
+          : identifierCarriesSecret(value);
+      if (secretShaped) record(location);
       // One exception, and it is not a collapse: a `user:pass@host`
       // authority is not part of what an identifier identifies. Stripping
       // it leaves the identifier pointing at the same resource, where

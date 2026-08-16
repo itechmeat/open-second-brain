@@ -16,16 +16,18 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
@@ -55,20 +57,57 @@ interface DiscoveryJson {
   readonly files?: ReadonlyArray<{ readonly file: string }>;
 }
 
+/**
+ * A credential in the shape the redactor's `key: value` pass catches, so
+ * the byte-identity claim below is about a fixture that actually carries
+ * one. The parity test asserted a structural property against a fixture
+ * with no secret and no tool call in it, which made its own docstring -
+ * "redaction and the tool-payload exclusion cannot be relaxed on one path
+ * without failing on the other" - true only by construction.
+ */
+const FIXTURE_SECRET = "sk-live-9f2ba7c1d4e8";
+
+/** A tool INPUT, which no signal may ever carry: a host path. */
+const FIXTURE_TOOL_INPUT = "/etc/shadow";
+
 function claudeLine(topic: string, uuid: string): string {
   return (
-    JSON.stringify({
-      parentUuid: null,
-      sessionId: "s",
-      entrypoint: "sdk-cli",
-      type: "user",
-      message: {
-        role: "user",
-        content: `@osb feedback positive topic=${topic} principle="Declare the roots exactly once."`,
-      },
-      uuid,
-      timestamp: "2026-08-16T09:00:00.000Z",
-    }) + "\n"
+    [
+      JSON.stringify({
+        parentUuid: null,
+        sessionId: "s",
+        entrypoint: "sdk-cli",
+        type: "user",
+        message: {
+          role: "user",
+          content:
+            `@osb feedback positive topic=${topic} principle="Declare the roots exactly once. ` +
+            `Never paste the token: ${FIXTURE_SECRET} into a prompt."`,
+        },
+        uuid,
+        timestamp: "2026-08-16T09:00:00.000Z",
+      }),
+      JSON.stringify({
+        parentUuid: uuid,
+        sessionId: "s",
+        entrypoint: "sdk-cli",
+        type: "assistant",
+        message: {
+          role: "assistant",
+          content: [
+            { type: "text", text: "noted" },
+            {
+              type: "tool_use",
+              name: "Read",
+              id: `call-${uuid}`,
+              input: { path: FIXTURE_TOOL_INPUT },
+            },
+          ],
+        },
+        uuid: `a-${uuid}`,
+        timestamp: "2026-08-16T09:00:01.000Z",
+      }),
+    ].join("\n") + "\n"
   );
 }
 
@@ -222,6 +261,98 @@ describe("--discover reports what would import and imports nothing", () => {
   });
 });
 
+describe("the ledger records what happened, and only what happened", () => {
+  test("a directory import records the files it imported, not the files it found", async () => {
+    // `importSessionPath` collects a per-file failure into `warnings` and
+    // carries on, while the verb recorded every `*.jsonl` under the path
+    // as imported. So an unrecognised transcript left the ledger at its
+    // current bytes and vanished from `--status` and `--discover` - the
+    // "silently report everything as imported" direction this surface
+    // exists to rule out - and would stay invisible even after a later
+    // release shipped an adapter that could read it.
+    const dir = join(home, ".claude", "projects", "-srv-projects-example");
+    claudeLog("good.jsonl", "alpha");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "bad.jsonl"), JSON.stringify({ not: "a transcript" }) + "\n");
+
+    const res = await run([dir]);
+    expect(res.returncode).toBe(0);
+    expect(res.stderr + res.stdout).toContain("bad.jsonl");
+
+    const status = JSON.parse((await run(["--status", "--json"])).stdout) as DiscoveryJson;
+    expect(status.found).toBe(2);
+    expect(status.imported).toBe(1);
+    expect(status.gap).toBe(1);
+
+    const ledger = JSON.parse(readFileSync(sessionLedgerPath(vault), "utf8")) as {
+      entries: Record<string, unknown>;
+    };
+    expect(Object.keys(ledger.entries)).toEqual([join(dir, "good.jsonl")]);
+  });
+
+  test("a ledger failure after a successful import is reported as itself", async () => {
+    // The ledger write sat inside the verb's big `try`, ahead of the
+    // report. A corrupt ledger therefore printed `import-session failed`,
+    // exited 1 and emitted no JSON - for a run whose signal was already on
+    // disk and whose log event was already appended.
+    const path = claudeLog("one.jsonl", "alpha");
+    mkdirSync(dirname(sessionLedgerPath(vault)), { recursive: true });
+    writeFileSync(sessionLedgerPath(vault), "{ this is not json", "utf8");
+
+    const res = await run([path, "--json"]);
+    expect(res.returncode).toBe(1);
+    // The report is emitted, because the import is what it reports on.
+    const body = JSON.parse(res.stdout) as DiscoveryJson;
+    expect(body.files?.length).toBe(1);
+    // And the signal really is there.
+    expect(inboxSignals(vault).length).toBe(1);
+    // The failure names itself rather than the import.
+    expect(res.stderr).toContain("the import completed");
+    expect(res.stderr).toContain("ledger");
+    expect(res.stderr).not.toContain("import-session failed");
+  });
+
+  test("a sweep whose ledger write fails still reports what it imported", async () => {
+    // The same defect one function over, and it was not even in a `try`:
+    // `--discover --all` imported the gap and then took the whole run's
+    // report down with the ledger write. A read-only derived store is the
+    // cheapest real cause - the ledger's lock file cannot be created -
+    // and stands in for the lock timeout and the read-only vault.
+    if (process.getuid?.() === 0) return; // root writes a 0o500 directory anyway
+    claudeLog("one.jsonl", "alpha");
+    const derived = dirname(sessionLedgerPath(vault));
+    mkdirSync(derived, { recursive: true });
+    chmodSync(derived, 0o500);
+    try {
+      const res = await run(["--discover", "--all", "--json"]);
+      expect(res.returncode).toBe(1);
+      const body = JSON.parse(res.stdout) as DiscoveryJson;
+      expect(body.files?.length).toBe(1);
+      expect(inboxSignals(vault).length).toBe(1);
+      expect(res.stderr).toContain("the import completed");
+    } finally {
+      chmodSync(derived, 0o700);
+    }
+  });
+
+  test("an entry whose file has been renamed away is pruned on the next write", async () => {
+    // Entries were dropped only when the vanished path was re-submitted,
+    // which is the one moment a ledger never hears about a renamed file.
+    // So a rotated transcript left a dead key in the ledger forever.
+    const first = claudeLog("one.jsonl", "alpha");
+    expect((await run([first])).returncode).toBe(0);
+    renameSync(first, join(dirname(first), "rotated.jsonl"));
+
+    const second = claudeLog("two.jsonl", "beta");
+    expect((await run([second])).returncode).toBe(0);
+
+    const ledger = JSON.parse(readFileSync(sessionLedgerPath(vault), "utf8")) as {
+      entries: Record<string, unknown>;
+    };
+    expect(Object.keys(ledger.entries)).toEqual([second]);
+  });
+});
+
 describe("the privacy posture is the one importSession already holds", () => {
   test("the discovered import and the explicit-path import write identical bytes", async () => {
     const path = claudeLog("one.jsonl", "alpha");
@@ -235,6 +366,16 @@ describe("the privacy posture is the one importSession already holds", () => {
 
     expect((await run(["--discover", "--all"])).returncode).toBe(0);
     expect(inboxBytes(vault)).toEqual(inboxBytes(explicit));
+
+    // And the bytes both paths wrote are bytes the posture actually acted
+    // on. Byte-identity between two paths that both leaked would pass just
+    // as happily, so the fixture carries a credential and a tool payload
+    // and both are checked here.
+    const written = Object.values(inboxBytes(vault)).join("");
+    expect(written.length).toBeGreaterThan(0);
+    expect(written).not.toContain(FIXTURE_SECRET);
+    expect(written).toContain("***REDACTED***");
+    expect(written).not.toContain(FIXTURE_TOOL_INPUT);
   });
 });
 

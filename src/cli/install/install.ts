@@ -162,10 +162,26 @@ export function resolveInstallVault(explicitVault: string | null, configPath: st
   return explicitVault ?? resolveVault(configPath) ?? "";
 }
 
+/**
+ * The `InstallEnv` every adapter on this run is handed.
+ *
+ * `OPEN_SECOND_BRAIN_CONFIG` is stamped from the resolved `--config` so
+ * that ONE file parameterises the whole run. It did not used to be: the
+ * agent name, timezone and vault came from `--config`, while
+ * `install_hook_timeout_seconds` and `mcp_tool_profile` were read by
+ * `installSettingsSource` out of `~/.config/open-second-brain/config.yaml`
+ * because `InstallEnv` carried no config path and the resolver fell back
+ * to the machine default. On a box with both files populated, `--apply`
+ * generated from one and `--check` verified against the other. Publishing
+ * the choice as the variable `resolveDefaultConfigPath` already consults
+ * first keeps a single override in a single place, and keeps `InstallEnv`
+ * the complete description of the run it is documented to be.
+ */
 function buildInstallEnv(args: ParsedInstallArgs): InstallEnv {
   const cfg = discoverConfig(args.config).data;
   const vault = resolveInstallVault(args.vault, args.config);
   const env = { ...process.env } as Record<string, string>;
+  env["OPEN_SECOND_BRAIN_CONFIG"] = args.config;
   if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
   if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
   return {

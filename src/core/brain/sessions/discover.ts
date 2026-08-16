@@ -248,6 +248,16 @@ function serializeLedger(entries: Record<string, SessionLedgerEntry>): string {
  * read-modify-write takes: `--discover --all` and an explicit-path import
  * can be running in two processes at once, and two snapshots written back
  * in sequence would each lose the other's entry.
+ *
+ * Every OTHER entry that no longer names a file is dropped in the same
+ * pass. Dropping only the re-submitted ones left a dead key behind for
+ * every transcript a runtime renamed, rotated or deleted - and nothing
+ * ever removed it, because a re-submission is the one moment the ledger
+ * hears a path's name again. The pruning happens here and not in
+ * {@link discoverSessions} on purpose: discovery writes nothing, and a
+ * report that quietly rewrote the state it reports on would be a report
+ * nobody could re-run. The cost is one `existsSync` per entry, on a write
+ * path that already hashes a file per record.
  */
 export function recordSessionImports(
   vault: string,
@@ -270,6 +280,9 @@ export function recordSessionImports(
         runtime: record.runtime,
         imported_at: stamp,
       };
+    }
+    for (const path of Object.keys(entries)) {
+      if (!existsSync(path)) delete entries[path];
     }
     const next = serializeLedger(entries);
     if (existsSync(path) && readFileSync(path, "utf8") === next) return false;

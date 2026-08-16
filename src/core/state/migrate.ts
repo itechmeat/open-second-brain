@@ -38,6 +38,14 @@
  * it. The refusals are part of the returned value rather than a warning
  * on stderr, which is what lets the CLI make them part of its exit code.
  *
+ * The ROOT is checked the same way and before any of that: the manifest
+ * records an absolute source root, and a vault renamed since the
+ * migration would otherwise have that dead path recreated, restored into,
+ * and its live destination copies deleted behind it. A root that is no
+ * longer a directory is refused by name, and {@link RollbackPlanInput.vault}
+ * is how an operator says where the vault went - with the recorded root
+ * still reported, so an override is read rather than assumed.
+ *
  * ## What the manifest binds
  *
  * Through {@link sha256Hex} and {@link canonicalJson}, the one digest
@@ -63,13 +71,15 @@ import {
   readFileSync,
   readdirSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   rmdirSync,
+  statSync,
   statfsSync,
   type Stats,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { canonicalJson, DIGEST_ALGORITHM, sha256Hex } from "../integrity/digest.ts";
@@ -355,15 +365,7 @@ function collect(
   try {
     stat = lstatSync(path);
   } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    refusals.push({
-      code: MIGRATION_REFUSAL.unreadableSurface,
-      path,
-      found: `could not be read (${err.code ?? "unknown error"}): ${err.message}`,
-      remedy:
-        "make the path readable to this user before migrating; a tree this run cannot " +
-        "enumerate cannot be bound by a manifest, and an unbound file is not restorable",
-    });
+    refusals.push(unreadableInTree(path, error, "read"));
     return;
   }
 
@@ -380,7 +382,20 @@ function collect(
     return;
   }
   if (stat.isDirectory()) {
-    for (const child of readdirSync(path).toSorted()) {
+    // Guarded for the same reason the `lstat` above is, and it is the
+    // same one check: an `EACCES` thrown from here left `planStateMigration`
+    // through a stack rather than through a refusal, so the operator got
+    // no remedy AND every other refusal in the tree went uncomputed -
+    // which is precisely the "runs every check and returns ALL of them"
+    // contract this module leads with.
+    let children: string[];
+    try {
+      children = readdirSync(path).toSorted();
+    } catch (error) {
+      refusals.push(unreadableInTree(path, error, "listed"));
+      return;
+    }
+    for (const child of children) {
       collect(source, `${rel}/${child}`, entries, refusals);
     }
     return;
@@ -397,8 +412,27 @@ function collect(
     return;
   }
 
-  const body = readFileSync(path);
+  let body: Buffer;
+  try {
+    body = readFileSync(path);
+  } catch (error) {
+    refusals.push(unreadableInTree(path, error, "read"));
+    return;
+  }
   entries.push({ relative_path: rel, bytes: body.byteLength, digest: sha256Hex(body) });
+}
+
+/** The one wording for "this run could not look at part of the state tree". */
+function unreadableInTree(path: string, error: unknown, verb: string): MigrationRefusal {
+  const err = error as NodeJS.ErrnoException;
+  return {
+    code: MIGRATION_REFUSAL.unreadableSurface,
+    path,
+    found: `could not be ${verb} (${err.code ?? "unknown error"}): ${err.message}`,
+    remedy:
+      "make the path readable to this user before migrating; a tree this run cannot " +
+      "enumerate cannot be bound by a manifest, and an unbound file is not restorable",
+  };
 }
 
 function readLinkTarget(path: string): string {
@@ -427,33 +461,51 @@ function specialFileKind(stat: Stats): string {
  * a child of the target. The other two are namespaces nobody dedicates to
  * one tool: scattering forty state locations across `$HOME` or `/` is not
  * undoable by reading a manifest.
+ *
+ * Every comparison is made over {@link realPath}, never over the argument
+ * strings. `resolve` collapses `.` and `..` and cannot see a symlink, so
+ * `/outside/link -> <vault>/Brain` was inside the vault by every test
+ * that matters and outside it by every string test - the whole state tree
+ * landed in the vault it was being migrated out of, with `refusals: []`.
  */
 function reservedNamespaceRefusals(source: string, destination: string): MigrationRefusal[] {
   const out: MigrationRefusal[] = [];
+  const realSource = realPath(source);
+  const realDestination = realPath(destination);
+  // Named in the finding whenever the link matters, because "a path
+  // inside the vault" about a path that visibly is not one reads as a bug
+  // in the tool rather than as the fact it is.
+  const via =
+    realDestination === destination ? "" : `; ${destination} resolves to ${realDestination}`;
   const push = (found: string, remedy: string): void => {
-    out.push({ code: MIGRATION_REFUSAL.reservedNamespace, path: destination, found, remedy });
+    out.push({
+      code: MIGRATION_REFUSAL.reservedNamespace,
+      path: destination,
+      found: `${found}${via}`,
+      remedy,
+    });
   };
-  if (destination === source || destination.startsWith(`${source}${sep}`)) {
+  if (realDestination === realSource || realDestination.startsWith(`${realSource}${sep}`)) {
     push(
       `a path inside the vault being migrated (${source})`,
       "name a destination outside the vault; copying the state tree into itself would " +
         "recurse into the copy it is making",
     );
-  } else if (source.startsWith(`${destination}${sep}`)) {
+  } else if (realSource.startsWith(`${realDestination}${sep}`)) {
     push(
       `an ancestor of the vault being migrated (${source})`,
       "name a destination that does not contain the vault; every source path is already " +
         "below it, so the move has no direction",
     );
   }
-  if (dirname(destination) === destination) {
+  if (dirname(realDestination) === realDestination) {
     push(
       "the filesystem root",
       "name a directory dedicated to this vault's state; state written at the root is " +
         "indistinguishable from everything else there",
     );
   }
-  if (destination === resolve(homedir())) {
+  if (realDestination === realPath(homedir())) {
     push(
       `the home directory itself (${destination})`,
       "name a subdirectory of the home directory instead, so the state stays one tree an " +
@@ -461,6 +513,37 @@ function reservedNamespaceRefusals(source: string, destination: string): Migrati
     );
   }
   return out;
+}
+
+/**
+ * `path` with every EXISTING ancestor resolved through the filesystem.
+ *
+ * A migration creates its own destination, so the leaf usually does not
+ * exist yet and `realpathSync` on the whole path would throw. This walks
+ * up to the nearest ancestor the filesystem answers for and re-appends
+ * the segments below it, which is what makes a not-yet-created
+ * destination comparable at all.
+ *
+ * A path no ancestor resolves - a permission wall on the way up - falls
+ * back to the lexical answer rather than throwing here. That is not a
+ * quiet pass: a destination this run cannot examine is refused on its own
+ * evidence by {@link destinationRefusal}, which is the check that owns
+ * that condition.
+ */
+function realPath(path: string): string {
+  const lexical = resolve(path);
+  const below: string[] = [];
+  let at = lexical;
+  for (;;) {
+    try {
+      return join(realpathSync(at), ...below.toReversed());
+    } catch {
+      const parent = dirname(at);
+      if (parent === at) return lexical;
+      below.push(basename(at));
+      at = parent;
+    }
+  }
 }
 
 /** A destination that already holds content is refused rather than merged into. */
@@ -488,7 +571,20 @@ function destinationRefusal(destination: string): MigrationRefusal | null {
       remedy: "name an empty directory, or a path that does not exist yet",
     };
   }
-  const children = readdirSync(destination).toSorted();
+  let children: string[];
+  try {
+    children = readdirSync(destination).toSorted();
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    return {
+      code: MIGRATION_REFUSAL.destinationOccupied,
+      path: destination,
+      found: `could not be listed (${err.code ?? "unknown error"}): ${err.message}`,
+      remedy:
+        "a destination this run cannot look inside cannot be shown to be empty; fix the " +
+        "permissions on it, or name one that does not exist yet",
+    };
+  }
   if (children.length === 0) return null;
   return {
     code: MIGRATION_REFUSAL.destinationOccupied,
@@ -618,7 +714,28 @@ export function applyStateMigration(plan: MigrationPlan): MigrationResult {
   try {
     for (const entry of plan.manifest.entries) {
       const target = absolute(plan.destination, entry.relative_path);
+      // `destination_occupied` again, one confirmation later. The plan
+      // measured it before the operator read it, and anything that
+      // arrived since would be overwritten here AND removed by the
+      // unwind below, which cannot tell a file it created from one it
+      // clobbered. `lstat` rather than `existsSync`: a dangling symlink
+      // is something at the target too, and copying through it writes
+      // wherever it points.
+      if (lstatSync(target, { throwIfNoEntry: false }) !== undefined) {
+        throw new StateMigrationError(
+          `${target} appeared at the destination after this plan was made ` +
+            `(${MIGRATION_REFUSAL.destinationOccupied}); it is left exactly as it is and ` +
+            "nothing was copied onto it - move it aside, then plan and apply again",
+        );
+      }
       mkdirSync(dirname(target), { recursive: true });
+      // Recorded BEFORE the write rather than after the verify: the
+      // unwind has to remove what this run WROTE, and a copy that failed
+      // part way through, or landed with the wrong bytes, has still
+      // written something. The occupancy check above is what makes that
+      // safe - nothing was at this path a moment ago, so whatever is
+      // there now is ours to take back.
+      landed.push(target);
       copyFileSync(absolute(plan.source, entry.relative_path), target);
       const digest = sha256Hex(readFileSync(target));
       if (digest !== entry.digest) {
@@ -627,21 +744,19 @@ export function applyStateMigration(plan: MigrationPlan): MigrationResult {
             `and the copy at ${target} digests to ${digest}`,
         );
       }
-      landed.push(target);
     }
   } catch (error) {
     for (const target of landed.toReversed()) rmSync(target, { force: true });
-    pruneEmptyDirectories(plan.destination, plan.manifest.canonical_roots);
-    // The destination directory itself, but only while it is empty: the
-    // plan refused an occupied destination, so anything in it now is
-    // ours, and a `rmdir` that fails because something else appeared is
-    // the correct outcome rather than a case to force past.
-    try {
-      rmdirSync(plan.destination);
-    } catch {
-      // Left in place, with whatever appeared in it. The message below
-      // names the source as untouched, which is the fact that matters.
-    }
+    // From the destination ITSELF rather than from the canonical roots.
+    // The copy pass creates every intermediate directory on the way down
+    // with `mkdirSync(..., { recursive: true })`, and a prune that starts
+    // at the roots never reaches the ones above them: the empty skeleton
+    // it left behind made the identical retry fail with
+    // `destination_occupied`, so a recoverable abort needed a manual
+    // `rm -rf` before the operator could try again. `pruneIfEmpty`
+    // removes ONLY empty directories, so anything that arrived here
+    // meanwhile keeps its parents alive and is never touched.
+    pruneIfEmpty(plan.destination);
     throw new StateMigrationError(
       `migration aborted during the copy pass and the destination was unwound; the source ` +
         `at ${plan.source} is untouched. Cause: ${(error as Error).message}`,
@@ -651,10 +766,26 @@ export function applyStateMigration(plan: MigrationPlan): MigrationResult {
   const manifestPath = join(plan.destination, MIGRATION_MANIFEST_FILE);
   atomicWriteFileSync(manifestPath, `${JSON.stringify(plan.manifest, null, 2)}\n`);
 
-  for (const entry of plan.manifest.entries) {
-    rmSync(absolute(plan.source, entry.relative_path), { force: true });
+  try {
+    for (const entry of plan.manifest.entries) {
+      rmSync(absolute(plan.source, entry.relative_path), { force: true });
+    }
+    pruneEmptyDirectories(plan.source, plan.manifest.canonical_roots);
+  } catch (error) {
+    // Past the commit point, and that is the news. Every bound file is
+    // at the destination and was re-digested there, and the manifest is
+    // written, so the half-cleaned source is exactly the shape a
+    // rollback puts back - `force: true` swallows only ENOENT, so this
+    // is a real refusal from the filesystem and not a missing file.
+    // Escaping as a raw `EACCES` told the operator none of that.
+    throw new StateMigrationError(
+      `every bound file landed and verified at ${plan.destination} and the manifest at ` +
+        `${manifestPath} was written, but the source at ${plan.source} could not be cleaned ` +
+        `up: ${(error as Error).message}. Nothing is lost - the bytes are at the destination; ` +
+        `undo the whole move with \`o2b state rollback --from ${plan.destination}\`, or fix ` +
+        "the permissions on the source and remove the leftovers by hand",
+    );
   }
-  pruneEmptyDirectories(plan.source, plan.manifest.canonical_roots);
 
   return {
     manifest_path: manifestPath,
@@ -672,23 +803,50 @@ export function applyStateMigration(plan: MigrationPlan): MigrationResult {
  * `rm -r` of the root.
  */
 function pruneEmptyDirectories(base: string, roots: ReadonlyArray<string>): void {
-  const prune = (path: string): boolean => {
-    let stat: Stats;
-    try {
-      stat = lstatSync(path);
-    } catch {
-      return true;
-    }
-    if (!stat.isDirectory()) return false;
-    let empty = true;
-    for (const child of readdirSync(path)) {
-      if (!prune(join(path, child))) empty = false;
-    }
-    if (!empty) return false;
+  for (const root of roots) pruneIfEmpty(absolute(base, root));
+}
+
+/**
+ * Remove `path` if it is an empty directory, depth first.
+ *
+ * Returns whether it is GONE, which is what tells the caller above
+ * whether its own directory is now empty. Every uncertain answer is
+ * `false`, and that is the whole correctness argument: a child this run
+ * could not look at was reported as gone, the parent was judged empty on
+ * the strength of it, and the `rmdir` that followed threw ENOTEMPTY out
+ * of an unwind whose message was the only thing telling the operator
+ * their source was untouched. A directory left standing costs an
+ * operator one `rmdir`; a wrong "it is gone" costs a throw in the middle
+ * of the recovery path.
+ */
+function pruneIfEmpty(path: string): boolean {
+  let stat: Stats;
+  try {
+    stat = lstatSync(path);
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT";
+  }
+  if (!stat.isDirectory()) return false;
+  let children: string[];
+  try {
+    children = readdirSync(path);
+  } catch {
+    return false;
+  }
+  let empty = true;
+  for (const child of children) {
+    if (!pruneIfEmpty(join(path, child))) empty = false;
+  }
+  if (!empty) return false;
+  try {
     rmdirSync(path);
-    return true;
-  };
-  for (const root of roots) prune(absolute(base, root));
+  } catch {
+    // Empty and still not removable: a leftover directory, never a lost
+    // byte. It is reported as still there so the walk stops here instead
+    // of throwing out of a caller whose real news is elsewhere.
+    return false;
+  }
+  return true;
 }
 
 // ----- Rolling a migration back ---------------------------------------------
@@ -698,7 +856,12 @@ export interface RollbackEntry {
   readonly relative_path: string;
   readonly from: string;
   readonly to: string;
-  /** True when the source already holds the bound bytes and only the copy is removed. */
+  /**
+   * True when the source already holds the bound bytes and only the copy
+   * is removed. Measured at plan time, so it is what the operator is
+   * shown; {@link applyStateRollback} probes the source again rather than
+   * acting on it, because the source can change while a plan is read.
+   */
   readonly already_in_place: boolean;
 }
 
@@ -723,6 +886,12 @@ export interface RollbackPlan {
 export interface RollbackPlanInput {
   /** The directory a migration was moved TO; it holds the manifest. */
   readonly destination: string;
+  /**
+   * Where to put the files back, when that is no longer the root the
+   * manifest recorded - a vault renamed or moved since the migration.
+   * Absent means the recorded root, which then has to still be there.
+   */
+  readonly vault?: string;
 }
 
 /**
@@ -736,7 +905,7 @@ export function planStateRollback(input: RollbackPlanInput): RollbackPlan {
   const destination = resolve(input.destination);
   const manifestPath = join(destination, MIGRATION_MANIFEST_FILE);
   const manifest = readManifest(manifestPath);
-  const source = manifest.source_root;
+  const source = rollbackSource(manifest, input.vault ?? null, manifestPath);
 
   const restore: RollbackEntry[] = [];
   const refusals: RollbackRefusal[] = [];
@@ -745,7 +914,11 @@ export function planStateRollback(input: RollbackPlanInput): RollbackPlan {
     const from = absolute(destination, entry.relative_path);
     const to = absolute(source, entry.relative_path);
     const atDestination = digestOf(from);
-    if (atDestination === null) {
+    if (atDestination.state === DIGEST_PROBE.unreadable) {
+      refusals.push(unreadableRefusal(entry.relative_path, from, atDestination.reason));
+      continue;
+    }
+    if (atDestination.state === DIGEST_PROBE.absent) {
       refusals.push({
         code: ROLLBACK_REFUSAL.missingAtDestination,
         relative_path: entry.relative_path,
@@ -757,12 +930,12 @@ export function planStateRollback(input: RollbackPlanInput): RollbackPlan {
       });
       continue;
     }
-    if (atDestination !== entry.digest) {
+    if (atDestination.digest !== entry.digest) {
       refusals.push({
         code: ROLLBACK_REFUSAL.digestMismatch,
         relative_path: entry.relative_path,
         path: from,
-        found: `changed since the migration (bound ${entry.digest}, now ${atDestination})`,
+        found: `changed since the migration (bound ${entry.digest}, now ${atDestination.digest})`,
         remedy:
           "it is left exactly where it is and is never deleted; copy it somewhere safe, or " +
           "keep the destination as the live location for it",
@@ -770,27 +943,102 @@ export function planStateRollback(input: RollbackPlanInput): RollbackPlan {
       continue;
     }
     const atSource = digestOf(to);
-    if (atSource !== null && atSource !== entry.digest) {
-      refusals.push({
-        code: ROLLBACK_REFUSAL.sourceDiverged,
-        relative_path: entry.relative_path,
-        path: to,
-        found: `something has written the source path since the migration (bound ${entry.digest}, now ${atSource})`,
-        remedy:
-          "the newer file at the source is kept and the destination copy is left in place; " +
-          "reconcile the two by hand and remove whichever one you do not want",
-      });
+    if (atSource.state === DIGEST_PROBE.unreadable) {
+      refusals.push(unreadableRefusal(entry.relative_path, to, atSource.reason));
+      continue;
+    }
+    if (atSource.state === DIGEST_PROBE.digest && atSource.digest !== entry.digest) {
+      refusals.push(divergedRefusal(entry.relative_path, to, entry.digest, atSource.digest));
       continue;
     }
     restore.push({
       relative_path: entry.relative_path,
       from,
       to,
-      already_in_place: atSource !== null,
+      already_in_place: atSource.state === DIGEST_PROBE.digest,
     });
   }
 
   return { manifest_path: manifestPath, manifest, source, destination, restore, refusals };
+}
+
+/**
+ * Where the files go back to.
+ *
+ * `source_root` is an absolute path recorded when the migration ran, and
+ * a vault renamed since is the case that turned a rollback into a data
+ * loss: the apply recreated the dead directory, copied into it, removed
+ * the destination copies and deleted the manifest, all while exiting 0.
+ * The live vault ended up with nothing and the only surviving copy was
+ * gone. So a recorded root that is no longer a directory is refused BY
+ * NAME here, before a single entry is classified, and `vault` is the way
+ * an operator says where it went. The recorded root stays on the plan and
+ * in {@link renderRollbackPlan} either way, so an override is something
+ * they can see rather than something they have to remember.
+ */
+function rollbackSource(
+  manifest: MigrationManifest,
+  override: string | null,
+  manifestPath: string,
+): string {
+  const source = override === null ? manifest.source_root : resolve(override);
+  const overridden =
+    override === null ? "" : ` (--to; the manifest recorded ${manifest.source_root})`;
+  let stat: Stats;
+  try {
+    // `statSync`, following links: a vault reached through a symlink is
+    // an ordinary install, and what is asked here is only whether there
+    // is a directory to restore into.
+    stat = statSync(source);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    throw new StateMigrationError(
+      `the rollback would restore into ${source}${overridden}, which this run cannot use ` +
+        `(${err.code ?? "unknown error"}): ${err.message}. The manifest at ${manifestPath} and ` +
+        "every file it binds are untouched; point the rollback at the vault's current " +
+        "location with `--to <dir>`, or put the vault back where the manifest says it was",
+    );
+  }
+  if (!stat.isDirectory()) {
+    throw new StateMigrationError(
+      `the rollback would restore into ${source}${overridden}, which is not a directory. The ` +
+        `manifest at ${manifestPath} and every file it binds are untouched; point the ` +
+        "rollback at the vault's current location with `--to <dir>`",
+    );
+  }
+  return source;
+}
+
+/** The one wording for an entry this run could not read, plan or apply. */
+function unreadableRefusal(relativePath: string, path: string, reason: string): RollbackRefusal {
+  return {
+    code: ROLLBACK_REFUSAL.unreadable,
+    relative_path: relativePath,
+    path,
+    found: reason,
+    remedy:
+      "an entry this run cannot read cannot be shown to be the one the manifest binds, so it " +
+      "is left exactly as it is and the manifest is kept; make the path readable to this " +
+      "user - or move aside whatever is standing in its place - and roll back again",
+  };
+}
+
+/** The one wording for a source path something else has written. */
+function divergedRefusal(
+  relativePath: string,
+  path: string,
+  bound: string,
+  found: string,
+): RollbackRefusal {
+  return {
+    code: ROLLBACK_REFUSAL.sourceDiverged,
+    relative_path: relativePath,
+    path,
+    found: `something has written the source path since the migration (bound ${bound}, now ${found})`,
+    remedy:
+      "the newer file at the source is kept and the destination copy is left in place; " +
+      "reconcile the two by hand and remove whichever one you do not want",
+  };
 }
 
 function readManifest(manifestPath: string): MigrationManifest {
@@ -835,16 +1083,39 @@ function readManifest(manifestPath: string): MigrationManifest {
   return manifest;
 }
 
-/** The digest of a plain file, or `null` when nothing is there. */
-function digestOf(path: string): string | null {
+/** The three answers a path can give when asked for its digest. */
+const DIGEST_PROBE = Object.freeze({
+  digest: "digest",
+  absent: "absent",
+  unreadable: "unreadable",
+} as const);
+
+type DigestProbe =
+  | { readonly state: typeof DIGEST_PROBE.digest; readonly digest: string }
+  | { readonly state: typeof DIGEST_PROBE.absent }
+  | { readonly state: typeof DIGEST_PROBE.unreadable; readonly reason: string };
+
+/**
+ * What is at `path`: its digest, nothing, or a reason it could not be
+ * read - three answers rather than two.
+ *
+ * A throw here used to take the WHOLE plan with it over one entry: a
+ * single source path recreated as a directory made `planStateRollback`
+ * raise `EISDIR` and every other restorable file died with it, while
+ * {@link ROLLBACK_REFUSAL.unreadable} - the code declared for exactly
+ * this - was produced nowhere in the codebase. One unreadable entry is
+ * one refusal, like every other per-entry verdict in this module.
+ */
+function digestOf(path: string): DigestProbe {
   try {
-    return sha256Hex(readFileSync(path));
+    return { state: DIGEST_PROBE.digest, digest: sha256Hex(readFileSync(path)) };
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw new StateMigrationError(
-      `${path} could not be read while planning a rollback (${(error as Error).message}); ` +
-        "fix the permissions on it before restoring, so no entry is classified from a guess",
-    );
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === "ENOENT") return { state: DIGEST_PROBE.absent };
+    return {
+      state: DIGEST_PROBE.unreadable,
+      reason: `could not be read (${err.code ?? "unknown error"}): ${err.message}`,
+    };
   }
 }
 
@@ -859,21 +1130,46 @@ export interface RollbackResult {
 /**
  * Put back everything the plan cleared, and nothing else.
  *
- * The manifest is removed only when there is nothing left to refuse. An
- * incomplete rollback keeps it, because the refused entries are still the
- * only record of where those bytes came from.
+ * Every entry is measured AGAIN here. A plan is a statement about the
+ * moment it was made, and the moment that matters is this one: the
+ * `source_diverged` verdict was decided while the operator was still
+ * reading the plan, and a file written at the source since then used to
+ * be copied straight over. The re-check is the same refusal one
+ * confirmation later, and it joins the plan's own refusals in the result.
+ *
+ * The manifest is removed only when there is nothing left to refuse -
+ * from either half. An incomplete rollback keeps it, because the refused
+ * entries are still the only record of where those bytes came from.
  */
 export function applyStateRollback(plan: RollbackPlan): RollbackResult {
   const restored: string[] = [];
+  const refused: RollbackRefusal[] = [...plan.refusals];
   for (const entry of plan.restore) {
-    if (!entry.already_in_place) {
+    const bound = plan.manifest.entries.find(
+      (candidate) => candidate.relative_path === entry.relative_path,
+    );
+    if (bound === undefined) {
+      throw new StateMigrationError(
+        `${entry.relative_path} is in this rollback plan but not in the manifest at ` +
+          `${plan.manifest_path}, so there is no digest to restore it against; nothing has ` +
+          "been done for it - plan the rollback again rather than applying a plan and a " +
+          "manifest that disagree",
+      );
+    }
+    const atSource = digestOf(entry.to);
+    if (atSource.state === DIGEST_PROBE.unreadable) {
+      refused.push(unreadableRefusal(entry.relative_path, entry.to, atSource.reason));
+      continue;
+    }
+    if (atSource.state === DIGEST_PROBE.digest && atSource.digest !== bound.digest) {
+      refused.push(divergedRefusal(entry.relative_path, entry.to, bound.digest, atSource.digest));
+      continue;
+    }
+    if (atSource.state === DIGEST_PROBE.absent) {
       mkdirSync(dirname(entry.to), { recursive: true });
       copyFileSync(entry.from, entry.to);
       const digest = sha256Hex(readFileSync(entry.to));
-      const bound = plan.manifest.entries.find(
-        (candidate) => candidate.relative_path === entry.relative_path,
-      );
-      if (bound === undefined || digest !== bound.digest) {
+      if (digest !== bound.digest) {
         throw new StateMigrationError(
           `${entry.relative_path} did not restore intact to ${entry.to}; the destination copy ` +
             "is still in place, so nothing is lost - investigate the source filesystem before " +
@@ -886,10 +1182,10 @@ export function applyStateRollback(plan: RollbackPlan): RollbackResult {
   }
   pruneEmptyDirectories(plan.destination, plan.manifest.canonical_roots);
 
-  const complete = plan.refusals.length === 0;
+  const complete = refused.length === 0;
   if (complete) rmSync(plan.manifest_path, { force: true });
 
-  return { restored, refused: plan.refusals, manifest_removed: complete };
+  return { restored, refused, manifest_removed: complete };
 }
 
 // ----- The rendering --------------------------------------------------------
@@ -940,9 +1236,20 @@ export function renderRollbackPlan(plan: RollbackPlan): string {
   const lines: string[] = [
     `State rollback: ${plan.destination} -> ${plan.source}`,
     `  manifest ${plan.manifest_path} (taken ${plan.manifest.created_at})`,
+  ];
+  // An override is never silent: the operator is told which root the
+  // manifest recorded, so "I am restoring somewhere else" is a thing they
+  // read rather than a thing they have to remember typing.
+  if (plan.source !== plan.manifest.source_root) {
+    lines.push(
+      `  the manifest recorded ${plan.manifest.source_root}; --to overrides it, so the files ` +
+        `go to ${plan.source}`,
+    );
+  }
+  lines.push(
     `  ${plan.restore.length} of ${plan.manifest.entries.length} bound file(s) still match ` +
       "their recorded digest and will be restored",
-  ];
+  );
   if (plan.refusals.length > 0) {
     lines.push(
       "",

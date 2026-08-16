@@ -27,6 +27,7 @@ import { existsSync, renameSync } from "node:fs";
 
 import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
 import { preferenceSlug, type PlanState } from "./dream-plan.ts";
+import { SafeguardAbortError, SafeguardTimeoutError, type Safeguard } from "./safeguard.ts";
 import type { RefreshResult } from "./dream-refresh.ts";
 import type { DreamGatedRetireEntry } from "./dream-types.ts";
 import { WORKRUN_PHASE, type WorkrunHandle } from "./dream-workrun.ts";
@@ -65,6 +66,14 @@ export interface DreamApplyInput {
   readonly wikilinkToRun: string;
   /** Resolved `dream.heal_enrich` gate for this run. */
   readonly healEnrichEnabled: boolean;
+  /**
+   * The pass's cooperative deadline, forwarded to the one sub-unit here
+   * that is unbounded in the vault's size: the opt-in heal enrichment,
+   * which reads and rewrites every user page outside `Brain/`. Nothing
+   * else in this module iterates over anything but the decided plan, so
+   * nothing else needs it.
+   */
+  readonly safeguard?: Safeguard;
   readonly workrun: WorkrunHandle | null;
 }
 
@@ -112,7 +121,9 @@ export function applyDreamPlan(input: DreamApplyInput): DreamApplyResult {
   workrun?.checkpoint(WORKRUN_PHASE.retireComplete);
 
   const moved = moveConsumedSignals(vault, plan);
-  const healEnriched = input.healEnrichEnabled ? runHealEnrichmentSafely(vault) : 0;
+  const healEnriched = input.healEnrichEnabled
+    ? runHealEnrichmentSafely(vault, input.safeguard)
+    : 0;
 
   // Heal's second half (the optional enrichment) is durable here; its
   // first half was the retire loop above. The marker sits at the later
@@ -348,11 +359,22 @@ function moveConsumedSignals(vault: string, plan: PlanState): string[] {
  * retire/move mutations (heal-after-mutations). Off by default so the
  * default install stays byte-identical; a failure is a warning, never
  * fatal to the dream pass.
+ *
+ * A SAFEGUARD STOP IS NOT SUCH A FAILURE, and the difference is the whole
+ * reason this catch is narrowed. "Heal could not enrich a page" is a
+ * hygiene miss the pass survives; "the operator cancelled" and "the pass
+ * is past its budget" are decisions about the RUN, and swallowing either
+ * into a stderr warning plus `0` would report a pass that enriched
+ * nothing where the truth is a pass that was stopped. The pass's own
+ * post-mutation checkpoint would throw an instant later anyway - so
+ * absorbing it here only ever bought a wrong `heal_enriched: 0` on the
+ * way to the same error.
  */
-function runHealEnrichmentSafely(vault: string): number {
+function runHealEnrichmentSafely(vault: string, safeguard: Safeguard | undefined): number {
   try {
-    return runHealEnrichment(vault).enriched;
+    return runHealEnrichment(vault, safeguard ? { safeguard } : {}).enriched;
   } catch (err) {
+    if (err instanceof SafeguardTimeoutError || err instanceof SafeguardAbortError) throw err;
     process.stderr.write(`warning: heal enrichment failed: ${(err as Error).message}\n`);
     return 0;
   }

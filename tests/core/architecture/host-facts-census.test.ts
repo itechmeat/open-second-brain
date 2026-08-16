@@ -53,6 +53,25 @@ describe("runtime facts census", () => {
     expect(unaccounted.toSorted().join("\n")).toBe("");
   });
 
+  test("every row's label is the adapter's own label, as the field claims", () => {
+    // `RuntimeFacts.label` is documented as "matching the adapter's own
+    // label" and nothing in `src/` read it - `--friction` prints
+    // `adapter.label`. A declared fact with no reader and no assertion is
+    // free to drift into a second, quietly wrong name for the same host,
+    // which is the defect this release exists to remove. This is the
+    // reader: not a consumer of the value, but the binding that makes the
+    // claim true or fails.
+    const mismatched = registerAllAdapters()
+      .list()
+      .filter((adapter) => RUNTIME_FACTS[adapter.target].label !== adapter.label)
+      .map(
+        (adapter) =>
+          `${adapter.target}: row says '${RUNTIME_FACTS[adapter.target].label}', ` +
+          `adapter says '${adapter.label}'`,
+      );
+    expect(mismatched.toSorted().join("\n")).toBe("");
+  });
+
   test("the vocabulary and the row keys are the same set", () => {
     // The third corner: a member with no row would type-check everywhere
     // and resolve to `undefined` at the one call site that reads it.

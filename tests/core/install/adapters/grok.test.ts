@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { grokAdapter } from "../../../../src/core/install/adapters/grok.ts";
+import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../../../../src/core/brain/policy/blocks/install.ts";
 import { grokMcpServers, grokHooksJson } from "../../../../src/core/install/grok-asset.ts";
 import { hasMcpServers } from "../../../../src/core/install/grok-config.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
@@ -122,7 +123,9 @@ describe("grok adapter - apply", () => {
 
   test("writes the lifecycle hooks file verbatim", () => {
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload()));
+    expect(readFileSync(hooksPath(), "utf8")).toBe(
+      grokHooksJson(payload(), INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT),
+    );
   });
 
   test("manifest records the mcp keys and the hooks path", () => {
@@ -160,7 +163,9 @@ describe("grok adapter - apply", () => {
     apply();
     writeFileSync(hooksPath(), "{}\n");
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload()));
+    expect(readFileSync(hooksPath(), "utf8")).toBe(
+      grokHooksJson(payload(), INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT),
+    );
   });
 });
 

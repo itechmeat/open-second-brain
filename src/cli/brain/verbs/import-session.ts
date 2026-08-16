@@ -43,7 +43,6 @@ import {
   OPERATION,
   resolveSafeguardTimeoutMs,
 } from "../../../core/brain/safeguard.ts";
-import { sessionFilesUnder } from "../../../core/brain/sessions/session-files.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import {
   isSessionAdapterId,
@@ -171,28 +170,68 @@ export async function cmdBrainImportSession(argv: string[]): Promise<number> {
     return fail(`cannot stat ${sessionPath}: ${(err as Error).message ?? err}`);
   }
 
+  let result: Awaited<ReturnType<typeof importSessionPath>>;
   try {
-    const result = stat.isDirectory()
+    result = stat.isDirectory()
       ? await importSessionPath(vault, sessionPath, importOptions)
       : { files: [await importSession(vault, sessionPath, importOptions)], warnings: [] };
+  } catch (exc) {
+    return reportImportFailure(exc);
+  }
 
-    if (!dryRun) {
-      logImports(vault, agent, result.files);
+  // Past this line the import HAPPENED: signals are on disk. Everything
+  // that follows is bookkeeping about it, and a bookkeeping failure is
+  // reported as itself rather than as a failed import. The ledger write
+  // used to sit inside the same `try` as the import above, so a corrupt
+  // ledger printed `import-session failed: …`, exited 1 and emitted no
+  // report at all - for a run whose signals had already been written and
+  // whose log events had already been appended.
+  let ledgerError: string | null = null;
+  if (!dryRun) {
+    logImports(vault, agent, result.files);
+    try {
       // A named path is still coverage. Recording it is what stops a
       // later `--status` from reporting a log the operator has already
       // imported by hand as outstanding - the exact false gap this whole
       // surface exists to remove.
+      //
+      // The files that were actually IMPORTED, not the files that were
+      // found. `importSessionPath` collects a per-file failure into
+      // `warnings` and carries on, so walking the directory again here
+      // recorded the ones that failed as imported: they left the ledger
+      // at their current bytes, vanished from `--status` and `--discover`
+      // until something edited them, and would stay invisible even after
+      // a later release shipped an adapter that could read them.
       recordUnderDeclaredRoots(
         vault,
-        stat.isDirectory() ? sessionFilesUnder(sessionPath) : [sessionPath],
+        result.files.map((f) => f.file),
       );
+    } catch (exc) {
+      ledgerError = (exc as Error).message ?? String(exc);
     }
-
-    emitImportReport(result, { asJson, recall });
-    return 0;
-  } catch (exc) {
-    return reportImportFailure(exc);
   }
+
+  emitImportReport(result, { asJson, recall });
+  if (ledgerError !== null) return reportLedgerFailure(ledgerError);
+  return 0;
+}
+
+/**
+ * The import landed and the coverage ledger did not.
+ *
+ * Non-zero, because something the operator asked for did not happen - but
+ * named as what it is. The repair is different from a failed import (the
+ * signals are already in the vault; re-running would only re-import work
+ * dedup will suppress), and the consequence is bounded and worth stating:
+ * the next sweep offers these files again.
+ */
+function reportLedgerFailure(detail: string): number {
+  process.stderr.write(
+    `error: the import completed and its signals were written, but the session import ledger ` +
+      `could not be updated: ${detail}. A later --status or --discover will offer these files ` +
+      "again; re-importing them is safe, because dedup suppresses the writes.\n",
+  );
+  return 1;
 }
 
 /**
@@ -297,12 +336,25 @@ async function sweep(req: SweepRequest): Promise<number> {
     }
   }
 
+  // Same ordering as the path form, for the same reason: the imports have
+  // landed, so a lock timeout or a read-only vault in the ledger write is
+  // a bookkeeping failure and must not swallow the report of what was
+  // imported. This call was not in a `try` at all, so it took the whole
+  // run's report down with it.
+  let ledgerError: string | null = null;
   if (!req.dryRun) {
     logImports(req.vault, req.agent, files);
-    if (imported.length > 0) recordSessionImports(req.vault, imported);
+    if (imported.length > 0) {
+      try {
+        recordSessionImports(req.vault, imported);
+      } catch (exc) {
+        ledgerError = (exc as Error).message ?? String(exc);
+      }
+    }
   }
 
   emitImportReport({ files, warnings: [] }, { asJson: req.asJson, recall: req.recall, failures });
+  if (ledgerError !== null) return reportLedgerFailure(ledgerError);
   return failures.length > 0 ? 1 : 0;
 }
 

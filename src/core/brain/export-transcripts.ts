@@ -51,19 +51,30 @@
  * recorded it, and the file that would say otherwise is the one the
  * recipient does not have.
  *
+ * A ZERO-BYTE file is the one thing that does not refuse, and is counted
+ * instead ({@link TranscriptExportSummary.empty}). It carries nothing to
+ * omit, Claude Code leaves them behind whenever a session is killed
+ * before its first turn flushes, and refusing on them made the export
+ * unusable against a real store.
+ *
  * Redaction is NOT this module's job - it composes records, and the export
  * verb hands each one to `redactForEgress` before any byte is written. The
  * split is deliberate: the guard call belongs at the boundary that names
  * the destination, which is where the egress census can see it.
  */
 
+import { statSync } from "node:fs";
 import { basename } from "node:path";
 
 import { readFirstLine } from "./sessions/read-lines.ts";
 import { detectAdapter, getAdapter, SESSION_ADAPTER_REGISTRY } from "./sessions/registry.ts";
 import type { SessionAdapterRegistry } from "./sessions/registry.ts";
 import { sessionFilesUnder } from "./sessions/session-files.ts";
-import { SessionImportError, type SessionTurn } from "./sessions/types.ts";
+import {
+  SESSION_TIMESTAMP_UNKNOWN,
+  SessionImportError,
+  type SessionTurn,
+} from "./sessions/types.ts";
 
 /**
  * Versions the RECORD, not the corpus. A field added later is additive and
@@ -133,6 +144,23 @@ export interface TranscriptExportSummary {
   readonly outside_window: number;
   /** Recognised, and carrying no turn a dataset can learn from. */
   readonly no_messages: number;
+  /**
+   * Holding no bytes at all, so there was nothing to detect a format
+   * from.
+   *
+   * Counted rather than refused, which is the one exception to the
+   * refuse-what-you-cannot-read rule below, and it is not a softening of
+   * it. A zero-byte transcript is not a file this walk failed to
+   * understand - it is a file with no content to understand, which is
+   * what Claude Code leaves behind routinely when a session opens and the
+   * process is killed before the first turn flushes. Refusing on those
+   * made the whole export unusable against a real store and offered a
+   * remedy ("move this file out of the source directory") that does not
+   * scale to a thousand of them. A file that HAS content no adapter
+   * recognises still refuses: there, something was recorded and this
+   * build cannot say what.
+   */
+  readonly empty: number;
 }
 
 /** Tool names of a turn, in call order. */
@@ -157,14 +185,32 @@ function messageOf(turn: SessionTurn): TranscriptMessage | null {
 /**
  * The conversation's start as an instant, for the window comparison only.
  *
- * A timestamp that will not parse is refused rather than treated as either
- * inside or outside the window: both readings are a guess, and one of them
- * silently drops a transcript from the corpus. Only reached when a window
- * is actually set - with no `--since` / `--until` nothing depends on the
- * value, and refusing an export over a field nobody read would be a
+ * A timestamp this module cannot READ is refused rather than treated as
+ * either inside or outside the window: both readings are a guess, and one
+ * of them silently drops a transcript from the corpus. Only reached when a
+ * window is actually set - with no `--since` / `--until` nothing depends
+ * on the value, and refusing an export over a field nobody read would be a
  * refusal for its own sake.
+ *
+ * "Cannot read" has TWO cases, and for a long time this function handled
+ * only the one that never happens. A string `Date.parse` rejects is the
+ * obvious case; it does not occur, because no adapter ever emits one. The
+ * case that does occur is {@link SESSION_TIMESTAMP_UNKNOWN}: every adapter
+ * synthesises the epoch when the line it read carried no clock, that
+ * parses perfectly well, and it sorts before any window an operator would
+ * type - so the transcript took the silently-dropped path this docblock
+ * forbids, on the exact input the guarantee was written for.
  */
 function startInstant(record: TranscriptMessage, path: string): number {
+  if (record.timestamp === SESSION_TIMESTAMP_UNKNOWN) {
+    throw new SessionImportError(
+      "PARSE",
+      `the first turn of ${path} carries no timestamp - the runtime did not record one, and ` +
+        "the adapter reports that as the epoch - so --since / --until cannot say whether this " +
+        "conversation is in the window; drop the window flags to export it, or narrow " +
+        "--transcripts to the files that are timestamped",
+    );
+  }
   const ms = Date.parse(record.timestamp);
   if (!Number.isFinite(ms)) {
     throw new SessionImportError(
@@ -181,6 +227,23 @@ function inWindow(startedAtMs: number, options: TranscriptExportOptions): boolea
   if (options.since !== undefined && startedAtMs < options.since.getTime()) return false;
   if (options.until !== undefined && startedAtMs >= options.until.getTime()) return false;
   return true;
+}
+
+/**
+ * True when `path` holds zero bytes.
+ *
+ * A stat that fails answers `false` rather than `true`: the file was
+ * listed a moment ago, so a failure here is a race or a permission
+ * change, and reading that as "empty" would drop a transcript on the
+ * strength of an error. It falls through to the detect refusal, which
+ * names the file.
+ */
+function holdsNoBytes(path: string): boolean {
+  try {
+    return statSync(path).size === 0;
+  } catch {
+    return false;
+  }
 }
 
 /** Why a scanned file produced no record, when it produced none. */
@@ -242,10 +305,22 @@ export async function* streamTranscriptConversations(
   let otherRuntime = 0;
   let outsideWindow = 0;
   let noMessages = 0;
+  let empty = 0;
 
   for (const path of files) {
     // oxlint-disable-next-line no-await-in-loop
-    const adapter = detectAdapter(await readFirstLine(path), registry);
+    const firstLine = await readFirstLine(path);
+    if (firstLine === "" && holdsNoBytes(path)) {
+      // Accounted for and stepped over - see `empty` on the summary for
+      // why this one case is not the refusal below. The size check is what
+      // keeps it to that case: `readFirstLine` also returns `""` for a
+      // file whose first line is blank and whose second line is a turn,
+      // and skipping THAT would be the silent omission the refusal exists
+      // to prevent.
+      empty += 1;
+      continue;
+    }
+    const adapter = detectAdapter(firstLine, registry);
     if (adapter === null) {
       throw new SessionImportError(
         "DETECT_FAIL",
@@ -278,5 +353,6 @@ export async function* streamTranscriptConversations(
     other_runtime: otherRuntime,
     outside_window: outsideWindow,
     no_messages: noMessages,
+    empty,
   });
 }

@@ -45,12 +45,19 @@ o2b install --target codex --vault /path/to/vault --apply
 
 The first command plans and writes nothing; the second applies. With the
 `codex` binary on PATH the adapter registers both servers through
-`codex mcp add`, which persists them into `~/.codex/config.toml`. Without
-it, the adapter merges the same two `[mcp_servers.*]` tables into that
-file directly, leaving every other table - including the
+`codex mcp add`, which persists them into `$CODEX_HOME/config.toml`.
+Without it, the adapter merges the same two `[mcp_servers.*]` tables into
+that file directly, leaving every other table - including the
 `[plugins."..."]` and `[marketplaces....]` blocks above - byte-for-byte
-intact. `CODEX_HOME` relocates the whole directory and the adapter
-follows it.
+intact.
+
+`$CODEX_HOME` is written that way throughout this page rather than as
+`~/.codex`, because the variable is what the adapter resolves and
+`~/.codex` is only its default. Setting `CODEX_HOME` relocates the whole
+Codex configuration directory, and the adapter follows it on every path:
+the file it merges, the `CODEX_HOME` it exports to the `codex mcp add`
+subprocess, the `codex mcp list` it runs to verify, and the session roots
+`o2b` sweeps for transcripts.
 
 The adapter sets `VAULT_AGENT_NAME` for you, to Codex's own
 host-qualified identity: it keeps the host segment of your configured
@@ -79,8 +86,12 @@ o2b install --check
 
 That line is the host's own answer: the check runs `codex mcp list` and
 reports what Codex says it has registered. When the binary is not on
-PATH, or exits non-zero, the check names that obstacle instead and falls
-back to what `~/.codex/config.toml` declares. This block is asserted
+PATH, or exits non-zero, or does not answer within the probe's timeout,
+the check names that obstacle instead and falls back to what
+`$CODEX_HOME/config.toml` declares - and it declares a table only where
+the header stands on its own line, so a commented-out
+`# [mcp_servers.open-second-brain]` reads as absent, which is what an
+operator who commented it out meant. This block is asserted
 against the adapter's real `verify()` output by
 `tests/docs/install-verify-conformance.test.ts`, so it cannot drift from
 the code.

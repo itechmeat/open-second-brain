@@ -27,7 +27,7 @@
 import { basename, dirname } from "node:path";
 
 import { readLines } from "./read-lines.ts";
-import { SessionImportError } from "./types.ts";
+import { SESSION_TIMESTAMP_UNKNOWN, SessionImportError } from "./types.ts";
 import type { SessionAdapter, SessionTurn } from "./types.ts";
 
 interface GrokUpdate {
@@ -47,7 +47,7 @@ function isoFrom(ts: unknown): string {
   if (typeof ts === "number" && Number.isFinite(ts)) {
     return new Date(ts * 1000).toISOString();
   }
-  return new Date(0).toISOString();
+  return SESSION_TIMESTAMP_UNKNOWN;
 }
 
 /** Parse one line into its `session/update` payload, or null if it is not one. */

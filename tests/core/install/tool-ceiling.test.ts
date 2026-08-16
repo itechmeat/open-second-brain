@@ -39,13 +39,13 @@ import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { cursorAdapter } from "../../../src/core/install/adapters/cursor.ts";
 import { buildPayload } from "../../../src/core/install/payload.ts";
 import {
+  carriesHostDimensions,
   HOST_TARGET_FLAG,
   TOOL_PROFILE_FLAG,
   payloadForHost,
 } from "../../../src/core/install/payload-host.ts";
 import {
   INSTALL_TOOL_PROFILE_CONFIG_KEY,
-  INSTALL_TOOL_PROFILE_ENV_KEY,
   resolveInstallToolProfile,
 } from "../../../src/core/install/settings.ts";
 import type { InstallEnv } from "../../../src/core/install/types.ts";
@@ -142,7 +142,7 @@ describe("the declared-ceiling census", () => {
       const ceiling = RUNTIME_FACTS[target].toolCeiling;
       if (ceiling.kind !== TOOL_CEILING_KIND.declared) throw new Error("derivation drifted");
       const resolved = resolveInstallToolProfile(
-        { vault, env: {}, configPath: join(home, "config.yaml") },
+        { vault, configPath: join(home, "config.yaml") },
         target,
       );
       expect(resolved.value).not.toBeNull();
@@ -180,7 +180,10 @@ describe("the profile baked into the generated payload", () => {
     ]);
   });
 
-  for (const target of UNKNOWN_CEILING_TARGETS) {
+  // The three targets that write no MCP command line at all are excluded:
+  // `payloadForHost` refuses them by name rather than pretending to bake a
+  // dimension into a registration they never generate.
+  for (const target of UNKNOWN_CEILING_TARGETS.filter(carriesHostDimensions)) {
     test(`${target}: an unchecked ceiling bakes in no profile`, () => {
       const payload = payloadForHost(target, makePayload(), makeEnv());
       expect(payload.full.args).not.toContain(TOOL_PROFILE_FLAG);
@@ -208,20 +211,10 @@ describe("the profile baked into the generated payload", () => {
   });
 });
 
-describe("tool-profile precedence, four layers, highest first", () => {
-  function source(env: NodeJS.ProcessEnv = {}) {
-    return { vault, env, configPath: join(home, "config.yaml") };
+describe("tool-profile precedence, three layers, highest first", () => {
+  function source() {
+    return { vault, configPath: join(home, "config.yaml") };
   }
-
-  test("the environment beats every layer below it", () => {
-    atomicWriteFileSync(
-      brainConfigPath(vault),
-      'schema_version: 1\ninstall:\n  tool_profile: "recall"\n',
-    );
-    expect(
-      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "minimal" }), "cursor"),
-    ).toEqual({ value: "minimal", origin: CONFIG_ORIGIN.env });
-  });
 
   test("the committed vault block beats the host row", () => {
     atomicWriteFileSync(
@@ -306,3 +299,56 @@ function sink(): NodeJS.WriteStream {
     },
   }) as unknown as NodeJS.WriteStream;
 }
+
+/**
+ * The environment does not parameterise a GENERATED registration.
+ *
+ * `OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE` used to outrank every other tier
+ * here, and the ladder is walked twice: once by `payloadForHost` on the
+ * apply path and once by `expectedPayloadFromEnv` on the verify path. A
+ * variable set for the first invocation and absent from the next therefore
+ * made a CORRECT install report drift, and the fix hint it offered would
+ * have rewritten the file to the host row - silently downgrading the
+ * profile the operator had asked for. Every surviving tier is a file, and a
+ * file is still there on the next invocation.
+ */
+describe("an environment variable cannot reach the written payload", () => {
+  const ENV_KEY = "OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE";
+
+  test("apply writes the host row's profile, not the environment's", () => {
+    const env = makeEnv({ [ENV_KEY]: "minimal" });
+    const payload = makePayload();
+    cursorAdapter.apply(cursorAdapter.plan(payload, env), payload, env, {
+      dryRun: false,
+      force: false,
+      stdout: sink(),
+      stderr: sink(),
+    });
+    const written = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")) as {
+      mcpServers: Record<string, { args: string[] }>;
+    };
+    const args = written.mcpServers["open-second-brain"]!.args;
+    expect(args).toContain("catalog");
+    expect(args).not.toContain("minimal");
+  });
+
+  test("a plain --check after an environment-set apply reports no drift", () => {
+    const withEnv = makeEnv({ [ENV_KEY]: "minimal" });
+    const payload = makePayload();
+    cursorAdapter.apply(cursorAdapter.plan(payload, withEnv), payload, withEnv, {
+      dryRun: false,
+      force: false,
+      stdout: sink(),
+      stderr: sink(),
+    });
+    // The second invocation is the operator running `o2b install --check`
+    // in a shell that never exported the variable.
+    expect(cursorAdapter.verify(makeEnv()).status).toBe("ok");
+  });
+
+  test("the resolver itself ignores the variable", () => {
+    expect(
+      resolveInstallToolProfile({ vault, configPath: join(home, "config.yaml") }, "cursor"),
+    ).toEqual({ value: "catalog", origin: CONFIG_ORIGIN.default });
+  });
+});

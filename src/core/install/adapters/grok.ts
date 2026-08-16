@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { UnsupportedPlatformError } from "../../config.ts";
 import type { InstallTargetId } from "../../runtime/host-facts.ts";
 import { GROK_HOOKS_FILENAME, grokHooksJson, grokMcpServers } from "../grok-asset.ts";
 import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
@@ -122,8 +123,34 @@ export const grokAdapter = {
   target: TARGET,
   label: LABEL,
 
+  /**
+   * The status vocabulary has a member for "this machine is not one this
+   * build has a layout for", and `detect` owes it rather than a throw.
+   *
+   * The reachable path to that condition is new: `syncState` resolves the
+   * hook timeout, which resolves the machine-local config path, which
+   * refuses on a platform with no `$HOME/.config` convention and no
+   * operator override. Before this adapter read a setting, `detect` could
+   * not fail that way; after it, an unsupported platform turned a
+   * read-only status query into an exception that also took down
+   * `detectAll`'s other nine targets.
+   */
   detect(env: InstallEnv): DetectResult {
-    const { mcpOk, hooksOk, anyPresent } = syncState(env);
+    let state: { mcpOk: boolean; hooksOk: boolean; anyPresent: boolean };
+    try {
+      state = syncState(env);
+    } catch (exc) {
+      if (exc instanceof UnsupportedPlatformError) {
+        return {
+          target: TARGET,
+          status: "unsupported-on-this-platform",
+          configPath: null,
+          notes: [exc.message],
+        };
+      }
+      throw exc;
+    }
+    const { mcpOk, hooksOk, anyPresent } = state;
     const status = !anyPresent ? "not-installed" : mcpOk && hooksOk ? "installed" : "drift";
     return { target: TARGET, status, configPath: configPath(env), notes: [] };
   },

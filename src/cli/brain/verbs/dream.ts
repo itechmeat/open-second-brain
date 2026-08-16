@@ -224,7 +224,12 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     // forwards, exactly as the maintenance lane does over its tasks.
     const stepObservation =
       flags["progress"] === true
-        ? attachProgress({ command: "brain", argv: ["dream", "step"], jsonRequested: asJson })
+        ? // The rail is told what was actually dispatched, not a label
+          // for it: `brain.ts` hands this verb the tail AFTER `dream`, and
+          // `["dream", "step"]` named a positional this verb has never had
+          // - `--step` is a flag. The two sibling call sites below pass
+          // the real action for the same reason.
+          attachProgress({ command: "brain", argv: ["dream", ...argv], jsonRequested: asJson })
         : null;
     reportProgressRefusal(stepObservation);
     let result: DreamStepResult;
@@ -243,7 +248,19 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       }
       const message = `dream step ${stepRequest} failed: ${(exc as Error).message ?? exc}`;
       if (asJson) {
-        okJson({ ok: false, step: stepRequest, message });
+        // The same marker the staged-action catch and the inline-pass
+        // catch emit, for the same reason and on the same contract
+        // (`docs/cli-reference.md`, "Long-running operations"): a machine
+        // caller has to be able to tell a budget it can raise or retry
+        // past from a defect it cannot. This branch is the one the step
+        // deadline was added for, so it was the one place a timeout came
+        // back indistinguishable from a crash.
+        okJson({
+          ok: false,
+          step: stepRequest,
+          ...(exc instanceof SafeguardTimeoutError ? { timed_out: true } : {}),
+          message,
+        });
         return 1;
       }
       return fail(message);

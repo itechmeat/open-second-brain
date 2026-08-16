@@ -111,6 +111,10 @@ const SKIP_DIRS: ReadonlySet<string> = new Set(["node_modules"]);
  */
 const DECLARED_EXEMPTIONS: ReadonlyMap<string, string> = new Map<string, string>([
   [
+    "DreamApplyInput",
+    "The dream pass's MUTATION STAGE, not a run: dream() owns the counter and has an `apply` stage open across this whole call. It takes the safeguard because the one sub-unit it dispatches - the opt-in heal enrichment - walks every user page in the vault and so needs a deadline inside a pass exactly as it does on its own; it takes no sink for the same reason scanBrain takes none from dream(), namely that a second stream would put two terminators on one run.",
+  ],
+  [
     "EmbeddingPhaseOptions",
     "A PHASE, not a run: called from indexInto and standalone by the vector backfill. Given a sink it would build a second counter, and a stream carrying two terminators cannot say which one ended the run - so it borrows the run owner's ProgressCounter instead, which is strictly more wiring than a sink, not less.",
   ],

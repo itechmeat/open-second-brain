@@ -30,8 +30,19 @@ import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
+import { applyDreamPlan } from "../../../src/core/brain/dream-apply.ts";
+import { scanBrain } from "../../../src/core/brain/dream-scan.ts";
+import type { PlanState } from "../../../src/core/brain/dream-plan.ts";
+import type { RefreshResult } from "../../../src/core/brain/dream-refresh.ts";
+import { runHealEnrichment } from "../../../src/core/brain/heal-run.ts";
+import { loadBrainConfig } from "../../../src/core/brain/policy.ts";
 import { brainDirs, dreamRunsDir } from "../../../src/core/brain/paths.ts";
-import { SafeguardTimeoutError, type Safeguard } from "../../../src/core/brain/safeguard.ts";
+import {
+  createSafeguard,
+  SafeguardAbortError,
+  SafeguardTimeoutError,
+  type Safeguard,
+} from "../../../src/core/brain/safeguard.ts";
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
@@ -234,16 +245,37 @@ describe("dream workrun checkpoints are truthful", () => {
 // ----- 2. The pre-finalize safeguard checkpoint -----------------------------
 
 describe("dream safeguard checkpoints", () => {
-  test("a changed run checkpoints five times, the last before finalize", () => {
+  /**
+   * The scan's own checkpoint count for THIS vault, measured rather than
+   * written down.
+   *
+   * The pass has five checkpoints of its own, but it CONTAINS the scan,
+   * and the scan is the pass's largest unbounded read - so the pass's
+   * total is five plus whatever the scan consults. Probing it with a real
+   * `scanBrain` call keeps the arithmetic honest as the fixture changes,
+   * and the probe is free of side effects: the scan opens no writer.
+   */
+  function scanCheckpoints(target: string = vault): number {
+    const probe = countingGuard(null);
+    scanBrain(target, { safeguard: probe.guard });
+    return probe.calls();
+  }
+
+  test("a changed run checkpoints five times of its own, plus the scan it contains", () => {
     seedPromotion();
+    const scan = scanCheckpoints();
+    // Non-vacuous: a fixture whose scan crossed no boundary would make
+    // the sum below true of an unguarded scan too.
+    expect(scan).toBeGreaterThan(0);
     const { guard, calls } = countingGuard(null);
     dream(vault, { now: NOW, safeguard: guard });
-    expect(calls()).toBe(5);
+    expect(calls()).toBe(5 + scan);
   });
 
   test("the pre-finalize checkpoint fires and leaves the workrun dangling", () => {
     seedPromotion();
-    const { guard } = countingGuard(5);
+    // The pass's fifth own checkpoint, counted from the scan's last one.
+    const { guard } = countingGuard(scanCheckpoints() + 5);
     expect(() => dream(vault, { now: NOW, safeguard: guard })).toThrow(SafeguardTimeoutError);
     const phases = workrunPhases();
     // The tail is covered: every mutation landed, the journal recorded it,
@@ -253,11 +285,99 @@ describe("dream safeguard checkpoints", () => {
     expect(existsSync(join(brainDirs(vault).preferences, "pref-ckpt-topic.md"))).toBe(true);
   });
 
-  test("a no-op run checkpoints once, at entry", () => {
+  test("a no-op run checkpoints once at entry, plus the scan it contains", () => {
+    const scan = scanCheckpoints();
     const { guard, calls } = countingGuard(null);
     const summary = dream(vault, { now: NOW, safeguard: guard });
     expect(summary.changed).toBe(false);
-    expect(calls()).toBe(1);
+    expect(calls()).toBe(1 + scan);
+  });
+
+  test("the heal enrichment inside a pass is guarded like the step on its own", () => {
+    // Heal is the second unit a full pass contains that walks the vault
+    // rather than the decided plan, and it was reached through
+    // `runHealEnrichment(vault)` with no options: inside a real pass the
+    // enrichment reads and rewrote every user page unguarded, however
+    // long the budget said the pass had.
+    makeNotes();
+    seedPromotion();
+    const scan = scanCheckpoints();
+
+    // Heal's own count for the same page set, measured on a vault of its
+    // own so the probe's rewrites cannot change what the pass then sees.
+    const twin = mkdtempSync(join(tmpdir(), "o2b-dream-ckpt-heal-"));
+    let heal: number;
+    try {
+      const twinConfig = join(configHome, "heal-twin.yaml");
+      atomicWriteFileSync(twinConfig, `vault: ${twin}\n`);
+      bootstrapBrain(twin, { configPath: twinConfig });
+      makeNotes(twin);
+      const probe = countingGuard(null);
+      runHealEnrichment(twin, { safeguard: probe.guard });
+      heal = probe.calls();
+    } finally {
+      rmSync(twin, { recursive: true, force: true });
+    }
+    expect(heal).toBeGreaterThan(0);
+
+    const { guard, calls } = countingGuard(null);
+    dream(vault, { now: NOW, safeguard: guard, gates: { heal_enrich: true } });
+    expect(calls()).toBe(5 + scan + heal);
+  });
+});
+
+// ----- 2b. A safeguard stop is not a heal failure ---------------------------
+
+describe("the mutation stage does not absorb a safeguard stop", () => {
+  /** The empty decided plan: this test is about the heal call, not planning. */
+  function emptyPlan(): PlanState {
+    return {
+      newUnconfirmed: [],
+      retires: [],
+      notedRedundant: [],
+      retainPinned: [],
+      signalsToMove: new Map(),
+      contradictionTopics: new Set(),
+      signalsSuppressed: [],
+      quarantined: [],
+      topicKeyContentions: [],
+    };
+  }
+
+  function emptyRefresh(): RefreshResult {
+    return { confirmed: new Set(), updated: new Map(), bandDrops: [], outcomeRegressions: [] };
+  }
+
+  function applyWith(safeguard: Safeguard): void {
+    applyDreamPlan({
+      vault,
+      cfg: loadBrainConfig(vault),
+      now: NOW,
+      plan: emptyPlan(),
+      refresh: emptyRefresh(),
+      agentName: "claude",
+      wikilinkToRun: "[[Brain/log/2026-05-23]]",
+      healEnrichEnabled: true,
+      safeguard,
+      workrun: null,
+    });
+  }
+
+  test("a tripped deadline in heal leaves the stage rather than warning and returning 0", () => {
+    makeNotes();
+    // The catch around the heal call is there for "one page would not
+    // rewrite", not for "the run is over". Absorbing a safeguard stop
+    // into a stderr warning and `heal_enriched: 0` reports a pass that
+    // enriched nothing where the truth is a pass that was stopped.
+    expect(() => applyWith(countingGuard(1).guard)).toThrow(SafeguardTimeoutError);
+  });
+
+  test("an abort is re-raised as an abort, not flattened into a warning", () => {
+    makeNotes();
+    const controller = new AbortController();
+    controller.abort();
+    const guard = createSafeguard({ operation: "dream", signal: controller.signal });
+    expect(() => applyWith(guard)).toThrow(SafeguardAbortError);
   });
 });
 

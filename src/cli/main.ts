@@ -19,6 +19,7 @@ import {
   setConfigValue,
   validateTimezoneName,
 } from "../core/config.ts";
+import { BrainConfigError } from "../core/brain/policy/errors.ts";
 import { EGRESS_OUTCOME, redactForEgress } from "../core/egress/guard.ts";
 import { listSecretReferences } from "../core/secret-ref.ts";
 import { BRAIN_INDEX_REL } from "../core/brain/paths.ts";
@@ -1070,6 +1071,21 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
     }
     if (exc instanceof ConfigReadError) {
       return reportConfigReadError(exc, command, rest);
+    }
+    if (exc instanceof BrainConfigError) {
+      // Joins `NoVaultConfiguredError` on exit 1 for the reason stated at
+      // {@link reportConfigReadError}: nothing is wrong with the argv, the
+      // machine cannot answer. The message already names the file and the
+      // field, because {@link BrainConfigError} composes both.
+      //
+      // Reached from `o2b install` and `o2b update`, where the settings
+      // ladder reads `<vault>/Brain/_brain.yaml` and REFUSES an unreadable
+      // one rather than regenerating a default the operator never chose.
+      // The refusal is right; printing it as a stack trace was not, and it
+      // took every other target's status down with it - `detectAll` walks
+      // ten adapters and one of them reads that file.
+      process.stderr.write(`error: ${exc.message}\n`);
+      return 1;
     }
     throw exc;
   }

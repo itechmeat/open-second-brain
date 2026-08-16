@@ -11,6 +11,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runHealEnrichment } from "../../../src/core/brain/heal-run.ts";
+import {
+  createSafeguard,
+  SafeguardTimeoutError,
+  type Safeguard,
+} from "../../../src/core/brain/safeguard.ts";
 
 let vault: string;
 
@@ -66,3 +71,65 @@ describe("runHealEnrichment safety", () => {
     expect(readFileSync(ego, "utf8")).not.toContain("[[Acme]]");
   });
 });
+
+describe("where the deadline is actually honoured", () => {
+  /** A guard that never trips and counts how often it was consulted. */
+  function countingGuard(): { guard: Safeguard; count: () => number } {
+    let seen = 0;
+    return {
+      guard: Object.freeze({
+        operation: "dream",
+        timeoutMs: null,
+        checkpoint: () => {
+          seen += 1;
+        },
+      }),
+      count: () => seen,
+    };
+  }
+
+  test("the phrase build is consulted before, not only after", () => {
+    // Two pages, so the arithmetic distinguishes a per-page checkpoint
+    // from a per-phase one. The run consults the guard:
+    //
+    //   1x after the listing walk (uninterruptible, so bounded on exit),
+    //   Px in the index loop,
+    //   1x before prepareHealPhrases (uninterruptible, so bounded on
+    //     entry - this is the one that was missing, which left the sort
+    //     and regex-escape of every title and alias in the vault sitting
+    //     between two checkpoints),
+    //   Px in the rewrite loop.
+    //
+    // 2 * P + 2. Before the fix it was 2 * P + 1, and the phrase build
+    // ran unconditionally no matter how long the budget had been gone.
+    note("Notes/Acme.md", "---\ntitle: Acme\n---\nThe Acme page.\n");
+    note("Notes/ref.md", "---\ntitle: Ref\n---\nwe rely on Acme daily\n");
+    const { guard, count } = countingGuard();
+    const result = runHealEnrichment(vault, { safeguard: guard });
+    expect(result.scanned).toBe(2);
+    expect(count()).toBe(2 * result.scanned + 2);
+  });
+
+  test("an already-elapsed budget stops before the phrase build", () => {
+    note("Notes/Acme.md", "---\ntitle: Acme\n---\nThe Acme page.\n");
+    const ref = note("Notes/ref.md", "---\ntitle: Ref\n---\nwe rely on Acme daily\n");
+    expect(() => runHealEnrichment(vault, { safeguard: trippedGuard() })).toThrow(
+      SafeguardTimeoutError,
+    );
+    // Nothing rewritten: the stop is at a boundary, before any write.
+    expect(readFileSync(ref, "utf8")).not.toContain("[[Acme]]");
+  });
+});
+
+/** A guard whose deadline is already in the past on its first check. */
+function trippedGuard(): Safeguard {
+  let calls = 0;
+  return createSafeguard({
+    operation: "dream",
+    timeoutMs: 1,
+    now: () => {
+      calls += 1;
+      return calls === 1 ? 0 : 1_000;
+    },
+  });
+}

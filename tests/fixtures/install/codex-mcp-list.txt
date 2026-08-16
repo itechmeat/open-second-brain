@@ -1,0 +1,2 @@
+Name               Command  Args  Env  Cwd  Status   Auth
+open-second-brain  o2b      mcp   -    -    enabled  Unsupported

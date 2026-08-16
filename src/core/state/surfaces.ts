@@ -60,7 +60,7 @@
  * already does.
  */
 
-import { statSync } from "node:fs";
+import { lstatSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -990,9 +990,20 @@ export interface StateInventoryInput {
   readonly statAt?: (path: string) => StatLike | undefined;
 }
 
-/** The default probe: `undefined` for a missing path, a throw for anything else. */
+/**
+ * The default probe: `undefined` for a missing path, a throw for anything
+ * else.
+ *
+ * The `lstat` fallback is not a detail. `statSync` FOLLOWS a symlink and
+ * reports a missing target as ENOENT, so a surface whose root is a
+ * dangling link answered `absent` - and `state migrate`, which only walks
+ * what is present, skipped it in silence and never reached the `symlink`
+ * refusal that knows what to tell the operator about a link. Something IS
+ * at that path; saying so is what carries it to the check that can
+ * explain it.
+ */
 function statOrAbsent(path: string): StatLike | undefined {
-  return statSync(path, { throwIfNoEntry: false });
+  return statSync(path, { throwIfNoEntry: false }) ?? lstatSync(path, { throwIfNoEntry: false });
 }
 
 /** What an absent surface says. Absent is a state, not a failure. */

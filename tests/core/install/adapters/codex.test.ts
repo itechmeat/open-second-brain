@@ -544,3 +544,117 @@ describe("codex adapter — uninstall", () => {
     expect(hint).toContain("--force-from-snippet");
   });
 });
+
+// ---------- A commented-out table is the operator saying no ----------
+
+describe("a commented-out table is not a declaration", () => {
+  /** The file an operator produces by commenting both tables out. */
+  function commentOutOurTables(): void {
+    const path = configPath();
+    const current = readFileSync(path, "utf8");
+    writeFileSync(
+      path,
+      current
+        .split("\n")
+        .map((line) => (line.trim().length === 0 ? line : `# ${line}`))
+        .join("\n"),
+    );
+  }
+
+  test("detect reports not-installed, not installed", () => {
+    // `toml.includes("[mcp_servers.open-second-brain]")` matches
+    // `# [mcp_servers.open-second-brain]` just as readily, so commenting
+    // both tables out - the ordinary way to turn a server off - left
+    // `detect` reporting a registration Codex would never load.
+    setCodexRunner(absentCodex());
+    install();
+    commentOutOurTables();
+    expect(codexAdapter.detect(env()).status).toBe("not-installed");
+  });
+
+  test("verify reports drift and names both missing tables", () => {
+    setCodexRunner(absentCodex());
+    install();
+    commentOutOurTables();
+    setHostProbeRunner({
+      available: () => false,
+      run: () => ({ exitCode: 127, stdout: "", stderr: "" }),
+    });
+    const result = codexAdapter.verify(env());
+    expect(result.status).toBe("drift");
+    expect(result.details.join("; ")).toContain(OSB_KEY_FULL);
+    expect(result.details.join("; ")).toContain(OSB_KEY_WRITER);
+  });
+
+  test("an indented but uncommented header still counts as declared", () => {
+    // The anchor is a whole-line match with leading whitespace tolerated:
+    // TOML permits an indented table header, and refusing one would be
+    // the same misreading pointed the other way.
+    setCodexRunner(absentCodex());
+    install();
+    const path = configPath();
+    writeFileSync(path, readFileSync(path, "utf8").replaceAll("[mcp_servers.", "  [mcp_servers."));
+    expect(codexAdapter.detect(env()).status).toBe("installed");
+  });
+});
+
+// ---------- A failed removal keeps the manifest entry ----------
+
+describe("uninstall does not forget an install it failed to remove", () => {
+  test("a `codex mcp remove` that fails leaves the entry, so the retry works", () => {
+    // Dropping the manifest entry after a failed removal makes the retry
+    // impossible: the next `o2b uninstall` finds no entry, throws
+    // `manifest-missing` and demands `--force-from-snippet` for a server
+    // the host still has. grok already guarded this; codex did not.
+    const host = fakeCodex();
+    setCodexRunner(host.runner);
+    install();
+    expect(readManifest(vault).installs["codex"]).toBeDefined();
+
+    setCodexRunner({
+      available: () => true,
+      run: () => ({ exitCode: 3, stdout: "", stderr: "codex refused the remove" }),
+    });
+    const result = codexAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(result.removed_keys).toEqual([]);
+    expect(result.skipped.map(([name]) => name).toSorted()).toEqual(
+      [OSB_KEY_FULL, OSB_KEY_WRITER].toSorted(),
+    );
+    expect(readManifest(vault).installs["codex"]).toBeDefined();
+
+    // The retry, once the host is willing again.
+    setCodexRunner(host.runner);
+    const retry = codexAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(retry.removed_keys.toSorted()).toEqual([OSB_KEY_FULL, OSB_KEY_WRITER].toSorted());
+    expect(readManifest(vault).installs["codex"]).toBeUndefined();
+  });
+
+  test("a clean removal still drops the entry", () => {
+    const host = fakeCodex();
+    setCodexRunner(host.runner);
+    install();
+    codexAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(readManifest(vault).installs["codex"]).toBeUndefined();
+  });
+
+  test("nothing left to remove is a completed uninstall, not a failure", () => {
+    // A skip is not a failure. `no OSB tables declared` means the file
+    // path found nothing to strip, and keeping the entry alive for that
+    // would make the manifest unclearable.
+    setCodexRunner(absentCodex());
+    install();
+    writeFileSync(configPath(), "");
+    const result = codexAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(result.skipped.length).toBe(1);
+    expect(readManifest(vault).installs["codex"]).toBeUndefined();
+  });
+
+  test("the file path reports the config it changed", () => {
+    // grok names its hooks file; codex named nothing, so an uninstall that
+    // rewrote `config.toml` left the operator no path to check.
+    setCodexRunner(absentCodex());
+    install();
+    const result = codexAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(result.removed_paths).toEqual([configPath()]);
+  });
+});

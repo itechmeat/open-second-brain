@@ -15,7 +15,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -203,6 +203,22 @@ describe("the measured half", () => {
     const path = row("maintenance_lease").derive(vault, null);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "", "utf8");
+    const report = reportFor(vault, "maintenance_lease");
+    expect(report.reachability.state).toBe(STATE_REACHABILITY.present);
+    expect(report.reachability.reason).toBeNull();
+  });
+
+  test("a dangling symlink is present: something IS there, and it needs a decision", () => {
+    // `statSync` follows the link and reports the missing TARGET as
+    // ENOENT, so a surface whose root is a broken link read as `absent`
+    // and `state migrate` skipped it in silence. Reporting it present is
+    // what carries it to the `symlink` refusal, which is the one place
+    // that knows what to tell the operator about a link.
+    const vault = tempVault();
+    const path = row("maintenance_lease").derive(vault, null);
+    mkdirSync(dirname(path), { recursive: true });
+    symlinkSync(join(vault, "nowhere"), path);
+
     const report = reportFor(vault, "maintenance_lease");
     expect(report.reachability.state).toBe(STATE_REACHABILITY.present);
     expect(report.reachability.reason).toBeNull();

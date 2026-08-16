@@ -32,7 +32,11 @@
 
 import { join } from "node:path";
 
-import { SESSION_ADAPTER_ID, type SessionAdapterId } from "../brain/sessions/types.ts";
+import {
+  SESSION_ADAPTER_ID,
+  SESSION_FILE_EXTENSION,
+  type SessionAdapterId,
+} from "../brain/sessions/types.ts";
 
 // ---------- The target vocabulary ----------
 
@@ -344,11 +348,20 @@ const CODEX_SESSION_SUBDIRS: ReadonlyArray<string> = Object.freeze([
  * written on could settle it: the discipline scanner counts `*.json`,
  * while `src/core/brain/sessions/codex.ts` parses the `.jsonl` rollout
  * line schema, and no session directory existed under the Codex home to
- * measure. So the glob covers both extensions rather than picking the
- * one that would silently find nothing.
+ * measure. The glob used to cover both extensions rather than pick the
+ * one that would silently find nothing - but "find" was the wrong word
+ * for what covering both bought. A `.json` this build enrols is one no
+ * shipped adapter can read, so it is discovered as a GAP, fails
+ * `DETECT_FAIL` on import, and drives `--discover --all` to exit 1; and
+ * `sessionFilesUnder` never accepted it, so `import-session <dir>` and
+ * `export --transcripts <dir>` skipped every one of them in silence.
+ * Three definitions of "what a session log is", of which only
+ * {@link SESSION_FILE_EXTENSION} matched what the adapters parse. The
+ * format label keeps its name: the uncertainty about what Codex writes is
+ * real, and it is this build's READER that is narrow.
  */
 const CODEX_SESSION_FORMAT = "codex-rollout-json-or-jsonl";
-const CODEX_SESSION_GLOB = "**/*.json*";
+const CODEX_SESSION_GLOB = `**/*${SESSION_FILE_EXTENSION}`;
 
 /** Codex keeps per-session files under `$CODEX_HOME` (default `~/.codex`). */
 const CODEX_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze(
@@ -365,8 +378,16 @@ const CODEX_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze(
   ),
 );
 
-/** `$CODEX_HOME` when the operator set one, else `~/.codex`. */
-function codexHome(ctx: HostContext): string {
+/**
+ * `$CODEX_HOME` when the operator set one, else `~/.codex`.
+ *
+ * Exported because the Codex adapter resolves the same directory for its
+ * `config.toml` and for the `CODEX_HOME` it injects into the CLI. It had
+ * its own copy, in a module pair whose whole thesis is that a fact about a
+ * host has one home - so a relocation rule fixed in one and not the other
+ * would put the session roots and the configuration on different disks.
+ */
+export function codexHome(ctx: HostContext): string {
   return envOr(ctx, "CODEX_HOME", join(ctx.home, ".codex"));
 }
 

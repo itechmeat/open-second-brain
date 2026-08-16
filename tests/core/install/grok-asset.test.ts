@@ -7,6 +7,7 @@
 
 import { describe, expect, test } from "bun:test";
 
+import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../../../src/core/brain/policy/blocks/install.ts";
 import { grokHooksJson, grokMcpServers } from "../../../src/core/install/grok-asset.ts";
 import type { McpPayload } from "../../../src/core/install/types.ts";
 
@@ -51,7 +52,7 @@ describe("grokMcpServers", () => {
 
 describe("grokHooksJson", () => {
   test("stamps grok's host-qualified id on every hook command's env", () => {
-    const parsed = JSON.parse(grokHooksJson(PAYLOAD));
+    const parsed = JSON.parse(grokHooksJson(PAYLOAD, INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT));
     const commands = Object.values(
       parsed.hooks as Record<string, Array<{ hooks: Array<{ env: Record<string, string> }> }>>,
     )

@@ -298,12 +298,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "creates no file and removes none",
   ],
   [
-    "src/core/install/friction.ts",
-    "a report, not a writer: the home-rooted paths in it are the transcript roots and config " +
-      "paths the fact table and the adapters' own plans DECLARE, printed so an operator can " +
-      "compare what each host costs. It resolves them against the injected InstallEnv, creates " +
-      "nothing, reads nothing off the filesystem at those paths, and never even checks whether " +
-      "they exist - that measurement would turn a capability table into a machine report",
+    "src/core/install/host-probe.ts",
+    "it builds no path at all: the only home it touches is `InstallEnv.home`, copied into the " +
+      "environment of a read-only `<host> mcp list` subprocess so the host answers about the " +
+      "machine being verified rather than the ambient one. The probe starts no model turn, needs " +
+      "no key, writes nothing, and whatever the host reads under that home belongs to the " +
+      "runtime_config_blocks row the adapters already declare",
   ],
   [
     "src/cli/install/install.ts",
@@ -364,6 +364,14 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
     "a read-only transcript scanner: it locates the runtime's own session logs and workspace " +
       "state under the home directory and reads them. The runtime wrote those files and owns " +
       "them; this module creates nothing and deletes nothing there",
+  ],
+  [
+    "src/cli/brain/verbs/export.ts",
+    "the transcript export streams each redacted record to a spool as it is produced rather " +
+      "than building the corpus in memory, and the spool sits beside --out so the finish is a " +
+      "rename on one filesystem; only when the operator named no destination does it fall back " +
+      "to the temp directory, and either way the file is renamed into place or unlinked before " +
+      "the command returns. Nothing durable is left outside the vault",
   ],
   [
     "src/core/state/migrate.ts",

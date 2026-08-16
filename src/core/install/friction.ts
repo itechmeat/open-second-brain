@@ -55,8 +55,9 @@
  */
 
 import { hostProbeCommand, NO_HANDSHAKE_NOTE } from "./host-probe.ts";
-import { installSettingsSource, resolveInstallToolProfile } from "./settings.ts";
+import { writtenToolProfile } from "./payload-host.ts";
 import { RUNTIME_FACTS, TOOL_CEILING_KIND, type InstallTargetId } from "../runtime/host-facts.ts";
+import { BrainConfigError } from "../brain/policy/errors.ts";
 import type { InstallAdapter, InstallEnv, McpPayload } from "./types.ts";
 
 /**
@@ -143,6 +144,34 @@ export interface FrictionInput {
   readonly adapters: ReadonlyArray<InstallAdapter>;
 }
 
+/**
+ * The answer for a cell whose input could not be resolved, naming the
+ * obstacle.
+ *
+ * `--friction` is a REPORT and is documented as one that never exits
+ * non-zero, so a vault whose `_brain.yaml` will not parse must not turn it
+ * into a stack trace - which it did the moment `plan()` began resolving
+ * the tool profile, because `loadInstallBlockSafe` refuses an unreadable
+ * config by design and `runFriction` caught only usage and payload
+ * errors. Reporting the refusal in the cell keeps both properties: the
+ * report stays total, and the refusal is still stated rather than papered
+ * over with a default the operator never chose. Nothing is generated from
+ * this value, which is why a report may hold what a writer must not.
+ */
+function unresolvedCell(dimension: FrictionDimension, exc: BrainConfigError): FrictionCell {
+  return { dimension, value: "unresolved", detail: exc.message };
+}
+
+/** `compute()`, or the named refusal when the vault config will not parse. */
+function orUnresolved(dimension: FrictionDimension, compute: () => FrictionCell): FrictionCell {
+  try {
+    return compute();
+  } catch (exc) {
+    if (exc instanceof BrainConfigError) return unresolvedCell(dimension, exc);
+    throw exc;
+  }
+}
+
 /** The install mechanism, as the live adapter's own plan describes it. */
 function mechanismCell(adapter: InstallAdapter, input: FrictionInput): FrictionCell {
   const steps = adapter.plan(input.payload, input.env).steps;
@@ -181,13 +210,26 @@ function ceilingCell(target: InstallTargetId): FrictionCell {
 }
 
 /**
- * The profile the generated registration will actually carry, resolved
- * through the same four tiers `payloadForHost` resolves it through - not
- * the fact row's bottom tier, which is only one of the four and is the
- * one an operator is least likely to be looking at.
+ * The profile the generated registration will actually carry, asked of the
+ * one function the write path asks - not the fact row's bottom tier, which
+ * is only one of the three and is the one an operator is least likely to
+ * be looking at.
+ *
+ * Three targets carry no profile because they write no MCP command line at
+ * all, and they answer so by name. Resolving the ladder for them anyway
+ * printed `generic tool-profile minimal / resolved from ...` beside a
+ * `--target generic --apply` that emits no `--tool-profile` argument - a
+ * cell contradicting the artifact it claims to describe.
  */
 function profileCell(target: InstallTargetId, input: FrictionInput): FrictionCell {
-  const resolved = resolveInstallToolProfile(installSettingsSource(input.env), target);
+  const resolved = writtenToolProfile(target, input.env);
+  if (resolved === null) {
+    return {
+      dimension: FRICTION_DIMENSION.toolProfile,
+      value: "not carried",
+      detail: "this target writes no MCP command line, so no profile is selected for it",
+    };
+  }
   return {
     dimension: FRICTION_DIMENSION.toolProfile,
     value: resolved.value ?? "none",
@@ -213,39 +255,56 @@ function evidenceCell(target: InstallTargetId): FrictionCell {
 }
 
 /**
- * The transcript roots the fact row DECLARES for this host, resolved
- * against the injected machine. Declared, not measured: whether the
- * directory exists on this box is a discovery question, and answering it
- * here would turn a capability table into a machine report.
+ * The transcript roots THIS ADAPTER answers for, resolved against the
+ * injected machine.
+ *
+ * Asked of `adapter.sessionPaths(env)` rather than read out of
+ * `RUNTIME_FACTS` directly, and that is the point: the member shipped
+ * required with ten implementations and no caller anywhere in `src/`,
+ * which is the exact defect - a declaration nothing reads - that this
+ * release exists to remove. These two cells are per target and
+ * adapter-keyed and already hold an `InstallEnv`, so they are the caller
+ * the member was written for. The adapters all delegate to
+ * `sessionPathsFor`, so the answer still comes from the one declaration;
+ * what changes is that the seam is now load-bearing and a broken
+ * implementation is visible in a surface an operator reads.
+ *
+ * Declared, not measured: whether the directory exists on this box is a
+ * discovery question, and answering it here would turn a capability table
+ * into a machine report.
  */
-function transcriptCell(target: InstallTargetId, input: FrictionInput): FrictionCell {
-  const roots = RUNTIME_FACTS[target].sessionRoots;
-  if (roots.length === 0) {
+function transcriptCell(adapter: InstallAdapter, input: FrictionInput): FrictionCell {
+  const answered = adapter.sessionPaths(input.env);
+  if (answered === null || answered.roots.length === 0) {
     return {
       dimension: FRICTION_DIMENSION.sessionTranscripts,
       value: "none declared",
       detail: null,
     };
   }
-  const ctx = { home: input.env.home, env: input.env.env };
   return {
     dimension: FRICTION_DIMENSION.sessionTranscripts,
-    value: `${roots.length} declared root(s)`,
-    detail: roots.map((root) => `${root.resolve(ctx)}/${root.glob} (${root.format})`).join("; "),
+    value: `${answered.roots.length} declared root(s)`,
+    detail: answered.roots.map((root) => `${root.path}/${root.glob} (${root.format})`).join("; "),
   };
 }
 
 /** Whether anything in this build reads those transcripts. */
-function parserCell(target: InstallTargetId): FrictionCell {
-  const facts = RUNTIME_FACTS[target];
-  if (facts.sessionAdapter !== null) {
+function parserCell(adapter: InstallAdapter, input: FrictionInput): FrictionCell {
+  const answered = adapter.sessionPaths(input.env);
+  const roots = answered === null ? [] : answered.roots;
+  // Each root names its own parser, so a runtime whose stores are split
+  // between a readable and an unreadable format says both rather than
+  // rounding to the row's single answer.
+  const adapters = [...new Set(roots.map((root) => root.adapter).filter((a) => a !== null))];
+  if (adapters.length > 0) {
     return {
       dimension: FRICTION_DIMENSION.sessionParser,
-      value: facts.sessionAdapter,
+      value: adapters.toSorted().join(", "),
       detail: null,
     };
   }
-  const formats = [...new Set(facts.sessionRoots.map((root) => root.format))];
+  const formats = [...new Set(roots.map((root) => root.format))];
   return {
     dimension: FRICTION_DIMENSION.sessionParser,
     value: "none ships",
@@ -263,12 +322,12 @@ function rowFor(adapter: InstallAdapter, input: FrictionInput): FrictionRow {
     target,
     label: adapter.label,
     cells: [
-      mechanismCell(adapter, input),
+      orUnresolved(FRICTION_DIMENSION.mechanism, () => mechanismCell(adapter, input)),
       ceilingCell(target),
-      profileCell(target, input),
+      orUnresolved(FRICTION_DIMENSION.toolProfile, () => profileCell(target, input)),
       evidenceCell(target),
-      transcriptCell(target, input),
-      parserCell(target),
+      transcriptCell(adapter, input),
+      parserCell(adapter, input),
     ],
   };
 }

@@ -19,7 +19,7 @@
  *   - with neither flag present the verb is byte-identical to today.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +28,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { DREAM_PHASE } from "../../src/core/brain/dream-phases.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { cmdBrainDream } from "../../src/cli/brain/verbs/dream.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -466,5 +467,67 @@ describe("MCP brain_dream carries the same two capabilities", () => {
     const tool = listed.result.tools.find((t) => t.name === "brain_dream")!;
     expect(Object.keys(tool.inputSchema.properties)).toContain("step");
     expect(Object.keys(tool.inputSchema.properties)).toContain("gates");
+  });
+});
+
+describe("a step that runs out of budget says so on the JSON stream", () => {
+  /**
+   * `--step` is driven IN PROCESS here rather than through `runCli`,
+   * because a deadline cannot be forced from outside: the config ladder
+   * accepts only non-negative whole seconds and reads `0` as "disabled",
+   * so no value a subprocess could be given makes a scan trip. A clock
+   * whose every reading is a day past the previous one does it instead -
+   * `createSafeguard` reads `Date.now`, which is exactly the path the
+   * verb takes - and it is the same technique `long-running-tools.test.ts`
+   * uses on the MCP side of the same contract.
+   */
+  async function stepJson(step: string): Promise<Record<string, unknown>> {
+    const written: string[] = [];
+    const realWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown) => {
+      written.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+    let tick = 0;
+    const clock = spyOn(Date, "now").mockImplementation(() => {
+      tick += 1;
+      return tick * 86_400_000;
+    });
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    try {
+      const code = await cmdBrainDream(["--step", step, "--vault", vault, "--json"]);
+      expect(code).toBe(1);
+    } finally {
+      clock.mockRestore();
+      process.stdout.write = realWrite;
+      delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    }
+    return JSON.parse(written.join("")) as Record<string, unknown>;
+  }
+
+  test("the scan step marks a tripped deadline as timed_out", async () => {
+    seedPromotion();
+    const payload = await stepJson("scan");
+    expect(payload["ok"]).toBe(false);
+    expect(payload["step"]).toBe("scan");
+    // The contract `docs/cli-reference.md` states for every long-running
+    // operation: a machine caller must be able to tell a budget it can
+    // raise from a defect it cannot. Both other dream catches emit it.
+    expect(payload["timed_out"]).toBe(true);
+    expect(String(payload["message"])).toContain("safeguard timeout");
+  });
+
+  test("the heal-enrich step marks it the same way", async () => {
+    makeLinkableNotes();
+    const payload = await stepJson("heal-enrich");
+    expect(payload["ok"]).toBe(false);
+    expect(payload["step"]).toBe("heal-enrich");
+    expect(payload["timed_out"]).toBe(true);
+  });
+
+  test("a refusal is not a timeout: no marker on a step that cannot run", async () => {
+    const r = await runCli(["brain", "dream", "--step", "log", "--vault", vault, "--json"]);
+    expect(r.returncode).toBe(2);
+    expect(JSON.parse(r.stdout)["timed_out"]).toBeUndefined();
   });
 });

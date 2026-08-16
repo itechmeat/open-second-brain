@@ -31,11 +31,12 @@
  */
 
 import { afterEach, beforeEach, expect, spyOn, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { DREAM_STEP } from "../../src/core/brain/dream-step.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
@@ -223,10 +224,31 @@ test("brain_dream step reports the step it runs under a progress token", async (
   await initialize(server);
 
   expect(
-    (await callWithToken(server, "brain_dream", { action: "run", step: "scan" })).isError,
+    (await callWithToken(server, "brain_dream", { action: "run", step: DREAM_STEP.scan })).isError,
   ).toBe(false);
   // The step branch dropped the sink as silently as it dropped the guard.
   expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+  // ...and the STAGE is the claim this test's name, its docblock and the
+  // `docs/mcp.md` row all make: a step reports under its own name rather
+  // than the five stages of a full pass. Asserting only the operation
+  // left that claim untested - `dream` is the operation on every branch,
+  // so renaming the scan's stage to `plan` kept this green.
+  expect(stagesIn(frames)).toEqual(new Set([DREAM_STEP.scan]));
+});
+
+test("brain_dream step heal-enrich reports under its own stage too", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect(
+    (await callWithToken(server, "brain_dream", { action: "run", step: DREAM_STEP.healEnrich }))
+      .isError,
+  ).toBe(false);
+  // The second of the two runnable steps, so the row's parenthetical
+  // (`scan` / `heal-enrich`) is covered rather than half-covered.
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+  expect(stagesIn(frames)).toEqual(new Set([DREAM_STEP.healEnrich]));
 });
 
 test("brain_maintenance names the task whose deadline tripped", async () => {
@@ -314,20 +336,37 @@ test("a live clock leaves all four tools running to completion", async () => {
 // The same four tools, observed
 // ---------------------------------------------------------------------------
 
-/** The operations named by the progress events a call emitted. */
-function operationsIn(frames: JsonRpcNotification[]): Set<string> {
+/** One field of the progress events a call emitted, deduplicated. */
+function fieldIn(frames: JsonRpcNotification[], field: "operation" | "stage"): Set<string> {
   const seen = new Set<string>();
   for (const frame of frames) {
     if (frame.method !== PROGRESS_NOTIFICATION_METHOD) continue;
     const params = frame.params as Record<
       string,
-      Record<string, { operation: string; schema: string }>
+      Record<string, { operation: string; stage: string; schema: string }>
     >;
     const event = params["_meta"]![PROGRESS_META_KEY]!;
     expect(event.schema).toBe(PROGRESS_SCHEMA);
-    seen.add(event.operation);
+    seen.add(event[field]);
   }
   return seen;
+}
+
+/** The operations named by the progress events a call emitted. */
+function operationsIn(frames: JsonRpcNotification[]): Set<string> {
+  return fieldIn(frames, "operation");
+}
+
+/**
+ * The stages named by those events.
+ *
+ * A second reader rather than a wider `operationsIn`, because the two
+ * answer different questions: the operation says WHOSE run this is (the
+ * lane's dispatch test turns on it), and the stage says WHERE in that run
+ * it currently is. The step tests are the ones that need the second.
+ */
+function stagesIn(frames: JsonRpcNotification[]): Set<string> {
+  return fieldIn(frames, "stage");
 }
 
 /** A server whose notification frames this test can read back. */
@@ -444,4 +483,82 @@ test("no token leaves every one of them silent", async () => {
   await callRaw(server, "brain_bridges", { operation: "discover" });
   await callRaw(server, "brain_clusters", { operation: "run" });
   expect(frames).toEqual([]);
+});
+
+// ---------------------------------------------------------------------------
+// The prose is derived from the two populations, not asserted beside them
+// ---------------------------------------------------------------------------
+
+/**
+ * `docs/mcp.md` claims "bounded and observed are now the same population
+ * with no exception", and the table under it is the population. That
+ * sentence replaced a `**none**` row - a row that had been wrong for a
+ * release because nothing checked it - so leaving the replacement as
+ * unchecked prose would repeat the failure with better wording.
+ *
+ * Both sides are read rather than written down: the rows come out of the
+ * document and the covered tools come out of THIS file's own calls. A row
+ * for a tool nobody drives here fails, and a row that reads `none` in
+ * either column fails.
+ */
+const BOUNDED_TABLE_HEADER = "| tool | long operation it reaches | deadline | reports |";
+
+interface DocRow {
+  readonly tool: string;
+  readonly subject: string;
+  readonly deadline: string;
+  readonly reports: string;
+}
+
+function boundedTableRows(): ReadonlyArray<DocRow> {
+  const doc = readFileSync(join(import.meta.dir, "..", "..", "docs", "mcp.md"), "utf8");
+  const start = doc.indexOf(BOUNDED_TABLE_HEADER);
+  expect(`the bounded table is present: ${start >= 0}`).toBe("the bounded table is present: true");
+  const body = doc.slice(start).split("\n\n")[0]!;
+  return body
+    .split("\n")
+    .slice(2) // header and separator
+    .filter((line) => line.startsWith("|"))
+    .map((line) => {
+      const cells = line
+        .split("|")
+        .slice(1, -1)
+        .map((c) => c.trim());
+      return {
+        subject: cells[0] ?? "",
+        tool: /`(brain_[a-z_]+)`/.exec(cells[0] ?? "")?.[1] ?? "",
+        deadline: cells[2] ?? "",
+        reports: cells[3] ?? "",
+      };
+    });
+}
+
+/** The tools this file actually drives, read from its own call sites. */
+function toolsCoveredHere(): Set<string> {
+  const self = readFileSync(import.meta.path, "utf8");
+  return new Set(
+    [...self.matchAll(/call(?:Raw|WithToken)\(\s*server,\s*"([a-z_]+)"/g)].map((m) => m[1]!),
+  );
+}
+
+test("every row of the bounded table is bounded, observed, and covered here", () => {
+  const rows = boundedTableRows();
+  // Non-vacuous: a parse that silently stopped matching would sweep an
+  // empty table clean.
+  expect(rows.length).toBeGreaterThan(6);
+
+  const unnamed = rows.filter((r) => r.tool === "").map((r) => r.subject);
+  expect(unnamed.join("\n")).toBe("");
+
+  // "No exception" is exactly this: no row may say a call is unbounded or
+  // unobserved. `**none**` was the spelling the step row used.
+  const exceptions = rows
+    .filter((r) => /none/i.test(r.deadline) || !/^yes/i.test(r.reports))
+    .map((r) => `${r.subject} | ${r.deadline} | ${r.reports}`);
+  expect(exceptions.join("\n")).toBe("");
+
+  // And the table may not name a tool this file leaves untested.
+  const covered = toolsCoveredHere();
+  const untested = [...new Set(rows.map((r) => r.tool))].filter((t) => !covered.has(t));
+  expect(untested.toSorted().join("\n")).toBe("");
 });

@@ -35,9 +35,7 @@ import {
 } from "../../../../src/core/brain/policy/blocks/install.ts";
 import {
   INSTALL_HOOK_TIMEOUT_CONFIG_KEY,
-  INSTALL_HOOK_TIMEOUT_ENV_KEY,
   INSTALL_TOOL_PROFILE_CONFIG_KEY,
-  INSTALL_TOOL_PROFILE_ENV_KEY,
   resolveInstallHookTimeoutSeconds,
   resolveInstallToolProfile,
 } from "../../../../src/core/install/settings.ts";
@@ -70,8 +68,8 @@ function writeUserConfig(body: string): void {
   atomicWriteFileSync(configPath, body);
 }
 
-function source(env: NodeJS.ProcessEnv = {}) {
-  return { vault, env, configPath };
+function source() {
+  return { vault, configPath };
 }
 
 function parse(body: string) {
@@ -128,16 +126,7 @@ describe("install: block parsing", () => {
   });
 });
 
-describe("install setting resolution - four layers, highest first", () => {
-  test("environment beats the vault block, the user key and the default", () => {
-    writeVaultConfig("schema_version: 1\ninstall:\n  hook_timeout_seconds: 30\n");
-    writeUserConfig(`${INSTALL_HOOK_TIMEOUT_CONFIG_KEY}: 20\n`);
-    const resolved = resolveInstallHookTimeoutSeconds(
-      source({ [INSTALL_HOOK_TIMEOUT_ENV_KEY]: "40" }),
-    );
-    expect(resolved).toEqual({ value: 40, origin: CONFIG_ORIGIN.env });
-  });
-
+describe("install setting resolution - three layers, highest first", () => {
   test("the committed vault block beats the user-level key", () => {
     writeVaultConfig("schema_version: 1\ninstall:\n  hook_timeout_seconds: 30\n");
     writeUserConfig(`${INSTALL_HOOK_TIMEOUT_CONFIG_KEY}: 20\n`);
@@ -163,7 +152,7 @@ describe("install setting resolution - four layers, highest first", () => {
     });
   });
 
-  test("the same four layers decide the tool profile", () => {
+  test("the same three layers decide the tool profile", () => {
     // The bottom tier is per HOST - the target's own `RUNTIME_FACTS`
     // row, not one compiled name - because a profile that fits a host
     // capping a workspace at forty tools is not the profile that fits a
@@ -186,22 +175,20 @@ describe("install setting resolution - four layers, highest first", () => {
       value: "recall",
       origin: CONFIG_ORIGIN.vaultConfig,
     });
-
-    expect(
-      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "catalog" }), "kiro"),
-    ).toEqual({ value: "catalog", origin: CONFIG_ORIGIN.env });
   });
 
-  test("an environment value that is not a known profile is refused by name", () => {
-    expect(() =>
-      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "nope" }), "kiro"),
-    ).toThrow(new RegExp(INSTALL_TOOL_PROFILE_ENV_KEY));
+  test("a user-config value that is not a known profile is refused by name", () => {
+    writeUserConfig(`${INSTALL_TOOL_PROFILE_CONFIG_KEY}: nope\n`);
+    expect(() => resolveInstallToolProfile(source(), "kiro")).toThrow(
+      new RegExp(INSTALL_TOOL_PROFILE_CONFIG_KEY),
+    );
   });
 
-  test("an environment hook timeout that is not a positive integer is refused by name", () => {
-    expect(() =>
-      resolveInstallHookTimeoutSeconds(source({ [INSTALL_HOOK_TIMEOUT_ENV_KEY]: "abc" })),
-    ).toThrow(new RegExp(INSTALL_HOOK_TIMEOUT_ENV_KEY));
+  test("a user-config hook timeout that is not a positive integer is refused by name", () => {
+    writeUserConfig(`${INSTALL_HOOK_TIMEOUT_CONFIG_KEY}: abc\n`);
+    expect(() => resolveInstallHookTimeoutSeconds(source())).toThrow(
+      new RegExp(INSTALL_HOOK_TIMEOUT_CONFIG_KEY),
+    );
   });
 });
 

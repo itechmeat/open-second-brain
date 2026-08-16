@@ -23,8 +23,9 @@ import type { InstallEnv } from "../../../src/core/install/types.ts";
 import {
   isInstallTargetId,
   isSessionRuntimeId,
-  resolveSessionRoots,
+  resolveSessionRootsFor,
   RUNTIME_FACTS,
+  SESSION_ROOTS,
   SESSION_RUNTIME_ID,
   type InstallTargetId,
 } from "../../../src/core/runtime/host-facts.ts";
@@ -70,10 +71,20 @@ describe("every adapter answers where its sessions live", () => {
   });
 
   test("a runtime that stores session logs answers the fact table's roots, resolved", () => {
+    // The declaration is reached through the RUNTIME-keyed lookup
+    // (`resolveSessionRootsFor` over `SESSION_ROOTS`), not the
+    // target-keyed one. Comparing `adapter.sessionPaths()` against
+    // `resolveSessionRoots(target)` was a tautology: both read
+    // `RUNTIME_FACTS[target].sessionRoots`, so the assertion held for any
+    // value that field could contain. Going through the other lookup is
+    // what makes a row naming one runtime while carrying another's roots
+    // fail here.
     const drifted: string[] = [];
     for (const adapter of ADAPTERS) {
       const target = adapter.target as InstallTargetId;
-      const declared = resolveSessionRoots(target, { home: HOME, env: {} });
+      const runtime = RUNTIME_FACTS[target].sessionRuntime;
+      const declared =
+        runtime === null ? [] : resolveSessionRootsFor(runtime, { home: HOME, env: {} });
       const answered = adapter.sessionPaths(envFor());
       if (declared.length === 0) {
         if (answered !== null) drifted.push(`${target}: roots with no declaration`);
@@ -134,15 +145,33 @@ describe("every adapter answers where its sessions live", () => {
   });
 
   test("the row's declared session runtime and its declared roots agree", () => {
-    // Two fields could disagree: a row naming a runtime while carrying
-    // another runtime's roots would make the discovery join silently wrong.
+    // Two fields could disagree, and the comparison has to be BETWEEN
+    // them: a row naming `grok` while carrying Cursor's roots would make
+    // the discovery join silently wrong - a sweep keyed on the runtime id
+    // would attribute Cursor's `state.vscdb` files to grok - and the
+    // shapes match, so nothing about the types objects to it. Counting
+    // roots against runtime-is-not-null could not see it: both sides stay
+    // true. The row's roots must BE the entry its declared runtime names,
+    // by identity, because `SESSION_ROOTS` is the one declaration and a
+    // row that copied the array instead of pointing at it is a second one.
     const drifted: string[] = [];
     for (const row of Object.values(RUNTIME_FACTS)) {
-      const hasRoots = row.sessionRoots.length > 0;
-      if (hasRoots !== (row.sessionRuntime !== null)) {
+      if (row.sessionRuntime === null) {
+        if (row.sessionRoots.length > 0) {
+          drifted.push(`${row.target}: ${row.sessionRoots.length} roots but no session runtime`);
+        }
+        continue;
+      }
+      const declared = SESSION_ROOTS[row.sessionRuntime];
+      if (row.sessionRoots !== declared) {
         drifted.push(
-          `${row.target}: runtime ${String(row.sessionRuntime)}, ${row.sessionRoots.length} roots`,
+          `${row.target}: sessionRoots are not SESSION_ROOTS[${row.sessionRuntime}] ` +
+            `(ids ${row.sessionRoots.map((r) => r.id).join(",")} vs ` +
+            `${declared.map((r) => r.id).join(",")})`,
         );
+      }
+      if (row.sessionRoots.length === 0) {
+        drifted.push(`${row.target}: names runtime ${row.sessionRuntime} and declares no roots`);
       }
     }
     expect(drifted.toSorted().join("\n")).toBe("");

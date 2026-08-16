@@ -22,6 +22,7 @@
  */
 
 import { readLines } from "./read-lines.ts";
+import { SESSION_TIMESTAMP_UNKNOWN } from "./types.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface HermesToolCall {
@@ -59,7 +60,7 @@ function buildTurn(obj: Record<string, unknown>, fallbackIndex: number): Session
   const timestamp =
     typeof obj["timestamp"] === "string" && obj["timestamp"].length > 0
       ? (obj["timestamp"] as string)
-      : new Date(0).toISOString();
+      : SESSION_TIMESTAMP_UNKNOWN;
 
   const text =
     typeof obj["content"] === "string" && obj["content"].length > 0

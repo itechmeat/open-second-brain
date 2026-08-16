@@ -296,3 +296,109 @@ describe("copilot-cli adapter — uninstall", () => {
     expect(parsed.mcpServers["open-second-brain-writer"]).toBeUndefined();
   });
 });
+
+/**
+ * The other half of the shared refuting-probe rule.
+ *
+ * `probeRefutedVerdict` splits one probe answer into two verdicts, and
+ * this adapter's subprocess mode is the only place in the tree where the
+ * `artifactMatches: false` half is reachable: `copilot mcp add` leaves no
+ * file, so the host's own registry IS the record and a host that answers
+ * without our servers has lost the registration rather than failed to
+ * reload it. The `artifactMatches: true` half - config right, host stale -
+ * is driven for every probe-bearing target in
+ * `tests/core/install/friction.test.ts`.
+ */
+describe("a refuting probe means different things in the two modes", () => {
+  function subprocessCapable(): CopilotRunner {
+    return {
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      list: () => ({ ok: true, names: ["open-second-brain", "open-second-brain-writer"] }),
+    };
+  }
+
+  test("subprocess mode: the host is the record, so an empty answer is drift", () => {
+    setCopilotRunner(subprocessCapable());
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    stageProbe([]);
+    const v = copilotCliAdapter.verify(env());
+    expect(v.status).toBe("drift");
+    // Re-applying is the repair, because there is nothing on disk that is
+    // already correct for a restart to pick up.
+    expect(v.fix_hint ?? "").toContain("--apply");
+    expect(v.fix_hint ?? "").not.toContain("restart");
+  });
+
+  test("file mode: the file is the record and it matches, so it is unreachable", () => {
+    const absent: CopilotRunner = {
+      available: () => false,
+      run: () => ({ exitCode: 1, stdout: "", stderr: "" }),
+      list: () => ({ ok: false, names: [] }),
+    };
+    setCopilotRunner(absent);
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    stageProbe([]);
+    const v = copilotCliAdapter.verify(env());
+    expect(v.status).toBe("mcp-unreachable");
+    expect(v.fix_hint ?? "").toContain("restart");
+  });
+});
+
+describe("uninstall does not forget an install it failed to remove", () => {
+  test("a `copilot mcp remove` that fails leaves the entry, so the retry works", () => {
+    setCopilotRunner({
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      list: () => ({ ok: true, names: ["open-second-brain", "open-second-brain-writer"] }),
+    });
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    expect(readManifest(vault).installs["copilot-cli"]).toBeDefined();
+
+    setCopilotRunner({
+      available: () => true,
+      run: () => ({ exitCode: 5, stdout: "", stderr: "copilot refused the remove" }),
+      list: () => ({ ok: true, names: ["open-second-brain", "open-second-brain-writer"] }),
+    });
+    const failed = copilotCliAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(failed.removed_keys).toEqual([]);
+    expect(failed.skipped.length).toBe(2);
+    // Kept, so the retry below is not `manifest-missing`.
+    expect(readManifest(vault).installs["copilot-cli"]).toBeDefined();
+
+    setCopilotRunner({
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      list: () => ({ ok: true, names: [] }),
+    });
+    const retry = copilotCliAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(retry.removed_keys.length).toBe(2);
+    expect(readManifest(vault).installs["copilot-cli"]).toBeUndefined();
+  });
+
+  test("an unchanged fallback file is a completed uninstall, not a failure", () => {
+    // A skip is not a failure: there was nothing left to remove. Guarding
+    // the manifest drop on `skipped.length === 0` - the shape grok uses,
+    // where every skip IS a failure - would make this manifest entry
+    // unclearable.
+    const absent: CopilotRunner = {
+      available: () => false,
+      run: () => ({ exitCode: 1, stdout: "", stderr: "" }),
+      list: () => ({ ok: false, names: [] }),
+    };
+    setCopilotRunner(absent);
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    copilotCliAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: false });
+    expect(readManifest(vault).installs["copilot-cli"]).toBeUndefined();
+
+    // Second pass: the file no longer carries the keys.
+    setCopilotRunner(absent);
+    const again = copilotCliAdapter.uninstall(env(), { ...applyOpts(), fromSnippet: true });
+    expect(again.skipped.length).toBe(1);
+    expect(readManifest(vault).installs["copilot-cli"]).toBeUndefined();
+  });
+});

@@ -32,9 +32,10 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { INSTALL_TARGET_ID } from "../../runtime/host-facts.ts";
 import {
   handshakeNote,
+  hostProbeEnvironment,
   HOST_PROBE_RESULT,
   probeHost,
-  probeRefutedFixHint,
+  probeRefutedVerdict,
   probeRefutes,
 } from "../host-probe.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
@@ -83,8 +84,24 @@ export interface CopilotListResult {
 
 export interface CopilotRunner {
   available(): boolean;
-  run(args: ReadonlyArray<string>): CopilotRunResult;
-  list(): CopilotListResult;
+  /**
+   * `copilot <args>` against the host `env` describes.
+   *
+   * The environment is a parameter for the same reason `list` takes one:
+   * `mcp add` persists into Copilot's own configuration root, and an
+   * `apply` that wrote to the ambient machine while `verify` asked the
+   * injected one would report drift against a registration it had just
+   * made.
+   */
+  run(args: ReadonlyArray<string>, env: InstallEnv): CopilotRunResult;
+  /**
+   * Ask the host named by `env` what it has registered. The environment is
+   * a parameter for the reason the probe seam takes one: Copilot derives
+   * its own `${XDG_CONFIG_HOME:-$HOME/.config}/github-copilot` root, and a
+   * question asked of the ambient process is a question about a different
+   * machine than the one `fallbackPath(env)` writes to.
+   */
+  list(env: InstallEnv): CopilotListResult;
 }
 
 const defaultRunner: CopilotRunner = {
@@ -96,19 +113,35 @@ const defaultRunner: CopilotRunner = {
       return false;
     }
   },
-  run(args) {
-    const r = Bun.spawnSync({ cmd: ["copilot", ...args], stdout: "pipe", stderr: "pipe" });
+  run(args, env) {
+    const r = Bun.spawnSync({
+      cmd: ["copilot", ...args],
+      // The machine `env` describes, plus a PATH. `PATH` is not part of
+      // "which machine's configuration" - it is how the `copilot`
+      // executable was located in the first place, and `available()`
+      // above locates it with the ambient one - so an `InstallEnv` that
+      // carries no PATH must not make the very binary this runner just
+      // confirmed present unspawnable. Everything that decides WHICH
+      // configuration root Copilot writes (`HOME`, `XDG_CONFIG_HOME`)
+      // comes from `env`, so apply and verify address one machine.
+      env: {
+        PATH: process.env["PATH"] ?? "",
+        ...hostProbeEnvironment(env),
+      },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
     return {
       exitCode: r.exitCode ?? 1,
       stdout: r.stdout?.toString() ?? "",
       stderr: r.stderr?.toString() ?? "",
     };
   },
-  list(): CopilotListResult {
+  list(env: InstallEnv): CopilotListResult {
     // One implementation of "ask copilot what it has registered", shared
     // with `verify` through the declared `RUNTIME_FACTS` probe rather
     // than spelled a second time here.
-    const outcome = probeHost(TARGET);
+    const outcome = probeHost(TARGET, env);
     if (outcome.kind !== HOST_PROBE_RESULT.answered) return { ok: false, names: [] };
     return { ok: true, names: outcome.registered };
   },
@@ -152,18 +185,19 @@ interface ApplyOutcome {
 }
 
 function applyViaCli(
+  env: InstallEnv,
   payload: McpPayload,
   stderr: NodeJS.WriteStream | NodeJS.WritableStream,
 ): { ok: boolean; reason?: string } {
   // best-effort remove
   for (const name of [OSB_KEY_FULL, OSB_KEY_WRITER]) {
-    activeRunner.run(["mcp", "remove", name]);
+    activeRunner.run(["mcp", "remove", name], env);
   }
   for (const [name, entry] of [
     [OSB_KEY_FULL, payload.full],
     [OSB_KEY_WRITER, payload.writer],
   ] as const) {
-    const r = activeRunner.run(addArgs(name, entry));
+    const r = activeRunner.run(addArgs(name, entry), env);
     if (r.exitCode !== 0) {
       stderr.write(`copilot mcp add failed for ${name} (exit ${r.exitCode}): ${r.stderr.trim()}\n`);
       return { ok: false, reason: r.stderr.trim() || `exit ${r.exitCode}` };
@@ -189,13 +223,25 @@ function applyViaFile(
   return path;
 }
 
-function uninstallViaCli(): { removed: string[] } {
+/**
+ * Remove both servers from the host's own registry.
+ *
+ * `failed` is reported apart from the removed names because the manifest
+ * entry may only be dropped when nothing was left behind - see the guard
+ * in `uninstall`.
+ */
+function uninstallViaCli(env: InstallEnv): {
+  removed: string[];
+  failures: Array<readonly [string, string]>;
+} {
   const removed: string[] = [];
+  const failures: Array<readonly [string, string]> = [];
   for (const name of [OSB_KEY_FULL, OSB_KEY_WRITER]) {
-    const r = activeRunner.run(["mcp", "remove", name]);
+    const r = activeRunner.run(["mcp", "remove", name], env);
     if (r.exitCode === 0) removed.push(name);
+    else failures.push([name, `copilot mcp remove exited ${r.exitCode}`]);
   }
-  return { removed };
+  return { removed, failures };
 }
 
 function uninstallViaFile(
@@ -223,7 +269,7 @@ export const copilotCliAdapter: InstallAdapter = {
   detect(env: InstallEnv): DetectResult {
     const cliAvailable = activeRunner.available();
     if (cliAvailable) {
-      const lst = activeRunner.list();
+      const lst = activeRunner.list(env);
       if (lst.ok) {
         const has = (n: string) => lst.names.includes(n);
         if (has(OSB_KEY_FULL) && has(OSB_KEY_WRITER)) {
@@ -323,7 +369,7 @@ export const copilotCliAdapter: InstallAdapter = {
     const payload = payloadForHost(TARGET, rawPayload, env);
     let outcome: ApplyOutcome;
     if (activeRunner.available()) {
-      const r = opts.dryRun ? { ok: true } : applyViaCli(payload, opts.stderr);
+      const r = opts.dryRun ? { ok: true } : applyViaCli(env, payload, opts.stderr);
       if (r.ok) {
         outcome = { viaCli: true, fallbackFile: null };
       } else {
@@ -366,6 +412,10 @@ export const copilotCliAdapter: InstallAdapter = {
       );
     }
 
+    // A skip is not a failure: an unchanged fallback file means there was
+    // nothing left to remove. Only a removal this build attempted and
+    // could not carry out may keep the manifest entry alive.
+    let failed = false;
     const viaCli = stored?.operation === "subprocess";
     if (viaCli) {
       if (opts.dryRun) {
@@ -373,8 +423,10 @@ export const copilotCliAdapter: InstallAdapter = {
         // the two removals so the operator sees what would happen.
         removed_keys.push(OSB_KEY_FULL, OSB_KEY_WRITER);
       } else {
-        const { removed } = uninstallViaCli();
+        const { removed, failures } = uninstallViaCli(env);
         for (const r of removed) removed_keys.push(r);
+        for (const f of failures) skipped.push(f);
+        failed = failures.length > 0;
       }
     } else {
       const { path, touched } = uninstallViaFile(
@@ -388,7 +440,11 @@ export const copilotCliAdapter: InstallAdapter = {
         skipped.push([path, "fallback file unchanged"]);
       }
     }
-    if (!opts.dryRun) removeEntry(env.vault, TARGET);
+    // Dropping the manifest entry after a FAILED removal makes the retry
+    // impossible: the next `o2b uninstall` finds no entry, throws
+    // `manifest-missing` and demands `--force-from-snippet` for a server
+    // the host still has. grok already guards this; this adapter did not.
+    if (!opts.dryRun && !failed) removeEntry(env.vault, TARGET);
     return { target: TARGET, removed_keys, removed_paths, skipped };
   },
 
@@ -406,7 +462,7 @@ export const copilotCliAdapter: InstallAdapter = {
     // before the branch because BOTH modes are owed it: the subprocess
     // mode has nothing else to compare, and the file mode has a
     // comparison that cannot establish the host ever loaded the file.
-    const probe = probeHost(TARGET);
+    const probe = probeHost(TARGET, env);
     if (stored.operation === "subprocess") {
       // In this mode the host CLI IS the registry - there is no file to
       // fall back on - so a probe that could not run leaves nothing
@@ -429,14 +485,20 @@ export const copilotCliAdapter: InstallAdapter = {
           fix_hint: null,
         };
       }
-      // A partial answer here is DRIFT, not unreachable: the host was
-      // reached and reported the registration itself as incomplete, and
-      // re-applying is what repairs it.
+      // Subprocess mode leaves no artifact, so `artifactMatches` is false
+      // and the shared rule returns DRIFT rather than unreachable: the
+      // host was reached, the host IS the record, and it reported the
+      // registration itself as incomplete. Re-applying is what repairs it.
+      const verdict = probeRefutedVerdict({
+        target: TARGET,
+        label: LABEL,
+        artifactMatches: false,
+      });
       return {
         target: TARGET,
-        status: "drift",
+        status: verdict.status,
         details: [handshakeNote(probe)],
-        fix_hint: "o2b install --target copilot-cli --apply",
+        fix_hint: verdict.fixHint,
       };
     }
     // file-fallback path
@@ -467,11 +529,16 @@ export const copilotCliAdapter: InstallAdapter = {
         // question, and a host that answers and does not list the servers
         // has not loaded the file the operator just verified.
         if (probeRefutes(probe)) {
+          const verdict = probeRefutedVerdict({
+            target: TARGET,
+            label: LABEL,
+            artifactMatches: true,
+          });
           return {
             target: TARGET,
-            status: "mcp-unreachable",
+            status: verdict.status,
             details: [`${path}: matches the canonical payload, but ${handshakeNote(probe)}`],
-            fix_hint: probeRefutedFixHint(LABEL),
+            fix_hint: verdict.fixHint,
           };
         }
         return {

@@ -20,12 +20,30 @@
  * {@link CLI_ONLY} / {@link MCP_ONLY}, each entry carrying a written
  * reason. Both directions are asserted: a missing counterpart fails, and
  * so does an exclusion that outlives the flag it excuses, so the map
- * cannot quietly become a graveyard.
+ * cannot quietly become a graveyard. {@link CLI_TO_MCP} is checked on
+ * BOTH sides for the same reason - its values were validated against the
+ * declared properties and its keys against nothing, so renaming `--retry`
+ * would have left a dead entry silently excusing a flag that no longer
+ * exists.
  *
- * The last rule is cheaper and catches the root cause rather than its
- * symptom: neither module may spell a lane task name by hand any more.
- * Both build their task list from `LANE_TASK`, so a fifth task is added
- * in one place or not at all.
+ * ## Three things a name-only census cannot see
+ *
+ * Names matching is necessary and not sufficient, so three further rules
+ * sit beside it:
+ *
+ *   - **Same name, different contract.** `--busy-minutes`, `--busy-
+ *     threshold` and `--limit` each took any positive integer on the CLI
+ *     while the tool bounded them, so one lane accepted through one door
+ *     what it refused at the other. Both surfaces now read the same
+ *     ceilings, and "the two refuse the same out-of-range value" is
+ *     asserted by DRIVING both rather than by comparing two numbers.
+ *   - **Declared and never read.** The populations come from the flag
+ *     table and the `inputSchema`, both of which are declarations. A
+ *     property nobody consumes would pass a name census cleanly, so each
+ *     name must also appear where its surface actually reads it.
+ *   - **The root cause, not the symptom:** neither module may spell a
+ *     lane task name by hand any more. Both build their task list from
+ *     `LANE_TASK`, so a fifth task is added in one place or not at all.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -33,7 +51,14 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { isLaneTask, LANE_TASK, LANE_TASKS } from "../../src/core/brain/maintenance/lane.ts";
+import {
+  isLaneTask,
+  LANE_TASK,
+  LANE_TASKS,
+  MAINTENANCE_BUSY_MINUTES_MAX,
+  MAINTENANCE_BUSY_THRESHOLD_MAX,
+} from "../../src/core/brain/maintenance/lane.ts";
+import { MAINTENANCE_JOURNAL_CAP } from "../../src/core/brain/maintenance/journal.ts";
 import { isOperation } from "../../src/core/brain/safeguard.ts";
 import { ADMIN_TOOLS } from "../../src/mcp/brain/admin-tools.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
@@ -73,6 +98,18 @@ const CLI_ONLY: Readonly<Record<string, string>> = Object.freeze({
   progress:
     "a client asks for progress with a _meta progressToken on the request, which the transport " +
     "turns into the handler's onProgress sink; a boolean argument would be a second way to ask.",
+});
+
+/**
+ * CLI flags the verb reads through a shared helper rather than by name,
+ * mapped to the helper that reads them.
+ *
+ * `flags["<name>"]` is how every other flag is consumed, so the absence
+ * of that spelling normally means nobody reads it. These are the
+ * exceptions, and each names the reader so the waiver dies with it.
+ */
+const CLI_INDIRECT: Readonly<Record<string, string>> = Object.freeze({
+  vault: "brainVerbContext(flags)",
 });
 
 /** MCP properties with no CLI flag, and why. */
@@ -122,6 +159,26 @@ function mcpPropertyNames(): ReadonlyArray<string> {
   return Object.keys(schema.properties ?? {});
 }
 
+/**
+ * The tool's handler, as source: everything between its declaration and
+ * the tool table that declares the schema.
+ *
+ * Bounded that way on purpose. Every property name appears in the schema
+ * literal by construction, so a census that searched the whole module
+ * would find each one and prove nothing; the handler region is where a
+ * name has to appear for the argument to actually do something.
+ */
+function mcpHandlerSource(): string {
+  const text = sourceWithoutComments(MCP_MODULE);
+  const start = text.indexOf("function toolBrainMaintenance(");
+  expect(`the handler is present: ${start >= 0}`).toBe("the handler is present: true");
+  const end = text.indexOf("export const ADMIN_TOOLS", start);
+  expect(`the handler precedes the tool table: ${end > start}`).toBe(
+    "the handler precedes the tool table: true",
+  );
+  return text.slice(start, end);
+}
+
 /** The properties a CLI flag maps to: its declared aliases, else its snake form. */
 function propertiesFor(flag: string): ReadonlyArray<string> {
   return CLI_TO_MCP[flag] ?? [flag.replaceAll("-", "_")];
@@ -132,7 +189,18 @@ function flagFor(property: string, flags: ReadonlyArray<string>): string | undef
   return flags.find((flag) => propertiesFor(flag).includes(property));
 }
 
-/** Lane-task names spelled as a bare string literal, with their module. */
+/**
+ * Lane-task names spelled as a bare string literal, with their module.
+ *
+ * Known imprecision, left in deliberately: this matches a quoted task
+ * name ANYWHERE outside a comment, so a user-facing message that happens
+ * to quote one - `"dream is already running"` - would be reported as a
+ * hand-written list. That is a false positive, not a bug to work around
+ * silently: if you hit it, the fix is to build the sentence from
+ * `LANE_TASK.dream` rather than to loosen this pattern, because the whole
+ * point is that the name has exactly one source. A pattern that tried to
+ * tell a list from a sentence would need a parser and would still guess.
+ */
 function bareLaneTaskLiterals(file: string): ReadonlyArray<string> {
   const literal = new RegExp(`(["'\`])(${LANE_TASKS.join("|")})\\1`, "g");
   const label = file.slice(ROOT.length + 1);
@@ -213,6 +281,39 @@ describe("maintenance surface parity", () => {
       .flatMap(([flag, names]) => names.map((name) => `${flag} -> ${name}`))
       .filter((pair) => !properties.has(pair.split(" -> ")[1]!));
     expect(dangling.toSorted().join("\n")).toBe("");
+    // ...and the other side of the same arrow. A key naming a flag the
+    // verb no longer declares excuses nothing and hides that it excuses
+    // nothing: rename `--retry` and the two name-parity tests above stay
+    // green while this entry rots.
+    const orphanedKeys = Object.keys(CLI_TO_MCP).filter((flag) => !flags.has(flag));
+    expect(orphanedKeys.toSorted().join("\n")).toBe("");
+  });
+
+  test("every declared name is read by the surface that declares it", () => {
+    // Both populations are DECLARATIONS. A flag in the table that the
+    // verb never reads, or a schema property the handler never consumes,
+    // is a promise on the surface with nothing behind it - and it passes
+    // a name census cleanly, because the name is right there.
+    const cli = sourceWithoutComments(CLI_VERB);
+    const unreadFlags = cliFlagNames()
+      .filter((flag) => CLI_INDIRECT[flag] === undefined)
+      .filter((flag) => !cli.includes(`flags["${flag}"]`))
+      .map((flag) => `--${flag}`);
+    expect(unreadFlags.toSorted().join("\n")).toBe("");
+
+    // The indirect readers are named rather than waived: the helper that
+    // consumes the flag has to still be called here.
+    for (const [flag, helper] of Object.entries(CLI_INDIRECT)) {
+      expect(`--${flag} is read via ${helper}: ${cli.includes(helper)}`).toBe(
+        `--${flag} is read via ${helper}: true`,
+      );
+    }
+
+    const handler = mcpHandlerSource();
+    const unreadProperties = mcpPropertyNames()
+      .filter((property) => !handler.includes(`"${property}"`))
+      .map((property) => `${TOOL_NAME}.${property}`);
+    expect(unreadProperties.toSorted().join("\n")).toBe("");
   });
 
   test("the census is not vacuous", () => {
@@ -229,6 +330,138 @@ describe("maintenance surface parity", () => {
     expect(
       [...bareLaneTaskLiterals(CLI_VERB), ...bareLaneTaskLiterals(MCP_MODULE)].join("\n"),
     ).toBe("");
+  });
+});
+
+/**
+ * One out-of-range value per bounded knob, in both spellings.
+ *
+ * The ceilings are imported, never retyped, and each case sits one past
+ * its own ceiling - so raising a bound moves these cases with it and a
+ * bound that disappears from one surface fails here rather than in a
+ * user's vault.
+ */
+interface OutOfRangeCase {
+  readonly label: string;
+  readonly operation: "run" | "status";
+  readonly cli: ReadonlyArray<string>;
+  readonly mcp: Record<string, number>;
+}
+
+// Annotated before freezing rather than inside it: `Object.freeze` is
+// generic, so its argument gets no contextual type, and TypeScript then
+// widens these three literals into a union in which each one carries the
+// other two's keys as `?: undefined` - which no `Record<string, number>`
+// accepts.
+const OUT_OF_RANGE_CASES: ReadonlyArray<OutOfRangeCase> = [
+  {
+    label: "busy-minutes past a day",
+    operation: "run",
+    cli: ["--busy-minutes", String(MAINTENANCE_BUSY_MINUTES_MAX + 1)],
+    mcp: { busy_minutes: MAINTENANCE_BUSY_MINUTES_MAX + 1 },
+  },
+  {
+    label: "busy-threshold past any real traffic",
+    operation: "run",
+    cli: ["--busy-threshold", String(MAINTENANCE_BUSY_THRESHOLD_MAX + 1)],
+    mcp: { busy_threshold: MAINTENANCE_BUSY_THRESHOLD_MAX + 1 },
+  },
+  {
+    label: "limit past the journal's ring size",
+    operation: "status",
+    cli: ["--limit", String(MAINTENANCE_JOURNAL_CAP + 1)],
+    mcp: { limit: MAINTENANCE_JOURNAL_CAP + 1 },
+  },
+];
+
+const OUT_OF_RANGE = Object.freeze(OUT_OF_RANGE_CASES);
+
+describe("the two surfaces refuse the same values, not only the same names", () => {
+  let tmp: string;
+  let vault: string;
+  let configPath: string;
+
+  beforeEach(async () => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-maint-bounds-"));
+    vault = join(tmp, "vault");
+    mkdirSync(vault, { recursive: true });
+    configPath = join(tmp, "config.yaml");
+    writeFileSync(configPath, `vault: ${vault}\nagent_name: claude\n`);
+    const init = await runCli(["brain", "init", "--vault", vault], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
+    });
+    expect(init.returncode).toBe(0);
+  });
+
+  afterEach(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  for (const casing of OUT_OF_RANGE) {
+    test(`${casing.label}: refused by the verb and by the tool`, async () => {
+      const cli = await runCli(
+        ["brain", "maintenance", casing.operation, ...casing.cli, "--vault", vault],
+        { env: { OPEN_SECOND_BRAIN_CONFIG: configPath } },
+      );
+      // Understood and declined: a usage exit, nothing attempted. The
+      // lane must never START on a number the other door refuses.
+      expect(cli.returncode).toBe(2);
+
+      const server = new MCPServer({ vault, configPath });
+      await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: PROTOCOL_VERSION },
+      });
+      const res = (await server.handleRequest({
+        jsonrpc: JSONRPC_VERSION,
+        id: 2,
+        method: "tools/call",
+        params: {
+          name: TOOL_NAME,
+          arguments: { operation: casing.operation, ...casing.mcp },
+        },
+      })) as { error?: { code: number } };
+      expect(res.error?.code).toBe(INVALID_PARAMS);
+    });
+  }
+
+  test("retry_tasks longer than the lane has tasks is refused, not merely advertised", async () => {
+    // `maxItems` on the schema is advertisement: no JSON-Schema validator
+    // runs on the request path, and the unknown-argument guard checks
+    // names rather than shapes. So the handler owes the check itself -
+    // without it a thousand-entry array was accepted while the schema
+    // said it could not be.
+    const server = new MCPServer({ vault, configPath });
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: PROTOCOL_VERSION },
+    });
+    const tool = ADMIN_TOOLS.find((t) => t.name === TOOL_NAME)!;
+    const schema = tool.inputSchema as {
+      properties: { retry_tasks: { maxItems?: number } };
+    };
+    const advertised = schema.properties.retry_tasks.maxItems;
+    expect(advertised).toBe(LANE_TASKS.length);
+    const res = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "tools/call",
+      params: {
+        name: TOOL_NAME,
+        arguments: {
+          operation: "run",
+          // Every entry a REAL lane task, so the only thing wrong with
+          // the request is its length.
+          retry_tasks: Array.from({ length: advertised! + 1 }, () => LANE_TASK.dream),
+        },
+      },
+    })) as { error?: { code: number; message: string } };
+    expect(res.error?.code).toBe(INVALID_PARAMS);
+    expect(res.error?.message).toContain(String(advertised));
   });
 });
 

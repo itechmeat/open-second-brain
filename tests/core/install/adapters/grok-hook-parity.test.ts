@@ -21,6 +21,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../../../../src/core/brain/policy/blocks/install.ts";
 import { grokHooksJson } from "../../../../src/core/install/grok-asset.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import type { McpPayload } from "../../../../src/core/install/types.ts";
@@ -79,7 +80,7 @@ function payload(): McpPayload {
 
 describe("grok registers the plugin's hooks", () => {
   const plugin = registeredHooks(readFileSync(PLUGIN_HOOKS_JSON, "utf8"));
-  const grok = registeredHooks(grokHooksJson(payload()));
+  const grok = registeredHooks(grokHooksJson(payload(), INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT));
 
   test("the derivation reads a real hook set, not an empty one", () => {
     // Both floors sit just under the live measurement. Without them a

@@ -89,7 +89,13 @@ export async function startHttp(
     // for: counting it would make the number a supervisor reads include
     // the act of reading it, and a probe arriving as the last request
     // finishes would restart the wait it was checking on.
-    const finish = isHealthProbe(req) ? NOTHING_TO_FINISH : drain.begin(requestLabel(req));
+    // A request that arrives once the drain has started is not work
+    // either - it is refused with a 503 below and never dispatched - and
+    // counting it let a client retrying in a tight loop keep the register
+    // non-empty, holding the shutdown open to its whole deadline over
+    // requests the server had already declined to do.
+    const untracked = isHealthProbe(req) || drain.draining;
+    const finish = untracked ? NOTHING_TO_FINISH : drain.begin(requestLabel(req));
     // On `close` rather than on the handler returning, because that is
     // when the response has actually left: a request counted as finished
     // while its bytes are still queued lets the drain proceed to

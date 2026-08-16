@@ -43,20 +43,25 @@
  * Two seams, for the reason `copilot-cli.ts` states: `CodexRunner` owns
  * the commands that CHANGE this host, while `../host-probe.ts` owns the
  * read-only question "what does this host say it has registered",
- * declared once in `RUNTIME_FACTS[codex].hostProbe`.
+ * declared once in `RUNTIME_FACTS[codex].hostProbe`. BOTH seams take the
+ * injected home - the probe through `hostProbeEnvironment(env)` - so the
+ * file half and the handshake half of a `verify` describe one machine.
+ * They described two for a release: the file half read the relocated
+ * `CODEX_HOME` while `codex mcp list` answered about the operator's real
+ * `~/.codex`.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { INSTALL_TARGET_ID } from "../../runtime/host-facts.ts";
+import { codexHome as resolveCodexHome, INSTALL_TARGET_ID } from "../../runtime/host-facts.ts";
 import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
 import type { GrokMcpEntry } from "../grok-config.ts";
 import {
   handshakeNote,
   probeHost,
-  probeRefutedFixHint,
+  probeRefutedVerdict,
   probeRefutes,
   HOST_PROBE_RESULT,
 } from "../host-probe.ts";
@@ -149,9 +154,16 @@ export function resetCodexRunner(): void {
 
 // ---------- Paths and payload ----------
 
+/**
+ * The Codex configuration directory this install is about.
+ *
+ * Delegated to `../../runtime/host-facts.ts` rather than re-derived: that
+ * module already resolves the same `$CODEX_HOME`-or-`~/.codex` rule for
+ * the session roots, and two copies of a relocation rule is two answers
+ * waiting to disagree.
+ */
 function codexHome(env: InstallEnv): string {
-  const override = env.env["CODEX_HOME"];
-  return override && override.length > 0 ? override : join(env.home, ".codex");
+  return resolveCodexHome({ home: env.home, env: env.env });
 }
 
 function configPath(env: InstallEnv): string {
@@ -200,18 +212,38 @@ function codexMcpServers(payload: McpPayload): Record<string, GrokMcpEntry> {
   };
 }
 
+/**
+ * Whether `toml` DECLARES the `[mcp_servers.<name>]` table.
+ *
+ * Anchored to a whole line, and that is the point. A substring search
+ * matches `# [mcp_servers.open-second-brain]` as readily as the table
+ * itself, so an operator who commented both tables out - the ordinary way
+ * to turn a server off - got `detect: installed` and `verify: ok` for a
+ * registration Codex would not load. A commented header is the operator
+ * saying no, and a reader that cannot tell it from a yes is reporting on a
+ * file it did not understand.
+ *
+ * Leading whitespace is tolerated because TOML permits an indented table
+ * header; anything else on the line - a `#`, a second table, trailing
+ * prose - means this is not that header.
+ */
+function declaresTable(toml: string, name: string): boolean {
+  const header = `[mcp_servers.${name}]`;
+  return toml.split("\n").some((line) => line.trim() === header);
+}
+
 /** Whether both of our tables are declared at all, whoever wrote them. */
 function declaresBothServers(toml: string): boolean {
-  return SERVER_NAMES.every((name) => toml.includes(`[mcp_servers.${name}]`));
+  return SERVER_NAMES.every((name) => declaresTable(toml, name));
 }
 
 function declaredServers(toml: string): ReadonlyArray<string> {
-  return SERVER_NAMES.filter((name) => toml.includes(`[mcp_servers.${name}]`));
+  return SERVER_NAMES.filter((name) => declaresTable(toml, name));
 }
 
 /** The clause naming which of the two tables the file is missing. */
 function undeclared(toml: string): string {
-  const missing = SERVER_NAMES.filter((name) => !toml.includes(`[mcp_servers.${name}]`));
+  const missing = SERVER_NAMES.filter((name) => !declaresTable(toml, name));
   return `does not declare ${missing.join(", ")}`;
 }
 
@@ -263,7 +295,10 @@ function applyViaFile(
   stderr.write(`codex: wrote the MCP servers to ${path} (file-fallback mode)\n`);
 }
 
-/** Strip our two tables, leaving every other section untouched. */
+/**
+ * Strip our two tables, leaving every other section untouched. Returns
+ * whether the file carried any of them.
+ */
 function stripOurTables(env: InstallEnv, dryRun: boolean): boolean {
   const path = configPath(env);
   const current = readFileOrEmpty(path);
@@ -299,10 +334,25 @@ export const codexAdapter: InstallAdapter = {
     return { target: TARGET, status: "not-installed", configPath: path, notes: [cliNote] };
   },
 
-  plan(payload: McpPayload, env: InstallEnv): InstallPlan {
-    void payload;
+  plan(rawPayload: McpPayload, env: InstallEnv): InstallPlan {
     const path = configPath(env);
+    // The preview prints the args that will actually be registered, for
+    // the reason `_json-mcp.ts` prints them: a plan whose command line
+    // differs from the applied one is a plan the operator cannot use to
+    // review the change - and the host dimensions this transform adds
+    // (`--tool-profile`, `--host-target`) are exactly what a reviewer of
+    // a capped host is looking for.
+    const payload = codexPayload(rawPayload, env);
     if (activeRunner.available()) {
+      const commands = [
+        ...SERVER_NAMES.map((name) => `codex mcp remove ${name}`),
+        ...(
+          [
+            [OSB_KEY_FULL, payload.full],
+            [OSB_KEY_WRITER, payload.writer],
+          ] as const
+        ).map(([name, entry]) => `codex ${addArgs(name, entry).join(" ")}`),
+      ];
       return {
         target: TARGET,
         steps: [
@@ -312,22 +362,24 @@ export const codexAdapter: InstallAdapter = {
             // registration lands, and an operator reading a plan is owed
             // the file it will change.
             path,
-            preview:
-              `codex mcp remove ${SERVER_NAMES.join("; codex mcp remove ")}; ` +
-              `codex mcp add ${SERVER_NAMES.join(" ...; codex mcp add ")} ... ` +
-              `(persisted to ${path})`,
+            preview: `${commands.join("; ")} (persisted to ${path})`,
           },
         ],
         postNotes: [`codex CLI present; CODEX_HOME resolves to ${codexHome(env)}`],
       };
     }
+    const tables = Object.entries(codexMcpServers(payload)).map(
+      ([name, entry]) => `[mcp_servers.${name}] → ${entry.command} ${entry.args.join(" ")}`,
+    );
     return {
       target: TARGET,
       steps: [
         {
           kind: "managed-block",
           path,
-          preview: `codex CLI not on PATH; merge the two [mcp_servers.*] tables into ${path}`,
+          preview:
+            `codex CLI not on PATH; merge the two [mcp_servers.*] tables into ${path}: ` +
+            tables.join("; "),
         },
       ],
       postNotes: [
@@ -374,6 +426,11 @@ export const codexAdapter: InstallAdapter = {
     const removed_keys: string[] = [];
     const removed_paths: string[] = [];
     const skipped: Array<readonly [string, string]> = [];
+    // A skip is not a failure. "No OSB tables declared" means there was
+    // nothing left to remove, which is a completed uninstall; only a
+    // removal this build attempted and could not carry out may keep the
+    // manifest entry alive. Tracked apart from `skipped` for that reason.
+    let failed = false;
 
     if (stored?.operation === "subprocess" && activeRunner.available()) {
       if (opts.dryRun) {
@@ -384,18 +441,29 @@ export const codexAdapter: InstallAdapter = {
         for (const name of SERVER_NAMES) {
           const result = activeRunner.run(codexHome(env), ["mcp", "remove", name]);
           if (result.exitCode === 0) removed_keys.push(name);
-          else skipped.push([name, `codex mcp remove exited ${result.exitCode}`]);
+          else {
+            skipped.push([name, `codex mcp remove exited ${result.exitCode}`]);
+            failed = true;
+          }
         }
       }
     } else if (stripOurTables(env, opts.dryRun)) {
       // Also the repair path for a subprocess install whose CLI has since
-      // left the machine: the registration is in a file either way.
+      // left the machine: the registration is in a file either way. The
+      // file is reported as a touched path, exactly as grok reports its
+      // hooks file - an uninstall that changed a file and named none left
+      // the operator nothing to check.
       removed_keys.push(...SERVER_NAMES);
+      removed_paths.push(configPath(env));
     } else {
       skipped.push([configPath(env), "no OSB tables declared"]);
     }
 
-    if (!opts.dryRun) removeEntry(env.vault, TARGET);
+    // Dropping the manifest entry after a FAILED removal is what makes the
+    // retry impossible: the next `o2b uninstall` finds no entry, throws
+    // `manifest-missing` and demands `--force-from-snippet` for a server
+    // that is still registered. grok already guards this; codex did not.
+    if (!opts.dryRun && !failed) removeEntry(env.vault, TARGET);
     return { target: TARGET, removed_keys, removed_paths, skipped };
   },
 
@@ -411,32 +479,37 @@ export const codexAdapter: InstallAdapter = {
     }
     const path = configPath(env);
     const toml = readFileOrEmpty(path);
-    const probe = probeHost(TARGET);
+    const probe = probeHost(TARGET, env);
     const declaresBoth = declaresBothServers(toml);
 
     if (stored.operation === "subprocess") {
       // The Codex CLI owns these bytes, so the host's own answer is the
-      // strongest evidence available and is taken first. The file is
-      // consulted only where that answer is absent or negative - and it
-      // is consulted for PRESENCE, because this build has no published
-      // grammar for the layout the CLI writes and will not guess one.
+      // strongest evidence available and is taken first. That is only
+      // sound because the probe is asked about the SAME home this adapter
+      // resolved - `probeHost` spawns under `hostProbeEnvironment(env)`,
+      // so a relocated `CODEX_HOME` cannot be verified against the
+      // operator's ambient `~/.codex`. The file is consulted only where
+      // that answer is absent or negative - and it is consulted for
+      // PRESENCE, because this build has no published grammar for the
+      // layout the CLI writes and will not guess one.
       if (probe.kind === HOST_PROBE_RESULT.answered) {
         if (probe.missing.length === 0) {
           return { target: TARGET, status: "ok", details: [handshakeNote(probe)], fix_hint: null };
         }
-        if (declaresBoth) {
-          return {
-            target: TARGET,
-            status: "mcp-unreachable",
-            details: [`${path}: declares both OSB servers, but ${handshakeNote(probe)}`],
-            fix_hint: probeRefutedFixHint(LABEL),
-          };
-        }
+        const verdict = probeRefutedVerdict({
+          target: TARGET,
+          label: LABEL,
+          artifactMatches: declaresBoth,
+        });
         return {
           target: TARGET,
-          status: "drift",
-          details: [`${path}: ${undeclared(toml)} (${handshakeNote(probe)})`],
-          fix_hint: FIX_HINT,
+          status: verdict.status,
+          details: [
+            declaresBoth
+              ? `${path}: declares both OSB servers, but ${handshakeNote(probe)}`
+              : `${path}: ${undeclared(toml)} (${handshakeNote(probe)})`,
+          ],
+          fix_hint: verdict.fixHint,
         };
       }
       if (!declaresBoth) {
@@ -475,11 +548,16 @@ export const codexAdapter: InstallAdapter = {
       };
     }
     if (probeRefutes(probe)) {
+      const verdict = probeRefutedVerdict({
+        target: TARGET,
+        label: LABEL,
+        artifactMatches: true,
+      });
       return {
         target: TARGET,
-        status: "mcp-unreachable",
+        status: verdict.status,
         details: [`${path}: matches the canonical payload, but ${handshakeNote(probe)}`],
-        fix_hint: probeRefutedFixHint(LABEL),
+        fix_hint: verdict.fixHint,
       };
     }
     return {

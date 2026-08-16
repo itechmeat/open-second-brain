@@ -279,6 +279,42 @@ function moduleText(path: string): string {
   return readFileSync(join(REPO_ROOT, path), "utf8");
 }
 
+/**
+ * The source of one top-level function declaration, from its signature to
+ * the closing brace in column zero. Enough to ask whether that function
+ * body contains a call, and no more: this file reads source as text
+ * everywhere else too, and a parser would be a heavier dependency than
+ * the question deserves.
+ */
+function bodyOf(text: string, name: string): string {
+  const start = text.search(new RegExp(`^(?:export )?(?:async )?function ${name}\\b`, "m"));
+  if (start < 0) return "";
+  const end = text.indexOf("\n}\n", start);
+  return end < 0 ? text.slice(start) : text.slice(start, end);
+}
+
+/**
+ * True when `name`'s body calls the guard, or hands its payload to one
+ * module-local function that does.
+ *
+ * One hop, and no more. A handler is allowed to delegate its loop - the
+ * transcript one does, to the spooling function that owns the
+ * write-as-you-read contract - but a chain any longer than that stops
+ * being something this census can honestly claim to have checked, and a
+ * new handler wired through three helpers would be a reviewer's problem
+ * rather than a grep's.
+ */
+function guardsSomewhere(text: string, name: string): boolean {
+  const body = bodyOf(text, name);
+  if (EGRESS_GUARD_CALL_RE.test(body)) return true;
+  for (const call of body.matchAll(/\b([a-z][A-Za-z0-9]*)\s*\(/g)) {
+    const callee = call[1]!;
+    if (callee === name) continue;
+    if (EGRESS_GUARD_CALL_RE.test(bodyOf(text, callee))) return true;
+  }
+  return false;
+}
+
 describe("egress site census", () => {
   test("every module that names an output destination is declared", () => {
     // Named, not counted: the failure has to say which file.
@@ -328,6 +364,25 @@ describe("egress site census", () => {
         (row) => `${row.module}: ${row.destinations} destination(s), ${row.guards} guard call(s)`,
       );
     expect(uncovered).toEqual([]);
+  });
+
+  test("every format handler of `brain export` calls the guard itself", () => {
+    // `guards >= destinations` is an INEQUALITY, and it is the wrong
+    // instrument for a module that dispatches. `brain export` declares one
+    // destination and makes three guard calls, so a fourth format handler
+    // that scanned nothing would satisfy the count while writing raw bytes
+    // to the same `--out`. The registry's own sentence used to claim "the
+    // guard-call count is what proves each branch scans"; this is what
+    // makes that true, per branch, by name.
+    const module = "src/cli/brain/verbs/export.ts";
+    const text = moduleText(module);
+    const handlers = [...text.matchAll(/^\s*\[EXPORT_FORMAT\.\w+\]:\s*(\w+),$/gm)].map(
+      (m) => m[1]!,
+    );
+    // The table is the dispatch; an empty read here would pass vacuously.
+    expect(handlers.length).toBeGreaterThanOrEqual(3);
+    const unguarded = handlers.filter((name) => !guardsSomewhere(text, name));
+    expect(unguarded).toEqual([]);
   });
 
   test("no entry understates what its module does", () => {

@@ -554,6 +554,19 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
 
   // --- Machine-readable artifacts: JSON, sqlite, archives ----------------
+  "src/cli/brain/verbs/export.ts": {
+    categories: [C.machineArtifact],
+    calls: ["renameSync", "unlinkSync", "writeSync"],
+    reason:
+      "`o2b brain export --format transcripts-jsonl` spools the corpus record by " +
+      "record to a temp sibling of the operator-named `--out` and renames it into " +
+      "place, so peak memory is one conversation rather than the whole corpus and a " +
+      "guard refusal still leaves nothing written. `atomicWriteFileSync` cannot serve " +
+      "it: that helper takes the complete contents as a string, which is precisely " +
+      "the materialisation being avoided. The `unlinkSync` removes the spool on a " +
+      "refusal and after a stdout run. Never a vault note - the source is the " +
+      "runtimes' own session directories and the target is a path the operator named.",
+  },
   "src/cli/brain/verbs/continuity.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
@@ -870,8 +883,14 @@ const SOURCE_TREE = readSourceTree();
 const ROWS = census(SOURCE_TREE);
 const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
 
-/** Measured modules calling a filesystem write directly. An equality. */
-const DIRECT_WRITE_ROWS = 64;
+/**
+ * Measured modules calling a filesystem write directly. An equality.
+ *
+ * 64 -> 65: `src/cli/brain/verbs/export.ts` now spools the transcript
+ * corpus record by record and renames the spool into `--out`, instead of
+ * joining the whole corpus into one string for `atomicWriteFileSync`.
+ */
+const DIRECT_WRITE_ROWS = 65;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.

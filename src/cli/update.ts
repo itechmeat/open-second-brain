@@ -51,9 +51,14 @@ export function parseUpdateArgs(argv: string[]): ParsedUpdateArgs {
 }
 
 function buildEnv(): InstallEnv {
-  const cfg = discoverConfig(defaultConfigPath()).data;
+  const configPath = defaultConfigPath();
+  const cfg = discoverConfig(configPath).data;
   const vault = resolveVault() ?? "";
   const env = { ...process.env } as Record<string, string>;
+  // The one config file this run is parameterised by, published where
+  // `installSettingsSource` reads it - see `buildInstallEnv` in
+  // `./install/install.ts` for why the adapters may not re-derive it.
+  env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
   if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
   if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
   return { vault, home: homedir(), cwd: process.cwd(), env, now: new Date() };

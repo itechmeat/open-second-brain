@@ -22,6 +22,7 @@
  */
 
 import { readLines } from "./read-lines.ts";
+import { SESSION_TIMESTAMP_UNKNOWN } from "./types.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface CodexBlock {
@@ -36,7 +37,7 @@ function buildMessageTurn(obj: Record<string, unknown>, fallbackIndex: number): 
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
   const turnId = `codex-msg-${fallbackIndex}`;
   const timestamp =
-    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : new Date(0).toISOString();
+    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : SESSION_TIMESTAMP_UNKNOWN;
 
   const content = payload["content"];
   if (!Array.isArray(content)) {
@@ -95,7 +96,7 @@ function buildFunctionCallTurn(
   };
   const turnId = callId !== undefined ? `codex-fc-${callId}` : `codex-fc-${fallbackIndex}`;
   const timestamp =
-    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : new Date(0).toISOString();
+    typeof obj["timestamp"] === "string" ? (obj["timestamp"] as string) : SESSION_TIMESTAMP_UNKNOWN;
   return {
     turnId,
     timestamp,

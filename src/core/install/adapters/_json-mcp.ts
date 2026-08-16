@@ -21,7 +21,7 @@ import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { InstallTargetId } from "../../runtime/host-facts.ts";
-import { handshakeNote, probeHost, probeRefutedFixHint, probeRefutes } from "../host-probe.ts";
+import { handshakeNote, probeHost, probeRefutedVerdict, probeRefutes } from "../host-probe.ts";
 import { payloadWithRuntimeIdentity } from "../identity.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { payloadForHost } from "../payload-host.ts";
@@ -499,13 +499,21 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       // registered, which is the only question a host can answer about
       // itself, and no row in this body's population declares one today -
       // so they keep the blanket note, and keep it honestly.
-      const probe = probeHost(spec.target);
+      const probe = probeHost(spec.target, env);
       if (probeRefutes(probe)) {
+        // The file was just compared and matches, so the shared rule reads
+        // this as a host that has not reloaded it - never as a lost
+        // registration.
+        const verdict = probeRefutedVerdict({
+          target: spec.target,
+          label: spec.label,
+          artifactMatches: true,
+        });
         return {
           target: spec.target,
-          status: "mcp-unreachable",
+          status: verdict.status,
           details: [`${path}: matches the canonical payload, but ${handshakeNote(probe)}`],
-          fix_hint: probeRefutedFixHint(spec.label),
+          fix_hint: verdict.fixHint,
         };
       }
       return {

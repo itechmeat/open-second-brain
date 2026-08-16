@@ -1,0 +1,186 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/active-inject.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/gap-agenda.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/recall-inject.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/nav-inject.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/pretool-orient.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "brain_feedback",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|apply_patch|search_replace",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/post-write-reminder.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/stop-log-guardrail.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/gap-promote.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/active-inject.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "<BUN> run <REPO>/hooks/session-capture.ts",
+            "env": {
+              "VAULT_AGENT_NAME": "grok-dev-agent"
+            },
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -39,7 +39,9 @@ import {
   LANE_TASK,
   LANE_TASKS,
   MAINTENANCE_BUSY_MINUTES,
+  MAINTENANCE_BUSY_MINUTES_MAX,
   MAINTENANCE_BUSY_THRESHOLD,
+  MAINTENANCE_BUSY_THRESHOLD_MAX,
   runMaintenance,
   type DailyWindow,
   type LaneTask,
@@ -265,17 +267,16 @@ async function toolBrainSecrets(
 // ----- brain_maintenance (t_166d1226) ------------------------------------------
 
 /**
- * Bounds for the busy gate's two knobs. A day is the longest lookback
- * that still describes "recent interactive use"; past that the gate is
- * answering a different question than the one it was built for.
- */
-const MAX_BUSY_MINUTES = 24 * 60;
-const MAX_BUSY_THRESHOLD = 10_000;
-
-/**
- * Bound for `retry_tasks`. `coerceStrList` enforces no length of its own,
- * so the schema and this constant carry it: naming more tasks than the
- * lane dispatches is a mistake, not a request.
+ * Bound for `retry_tasks`: naming more tasks than the lane dispatches is
+ * a mistake, not a request.
+ *
+ * The `maxItems` this feeds into the schema is ADVERTISEMENT, not
+ * enforcement - nothing in the request path validates a JSON Schema.
+ * `src/mcp/argument-guard.ts` checks argument NAMES and `coerceStrList`
+ * enforces no length of its own, so a 1000-entry array reached the lane
+ * with the schema saying it could not. The handler checks the length
+ * itself for that reason; the schema keeps the number so a client that
+ * does validate refuses before spending a round trip.
  */
 const MAX_RETRY_TASKS = LANE_TASKS.length;
 
@@ -326,14 +327,33 @@ async function toolBrainMaintenance(
   // an agent that wants a wider quiet window does not have to reach for
   // `force` - which switches off three gates it never meant to touch.
   const busy = {
-    minutes: coerceInt(args, "busy_minutes", MAINTENANCE_BUSY_MINUTES, 1, MAX_BUSY_MINUTES),
-    threshold: coerceInt(args, "busy_threshold", MAINTENANCE_BUSY_THRESHOLD, 1, MAX_BUSY_THRESHOLD),
+    minutes: coerceInt(
+      args,
+      "busy_minutes",
+      MAINTENANCE_BUSY_MINUTES,
+      1,
+      MAINTENANCE_BUSY_MINUTES_MAX,
+    ),
+    threshold: coerceInt(
+      args,
+      "busy_threshold",
+      MAINTENANCE_BUSY_THRESHOLD,
+      1,
+      MAINTENANCE_BUSY_THRESHOLD_MAX,
+    ),
   };
   // Refused BY NAME, exactly as the CLI refuses a `--retry` typo: a name
   // this lane does not dispatch retries nothing, and silently accepting
   // it would leave the caller reading a refusal it believed it had just
   // asked past.
   const requestedRetries = coerceStrList(args, "retry_tasks");
+  if (requestedRetries.length > MAX_RETRY_TASKS) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_maintenance run: retry_tasks accepts at most ${MAX_RETRY_TASKS} entries ` +
+        `(one per lane task: ${LANE_TASKS.join(", ")}), got ${requestedRetries.length}`,
+    );
+  }
   const unknownRetries = requestedRetries.filter((name) => !isLaneTask(name));
   if (unknownRetries.length > 0) {
     throw new MCPError(
@@ -553,13 +573,13 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         busy_minutes: {
           type: "integer",
           minimum: 1,
-          maximum: MAX_BUSY_MINUTES,
+          maximum: MAINTENANCE_BUSY_MINUTES_MAX,
           description: `Busy-gate lookback in minutes (run; default ${MAINTENANCE_BUSY_MINUTES}).`,
         },
         busy_threshold: {
           type: "integer",
           minimum: 1,
-          maximum: MAX_BUSY_THRESHOLD,
+          maximum: MAINTENANCE_BUSY_THRESHOLD_MAX,
           description: `Recent queries in the lookback that count as busy (run; default ${MAINTENANCE_BUSY_THRESHOLD}).`,
         },
         limit: {

@@ -19,7 +19,7 @@
  */
 
 import { readLines } from "./read-lines.ts";
-import { SessionImportError } from "./types.ts";
+import { SESSION_TIMESTAMP_UNKNOWN, SessionImportError } from "./types.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 const ORIGINATOR = "open-second-brain-opencode-plugin";
@@ -50,7 +50,7 @@ function buildTurn(obj: Record<string, unknown>): SessionTurn | null {
   const role = obj["role"];
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
   const timestamp =
-    typeof obj["timestamp"] === "string" ? obj["timestamp"] : new Date(0).toISOString();
+    typeof obj["timestamp"] === "string" ? obj["timestamp"] : SESSION_TIMESTAMP_UNKNOWN;
 
   const toolCalls: SessionToolCall[] = [];
   if (Array.isArray(obj["toolCalls"])) {

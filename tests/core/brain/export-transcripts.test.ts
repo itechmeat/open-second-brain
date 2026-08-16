@@ -242,6 +242,162 @@ describe("transcript conversation records", () => {
     }
   });
 
+  test("a zero-byte transcript is counted, not made into a refusal", async () => {
+    // Claude Code leaves these behind whenever a session opens and is
+    // killed before the first turn flushes, and "move this file out of
+    // the source directory" does not scale to a store that holds a
+    // thousand transcripts. A file with no bytes has nothing to omit.
+    const dir = tempDir();
+    try {
+      write(dir, "good.jsonl", claudeLines({ at: "2026-08-01T10:00:00.000Z" }));
+      writeFileSync(join(dir, "flushed-nothing.jsonl"), "", "utf8");
+      const { records, summary } = await drain({ source: dir });
+      expect(records.map((r) => r.session_id)).toEqual(["good.jsonl"]);
+      expect(summary.scanned).toBe(2);
+      expect(summary.empty).toBe(1);
+      // Every scanned file on exactly one counter, still.
+      expect(
+        summary.exported +
+          summary.other_runtime +
+          summary.outside_window +
+          summary.no_messages +
+          summary.empty,
+      ).toBe(summary.scanned);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a file whose first line is blank but whose second is a turn still refuses", async () => {
+    // The complement of the case above, and the reason the empty check
+    // reads the file's SIZE rather than trusting an empty first line:
+    // this file has content, so skipping it would be the silent omission
+    // the refusal exists to prevent.
+    const dir = tempDir();
+    try {
+      writeFileSync(
+        join(dir, "leading-blank.jsonl"),
+        "\n" + JSON.stringify({ hello: "world" }) + "\n",
+        "utf8",
+      );
+      await expect(drain({ source: dir })).rejects.toThrow(/leading-blank\.jsonl/);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("--since refuses a transcript whose first turn carries no timestamp", async () => {
+    // The docblock on `startInstant` forbids treating an unreadable
+    // timestamp as either inside or outside the window, "both readings
+    // are a guess, and one of them silently drops a transcript". Every
+    // adapter synthesises the epoch for a missing timestamp, which parses
+    // fine and sorts before any realistic `--since` - so the guarantee
+    // held only for a malformed string, which no adapter ever emits, and
+    // the case that does occur took the forbidden path.
+    const dir = tempDir();
+    try {
+      write(dir, "clockless.jsonl", [
+        {
+          parentUuid: null,
+          sessionId: "sess-1",
+          entrypoint: "cli",
+          type: "user",
+          uuid: "u-1",
+          message: { role: "user", content: "no timestamp on this line" },
+        },
+      ]);
+      await expect(
+        drain({ source: dir, since: new Date("2026-07-15T00:00:00.000Z") }),
+      ).rejects.toThrow(/clockless\.jsonl.*no timestamp/s);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a clockless transcript still exports when no window is asked for", async () => {
+    // Refusing over a field nobody read would be a refusal for its own
+    // sake; the window is the only thing that depends on the value.
+    const dir = tempDir();
+    try {
+      write(dir, "clockless.jsonl", [
+        {
+          parentUuid: null,
+          sessionId: "sess-1",
+          entrypoint: "cli",
+          type: "user",
+          uuid: "u-1",
+          message: { role: "user", content: "no timestamp on this line" },
+        },
+      ]);
+      const { records } = await drain({ source: dir });
+      expect(records.map((r) => r.session_id)).toEqual(["clockless.jsonl"]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a BARE high-entropy session filename is refused, not exported verbatim", async () => {
+    // The identifier branch tests identifier values for VENDOR prefixes
+    // only, on the argument that "record ids and slugs are long mixed runs
+    // by construction". That argument is about ids this vault generates.
+    // `session_id` is a foreign harness's filename, so an unexplained
+    // 24-character mixed run in it is not an id by construction - and it
+    // used to export with exit 0 while its `sk-`-prefixed sibling refused
+    // the whole run.
+    const dir = tempDir();
+    try {
+      write(dir, "Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5.jsonl", claudeLines({ at: "2026-08-01T10:00:00.000Z" }));
+      const { records } = await drain({ source: dir });
+      const verdict = redactForEgress("brain-export", records[0]!, { foreignIdentifiers: true });
+      expect(verdict.outcome).toBe(EGRESS_OUTCOME.refusedSecretIdentifier);
+      if (verdict.outcome === EGRESS_OUTCOME.refusedSecretIdentifier) {
+        expect(verdict.secretIdentifiers).toContain("session_id");
+        // Locations, not values: the refusal must not echo the name.
+        expect(verdict.detail).not.toContain("Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a BARE high-entropy turn id is refused too", async () => {
+    const dir = tempDir();
+    try {
+      write(
+        dir,
+        "one.jsonl",
+        claudeLines({ at: "2026-08-01T10:00:00.000Z", uuid: "Xk7Qp2Rm9Wz4Tn6Yb8Vc3Ld5" }),
+      );
+      const { records } = await drain({ source: dir });
+      const verdict = redactForEgress("brain-export", records[0]!, { foreignIdentifiers: true });
+      expect(verdict.outcome).toBe(EGRESS_OUTCOME.refusedSecretIdentifier);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a uuid-named transcript is NOT refused: it is a content address", async () => {
+    // The widening must not refuse every Claude Code session, whose files
+    // are named by uuid - hex and dashes, which the redactor already
+    // carves out as an identifier shape a bundle has to carry unchanged.
+    const dir = tempDir();
+    try {
+      write(
+        dir,
+        "f47ac10b-58cc-4372-a567-0e02b2c3d479.jsonl",
+        claudeLines({
+          at: "2026-08-01T10:00:00.000Z",
+          uuid: "a5d9e0f1-2b3c-4d5e-8f90-1a2b3c4d5e6f",
+        }),
+      );
+      const { records } = await drain({ source: dir });
+      const verdict = redactForEgress("brain-export", records[0]!, { foreignIdentifiers: true });
+      expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a secret-shaped turn id lands where the egress guard refuses it", async () => {
     // The record shape is what decides whether the guard can see a
     // credential at all: an identifier is never rewritten, so it has to sit

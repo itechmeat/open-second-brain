@@ -58,6 +58,26 @@ function shippedHookTimeoutSeconds(): number {
   return [...timeouts][0]!;
 }
 
+/** The committed rendering, with the two per-machine paths left as tokens. */
+function golden(): string {
+  return readFileSync(
+    join(REPO_ROOT, "tests", "fixtures", "install", "grok-hooks.golden.json"),
+    "utf8",
+  );
+}
+
+/**
+ * A generated hooks file reduced to the form the golden is stored in.
+ *
+ * Only the bun binary and the repository root are tokenised, because only
+ * those two are machine-specific by design (grok's restricted
+ * session-spawn PATH forces absolute commands). Tokenising anything else
+ * would be the golden agreeing not to look at it.
+ */
+function normalize(json: string): string {
+  return json.split(process.execPath).join("<BUN>").split(REPO_ROOT).join("<REPO>");
+}
+
 function hookEntries(json: string): ReadonlyArray<HookEntry> {
   const parsed = JSON.parse(json) as {
     hooks: Record<string, Array<{ hooks: HookEntry[] }>>;
@@ -123,23 +143,36 @@ describe("a vault with no install: block regenerates the committed output", () =
     expect(
       resolveInstallHookTimeoutSeconds({
         vault,
-        env: {},
         configPath: join(home, "absent-config.yaml"),
       }),
     ).toEqual({ value: shippedHookTimeoutSeconds(), origin: CONFIG_ORIGIN.default });
   });
 
-  test("generation with the resolved value is byte-identical to the unparameterised form", () => {
-    expect(grokHooksJson(payload(), shippedHookTimeoutSeconds())).toBe(grokHooksJson(payload()));
+  test("the generation matches the committed golden rendering, byte for byte", () => {
+    // The anchor. Every other "byte-identical" assertion here and in the
+    // adapter suite compared the generator against ITSELF - the same call
+    // with the argument the default supplied - so it could only fail if
+    // the generator were non-deterministic, and a change to the hook
+    // command paths, the `env` map, the entry ordering or the JSON
+    // indentation left every one of them green. This compares against
+    // bytes committed to the tree.
+    //
+    // Two substitutions, and only two: the bun binary and the repository
+    // root are absolute paths that differ per machine, and the whole
+    // reason `grok-asset.ts` emits them is that grok's session-spawn PATH
+    // will not resolve a bare command. Everything else - including the
+    // derived agent name and the timeout on every entry - is compared
+    // literally.
+    expect(normalize(grokHooksJson(payload(), shippedHookTimeoutSeconds()))).toBe(golden());
   });
 
-  test("the applied file is byte-identical to the unparameterised generation", () => {
+  test("the applied file is the same golden rendering", () => {
     apply();
-    expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload()));
+    expect(normalize(readFileSync(hooksPath(), "utf8"))).toBe(golden());
   });
 
   test("every generated entry carries the shipped timeout", () => {
-    const entries = hookEntries(grokHooksJson(payload()));
+    const entries = hookEntries(grokHooksJson(payload(), shippedHookTimeoutSeconds()));
     expect(entries.length).toBeGreaterThan(0);
     for (const entry of entries) expect(entry.timeout).toBe(shippedHookTimeoutSeconds());
   });
@@ -159,7 +192,6 @@ describe("a configured hook_timeout_seconds reaches every entry", () => {
     expect(
       resolveInstallHookTimeoutSeconds({
         vault,
-        env: {},
         configPath: join(home, "absent-config.yaml"),
       }),
     ).toEqual({ value: CONFIGURED, origin: CONFIG_ORIGIN.vaultConfig });
@@ -175,6 +207,16 @@ describe("a configured hook_timeout_seconds reaches every entry", () => {
   test("the applied file equals the generation for that timeout", () => {
     apply();
     expect(readFileSync(hooksPath(), "utf8")).toBe(grokHooksJson(payload(), CONFIGURED));
+  });
+
+  test("it is the golden rendering with only the timeout changed", () => {
+    // Pins the SCOPE of the setting as well as its arrival: a knob that
+    // also moved a command path or reordered the entries would pass the
+    // assertion above and fail this one.
+    apply();
+    expect(normalize(readFileSync(hooksPath(), "utf8"))).toBe(
+      golden().replaceAll(`"timeout": ${shippedHookTimeoutSeconds()}`, `"timeout": ${CONFIGURED}`),
+    );
   });
 
   test("a freshly applied install reports no drift", () => {
@@ -208,5 +250,34 @@ describe("an unreadable _brain.yaml refuses the generation", () => {
       // The refusal is the assertion below: no hooks file exists.
     }
     expect(() => readFileSync(hooksPath(), "utf8")).toThrow();
+  });
+
+  /**
+   * The READ paths refuse too, and they are the ones with a blast radius:
+   * `o2b install` with no `--target` walks every adapter's `detect`, and
+   * `--check` walks every `verify`, so one unparsable file used to take
+   * down the status of nine targets that never read it. The refusal is
+   * still correct - `syncState` compares against a generation it cannot
+   * produce - and `src/cli/main.ts` now renders it as one line rather than
+   * a stack trace.
+   */
+  test("verify refuses and names the file", () => {
+    let message = "";
+    try {
+      grokAdapter.verify(installEnv());
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(brainConfigPath(vault));
+  });
+
+  test("detect refuses and names the file", () => {
+    let message = "";
+    try {
+      grokAdapter.detect(installEnv());
+    } catch (err) {
+      message = (err as Error).message;
+    }
+    expect(message).toContain(brainConfigPath(vault));
   });
 });

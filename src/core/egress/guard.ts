@@ -109,6 +109,21 @@ export interface EgressRefused {
     | typeof EGRESS_OUTCOME.refusedSecretIdentifier;
   /** Operator-facing sentence naming the verb and what to do about it. */
   readonly detail: string;
+  /**
+   * The tree locations the structural scan reported as secret-shaped
+   * identifiers, already inside {@link detail} and carried structurally as
+   * well. Empty on the truncation arm.
+   *
+   * A caller composing its own prefix around `detail` has to know WHICH
+   * identifier was refused before it can decide what is safe to say. The
+   * transcript export is the case: it named each refused record by its
+   * `session_id`, which is the transcript's basename - so when the
+   * basename was itself the secret-shaped identifier, the refusal printed
+   * the exact value it had just declined to write. Reading the list is
+   * what lets that caller withhold the name on that one branch and keep
+   * printing it on every other.
+   */
+  readonly secretIdentifiers: ReadonlyArray<string>;
 }
 
 /**
@@ -140,15 +155,42 @@ export const EGRESS_REDACTION_NOTICE =
   "note: secret-shaped content was redacted; this export no longer matches the vault byte for byte\n";
 
 /**
+ * What a call site may vary about the one policy above.
+ *
+ * Deliberately not a second policy constant: the redaction options stay
+ * single, and this names the one decision that cannot be answered once for
+ * every site because it depends on WHERE the payload's identifiers were
+ * named rather than on where they are going.
+ */
+export interface EgressPolicy {
+  /**
+   * The payload's identifiers were named outside this vault, so judge them
+   * with the full bare-token detector rather than vendor prefixes alone.
+   * Set by the transcript corpus and nothing else - see
+   * `foreignIdentifierCarriesSecret` in the redactor for why the default
+   * is right for every vault-authored export.
+   */
+  readonly foreignIdentifiers?: boolean;
+}
+
+/**
  * Redact `payload` for `site`, or refuse it. The payload may be a string
  * or any JSON-shaped tree; see `redactStructured` for why the tree form
  * exists rather than a pass over serialised bytes.
  */
-export function redactForEgress<T>(site: EgressSiteId, payload: T): EgressVerdict<T> {
-  const scanned = redactStructured(payload, EGRESS_REDACTION_OPTIONS);
+export function redactForEgress<T>(
+  site: EgressSiteId,
+  payload: T,
+  policy: EgressPolicy = {},
+): EgressVerdict<T> {
+  const scanned = redactStructured(payload, {
+    ...EGRESS_REDACTION_OPTIONS,
+    ...(policy.foreignIdentifiers === true ? { foreignIdentifiers: true } : {}),
+  });
   if (scanned.truncated) {
     return {
       outcome: EGRESS_OUTCOME.refusedScanTruncated,
+      secretIdentifiers: Object.freeze([]),
       detail:
         `${EGRESS_SITES[site].verb} refused to write: a field exceeded the redactor ` +
         `scan window (${SCAN_WINDOW_MIB} MiB), so only part of it was scanned and this ` +
@@ -159,6 +201,7 @@ export function redactForEgress<T>(site: EgressSiteId, payload: T): EgressVerdic
   if (scanned.secretIdentifiers.length > 0) {
     return {
       outcome: EGRESS_OUTCOME.refusedSecretIdentifier,
+      secretIdentifiers: scanned.secretIdentifiers,
       detail:
         `${EGRESS_SITES[site].verb} refused to write: an identifier is secret-shaped, and an ` +
         "identifier is never rewritten - a redacted filename merges the pages it names and a " +

@@ -13,7 +13,15 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -148,6 +156,43 @@ describe("o2b state rollback", () => {
     const r = await runCli(["state", "rollback"]);
     expect(r.returncode).toBe(2);
     expect(r.stderr).toContain("--from <dir>");
+  });
+
+  /**
+   * The command an operator runs after they have moved the vault. It used
+   * to exit 0 having recreated the dead path, copied into it, deleted the
+   * destination copies and removed the manifest - a data loss reported as
+   * a success. Now it refuses by name, and `--to` is the way through.
+   */
+  test("a vault renamed since the migration is refused, and --to puts the files back", async () => {
+    const vault = seedVault();
+    const dest = join(tempDir("osb-state-dest-"), "moved");
+    await runCli(["state", "migrate", "--vault", vault, "--to", dest, "--apply", "--yes"]);
+    const renamed = `${vault}-renamed`;
+    renameSync(vault, renamed);
+    temps.push(renamed);
+
+    const refused = await runCli(["state", "rollback", "--from", dest, "--apply", "--yes"]);
+    expect(refused.returncode).toBe(1);
+    expect(refused.stderr).toContain(vault);
+    expect(refused.stderr).toContain("--to");
+    expect(existsSync(join(dest, MIGRATION_MANIFEST_FILE))).toBe(true);
+
+    const rolled = await runCli([
+      "state",
+      "rollback",
+      "--from",
+      dest,
+      "--to",
+      renamed,
+      "--apply",
+      "--yes",
+    ]);
+    expect(rolled.returncode).toBe(0);
+    expect(readFileSync(surfacePath(renamed, STATE_SURFACE_ID.searchIndex), "utf8")).toBe(
+      "index-bytes",
+    );
+    expect(existsSync(vault)).toBe(false);
   });
 
   test("a refused entry is named and exits 1 even though the rest restored", async () => {

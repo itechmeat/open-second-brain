@@ -132,15 +132,18 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
  * exact output.
  *
  * `hookTimeoutSeconds` is the resolved `install.hook_timeout_seconds`
- * (see `./settings.ts`). It defaults to the compiled default - the
- * BOTTOM tier of that same ladder, and the literal this generator
- * carried before the setting existed - so a vault that configures
- * nothing regenerates byte-identical output.
+ * (see `./settings.ts`) and is REQUIRED, like every other input to a
+ * generator in this file. It carried a default of
+ * {@link INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT} - the bottom tier of that
+ * same ladder - which made "forgot to resolve it" and "the vault
+ * configures nothing" produce identical bytes, so a future caller that
+ * dropped the argument would silently write the compiled default over the
+ * operator's configured value and no test would notice. A vault that
+ * configures nothing still regenerates byte-identical output, because the
+ * resolver returns that same constant; the difference is that the caller
+ * has to have asked.
  */
-export function grokHooksJson(
-  payload: McpPayload,
-  hookTimeoutSeconds: number = INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT,
-): string {
+export function grokHooksJson(payload: McpPayload, hookTimeoutSeconds: number): string {
   const agentName = runtimeAgentNameFromPayload(payload, GROK_RUNTIME_ID);
   const hooks: Record<string, unknown[]> = {};
   for (const { event, groups } of HOOK_SPEC) {

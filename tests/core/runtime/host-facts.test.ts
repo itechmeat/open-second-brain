@@ -39,6 +39,7 @@ import {
   TOOL_CEILING_KIND,
   TOOL_CEILING_KINDS,
   type HostContext,
+  type RuntimeFacts,
 } from "../../../src/core/runtime/host-facts.ts";
 import { TOOL_SURFACE_PROFILES } from "../../../src/mcp/profiles.ts";
 
@@ -139,15 +140,48 @@ describe("the tool-ceiling vocabulary", () => {
     expect(defects.join("\n")).toBe("");
   });
 
-  test("an unbounded ceiling cites where the absence of a limit is published", () => {
-    // No row ships this today; the assertion is what keeps the member from
-    // becoming a place to park a host nobody checked.
-    const silent = ROWS.filter(
-      (row) =>
-        row.toolCeiling.kind === TOOL_CEILING_KIND.unbounded &&
-        row.toolCeiling.source.trim() === "",
+  test("no row ships an unbounded ceiling today, and that is on purpose", () => {
+    // Stated as an equality rather than left implicit. The filter in the
+    // case below is empty over the live population, so without this line
+    // that case reads as coverage when it is really a guard held in
+    // reserve. The day a host publishes "no limit", this assertion is what
+    // fails first and sends the author to the one below.
+    const unbounded = ROWS.filter(
+      (row) => row.toolCeiling.kind === TOOL_CEILING_KIND.unbounded,
     ).map((row) => row.target);
-    expect(silent.join(",")).toBe("");
+    expect(unbounded.join(",")).toBe("");
+  });
+
+  test("an unbounded ceiling cites where the absence of a limit is published", () => {
+    // Run against a SYNTHETIC row, because no live row uses the member.
+    // The predicate is the same one applied to the live population, so
+    // the guard is proven to bite before it has anything to bite on -
+    // otherwise the first host to declare `unbounded` would be checked by
+    // an assertion nobody had ever seen fail.
+    const sourceless = (rows: ReadonlyArray<RuntimeFacts>): ReadonlyArray<string> =>
+      rows
+        .filter(
+          (row) =>
+            row.toolCeiling.kind === TOOL_CEILING_KIND.unbounded &&
+            row.toolCeiling.source.trim() === "",
+        )
+        .map((row) => row.target);
+
+    const base = runtimeFactsFor(INSTALL_TARGET_ID.kiro);
+    const silent: RuntimeFacts = {
+      ...base,
+      toolCeiling: { kind: TOOL_CEILING_KIND.unbounded, source: "  " },
+    };
+    const sourced: RuntimeFacts = {
+      ...base,
+      toolCeiling: {
+        kind: TOOL_CEILING_KIND.unbounded,
+        source: "the host documents that it applies no per-workspace tool limit",
+      },
+    };
+    expect(sourceless([silent]).join(",")).toBe(base.target);
+    expect(sourceless([sourced]).join(",")).toBe("");
+    expect(sourceless(ROWS).join(",")).toBe("");
   });
 
   test("cursor carries the published 40-tool workspace limit", () => {

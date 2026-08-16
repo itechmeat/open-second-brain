@@ -37,13 +37,15 @@ import {
   isLaneTask,
   LANE_TASK,
   MAINTENANCE_BUSY_MINUTES,
+  MAINTENANCE_BUSY_MINUTES_MAX,
   MAINTENANCE_BUSY_THRESHOLD,
+  MAINTENANCE_BUSY_THRESHOLD_MAX,
   runMaintenance,
   type DailyWindow,
   type LaneTask,
   type MaintenanceTask,
 } from "../../../core/brain/maintenance/lane.ts";
-import { listJournal } from "../../../core/brain/maintenance/journal.ts";
+import { listJournal, MAINTENANCE_JOURNAL_CAP } from "../../../core/brain/maintenance/journal.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../../../core/search/index.ts";
 import { onInterrupt } from "../../interrupt.ts";
@@ -115,10 +117,17 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
 
   try {
     if (op === "status") {
+      // Bounded on the journal's own ring size, which is also the bound
+      // `brain_maintenance` enforces. Unbounded here, `--limit 100000`
+      // was accepted on this surface and refused on the other for the
+      // same lane; and the ring cannot hold more than its cap anyway, so
+      // a larger number was never a request the journal could answer.
       const limitRaw = flags["limit"] as string | undefined;
       const limit = limitRaw !== undefined ? Number(limitRaw) : 10;
-      if (!Number.isInteger(limit) || limit < 1) {
-        process.stderr.write("brain maintenance status: --limit must be a positive integer\n");
+      if (!Number.isInteger(limit) || limit < 1 || limit > MAINTENANCE_JOURNAL_CAP) {
+        process.stderr.write(
+          `brain maintenance status: --limit must be an integer between 1 and ${MAINTENANCE_JOURNAL_CAP}\n`,
+        );
         return MAINTENANCE_EXIT.usage;
       }
       const lease = currentLease(vault, { name: MAINTENANCE_LEASE_NAME, now });
@@ -152,11 +161,24 @@ export async function cmdBrainMaintenance(argv: string[]): Promise<number> {
       }
       window = { startHour, endHour, tz: (flags["tz"] as string | undefined) ?? "UTC" };
     }
-    const busyMinutes = numberFlag(flags["busy-minutes"], MAINTENANCE_BUSY_MINUTES);
-    const busyThreshold = numberFlag(flags["busy-threshold"], MAINTENANCE_BUSY_THRESHOLD);
+    // Same ceilings the MCP tool's schema declares and its handler
+    // enforces, read from the same constants beside the defaults: one
+    // lane must not accept through one door what it refuses at the other.
+    const busyMinutes = numberFlag(
+      flags["busy-minutes"],
+      MAINTENANCE_BUSY_MINUTES,
+      MAINTENANCE_BUSY_MINUTES_MAX,
+    );
+    const busyThreshold = numberFlag(
+      flags["busy-threshold"],
+      MAINTENANCE_BUSY_THRESHOLD,
+      MAINTENANCE_BUSY_THRESHOLD_MAX,
+    );
     if (busyMinutes === null || busyThreshold === null) {
       process.stderr.write(
-        "brain maintenance run: --busy-minutes/--busy-threshold must be positive integers\n",
+        `brain maintenance run: --busy-minutes must be an integer between 1 and ` +
+          `${MAINTENANCE_BUSY_MINUTES_MAX} and --busy-threshold between 1 and ` +
+          `${MAINTENANCE_BUSY_THRESHOLD_MAX}\n`,
       );
       return MAINTENANCE_EXIT.usage;
     }
@@ -377,8 +399,9 @@ function stringArrayFlag(raw: unknown): string[] {
     : [];
 }
 
-function numberFlag(raw: unknown, fallback: number): number | null {
+/** An integer flag inside `1..max`, its default, or null when refused. */
+function numberFlag(raw: unknown, fallback: number, max: number): number | null {
   if (raw === undefined) return fallback;
   const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : null;
+  return Number.isInteger(value) && value > 0 && value <= max ? value : null;
 }

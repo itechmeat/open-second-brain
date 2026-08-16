@@ -129,12 +129,17 @@ population with no exception: the `step` row below was the one that read
 **none**, because the two step functions took no guard and dropped the
 sink, and a single step over a large tree therefore held the server for
 its whole duration with nothing to show for it. Both halves are wired.
+That sentence is not left to prose — `tests/mcp/long-running-tools.test.ts`
+reads the rows out of this table, fails on any row whose deadline or
+`reports` cell reads `none`, and fails on a row naming a tool it does not
+itself drive through both halves. The `**none**` row went stale for a
+release because nothing checked it; its replacement is checked.
 
 | tool | long operation it reaches | deadline | reports |
 | --- | --- | --- | --- |
 | `brain_dream` (`run`) | `dream`, twice when `expect`/`strict` asks for a guard preview | `dream` — one budget for the whole call, preview included | yes |
 | `brain_dream` (`stage`/`validate`/`apply`) | `dream`, through the staged bundle | `dream` | yes |
-| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget | yes, under the step's own stage (`scan` / `heal-enrich`) |
+| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file (`scan`) and per page (`heal-enrich`), plus once on each side of the two phases that cross no boundary of their own: `heal-enrich`'s vault listing and its one-shot title/alias phrase build. So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
 | `brain_maintenance` (`run`) | all four, sequentially | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
@@ -146,6 +151,16 @@ sweeps are synchronous, so nothing can interrupt them from outside — past
 the deadline the operation's next checkpoint throws, at a boundary where
 writes are already atomic. Setting `safeguard_timeout_dream_seconds: 0`
 disables the deadline for every row above whose budget is `dream`.
+
+Cooperative also means the guarantee is "stops at the next boundary", and
+a phase that crosses no boundary is therefore not interruptible however
+long the budget has been gone. Two such phases exist and both are in
+`heal-enrich`: the vault listing, which walks every page and parses its
+frontmatter in one call, and the phrase build, which sorts and
+regex-escapes the whole title/alias set in one. The deadline is honoured
+immediately before and immediately after each, so an elapsed budget never
+pays for one it has not started — but a call that has already entered one
+runs it to the end. `src/core/brain/heal-run.ts` names the same two.
 
 ## Tool Highlights
 

@@ -58,6 +58,50 @@ describe("redactRawOutput (cross-module backward compat)", () => {
   });
 });
 
+describe("redactRawOutput env-style assignment under a PREFIXED key name", () => {
+  // `\b` used to stand at the front of this pattern, and `_` is a word
+  // character, so the boundary never fired after one: the two most common
+  // spellings a credential takes in a shell line or an agent transcript
+  // went through untouched while the unprefixed one was caught. What did
+  // come out redacted in the common cases came out through the
+  // vendor-prefix rule on the VALUE, not through this key-name pass.
+  test("a vendor-neutral value under a prefixed key name is redacted", () => {
+    expect(redactRawOutput("export ANTHROPIC_API_KEY=hunter2secretvalue")).toBe(
+      "export ANTHROPIC_API_KEY=***REDACTED***",
+    );
+    expect(redactRawOutput("MY_DB_PASSWORD=letmein12345")).toBe("MY_DB_PASSWORD=***REDACTED***");
+    expect(redactRawOutput("SERVICE-ACCESS-TOKEN=plainish9value")).toBe(
+      "SERVICE-ACCESS-TOKEN=***REDACTED***",
+    );
+  });
+
+  test("the unprefixed spelling is still redacted", () => {
+    expect(redactRawOutput("export API_KEY=hunter2secretvalue")).toBe(
+      "export API_KEY=***REDACTED***",
+    );
+  });
+
+  test("the prefix is kept, so the line still says which variable it was", () => {
+    expect(redactRawOutput("export ANTHROPIC_API_KEY=hunter2secretvalue")).toContain("ANTHROPIC_");
+  });
+
+  test("a near miss keeps its value: the key must END at the assignment", () => {
+    // `token` here is followed by `s`, not by `=`. A widened boundary that
+    // fired anyway would eat the value of an ordinary CLI flag - and the
+    // point of the boundary is that it separates a credential's NAME from
+    // a word that merely contains one.
+    expect(redactRawOutput("claude --max-tokens=4096")).toBe("claude --max-tokens=4096");
+    expect(redactRawOutput("TOKENS_PER_MINUTE=90000")).toBe("TOKENS_PER_MINUTE=90000");
+  });
+
+  test("a near miss keeps its value: the key must START at a separator", () => {
+    // Mid-identifier with no `_` or `-` in front of it is the same
+    // under-match `\b` already had, left in place deliberately rather than
+    // widened into every word ending in a secret name.
+    expect(redactRawOutput("MYTOKEN=plainish9value")).toBe("MYTOKEN=plainish9value");
+  });
+});
+
 describe("redactRawOutput fail-closed truncation", () => {
   test("appends the scan-truncated marker when input exceeds maxInput", () => {
     const out = redactRawOutput("x".repeat(100), { maxInput: 10 });

@@ -23,6 +23,51 @@
  */
 
 /**
+ * The extension a session transcript is written with, stated once for
+ * every consumer that has to decide whether a file is one.
+ *
+ * There were three answers to that question and they disagreed.
+ * `session-files.ts` - the primitive extracted precisely so the two
+ * walkers could not drift - accepted `.jsonl`; the Codex rows in
+ * `src/core/runtime/host-facts.ts` declared `**` + `/*.json*`, so the
+ * machine-wide sweep enrolled `.json` files that `import-session <dir>`
+ * and `export --transcripts <dir>` then skipped without a word; and every
+ * shipped adapter parses line-delimited JSON and can read neither a
+ * pretty-printed `.json` nor anything else. This constant is the one
+ * answer, and it sits in the vocabulary module because that is the only
+ * thing `host-facts.ts` is allowed to import from here.
+ *
+ * Narrow rather than wide on purpose. Enrolling `.json` into discovery
+ * does not make a `.json` importable - no adapter in this build can read
+ * one - it only turns every such file into a `DETECT_FAIL` that drives
+ * `--discover --all` to exit 1. Finding a file this build cannot parse is
+ * worse than not finding it, because a failure an operator cannot fix is
+ * indistinguishable from one they can.
+ */
+export const SESSION_FILE_EXTENSION = ".jsonl";
+
+/**
+ * What every adapter puts in {@link SessionTurn.timestamp} when the line
+ * it read carried no usable one: the Unix epoch, as an ISO instant.
+ *
+ * `SessionTurn.timestamp` is not optional, so an adapter facing a line
+ * without a clock has to write something, and all five write this. That
+ * made the sentinel a real part of the contract while it was spelled
+ * `new Date(0).toISOString()` in five files and described in prose in a
+ * sixth (`resolveEventInstant`, which already reads `ms <= 0` as "no
+ * timestamp"). A consumer that did not know the convention could not
+ * distinguish "recorded at the epoch" from "not recorded", and the
+ * transcript export's `--since` window did exactly that: it compared the
+ * sentinel as an instant, found it before every realistic window, and
+ * silently dropped the transcript - the outcome its own docblock forbids.
+ *
+ * Naming it is what lets a consumer ask the question. It is a SENTINEL,
+ * not a time: code that means "is this turn inside a window" must check
+ * for it before it parses.
+ */
+export const SESSION_TIMESTAMP_UNKNOWN = new Date(0).toISOString();
+
+/**
  * The runtimes whose adapters ship in this tree.
  *
  * Closed, because it is what `--format` is validated against: a value that

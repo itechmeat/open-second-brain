@@ -214,7 +214,14 @@ function dreamRun(
   //    parse-errors) are surfaced separately so the planning phase
   //    can emit `skip-corrupted-frontmatter` log entries without
   //    aborting.
-  const scan = scanBrain(vault);
+  //
+  //    The guard goes in and the sink does not, and the two decisions
+  //    have different reasons - see `ScanBrainOptions`. The scan is the
+  //    largest unbounded read in the pass, so leaving it unguarded put
+  //    the whole `Brain/` tree between two of the pass's five
+  //    checkpoints; the stream, by contrast, is this counter's, which
+  //    already owns a `scan` stage.
+  const scan = scanBrain(vault, opts.safeguard ? { safeguard: opts.safeguard } : {});
   progress.advance(DREAM_STAGE.scan);
   const intentReview = buildIntentReview(vault, { now });
   progress.start(DREAM_STAGE.plan, scan.preferences.length);
@@ -345,6 +352,7 @@ function dreamRun(
           agentName: opts.agentName,
           wikilinkToRun,
           healEnrichEnabled,
+          ...(opts.safeguard ? { safeguard: opts.safeguard } : {}),
           workrun: handle,
         });
         return { applied, handle };

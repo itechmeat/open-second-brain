@@ -37,7 +37,7 @@ const USAGE = [
   "usage: o2b state status [--vault <dir>] [--config <file>] [--json]",
   "       o2b state migrate --to <dir> [--vault <dir>] [--config <file>]",
   "                         [--dry-run | --apply [--yes]] [--json]",
-  "       o2b state rollback --from <dir> [--apply [--yes]] [--json]",
+  "       o2b state rollback --from <dir> [--to <vault>] [--apply [--yes]] [--json]",
 ].join("\n");
 
 /**
@@ -214,6 +214,7 @@ async function cmdStateMigrate(argv: ReadonlyArray<string>): Promise<number> {
 async function cmdStateRollback(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags([...argv], {
     from: { type: "string" },
+    to: { type: "string" },
     "dry-run": { type: "boolean" },
     apply: { type: "boolean" },
     yes: { type: "boolean" },
@@ -221,6 +222,11 @@ async function cmdStateRollback(argv: ReadonlyArray<string>): Promise<number> {
   });
   const asJson = Boolean(flags["json"]);
   const from = flags["from"] as string | undefined;
+  // `--to` is the answer to a vault that has MOVED since the migration.
+  // The manifest records an absolute source root, and without an override
+  // a renamed vault leaves the rollback with nowhere honest to put the
+  // files; the plan refuses that case by name and points here.
+  const to = flags["to"] as string | undefined;
   if (from === undefined || from.trim() === "") {
     process.stderr.write(
       "error: state rollback requires --from <dir>: the directory a migration was moved TO, " +
@@ -235,7 +241,10 @@ async function cmdStateRollback(argv: ReadonlyArray<string>): Promise<number> {
 
   let plan: RollbackPlan;
   try {
-    plan = planStateRollback({ destination: from });
+    plan = planStateRollback({
+      destination: from,
+      ...(to === undefined || to.trim() === "" ? {} : { vault: to }),
+    });
   } catch (exc) {
     process.stderr.write(`error: state rollback could not plan: ${(exc as Error).message}\n`);
     return STATE_EXIT.refused;

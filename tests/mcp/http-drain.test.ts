@@ -157,6 +157,40 @@ describe("the HTTP transport drains before it closes", () => {
     }
   });
 
+  test("a request refused with 503 is not counted as work the drain waits for", async () => {
+    const handle = await startHttp({ vault: tempVault() }, { host: "127.0.0.1", port: 0 });
+    const held = await holdRequestOpen(handle);
+    try {
+      const closing = handle.close();
+      await until(() => handle.drain.draining, "the drain to start");
+
+      const retries = await Promise.all(
+        [1, 2, 3].map((id) =>
+          fetch(handle.url, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ jsonrpc: "2.0", id, method: "ping" }),
+          }),
+        ),
+      );
+      expect(retries.map((r) => r.status)).toEqual([503, 503, 503]);
+
+      // The register hands out ids in registration order, so the id of
+      // the next request IS the count of everything registered before
+      // it: 1 is the held request, and 2 means the three refusals above
+      // never entered the register. Counting them let a client retrying
+      // in a tight loop hold the drain open to its own deadline.
+      const finish = handle.drain.begin("probe");
+      expect(handle.drain.snapshot().find((r) => r.label === "probe")?.id).toBe(2);
+      finish();
+
+      held.complete();
+      expect((await closing).state).toBe(DRAIN_STATE.drained);
+    } finally {
+      held.socket.destroy();
+    }
+  });
+
   test("names the still-open requests on stderr when the deadline expires", async () => {
     const handle = await startHttp(
       { vault: tempVault() },
