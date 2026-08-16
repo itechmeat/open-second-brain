@@ -32,7 +32,7 @@ import {
  * Registered adapters today. An equality, so adding an adapter is a
  * deliberate edit here rather than a silent widening of the population.
  */
-const REGISTERED_TARGET_COUNT = 9;
+const REGISTERED_TARGET_COUNT = 10;
 
 const registeredTargets = (): ReadonlyArray<string> => registerAllAdapters().targets();
 

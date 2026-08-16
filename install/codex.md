@@ -1,6 +1,8 @@
 # Codex
 
-Codex installs OSB through its marketplace + MCP subsystems.
+Codex installs OSB through its marketplace + MCP subsystems. The MCP
+registration is driven by the `codex` install adapter, so the steps below
+are the same two commands every other adapter-backed runtime uses.
 
 ## 1. Install the plugin
 
@@ -34,33 +36,54 @@ o2b init --vault /path/to/vault --name "My Second Brain" \
 o2b brain init --vault /path/to/vault
 ```
 
-## 4. Register the MCP server
+## 4. Register the MCP servers
 
 ```bash
-codex mcp add open-second-brain \
-    --env VAULT_AGENT_NAME=codex-<host>-agent \
-    --env VAULT_TIMEZONE=<chosen-tz> \
-    -- o2b mcp --vault /path/to/vault
+o2b install --target codex --vault /path/to/vault
+o2b install --target codex --vault /path/to/vault --apply
 ```
 
-`VAULT_AGENT_NAME` makes Codex attribute its Brain writes to its OWN
-host-qualified identity rather than the shared operator name - so Codex
-activity is distinguishable per runtime, and in a shared multi-device vault
-also per device.
+The first command plans and writes nothing; the second applies. With the
+`codex` binary on PATH the adapter registers both servers through
+`codex mcp add`, which persists them into `~/.codex/config.toml`. Without
+it, the adapter merges the same two `[mcp_servers.*]` tables into that
+file directly, leaving every other table - including the
+`[plugins."..."]` and `[marketplaces....]` blocks above - byte-for-byte
+intact. `CODEX_HOME` relocates the whole directory and the adapter
+follows it.
 
-Build the value by keeping the host segment of your configured `agent_name`
-and substituting `codex` as the vendor token: if `agent_name` is
-`claude-vps-agent`, use `codex-vps-agent`; on a Mac box named
-`claude-mac-agent`, use `codex-mac-agent`. A name that does not fit the
-`<vendor>-<host>-agent` shape is prefixed with `codex-` instead. This mirrors
-what the `grok` and `opencode` adapters derive automatically.
+The adapter sets `VAULT_AGENT_NAME` for you, to Codex's own
+host-qualified identity: it keeps the host segment of your configured
+`agent_name` and substitutes `codex` as the vendor token, so an
+`agent_name` of `claude-vps-agent` registers as `codex-vps-agent`. That
+makes Codex's Brain writes distinguishable per runtime, and in a shared
+multi-device vault also per device - the same derivation the `grok` and
+`opencode` adapters apply.
 
 ## 5. Verify
 
 ```bash
+o2b install --check --target codex --vault /path/to/vault
 o2b doctor --vault /path/to/vault --repo .
-codex mcp list
 ```
+
+A successful check prints:
+
+<!-- expected-output: o2b install --check --target codex -->
+
+```text
+o2b install --check
+--------------------
+  codex         ok                `codex mcp list` reports both OSB servers registered
+```
+
+That line is the host's own answer: the check runs `codex mcp list` and
+reports what Codex says it has registered. When the binary is not on
+PATH, or exits non-zero, the check names that obstacle instead and falls
+back to what `~/.codex/config.toml` declares. This block is asserted
+against the adapter's real `verify()` output by
+`tests/docs/install-verify-conformance.test.ts`, so it cannot drift from
+the code.
 
 Run the daily-identity check from `install/prerequisites.md`.
 
@@ -91,7 +114,12 @@ codex plugin marketplace upgrade open-second-brain
 ## Uninstall
 
 ```bash
-codex mcp remove open-second-brain
+o2b uninstall --target codex --vault /path/to/vault --apply
 codex plugin marketplace remove open-second-brain
 o2b uninstall --apply-local --remove-cli
 ```
+
+`o2b uninstall --target codex` removes only the two OSB server
+registrations - through `codex mcp remove` when the binary is present,
+and by stripping the two tables from `~/.codex/config.toml` when it is
+not. Every other table in that file is left alone.

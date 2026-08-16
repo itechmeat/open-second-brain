@@ -9,6 +9,10 @@
  * PATH). So the grok install target writes the two Open Second Brain servers
  * here, with an absolute command.
  *
+ * Codex names the same `[mcp_servers.<name>]` table with the same value
+ * shapes, so `./adapters/codex.ts` reuses this editor rather than adding
+ * a second one - a change here changes both hosts.
+ *
  * The project ships `dependencies = []`, so rather than pull in a TOML
  * library this edits by line-section: it only ever writes/removes the exact
  * `[mcp_servers.open-second-brain]` / `[mcp_servers.open-second-brain-writer]`

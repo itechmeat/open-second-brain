@@ -15,6 +15,7 @@ import { parseFlags } from "./argparse.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../core/config.ts";
 import { defaultRegistry } from "../core/install/registry.ts";
 import "../core/install/adapters/aider.ts";
+import "../core/install/adapters/codex.ts";
 import "../core/install/adapters/copilot-cli.ts";
 import "../core/install/adapters/cursor.ts";
 import "../core/install/adapters/gemini-cli.ts";

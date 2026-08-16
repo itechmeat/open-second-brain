@@ -13,6 +13,7 @@
 import { defaultRegistry } from "../registry.ts";
 
 import "./aider.ts";
+import "./codex.ts";
 import "./copilot-cli.ts";
 import "./cursor.ts";
 import "./gemini-cli.ts";

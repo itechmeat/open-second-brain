@@ -3,22 +3,42 @@
  *
  * This stays transport-only: every accepted JSON-RPC request is dispatched
  * through MCPServer.handleRequest, the same core used by stdio.
+ *
+ * ## Shutdown
+ *
+ * `close` used to be a bare `server.close()`. That stops the listener and
+ * returns; it does not wait for anything, and the promise this module's
+ * own request callback returns is floated, so a shutdown landing during a
+ * tool call answered it with a dead socket. {@link HttpServerHandle.close}
+ * now drains: it stops accepting NEW MCP work, keeps answering `/health`
+ * so a supervisor can watch it happen, waits for the in-flight requests to
+ * a bounded deadline, and only then shuts the listener down. The listener
+ * outliving the refusal is deliberate - "stopped accepting" is about
+ * requests, and a `/health` that answers `connection refused` tells a
+ * supervisor nothing about which state it is in.
  */
 
 import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
+import type { Socket } from "node:net";
 import type { Writable } from "node:stream";
 
 import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
-import { INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
+import { INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
+import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 
 export interface ServeHttpOptions {
   readonly host?: string;
   readonly port?: number;
   readonly apiKey?: string | null;
   readonly stderr?: Writable;
+  /**
+   * How long {@link HttpServerHandle.close} waits for in-flight requests.
+   * Defaults to `O2B_MCP_DRAIN_MS`, and to ten seconds without it.
+   */
+  readonly drainDeadlineMs?: number;
 }
 
 export interface HttpServerHandle {
@@ -26,7 +46,13 @@ export interface HttpServerHandle {
   readonly host: string;
   readonly port: number;
   readonly url: string;
-  close(): Promise<void>;
+  /** The in-flight register, so a caller can report what is running. */
+  readonly drain: RequestDrain;
+  /**
+   * Stop accepting, await the in-flight requests to the deadline, close.
+   * Returns what happened, including any request the deadline abandoned.
+   */
+  close(): Promise<DrainOutcome>;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -50,8 +76,50 @@ export async function startHttp(
   }
   const port = opts.port ?? 0;
   const mcp = new MCPServer(ctx, runtimeOpts);
+  const drain = new RequestDrain();
+  const deadlineMs = opts.drainDeadlineMs ?? resolveDrainDeadlineMs(process.env);
   const server = createServer(async (req, res) => {
-    await handleHttpRequest(mcp, apiKey, host, req, res);
+    // Registered here rather than inside the handler so the whole
+    // request - header parsing, body read, dispatch, response write - is
+    // inside the window a drain waits for. `finish` runs on `close`
+    // rather than on the handler returning: a client that walks away
+    // mid-body leaves the handler parked forever, and a drain waiting on
+    // it would sit out its whole deadline for a request nobody wants.
+    // The health probe is an OBSERVATION of the drain, not work it waits
+    // for: counting it would make the number a supervisor reads include
+    // the act of reading it, and a probe arriving as the last request
+    // finishes would restart the wait it was checking on.
+    const finish = isHealthProbe(req) ? NOTHING_TO_FINISH : drain.begin(requestLabel(req));
+    // On `close` rather than on the handler returning, because that is
+    // when the response has actually left: a request counted as finished
+    // while its bytes are still queued lets the drain proceed to
+    // `closeIdleConnections` over a socket that is not idle yet, and the
+    // shutdown then waits for a client that is waiting for it.
+    res.on("close", finish);
+    try {
+      await handleHttpRequest(mcp, apiKey, host, drain, req, res);
+    } catch (exc) {
+      // This promise used to be floated. A throw from the dispatch left
+      // the socket open with no response on it and no record anywhere;
+      // the client waited until its own timeout for a request the server
+      // had already given up on.
+      if (!res.headersSent) {
+        writeJson(res, errorResponse(null, INTERNAL_ERROR, (exc as Error).message));
+      } else {
+        res.end();
+      }
+    }
+  });
+  // Every accepted socket, tracked so an expired drain can actually drop
+  // what it gave up on. `server.closeAllConnections()` is the documented
+  // way to do that and, measured on this runtime, does NOT reach a socket
+  // parked mid-body: the request stays open, `server.close` never calls
+  // back, and a shutdown that promised a bounded deadline waits forever.
+  // The set is the fallback that makes the deadline real.
+  const sockets = new Set<Socket>();
+  server.on("connection", (socket: Socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
   });
   server.listen(port, host);
   await once(server, "listening");
@@ -62,11 +130,59 @@ export async function startHttp(
     host,
     port: actualPort,
     url: `http://${host}:${actualPort}`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((err) => (err ? reject(err) : resolve()));
-      }),
+    drain,
+    close: () => closeHttp(server, drain, deadlineMs, sockets),
   };
+}
+
+/** How one in-flight request is named in a drain report. */
+function requestLabel(req: IncomingMessage): string {
+  return `${req.method ?? "?"} ${requestPath(req)}`;
+}
+
+function requestPath(req: IncomingMessage): string {
+  return (req.url ?? "/").split("?")[0] ?? "/";
+}
+
+/** The unauthenticated liveness probe, recognised before anything is counted. */
+const HEALTH_PATH = "/health";
+
+function isHealthProbe(req: IncomingMessage): boolean {
+  return req.method === "GET" && requestPath(req) === HEALTH_PATH;
+}
+
+/** The finish for a request the drain does not track. */
+const NOTHING_TO_FINISH = (): void => {};
+
+/**
+ * Drain, then shut the listener.
+ *
+ * The order matters and the connection handling is the part that is easy
+ * to get wrong. `server.close()` refuses new CONNECTIONS but resolves
+ * only once every existing socket is gone, and HTTP keep-alive means an
+ * answered request leaves its socket open - so closing without touching
+ * the idle ones hangs until the client happens to disconnect.
+ * `closeIdleConnections` releases exactly those. Sockets still carrying
+ * an abandoned request are dropped only after the deadline has expired,
+ * and the outcome returned here still names those requests so the caller
+ * can report them rather than dropping them silently.
+ */
+async function closeHttp(
+  server: Server,
+  drain: RequestDrain,
+  deadlineMs: number,
+  sockets: ReadonlySet<Socket>,
+): Promise<DrainOutcome> {
+  const outcome = await drain.drain(deadlineMs);
+  const closed = new Promise<void>((resolve, reject) => {
+    server.close((err) => (err ? reject(err) : resolve()));
+  });
+  server.closeIdleConnections();
+  if (outcome.state === DRAIN_STATE.deadlineExpired) {
+    for (const socket of sockets) socket.destroy();
+  }
+  await closed;
+  return outcome;
 }
 
 export async function serveHttp(
@@ -83,6 +199,7 @@ async function handleHttpRequest(
   mcp: MCPServer,
   apiKey: string | null,
   boundHost: string,
+  drain: RequestDrain,
   req: IncomingMessage,
   res: ServerResponse,
 ): Promise<void> {
@@ -101,13 +218,38 @@ async function handleHttpRequest(
     return;
   }
 
-  const path = (req.url ?? "/").split("?")[0];
-
   // Health endpoint: an unauthenticated liveness probe (still behind the Host
   // guard), so a supervisor can check the transport without a bearer.
-  if (req.method === "GET" && path === "/health") {
+  if (isHealthProbe(req)) {
+    // Three fields rather than one, because a supervisor's next action
+    // differs per state: `ok` keep going, `draining` stop sending work
+    // and wait, and the count says how long that wait has left in it.
+    // The health probe itself is never refused during a drain - a
+    // shutdown a supervisor cannot observe is a shutdown it will report
+    // as a crash. The drain counts this request like any other; it
+    // answers within the same tick, so it never holds one open.
     res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ status: "ok", transport: "http" }) + "\n");
+    res.end(
+      JSON.stringify({
+        status: drain.draining ? DRAIN_STATE.draining : "ok",
+        transport: "http",
+        in_flight: drain.inFlight,
+      }) + "\n",
+    );
+    return;
+  }
+
+  // Stopped accepting. The listener is deliberately still up (see the
+  // module docblock), so this is where "no more work" is actually said,
+  // and it is said with a code a client retries rather than one it reads
+  // as a protocol error.
+  if (drain.draining) {
+    res.writeHead(503, {
+      "content-type": "text/plain; charset=utf-8",
+      connection: "close",
+      "retry-after": "1",
+    });
+    res.end("Service Unavailable: the MCP transport is shutting down\n");
     return;
   }
 

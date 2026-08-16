@@ -123,6 +123,16 @@ const SANCTIONED: Readonly<Record<string, SanctionedPointer>> = Object.freeze({
       "command to run next, and routing it through the rail would advise the operator to reinstall " +
       "the very symlinks the paragraph is about removing.",
   },
+  "src/cli/state.ts :: o2b state rollback": {
+    count: 1,
+    reason:
+      "the undo line on a completed `state migrate --apply` receipt, which must name the " +
+      "destination the operator chose seconds earlier: `o2b state rollback --from <that dir>`. " +
+      "The rail resolves ONE structural command per diagnostic code and has no parameter through " +
+      "which a runtime path can enter, by design - so a registered signal here could only name a " +
+      "command that does not run. It sits beside the manifest path in the same receipt for the " +
+      "same reason: both are facts about the move that just happened.",
+  },
 });
 
 /** A reason has to say something; a placeholder cannot reach this. */
@@ -283,9 +293,11 @@ describe("the rail is the only forward-pointer mechanism", () => {
 
   test("the sanctioned table stays an exception", () => {
     // Every measured site is sanctioned (test one), so the table's size
-    // IS the number of unmigrated sites. Four is the ceiling this change
-    // leaves behind; a fifth needs its own argument.
-    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(4);
+    // IS the number of unmigrated sites. Four was the ceiling that change
+    // left behind; the fifth is `state migrate`'s undo line, which the
+    // rail structurally cannot carry because it interpolates the
+    // destination the operator just named. A sixth needs its own argument.
+    expect(Object.keys(SANCTIONED).length).toBeLessThanOrEqual(5);
   });
 });
 

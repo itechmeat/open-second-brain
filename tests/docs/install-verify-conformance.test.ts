@@ -19,17 +19,23 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { Writable } from "node:stream";
 
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
 import {
+  resetCodexRunner,
+  setCodexRunner,
+  type CodexRunner,
+} from "../../src/core/install/adapters/codex.ts";
+import {
   resetCopilotRunner,
   setCopilotRunner,
   type CopilotRunner,
 } from "../../src/core/install/adapters/copilot-cli.ts";
+import { resetHostProbeRunner, setHostProbeRunner } from "../../src/core/install/host-probe.ts";
 import { buildPayload } from "../../src/core/install/payload.ts";
 import { renderVerifyTable } from "../../src/cli/install/render.ts";
 import type {
@@ -62,7 +68,6 @@ const TIMEZONE = "UTC";
  */
 const PIPELINE_HOSTED_DOCS: Readonly<Record<string, string>> = Object.freeze({
   "claudecode.md": "plugin-hosted; verified with `claude mcp list`, not an OSB adapter",
-  "codex.md": "plugin-hosted; verified with `codex mcp list`, not an OSB adapter",
   "hermes.md": "provider-hosted; verified with `hermes memory status`, not an OSB adapter",
   "openclaw.md": "plugin-hosted; verified with `openclaw plugins inspect`, not an OSB adapter",
   "prerequisites.md": "shared setup, not a runtime document",
@@ -85,7 +90,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetCodexRunner();
   resetCopilotRunner();
+  resetHostProbeRunner();
   for (const dir of [vault, home]) {
     try {
       rmSync(dir, { recursive: true, force: true });
@@ -136,6 +143,36 @@ const INSTALLERS: Readonly<Record<string, (adapter: InstallAdapter) => Harness>>
     const h = harness({ piSkillSource: join(REPO_ROOT, "skills", "brain-memory") });
     return applyInto(adapter, h);
   },
+  codex: (adapter) => {
+    // The codex CLI may or may not be on the machine running this suite,
+    // and the document has to show ONE thing: what an operator who has
+    // it installed sees. So the mutation seam is a fake that behaves
+    // like the real binary - `mcp add` persists a `[mcp_servers.<name>]`
+    // table into `$CODEX_HOME/config.toml`, in codex's own layout rather
+    // than the adapter's - and the read-only probe is staged separately,
+    // exactly as the copilot case below stages its two seams.
+    const registered: string[] = [];
+    const runner: CodexRunner = {
+      available: () => true,
+      run: (codexHome: string, args: ReadonlyArray<string>) => {
+        if (args[0] === "mcp" && args[1] === "add" && typeof args[2] === "string") {
+          registered.push(args[2]);
+          mkdirSync(codexHome, { recursive: true });
+          const tables = registered
+            .map((name) => `[mcp_servers.${name}]\ncommand = "o2b"\nargs = [\n  "mcp",\n]\n`)
+            .join("\n");
+          writeFileSync(join(codexHome, "config.toml"), tables);
+        }
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    setCodexRunner(runner);
+    setHostProbeRunner({
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: registered.join("\n") + "\n", stderr: "" }),
+    });
+    return applyInto(adapter, harness());
+  },
   "copilot-cli": (adapter) => {
     // The copilot CLI is not present in a test environment; inject a
     // runner that behaves like a working one so the document shows the
@@ -152,6 +189,15 @@ const INSTALLERS: Readonly<Record<string, (adapter: InstallAdapter) => Harness>>
       },
     };
     setCopilotRunner(runner);
+    // `verify` reads the host through the DECLARED probe rather than
+    // through `CopilotRunner`, so the same fiction has to be staged on
+    // that seam too - otherwise the document would show the verdict of a
+    // machine with no `copilot` on PATH, which is not what a successful
+    // check looks like.
+    setHostProbeRunner({
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: registered.join("\n") + "\n", stderr: "" }),
+    });
     return applyInto(adapter, harness());
   },
 });

@@ -430,9 +430,10 @@ export async function probeRuntimeAdapterWiring(opts: ReadinessOptions): Promise
  *
  * Delegating to `verify` rather than re-reading the runtime config files
  * here is the whole point: the adapter already knows where its config
- * lives, what the canonical payload looks like for it, and - for the one
- * runtime that has a CLI to ask (`copilot-cli`) - how to consult the
- * runtime itself. Re-implementing any of that in a doctor probe would
+ * lives, what the canonical payload looks like for it, and - for the
+ * runtimes that have a CLI to ask (`copilot-cli`, `codex`) - how to
+ * consult the runtime itself. Re-implementing any of that in a doctor
+ * probe would
  * produce a second, quietly divergent opinion about the same disk.
  *
  * The closed `VerifyStatus` vocabulary maps onto readiness with no
@@ -444,9 +445,10 @@ export async function probeRuntimeAdapterWiring(opts: ReadinessOptions): Promise
  * manifest we cannot read is not a machine with nothing installed.
  */
 /**
- * NOTE ON THE TIMEOUT: every `verify` here is synchronous, and
- * `copilot-cli` verifies by spawning its own CLI synchronously. While that
- * spawn runs, the event loop is blocked and the runner's timeout timer
+ * NOTE ON THE TIMEOUT: every `verify` here is synchronous, and both
+ * `copilot-cli` and `codex` verify by spawning their own CLI
+ * synchronously. While that spawn runs, the event loop is blocked and the
+ * runner's timeout timer
  * cannot fire, so this probe is the one the module-level timeout promise
  * does not cover. Making it interruptible means an async adapter contract,
  * which is a change to every adapter and belongs in its own unit.

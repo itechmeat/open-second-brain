@@ -25,8 +25,8 @@
  * second run on the same file finds every hash already present.
  */
 
-import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
-import { basename, join, resolve } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { basename, resolve } from "node:path";
 
 import { delegatedAgentName } from "../../agent-identity.ts";
 import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
@@ -39,6 +39,7 @@ import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
 import { readFirstLine } from "./read-lines.ts";
 import { detectAdapter, getAdapter } from "./registry.ts";
+import { sessionFilesUnder } from "./session-files.ts";
 import {
   SessionImportError,
   type SessionAdapter,
@@ -667,30 +668,9 @@ export async function importSessionPath(
   // as new signals are written, so cross-file dedup happens too.
   const files: ImportSessionResult[] = [];
   const warnings: { path: string; message: string }[] = [];
-  const queue: string[] = [];
-  const collect = (dir: string): void => {
-    for (const name of readdirSync(dir)) {
-      const full = join(dir, name);
-      let st;
-      try {
-        // lstat (not stat) so symlink cycles can't drive the walker
-        // into infinite recursion. Symlink-following session-exports
-        // are atypical; if real demand surfaces we can switch to a
-        // visited-inode set instead.
-        st = lstatSync(full);
-      } catch {
-        continue;
-      }
-      if (st.isSymbolicLink()) continue;
-      if (st.isDirectory()) {
-        collect(full);
-        continue;
-      }
-      if (name.endsWith(".jsonl")) queue.push(full);
-    }
-  };
-  collect(path);
-  queue.sort();
+  // Shared with the transcript dataset export, so both agree on what a
+  // session log is and neither can quietly widen the rule alone.
+  const queue = sessionFilesUnder(path);
 
   const sharedDedup = opts.dedupIndex ?? buildDedupIndex(vault);
   const perFileOpts: ImportSessionOptions = {

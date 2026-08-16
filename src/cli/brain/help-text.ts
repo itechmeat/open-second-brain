@@ -58,7 +58,8 @@ Brain verbs (observing memory):
   unprotect        Remove OSB-managed deny rules for the chosen target (--target)
   merge            Merge two near-duplicate preferences (<keep> <drop>; --dry-run, --force)
   upgrade          Migrate release-owned files forward (--dry-run by default; --apply --yes)
-  export           Dump active preferences (--format json|llms-txt [--out <path>])
+  export           Dump preferences or a transcript dataset
+                   (--format json|llms-txt|transcripts-jsonl [--out <path>])
   okf-export       Write a portable Open Knowledge Format bundle (--out <dir> [--force])
   okf-import       Import an OKF bundle (<dir>; staged as review candidates, --trusted writes direct)
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
@@ -703,12 +704,22 @@ export const VERB_HELP: Record<string, string> = {
     "--force skips the interactive prompt but does NOT bypass invariant\n" +
     "guards (topic/scope mismatch, pin parity).\n",
   export:
-    "usage: o2b brain export --format json|llms-txt [--vault <path>]\n" +
-    "                         [--out <path>] [--force]\n" +
+    "usage: o2b brain export --format json|llms-txt|transcripts-jsonl\n" +
+    "                         [--vault <path>] [--out <path>] [--force]\n" +
+    "       o2b brain export --format transcripts-jsonl --transcripts <file|dir>\n" +
+    "                         [--runtime <id>] [--since <iso>] [--until <iso>]\n" +
     "Read-only dump of active preferences (confirmed | unconfirmed |\n" +
     "quarantine) from Brain/preferences/. Retired and signal entries\n" +
     "are not included. JSON is single-line; llms-txt follows the\n" +
     "llmstxt.org H1 + summary + H2-section shape.\n" +
+    "transcripts-jsonl reads no vault: it emits one JSON conversation\n" +
+    "record per line from the session logs under --transcripts, with\n" +
+    "ordered role/text messages and the names (never the inputs) of the\n" +
+    "tools each turn called. --runtime keeps one adapter's transcripts;\n" +
+    "--since / --until select whole conversations by their START, so a\n" +
+    "kept conversation is never sliced across the window edge.\n" +
+    "Every format is scanned by the shared egress guard before a byte is\n" +
+    "written, and a secret-shaped identifier refuses the export outright.\n" +
     "Default sink is stdout; --out writes to <path> (refuses to\n" +
     "overwrite without --force).\n",
   upgrade:

@@ -23,8 +23,19 @@ mirrors the same path.
 o2b install --check --target copilot-cli
 ```
 
-Verify queries `copilot mcp list` when the CLI is available, or
-inspects the fallback file otherwise.
+Verify always asks `copilot mcp list` what this host has registered - the
+probe is declared on the `copilot-cli` row of the runtime fact table, it
+needs no API key and starts no model turn. When the binary is absent or
+exits non-zero, the check says so by name ("host probe skipped: `copilot`
+is not on PATH") rather than reporting a handshake it never attempted.
+
+What the answer is worth depends on how the install was applied. In
+subprocess mode the host CLI holds the only record, so a probe that
+cannot run leaves nothing verified and the check exits `5`. In
+file-fallback mode the config file is compared as well, so a skipped
+probe still leaves a verified configuration - and a probe that ANSWERS
+without listing the servers means the host has not loaded that file,
+which is also exit `5`.
 
 A successful check prints:
 
@@ -33,7 +44,7 @@ A successful check prints:
 ```text
 o2b install --check
 --------------------
-  copilot-cli   ok                both OSB names registered with copilot CLI
+  copilot-cli   ok                `copilot mcp list` reports both OSB servers registered
 ```
 
 `$HOME` stands in for your home directory. This block is asserted

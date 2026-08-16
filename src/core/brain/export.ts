@@ -80,7 +80,42 @@ export class PreferenceParseError extends Error {
   }
 }
 
-export type ExportFormat = "json" | "llms-txt";
+/**
+ * What `o2b brain export --format` accepts.
+ *
+ * Closed, and a vocabulary rather than the type alias it used to be: the
+ * alias was declared here and imported by nobody, while the verb compared
+ * the raw argv string against two inline literals. A contract with nothing
+ * behind it is not a contract - adding a third format meant editing a
+ * comparison in the CLI and hoping this line was noticed. The guard is now
+ * the boundary the argv value crosses, and the object's key set is what the
+ * verb's dispatch table is typed against, so a format with no handler is a
+ * compile error.
+ *
+ * `transcripts-jsonl` names its shape on purpose. `json` and `llms-txt`
+ * each produce ONE document; this one produces a stream of records, and an
+ * operator who redirects it into a `.json` file learns that from the flag
+ * rather than from a parse error downstream.
+ */
+export const EXPORT_FORMAT = Object.freeze({
+  json: "json",
+  llmsTxt: "llms-txt",
+  transcriptsJsonl: "transcripts-jsonl",
+} as const);
+
+export type ExportFormat = (typeof EXPORT_FORMAT)[keyof typeof EXPORT_FORMAT];
+
+/** The formats, in the order the help text and the refusal message list them. */
+export const EXPORT_FORMATS: ReadonlyArray<ExportFormat> = Object.freeze([
+  EXPORT_FORMAT.json,
+  EXPORT_FORMAT.llmsTxt,
+  EXPORT_FORMAT.transcriptsJsonl,
+]);
+
+/** Takes `unknown`: the value arrives as a raw `--format` argument. */
+export function isExportFormat(value: unknown): value is ExportFormat {
+  return typeof value === "string" && (EXPORT_FORMATS as ReadonlyArray<string>).includes(value);
+}
 
 export interface ExportedPreferenceRow {
   readonly id: string;

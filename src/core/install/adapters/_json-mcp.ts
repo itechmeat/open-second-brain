@@ -21,6 +21,7 @@ import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { InstallTargetId } from "../../runtime/host-facts.ts";
+import { handshakeNote, probeHost, probeRefutedFixHint, probeRefutes } from "../host-probe.ts";
 import { payloadWithRuntimeIdentity } from "../identity.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { payloadForHost } from "../payload-host.ts";
@@ -40,14 +41,6 @@ import {
   type UninstallResult,
   type VerifyResult,
 } from "../types.ts";
-
-/**
- * Stated on every clean `verify` so an `ok` cannot be read as "the
- * runtime answered". One constant, because the sentence is a property of
- * this adapter body and every target that reuses it must say it the same
- * way.
- */
-const NO_HANDSHAKE_NOTE = "configuration comparison; no MCP handshake attempted";
 
 export interface JsonMcpAdapterSpec {
   /** The runtime this spec installs into; becomes `InstallAdapter.target`. */
@@ -485,24 +478,29 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
           fix_hint: spec.fixHintForDrift ?? `o2b install --target ${spec.target} --apply`,
         };
       }
-      // The `ok` below is a CONFIGURATION comparison and nothing more, and
-      // it now says so. This is where an optional `probeMcp(env)` seam used
-      // to sit: declared on the spec, called here, and implemented by zero
-      // adapters in the tree, so every JSON-MCP runtime reported `ok` on the
-      // strength of two matching JSON keys while the branch that could have
-      // said otherwise was unreachable. The seam is deleted rather than
-      // implemented because implementing it here would mean this process
-      // spawning each runtime's MCP server to speak a handshake to itself,
-      // which proves that WE can run `o2b`, not that Cursor or Gemini CLI
-      // loaded the entry - and no caller wanted that answer today. Liveness
-      // stays reachable where a runtime genuinely exposes it: `copilot-cli`
-      // asks `copilot mcp list` and returns `mcp-unreachable` from a real
-      // failure. An operator reading this verdict is owed the distinction,
-      // so the detail carries it instead of a bare "both OSB keys present".
+      // The config matches. What that is EVIDENCE of depends on the host,
+      // and the fact table is what decides: a target whose `RUNTIME_FACTS`
+      // row declares a `hostProbe` gets asked, and the answer - or the
+      // named reason there is none - replaces the blanket note. Nothing in
+      // this body spawns a runtime's own MCP server to speak a handshake
+      // to itself: that would prove WE can run `o2b`, not that Cursor
+      // loaded the entry. It asks the host's own CLI what it has
+      // registered, which is the only question a host can answer about
+      // itself, and no row in this body's population declares one today -
+      // so they keep the blanket note, and keep it honestly.
+      const probe = probeHost(spec.target);
+      if (probeRefutes(probe)) {
+        return {
+          target: spec.target,
+          status: "mcp-unreachable",
+          details: [`${path}: matches the canonical payload, but ${handshakeNote(probe)}`],
+          fix_hint: probeRefutedFixHint(spec.label),
+        };
+      }
       return {
         target: spec.target,
         status: "ok",
-        details: [`${path}: both OSB keys match the canonical payload (${NO_HANDSHAKE_NOTE})`],
+        details: [`${path}: both OSB keys match the canonical payload (${handshakeNote(probe)})`],
         fix_hint: null,
       };
     },

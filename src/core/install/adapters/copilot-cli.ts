@@ -14,12 +14,29 @@
  *
  * The subprocess seam is injectable via `setCopilotRunner` so tests
  * can drive both branches deterministically.
+ *
+ * Two seams, not one, and the split is deliberate: `CopilotRunner` owns
+ * the commands that CHANGE this host (`mcp add`, `mcp remove`) and the
+ * presence check that decides which path apply takes, while
+ * `src/core/install/host-probe.ts` owns the read-only question "what does
+ * this host say it has registered". The read is declared once, in
+ * `RUNTIME_FACTS[copilot-cli].hostProbe`, so `verify` asks the same
+ * question every other probe-bearing target will be asked, in the same
+ * words - see the note that used to be blanket in `_json-mcp.ts`.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { INSTALL_TARGET_ID } from "../../runtime/host-facts.ts";
+import {
+  handshakeNote,
+  HOST_PROBE_RESULT,
+  probeHost,
+  probeRefutedFixHint,
+  probeRefutes,
+} from "../host-probe.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { payloadForHost } from "../payload-host.ts";
 import { expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
@@ -40,7 +57,7 @@ import {
   type VerifyResult,
 } from "../types.ts";
 
-const TARGET = "copilot-cli";
+const TARGET = INSTALL_TARGET_ID.copilotCli;
 const LABEL = "GitHub Copilot CLI";
 
 // ---------- Injectable subprocess runner ----------
@@ -51,6 +68,12 @@ export interface CopilotRunResult {
   readonly stderr: string;
 }
 
+/**
+ * What `detect` needs from the host: which OSB names it reports, or that
+ * it could not be asked. `verify` does NOT read this - it asks
+ * {@link probeHost} directly, so the reason a probe was skipped survives
+ * into the verdict instead of collapsing into `ok: false`.
+ */
 export interface CopilotListResult {
   readonly ok: boolean;
   readonly names: ReadonlyArray<string>;
@@ -80,16 +103,12 @@ const defaultRunner: CopilotRunner = {
     };
   },
   list(): CopilotListResult {
-    const r = Bun.spawnSync({ cmd: ["copilot", "mcp", "list"], stdout: "pipe", stderr: "pipe" });
-    if (r.exitCode !== 0) return { ok: false, names: [] };
-    const stdout = r.stdout?.toString() ?? "";
-    const names = stdout
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((l) => l.length > 0)
-      .map((line) => line.split(/\s+/)[0]!)
-      .filter((n) => n === OSB_KEY_FULL || n === OSB_KEY_WRITER);
-    return { ok: true, names };
+    // One implementation of "ask copilot what it has registered", shared
+    // with `verify` through the declared `RUNTIME_FACTS` probe rather
+    // than spelled a second time here.
+    const outcome = probeHost(TARGET);
+    if (outcome.kind !== HOST_PROBE_RESULT.answered) return { ok: false, names: [] };
+    return { ok: true, names: outcome.registered };
   },
 };
 
@@ -381,29 +400,40 @@ export const copilotCliAdapter: InstallAdapter = {
         fix_hint: null,
       };
     }
+    // The host's own answer, or the named reason there is none. Asked
+    // before the branch because BOTH modes are owed it: the subprocess
+    // mode has nothing else to compare, and the file mode has a
+    // comparison that cannot establish the host ever loaded the file.
+    const probe = probeHost(TARGET);
     if (stored.operation === "subprocess") {
-      const lst = activeRunner.list();
-      if (!lst.ok) {
+      // In this mode the host CLI IS the registry - there is no file to
+      // fall back on - so a probe that could not run leaves nothing
+      // verified, and says which of the two obstacles it hit.
+      if (probe.kind !== HOST_PROBE_RESULT.answered) {
         return {
           target: TARGET,
           status: "mcp-unreachable",
-          details: ["`copilot mcp list` failed"],
-          fix_hint: "ensure copilot CLI is on PATH and authenticated",
+          details: [handshakeNote(probe)],
+          fix_hint:
+            "put the copilot CLI on PATH and authenticate it - in subprocess mode it holds the " +
+            "only record of this registration",
         };
       }
-      const has = (n: string) => lst.names.includes(n);
-      if (has(OSB_KEY_FULL) && has(OSB_KEY_WRITER)) {
+      if (probe.missing.length === 0) {
         return {
           target: TARGET,
           status: "ok",
-          details: ["both OSB names registered with copilot CLI"],
+          details: [handshakeNote(probe)],
           fix_hint: null,
         };
       }
+      // A partial answer here is DRIFT, not unreachable: the host was
+      // reached and reported the registration itself as incomplete, and
+      // re-applying is what repairs it.
       return {
         target: TARGET,
         status: "drift",
-        details: [`missing: ${[OSB_KEY_FULL, OSB_KEY_WRITER].filter((n) => !has(n)).join(", ")}`],
+        details: [handshakeNote(probe)],
         fix_hint: "o2b install --target copilot-cli --apply",
       };
     }
@@ -431,10 +461,21 @@ export const copilotCliAdapter: InstallAdapter = {
           expected.writer,
         )
       ) {
+        // The file is right. Whether the host READ it is the probe's
+        // question, and a host that answers and does not list the servers
+        // has not loaded the file the operator just verified.
+        if (probeRefutes(probe)) {
+          return {
+            target: TARGET,
+            status: "mcp-unreachable",
+            details: [`${path}: matches the canonical payload, but ${handshakeNote(probe)}`],
+            fix_hint: probeRefutedFixHint(LABEL),
+          };
+        }
         return {
           target: TARGET,
           status: "ok",
-          details: [`${path}: both keys present`],
+          details: [`${path}: both keys present (${handshakeNote(probe)})`],
           fix_hint: null,
         };
       }

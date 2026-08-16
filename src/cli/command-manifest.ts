@@ -69,7 +69,24 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
     command("help", "Print command help or the command manifest"),
     command("completions", "Print shell completion script for o2b", [flag("shell", "string")]),
     command("install-cli", "Create symlinks for o2b and vault-log"),
-    command("install", "Multi-runtime install orchestrator"),
+    // The whole flag set, not only the two the friction mode added:
+    // `tests/cli/help-surface-parity.test.ts` renders the human help from
+    // this list, so declaring one flag on a verb that parses twelve would
+    // advertise a surface narrower than the verb's own argument parser.
+    command("install", "Multi-runtime install orchestrator", [
+      flag("target", "string"),
+      flag("apply", "boolean"),
+      flag("check", "boolean"),
+      flag("friction", "boolean"),
+      flag("base", "string"),
+      flag("compare", "string"),
+      flag("dry-run", "boolean"),
+      flag("force", "boolean"),
+      flag("out", "string"),
+      flag("format", "string"),
+      flag("vault", "string"),
+      flag("config", "string"),
+    ]),
     command("update", "Update Open Second Brain across detected runtimes", [
       flag("target", "string"),
       flag("dry-run", "boolean"),
@@ -165,7 +182,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command("rollback", "Restore Brain from a snapshot"),
         command("upgrade", "Migrate release-owned Brain files"),
-        command("export", "Export active preferences"),
+        command("export", "Export active preferences or a session-transcript dataset", [
+          flag("vault", "string"),
+          flag("format", "string"),
+          flag("transcripts", "string"),
+          flag("runtime", "string"),
+          flag("since", "string"),
+          flag("until", "string"),
+          flag("out", "string"),
+          flag("force", "boolean"),
+        ]),
         command("explorer", "Open or export Brain graph explorer"),
         command("doctor", "Check Brain invariants"),
         command("status", "Unified operator status snapshot with next-command hints", [
@@ -619,6 +645,28 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "status",
           "Report every state surface in the vault with its path, reachability, and the override that placed it",
           [flag("vault", "string"), flag("config", "string")],
+        ),
+        command(
+          "migrate",
+          "Plan (or, with --apply --yes, perform) a digest-bound move of the vault's state to another directory",
+          [
+            flag("to", "string"),
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("dry-run", "boolean"),
+            flag("apply", "boolean"),
+            flag("yes", "boolean"),
+          ],
+        ),
+        command(
+          "rollback",
+          "Restore a migration's manifest-bound files whose digests still match, refusing anything changed since",
+          [
+            flag("from", "string"),
+            flag("dry-run", "boolean"),
+            flag("apply", "boolean"),
+            flag("yes", "boolean"),
+          ],
         ),
       ],
     ),

@@ -141,15 +141,23 @@ export const EGRESS_SITES = Object.freeze({
       "full, because the `<private>` region marker is this product's only content-derived " +
       "privacy primitive and these composers are content composers, not visibility filters.",
   },
-  "brain-preference-export": {
-    id: "brain-preference-export",
+  "brain-export": {
+    id: "brain-export",
     verb: "o2b brain export",
     module: "src/cli/brain/verbs/export.ts",
     redaction: R.sharedRedactor,
     reason:
       "preference principles are free text an agent wrote, and the llms-txt form is " +
       "meant to be pasted into a foreign prompt - the destination least likely to be " +
-      "read before it is shared.",
+      "read before it is shared. One entry covers all three of the verb's formats " +
+      "because the census keys on the MODULE and the destination is declared once, in " +
+      "the verb: the JSON and transcript forms are redacted as TREES and serialised " +
+      "afterwards, llms-txt as text, and the guard-call count is what proves each " +
+      "branch scans. The transcript form is the widest of the three by far - whole " +
+      "recorded conversations with whichever runtime wrote them, which is where a key " +
+      "pasted into a prompt actually lives. Its records are guarded ONE AT A TIME, so " +
+      "a single oversized turn cannot put a machine's whole corpus past the scan " +
+      "window, and a refusal names the conversation rather than the run.",
   },
   "config-export": {
     id: "config-export",

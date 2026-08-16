@@ -35,6 +35,7 @@ import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
 import { handleStateSubcommand } from "./state.ts";
+import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
@@ -738,20 +739,43 @@ async function cmdMcp(argv: string[]): Promise<number> {
     process.stderr.write(
       `[mcp] ${serverName} ${SERVER_VERSION} listening on ${handle.url} (vault=${vault})\n`,
     );
-    // `closed` rather than `resolve`: this module imports `resolve` from
-    // `node:path`, and shadowing it here hid that import inside the closure.
-    await new Promise<void>((closed) => handle.server.once("close", closed));
-    return 0;
+    // A served transport outlives every other verb in this CLI, so it is
+    // the one place a shutdown signal has work to do: stop accepting,
+    // finish what is running, then let the registered `exit` hooks
+    // checkpoint the index and release the locks. Released in a `finally`
+    // because the listeners are process-global.
+    const signals = installMcpSignalDrain({ close: () => handle.close() });
+    try {
+      // `closed` rather than `resolve`: this module imports `resolve` from
+      // `node:path`, and shadowing it here hid that import inside the closure.
+      await new Promise<void>((closed) => handle.server.once("close", closed));
+    } finally {
+      signals.release();
+    }
+    return signals.exitCode() ?? 0;
   }
 
   process.stderr.write(
     `[mcp] ${serverName} ${SERVER_VERSION} listening on stdio (vault=${vault})\n`,
   );
-  return await serveStdio(
-    { vault, configPath: config, repoRoot },
-    {},
-    { scope, serverName, capabilityWindow, hostTarget },
-  );
+  // A holder rather than a `let`, because the assignment happens inside a
+  // callback: the compiler cannot see that it ran and would narrow a bare
+  // binding to `null` at both reads below.
+  const stdio: { signals: McpSignalDrainHandle | null } = { signals: null };
+  try {
+    const code = await serveStdio(
+      { vault, configPath: config, repoRoot },
+      {
+        onStart: (transport) => {
+          stdio.signals = installMcpSignalDrain({ close: () => transport.close() });
+        },
+      },
+      { scope, serverName, capabilityWindow, hostTarget },
+    );
+    return stdio.signals?.exitCode() ?? code;
+  } finally {
+    stdio.signals?.release();
+  }
 }
 
 function parseCapabilityWindow(

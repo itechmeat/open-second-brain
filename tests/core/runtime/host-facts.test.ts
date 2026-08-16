@@ -51,7 +51,7 @@ const NON_MEMBERS: ReadonlyArray<unknown> = Object.freeze([
   " ",
   "Cursor",
   "copilot",
-  "codex",
+  "Codex",
   null,
   undefined,
   42,
@@ -90,11 +90,14 @@ describe("the install-target vocabulary", () => {
     expect([...INSTALL_TARGET_IDS].toSorted()).toEqual(Object.values(INSTALL_TARGET_ID).toSorted());
   });
 
-  test("codex is not a member until its adapter ships", () => {
-    // The vocabulary is what `--target` is validated against. Declaring a
-    // target with no adapter behind it would make the CLI accept a name
-    // the registry then fails to find - a worse error than an unknown one.
-    expect(isInstallTargetId("codex")).toBe(false);
+  test("codex is a member now that its adapter ships", () => {
+    // The vocabulary is what `--target` is validated against, so a member
+    // is only allowed to exist once the registry can find an adapter for
+    // it - `tests/core/architecture/host-facts-census.test.ts` holds the
+    // two populations equal. Codex was the standing example of the rule
+    // while it had no adapter; it is now the example of the rule met.
+    expect(isInstallTargetId("codex")).toBe(true);
+    expect(runtimeFactsFor(INSTALL_TARGET_ID.codex).sessionAdapter).toBe(SESSION_ADAPTER_ID.codex);
   });
 });
 
@@ -278,6 +281,27 @@ describe("session roots", () => {
     ]);
   });
 
+  test("the codex roots are the four subdirectories the scanner walks, under CODEX_HOME", () => {
+    // `src/core/discipline/transcripts/codex.ts` probes exactly these
+    // four because the CLI has moved its transcripts between releases.
+    expect(resolveSessionRoots(INSTALL_TARGET_ID.codex, ONE).map((r) => r.path)).toEqual([
+      join("/home/one", ".codex", "sessions"),
+      join("/home/one", ".codex", "session"),
+      join("/home/one", ".codex", "history"),
+      join("/home/one", ".codex", ".tmp"),
+    ]);
+    const relocated: HostContext = {
+      home: "/home/two",
+      env: { CODEX_HOME: "/home/two/codex-elsewhere" },
+    };
+    expect(resolveSessionRoots(INSTALL_TARGET_ID.codex, relocated).map((r) => r.path)).toEqual([
+      join("/home/two/codex-elsewhere", "sessions"),
+      join("/home/two/codex-elsewhere", "session"),
+      join("/home/two/codex-elsewhere", "history"),
+      join("/home/two/codex-elsewhere", ".tmp"),
+    ]);
+  });
+
   test("a resolved cursor root reports the SQLite format and no adapter", () => {
     const [first] = resolveSessionRoots(INSTALL_TARGET_ID.cursor, ONE);
     expect(`${first?.adapter} ${first?.format}`).toBe("null cursor-state-vscdb");
@@ -300,6 +324,15 @@ describe("host probes", () => {
   test("copilot-cli declares the registration probe it already runs", () => {
     const probe = runtimeFactsFor(INSTALL_TARGET_ID.copilotCli).hostProbe;
     expect(`${probe?.bin} ${probe?.argv.join(" ")}`).toBe("copilot mcp list");
+  });
+
+  test("codex declares the plain-text registration probe, not the JSON one", () => {
+    // The shared probe reads the first whitespace-delimited token of each
+    // output line, which is the name column of `codex mcp list`. Under
+    // `--json` that token is `"name":` on every host, so a JSON probe
+    // would answer "nothing registered" everywhere.
+    const probe = runtimeFactsFor(INSTALL_TARGET_ID.codex).hostProbe;
+    expect(`${probe?.bin} ${probe?.argv.join(" ")}`).toBe("codex mcp list");
   });
 
   test("a target with no probe declares null rather than an empty command", () => {

@@ -9,6 +9,9 @@
  *   o2b install --check                  # verify every known target
  *   o2b install --target generic --out <p|->     # generic adapter only
  *   o2b install --target generic --format json|yaml
+ *   o2b install --friction                       # capability matrix, every runtime
+ *   o2b install --friction --target X            # one runtime
+ *   o2b install --friction --base A --compare B  # only what differs
  *
  * Exit codes ({@link INSTALL_EXIT}):
  *   0  success / no drift
@@ -35,6 +38,14 @@ import { defaultRegistry } from "../../core/install/registry.ts";
 import "../../core/install/adapters/all.ts";
 
 import { buildPayload, PayloadError } from "../../core/install/payload.ts";
+import {
+  buildFrictionMatrix,
+  diffFrictionRows,
+  FRICTION_DIMENSIONS,
+  frictionRowFor,
+  type FrictionInput,
+} from "../../core/install/friction.ts";
+import { isInstallTargetId, type InstallTargetId } from "../../core/runtime/host-facts.ts";
 import { renderDataOwnership } from "../../core/install/ownership.ts";
 import type { DataOwnership } from "../../core/install/ownership.ts";
 import { measureDataOwnership } from "../../core/install/ownership-measure.ts";
@@ -45,6 +56,10 @@ import {
   renderApplyResult,
   renderDetectJson,
   renderDetectTable,
+  renderFrictionDiff,
+  renderFrictionDiffJson,
+  renderFrictionJson,
+  renderFrictionTable,
   renderPlan,
   renderPlanJson,
   renderVerifyJson,
@@ -68,6 +83,9 @@ interface ParsedInstallArgs {
   readonly target: string | null;
   readonly apply: boolean;
   readonly check: boolean;
+  readonly friction: boolean;
+  readonly base: string | null;
+  readonly compare: string | null;
   readonly dryRun: boolean;
   readonly force: boolean;
   readonly json: boolean;
@@ -82,6 +100,9 @@ function parseInstallArgs(argv: string[]): ParsedInstallArgs {
     target: { type: "string" },
     apply: { type: "boolean" },
     check: { type: "boolean" },
+    friction: { type: "boolean" },
+    base: { type: "string" },
+    compare: { type: "string" },
     "dry-run": { type: "boolean" },
     force: { type: "boolean" },
     json: { type: "boolean" },
@@ -102,6 +123,9 @@ function parseInstallArgs(argv: string[]): ParsedInstallArgs {
     target: (flags["target"] as string | undefined) ?? null,
     apply: Boolean(flags["apply"]),
     check: Boolean(flags["check"]),
+    friction: Boolean(flags["friction"]),
+    base: (flags["base"] as string | undefined) ?? null,
+    compare: (flags["compare"] as string | undefined) ?? null,
     dryRun: Boolean(flags["dry-run"]),
     force: Boolean(flags["force"]),
     json: Boolean(flags["json"]),
@@ -225,6 +249,11 @@ export async function cmdInstall(argv: string[]): Promise<number> {
     throw e;
   }
 
+  // `--friction` is a report over the registry rather than an operation
+  // on one target, so it is settled before `--target` is read as "act on
+  // this runtime".
+  if (args.friction) return runFriction(args);
+
   // `--check` is its own mode — runs verify per target.
   if (args.check) return runCheck(args);
 
@@ -246,15 +275,101 @@ function runDetect(args: ParsedInstallArgs): number {
   return INSTALL_EXIT.ok;
 }
 
-function runTarget(args: ParsedInstallArgs): number {
-  const adapter = defaultRegistry.get(args.target!);
-  if (!adapter) {
+/**
+ * Refuse a runtime nobody registered, by name and with the spelling.
+ *
+ * One function because three flags now accept a target, and an operator
+ * who mistyped one is owed the same answer whichever they mistyped.
+ */
+function refuseUnknownTarget(flag: string, value: string): number {
+  process.stderr.write(
+    `error: unknown ${flag}: ${value}. Available: ${defaultRegistry.targets().join(", ")}\n`,
+  );
+  return INSTALL_EXIT.usage;
+}
+
+/**
+ * The registered target `value` names, or `null`.
+ *
+ * Both halves are required: the registry answers whether an adapter
+ * exists, the guard answers whether the id is a member of the closed
+ * vocabulary the fact table is keyed by. A value that passes one and not
+ * the other is the contradiction
+ * `tests/core/architecture/host-facts-census.test.ts` exists to prevent,
+ * and it is refused here rather than indexed into the table.
+ */
+function resolveTarget(value: string): InstallTargetId | null {
+  if (defaultRegistry.get(value) === undefined) return null;
+  return isInstallTargetId(value) ? value : null;
+}
+
+/**
+ * `o2b install --friction` - what each host costs, side by side.
+ *
+ * A report, so it never returns a non-zero code for what it FOUND: the
+ * matrix has no notion of a bad answer, only of an honest one. The only
+ * refusals are usage refusals, and each one names the flag and the
+ * spelling it wanted.
+ */
+function runFriction(args: ParsedInstallArgs): number {
+  const wantsDiff = args.base !== null || args.compare !== null;
+  if (wantsDiff && args.target !== null) {
     process.stderr.write(
-      `error: unknown --target: ${args.target}. ` +
-        `Available: ${defaultRegistry.targets().join(", ")}\n`,
+      "error: --friction takes either --target <t> or --base <a> --compare <b>, not both\n",
     );
     return INSTALL_EXIT.usage;
   }
+  if (wantsDiff && (args.base === null || args.compare === null)) {
+    const missing = args.base === null ? "--base" : "--compare";
+    process.stderr.write(
+      `error: --friction diff needs both --base and --compare; ${missing} is missing\n`,
+    );
+    return INSTALL_EXIT.usage;
+  }
+  for (const [flag, value] of [
+    ["--target", args.target],
+    ["--base", args.base],
+    ["--compare", args.compare],
+  ] as const) {
+    if (value !== null && resolveTarget(value) === null) return refuseUnknownTarget(flag, value);
+  }
+
+  const env = buildInstallEnv(args);
+  let payload;
+  try {
+    payload = loadPayload(args, env);
+  } catch (e) {
+    if (e instanceof UsageError || e instanceof PayloadError) {
+      process.stderr.write(`error: ${e.message}\n`);
+      return INSTALL_EXIT.usage;
+    }
+    throw e;
+  }
+  const input: FrictionInput = { env, payload, adapters: defaultRegistry.list() };
+
+  if (wantsDiff) {
+    const diff = diffFrictionRows(
+      frictionRowFor(resolveTarget(args.base!)!, input),
+      frictionRowFor(resolveTarget(args.compare!)!, input),
+    );
+    process.stdout.write(args.json ? renderFrictionDiffJson(diff) : renderFrictionDiff(diff));
+    return INSTALL_EXIT.ok;
+  }
+
+  const matrix =
+    args.target === null
+      ? buildFrictionMatrix(input)
+      : {
+          dimensions: FRICTION_DIMENSIONS,
+          rows: [frictionRowFor(resolveTarget(args.target)!, input)],
+        };
+  process.stdout.write(args.json ? renderFrictionJson(matrix) : renderFrictionTable(matrix));
+  return INSTALL_EXIT.ok;
+}
+
+function runTarget(args: ParsedInstallArgs): number {
+  const adapter = defaultRegistry.get(args.target!);
+  if (!adapter) return refuseUnknownTarget("--target", args.target!);
   const env = buildInstallEnv(args);
   let payload;
   try {

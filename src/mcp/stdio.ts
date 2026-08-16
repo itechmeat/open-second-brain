@@ -3,6 +3,16 @@
  *
  * Mirrors `serve_stdio` from the legacy Python implementation. The server
  * only writes JSON-RPC frames to stdout; logs go to stderr.
+ *
+ * ## Shutdown
+ *
+ * The loop had no shutdown path at all: a SIGTERM took the default
+ * disposition and killed the process wherever it happened to be, which
+ * for a `tools/call` is mid-dispatch with no frame written. It now shares
+ * the HTTP transport's register (`./drain.ts`): a drain stops the loop at
+ * a request boundary, waits for the one request that can be in flight,
+ * and only then closes the reader. Nothing here handles a signal - that
+ * belongs to the CLI, which owns the process (`src/cli/mcp-drain.ts`).
  */
 
 import { createInterface } from "node:readline";
@@ -11,6 +21,7 @@ import type { Readable, Writable } from "node:stream";
 import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "./server.ts";
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protocol.ts";
+import { RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 
 /**
  * Any frame this transport writes: a response to a request, or a
@@ -18,10 +29,28 @@ import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protoc
  */
 type OutboundFrame = JsonRpcResponse | JsonRpcNotification;
 
+/**
+ * The shutdown handle for a running stdio loop.
+ *
+ * The same two members the HTTP handle exposes, so `src/cli/mcp-drain.ts`
+ * wires one signal handler for both transports rather than one each. It
+ * is handed to {@link ServeStdioOptions.onStart} rather than returned,
+ * because this loop does not return until it is over.
+ */
+export interface StdioTransportHandle {
+  readonly drain: RequestDrain;
+  /** Stop reading new lines, await the in-flight request, end the loop. */
+  close(): Promise<DrainOutcome>;
+}
+
 export interface ServeStdioOptions {
   readonly stdin?: Readable;
   readonly stdout?: Writable;
   readonly stderr?: Writable;
+  /** Defaults to `O2B_MCP_DRAIN_MS`, and to ten seconds without it. */
+  readonly drainDeadlineMs?: number;
+  /** Called once the loop is live, with the handle that shuts it down. */
+  readonly onStart?: (handle: StdioTransportHandle) => void;
 }
 
 /**
@@ -50,7 +79,28 @@ export async function serveStdio(
   });
   const rl = createInterface({ input: stdin, crlfDelay: Infinity });
 
+  const drain = new RequestDrain();
+  const deadlineMs = ioOpts.drainDeadlineMs ?? resolveDrainDeadlineMs(process.env);
+  ioOpts.onStart?.({
+    drain,
+    close: async () => {
+      // The wait comes first and the reader is closed after it: closing
+      // the interface while a `tools/call` is still running would end the
+      // loop before its response frame was written, which is the stdio
+      // shape of the truncated HTTP response this unit removes.
+      const outcome = await drain.drain(deadlineMs);
+      rl.close();
+      return outcome;
+    },
+  });
+
   for await (const rawLine of rl) {
+    // Stopped accepting. A line that arrives after a drain has started is
+    // left unread rather than answered with an error frame: the client is
+    // being disconnected either way, and a half-served shutdown that
+    // replies to some requests and not others is harder to reason about
+    // than one that stops cleanly at a request boundary.
+    if (drain.draining) break;
     const line = rawLine.trim();
     if (!line) continue;
     let request: unknown;
@@ -78,10 +128,25 @@ export async function serveStdio(
       writeFrame(stdout, errorResponse(null, INVALID_REQUEST, "request must be an object"));
       continue;
     }
-    const response = await server.handleRequest(request as Record<string, unknown>);
-    if (response !== null) writeFrame(stdout, response);
+    // The response write is INSIDE the tracked window: a request marked
+    // finished before its frame is queued lets a drain end the loop
+    // between the dispatch and the answer.
+    const finish = drain.begin(requestLabel(request as Record<string, unknown>));
+    try {
+      const response = await server.handleRequest(request as Record<string, unknown>);
+      if (response !== null) writeFrame(stdout, response);
+    } finally {
+      finish();
+    }
   }
   return 0;
+}
+
+/** How one in-flight stdio request is named in a drain report. */
+function requestLabel(request: Record<string, unknown>): string {
+  const method = typeof request["method"] === "string" ? request["method"] : "(no method)";
+  const id = request["id"];
+  return id === undefined ? method : `${method} (id ${JSON.stringify(id)})`;
 }
 
 /**

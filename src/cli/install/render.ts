@@ -20,6 +20,7 @@
  */
 
 import type { DataOwnership } from "../../core/install/ownership.ts";
+import type { FrictionDiff, FrictionMatrix } from "../../core/install/friction.ts";
 import type {
   ApplyResult,
   DetectResult,
@@ -193,5 +194,95 @@ export function renderVerifyJson(
   return installJson({
     targets: rows,
     ...(ownership === null ? {} : { [DATA_OWNERSHIP_KEY]: ownership }),
+  });
+}
+
+/** Column widths shared by the friction table and its diff. */
+const FRICTION_TARGET_WIDTH = 14;
+const FRICTION_DIMENSION_WIDTH = 22;
+/** Where a citation continuation line starts: past both columns. */
+const FRICTION_DETAIL_INDENT = " ".repeat(2 + FRICTION_TARGET_WIDTH + FRICTION_DIMENSION_WIDTH);
+
+/**
+ * The friction matrix: one line per host per dimension, with the
+ * citation on a continuation line beneath it.
+ *
+ * The citation is printed rather than reserved for `--json` because the
+ * answers it explains are one word each - `unknown`, `none ships` - and a
+ * one-word answer with no source is the shape of claim this whole verb
+ * spent a release removing.
+ */
+export function renderFrictionTable(matrix: FrictionMatrix): string {
+  if (matrix.rows.length === 0) return "o2b install --friction — no adapters registered\n";
+  const lines: string[] = ["o2b install --friction", "-".repeat(22)];
+  for (const row of matrix.rows) {
+    for (const cell of row.cells) {
+      lines.push(
+        `  ${row.target.padEnd(FRICTION_TARGET_WIDTH)}` +
+          `${cell.dimension.padEnd(FRICTION_DIMENSION_WIDTH)}${cell.value}`,
+      );
+      if (cell.detail !== null) lines.push(`${FRICTION_DETAIL_INDENT}${cell.detail}`);
+    }
+    lines.push("");
+  }
+  lines.push(
+    `${matrix.rows.length} runtime(s) × ${matrix.dimensions.length} dimension(s), ` +
+      `derived from the fact table and the live adapter registry.`,
+  );
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function renderFrictionJson(matrix: FrictionMatrix): string {
+  return installJson({
+    friction: {
+      dimensions: matrix.dimensions,
+      targets: matrix.rows.map((row) => ({
+        target: row.target,
+        label: row.label,
+        cells: row.cells,
+      })),
+    },
+  });
+}
+
+/**
+ * The diff: the dimensions the two hosts answer differently, and a count
+ * of the ones they do not. The shared dimensions are counted rather than
+ * printed - a diff that reprints everything is the table the reader
+ * already has - and the count is what keeps the silence from reading as
+ * "there was nothing else to compare".
+ */
+export function renderFrictionDiff(diff: FrictionDiff): string {
+  const lines: string[] = [
+    `o2b install --friction --base ${diff.base} --compare ${diff.compare}`,
+    "-".repeat(52),
+  ];
+  for (const difference of diff.differing) {
+    lines.push(`  ${difference.dimension}`);
+    lines.push(`    ${diff.base.padEnd(FRICTION_TARGET_WIDTH)}${difference.baseValue}`);
+    lines.push(`    ${diff.compare.padEnd(FRICTION_TARGET_WIDTH)}${difference.compareValue}`);
+  }
+  lines.push("");
+  lines.push(
+    `${diff.differing.length} dimension(s) differ; ` +
+      `the other ${diff.shared} are answered identically and are not listed.`,
+  );
+  lines.push("");
+  return lines.join("\n");
+}
+
+export function renderFrictionDiffJson(diff: FrictionDiff): string {
+  return installJson({
+    friction_diff: {
+      base: diff.base,
+      compare: diff.compare,
+      shared: diff.shared,
+      differing: diff.differing.map((difference) => ({
+        dimension: difference.dimension,
+        base_value: difference.baseValue,
+        compare_value: difference.compareValue,
+      })),
+    },
   });
 }

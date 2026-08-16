@@ -50,6 +50,7 @@ import { SESSION_ADAPTER_ID, type SessionAdapterId } from "../brain/sessions/typ
  */
 export const INSTALL_TARGET_ID = Object.freeze({
   aider: "aider",
+  codex: "codex",
   copilotCli: "copilot-cli",
   cursor: "cursor",
   geminiCli: "gemini-cli",
@@ -65,6 +66,7 @@ export type InstallTargetId = (typeof INSTALL_TARGET_ID)[keyof typeof INSTALL_TA
 /** The installable targets, in registration order. */
 export const INSTALL_TARGET_IDS: ReadonlyArray<InstallTargetId> = Object.freeze([
   INSTALL_TARGET_ID.aider,
+  INSTALL_TARGET_ID.codex,
   INSTALL_TARGET_ID.copilotCli,
   INSTALL_TARGET_ID.cursor,
   INSTALL_TARGET_ID.geminiCli,
@@ -259,6 +261,54 @@ const CURSOR_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
   }),
 ]);
 
+/**
+ * The subdirectories of the Codex home that have held session files.
+ *
+ * Not invented here: `src/core/discipline/transcripts/codex.ts` already
+ * walks exactly these four, three levels deep, because the Codex CLI has
+ * moved its transcripts between releases. Declaring the same four keeps
+ * the two subsystems from knowing different halves of one fact.
+ */
+const CODEX_SESSION_SUBDIRS: ReadonlyArray<string> = Object.freeze([
+  "sessions",
+  "session",
+  "history",
+  ".tmp",
+]);
+
+/**
+ * What a Codex transcript file is called, stated with its uncertainty.
+ *
+ * The two consumers disagree and nothing on the machine this row was
+ * written on could settle it: the discipline scanner counts `*.json`,
+ * while `src/core/brain/sessions/codex.ts` parses the `.jsonl` rollout
+ * line schema, and no session directory existed under the Codex home to
+ * measure. So the glob covers both extensions rather than picking the
+ * one that would silently find nothing.
+ */
+const CODEX_SESSION_FORMAT = "codex-rollout-json-or-jsonl";
+const CODEX_SESSION_GLOB = "**/*.json*";
+
+/** Codex keeps per-session files under `$CODEX_HOME` (default `~/.codex`). */
+const CODEX_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze(
+  CODEX_SESSION_SUBDIRS.map((sub) =>
+    Object.freeze({
+      // `.tmp` would give an id starting with a dot; strip it so the
+      // handle a report prints reads as a slug.
+      id: `codex-${sub.replace(/^\./, "")}`,
+      resolve: (ctx: HostContext) => join(codexHome(ctx), sub),
+      glob: CODEX_SESSION_GLOB,
+      adapter: SESSION_ADAPTER_ID.codex,
+      format: CODEX_SESSION_FORMAT,
+    }),
+  ),
+);
+
+/** `$CODEX_HOME` when the operator set one, else `~/.codex`. */
+function codexHome(ctx: HostContext): string {
+  return envOr(ctx, "CODEX_HOME", join(ctx.home, ".codex"));
+}
+
 /** Grok persists one ACP update stream per session, per encoded cwd. */
 const GROK_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
   Object.freeze({
@@ -314,6 +364,33 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     sessionAdapter: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
+  }),
+  [INSTALL_TARGET_ID.codex]: Object.freeze({
+    target: INSTALL_TARGET_ID.codex,
+    label: "Codex CLI",
+    toolCeiling: Object.freeze({
+      kind: TOOL_CEILING_KIND.unknown,
+      reason:
+        "Codex publishes no per-workspace MCP tool limit; `codex mcp list --json` reports each " +
+        "server's transport, startup and tool TIMEOUTS and auth status, and nothing in that " +
+        "record - or in this tree - is a tool-count cap.",
+    }),
+    toolProfile: null,
+    sessionAdapter: SESSION_ADAPTER_ID.codex,
+    sessionRoots: CODEX_SESSION_ROOTS,
+    // `mcp list` and NOT `mcp list --json`: the shared probe reads the
+    // first column of each output line, which is the name column here.
+    // Under `--json` the name arrives as `"name": "open-second-brain"`,
+    // whose first token is `"name":`, so a JSON probe would report every
+    // host as having nothing registered - a false negative dressed as an
+    // answer, which is the exact failure `host-probe.ts` exists to refuse.
+    hostProbe: Object.freeze({
+      bin: "codex",
+      argv: Object.freeze(["mcp", "list"]),
+      answers:
+        "whether this host has the Open Second Brain servers registered, read from the host " +
+        "itself rather than from the `config.toml` section the adapter writes.",
+    }),
   }),
   [INSTALL_TARGET_ID.copilotCli]: Object.freeze({
     target: INSTALL_TARGET_ID.copilotCli,

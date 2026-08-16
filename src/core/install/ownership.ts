@@ -298,6 +298,14 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "creates no file and removes none",
   ],
   [
+    "src/core/install/friction.ts",
+    "a report, not a writer: the home-rooted paths in it are the transcript roots and config " +
+      "paths the fact table and the adapters' own plans DECLARE, printed so an operator can " +
+      "compare what each host costs. It resolves them against the injected InstallEnv, creates " +
+      "nothing, reads nothing off the filesystem at those paths, and never even checks whether " +
+      "they exist - that measurement would turn a capability table into a machine report",
+  ],
+  [
     "src/cli/install/install.ts",
     "the only out-of-vault path it builds is `InstallEnv.home`, which it hands to the adapters; " +
       "every file written from it belongs to the runtime_config_blocks row, and this verb writes " +
@@ -356,6 +364,14 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
     "a read-only transcript scanner: it locates the runtime's own session logs and workspace " +
       "state under the home directory and reads them. The runtime wrote those files and owns " +
       "them; this module creates nothing and deletes nothing there",
+  ],
+  [
+    "src/core/state/migrate.ts",
+    "it reads the home directory once, as a REFUSAL: a destination equal to $HOME itself is " +
+      "rejected, because state scattered across a home directory stops being one tree an " +
+      "operator can move, back up or delete as a unit. It never builds a path under the home " +
+      "directory, and every location it does move comes from the declared state-surface " +
+      "inventory, whose rows are enumerated in their own census",
   ],
   [
     "src/core/runtime/host-facts.ts",

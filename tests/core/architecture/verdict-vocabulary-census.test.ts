@@ -376,6 +376,7 @@ import {
   TOOL_CEILING_KINDS,
 } from "../../../src/core/runtime/host-facts.ts";
 import { CONFIG_ORIGIN, CONFIG_ORIGINS, isConfigOrigin } from "../../../src/core/validate.ts";
+import { EXPORT_FORMAT, EXPORT_FORMATS, isExportFormat } from "../../../src/core/brain/export.ts";
 import {
   isStateReachability,
   isStateSurfaceId,
@@ -1173,6 +1174,19 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: STATE_REACHABILITIES,
     guard: isStateReachability,
   },
+  {
+    // U11. What `o2b brain export --format` accepts. It shipped as a bare
+    // type alias that NOTHING imported, while the verb compared the raw
+    // argv string against two inline literals - a contract declared with
+    // nothing behind it, which is the defect class this release closes.
+    // The guard is now the boundary the argv value crosses, and the frozen
+    // object is the dispatch table's key set, so a format with no handler
+    // is a compile error rather than a silent fall-through.
+    name: "EXPORT_FORMAT",
+    values: EXPORT_FORMAT,
+    members: EXPORT_FORMATS,
+    guard: isExportFormat,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1437,7 +1451,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 69;
+const VOCABULARY_POPULATION = 70;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

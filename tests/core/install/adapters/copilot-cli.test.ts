@@ -10,6 +10,10 @@ import {
   resetCopilotRunner,
   type CopilotRunner,
 } from "../../../../src/core/install/adapters/copilot-cli.ts";
+import {
+  resetHostProbeRunner,
+  setHostProbeRunner,
+} from "../../../../src/core/install/host-probe.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 
@@ -24,6 +28,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   resetCopilotRunner();
+  resetHostProbeRunner();
   for (const p of [vault, home]) {
     try {
       rmSync(p, { recursive: true, force: true });
@@ -134,8 +139,25 @@ describe("copilot-cli adapter — fallback to JSON file", () => {
   });
 });
 
+/**
+ * A host whose `copilot` binary is present and reports `registered`.
+ *
+ * `verify` reads the host through the DECLARED probe
+ * (`RUNTIME_FACTS[copilot-cli].hostProbe`) rather than through
+ * `CopilotRunner`, so a case that wants the host to answer stages it
+ * here; `CopilotRunner` still stages `mcp add` / `mcp remove` / the
+ * presence check that decides which path apply takes.
+ */
+function stageProbe(registered: ReadonlyArray<string>): void {
+  setHostProbeRunner({
+    available: () => true,
+    run: () => ({ exitCode: 0, stdout: registered.join("\n") + "\n", stderr: "" }),
+  });
+}
+
 describe("copilot-cli adapter — verify", () => {
   test("verify ok when CLI lists both names", () => {
+    stageProbe(["open-second-brain", "open-second-brain-writer"]);
     const runner: CopilotRunner = {
       available: () => true,
       run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -181,6 +203,7 @@ describe("copilot-cli adapter — verify", () => {
   });
 
   test("verify drift when CLI lists only one name", () => {
+    stageProbe(["open-second-brain"]);
     const runner: CopilotRunner = {
       available: () => true,
       run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
@@ -190,6 +213,48 @@ describe("copilot-cli adapter — verify", () => {
     const p = payload();
     copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
     expect(copilotCliAdapter.verify(env()).status).toBe("drift");
+  });
+
+  test("a subprocess install whose host binary is gone reports the named skip, not ok", () => {
+    // The subprocess mode leaves no file behind, so the host CLI is the
+    // only record of the registration. Losing it means nothing is
+    // verified - and the operator is told WHICH obstacle was hit.
+    const runner: CopilotRunner = {
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      list: () => ({ ok: true, names: ["open-second-brain", "open-second-brain-writer"] }),
+    };
+    setCopilotRunner(runner);
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    setHostProbeRunner({
+      available: () => false,
+      run: () => {
+        throw new Error("the probe must not spawn a binary it just reported absent");
+      },
+    });
+    const v = copilotCliAdapter.verify(env());
+    expect(v.status).toBe("mcp-unreachable");
+    expect(v.details.join("\n")).toContain("not on PATH");
+    expect(v.fix_hint ?? "").toContain("PATH");
+  });
+
+  test("a host that refuses the probe names the exit code, not a bare failure", () => {
+    const runner: CopilotRunner = {
+      available: () => true,
+      run: () => ({ exitCode: 0, stdout: "", stderr: "" }),
+      list: () => ({ ok: true, names: ["open-second-brain", "open-second-brain-writer"] }),
+    };
+    setCopilotRunner(runner);
+    const p = payload();
+    copilotCliAdapter.apply(copilotCliAdapter.plan(p, env()), p, env(), applyOpts());
+    setHostProbeRunner({
+      available: () => true,
+      run: () => ({ exitCode: 4, stdout: "", stderr: "not authenticated\n" }),
+    });
+    const v = copilotCliAdapter.verify(env());
+    expect(v.status).toBe("mcp-unreachable");
+    expect(v.details.join("\n")).toContain("exited 4: not authenticated");
   });
 });
 
