@@ -19,7 +19,9 @@ import {
 import {
   dailyWindowContains,
   evaluateGates,
+  LANE_TASK,
   runMaintenance,
+  type MaintenanceTask,
 } from "../../../../src/core/brain/maintenance/lane.ts";
 import {
   appendJournal,
@@ -423,10 +425,10 @@ describe("the consecutive-failure streak", () => {
     }
     // Named: the refused task runs, and only that one - the second task's
     // own refusal is untouched by a retry that does not name it.
-    const tasks = [
+    const tasks: ReadonlyArray<MaintenanceTask> = [
       { name: TASK, run: async () => void 0 },
       {
-        name: "dream",
+        name: LANE_TASK.dream,
         run: async () => {
           throw new Error("should not have been reached");
         },

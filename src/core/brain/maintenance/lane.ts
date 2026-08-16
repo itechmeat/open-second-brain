@@ -53,7 +53,7 @@
  */
 
 import { listRecallTelemetry } from "../recall-telemetry.ts";
-import { capOutput, SafeguardTimeoutError } from "../safeguard.ts";
+import { capOutput, OPERATION, SafeguardTimeoutError } from "../safeguard.ts";
 import { loadMaintenanceConfigSafe } from "../policy/load.ts";
 import { acquireLease, MAINTENANCE_LEASE_NAME, releaseLease } from "./lease.ts";
 import {
@@ -126,8 +126,61 @@ export interface MaintenanceGateDecision {
 /** Cap for persisted per-task error strings (journal + results). */
 const LANE_ERROR_MAX_BYTES = 4096;
 
+/**
+ * The heavy passes this lane dispatches.
+ *
+ * A closed vocabulary rather than four string literals because the names
+ * are read on THREE surfaces - the CLI verb's task list, the MCP tool's
+ * task list, and `--retry`/`retry_tasks` validation on both - and they
+ * were written out by hand on each. Two releases running, the two lists
+ * disagreed about what the lane runs, which is the drift a vocabulary
+ * exists to make impossible: a fifth task is added here or nowhere.
+ *
+ * The values come from {@link OPERATION} rather than being retyped, so a
+ * lane task is by construction an operation with a safeguard budget and a
+ * progress vocabulary of its own. That is not decoration: each surface
+ * builds one deadline per task from the task's own name, and a name that
+ * was not an operation would resolve a budget nothing reads.
+ *
+ * One consequence, stated rather than left to be discovered: the
+ * tree-wide vocabulary census reads values out of an object LITERAL, so
+ * borrowing them here keeps this vocabulary outside its population. The
+ * same audit - object, list and guard agree - runs in
+ * `tests/mcp/maintenance-parity-census.test.ts`, together with the
+ * assertion that every value is still an operation.
+ */
+export const LANE_TASK = Object.freeze({
+  dream: OPERATION.dream,
+  reindex: OPERATION.reindex,
+  bridges: OPERATION.bridges,
+  clusters: OPERATION.clusters,
+} as const);
+
+export type LaneTask = (typeof LANE_TASK)[keyof typeof LANE_TASK];
+
+/**
+ * Membership list for {@link isLaneTask}, in the order the surfaces
+ * register their tasks and the order a refusal lists them. The lane
+ * itself runs them stale-first, so this is a vocabulary, not a schedule.
+ */
+export const LANE_TASKS: ReadonlyArray<LaneTask> = Object.freeze([
+  LANE_TASK.dream,
+  LANE_TASK.reindex,
+  LANE_TASK.bridges,
+  LANE_TASK.clusters,
+]);
+
+/**
+ * Whether `value` names a task this build dispatches. Takes `unknown`
+ * because it arrives from a `--retry` argument a person typed or from a
+ * `retry_tasks` array a client sent.
+ */
+export function isLaneTask(value: unknown): value is LaneTask {
+  return typeof value === "string" && (LANE_TASKS as ReadonlyArray<string>).includes(value);
+}
+
 export interface MaintenanceTask {
-  readonly name: string;
+  readonly name: LaneTask;
   readonly run: () => Promise<void>;
 }
 
@@ -144,12 +197,12 @@ export interface RunMaintenanceOptions extends EvaluateGatesOptions {
    * gate still applies; a name that is not a registered task is the
    * caller's to reject, because only the caller knows what it registered.
    */
-  readonly retryTasks?: ReadonlyArray<string>;
+  readonly retryTasks?: ReadonlyArray<LaneTask>;
   readonly leaseTtlMs?: number;
 }
 
 export interface MaintenanceTaskResult {
-  readonly name: string;
+  readonly name: LaneTask;
   readonly ok: boolean;
   readonly duration_ms: number;
   readonly error?: string;
@@ -353,7 +406,7 @@ function resolvePressureGate(
 /** The task-result and journal rows of a streak refusal, or `undefined` to run. */
 function refuseOnStreak(
   vault: string,
-  task: string,
+  task: LaneTask,
   limit: number,
 ):
   | { result: MaintenanceTaskResult; entry: Omit<MaintenanceJournalEntry, "ts" | "holder"> }
@@ -364,11 +417,16 @@ function refuseOnStreak(
   // result are read on different surfaces, and an operator who sees only
   // one of them still has to know how deep the hole is and how to climb
   // out of it.
+  //
+  // Both spellings of the narrow escape are named, because the message is
+  // read on both surfaces and naming only the CLI flag made the refusal a
+  // dead end for an MCP caller: it prescribed a remedy that surface did
+  // not have. It has `retry_tasks` now, and the sentence says so.
   const error =
     `refused: ${streak} consecutive journaled failures reached the ` +
     `maintenance.failure_streak_limit of ${limit}; fix the cause, then re-run with ` +
-    `--retry ${task} to attempt this task alone with every other gate still in force, ` +
-    `or --force to run the whole lane past every soft gate`;
+    `--retry ${task} (retry_tasks: ["${task}"] over MCP) to attempt this task alone with ` +
+    `every other gate still in force, or --force to run the whole lane past every soft gate`;
   return {
     result: { name: task, ok: false, duration_ms: 0, error, refused: true, failure_streak: streak },
     // No `ok` on the row: a refusal is not an attempt, and recording one

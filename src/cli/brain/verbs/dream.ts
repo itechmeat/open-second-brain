@@ -216,9 +216,23 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     });
 
   if (wantsStep) {
+    // A step is a whole run on this surface, so it is guarded and
+    // watched like one: `scan` walks the Brain tree and `heal-enrich`
+    // reads and rewrites every user page, and neither had a deadline or
+    // a sink before. The step itself owns the counter - the two units
+    // report under their own stage names - so this attaches the rail and
+    // forwards, exactly as the maintenance lane does over its tasks.
+    const stepObservation =
+      flags["progress"] === true
+        ? attachProgress({ command: "brain", argv: ["dream", "step"], jsonRequested: asJson })
+        : null;
+    reportProgressRefusal(stepObservation);
     let result: DreamStepResult;
     try {
-      result = runDreamStep(vault, stepRequest);
+      result = runDreamStep(vault, stepRequest, {
+        safeguard: guard(),
+        ...(stepObservation?.sink !== undefined ? { onProgress: stepObservation.sink } : {}),
+      });
     } catch (exc) {
       if (exc instanceof DreamStepNotRunnableError) {
         return refuse(exc.message, asJson, {

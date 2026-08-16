@@ -117,19 +117,24 @@ than the lane. Two more reach a consolidation pass without carrying its
 name and report on the same terms: `brain_brief` with `view: "operator"`,
 whose operator summary runs a dry-run pass, and
 `brain_review_candidates`, whose projection is that same dry run
-reshaped.
+reshaped. A single-step `brain_dream` call reports too, under the stage
+that names the step rather than the five stages of a full pass — the
+step owns the stream, because on that path it IS the run.
 
 **Which tools are bounded.** Every call that reaches one of those long
 operations runs under a cooperative deadline resolved from
 `safeguard_timeout_<operation>_seconds`, then `safeguard_timeout_seconds`,
-then the built-in default. Bounded and observed are the same population,
-with one stated exception — the row below marked **none**:
+then the built-in default. Bounded and observed are now the same
+population with no exception: the `step` row below was the one that read
+**none**, because the two step functions took no guard and dropped the
+sink, and a single step over a large tree therefore held the server for
+its whole duration with nothing to show for it. Both halves are wired.
 
 | tool | long operation it reaches | deadline | reports |
 | --- | --- | --- | --- |
 | `brain_dream` (`run`) | `dream`, twice when `expect`/`strict` asks for a guard preview | `dream` — one budget for the whole call, preview included | yes |
 | `brain_dream` (`stage`/`validate`/`apply`) | `dream`, through the staged bundle | `dream` | yes |
-| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | **none** — the step functions take no guard | no |
+| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
 | `brain_maintenance` (`run`) | all four, sequentially | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |

@@ -197,6 +197,38 @@ test("brain_dream stage aborts once its deadline has passed", async () => {
   }
 });
 
+test("brain_dream step aborts once its deadline has passed", async () => {
+  // The step branch was the one row `docs/mcp.md` marked **none**: it
+  // returned `runDreamStep(vault, step)` with no guard, so a single step
+  // over a large tree held the server's event loop for its whole
+  // duration. It is bounded on the same `dream` budget as every other
+  // branch now, and the abort names the operation rather than the step.
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  const restore = jumpingClock();
+  try {
+    const result = await callRaw(server, "brain_dream", { action: "run", step: "scan" });
+    expect(result.isError).toBe(true);
+    expect(result.content![0]!.text).toContain("safeguard timeout");
+    expect(result.content![0]!.text).toContain("dream");
+  } finally {
+    restore();
+  }
+});
+
+test("brain_dream step reports the step it runs under a progress token", async () => {
+  const frames: JsonRpcNotification[] = [];
+  const server = observedServer(frames);
+  await initialize(server);
+
+  expect(
+    (await callWithToken(server, "brain_dream", { action: "run", step: "scan" })).isError,
+  ).toBe(false);
+  // The step branch dropped the sink as silently as it dropped the guard.
+  expect(operationsIn(frames)).toEqual(new Set(["dream"]));
+});
+
 test("brain_maintenance names the task whose deadline tripped", async () => {
   const server = new MCPServer({ vault, configPath });
   await initialize(server);

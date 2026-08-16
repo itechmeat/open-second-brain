@@ -43,6 +43,8 @@ import { scanBrain } from "./dream.ts";
 import { DREAM_PHASE, type DreamPhase } from "./dream-phases.ts";
 import { runHealEnrichment } from "./heal-run.ts";
 import { vaultRelative } from "./paths.ts";
+import type { ProgressSink } from "./progress.ts";
+import type { Safeguard } from "./safeguard.ts";
 
 /** The units of dream work that are provably runnable on their own. */
 export const DREAM_STEP = Object.freeze({
@@ -146,16 +148,42 @@ export interface DreamHealEnrichStepResult {
 export type DreamStepResult = DreamScanStepResult | DreamHealEnrichStepResult;
 
 /**
+ * What a caller may hand a single-step request.
+ *
+ * A step is a whole call, not a phase of one: nothing above it holds a
+ * deadline or a stream, so both belong here and both are forwarded
+ * unchanged to whichever step runs. This is a DISPATCHER over two units
+ * of work and owns no counter of its own - each step opens exactly one
+ * stream, named for the stage it is - which is the same shape the
+ * maintenance lane takes over its four tasks, and for the same reason: a
+ * second counter here would put two terminators on one run.
+ *
+ * Until this existed the MCP `step` branch passed neither, so a step over
+ * a large tree held the server's event loop with no upper bound and said
+ * nothing while it did.
+ */
+export interface DreamStepOptions {
+  /** Cooperative deadline, honoured at the step's own iteration boundary. */
+  readonly safeguard?: Safeguard;
+  /** Where the step reports; absence means nobody asked. */
+  readonly onProgress?: ProgressSink;
+}
+
+/**
  * Run exactly one dream step, or refuse by name.
  *
  * Never runs more than was asked and never runs less: a request this
  * function cannot honour in full throws {@link DreamStepNotRunnableError}
  * and writes nothing.
  */
-export function runDreamStep(vault: string, step: string): DreamStepResult {
+export function runDreamStep(
+  vault: string,
+  step: string,
+  opts: DreamStepOptions = {},
+): DreamStepResult {
   switch (step) {
     case DREAM_STEP.scan: {
-      const scan = scanBrain(vault);
+      const scan = scanBrain(vault, opts);
       return Object.freeze({
         step: DREAM_STEP.scan,
         partial: true,
@@ -167,7 +195,7 @@ export function runDreamStep(vault: string, step: string): DreamStepResult {
       } satisfies DreamScanStepResult);
     }
     case DREAM_STEP.healEnrich: {
-      const result = runHealEnrichment(vault);
+      const result = runHealEnrichment(vault, opts);
       return Object.freeze({
         step: DREAM_STEP.healEnrich,
         partial: true,

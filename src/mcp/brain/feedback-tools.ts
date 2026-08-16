@@ -457,7 +457,19 @@ async function toolBrainDream(
       );
     }
     try {
-      return { ...runDreamStep(ctx.vault, stepArg) };
+      // Bounded and observed on the same terms as every sibling branch.
+      // This one had neither: it was the row `docs/mcp.md` marked
+      // **none**, and `dream()` being synchronous is exactly why that
+      // mattered - an unbounded step holds the server's event loop for
+      // its whole duration and the client cannot even time out and
+      // reissue. The budget is `dream`'s, because a step IS part of a
+      // dream pass; the sink is the caller's, dropped here until now.
+      return {
+        ...runDreamStep(ctx.vault, stepArg, {
+          safeguard: toolSafeguard(ctx, OPERATION.dream),
+          ...(onProgress ? { onProgress } : {}),
+        }),
+      };
     } catch (exc) {
       if (exc instanceof DreamStepNotRunnableError) {
         throw new MCPError(INVALID_PARAMS, exc.message);

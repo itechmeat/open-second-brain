@@ -182,6 +182,22 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.dream,
     stage: "scan",
   },
+  // The two single-step units. Each opens its own stream because a step
+  // IS the run when it is asked for on its own - `runDreamStep`
+  // dispatches and owns no counter. Inside a full pass neither is handed
+  // a sink, so `dream()`'s own counter stays the only voice and these
+  // two stay inert; that is why the witness for each is its own entry
+  // point rather than the full-pass one.
+  "core/brain/dream-scan.ts#scanBrain": {
+    entryPoint: "o2b brain dream --step scan --progress",
+    operation: OPERATION.dream,
+    stage: "scan",
+  },
+  "core/brain/heal-run.ts#runHealEnrichment": {
+    entryPoint: "o2b brain dream --step heal-enrich --progress",
+    operation: OPERATION.dream,
+    stage: "heal-enrich",
+  },
   "core/brain/link-graph/bridge-discovery.ts#discoverBridges": {
     entryPoint: "o2b brain bridges discover --progress",
     operation: OPERATION.bridges,
@@ -243,6 +259,14 @@ const ENTRY_POINTS: Readonly<Record<string, () => Promise<RunResult>>> = Object.
     runCli(["brain", "clusters", "run", "--vault", searchVault, "--progress"]),
   "o2b brain dream --progress": () =>
     runCli(["brain", "dream", "--dry-run", "--progress"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: dreamConfig },
+    }),
+  "o2b brain dream --step scan --progress": () =>
+    runCli(["brain", "dream", "--step", "scan", "--progress"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: dreamConfig },
+    }),
+  "o2b brain dream --step heal-enrich --progress": () =>
+    runCli(["brain", "dream", "--step", "heal-enrich", "--progress"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: dreamConfig },
     }),
   "o2b brain architect --progress": () =>
