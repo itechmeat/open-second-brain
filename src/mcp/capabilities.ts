@@ -1,4 +1,10 @@
+import {
+  RUNTIME_FACTS,
+  TOOL_CEILING_KIND,
+  type InstallTargetId,
+} from "../core/runtime/host-facts.ts";
 import type {
+  HostCeilingReport,
   ToolCapabilityEntry,
   ToolCapabilityReport,
   ToolDefinition,
@@ -15,6 +21,14 @@ export interface RuntimeCapabilityContext {
   readonly scope: ToolScope;
   readonly serverName: string;
   readonly window?: RuntimeCapabilityWindow;
+  /**
+   * The runtime that launched this server, from `o2b mcp --host-target`
+   * in the registration an install adapter generated. Absent whenever
+   * the server was started by hand or by a payload written before the
+   * flag existed - which is reported as an unchecked ceiling, never as
+   * an absent one.
+   */
+  readonly hostTarget?: InstallTargetId;
 }
 
 export interface ToolCapabilityEvaluation {
@@ -55,6 +69,7 @@ export function evaluateToolCapabilities(
     available.push({ name: tool.name, reason: "available" });
   }
 
+  const advertised = tools.filter((tool) => tool.hidden !== true).length;
   return {
     tools,
     report: {
@@ -62,10 +77,68 @@ export function evaluateToolCapabilities(
       server_name: context.serverName,
       static_tool_count: candidates.length,
       available_tool_count: tools.length,
+      advertised_tool_count: advertised,
+      host_ceiling: hostCeiling(context.hostTarget, advertised),
       available,
       withheld,
     },
   };
+}
+
+/**
+ * Why a server that was never told its host cannot cite a limit.
+ *
+ * It names the flag rather than shrugging, because the remedy is
+ * concrete: re-run `o2b install --target <runtime> --apply` and the
+ * generated registration will carry it.
+ */
+const UNNAMED_HOST_REASON =
+  "this server was not told which runtime launched it (no --host-target in its registration), " +
+  "so no published per-workspace tool limit can be cited; re-run " +
+  "`o2b install --target <runtime> --apply` to regenerate a registration that names the host";
+
+/** The host's published limit, or the stated absence of one. */
+function hostCeiling(target: InstallTargetId | undefined, advertised: number): HostCeilingReport {
+  if (target === undefined) {
+    return {
+      target: null,
+      kind: TOOL_CEILING_KIND.unknown,
+      max_tools: null,
+      source: null,
+      reason: UNNAMED_HOST_REASON,
+      within_ceiling: null,
+    };
+  }
+  const ceiling = RUNTIME_FACTS[target].toolCeiling;
+  switch (ceiling.kind) {
+    case TOOL_CEILING_KIND.declared:
+      return {
+        target,
+        kind: ceiling.kind,
+        max_tools: ceiling.maxTools,
+        source: ceiling.source,
+        reason: null,
+        within_ceiling: advertised <= ceiling.maxTools,
+      };
+    case TOOL_CEILING_KIND.unbounded:
+      return {
+        target,
+        kind: ceiling.kind,
+        max_tools: null,
+        source: ceiling.source,
+        reason: null,
+        within_ceiling: true,
+      };
+    case TOOL_CEILING_KIND.unknown:
+      return {
+        target,
+        kind: ceiling.kind,
+        max_tools: null,
+        source: null,
+        reason: ceiling.reason,
+        within_ceiling: null,
+      };
+  }
 }
 
 function nonEmptySet(values: ReadonlyArray<string> | undefined): ReadonlySet<string> | null {

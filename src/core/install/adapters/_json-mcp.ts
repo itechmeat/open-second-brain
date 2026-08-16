@@ -23,6 +23,7 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import type { InstallTargetId } from "../../runtime/host-facts.ts";
 import { payloadWithRuntimeIdentity } from "../identity.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
+import { payloadForHost } from "../payload-host.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { deepJsonEquals, expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
 import {
@@ -91,6 +92,36 @@ export interface JsonMcpAdapterSpec {
 /** Apply the runtime-identity rule to the payload when the spec opted in. */
 function identifyPayload(spec: JsonMcpAdapterSpec, payload: McpPayload): McpPayload {
   return spec.runtimeIdentity ? payloadWithRuntimeIdentity(payload, spec.target) : payload;
+}
+
+/**
+ * The payload as this target's config file must hold it: the host's own
+ * dimensions (tool profile, host id) then the runtime-identity rule.
+ *
+ * Both transforms are pure functions of the spec and the `InstallEnv`,
+ * and every path that touches the file - plan, apply, verify - goes
+ * through this one function. That is what keeps re-construction honest:
+ * a transform applied on apply but not on verify would report drift
+ * against bytes this adapter had just written itself.
+ */
+function payloadForSpec(
+  spec: JsonMcpAdapterSpec,
+  payload: McpPayload,
+  env: InstallEnv,
+): McpPayload {
+  return identifyPayload(spec, payloadForHost(spec.target, payload, env));
+}
+
+/**
+ * The same composition as {@link payloadForSpec}, rebuilt from the
+ * `InstallEnv` alone - the verify side of re-construction. It exists so
+ * the two sides cannot be assembled in different orders by accident:
+ * `verify` once applied the identity rule and not the host rule, which
+ * made every runtime-identity adapter report drift against the file it
+ * had just written.
+ */
+function expectedPayloadForSpec(spec: JsonMcpAdapterSpec, env: InstallEnv): McpPayload {
+  return identifyPayload(spec, expectedPayloadFromEnv(env, spec.target));
 }
 
 function readFileOrEmpty(path: string): string {
@@ -267,8 +298,13 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       };
     },
 
-    plan(payload: McpPayload, env: InstallEnv): InstallPlan {
+    plan(rawPayload: McpPayload, env: InstallEnv): InstallPlan {
       const path = spec.resolveConfigPath(env);
+      // The PREVIEW prints the args that will actually be written, not
+      // the un-transformed canonical ones: a plan whose command line
+      // differs from the applied one is a plan the operator cannot use
+      // to review the change.
+      const payload = payloadForSpec(spec, rawPayload, env);
       const preview =
         `json-merge two keys into ${topKey} at ${path}: ` +
         `${OSB_KEY_FULL} → ${payload.full.command} ${payload.full.args.join(" ")}; ` +
@@ -287,7 +323,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       opts: ApplyOpts,
     ): ApplyResult {
       const path = spec.resolveConfigPath(env);
-      const payload = identifyPayload(spec, rawPayload);
+      const payload = payloadForSpec(spec, rawPayload, env);
       const onDisk = readOnDisk(spec, env, payload);
       const manifestEntry = readManifest(env.vault).installs[spec.target];
 
@@ -436,7 +472,7 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
           fix_hint: spec.fixHintForDrift ?? `o2b install --target ${spec.target} --apply`,
         };
       }
-      const expected = identifyPayload(spec, expectedPayloadFromEnv(env));
+      const expected = expectedPayloadForSpec(spec, env);
       const equals = resolveEntryEquals(spec);
       if (
         !equals(block[OSB_KEY_FULL] as Record<string, unknown> | undefined, expected.full) ||

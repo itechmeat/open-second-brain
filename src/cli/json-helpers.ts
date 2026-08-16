@@ -51,6 +51,7 @@ export const COMMANDS_WITH_INTERNAL_JSON: ReadonlySet<string> = new Set([
   "brain",
   "search",
   "vault",
+  "state",
   "discipline",
   "partner",
   "doctor",

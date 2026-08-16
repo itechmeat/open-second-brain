@@ -34,6 +34,7 @@ import { handleBrainSubcommand } from "./brain.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
+import { handleStateSubcommand } from "./state.ts";
 import { handleVaultSubcommand } from "./vault.ts";
 import {
   NoVaultConfiguredError,
@@ -71,6 +72,11 @@ import { buildToolTable } from "../mcp/tools.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "../mcp/capabilities.ts";
 import { resolveToolSurface, toolSurfaceProfileNames } from "../mcp/profiles.ts";
 import { TOOL_SCOPE, TOOL_SCOPES, isToolScope, type ToolScope } from "../mcp/tool-contract.ts";
+import {
+  INSTALL_TARGET_IDS,
+  isInstallTargetId,
+  type InstallTargetId,
+} from "../core/runtime/host-facts.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -601,6 +607,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     scope: { type: "string" },
     "writer-only": { type: "boolean" },
     "tool-profile": { type: "string" },
+    "host-target": { type: "string" },
     probe: { type: "boolean" },
     json: { type: "boolean" },
     transport: { type: "string", default: "stdio" },
@@ -630,6 +637,22 @@ async function cmdMcp(argv: string[]): Promise<number> {
     process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${explicitScope}\n`);
     return 2;
   }
+
+  // Which runtime launched this server. Written into the generated
+  // registration by the install adapter, and read back only by the
+  // capability report, which cites that host's published tool ceiling.
+  // An unrecognised value is refused rather than dropped: silently
+  // ignoring it would report the ceiling as unchecked on a host that
+  // publishes one, which is the exact silence this flag exists to end.
+  const hostTargetFlag = flags["host-target"] as string | undefined;
+  if (hostTargetFlag !== undefined && !isInstallTargetId(hostTargetFlag)) {
+    process.stderr.write(
+      `o2b mcp: invalid --host-target value: ${hostTargetFlag}; ` +
+        `expected one of: ${INSTALL_TARGET_IDS.join(", ")}\n`,
+    );
+    return 2;
+  }
+  const hostTarget = hostTargetFlag as InstallTargetId | undefined;
 
   const config = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const transport = flags["transport"] as string;
@@ -685,6 +708,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
       serverName,
       json: Boolean(flags["json"]),
       capabilityWindow,
+      hostTarget,
     });
   }
 
@@ -706,7 +730,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
     const handle = await startHttp(
       { vault, configPath: config, repoRoot },
       { host, port, apiKey },
-      { scope, serverName, capabilityWindow },
+      { scope, serverName, capabilityWindow, hostTarget },
     );
     // Log the actually-bound endpoint. With the default --port 0 the OS
     // assigns an ephemeral port, so the requested `port` value ("0") would
@@ -726,7 +750,7 @@ async function cmdMcp(argv: string[]): Promise<number> {
   return await serveStdio(
     { vault, configPath: config, repoRoot },
     {},
-    { scope, serverName, capabilityWindow },
+    { scope, serverName, capabilityWindow, hostTarget },
   );
 }
 
@@ -759,6 +783,7 @@ async function runMcpProbe(args: {
   serverName: string;
   json: boolean;
   capabilityWindow: RuntimeCapabilityWindow | undefined;
+  hostTarget: InstallTargetId | undefined;
 }): Promise<number> {
   // The probe is an in-process MCP handshake: it counts the tools the
   // server would advertise and exits. Used by `o2b install --check`
@@ -775,6 +800,7 @@ async function runMcpProbe(args: {
       scope: args.scope,
       serverName: args.serverName,
       window: args.capabilityWindow,
+      hostTarget: args.hostTarget,
     });
     if (args.json) {
       process.stdout.write(
@@ -998,6 +1024,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleDisciplineSubcommand(rest);
       case "search":
         return await handleSearchSubcommand(rest);
+      case "state":
+        return await handleStateSubcommand(rest);
       case "vault":
         return await handleVaultSubcommand(rest);
       case "partner":

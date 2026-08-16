@@ -44,6 +44,7 @@ import { assertOutputContract } from "./output-contract.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
+import type { InstallTargetId } from "../core/runtime/host-facts.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -58,6 +59,13 @@ export interface MCPServerRuntimeOptions {
   readonly serverName?: string;
   readonly scope?: ToolScope;
   readonly capabilityWindow?: RuntimeCapabilityWindow;
+  /**
+   * The runtime that launched this process, from `o2b mcp
+   * --host-target` in a generated registration. Only the capability
+   * report reads it, and only to name the host's published tool
+   * ceiling; absent means the ceiling is reported as unchecked.
+   */
+  readonly hostTarget?: InstallTargetId;
   /**
    * Run id grouping this process's preview artifacts under
    * `Brain/.artifacts/<run-id>/`. Defaults to a per-process id;
@@ -124,6 +132,7 @@ export class MCPServer {
       scope: this.scope,
       serverName: this.serverName,
       window: runtimeOpts.capabilityWindow,
+      hostTarget: runtimeOpts.hostTarget,
     });
     this.tools = evaluated.tools;
     this.capabilityReport = evaluated.report;

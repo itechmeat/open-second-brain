@@ -1,0 +1,308 @@
+/**
+ * A capped host selects a bounded profile.
+ *
+ * Cursor publishes a per-workspace ceiling of forty tools across all
+ * enabled MCP servers; the full surface advertises a hundred and ten.
+ * Before this unit the adapter wrote the full surface anyway and the
+ * host silently dropped the excess - no error, no note, and no row in
+ * `second_brain_capabilities` naming which tools went missing or why.
+ *
+ * Three things are pinned here, and each one is pinned in the way that
+ * makes it hard to pass by accident:
+ *
+ *   - The census over `RUNTIME_FACTS` is DERIVED, not hand-listed, and
+ *     its pinned counts are an EQUALITY. A future row that declares a
+ *     ceiling has no way to skip the check, and a tool added to a
+ *     bounded profile moves the advertised count off its pin rather
+ *     than quietly creeping back over the host's limit.
+ *   - The advertised count is computed the way the SERVER computes it -
+ *     `buildToolTable` under the resolved surface, then
+ *     `evaluateToolCapabilities`, then the `hidden` filter `tools/list`
+ *     applies - so it is what a host actually sees, not what is
+ *     registered. Those two numbers differ by a hundred and three under
+ *     `catalog`, which is the whole reason the profile fits.
+ *   - `unknown` is visible. A host whose limit nobody has published gets
+ *     no profile - that is today's behaviour and it is correct - but the
+ *     capability report says the ceiling is unchecked and repeats the
+ *     written reason, because silence is what let the original defect
+ *     survive.
+ */
+
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Writable } from "node:stream";
+
+import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { cursorAdapter } from "../../../src/core/install/adapters/cursor.ts";
+import { buildPayload } from "../../../src/core/install/payload.ts";
+import {
+  HOST_TARGET_FLAG,
+  TOOL_PROFILE_FLAG,
+  payloadForHost,
+} from "../../../src/core/install/payload-host.ts";
+import {
+  INSTALL_TOOL_PROFILE_CONFIG_KEY,
+  INSTALL_TOOL_PROFILE_ENV_KEY,
+  resolveInstallToolProfile,
+} from "../../../src/core/install/settings.ts";
+import type { InstallEnv } from "../../../src/core/install/types.ts";
+import {
+  INSTALL_TARGET_IDS,
+  RUNTIME_FACTS,
+  TOOL_CEILING_KIND,
+  type InstallTargetId,
+} from "../../../src/core/runtime/host-facts.ts";
+import { CONFIG_ORIGIN } from "../../../src/core/validate.ts";
+import { evaluateToolCapabilities } from "../../../src/mcp/capabilities.ts";
+import { resolveToolSurface } from "../../../src/mcp/profiles.ts";
+import { buildToolTable } from "../../../src/mcp/tools.ts";
+
+let vault: string;
+let home: string;
+
+beforeEach(() => {
+  vault = mkdtempSync(join(tmpdir(), "osb-ceiling-v-"));
+  home = mkdtempSync(join(tmpdir(), "osb-ceiling-h-"));
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+});
+
+afterEach(() => {
+  rmSync(vault, { recursive: true, force: true });
+  rmSync(home, { recursive: true, force: true });
+});
+
+function makeEnv(overrides: Record<string, string> = {}): InstallEnv {
+  return {
+    vault,
+    home,
+    cwd: home,
+    env: { VAULT_AGENT_NAME: "claude-vps", VAULT_TIMEZONE: "UTC", ...overrides },
+    now: new Date("2026-08-16T12:00:00.000Z"),
+  };
+}
+
+function makePayload() {
+  return buildPayload({ vault, agent_name: "claude-vps", timezone: "UTC" });
+}
+
+/**
+ * What a host LISTS under one profile: the server's own surface build
+ * (`src/mcp/server.ts`) followed by the `hidden` filter its
+ * `tools/list` handler applies.
+ */
+function advertisedToolCount(profileName: string): number {
+  const surface = resolveToolSurface({ profileName });
+  const evaluated = evaluateToolCapabilities(buildToolTable(surface.scope), {
+    scope: surface.scope,
+    serverName: "open-second-brain",
+    ...(surface.window ? { window: surface.window } : {}),
+  });
+  return evaluated.tools.filter((tool) => tool.hidden !== true).length;
+}
+
+/**
+ * The advertised count each ceiling-bearing host's resolved profile
+ * produces today, as an EQUALITY per target.
+ *
+ * A floor would let a tool added to `catalog` walk the surface back
+ * toward the ceiling without failing anything until it crossed. The key
+ * set is required to equal the derived declared-ceiling population
+ * below, so a new row cannot be added without pinning its number.
+ */
+const PINNED_ADVERTISED_TOOLS: Readonly<Record<string, number>> = Object.freeze({
+  cursor: 7,
+});
+
+/** The targets whose row publishes a number, derived from the table. */
+const DECLARED_CEILING_TARGETS: ReadonlyArray<InstallTargetId> = INSTALL_TARGET_IDS.filter(
+  (target) => RUNTIME_FACTS[target].toolCeiling.kind === TOOL_CEILING_KIND.declared,
+);
+
+/** The targets whose row publishes nothing, derived the same way. */
+const UNKNOWN_CEILING_TARGETS: ReadonlyArray<InstallTargetId> = INSTALL_TARGET_IDS.filter(
+  (target) => RUNTIME_FACTS[target].toolCeiling.kind === TOOL_CEILING_KIND.unknown,
+);
+
+describe("the declared-ceiling census", () => {
+  test("is not vacuous: at least one runtime publishes a limit", () => {
+    expect(DECLARED_CEILING_TARGETS.length).toBeGreaterThan(0);
+  });
+
+  test("every declared ceiling has a pinned advertised count", () => {
+    expect(Object.keys(PINNED_ADVERTISED_TOOLS).toSorted()).toEqual(
+      [...DECLARED_CEILING_TARGETS].toSorted(),
+    );
+  });
+
+  for (const target of DECLARED_CEILING_TARGETS) {
+    test(`${target}: the resolved profile advertises at or under the published limit`, () => {
+      const ceiling = RUNTIME_FACTS[target].toolCeiling;
+      if (ceiling.kind !== TOOL_CEILING_KIND.declared) throw new Error("derivation drifted");
+      const resolved = resolveInstallToolProfile(
+        { vault, env: {}, configPath: join(home, "config.yaml") },
+        target,
+      );
+      expect(resolved.value).not.toBeNull();
+      const advertised = advertisedToolCount(resolved.value!);
+      expect(advertised).toBe(PINNED_ADVERTISED_TOOLS[target]!);
+      expect(advertised).toBeLessThanOrEqual(ceiling.maxTools);
+    });
+  }
+});
+
+describe("the profile baked into the generated payload", () => {
+  test("a capped host carries its profile on the full entry", () => {
+    const payload = payloadForHost("cursor", makePayload(), makeEnv());
+    expect(payload.full.args).toEqual([
+      "mcp",
+      "--vault",
+      vault,
+      TOOL_PROFILE_FLAG,
+      "catalog",
+      HOST_TARGET_FLAG,
+      "cursor",
+    ]);
+  });
+
+  test("the writer entry keeps its five-tool surface and takes no profile", () => {
+    const payload = payloadForHost("cursor", makePayload(), makeEnv());
+    expect(payload.writer.args).not.toContain(TOOL_PROFILE_FLAG);
+    expect(payload.writer.args).toEqual([
+      "mcp",
+      "--writer-only",
+      "--vault",
+      vault,
+      HOST_TARGET_FLAG,
+      "cursor",
+    ]);
+  });
+
+  for (const target of UNKNOWN_CEILING_TARGETS) {
+    test(`${target}: an unchecked ceiling bakes in no profile`, () => {
+      const payload = payloadForHost(target, makePayload(), makeEnv());
+      expect(payload.full.args).not.toContain(TOOL_PROFILE_FLAG);
+      expect(payload.writer.args).not.toContain(TOOL_PROFILE_FLAG);
+    });
+  }
+
+  test("a fresh apply reports no drift: verify reconstructs the same args", () => {
+    const payload = makePayload();
+    const env = makeEnv();
+    const opts = {
+      dryRun: false,
+      force: false,
+      stdout: sink(),
+      stderr: sink(),
+    };
+    const plan = cursorAdapter.plan(payload, env);
+    cursorAdapter.apply(plan, payload, env, opts);
+
+    const written = JSON.parse(readFileSync(join(home, ".cursor", "mcp.json"), "utf8")) as {
+      mcpServers: Record<string, { args: string[] }>;
+    };
+    expect(written.mcpServers["open-second-brain"]!.args).toContain("catalog");
+    expect(cursorAdapter.verify(env).status).toBe("ok");
+  });
+});
+
+describe("tool-profile precedence, four layers, highest first", () => {
+  function source(env: NodeJS.ProcessEnv = {}) {
+    return { vault, env, configPath: join(home, "config.yaml") };
+  }
+
+  test("the environment beats every layer below it", () => {
+    atomicWriteFileSync(
+      brainConfigPath(vault),
+      'schema_version: 1\ninstall:\n  tool_profile: "recall"\n',
+    );
+    expect(
+      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "minimal" }), "cursor"),
+    ).toEqual({ value: "minimal", origin: CONFIG_ORIGIN.env });
+  });
+
+  test("the committed vault block beats the host row", () => {
+    atomicWriteFileSync(
+      brainConfigPath(vault),
+      'schema_version: 1\ninstall:\n  tool_profile: "recall"\n',
+    );
+    expect(resolveInstallToolProfile(source(), "cursor")).toEqual({
+      value: "recall",
+      origin: CONFIG_ORIGIN.vaultConfig,
+    });
+  });
+
+  test("the machine-local key beats the host row when the vault says nothing", () => {
+    atomicWriteFileSync(join(home, "config.yaml"), `${INSTALL_TOOL_PROFILE_CONFIG_KEY}: minimal\n`);
+    expect(resolveInstallToolProfile(source(), "cursor")).toEqual({
+      value: "minimal",
+      origin: CONFIG_ORIGIN.userConfig,
+    });
+  });
+
+  test("the host row answers when nothing else does", () => {
+    expect(resolveInstallToolProfile(source(), "cursor")).toEqual({
+      value: "catalog",
+      origin: CONFIG_ORIGIN.default,
+    });
+  });
+
+  test("a host with no declared profile resolves to no profile at all", () => {
+    expect(resolveInstallToolProfile(source(), "kiro")).toEqual({
+      value: null,
+      origin: CONFIG_ORIGIN.default,
+    });
+  });
+});
+
+describe("the capability report states the ceiling it runs under", () => {
+  function report(hostTarget: InstallTargetId | undefined) {
+    const surface = resolveToolSurface({ profileName: "catalog" });
+    return evaluateToolCapabilities(buildToolTable(surface.scope), {
+      scope: surface.scope,
+      serverName: "open-second-brain",
+      ...(hostTarget !== undefined ? { hostTarget } : {}),
+    }).report;
+  }
+
+  test("a declared ceiling is reported with its number and its citation", () => {
+    const ceiling = report("cursor").host_ceiling;
+    expect(ceiling.target).toBe("cursor");
+    expect(ceiling.kind).toBe(TOOL_CEILING_KIND.declared);
+    expect(ceiling.max_tools).toBe(40);
+    expect(ceiling.source).toBe((RUNTIME_FACTS.cursor.toolCeiling as { source: string }).source);
+    expect(ceiling.reason).toBeNull();
+    expect(ceiling.within_ceiling).toBe(true);
+  });
+
+  test("an unchecked ceiling is stated, with the written reason, not left silent", () => {
+    const ceiling = report("kiro").host_ceiling;
+    expect(ceiling.kind).toBe(TOOL_CEILING_KIND.unknown);
+    expect(ceiling.max_tools).toBeNull();
+    expect(ceiling.within_ceiling).toBeNull();
+    expect(ceiling.reason).toBe((RUNTIME_FACTS.kiro.toolCeiling as { reason: string }).reason);
+  });
+
+  test("a server nobody named a host for says so instead of inventing one", () => {
+    const ceiling = report(undefined).host_ceiling;
+    expect(ceiling.target).toBeNull();
+    expect(ceiling.kind).toBe(TOOL_CEILING_KIND.unknown);
+    expect(ceiling.reason).toContain(HOST_TARGET_FLAG);
+  });
+
+  test("the advertised count is the one a host lists, not the registered one", () => {
+    const evaluated = report("cursor");
+    expect(evaluated.available_tool_count).toBe(110);
+    expect(evaluated.advertised_tool_count).toBe(7);
+  });
+});
+
+function sink(): NodeJS.WriteStream {
+  return new Writable({
+    write(_chunk, _enc, cb) {
+      cb();
+    },
+  }) as unknown as NodeJS.WriteStream;
+}

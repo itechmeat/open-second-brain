@@ -100,14 +100,22 @@ describe("opencode adapter - apply", () => {
     const full = parsed.mcp["open-second-brain"];
     expect(full).toEqual({
       type: "local",
-      command: ["o2b", "mcp", "--vault", vault],
+      command: ["o2b", "mcp", "--vault", vault, "--host-target", "opencode"],
       // opencode keeps the operator host ("dev") but swaps the vendor to its
       // own, rather than inheriting the operator name "claude-dev-agent".
       environment: { VAULT_AGENT_NAME: "opencode-dev-agent", VAULT_TIMEZONE: "UTC" },
       enabled: true,
     });
     const writer = parsed.mcp["open-second-brain-writer"];
-    expect(writer.command).toEqual(["o2b", "mcp", "--writer-only", "--vault", vault]);
+    expect(writer.command).toEqual([
+      "o2b",
+      "mcp",
+      "--writer-only",
+      "--vault",
+      vault,
+      "--host-target",
+      "opencode",
+    ]);
     expect(writer.type).toBe("local");
     expect(readManifest(vault).installs["opencode"]).toBeDefined();
   });

@@ -94,7 +94,7 @@ describe("createJsonMcpAdapter with custom entry shape", () => {
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     const full = parsed.mcp["open-second-brain"];
     expect(full.type).toBe("local");
-    expect(full.command).toEqual(["o2b", "mcp", "--vault", vault]);
+    expect(full.command).toEqual(["o2b", "mcp", "--vault", vault, "--host-target", "kiro"]);
     expect(full.environment).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
     expect(full.enabled).toBe(true);
     expect(full.args).toBeUndefined();

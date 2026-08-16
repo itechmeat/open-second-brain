@@ -15,6 +15,7 @@
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import type { ProgressSink } from "../core/brain/progress.ts";
+import type { ToolCeilingKind } from "../core/runtime/host-facts.ts";
 
 /**
  * The tool surfaces a server process can advertise.
@@ -54,11 +55,45 @@ export interface ToolCapabilityEntry {
   readonly reason: string;
 }
 
+/**
+ * What the running server can say about the per-workspace tool limit of
+ * the host that launched it.
+ *
+ * Present on every report, including - especially - when the answer is
+ * "nobody has established one". A host that caps a workspace at forty
+ * tools and is handed a hundred and ten drops the excess in silence, so
+ * a report that omitted the ceiling when it did not know one would be
+ * indistinguishable from a host with no limit at all. `kind` never
+ * collapses `unknown` into `unbounded`, and `reason` carries the written
+ * explanation the `RUNTIME_FACTS` row owes for saying nothing.
+ */
+export interface HostCeilingReport {
+  /** The install target that launched this server; `null` when unnamed. */
+  readonly target: string | null;
+  readonly kind: ToolCeilingKind;
+  /** The published limit; `null` unless `kind` is `declared`. */
+  readonly max_tools: number | null;
+  /** Where the limit (or its absence) is published; `null` when unknown. */
+  readonly source: string | null;
+  /** Why there is no answer; `null` unless `kind` is `unknown`. */
+  readonly reason: string | null;
+  /** Advertised tools against `max_tools`; `null` when there is no number. */
+  readonly within_ceiling: boolean | null;
+}
+
 export interface ToolCapabilityReport {
   readonly scope: ToolScope;
   readonly server_name: string;
   readonly static_tool_count: number;
   readonly available_tool_count: number;
+  /**
+   * The tools a host actually LISTS: `available_tool_count` minus the
+   * ones marked `hidden`, which `tools/list` filters out. The two
+   * numbers are a hundred and three apart under the `catalog` surface,
+   * and it is this one the host's ceiling applies to.
+   */
+  readonly advertised_tool_count: number;
+  readonly host_ceiling: HostCeilingReport;
   readonly available: ToolCapabilityEntry[];
   readonly withheld: ToolCapabilityEntry[];
 }

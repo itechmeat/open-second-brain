@@ -16,6 +16,34 @@ describe("o2b mcp --scope arg validation", () => {
     const res = await runCli(["mcp", "--scope"], { stdin: "" });
     expect(res.returncode).toBe(2);
   });
+});
+
+describe("o2b mcp --host-target arg validation", () => {
+  test("an unrecognised runtime exits 2 and lists the known ones", async () => {
+    const res = await runCli(["mcp", "--host-target", "nope"], { stdin: "" });
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain("--host-target");
+    expect(res.stderr).toContain("cursor");
+  });
+
+  test("a known runtime is reported back by the capability probe", async () => {
+    const tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-host-target-"));
+    try {
+      const res = await runCli(["mcp", "--probe", "--json", "--host-target", "cursor"], {
+        stdin: "",
+        env: { VAULT_DIR: tmp },
+      });
+      expect(res.returncode).toBe(0);
+      const parsed = JSON.parse(res.stdout) as {
+        capabilities: { host_ceiling: { target: string; kind: string; max_tools: number } };
+      };
+      expect(parsed.capabilities.host_ceiling.target).toBe("cursor");
+      expect(parsed.capabilities.host_ceiling.kind).toBe("declared");
+      expect(parsed.capabilities.host_ceiling.max_tools).toBe(40);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
 
   describe("--scope writer with a vault", () => {
     let tmp: string;

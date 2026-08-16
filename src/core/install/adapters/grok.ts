@@ -27,6 +27,7 @@ import { GROK_HOOKS_FILENAME, grokHooksJson, grokMcpServers } from "../grok-asse
 import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { readManifest, recordEntry, removeEntry } from "../manifest.ts";
+import { payloadForHost } from "../payload-host.ts";
 import { expectedPayloadFromEnv } from "../payload-equals.ts";
 import { defaultRegistry } from "../registry.ts";
 import { installSettingsSource, resolveInstallHookTimeoutSeconds } from "../settings.ts";
@@ -90,9 +91,12 @@ function hookTimeoutSeconds(env: InstallEnv): number {
 }
 
 /** Compute the target config.toml + hooks content for the current env/payload. */
-function desired(payload: McpPayload, env: InstallEnv): DesiredState {
+function desired(rawPayload: McpPayload, env: InstallEnv): DesiredState {
   const currentToml = readFileOrEmpty(configPath(env));
   const currentHooks = readFileOrEmpty(hooksPath(env));
+  // The same host transform `syncState` re-computes from the env alone,
+  // so an applied install is in sync with what verification expects.
+  const payload = payloadForHost(TARGET, rawPayload, env);
   return {
     currentToml,
     nextToml: upsertMcpServers(currentToml, grokMcpServers(payload)),
@@ -105,7 +109,7 @@ function desired(payload: McpPayload, env: InstallEnv): DesiredState {
 function syncState(env: InstallEnv): { mcpOk: boolean; hooksOk: boolean; anyPresent: boolean } {
   const toml = readFileOrEmpty(configPath(env));
   const hooks = readFileOrEmpty(hooksPath(env));
-  const payload = expectedPayloadFromEnv(env);
+  const payload = expectedPayloadFromEnv(env, TARGET);
   const mcpOk = hasMcpServers(toml, grokMcpServers(payload));
   const hooksOk = hooks === grokHooksJson(payload, hookTimeoutSeconds(env));
   const anyMcp = SERVER_NAMES.some((n) => toml.includes(`[mcp_servers.${n}]`));

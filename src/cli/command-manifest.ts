@@ -60,6 +60,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("scope", "string"),
       flag("writer-only", "boolean"),
       flag("tool-profile", "string"),
+      flag("host-target", "string"),
       flag("probe", "boolean"),
       flag("allow-tool", "string-array"),
       flag("disable-tool", "string-array"),
@@ -607,6 +608,18 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("inspect", "Inspect one vault-relative path"),
         command("profile", "Manage named vault profiles"),
         command("map", "Print vault-map role tokens"),
+      ],
+    ),
+    command(
+      "state",
+      "In-vault state surface verbs",
+      [],
+      [
+        command(
+          "status",
+          "Report every state surface in the vault with its path, reachability, and the override that placed it",
+          [flag("vault", "string"), flag("config", "string")],
+        ),
       ],
     ),
     command(

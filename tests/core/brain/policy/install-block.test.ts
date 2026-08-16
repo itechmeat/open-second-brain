@@ -164,31 +164,37 @@ describe("install setting resolution - four layers, highest first", () => {
   });
 
   test("the same four layers decide the tool profile", () => {
-    expect(resolveInstallToolProfile(source())).toEqual({
-      value: BRAIN_INSTALL_DEFAULTS.tool_profile,
+    // The bottom tier is per HOST - the target's own `RUNTIME_FACTS`
+    // row, not one compiled name - because a profile that fits a host
+    // capping a workspace at forty tools is not the profile that fits a
+    // host with no published limit. `kiro` declares none, so the bottom
+    // tier selects no profile at all; `tests/core/install/
+    // tool-ceiling.test.ts` drives the row-bearing side.
+    expect(resolveInstallToolProfile(source(), "kiro")).toEqual({
+      value: null,
       origin: CONFIG_ORIGIN.default,
     });
 
     writeUserConfig(`${INSTALL_TOOL_PROFILE_CONFIG_KEY}: minimal\n`);
-    expect(resolveInstallToolProfile(source())).toEqual({
+    expect(resolveInstallToolProfile(source(), "kiro")).toEqual({
       value: "minimal",
       origin: CONFIG_ORIGIN.userConfig,
     });
 
     writeVaultConfig('schema_version: 1\ninstall:\n  tool_profile: "recall"\n');
-    expect(resolveInstallToolProfile(source())).toEqual({
+    expect(resolveInstallToolProfile(source(), "kiro")).toEqual({
       value: "recall",
       origin: CONFIG_ORIGIN.vaultConfig,
     });
 
     expect(
-      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "catalog" })),
+      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "catalog" }), "kiro"),
     ).toEqual({ value: "catalog", origin: CONFIG_ORIGIN.env });
   });
 
   test("an environment value that is not a known profile is refused by name", () => {
     expect(() =>
-      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "nope" })),
+      resolveInstallToolProfile(source({ [INSTALL_TOOL_PROFILE_ENV_KEY]: "nope" }), "kiro"),
     ).toThrow(new RegExp(INSTALL_TOOL_PROFILE_ENV_KEY));
   });
 
@@ -216,7 +222,7 @@ describe("an unreadable vault config refuses rather than defaulting", () => {
 
   test("the tool-profile resolver refuses on the same file", () => {
     writeVaultConfig(UNREADABLE);
-    expect(() => resolveInstallToolProfile(source())).toThrow();
+    expect(() => resolveInstallToolProfile(source(), "kiro")).toThrow();
   });
 
   test("the refusal is not silently replaced by the default", () => {

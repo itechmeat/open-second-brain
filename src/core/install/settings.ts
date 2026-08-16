@@ -9,7 +9,9 @@
  *   2. the `install:` block of `<vault>/Brain/_brain.yaml` - the
  *      COMMITTED vault tier;
  *   3. the machine-local `config.yaml` key;
- *   4. the compiled default.
+ *   4. the compiled default - which for a per-host setting is the
+ *      host's own `RUNTIME_FACTS` row, not one number for every
+ *      runtime (see {@link resolveInstallToolProfile}).
  *
  * Tier 2 above tier 3 is the whole point and is the reverse of the
  * ordering a reader would guess. Generated content is verified by
@@ -36,6 +38,7 @@ import {
   INSTALL_HOOK_TIMEOUT_SECONDS_MIN,
   INSTALL_TOOL_PROFILE_NAMES,
 } from "../brain/policy/blocks/install.ts";
+import { RUNTIME_FACTS, type InstallTargetId } from "../runtime/host-facts.ts";
 import { CONFIG_ORIGIN, parseInteger, resolveWithOrigin, type ConfigOrigin } from "../validate.ts";
 import type { BrainInstallConfig } from "../brain/types.ts";
 import type { InstallEnv } from "./types.ts";
@@ -151,17 +154,32 @@ export function resolveInstallHookTimeoutSeconds(
   );
 }
 
-/** The MCP tool-surface profile generated content selects, and where it came from. */
+/**
+ * The MCP tool-surface profile generated content selects for one host,
+ * and where it came from.
+ *
+ * The bottom tier is the host's own {@link RUNTIME_FACTS} row rather
+ * than a single compiled name, because the question the bottom tier
+ * answers is per host: Cursor caps a workspace at forty tools across
+ * every enabled MCP server, so the profile that fits there is not the
+ * profile that fits a host with no published limit. A row that declares
+ * nothing resolves to `null` - NO profile, which is the flag-free
+ * registration every host got before this existed - and `null` is not
+ * the same answer as `full`: one leaves the surface unnamed, the other
+ * would write a name into the payload of eight hosts that never asked
+ * for one.
+ */
 export function resolveInstallToolProfile(
   source: InstallSettingsSource,
-): ResolvedInstallSetting<string> {
-  return resolveLayered(
+  target: InstallTargetId,
+): ResolvedInstallSetting<string | null> {
+  return resolveLayered<string | null>(
     source,
     INSTALL_TOOL_PROFILE_ENV_KEY,
     INSTALL_TOOL_PROFILE_CONFIG_KEY,
     (block) => block.tool_profile,
     requireToolProfileName,
-    BRAIN_INSTALL_DEFAULTS.tool_profile,
+    RUNTIME_FACTS[target].toolProfile,
   );
 }
 

@@ -2,8 +2,42 @@
 
 `o2b install --target cursor --apply` writes the OSB MCP servers
 into `~/.cursor/mcp.json` via JSON-merge. The two registered names
-are `open-second-brain` (full tool set) and `open-second-brain-writer`
-(always-loaded writer / `brain_context` subset).
+are `open-second-brain` (the **`catalog` two-pass surface** - see
+"The tool surface Cursor gets" below) and `open-second-brain-writer`
+(always-loaded writer / `brain_context` subset, five tools).
+
+## The tool surface Cursor gets
+
+Cursor sends at most the **first 40 tools** across every enabled MCP
+server to the model; anything past that is unreachable and the host
+says nothing about it. The full Open Second Brain surface advertises
+110 tools, so registering it here would silently strand most of them.
+
+The generated `open-second-brain` entry therefore carries
+`--tool-profile catalog`:
+
+```json
+"open-second-brain": {
+  "command": "o2b",
+  "args": ["mcp", "--vault", "/path/to/vault", "--tool-profile", "catalog", "--host-target", "cursor"]
+}
+```
+
+`catalog` **advertises 7 tools** and keeps every one of the 110
+registered verbs callable through `tool_hydrate`, which fetches a
+verb's schema on demand. Nothing is withheld - the surface is narrowed,
+not truncated - and `second_brain_capabilities` reports the ceiling
+this server runs under, its published source, and whether the
+advertised count fits inside it.
+
+`--host-target cursor` is what lets the running server name that
+ceiling; it carries no other behaviour.
+
+To choose a different profile, set `install.tool_profile` in
+`<vault>/Brain/_brain.yaml` (travels with the vault) or
+`OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE` in the environment (wins over
+everything), then re-apply. Raising it back to `full` re-exposes the
+110-tool surface **and the silent 40-tool cut** that goes with it.
 
 ## Prerequisites
 
@@ -61,6 +95,9 @@ which keys to remove). User-authored entries stay intact.
 - `--scope project` (writing into `<cwd>/.cursor/mcp.json`) is
   deferred to a follow-up release. v0.10.11 always targets the
   user-scope path.
+- An install written before the profile existed reports `drift` on the
+  next `--check`: its `args` carry no `--tool-profile`. Re-run
+  `o2b install --target cursor --apply` to regenerate it.
 - If a previous OSB version wrote to `.cursor/mcp.json` without
   recording a manifest entry, use
   `o2b uninstall --target cursor --apply --force-from-snippet`

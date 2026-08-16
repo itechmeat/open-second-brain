@@ -21,6 +21,7 @@ import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
+import { payloadForHost } from "../payload-host.ts";
 import { expectedPayloadFromEnv, payloadKeyEquals } from "../payload-equals.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { defaultRegistry } from "../registry.ts";
@@ -295,7 +296,10 @@ export const copilotCliAdapter: InstallAdapter = {
     };
   },
 
-  apply(_plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
+  apply(_plan: InstallPlan, rawPayload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult {
+    // Same transform `verify` re-computes below, so a fresh install
+    // compares against the bytes it just registered.
+    const payload = payloadForHost(TARGET, rawPayload, env);
     let outcome: ApplyOutcome;
     if (activeRunner.available()) {
       const r = opts.dryRun ? { ok: true } : applyViaCli(payload, opts.stderr);
@@ -416,7 +420,7 @@ export const copilotCliAdapter: InstallAdapter = {
     try {
       const parsed = JSON.parse(readFileSync(path, "utf8")) as Record<string, unknown>;
       const block = (parsed["mcpServers"] ?? {}) as Record<string, unknown>;
-      const expected = expectedPayloadFromEnv(env);
+      const expected = expectedPayloadFromEnv(env, TARGET);
       if (
         payloadKeyEquals(
           block[OSB_KEY_FULL] as Record<string, unknown> | undefined,

@@ -376,6 +376,17 @@ import {
   TOOL_CEILING_KINDS,
 } from "../../../src/core/runtime/host-facts.ts";
 import { CONFIG_ORIGIN, CONFIG_ORIGINS, isConfigOrigin } from "../../../src/core/validate.ts";
+import {
+  isStateReachability,
+  isStateSurfaceId,
+  isStateTier,
+  STATE_REACHABILITIES,
+  STATE_REACHABILITY,
+  STATE_SURFACE_ID,
+  STATE_SURFACE_IDS,
+  STATE_TIER,
+  STATE_TIERS,
+} from "../../../src/core/state/surfaces.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 
 interface VocabularyUnderCensus {
@@ -1131,6 +1142,37 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: CONFIG_ORIGINS,
     guard: isConfigOrigin,
   },
+  {
+    // U9. The durable locations this build keeps inside a vault. Closed
+    // because the inventory hands the id back to a caller that may ask
+    // for one surface by name; a bare `string` there would make a typo a
+    // silently empty answer rather than a compile error.
+    name: "STATE_SURFACE_ID",
+    values: STATE_SURFACE_ID,
+    members: STATE_SURFACE_IDS,
+    guard: isStateSurfaceId,
+  },
+  {
+    // U9. What losing one surface costs. Two members because derived
+    // machine state and vault content have genuinely different recovery
+    // stories, and an inventory that folded them into one bucket could
+    // not tell an operator which deletions are reversible.
+    name: "STATE_TIER",
+    values: STATE_TIER,
+    members: STATE_TIERS,
+    guard: isStateTier,
+  },
+  {
+    // U9. What this run established about one surface. `absent` and
+    // `unchecked` are separate members for the reason ORIGIN_REACH keeps
+    // its two apart: "it is not there" and "I could not look" are
+    // different repairs, and a permission error read as an absent file
+    // sends an operator to recreate what is already on disk.
+    name: "STATE_REACHABILITY",
+    values: STATE_REACHABILITY,
+    members: STATE_REACHABILITIES,
+    guard: isStateReachability,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1395,7 +1437,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 66;
+const VOCABULARY_POPULATION = 69;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

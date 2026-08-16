@@ -42,6 +42,8 @@ import { vaultRelative } from "../core/path-safety.ts";
 import { isOwnerVisible, normalizeAgentScope, pageOwner } from "../core/graph/agent-scope.ts";
 import { listVaultPages } from "../core/vault.ts";
 import { DEGRADATION_CODE, type DegradationNotice } from "../core/integrity/degradation.ts";
+import { TOOL_CEILING_KINDS } from "../core/runtime/host-facts.ts";
+import { inventoryStateSurfaces } from "../core/state/surfaces.ts";
 import { INVALID_PARAMS, METHOD_NOT_FOUND, MCPError } from "./protocol.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceInt } from "./coerce.ts";
 import type { OutputSchema } from "./output-contract.ts";
@@ -289,7 +291,37 @@ async function toolVaultHealth(
     ok: payload.every((c) => c.ok),
     checks: payload,
     notices,
+    // Where this vault keeps its state, measured the same way and from
+    // the same value `o2b state status` renders. It rides `vault_health`
+    // rather than a tool of its own because the question it answers -
+    // "what is here, is it reachable, and what put it there" - is the
+    // question a caller already asked; a second tool would be a second
+    // place for the two answers to disagree. It is a sibling FIELD, not a
+    // contribution to `ok`: an absent surface is normal on a young vault
+    // and an unchecked one carries its own reason.
+    state_surfaces: inventoryStateSurfaces({
+      vault: ctx.vault,
+      env: process.env,
+      config: readConfigForStateSurfaces(ctx.configPath),
+    }),
   };
+}
+
+/**
+ * The machine config the state overrides are read from.
+ *
+ * An unreadable config resolves to the strict fallback - no overrides -
+ * rather than propagating, because this is a READER: refusing the whole
+ * health report over a config file it could not parse would remove the
+ * one surface that could have said so. The `checks` array already carries
+ * the config fault by name.
+ */
+function readConfigForStateSurfaces(configPath: string | null): Readonly<Record<string, string>> {
+  try {
+    return discoverConfig(configPath ?? undefined).data;
+  } catch {
+    return {};
+  }
 }
 
 async function toolArtifactGet(
@@ -338,6 +370,8 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
     "server_name",
     "static_tool_count",
     "available_tool_count",
+    "advertised_tool_count",
+    "host_ceiling",
     "available",
     "withheld",
   ],
@@ -346,6 +380,18 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
     server_name: { type: "string" },
     static_tool_count: { type: "integer" },
     available_tool_count: { type: "integer" },
+    advertised_tool_count: { type: "integer" },
+    // Every field but `kind` is nullable, and the shape vocabulary
+    // types a node with one `type` rather than a union - so those
+    // nodes declare presence and leave the kind to `kind`, which is
+    // the field that says which of them carry a value.
+    host_ceiling: {
+      type: "object",
+      required: ["target", "kind", "max_tools", "source", "reason", "within_ceiling"],
+      properties: {
+        kind: { type: "string", enum: TOOL_CEILING_KINDS },
+      },
+    },
     available: {
       type: "array",
       items: {
@@ -463,7 +509,8 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     ...SEARCH_TOOLS,
     {
       name: "vault_health",
-      description: "Run vault, config, and plugin manifest health checks.",
+      description:
+        "Run vault, config, and plugin manifest health checks, and report every state surface in the vault with its path, reachability, and the override that placed it.",
       inputSchema: {
         type: "object",
         properties: {

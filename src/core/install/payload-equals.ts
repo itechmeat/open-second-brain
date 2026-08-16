@@ -1,12 +1,25 @@
 import { buildPayload } from "./payload.ts";
+import { payloadForHost } from "./payload-host.ts";
 import type { InstallEnv, McpPayload, McpServerEntry } from "./types.ts";
+import type { InstallTargetId } from "../runtime/host-facts.ts";
 
-export function expectedPayloadFromEnv(env: InstallEnv): McpPayload {
-  return buildPayload({
-    vault: env.vault,
-    agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
-    timezone: env.env["VAULT_TIMEZONE"] ?? null,
-  });
+/**
+ * The payload `verify()` compares the disk against, rebuilt from the
+ * `InstallEnv` and the adapter's own target - the two things every
+ * adapter has on both the apply and the verify path. Nothing else may
+ * enter it: a dimension only one of the two paths can see would make a
+ * freshly applied install report drift against itself.
+ */
+export function expectedPayloadFromEnv(env: InstallEnv, target: InstallTargetId): McpPayload {
+  return payloadForHost(
+    target,
+    buildPayload({
+      vault: env.vault,
+      agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
+      timezone: env.env["VAULT_TIMEZONE"] ?? null,
+    }),
+    env,
+  );
 }
 
 /**
