@@ -75,6 +75,11 @@ function scoresKeyOf(schema: Schema): string | undefined {
   return undefined;
 }
 
+/** An argument name as these descriptions spell one: inside backticks. */
+function backticked(key: string): string {
+  return `\`${key}\``;
+}
+
 /** Every curated tool whose input schema accepts `match_quality`. */
 function pairingTools(): ToolDefinition[] {
   return buildToolTable("full").filter((tool) =>
@@ -154,6 +159,48 @@ test("every tool that accepts match_quality declares the pairing on its own scor
     expect(String(properties(schema)[scoresKey as string]?.["description"])).toContain(
       MATCH_QUALITY_ARG_NAME,
     );
+  }
+});
+
+test("no advertised prose sends a caller to the other tool's argument name", () => {
+  const tools = pairingTools();
+  // Every scores key in play, so "the other tool's name" is derived rather
+  // than written down. A third tool with a third spelling joins this set on
+  // its way in and is checked against the first two automatically.
+  const allScoresKeys = tools.map((tool) => scoresKeyOf(tool.inputSchema as Schema) as string);
+
+  for (const tool of tools) {
+    const schema = tool.inputSchema as Schema;
+    const ownKey = scoresKeyOf(schema) as string;
+    const quality = properties(schema)[MATCH_QUALITY_ARG_NAME] ?? {};
+    const qualityText = String(quality["description"]);
+
+    // The companion argument's description is the sentence a schema-driven
+    // client reads to learn WHICH argument to send alongside, and
+    // `additionalProperties: false` refuses the wrong one - so naming the
+    // other tool's key here hands the caller a rejected payload.
+    expect(
+      qualityText,
+      `${tool.name}'s ${MATCH_QUALITY_ARG_NAME} description does not name its own scores key ` +
+        `'${ownKey}'`,
+    ).toContain(backticked(ownKey));
+
+    // Backtick-delimited so the check is exact: `recall_scores` contains the
+    // bare substring "scores", and only the delimiters tell the two apart.
+    for (const foreign of allScoresKeys) {
+      if (foreign === ownKey) continue;
+      for (const [field, text] of [
+        ["description", tool.description],
+        [`${MATCH_QUALITY_ARG_NAME}.description`, qualityText],
+        [`${ownKey}.description`, String(properties(schema)[ownKey]?.["description"])],
+      ] as const) {
+        expect(
+          text,
+          `${tool.name}'s ${field} names '${foreign}', which is another tool's argument; ` +
+            `this tool spells it '${ownKey}' and refuses the other name`,
+        ).not.toContain(backticked(foreign));
+      }
+    }
   }
 });
 

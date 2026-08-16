@@ -469,10 +469,9 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                       'minimum': 0,
                                                       'maximum': 1,
                                                       'description': 'Absolute match quality in '
-                                                                     '[0,1]: the '
-                                                                     '`idf_weighted_coverage` a '
-                                                                     'search outcome reports. '
-                                                                     'Required with scores; the '
+                                                                     "[0,1]: a search outcome's "
+                                                                     '`idf_weighted_coverage`. '
+                                                                     'Required with `scores`; the '
                                                                      'adequacy level reads this, '
                                                                      'never a score.'}},
                      'required': ['prompt'],
@@ -566,10 +565,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                       'minimum': 0,
                                                       'maximum': 1,
                                                       'description': 'Absolute match quality in '
-                                                                     '[0,1]: the '
-                                                                     '`idf_weighted_coverage` a '
-                                                                     'search outcome reports. '
-                                                                     'Required with scores; the '
+                                                                     "[0,1]: a search outcome's "
+                                                                     '`idf_weighted_coverage`. '
+                                                                     'Required with '
+                                                                     '`recall_scores`; the '
                                                                      'adequacy level reads this, '
                                                                      'never a score.'},
                                     'telemetry': {'type': 'boolean',

@@ -55,7 +55,7 @@ import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
   MATCH_QUALITY_ARG_NAME,
-  MATCH_QUALITY_SCHEMA,
+  matchQualitySchema,
   RECALL_SCORES_SCHEMA,
   coerceAgentScope,
   coerceRecallAdequacyInput,
@@ -752,7 +752,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
         [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
-        [MATCH_QUALITY_ARG_NAME]: MATCH_QUALITY_SCHEMA,
+        [MATCH_QUALITY_ARG_NAME]: matchQualitySchema(RECALL_SCORES_ARG_NAME),
         telemetry: {
           type: "boolean",
           description:

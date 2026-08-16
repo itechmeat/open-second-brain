@@ -159,13 +159,33 @@ export const RECALL_SCORES_SCHEMA = Object.freeze({
     "Optional top-k recall scores; requires `match_quality`. Together they add an adequacy verdict: sufficient/proceed, weak/re_recall, insufficient/abstain.",
 });
 
-export const MATCH_QUALITY_SCHEMA = Object.freeze({
-  type: "number",
-  minimum: 0,
-  maximum: 1,
-  description:
-    "Absolute match quality in [0,1]: the `idf_weighted_coverage` a search outcome reports. Required with scores; the adequacy level reads this, never a score.",
-});
+/**
+ * The companion argument's fragment, parameterised for the same reason
+ * {@link recallAdequacyPairing} is.
+ *
+ * This description used to be a frozen constant naming "scores", which is
+ * the gate's spelling and not the context pack's. Prose is what a
+ * schema-driven client reads when it wants to know WHICH argument to send
+ * alongside, and `additionalProperties: false` refuses the wrong one - so a
+ * shared sentence naming one tool's key is the same defect as a pairing
+ * hard-keyed on it, one layer softer. Both now say the key of the tool they
+ * are attached to.
+ *
+ * The sentence is budgeted for the LONGEST key it will be handed:
+ * `PROPERTY_DESCRIPTION_MAX` is 160 and `registry-guard` grants no
+ * exemptions, so prose that fits under `scores` can still overflow under
+ * `recall_scores`. Six characters of key are six characters of budget.
+ */
+export function matchQualitySchema(scoresKey: string): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    type: "number",
+    minimum: 0,
+    maximum: 1,
+    description:
+      `Absolute match quality in [0,1]: a search outcome's \`idf_weighted_coverage\`. ` +
+      `Required with \`${scoresKey}\`; the adequacy level reads this, never a score.`,
+  });
+}
 
 /**
  * "Both or neither", said in the schema rather than only in the refusal.

@@ -53,7 +53,7 @@ import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import {
   AGENT_SCOPE_SCHEMA,
   MATCH_QUALITY_ARG_NAME,
-  MATCH_QUALITY_SCHEMA,
+  matchQualitySchema,
   RECALL_SCORES_SCHEMA,
   coerceAgentScope,
   coerceBoolOptional,
@@ -558,7 +558,7 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
       description: "Optional session correlation id recorded on the telemetry record.",
     },
     [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
-    [MATCH_QUALITY_ARG_NAME]: MATCH_QUALITY_SCHEMA,
+    [MATCH_QUALITY_ARG_NAME]: matchQualitySchema(RECALL_SCORES_ARG_NAME),
   },
   required: ["prompt"],
   // Both or neither, stated declaratively so a schema-driven client can
