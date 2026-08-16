@@ -87,10 +87,28 @@ export interface TranscriptRuntime {
   /**
    * Walk this runtime's store for transcript files that show activity
    * inside the half-open day window `[dayStartMs, dayEndMs)`, and report
-   * which emptiness produced an empty list. `home` is injectable for tests.
+   * which emptiness produced an empty list.
+   *
+   * `home` and `env` together are the {@link HostContext} the runtime's
+   * declared roots resolve against. Both are injectable and both default
+   * to this machine: the roots live in `src/core/runtime/host-facts.ts`
+   * and several of them are moved by an environment variable
+   * (`$CODEX_HOME`, `$GROK_HOME`), so a scanner that took only `home`
+   * could be pointed at a test fixture and still miss a relocated store
+   * on a real one.
    */
-  scan(dayStartMs: number, dayEndMs: number, home?: string): TranscriptScanResult;
-  collectDetail?(dayStartMs: number, dayEndMs: number, home?: string): TranscriptDetail | null;
+  scan(
+    dayStartMs: number,
+    dayEndMs: number,
+    home?: string,
+    env?: Readonly<Record<string, string | undefined>>,
+  ): TranscriptScanResult;
+  collectDetail?(
+    dayStartMs: number,
+    dayEndMs: number,
+    home?: string,
+    env?: Readonly<Record<string, string | undefined>>,
+  ): TranscriptDetail | null;
 }
 
 export interface TranscriptDetail {

@@ -149,6 +149,55 @@ export interface HostContext {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
+/**
+ * The runtimes whose session logs this build can LOCATE.
+ *
+ * Deliberately not {@link InstallTargetId} and deliberately not
+ * {@link SessionAdapterId}, because it is neither set:
+ *
+ *   - Claude Code is here and is not an install target. Open Second Brain
+ *     reaches it as a plugin rather than through `o2b install --target`,
+ *     yet `~/.claude/projects` is the largest transcript store on a
+ *     typical machine, and a discovery sweep that skipped it would miss
+ *     most of what it exists to find.
+ *   - Cursor is here and has no session adapter. Its `state.vscdb` is
+ *     locatable and unreadable by anything in `src/core/brain/sessions/`,
+ *     which is a coverage answer worth printing rather than a runtime
+ *     worth omitting.
+ *   - Hermes is a {@link SessionAdapterId} and is NOT here: this build
+ *     ships a parser for its format and knows no path at which that
+ *     format is written, so a root would be an invention.
+ *
+ * Closed and guarded because the value round-trips through disk: the
+ * import ledger records which runtime each imported log came from, and a
+ * ledger written by another release is a string until the guard says
+ * otherwise.
+ */
+export const SESSION_RUNTIME_ID = Object.freeze({
+  claudeCode: "claude-code",
+  codex: "codex",
+  cursor: "cursor",
+  grok: "grok",
+  opencode: "opencode",
+} as const);
+
+export type SessionRuntimeId = (typeof SESSION_RUNTIME_ID)[keyof typeof SESSION_RUNTIME_ID];
+
+/** The session runtimes, in the order a coverage report prints them. */
+export const SESSION_RUNTIME_IDS: ReadonlyArray<SessionRuntimeId> = Object.freeze([
+  SESSION_RUNTIME_ID.claudeCode,
+  SESSION_RUNTIME_ID.codex,
+  SESSION_RUNTIME_ID.cursor,
+  SESSION_RUNTIME_ID.grok,
+  SESSION_RUNTIME_ID.opencode,
+]);
+
+export function isSessionRuntimeId(value: unknown): value is SessionRuntimeId {
+  return (
+    typeof value === "string" && (SESSION_RUNTIME_IDS as ReadonlyArray<string>).includes(value)
+  );
+}
+
 /** Where one runtime keeps session logs, and what they are. */
 export interface SessionRootSpec {
   /** Stable slug, unique within its row; the handle a report prints. */
@@ -216,6 +265,18 @@ export interface RuntimeFacts {
   readonly toolProfile: string | null;
   /** The adapter that parses this runtime's transcripts, or `null`. */
   readonly sessionAdapter: SessionAdapterId | null;
+  /**
+   * Which {@link SESSION_ROOTS} entry this target's logs are, or `null`
+   * where it writes none.
+   *
+   * Declared rather than derived from the target id. Four of the five
+   * session runtimes happen to spell their id the same as their install
+   * target, and a join built on that coincidence would silently break the
+   * first time one of them did not - the two vocabularies are different
+   * sets on purpose, and Claude Code is already a member of one and not
+   * the other.
+   */
+  readonly sessionRuntime: SessionRuntimeId | null;
   readonly sessionRoots: ReadonlyArray<SessionRootSpec>;
   readonly hostProbe: HostProbeSpec | null;
 }
@@ -341,8 +402,46 @@ const OPENCODE_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
   }),
 ]);
 
+/**
+ * Claude Code keeps one `.jsonl` per session under a per-project
+ * directory whose name is the encoded working directory.
+ *
+ * Already walked by `src/core/discipline/transcripts/claude-code.ts` and
+ * by `src/core/brain/claude-memory-paths.ts`; declared here so the two
+ * subsystems stop knowing different halves of one fact.
+ */
+const CLAUDE_CODE_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
+  Object.freeze({
+    id: "claude-code-projects",
+    resolve: (ctx: HostContext) => join(ctx.home, ".claude", "projects"),
+    glob: "*/*.jsonl",
+    adapter: SESSION_ADAPTER_ID.claude,
+    format: "claude-code-transcript-jsonl",
+  }),
+]);
+
 /** No transcripts, no roots: an empty list is the stated answer. */
 const NO_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([]);
+
+/**
+ * Where every runtime this build can locate keeps its session logs.
+ *
+ * The ONE declaration. Both consumers read it: the discovery sweep
+ * (`src/core/brain/sessions/discover.ts`), which asks whether a file was
+ * ever imported, and the discipline transcript scanner
+ * (`src/core/discipline/transcripts/`), which asks whether a file was
+ * touched inside a day window. Two questions, one input, and before this
+ * table each carried its own copy of where that input lives - so
+ * relocating a runtime moved one consumer and not the other.
+ */
+export const SESSION_ROOTS: Readonly<Record<SessionRuntimeId, ReadonlyArray<SessionRootSpec>>> =
+  Object.freeze({
+    [SESSION_RUNTIME_ID.claudeCode]: CLAUDE_CODE_SESSION_ROOTS,
+    [SESSION_RUNTIME_ID.codex]: CODEX_SESSION_ROOTS,
+    [SESSION_RUNTIME_ID.cursor]: CURSOR_SESSION_ROOTS,
+    [SESSION_RUNTIME_ID.grok]: GROK_SESSION_ROOTS,
+    [SESSION_RUNTIME_ID.opencode]: OPENCODE_SESSION_ROOTS,
+  });
 
 /**
  * What this build knows about each runtime it installs into.
@@ -362,6 +461,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
   }),
@@ -377,7 +477,8 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: SESSION_ADAPTER_ID.codex,
-    sessionRoots: CODEX_SESSION_ROOTS,
+    sessionRuntime: SESSION_RUNTIME_ID.codex,
+    sessionRoots: SESSION_ROOTS[SESSION_RUNTIME_ID.codex],
     // `mcp list` and NOT `mcp list --json`: the shared probe reads the
     // first column of each output line, which is the name column here.
     // Under `--json` the name arrives as `"name": "open-second-brain"`,
@@ -403,6 +504,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: Object.freeze({
       bin: "copilot",
@@ -427,7 +529,8 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     // without any verb being withheld.
     toolProfile: "catalog",
     sessionAdapter: null,
-    sessionRoots: CURSOR_SESSION_ROOTS,
+    sessionRuntime: SESSION_RUNTIME_ID.cursor,
+    sessionRoots: SESSION_ROOTS[SESSION_RUNTIME_ID.cursor],
     hostProbe: null,
   }),
   [INSTALL_TARGET_ID.geminiCli]: Object.freeze({
@@ -441,6 +544,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
   }),
@@ -455,6 +559,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
   }),
@@ -469,7 +574,8 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: SESSION_ADAPTER_ID.grok,
-    sessionRoots: GROK_SESSION_ROOTS,
+    sessionRuntime: SESSION_RUNTIME_ID.grok,
+    sessionRoots: SESSION_ROOTS[SESSION_RUNTIME_ID.grok],
     hostProbe: null,
   }),
   [INSTALL_TARGET_ID.kiro]: Object.freeze({
@@ -483,6 +589,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
   }),
@@ -497,7 +604,8 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: SESSION_ADAPTER_ID.opencode,
-    sessionRoots: OPENCODE_SESSION_ROOTS,
+    sessionRuntime: SESSION_RUNTIME_ID.opencode,
+    sessionRoots: SESSION_ROOTS[SESSION_RUNTIME_ID.opencode],
     hostProbe: null,
   }),
   [INSTALL_TARGET_ID.pi]: Object.freeze({
@@ -511,6 +619,7 @@ export const RUNTIME_FACTS: Readonly<Record<InstallTargetId, RuntimeFacts>> = Ob
     }),
     toolProfile: null,
     sessionAdapter: null,
+    sessionRuntime: null,
     sessionRoots: NO_SESSION_ROOTS,
     hostProbe: null,
   }),
@@ -523,16 +632,35 @@ export function runtimeFactsFor(target: InstallTargetId): RuntimeFacts {
   return RUNTIME_FACTS[target];
 }
 
-/** `target`'s session roots against one concrete host, in declared order. */
-export function resolveSessionRoots(
-  target: InstallTargetId,
-  ctx: HostContext,
-): ReadonlyArray<ResolvedSessionRoot> {
-  return RUNTIME_FACTS[target].sessionRoots.map((root) => ({
+/** One declared root against one concrete host. */
+function resolveRoot(root: SessionRootSpec, ctx: HostContext): ResolvedSessionRoot {
+  return {
     id: root.id,
     path: root.resolve(ctx),
     glob: root.glob,
     adapter: root.adapter,
     format: root.format,
-  }));
+  };
+}
+
+/** `target`'s session roots against one concrete host, in declared order. */
+export function resolveSessionRoots(
+  target: InstallTargetId,
+  ctx: HostContext,
+): ReadonlyArray<ResolvedSessionRoot> {
+  return RUNTIME_FACTS[target].sessionRoots.map((root) => resolveRoot(root, ctx));
+}
+
+/**
+ * `runtime`'s session roots against one concrete host, in declared order.
+ *
+ * The runtime-keyed sibling of {@link resolveSessionRoots}, and the one
+ * the two sweeps use: neither of them starts from an install target, and
+ * Claude Code has no install target to start from.
+ */
+export function resolveSessionRootsFor(
+  runtime: SessionRuntimeId,
+  ctx: HostContext,
+): ReadonlyArray<ResolvedSessionRoot> {
+  return SESSION_ROOTS[runtime].map((root) => resolveRoot(root, ctx));
 }

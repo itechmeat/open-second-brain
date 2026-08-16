@@ -38,9 +38,11 @@ import {
   type ManifestEntry,
   type McpPayload,
   type McpServerEntry,
+  type SessionPathsResult,
   type UninstallResult,
   type VerifyResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 
 export interface JsonMcpAdapterSpec {
   /** The runtime this spec installs into; becomes `InstallAdapter.target`. */
@@ -413,6 +415,15 @@ export function createJsonMcpAdapter(spec: JsonMcpAdapterSpec): InstallAdapter {
       removed_keys.push(`${topKey}.${OSB_KEY_FULL}`, `${topKey}.${OSB_KEY_WRITER}`);
       if (!opts.dryRun) removeEntry(env.vault, spec.target);
       return { target: spec.target, removed_keys, removed_paths, skipped };
+    },
+
+    /**
+     * Read off `RUNTIME_FACTS`, not off the spec. Every JSON-MCP host's
+     * session store is already declared there, and a `sessionRoots` field
+     * on {@link JsonMcpAdapterSpec} would be a second place to spell it.
+     */
+    sessionPaths(env: InstallEnv): SessionPathsResult | null {
+      return sessionPathsFor(spec.target, env);
     },
 
     verify(env: InstallEnv): VerifyResult {

@@ -46,6 +46,11 @@ function fakeAdapter(
   return {
     target,
     label: target,
+    // The seam is required on every adapter; a double that answers
+    // `null` is a runtime with no session store, which is what a double is.
+    sessionPaths(): null {
+      return null;
+    },
     detect(): DetectResult {
       return { target, status, configPath: `/tmp/${target}-config`, notes: [] };
     },

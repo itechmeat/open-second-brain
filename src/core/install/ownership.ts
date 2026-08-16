@@ -380,6 +380,19 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "opens nothing, writes nothing, and resolves no path until a caller hands it a machine",
   ],
   [
+    "src/core/install/session-paths.ts",
+    "it answers `InstallAdapter.sessionPaths` by resolving the session roots `host-facts.ts` " +
+      "declares against the home and environment already carried on `InstallEnv`. The agent " +
+      "runtimes wrote those logs and own them; this module opens nothing and writes nothing",
+  ],
+  [
+    "src/core/brain/sessions/discover.ts",
+    "it READS the declared session roots of every agent runtime on this machine to hash what it " +
+      "finds. The only thing it writes is the import ledger, which lives inside the vault under " +
+      "the derived store and is enrolled as a row in the state-surface inventory; nothing it " +
+      "creates is left outside the vault",
+  ],
+  [
     "src/core/brain/gates/durability.ts",
     "the temp-directory tokens in it are a REFUSAL list: the gate matches a candidate vault path " +
       "against them so a vault on volatile storage is rejected before anything is written. It " +

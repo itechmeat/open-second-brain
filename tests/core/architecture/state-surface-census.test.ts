@@ -68,10 +68,10 @@ const STORE_DIR_IDENTIFIER = "DERIVED_STORE_DIR";
  * glob that stopped matching would sweep an empty set clean and every
  * assertion below would pass over nothing.
  */
-const SWEPT_POPULATION_SIZE = 19;
+const SWEPT_POPULATION_SIZE = 20;
 
 /** Declared surfaces today. Pinned for the same reason. */
-const DECLARED_SURFACE_COUNT = 39;
+const DECLARED_SURFACE_COUNT = 40;
 
 /** An exclusion reason has to be an argument, not a label. */
 const MIN_REASON_LENGTH = 80;

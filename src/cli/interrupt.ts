@@ -127,6 +127,11 @@ const YIELDS_TO_EVENT_LOOP: Readonly<Record<Operation, boolean>> = Object.freeze
   [OPERATION.architect]: false,
   [OPERATION.reindex]: true,
   [OPERATION.maintenance]: true,
+  // The session sweep is synchronous end to end: the walk and the hash
+  // pass are both sync fs calls, so a signal handler cannot run while it
+  // does. Leaving SIGINT alone keeps the keystroke lethal, which is the
+  // only way this pass can actually be stopped.
+  [OPERATION.sessions]: false,
 });
 
 /**

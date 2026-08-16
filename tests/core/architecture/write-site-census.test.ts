@@ -89,8 +89,20 @@ const VAULT_WRITER_FILES: ReadonlyArray<string> = Object.freeze([
   "src/core/fs-atomic.ts",
 ]);
 
-/** The vault path vocabulary. Importing it is addressing the vault. */
-const VAULT_PATHS_IMPORT_RE = /^[ \t]*import\b[^;]*?\bfrom\s*"\.[^"]*\bpaths\.ts"/m;
+/**
+ * The vault path vocabulary. Importing it is addressing the vault.
+ *
+ * The basename has to be the WHOLE last segment. `\bpaths\.ts` was too
+ * loose: `-` is a word boundary, so `./hardcoded-paths.ts`,
+ * `../claude-memory-paths.ts` and `../session-paths.ts` all matched, and
+ * the last of those pulled four install adapters into a population the
+ * docblock above explicitly says they are out of - they write outside
+ * the vault, and the rule is what keeps them out rather than twenty
+ * hand-written "not a vault" exclusions. Over-inclusion is the safe
+ * direction for a gate in general; here it defeats the gate's own stated
+ * boundary, so the segment separator is required.
+ */
+const VAULT_PATHS_IMPORT_RE = /^[ \t]*import\b[^;]*?\bfrom\s*"\.(?:[^"]*\/)?paths\.ts"/m;
 
 /**
  * Calls that put file bytes on disk, or remove, move, or re-permission a
@@ -861,8 +873,15 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
 /** Measured modules calling a filesystem write directly. An equality. */
 const DIRECT_WRITE_ROWS = 64;
 
-/** Measured modules reaching a write through a shared helper. An equality. */
-const SHARED_HELPER_ROWS = 94;
+/**
+ * Measured modules reaching a write through a shared helper. An equality.
+ *
+ * 94 -> 95: `src/core/brain/sessions/discover.ts` writes the session
+ * import ledger through `atomicWriteFileSync`. The regex tightening
+ * above moved no row - `hardcoded-paths.ts` and `claude-memory-paths.ts`
+ * were the only other loose matches and neither writes.
+ */
+const SHARED_HELPER_ROWS = 95;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

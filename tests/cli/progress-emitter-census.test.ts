@@ -223,6 +223,15 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     operation: OPERATION.reindex,
     stage: "plan",
   },
+  // The machine-wide session sweep. One stage, because the walk is three
+  // orders of magnitude cheaper than the hashing (4 ms against 3.0 s over
+  // 596 MB) and a rail that announced the walk would be reporting on
+  // nothing.
+  "core/brain/sessions/discover.ts#discoverSessions": {
+    entryPoint: "o2b brain import-session --status --progress",
+    operation: OPERATION.sessions,
+    stage: "hash",
+  },
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -238,6 +247,9 @@ let dreamConfig: string;
 /** A tiny project tree plus the vault its notes are written into. */
 let archProject: string;
 let archVault: string;
+/** A temp HOME holding a synthetic Claude Code store, plus a vault to sweep into. */
+let sessionHome: string;
+let sessionVault: string;
 
 /**
  * One run of one entry point, with `--progress` on.
@@ -271,6 +283,10 @@ const ENTRY_POINTS: Readonly<Record<string, () => Promise<RunResult>>> = Object.
     }),
   "o2b brain architect --progress": () =>
     runCli(["brain", "architect", archProject, "--vault", archVault, "--progress"]),
+  "o2b brain import-session --status --progress": () =>
+    runCli(["brain", "import-session", "--status", "--vault", sessionVault, "--progress"], {
+      env: { HOME: sessionHome },
+    }),
 });
 
 beforeAll(async () => {
@@ -315,6 +331,18 @@ beforeAll(async () => {
   writeFileSync(join(archProject, "src", "core", "engine.ts"), "// x\n");
   archVault = join(tmp, "arch-vault");
   mkdirSync(join(archVault, "Brain"), { recursive: true });
+
+  // A synthetic Claude Code store under a temp HOME. Three files, so the
+  // counter has a denominator and at least one `advanced` record to emit;
+  // the bytes are never parsed by the sweep, only hashed.
+  sessionHome = join(tmp, "session-home");
+  const projects = join(sessionHome, ".claude", "projects", "-srv-projects-demo");
+  mkdirSync(projects, { recursive: true });
+  for (const name of ["a", "b", "c"]) {
+    writeFileSync(join(projects, `${name}.jsonl`), `{"type":"user","uuid":"${name}"}\n`);
+  }
+  sessionVault = join(tmp, "session-vault");
+  mkdirSync(join(sessionVault, "Brain"), { recursive: true });
 });
 
 afterAll(() => {

@@ -10,7 +10,11 @@
  * field semantics.
  */
 
-import type { InstallTargetId } from "../runtime/host-facts.ts";
+import type {
+  InstallTargetId,
+  ResolvedSessionRoot,
+  SessionRuntimeId,
+} from "../runtime/host-facts.ts";
 
 // ---------- Constant sets (runtime checkable) ----------
 
@@ -132,10 +136,25 @@ export interface VerifyResult {
   readonly fix_hint: string | null;
 }
 
+/**
+ * Where one runtime keeps its session logs on the host `env` describes.
+ *
+ * The `format` this used to carry was a four-member union
+ * (`"claude-jsonl" | "codex-json" | "cursor-sqlite" | "unknown"`) that was
+ * the only occurrence of those literals anywhere in the tree and named
+ * none of the adapters `src/core/brain/sessions/` ships. It could not be
+ * joined to anything, which is what a union with no implementations and
+ * no call sites always turns out to mean. Each root now carries a real
+ * {@link SessionAdapterId} - or `null` beside a NAMED non-session format,
+ * for a store like Cursor's `state.vscdb` that this build can find and
+ * cannot parse.
+ */
 export interface SessionPathsResult {
-  readonly target: string;
-  readonly paths: ReadonlyArray<string>;
-  readonly format: "claude-jsonl" | "codex-json" | "cursor-sqlite" | "unknown";
+  readonly target: InstallTargetId;
+  /** Which {@link SESSION_ROOTS} entry these roots are. */
+  readonly runtime: SessionRuntimeId;
+  /** The declared roots, resolved against `env`, in declared order. */
+  readonly roots: ReadonlyArray<ResolvedSessionRoot>;
 }
 
 export interface InstallAdapter {
@@ -157,7 +176,18 @@ export interface InstallAdapter {
   apply(plan: InstallPlan, payload: McpPayload, env: InstallEnv, opts: ApplyOpts): ApplyResult;
   uninstall(env: InstallEnv, opts: ApplyOpts & { fromSnippet?: boolean }): UninstallResult;
   verify(env: InstallEnv): VerifyResult;
-  sessionPaths?(env: InstallEnv): SessionPathsResult | null;
+  /**
+   * Where this runtime keeps its session logs, or `null` when it keeps
+   * none.
+   *
+   * REQUIRED, and that is the whole point of it. As an optional member it
+   * had zero implementations and zero call sites for four releases, and
+   * an absent member cannot be told apart from a runtime with nothing to
+   * say. `null` is the stated answer for `generic`, `aider` and `pi`;
+   * every implementation reads {@link SESSION_ROOTS} through
+   * `sessionPathsFor` rather than knowing its own paths.
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null;
 }
 
 // ---------- Errors ----------

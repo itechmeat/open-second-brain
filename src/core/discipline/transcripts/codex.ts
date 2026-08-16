@@ -1,45 +1,40 @@
 /**
  * Codex session-transcript paths for the discipline report.
  *
- * Codex stores per-session JSON files under `~/.codex/`. The exact
- * subdirectory has moved between CLI releases (`sessions/`, `.tmp/`,
- * etc.); we walk every immediate subdirectory of `~/.codex/` and look
- * for `.json` files whose mtime falls in the day window.
+ * Codex stores per-session JSON files under `$CODEX_HOME` (default
+ * `~/.codex`), and the exact subdirectory has moved between CLI releases
+ * (`sessions/`, `session/`, `history/`, `.tmp/`). That list used to be
+ * spelled here AND in `src/core/runtime/host-facts.ts`; it is now
+ * declared once there and read from here. What stays local is this
+ * scanner's own question - which `.json` files were TOUCHED inside the
+ * report's local day, three levels deep - and the `TRANSCRIPT_SCAN`
+ * vocabulary that answers which emptiness produced an empty list.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+import { resolveSessionRootsFor, SESSION_RUNTIME_ID } from "../../runtime/host-facts.ts";
 import {
   classifyTranscriptScan,
   type TranscriptRuntime,
   type TranscriptScanResult,
 } from "./types.ts";
 
-/** Subdirectories of `~/.codex/` that have held session files across releases. */
-const CANDIDATE_SUBDIRS: ReadonlyArray<string> = Object.freeze([
-  "sessions",
-  "session",
-  "history",
-  ".tmp",
-]);
-
 const MAX_DEPTH = 3;
 
 export const codexTranscript: TranscriptRuntime = {
   runtime: "codex",
   agentHint: "codex-vps-agent",
-  scan(dayStartMs, dayEndMs, home = homedir()): TranscriptScanResult {
-    const base = join(home, ".codex");
+  scan(dayStartMs, dayEndMs, home = homedir(), env = process.env): TranscriptScanResult {
     const files: string[] = [];
     const unreadable: string[] = [];
     let rootsPresent = false;
-    for (const sub of CANDIDATE_SUBDIRS) {
-      const dir = join(base, sub);
-      if (!existsSync(dir)) continue;
+    for (const root of resolveSessionRootsFor(SESSION_RUNTIME_ID.codex, { home, env })) {
+      if (!existsSync(root.path)) continue;
       rootsPresent = true;
-      pushJsonInRange(dir, dayStartMs, dayEndMs, files, unreadable, MAX_DEPTH);
+      pushJsonInRange(root.path, dayStartMs, dayEndMs, files, unreadable, MAX_DEPTH);
     }
     return classifyTranscriptScan(rootsPresent, files, unreadable);
   },

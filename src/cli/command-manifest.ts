@@ -270,7 +270,30 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("agent", "string"),
           flag("json", "boolean"),
         ]),
-        command("import-session", "Replay registered agent sessions"),
+        // Every flag the parser accepts, following the `o2b install`
+        // precedent from earlier in this release: advertising a narrower
+        // surface than the parser takes is the discoverability dead end
+        // `manifest-completeness.test.ts` exists to prevent, and this
+        // verb declared none of the thirteen it already parsed.
+        command("import-session", "Replay registered agent sessions", [
+          flag("vault", "string"),
+          flag("format", "string"),
+          flag("since", "string"),
+          flag("dry-run", "boolean"),
+          flag("agent", "string"),
+          flag("recall", "boolean"),
+          flag("recall-session-id", "string"),
+          flag("recall-summary-group-size", "string"),
+          flag("ingest-scope", "string"),
+          flag("filter-role", "string-array"),
+          flag("filter-text", "string"),
+          flag("preserve-event-time", "boolean"),
+          flag("discover", "boolean"),
+          flag("status", "boolean"),
+          flag("all", "boolean"),
+          flag("progress", "boolean"),
+          flag("json", "boolean"),
+        ]),
         command("handoff", "Write an operator-readable session handoff note"),
         command("intention", "Manage scoped current-intention chains"),
         command("project", "Link project directories to their owning vault"),

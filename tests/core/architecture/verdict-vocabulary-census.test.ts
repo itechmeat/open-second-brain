@@ -371,7 +371,10 @@ import {
   INSTALL_TARGET_ID,
   INSTALL_TARGET_IDS,
   isInstallTargetId,
+  isSessionRuntimeId,
   isToolCeilingKind,
+  SESSION_RUNTIME_ID,
+  SESSION_RUNTIME_IDS,
   TOOL_CEILING_KIND,
   TOOL_CEILING_KINDS,
 } from "../../../src/core/runtime/host-facts.ts";
@@ -1121,6 +1124,18 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isInstallTargetId,
   },
   {
+    // U9. The runtimes whose session logs this build can LOCATE. Neither
+    // the install-target set nor the session-adapter set: Claude Code is
+    // not installable and writes the largest transcript store on a
+    // typical machine, Cursor is locatable and unparsable, and Hermes is
+    // parsable at no path this build knows. The value round-trips through
+    // the import ledger on disk, which is what the guard is for.
+    name: "SESSION_RUNTIME_ID",
+    values: SESSION_RUNTIME_ID,
+    members: SESSION_RUNTIME_IDS,
+    guard: isSessionRuntimeId,
+  },
+  {
     // U9. What this build can say about one host's per-workspace MCP tool
     // limit. `unknown` and `unbounded` are separate members and that
     // separation IS the unit: collapsing them would let a host nobody
@@ -1451,7 +1466,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 70;
+const VOCABULARY_POPULATION = 71;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

@@ -48,6 +48,14 @@ import { discoverConfig } from "../config.ts";
  *     (`interruptIsObservable` in `src/cli/interrupt.ts`), because the
  *     lane awaits between tasks and so is the level at which a Ctrl-C
  *     can actually be seen. That is its one producer.
+ *
+ * `sessions` is the machine-wide session sweep
+ * (`brain/sessions/discover.ts`). It is the one member whose cost is
+ * dominated by bytes rather than by candidates: measured on a store of
+ * 1227 transcripts totalling 596 MB, one sweep is 3.1 s warm and 6.0 s
+ * cold, of which the walk is 4 ms and the hashing is everything else. It
+ * earns a deadline for the same reason a reindex does - the input is
+ * unbounded and lives on somebody else's disk.
  */
 export const OPERATION = Object.freeze({
   dream: "dream",
@@ -56,6 +64,7 @@ export const OPERATION = Object.freeze({
   clusters: "clusters",
   maintenance: "maintenance",
   architect: "architect",
+  sessions: "sessions",
 } as const);
 
 export type Operation = (typeof OPERATION)[keyof typeof OPERATION];
@@ -68,6 +77,7 @@ export const OPERATIONS: ReadonlyArray<Operation> = Object.freeze([
   OPERATION.clusters,
   OPERATION.maintenance,
   OPERATION.architect,
+  OPERATION.sessions,
 ]);
 
 /**

@@ -36,6 +36,7 @@ import {
 } from "../../../src/core/brain/paths.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
 import { manifestPath as ingestManifestPath } from "../../../src/core/brain/ingest/content-manifest.ts";
+import { sessionLedgerPath } from "../../../src/core/brain/sessions/discover.ts";
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
 import { manifestPath as installManifestPath } from "../../../src/core/install/manifest.ts";
 import { receiptsDir } from "../../../src/core/brain/decisions/receipts.ts";
@@ -160,6 +161,7 @@ describe("each row is bound to the resolver that owns it", () => {
     expect(row("ingest_checkpoints").derive(vault, null)).toBe(
       dirname(checkpointPath(vault, "0f1e2d3c")),
     );
+    expect(row("session_import_ledger").derive(vault, null)).toBe(sessionLedgerPath(vault));
     expect(row("install_manifest").derive(vault, null)).toBe(installManifestPath(vault));
     expect(row("hook_audit").derive(vault, null)).toBe(hookAuditDir(vault));
     expect(row("hook_session_state").derive(vault, null)).toBe(

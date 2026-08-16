@@ -79,7 +79,9 @@ import {
   type McpServerEntry,
   type UninstallResult,
   type VerifyResult,
+  type SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 
 const TARGET = INSTALL_TARGET_ID.codex;
 const LABEL = "Codex CLI";
@@ -486,6 +488,14 @@ export const codexAdapter: InstallAdapter = {
       details: [`${path}: both OSB tables match the canonical payload (${handshakeNote(probe)})`],
       fix_hint: null,
     };
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `Codex has moved its rollout files between four subdirectories of $CODEX_HOME across releases; all four are declared.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

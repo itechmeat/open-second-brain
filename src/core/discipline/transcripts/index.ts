@@ -32,6 +32,13 @@ export interface CollectTranscriptOpts {
   readonly dayStartMs: number;
   readonly dayEndMs: number;
   readonly home?: string;
+  /**
+   * The environment the declared roots resolve against. Carried beside
+   * `home` because several roots are moved by a variable rather than by
+   * the home directory (`$CODEX_HOME`, `$GROK_HOME`), and a caller that
+   * could only inject `home` would silently miss a relocated store.
+   */
+  readonly env?: Readonly<Record<string, string | undefined>>;
   readonly runtimes?: ReadonlyArray<TranscriptRuntime>;
 }
 
@@ -49,7 +56,7 @@ export function collectTranscriptActivity(opts: CollectTranscriptOpts): Transcri
   for (const r of runtimes) {
     let scan;
     try {
-      scan = r.scan(opts.dayStartMs, opts.dayEndMs, opts.home);
+      scan = r.scan(opts.dayStartMs, opts.dayEndMs, opts.home, opts.env);
     } catch (err) {
       scan = {
         state: TRANSCRIPT_SCAN.unreadable,
@@ -59,7 +66,7 @@ export function collectTranscriptActivity(opts: CollectTranscriptOpts): Transcri
     }
     let detail = null;
     try {
-      detail = r.collectDetail?.(opts.dayStartMs, opts.dayEndMs, opts.home) ?? null;
+      detail = r.collectDetail?.(opts.dayStartMs, opts.dayEndMs, opts.home, opts.env) ?? null;
     } catch {
       // The detail pass is an enrichment of a count that already stands; its
       // failure is reported by the scan state, not by losing the count.

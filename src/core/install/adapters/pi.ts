@@ -41,7 +41,9 @@ import {
   type McpPayload,
   type UninstallResult,
   type VerifyResult,
+  type SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
 import { defaultRegistry } from "../registry.ts";
 
@@ -242,6 +244,14 @@ export const piAdapter: InstallAdapter = {
       details: [`${path} → ${linkTarget}`],
       fix_hint: null,
     };
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `Pi is installed as a skill symlink and keeps no transcript store, so the declaration is empty and the answer is null.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

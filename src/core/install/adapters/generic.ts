@@ -29,7 +29,9 @@ import type {
   McpServerEntry,
   UninstallResult,
   VerifyResult,
+  SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 import { defaultRegistry } from "../registry.ts";
 
 const TARGET = "generic";
@@ -166,6 +168,14 @@ export const genericAdapter: InstallAdapter = {
       ],
       fix_hint: null,
     };
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `The generic target prints a payload for a host it was never told the name of, so there is no store to name and the answer is null.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

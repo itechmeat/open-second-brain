@@ -43,7 +43,9 @@ import {
   type McpPayload,
   type UninstallResult,
   type VerifyResult,
+  type SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 import { defaultRegistry } from "../registry.ts";
 // The sidecar snapshot logic is shared with the live session-bracketing
 // wrapper (E1) so the static and wrapped paths render byte-identical sidecars.
@@ -304,6 +306,14 @@ export const aiderAdapter: InstallAdapter = {
       details: [`${conf}: managed block present; sidecar ok`],
       fix_hint: null,
     };
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `aider is wired through a managed YAML block and a sidecar context file and writes no transcript store, so the declaration is empty and the answer is null.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

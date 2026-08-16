@@ -55,7 +55,9 @@ import {
   type McpServerEntry,
   type UninstallResult,
   type VerifyResult,
+  type SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 
 const TARGET = INSTALL_TARGET_ID.copilotCli;
 const LABEL = "GitHub Copilot CLI";
@@ -501,6 +503,14 @@ export const copilotCliAdapter: InstallAdapter = {
         fix_hint: "o2b install --target copilot-cli --apply",
       };
     }
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `GitHub Copilot CLI keeps no transcript store this build can locate, so the declaration is empty and the answer is null.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

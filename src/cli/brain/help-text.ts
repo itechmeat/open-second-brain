@@ -678,6 +678,8 @@ export const VERB_HELP: Record<string, string> = {
     "                                [--ingest-scope <label>] [--filter-role <role> ...] [--filter-text <substring>]\n" +
     "                                [--preserve-event-time]\n" +
     "                                [--recall-session-id <id>] [--recall-summary-group-size <n>] [--json]\n" +
+    "       o2b brain import-session --status [--vault <vault>] [--progress] [--json]\n" +
+    "       o2b brain import-session --discover [--all] [--vault <vault>] [--progress] [--json]\n" +
     "Extract signals from a registered agent session .jsonl file (or\n" +
     "directory of .jsonl files). Two extraction paths run in parallel:\n" +
     "@osb markers in user/assistant messages, and replay of brain_feedback\n" +
@@ -689,7 +691,15 @@ export const VERB_HELP: Record<string, string> = {
     "import wall-clock, so backfilling an old log stays historically\n" +
     "faithful. Turns with an absent/unparseable/future timestamp fall back\n" +
     "to now.\n" +
-    "Autodetect failure exits 2 — pass --format to override.\n",
+    "Autodetect failure exits 2 — pass --format to override.\n" +
+    "--status sweeps the session roots this build declares and reports, per\n" +
+    "runtime, how many logs were found, how many are already imported, and\n" +
+    "the gap between them. --discover lists the gap without importing it;\n" +
+    "--discover --all imports it. Coverage is keyed by content hash in\n" +
+    "<vault>/.open-second-brain/session-import-ledger.json, so a log whose\n" +
+    "bytes have not changed is reported as imported without being re-parsed.\n" +
+    "A <path> and --discover/--status are mutually exclusive and refuse by\n" +
+    "name; --all on its own does the same.\n",
   merge:
     "usage: o2b brain merge <keep-pref-id> <drop-pref-id>\n" +
     "                       [--dry-run] [--force] [--vault <path>] [--json]\n" +

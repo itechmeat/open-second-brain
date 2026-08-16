@@ -41,7 +41,9 @@ import type {
   McpPayload,
   UninstallResult,
   VerifyResult,
+  SessionPathsResult,
 } from "../types.ts";
+import { sessionPathsFor } from "../session-paths.ts";
 
 const TARGET: InstallTargetId = "grok";
 const LABEL = "Grok Build";
@@ -218,6 +220,14 @@ export const grokAdapter = {
 
     if (!opts.dryRun && skipped.length === 0) removeEntry(env.vault, TARGET);
     return { target: TARGET, removed_keys: removedKeys, removed_paths: removedPaths, skipped };
+  },
+
+  /**
+   * Where this runtime keeps session logs, from the one declaration.
+   * `Grok persists one ACP update stream per session under $GROK_HOME/sessions/<encoded-cwd>/<id>/.`
+   */
+  sessionPaths(env: InstallEnv): SessionPathsResult | null {
+    return sessionPathsFor(TARGET, env);
   },
 };
 

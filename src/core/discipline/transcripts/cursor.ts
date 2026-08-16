@@ -2,11 +2,11 @@
  * Cursor session-transcript paths for the discipline report.
  *
  * Cursor stores per-workspace chat history in `state.vscdb` SQLite
- * files. We probe both the Linux layout
- * (`~/.config/Cursor/User/workspaceStorage/<hash>/state.vscdb`) and
- * the macOS layout (under `~/Library/Application Support/Cursor/`).
- * collect() remains the mtime probe for backward compat; collectDetail()
- * does a deeper SQLite parse when bun:sqlite is available.
+ * files, under one of three layouts different builds have used. Those
+ * three used to be listed here; they are declared once in
+ * `src/core/runtime/host-facts.ts` and read from there. What stays local
+ * is this scanner's own question - which databases were TOUCHED inside
+ * the report's local day - and the deeper `collectDetail` parse.
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
@@ -14,25 +14,25 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 import {
+  resolveSessionRootsFor,
+  SESSION_RUNTIME_ID,
+  type HostContext,
+} from "../../runtime/host-facts.ts";
+import {
   classifyTranscriptScan,
   type TranscriptDetail,
   type TranscriptRuntime,
   type TranscriptScanResult,
 } from "./types.ts";
 
-/** Every layout a Cursor build has used for per-workspace storage. */
-function workspaceStorageRoots(home: string): ReadonlyArray<string> {
-  return [
-    join(home, ".config", "Cursor", "User", "workspaceStorage"),
-    join(home, "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
-    // macOS XDG-style fallback used by some Cursor builds
-    join(home, ".cursor", "workspaceStorage"),
-  ];
+/** Every layout a Cursor build has used, from the one declaration. */
+function workspaceStorageRoots(ctx: HostContext): ReadonlyArray<string> {
+  return resolveSessionRootsFor(SESSION_RUNTIME_ID.cursor, ctx).map((root) => root.path);
 }
 
-function findDatabases(home: string): string[] {
+function findDatabases(ctx: HostContext): string[] {
   const out: string[] = [];
-  for (const root of workspaceStorageRoots(home)) {
+  for (const root of workspaceStorageRoots(ctx)) {
     if (!existsSync(root)) continue;
     let dirs: import("node:fs").Dirent[];
     try {
@@ -123,11 +123,11 @@ function queryCursorDb(
 export const cursorTranscript: TranscriptRuntime = {
   runtime: "cursor",
   agentHint: "cursor-vps-agent",
-  scan(dayStartMs, dayEndMs, home = homedir()): TranscriptScanResult {
+  scan(dayStartMs, dayEndMs, home = homedir(), env = process.env): TranscriptScanResult {
     const files: string[] = [];
     const unreadable: string[] = [];
     let rootsPresent = false;
-    for (const root of workspaceStorageRoots(home)) {
+    for (const root of workspaceStorageRoots({ home, env })) {
       if (!existsSync(root)) continue;
       rootsPresent = true;
       let dirs: import("node:fs").Dirent[];
@@ -151,8 +151,13 @@ export const cursorTranscript: TranscriptRuntime = {
     }
     return classifyTranscriptScan(rootsPresent, files, unreadable);
   },
-  collectDetail(dayStartMs, dayEndMs, home = homedir()): TranscriptDetail | null {
-    const dbs = findDatabases(home);
+  collectDetail(
+    dayStartMs,
+    dayEndMs,
+    home = homedir(),
+    env = process.env,
+  ): TranscriptDetail | null {
+    const dbs = findDatabases({ home, env });
     let totalSessions = 0;
     let totalMessages = 0;
 

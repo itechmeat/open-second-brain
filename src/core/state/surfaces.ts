@@ -97,6 +97,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   secretCustody: "secret_custody",
   ingestContentManifest: "ingest_content_manifest",
   ingestCheckpoints: "ingest_checkpoints",
+  sessionImportLedger: "session_import_ledger",
   installManifest: "install_manifest",
   protectManifest: "protect_manifest",
   maintenanceLease: "maintenance_lease",
@@ -244,6 +245,7 @@ const WRITER_LOCK_SUFFIX = ".lock";
 const SECRETS_DIR = "secrets";
 const INGEST_MANIFEST_FILE = "ingest-manifest.json";
 const INGEST_CHECKPOINT_DIR = "ingest-checkpoints";
+const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
 const MAINTENANCE_LEASE_FILE = "maintenance.sqlite";
@@ -406,6 +408,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "One resume point per ingest plan, so an interrupted batch continues rather than restarts. " +
       "`OSB_INGEST_NO_CHECKPOINT` suppresses writing them; it does not move them.",
     sources: ["src/core/brain/ingest/checkpoint.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.sessionImportLedger,
+    label: "session import ledger",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(SESSION_LEDGER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "One content digest per agent session log this vault has imported, keyed by its absolute " +
+      "path on this machine, so `o2b brain import-session --status` can say what was found and " +
+      "what is outstanding without re-parsing anything. Deleting it reports every already- " +
+      "imported log as a gap; re-importing them is safe but pays the full parse again.",
+    sources: ["src/core/brain/sessions/discover.ts"],
   },
   {
     id: STATE_SURFACE_ID.installManifest,
