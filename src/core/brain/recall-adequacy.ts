@@ -48,21 +48,37 @@ export interface RecallAdequacyThresholds {
  * The level is decided by {@link matchQuality} and never by
  * {@link scores}. It used to be decided by the top score, and that could
  * not work: the keyword lane is min-max normalised inside the candidate
- * set, so the top row of any non-empty recall is pinned at the configured
- * `keywordWeight` - shipped at 0.6, which is exactly
- * {@link DEFAULT_RECALL_ADEQUACY_THRESHOLDS}.sufficient. Every keyword
- * recall in the product graded `sufficient / proceed`, `weak` and
- * `insufficient` were unreachable, and a hundredth of a point on either
- * constant would have inverted the verdict for every query at once.
+ * set, so the top row of any recall with a non-empty keyword lane sits at
+ * or above the configured `keywordWeight` whatever it matched -
+ * `DEFAULT_KEYWORD_WEIGHT`, shipped at 0.6, which is exactly
+ * {@link DEFAULT_RECALL_ADEQUACY_THRESHOLDS}.sufficient, and measured at
+ * 0.65 on a freshly written keyword-only vault once the additive boost
+ * layers are on top. Every keyword recall in the product graded
+ * `sufficient / proceed`, `weak` and `insufficient` were unreachable, and
+ * a hundredth of a point on either constant would have inverted the
+ * verdict for every query at once.
  *
  * `scores` is still read, for the two things it can honestly answer: how
  * many usable results there were, and what their spread was.
  */
 export interface RecallAdequacyInput {
   /**
-   * Absolute, pool-independent match quality in `[0,1]` - the share of the
-   * query's IDF mass the retrieved material covers
-   * (`SearchOutcome.idfWeightedCoverage`).
+   * Absolute match quality in `[0,1]` - the share of the query's IDF mass
+   * the retrieved material covers (`SearchOutcome.idfWeightedCoverage`).
+   *
+   * Absolute in the sense that separates it from a score: it does not
+   * depend on rank position, lane magnitude or fusion mode, so two
+   * retrievals for one query are comparable. It is NOT independent of
+   * which rows were delivered - see that field's docblock, which used to
+   * claim it was.
+   *
+   * A `number`, never null, and this is a boundary rather than an
+   * oversight: the producer reports `null` for a query it could not
+   * weigh, and the surfaces that reach this function take the value from
+   * a CALLER (`match_quality`, `src/mcp/coerce.ts`), which supplies a
+   * measured number or omits the pair entirely and gets no verdict. A
+   * caller holding an unmeasurable quality must omit it; forwarding a
+   * substitute number is the exact move this release removed.
    */
   readonly matchQuality: number;
   /** Per-result relevance scores: the count and the mean, never the level. */

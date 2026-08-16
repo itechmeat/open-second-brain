@@ -110,6 +110,15 @@ import {
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 
 /**
+ * Where an operator is told what leaves the machine unscanned.
+ *
+ * The registry's `reason` fields are the decision record and live in
+ * `src/`; this file is the surface someone configuring an endpoint
+ * actually opens.
+ */
+const OPERATOR_EGRESS_DISCLOSURE_DOC = "docs/cli-reference.md";
+
+/**
  * Flag names that name a destination the operator chose. `target` is
  * deliberately absent: `o2b install --target` names an ADAPTER, not a
  * path, and admitting it would put a name-selector in a destination
@@ -239,10 +248,29 @@ function countMatches(text: string, re: RegExp): number {
   return (text.match(re) ?? []).length;
 }
 
+/** One file as the census reads it: a repo-relative path and its bytes. */
+interface CensusFile {
+  readonly path: string;
+  readonly text: string;
+}
+
+/**
+ * The census itself, over whatever tree it is handed.
+ *
+ * Taking the tree as an ARGUMENT is what makes the synthetic controls
+ * below able to fail. They used to append a fabricated path string to an
+ * already-derived `POPULATION`, so the synthetic module's SOURCE never
+ * reached this rule set: replacing the derivation with `[]` left both
+ * "must be declared" tests green over a fully blinded census. Feeding the
+ * intruder's real text through here is the shape
+ * `write-site-census.test.ts` already uses for the same purpose.
+ */
+function census(files: ReadonlyArray<CensusFile>): ReadonlyArray<string> {
+  return files.filter((f) => declaresDestination(f.text)).map((f) => f.path);
+}
+
 const SOURCE_TREE = readSourceTree();
-const POPULATION: ReadonlyArray<string> = SOURCE_TREE.filter((f) =>
-  declaresDestination(f.text),
-).map((f) => f.path);
+const POPULATION: ReadonlyArray<string> = census(SOURCE_TREE);
 
 const ENTRIES: ReadonlyArray<EgressSite> = Object.values(EGRESS_SITES);
 const DECLARED_MODULES: ReadonlySet<string> = new Set(ENTRIES.map((e) => e.module));
@@ -331,6 +359,21 @@ describe("egress site census", () => {
     }
   });
 
+  test("every unscanned network egress is disclosed where an operator reads", () => {
+    // The registry is a source file. An operator deciding whether to point
+    // an embedding endpoint at a vendor reads the CLI reference, and four
+    // of the five unscanned network payloads appeared nowhere outside
+    // `src/`. Keyed on the entry ID rather than on prose, so a new
+    // declaration is undisclosed until someone writes the disclosure.
+    const doc = readFileSync(join(REPO_ROOT, OPERATOR_EGRESS_DISCLOSURE_DOC), "utf8");
+    const undisclosed = ENTRIES.filter(
+      (entry) => entry.redaction === EGRESS_REDACTION.unscannedNetworkPayload,
+    )
+      .filter((entry) => !doc.includes(entry.id))
+      .map((entry) => entry.id);
+    expect(undisclosed).toEqual([]);
+  });
+
   test("ids and module paths are unique", () => {
     expect(new Set(ENTRIES.map((e) => e.id)).size).toBe(ENTRIES.length);
     expect(DECLARED_MODULES.size).toBe(ENTRIES.length);
@@ -344,6 +387,19 @@ describe("egress site census", () => {
 });
 
 describe("the census cannot pass by finding nothing", () => {
+  /**
+   * Run the REAL census over the real tree plus one synthetic module, and
+   * report which of the resulting population nobody declared.
+   *
+   * The intruder arrives as a path AND its source, so the derivation is
+   * what puts it in population. A control that appended the path alone
+   * asserted a set operation over a constant and passed with the
+   * derivation blinded to `[]`.
+   */
+  function unlistedWith(intruder: CensusFile): ReadonlyArray<string> {
+    return census([...SOURCE_TREE, intruder]).filter((path) => !DECLARED_MODULES.has(path));
+  }
+
   test("the detector still sees the sites it measures", () => {
     // A regex that stopped matching would report a clean sweep over an
     // empty set. Floors sit just under the live measurement, not an order
@@ -421,10 +477,12 @@ describe("the census cannot pass by finding nothing", () => {
    * class this census exists to catch, one level up.
    */
   test("a synthetic --export module is in population and must be declared", () => {
-    const synthetic = 'export: { type: "string" },\n  atomicWriteFileSync(dest, body);\n';
-    expect(declaresFileDestination(synthetic)).toBe(true);
-    const intruder = "src/cli/brain/verbs/synthetic-export-flag.ts";
-    expect([...POPULATION, intruder].filter((p) => !DECLARED_MODULES.has(p))).toEqual([intruder]);
+    const intruder: CensusFile = {
+      path: "src/cli/brain/verbs/synthetic-export-flag.ts",
+      text: 'export: { type: "string" },\n  atomicWriteFileSync(dest, body);\n',
+    };
+    expect(declaresFileDestination(intruder.text)).toBe(true);
+    expect(unlistedWith(intruder)).toEqual([intruder.path]);
   });
 
   /**
@@ -455,14 +513,16 @@ describe("the census cannot pass by finding nothing", () => {
   }
 
   test("a synthetic network-destination module must be declared too", () => {
-    const synthetic =
-      "const response = await fetch(endpoint.url, {\n" +
-      '  method: "POST",\n' +
-      "  body: JSON.stringify({ input: chunkBodies }),\n" +
-      "});\n";
-    expect(declaresDestination(synthetic)).toBe(true);
-    const intruder = "src/core/search/embeddings/synthetic-provider.ts";
-    expect([...POPULATION, intruder].filter((p) => !DECLARED_MODULES.has(p))).toEqual([intruder]);
+    const intruder: CensusFile = {
+      path: "src/core/search/embeddings/synthetic-provider.ts",
+      text:
+        "const response = await fetch(endpoint.url, {\n" +
+        '  method: "POST",\n' +
+        "  body: JSON.stringify({ input: chunkBodies }),\n" +
+        "});\n",
+    };
+    expect(declaresDestination(intruder.text)).toBe(true);
+    expect(unlistedWith(intruder)).toEqual([intruder.path]);
   });
 
   test("reading a URL is not egress", () => {
@@ -539,8 +599,10 @@ describe("the census cannot pass by finding nothing", () => {
   });
 
   test("an undeclared module in population is reported by name", () => {
-    const intruder = "src/cli/brain/verbs/synthetic-export.ts";
-    const population = [...POPULATION, intruder];
-    expect(population.filter((path) => !DECLARED_MODULES.has(path))).toEqual([intruder]);
+    const intruder: CensusFile = {
+      path: "src/cli/brain/verbs/synthetic-export.ts",
+      text: '  out: { type: "string" },\n  writeFileSync(out, body, "utf8");\n',
+    };
+    expect(unlistedWith(intruder)).toEqual([intruder.path]);
   });
 });

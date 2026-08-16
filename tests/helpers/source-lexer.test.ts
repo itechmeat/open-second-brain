@@ -41,6 +41,22 @@ const DIVISIONS =
 /** A statement no rule may blank, appended after each hazard above. */
 const TAIL = "export const AFTER_THE_HAZARD = 1;\n";
 
+/**
+ * An astral character in a docblock, which shipped source really carries
+ * (`src/core/discipline/render.ts`).
+ *
+ * It is one code POINT and two UTF-16 code UNITS, and the scanner indexes
+ * code units (`text[i]`, `text.length`). A view built out of code points
+ * is therefore one slot SHORTER than the source for every astral
+ * character before the current offset, so every blanking window past it
+ * lands early and the offsets a census reads back out of the original
+ * text point at the wrong character. The statement after the comment is
+ * what makes that visible: it sits one slot early in the view, and a
+ * census that took its position from the view and its text from the
+ * source would read the character before it.
+ */
+const ASTRAL_IN_A_COMMENT = "/** \u{1D54F} astral. */\nconst after = 1;\n";
+
 /** Every input below, so length and newline preservation is asserted once. */
 const ALL_INPUTS: ReadonlyArray<readonly [string, string]> = Object.freeze([
   ["a regex holding a backtick", REGEX_WITH_BACKTICK + TAIL],
@@ -53,6 +69,8 @@ const ALL_INPUTS: ReadonlyArray<readonly [string, string]> = Object.freeze([
   ["an escaped backslash", 'const p = "ends with a backslash \\\\";\nconst q = 1;\n' + TAIL],
   ["an import specifier", 'import { writeFileSync } from "node:fs";\n' + TAIL],
   ["an unterminated template", "const t = `never closed\n" + TAIL],
+  ["an astral character in a comment", ASTRAL_IN_A_COMMENT + TAIL],
+  ["an astral character in a string", 'const s = "\u{1D54F}";\n' + TAIL],
 ]);
 
 describe("source lexer", () => {
@@ -155,6 +173,26 @@ describe("source lexer", () => {
       expect(report(views.withoutComments, "x")).toBe(expected);
       expect(report(views.code, "x")).toBe(expected);
     }
+  });
+
+  test("an astral character does not shift every offset after it", () => {
+    // The offset invariant, asserted where it can actually fail. Both
+    // views are indexed by UTF-16 code unit because the scanner is; a
+    // view built out of code points is one slot short per astral
+    // character, and every offset after it addresses the character
+    // before the one it names.
+    const views = lexSource(ASTRAL_IN_A_COMMENT);
+    expect(views.code).toBe(" ".repeat(17) + "\nconst after = 1;\n");
+    expect(views.withoutComments).toBe(views.code);
+    // The character at every offset past the astral one is unchanged, so
+    // a rule that reads a literal back out of the source at an offset the
+    // view gave it reads the character the view was describing.
+    const source = ASTRAL_IN_A_COMMENT + TAIL;
+    const code = lexCode(source);
+    for (let i = 0; i < source.length; i += 1) {
+      if (code[i] !== " ") expect(code[i]).toBe(source[i]!);
+    }
+    expect(code.length).toBe(source.length);
   });
 
   test("lexCode is the code view of lexSource", () => {

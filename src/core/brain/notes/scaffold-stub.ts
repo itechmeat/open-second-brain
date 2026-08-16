@@ -116,6 +116,16 @@ const REINDEX_COMMAND = requireNextStep(SEARCH_INDEX_MISSING_CODE).nextCommand;
 /** Default cap on targets returned by one scan. */
 export const DANGLING_SCAN_DEFAULT_LIMIT = 100;
 
+/**
+ * The `limit` handed to `Store.listDangling` so it groups every
+ * unresolved row rather than the first page of them.
+ *
+ * `listDangling` takes a required cap; there is no "all" spelling. The
+ * caller's own limit cannot be that cap, because it has to be applied
+ * after the ownership filter - see the call site.
+ */
+const UNBOUNDED_TARGETS = Number.MAX_SAFE_INTEGER;
+
 function refusal(state: DanglingScan, detail: string): DanglingScanResult {
   return Object.freeze({
     state,
@@ -193,9 +203,19 @@ export async function listDanglingTargets(
           "a dangling list is only reproducible after a forced full pass",
       );
     }
+    // The limit caps what the CALLER receives, so it is applied AFTER
+    // the ownership filter, never before it. Asking the store for
+    // `limit` targets and then hiding some of them silently returns
+    // fewer rows than the caller asked for and than the vault holds -
+    // and the shortfall is proportional to how much the other owner
+    // wrote, which is the existence leak read off a row count. Ordering
+    // it this way costs nothing: `listDangling` reads every unresolved
+    // row out of sqlite regardless and applies `limit` while grouping.
+    const scope = opts.ownerScope ?? null;
+    const visible = await visibleTargets(vault, store.listDangling(UNBOUNDED_TARGETS), scope);
     return Object.freeze({
       state: DANGLING_SCAN.measured,
-      targets: await visibleTargets(vault, store.listDangling(limit), opts.ownerScope ?? null),
+      targets: Object.freeze(visible.slice(0, limit)),
       detail: null,
       nextCommand: REINDEX_COMMAND,
     });

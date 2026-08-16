@@ -36,11 +36,22 @@ beforeEach(async () => {
   configPath = join(tmp, "config.yaml");
   writeFileSync(configPath, `vault: "${active}"\n`);
 
-  writeMd(active, "Brain/notes/local-note.md", "# Local\n\nThe griffin nests in the local vault.");
+  // The active note answers "griffin" completely and "aviary-keeper"
+  // only in part: SQLite's tokenizer splits the hyphen, so the row MATCHES
+  // on `aviary` + `keeper`, while the coverage engine's containment test
+  // looks for the literal term and does not find it. That is what gives
+  // the chain-stop test below an origin that genuinely returns rows and
+  // genuinely half-answers - see its own comment for why a fixture that
+  // returns no rows cannot test that gate at all.
+  writeMd(
+    active,
+    "Brain/notes/local-note.md",
+    "# Local\n\nThe griffin nests in the local vault beside the aviary keeper.",
+  );
   writeMd(
     external,
     "Brain/notes/external-note.md",
-    "# External\n\nThe griffin also visits the external vault aviary.",
+    "# External\n\nThe griffin also visits the external vault aviary-keeper.",
   );
   await indexVault(resolveSearchConfig({ vault: active, configPath }));
   await indexVault(resolveSearchConfig({ vault: external, configPath }));
@@ -198,10 +209,18 @@ test("chain-stop on: a confident active origin skips the remaining origins", asy
 
 test("chain-stop gates on coverage: an origin that half-answers does not stop the chain", async () => {
   addRecallSource(configPath, active, "team", external);
-  // "aviary" appears only in the EXTERNAL vault, so the active origin
-  // covers part of this query and not the rest. Under a 0.9 coverage
-  // threshold the chain must walk on and find the origin that holds the
-  // missing half.
+  // The active origin RETURNS A ROW for this query and covers only half
+  // of it: `aviary-keeper` matches its note through the tokenizer's
+  // hyphen split, and is not contained in it as a term. Under a 0.9
+  // coverage threshold the chain must walk on and find the origin that
+  // holds the missing half.
+  //
+  // The row count is the whole point of the fixture. An earlier version
+  // of this test asked for terms the active vault did not have at all, so
+  // the origin returned ZERO rows and the gate short-circuited on
+  // `hits.length > 0` before reading any threshold - reverting the gate
+  // to the old top-score rule left it green. A test of a threshold has to
+  // reach the threshold.
   //
   // This is the assertion the old score-based gate could not make. Its
   // quantity was the top NORMALIZED result score, which the keyword lane
@@ -209,17 +228,25 @@ test("chain-stop gates on coverage: an origin that half-answers does not stop th
   // thing about an origin that answered everything and one that answered a
   // fragment, and it meant opposite things under the two fusion modes
   // (unreachable in `linear`, always met in `rrf`).
-  withChainStop(0.9);
+  // 0.6 rather than 0.9, and the band matters: the active origin's
+  // coverage here is 0.5 - the two terms carry equal IDF and one is
+  // covered - while its top SCORE is ~0.65, so this threshold sits
+  // BETWEEN the two quantities. A threshold above both (0.9) is cleared
+  // by neither, which is why the earlier 0.9 version of this test stayed
+  // green when the gate was reverted to the score.
+  withChainStop(0.6);
   const outcome = await searchAcrossVaults(configPath, active, {
-    query: "griffin aviary",
+    query: "griffin aviary-keeper",
     limit: 10,
   });
-  // The active origin is walked past rather than stopped at, so the origin
-  // holding "aviary" is reached and answers. (Only the external note carries
-  // both terms, so it is the only row in the window - what matters here is
-  // that the union got that far at all.)
+  // The gate was reached with rows in hand…
+  expect(outcome.results.some((r) => r.origin === "local")).toBe(true);
+  // …and refused them, so the origin holding the other half is searched.
   expect(outcome.chainStop).toBeUndefined();
   expect(new Set(outcome.results.map((r) => r.origin))).toContain("source/team");
+  // The union's quality is the best origin's, and the external origin
+  // covers the query whole.
+  expect(outcome.idfWeightedCoverage).toBe(1);
 });
 
 test("chain-stop fires when the first origin covers the question", async () => {
@@ -255,11 +282,11 @@ test("cross-vault detail values are identifiers under the trail's shared rule", 
   addRecallSource(configPath, active, "other", other);
   withChainStop(0);
 
-  // "aviary" is absent from the active vault, so the union walks past it:
-  // source/bare cannot be read, source/team answers confidently, and
-  // source/other is deliberately skipped - one origin-failed entry and one
+  // "feeds" is absent from the active vault, so the union walks past it:
+  // source/bare cannot be read, source/other answers confidently, and
+  // source/team is deliberately skipped - one origin-failed entry and one
   // chain-stopped entry, each keyed by a namespaced origin label.
-  const outcome = await searchAcrossVaults(configPath, active, { query: "aviary", limit: 10 });
+  const outcome = await searchAcrossVaults(configPath, active, { query: "feeds", limit: 10 });
 
   const degraded = outcome.retrievalTrail?.degraded ?? [];
   const codes = degraded.map((d) => d.code);

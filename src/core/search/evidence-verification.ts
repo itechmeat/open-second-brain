@@ -69,9 +69,11 @@ export function coverageOverChunks(
  * about to return.
  *
  * Split out of {@link buildEvidenceVerification} because it is no longer
- * an evidence-pack-only quantity: it is the absolute, pool-independent
- * match-quality number every confidence threshold in the product now
- * reads (`SearchOutcome.idfWeightedCoverage`). Evidence-pack mode calls
+ * an evidence-pack-only quantity: it is the absolute match-quality number
+ * every confidence threshold in the product now reads
+ * (`SearchOutcome.idfWeightedCoverage`) - absolute as against a score,
+ * not independent of `results`, which is exactly the argument it is
+ * given. Evidence-pack mode calls
  * it through {@link buildEvidenceVerification}, which takes the finished
  * report rather than recomputing it, so one query performs exactly one
  * document-frequency read whichever mode it runs in.

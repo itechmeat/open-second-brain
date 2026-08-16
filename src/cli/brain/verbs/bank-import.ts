@@ -96,6 +96,18 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
           `(${collision.prefIds.join(", ")}); consolidation plans nothing until one owner remains`,
       );
     }
+    // The collision list above is a claim over every rule already in the
+    // DESTINATION. A rule the scan could not parse makes it a partial
+    // claim, and an empty list read as "no collisions" would be the
+    // confident zero. The import itself is unaffected - those files are
+    // not what the bundle carried - so it proceeds and says this instead
+    // of refusing wholesale.
+    for (const unreadable of p.topicScanUnreadable) {
+      lines.push(
+        `  topic-key check incomplete: ${unreadable.path} could not be parsed ` +
+          `(${unreadable.reason}); an existing rule may already claim a restored topic key`,
+      );
+    }
     process.stdout.write(lines.join("\n") + "\n");
   }
   // A refused preference is a partial import, not a clean one: the caller

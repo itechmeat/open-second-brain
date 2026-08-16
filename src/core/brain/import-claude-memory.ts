@@ -13,6 +13,7 @@ import { assertSafeMemoryPath } from "./claude-memory-paths.ts";
 import { claudeMemoryBackend } from "./agent-backend/claude.ts";
 import type { MemorySourceBackend } from "./agent-backend/types.ts";
 import { BRAIN_PREFERENCES_REL, preferencePath } from "./paths.ts";
+import { resolvedOwnerFor } from "./preference.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export interface ImportClaudeMemoryOpts {
@@ -157,6 +158,15 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
       });
       plans.push(plan);
       if (plan.action === "CREATE" || plan.action === "RECREATE" || plan.action === "UPDATE") {
+        // This module renders its own frontmatter and writes it with
+        // `atomicWriteFileSync`, so it never reaches `writePreference`
+        // and never got the ownership stamp every other preference
+        // writer applies (a-label-is-not-a-boundary, U3). Asking the
+        // shared resolver is the fix; rendering a second copy of the
+        // rule here is how the next writer would get it wrong again.
+        // `prefFile` is passed so an UPDATE carries the existing owner
+        // forward instead of re-owning the page, exactly as a rewrite
+        // through `writePreference` does.
         const body = backend.renderPreference({
           name: parsed.name,
           description: parsed.description,
@@ -164,6 +174,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
           memoryPath: join(baseDir, name),
           importedAt,
           bodySha256: parsed.bodySha256,
+          owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
         });
         filesToWrite.push({ plan, body, sha256: parsed.bodySha256, slug });
       }

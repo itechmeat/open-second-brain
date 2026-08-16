@@ -858,6 +858,12 @@ const SOURCE_TREE = readSourceTree();
 const ROWS = census(SOURCE_TREE);
 const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
 
+/** Measured modules calling a filesystem write directly. An equality. */
+const DIRECT_WRITE_ROWS = 64;
+
+/** Measured modules reaching a write through a shared helper. An equality. */
+const SHARED_HELPER_ROWS = 94;
+
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
     const unlisted = DIRECT_ROWS.filter((row) => !(row.path in DIRECT_WRITE_EXCLUSIONS)).map(
@@ -986,11 +992,17 @@ describe("the census can fail", () => {
 
   test("the detectors still match the shapes they measure", () => {
     // A regex that stopped matching would report a clean sweep over an
-    // empty set. Pin the measurement, not only its verdict.
-    // Set just under the measurement, not an order of magnitude under it:
-    // a floor of 40 against 63 would let a third of the tree stop being
-    // seen and still report a clean sweep.
-    expect(DIRECT_ROWS.length).toBeGreaterThan(58);
-    expect(ROWS.filter((row) => row.sharedCalls > 0).length).toBeGreaterThan(88);
+    // empty set. Pin the measurement, not only its verdict - and pin it
+    // as an EQUALITY. These were floors of 58 and 88 against a measured
+    // 64 and 94, and one of the two comments explaining the gap already
+    // named a stale figure (63), which is what a floor does to the
+    // number under it: nobody is keeping it. A floor also cannot fail on
+    // the drift it exists to catch until six sites have already gone
+    // dark.
+    //
+    // A moved number is a finding, not a re-measurement chore: state in
+    // the same commit what added or removed a write site.
+    expect(DIRECT_ROWS.length).toBe(DIRECT_WRITE_ROWS);
+    expect(ROWS.filter((row) => row.sharedCalls > 0).length).toBe(SHARED_HELPER_ROWS);
   });
 });

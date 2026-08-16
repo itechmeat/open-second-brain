@@ -104,10 +104,18 @@ describe("the anchoring kernel", () => {
     expect(windowStart(10, 200)).toBe(HEAD_WINDOW_START);
   });
 
-  test("terms shorter than the significance floor never anchor a window", () => {
-    // `significantTerms` keeps tokens of length >= 3, with no stop-word
-    // list anywhere. A two-character query therefore has no terms at all.
-    expect(matchOffset("an ox in the field", "ox")).toBe(NO_MATCH_OFFSET);
+  test("a short term anchors a window like any other", () => {
+    // There used to be a length floor here, inherited from
+    // `significantTerms`, and a two-character query therefore had no
+    // terms at all and anchored nothing. That floor was an English-shaped
+    // stopword rule: it also erased every one- and two-character CJK
+    // query, whose words are that long. With it gone, a short term is a
+    // term, and the only cost is the one this module's docblock already
+    // accepted - a window may open where a common word does.
+    expect(matchOffset("an ox in the field", "ox")).toBe("an ox in the field".indexOf("ox"));
+    expect(matchOffset("the 検索 pipeline", "検索")).toBe("the 検索 pipeline".indexOf("検索"));
+    // A term genuinely absent still reports the sentinel.
+    expect(matchOffset("an ox in the field", "zz")).toBe(NO_MATCH_OFFSET);
   });
 
   test("the earliest occurrence among several terms wins", () => {

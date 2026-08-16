@@ -373,9 +373,19 @@ function isContentAddress(run: string): boolean {
  * The carve-out is the SHAPE, not the prefix: an ISO date, then lowercase
  * alphanumeric runs joined by dashes, which is exactly what `slugify`
  * emits plus the `-<n>` collision suffix `allocateAndCreate` appends. A
- * credential wearing a `sig-` prefix matches neither half - it has no
- * date, or it carries the mixed case and punctuation a slug cannot - so
- * it is still redacted.
+ * credential wearing a `sig-` prefix is still redacted whenever it fails
+ * either half - no ISO date, or the mixed case, underscore or other
+ * punctuation a slug cannot carry - which covers every credential format
+ * this redactor was written against.
+ *
+ * It is not an absolute, and the earlier wording here said it was. A
+ * secret that is entirely lowercase alphanumeric AND is written behind
+ * `sig-` AND behind an ISO date passes: `sig-2026-08-16-<secret>` is
+ * indistinguishable from a signal id whose slug happens to be that
+ * string, because at that point it IS one by shape. Nothing narrower
+ * would do without keying on the prefix, which is what the paragraph
+ * above rejects - and a key wearing three disguises to reach a Brain
+ * signal filename is a different threat from the one this pass is for.
  */
 const SIGNAL_ID_RE = /^sig-\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
 

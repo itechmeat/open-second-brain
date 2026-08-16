@@ -5,8 +5,18 @@ import {
   DEFAULT_RECALL_ADEQUACY_THRESHOLDS,
 } from "../../../src/core/brain/recall-adequacy.ts";
 
-/** Three usable scores, so `minResults` is never what a case turns on. */
-const THREE_SCORES: ReadonlyArray<number> = [0.82, 0.5, 0.31];
+/**
+ * Three usable scores, so `minResults` is never what a case turns on -
+ * and all three deliberately BELOW every threshold in this file.
+ *
+ * The scores in these fixtures used to echo the match quality beside
+ * them, and a fixture where the two agree cannot tell this function from
+ * the substitution it exists to have removed: reverting the verdict to
+ * `topScore >=` left ten of these thirteen cases green. Every case below
+ * now puts the score on the opposite side of the boundary from the
+ * quality, so the substitution fails on each of them by name.
+ */
+const THREE_SCORES: ReadonlyArray<number> = [0.28, 0.2, 0.1];
 
 test("strong coverage is sufficient and proceeds", () => {
   const verdict = assessRecallAdequacy({ matchQuality: 0.82, scores: THREE_SCORES });
@@ -15,6 +25,9 @@ test("strong coverage is sufficient and proceeds", () => {
   expect(verdict.escalate).toBe(false);
   expect(verdict.matchQuality).toBeCloseTo(0.82);
   expect(verdict.resultCount).toBe(3);
+  // Every score is under the `weak` floor, so nothing but the coverage
+  // could have produced `sufficient`.
+  expect(verdict.topScore).toBeLessThan(DEFAULT_RECALL_ADEQUACY_THRESHOLDS.weak);
 });
 
 test("middling coverage is weak and triggers re-recall", () => {
@@ -56,7 +69,7 @@ test("no results is insufficient with zero scores and escalates", () => {
 });
 
 test("min_results downgrades strong-but-lonely coverage to weak/re-recall", () => {
-  const verdict = assessRecallAdequacy({ matchQuality: 0.9, scores: [0.9] }, { minResults: 2 });
+  const verdict = assessRecallAdequacy({ matchQuality: 0.9, scores: [0.1] }, { minResults: 2 });
   expect(verdict.level).toBe("weak");
   expect(verdict.action).toBe("re_recall");
   expect(verdict.escalate).toBe(false);
@@ -65,7 +78,9 @@ test("min_results downgrades strong-but-lonely coverage to weak/re-recall", () =
 test("custom thresholds move the boundaries", () => {
   // Raise the sufficient floor so 0.7 coverage is no longer sufficient.
   const verdict = assessRecallAdequacy(
-    { matchQuality: 0.7, scores: [0.7, 0.4] },
+    // Scores above the raised floor, coverage below it: the substitution
+    // would grade this `sufficient`.
+    { matchQuality: 0.7, scores: [0.95, 0.9] },
     { sufficient: 0.8, weak: 0.5 },
   );
   expect(verdict.level).toBe("weak");
@@ -74,16 +89,18 @@ test("custom thresholds move the boundaries", () => {
 test("non-finite scores are ignored; the count still reflects the rest", () => {
   const verdict = assessRecallAdequacy({
     matchQuality: 0.75,
-    scores: [Number.NaN, Infinity, 0.75],
+    scores: [Number.NaN, Infinity, 0.1],
   });
   expect(verdict.resultCount).toBe(1);
   expect(verdict.level).toBe("sufficient");
-  expect(verdict.topScore).toBeCloseTo(0.75);
+  expect(verdict.topScore).toBeCloseTo(0.1);
 });
 
 test("negative scores clamp to zero", () => {
-  const verdict = assessRecallAdequacy({ matchQuality: 0.05, scores: [-0.3, 0.05] });
-  expect(verdict.topScore).toBeCloseTo(0.05);
+  const verdict = assessRecallAdequacy({ matchQuality: 0.05, scores: [-0.3, 0.95] });
+  expect(verdict.topScore).toBeCloseTo(0.95);
+  // A confident-looking top row over material that covers almost none of
+  // the query: insufficient, and the score had no say.
   expect(verdict.level).toBe("insufficient");
 });
 

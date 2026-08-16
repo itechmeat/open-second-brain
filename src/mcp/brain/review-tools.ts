@@ -28,6 +28,14 @@ async function toolBrainIntentReview(
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
   const report = buildIntentReview(ctx.vault, nowDate ? { now: nowDate } : {});
+  // Deliberately unfiltered, and the reason is on the record rather than
+  // implied by silence (a-label-is-not-a-boundary, U3). Every row here is
+  // a fold over INBOX SIGNAL clusters - a topic, a decision, a count -
+  // and a signal carries no `owner:` anywhere in this product, so there
+  // is no ownership claim on disk for this surface to read. A filter
+  // keyed on "does a preference of this topic exist and may you see it"
+  // would withhold a row whose whole content came from artifacts the
+  // caller is entitled to, which is a narrowing nobody asked for.
   return {
     schema_version: report.schema_version,
     generated_at: report.generated_at,
@@ -103,10 +111,21 @@ async function toolBrainReviewCandidates(
     const slug = brainArtifactSlug(id);
     return [`pref-${slug}`, `ret-${slug}`];
   };
+  // `clusters_below_threshold` and `intent_reviews` stay unfiltered, for
+  // the reason `brain_intent_review` states above: both are keyed by a
+  // topic over inbox signals, and signals carry no owner.
   return {
-    ...(report.signal_novelty !== undefined ? { signal_novelty: report.signal_novelty } : {}),
-    would_create: [...report.would_create],
-    would_promote: [...report.would_promote],
+    // Signal rows name an inbox signal by id AND by vault-relative path.
+    ...(report.signal_novelty !== undefined
+      ? { signal_novelty: view.keep(report.signal_novelty, (s) => [s.path, s.id]) }
+      : {}),
+    // `would_create` names ids the pass has not written yet, so most of
+    // them resolve to nothing and pass; asking anyway is what keeps a
+    // projection over an id that DOES already exist from crossing.
+    would_create: view.keep(report.would_create, (id) => bothSpellings(id)),
+    // `would_promote` is the one that always names live pages: an
+    // unconfirmed preference on disk, transitioning to confirmed.
+    would_promote: view.keep(report.would_promote, (id) => bothSpellings(id)),
     would_retire: view
       .keep(report.would_retire, (r) => bothSpellings(r.id))
       .map((r) => ({

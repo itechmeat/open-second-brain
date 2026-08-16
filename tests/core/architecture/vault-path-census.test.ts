@@ -62,12 +62,20 @@
  *     assertions in `tests/mcp/mcp.test.ts` are what cover the value
  *     that actually ships.
  *   - The OpenClaw native runtime (`src/openclaw/index.ts`) registers
- *     three tools of its own that emit this field, and it is outside
- *     this population because it is outside this transport: it cannot
- *     import from `src/mcp/` by construction (the bundle is built from
- *     `src/openclaw/index.ts` alone and byte-diffed in CI), so the
- *     substitution there is a bundle-rebuilding change rather than a
- *     source-only one.
+ *     three tools of its own that emit this field, and they are outside
+ *     this population for one reason only: the scan is rooted at
+ *     {@link TOOL_SURFACE_ROOT}, and that file is not under it. The
+ *     earlier wording here said OpenClaw "cannot import from `src/mcp/`
+ *     by construction", and this branch falsified it - `src/openclaw/
+ *     index.ts:23` imports {@link VAULT_PATH_PRODUCER} from exactly
+ *     there, which is what makes its three emissions correct.
+ *
+ *     Those three are covered, by the second `describe` below rather than
+ *     by a widened root: it runs the same scanner over that one file and
+ *     requires the same producer, while {@link TOOL_SURFACE_ROOT} keeps
+ *     meaning "the modules that answer a `tools/call`". A count in a
+ *     population of three is an equality, so a fourth emission - or a
+ *     rewritten bundle that stops calling the producer - fails by name.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -89,12 +97,20 @@ const VAULT_PATH_PRODUCER = "vaultPathField";
 const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
 
 /**
- * A floor, not a count. The exact number moves with the tool surface and
- * a number in an assertion goes stale; what must never happen is this
- * census reading a scanner failure as a clean sweep, which is what a
- * population of zero (or three) would be.
+ * The measured population, as an EQUALITY.
+ *
+ * It was a floor of 20 against a real 44, which is the shape this release
+ * spent two other censuses removing: a floor that loose lets more than
+ * half the scanner's reach disappear and still reports a pass, so the
+ * one failure it exists to catch - a scanner that quietly stops matching
+ * - is exactly the one it would sleep through.
+ *
+ * The number moves when the tool surface does, and that is the point: a
+ * changed count is a fact about this release that someone states, in the
+ * same commit, rather than a drift nobody sees. Re-measure it only after
+ * deciding the move is intended.
  */
-const MINIMUM_EMITTING_SITES = 20;
+const EMITTING_SITES = 44;
 
 /** One `vault_path:` property found in the source. */
 interface FieldSite {
@@ -206,7 +222,7 @@ describe("vault_path emission census", () => {
     // A scanner that silently matched nothing would report a clean sweep
     // over a surface it never examined - the false-clean signature these
     // censuses exist to prevent.
-    expect(emittingSites(ALL_SITES).length).toBeGreaterThanOrEqual(MINIMUM_EMITTING_SITES);
+    expect(emittingSites(ALL_SITES).length).toBe(EMITTING_SITES);
     // The three tools defined in the aggregator itself are in population.
     expect(ALL_SITES.some((site) => site.file === join("src", "mcp", "tools.ts"))).toBe(true);
     // …and so is at least one Brain domain module.
@@ -270,5 +286,38 @@ describe("the census can fail", () => {
 
   test("a longer property name ending in the field name is not a site", () => {
     expect(fieldSites("synthetic.ts", `return { origin_${FIELD}: ctx.vault };`)).toEqual([]);
+  });
+});
+
+/**
+ * The OpenClaw native runtime, scanned by the same rule.
+ *
+ * It is a separate `describe` rather than a wider root because it is a
+ * separate transport: {@link TOOL_SURFACE_ROOT} is the set of modules
+ * that answer a `tools/call`, and widening it to keep one file in scope
+ * would cost that root its meaning. What must not differ is the RULE, so
+ * the same scanner and the same producer requirement run over it here.
+ */
+describe("vault_path emission census (OpenClaw runtime)", () => {
+  const OPENCLAW_ENTRY = join("src", "openclaw", "index.ts");
+  const OPENCLAW_SITES = fieldSites(
+    OPENCLAW_ENTRY,
+    readFileSync(resolve(ROOT, OPENCLAW_ENTRY), "utf8"),
+  );
+
+  /** Measured, and an equality: the runtime registers exactly three. */
+  const OPENCLAW_EMITTING_SITES = 3;
+
+  test("the three emissions are found and none is outside the producer", () => {
+    expect(emittingSites(OPENCLAW_SITES).length).toBe(OPENCLAW_EMITTING_SITES);
+    expect(offendingSites(OPENCLAW_SITES).map(render)).toEqual([]);
+  });
+
+  test("it reaches the producer by importing it, which is why it can", () => {
+    // The docblock above used to give "cannot import from `src/mcp/` by
+    // construction" as the exclusion reason. This is the line that
+    // falsified it, asserted so the reason cannot be restated.
+    const source = readFileSync(resolve(ROOT, OPENCLAW_ENTRY), "utf8");
+    expect(source).toContain(`import { ${VAULT_PATH_PRODUCER} } from "../mcp/vault-path-field.ts"`);
   });
 });

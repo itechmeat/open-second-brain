@@ -123,12 +123,24 @@ async function toolBrainBeliefEvolution(
     : { topic: (topicRaw as string).trim() };
   const index = buildTimelineIndex(ctx.vault, {});
   const evo = buildBeliefEvolution(index, ctx.vault, target);
+  // A topic target fans out to every pref/ret carrying that topic, so
+  // one `topic` argument reaches artifacts the caller never named
+  // (a-label-is-not-a-boundary, U3). Every row names its subject: a
+  // transition by `prefId` and by the wikilink the dream summary used,
+  // an evidence row by `prefId` and by the `artifact` it was applied to,
+  // a retirement by its whole supersession chain.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   return {
     vault_path: vaultPathField(ctx),
     target: evo.target,
-    transitions: evo.transitions,
-    evidence: evo.evidence,
-    retirements: evo.retirements,
+    transitions: view.keep(evo.transitions, (t) => [t.prefId, t.link]),
+    evidence: view.keep(evo.evidence, (e) => [e.prefId, e.artifact]),
+    retirements: view.keep(evo.retirements, (r) => [
+      r.prefId,
+      r.retiredBy,
+      r.supersededBy,
+      r.supersedes,
+    ]),
     generated_at: evo.generatedAt,
   };
 }
@@ -160,8 +172,13 @@ async function toolBrainConceptSynthesis(
     includeUnlinked = includeUnlinkedRaw;
   }
   const targetId = normaliseWikilinkTarget(idRaw);
+  // `linkers[].source` names every artifact pointing at the target and
+  // `unlinkedMentions[]` carries a VERBATIM line of the mentioning
+  // page's body (a-label-is-not-a-boundary, U3). Both producers already
+  // take the scope; passing it is the whole fix.
   const cluster = buildConceptCluster(ctx.vault, targetId, {
     includeUnlinked,
+    ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
   });
   return {
     vault_path: vaultPathField(ctx),
@@ -228,13 +245,22 @@ async function toolBrainDedup(
   }
   const since = coerceIsoTimestampOrDate("brain_analytics", "since", args["since"]);
   const until = coerceIsoTimestampOrDate("brain_analytics", "until", args["until"]);
+  const summary = summarizeIngestDedup(ctx.vault, {
+    ...(typeof surface === "string" ? { surface: surface as IngestDedupSurface } : {}),
+    ...(since !== undefined ? { since } : {}),
+    ...(until !== undefined ? { until } : {}),
+  });
+  // `by_source[].ref` is the one field here with a per-artifact subject:
+  // "a session id, or a vault-relative note path - whatever the run keys
+  // provenance by" (`dedup-telemetry.ts`), and a note path is
+  // owner-taggable (a-label-is-not-a-boundary, U3). The totals and the
+  // per-run trend beside it are folds over ingest RUNS with no artifact
+  // in them, so they stay as measured.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   return {
     vault_path: vaultPathField(ctx),
-    ...summarizeIngestDedup(ctx.vault, {
-      ...(typeof surface === "string" ? { surface: surface as IngestDedupSurface } : {}),
-      ...(since !== undefined ? { since } : {}),
-      ...(until !== undefined ? { until } : {}),
-    }),
+    ...summary,
+    by_source: view.keep(summary.by_source, (row) => [row.ref]),
   };
 }
 

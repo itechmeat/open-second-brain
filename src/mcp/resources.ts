@@ -31,6 +31,30 @@
  *   - Missing files produce `INTERNAL_ERROR` with a `not found` message
  *     — same shape as `brain_query`'s `BrainNotFoundError` so callers
  *     can treat both surfaces consistently.
+ *
+ * ## Ownership (a-label-is-not-a-boundary, U3)
+ *
+ * This surface is `resources/*`, and the isolation matrix's population
+ * was `tools/*`. So while every delivery tool learned to ask the
+ * ownership rule, `resources/read osb://preference/{id}` still handed
+ * back another owner's page in full - frontmatter, `owner:` line and
+ * body prose - under the same `integrity.owner_scope_delivery: fail`
+ * that made the tool withhold it. A boundary one protocol verb honours
+ * and its neighbour ignores is not a boundary.
+ *
+ * The four templated readers that reach owner-taggable content -
+ * `preference/{id}`, `topic/{slug}`, `backlinks/{id}`, `log/{date}` -
+ * therefore go through {@link gatedOwnerScopeView}, the same adapter and
+ * the same gate the tools use. A withheld artifact is reported with the
+ * `not found` message an ABSENT one produces, because a distinguishable
+ * refusal would announce the page it is meant to hide.
+ *
+ * The three whole-vault readers (`preferences/active`, `lessons`,
+ * `digest/latest`, `status`) are deliberately NOT filtered here: they
+ * serve generated files that are shared by construction and regenerated
+ * unscoped (see `brain_context`, which returns a scoped PROJECTION while
+ * leaving `Brain/active.md` untouched). Scoping the file itself is a
+ * different decision from scoping a delivery, and it is not made here.
  */
 
 import { existsSync, readFileSync } from "node:fs";
@@ -51,12 +75,29 @@ import {
   validateSlug,
 } from "../core/brain/paths.ts";
 import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
+import { gatedOwnerScopeView, type OwnerScopeView } from "../core/brain/owner-scope-view.ts";
+import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
+import type { BrainLogEntry } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
 export interface ResourceContext {
   readonly vault: string;
+  /**
+   * The identity this server resolved for the caller, threaded from
+   * `MCPServer.agentName` exactly as `ServerContext.agentName` is
+   * threaded into every tool.
+   *
+   * `resources/read` carries no arguments beyond the URI, so - like
+   * `brain_context` - this surface cannot be TOLD which owner is asking
+   * and the server identity is the only scope available. Absent means
+   * exactly what it means for a tool: `resolveOwnerScopeDelivery` reads
+   * no requested scope, `enforcedScope` is `null`, and nothing is
+   * filtered - the same behaviour, from the same resolver, so the two
+   * surfaces cannot disagree about what an unidentified caller sees.
+   */
+  readonly agentName?: string | undefined;
 }
 
 export interface ResourceDescriptor {
@@ -161,14 +202,39 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
     case "status":
       return readStatus(ctx, uri);
     case "preference":
-      return readPreference(ctx, uri, parsed.id);
+      return readPreference(ctx, uri, parsed.id, ownerView(ctx));
     case "topic":
-      return readTopic(ctx, uri, parsed.slug);
+      return readTopic(ctx, uri, parsed.slug, ownerView(ctx));
     case "log":
-      return readLog(ctx, uri, parsed.date);
+      return readLog(ctx, uri, parsed.date, ownerView(ctx));
     case "backlinks":
-      return readBacklinks(ctx, uri, parsed.id);
+      return readBacklinks(ctx, uri, parsed.id, ownerView(ctx));
   }
+}
+
+/**
+ * The ownership rule bound to this request, built once per read.
+ *
+ * Constructed at the switch rather than inside each reader so a reader
+ * added later cannot be the one that forgot: the four templated cases
+ * pass it explicitly and the compiler requires it.
+ */
+function ownerView(ctx: ResourceContext): OwnerScopeView {
+  return gatedOwnerScopeView(ctx.vault, ctx.agentName);
+}
+
+/**
+ * The error a resource raises for something the caller may not see.
+ *
+ * Byte-identical to the one a genuinely ABSENT artifact produces
+ * (`BrainNotFoundError`, rendered as `INTERNAL_ERROR` above), because a
+ * distinguishable refusal is an existence oracle over exactly the
+ * population the gate exists to hide - the same convention
+ * `preferences-collect.ts` states for counts and `brain_search_expand`
+ * already follows for a chunk id.
+ */
+function notFound(id: string): MCPError {
+  return new MCPError(INTERNAL_ERROR, new BrainNotFoundError(id).message);
 }
 
 // ----- URI parsing ---------------------------------------------------------
@@ -278,7 +344,12 @@ function readStatus(ctx: ResourceContext, uri: string): ResourceContent {
   };
 }
 
-function readPreference(ctx: ResourceContext, uri: string, rawId: string): ResourceContent {
+function readPreference(
+  ctx: ResourceContext,
+  uri: string,
+  rawId: string,
+  view: OwnerScopeView,
+): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `resource id must not be empty: ${uri}`);
   }
@@ -320,31 +391,75 @@ function readPreference(ctx: ResourceContext, uri: string, rawId: string): Resou
   const filePath = resolvedId.startsWith("pref-")
     ? preferencePath(ctx.vault, resolvedSlug)
     : retiredPath(ctx.vault, resolvedSlug);
+  // The whole file, `owner:` line and body prose included, is what this
+  // reader hands back - so the ownership question is asked before the
+  // read, not filtered out of the bytes afterwards.
+  if (!view.visible(resolvedId)) throw notFound(rawId);
   return readMarkdown(uri, filePath);
 }
 
-function readTopic(ctx: ResourceContext, uri: string, rawSlug: string): ResourceContent {
+function readTopic(
+  ctx: ResourceContext,
+  uri: string,
+  rawSlug: string,
+  view: OwnerScopeView,
+): ResourceContent {
   if (!rawSlug.trim()) {
     throw new MCPError(INVALID_PARAMS, `topic slug must not be empty: ${uri}`);
   }
   validateSlug(rawSlug);
   let result;
   try {
-    result = queryByTopic(ctx.vault, rawSlug);
+    // The scope reaches the SELECTION, not the result: a topic resolves
+    // to one preference and several may carry it, so filtering afterwards
+    // would report the topic as having no rule whenever another owner's
+    // preference happened to sort first.
+    result = queryByTopic(ctx.vault, rawSlug, { ownerScope: view.scope });
   } catch (err) {
     if (err instanceof BrainNotFoundError) {
       throw new MCPError(INTERNAL_ERROR, err.message);
     }
     throw err;
   }
+  // The two remaining owner-bearing streams, filtered before the
+  // renderer sees them: each signal row names its id and its author, and
+  // the log rows are the same events `brain_event_trace` filters. A
+  // topic whose ONLY rule is one this caller may not see is reported as
+  // a topic with no rule, not as a topic that refused - the renderer
+  // already has that shape for a topic that never reached promotion.
+  const scoped = Object.freeze({
+    ...result,
+    signals: view.keep(result.signals, (s) => [s.id]),
+    all_log_events: view.keep(result.all_log_events, (e) => logEventRefs(e)),
+  });
   return {
     uri,
     mimeType: MIME_MARKDOWN,
-    text: renderTopicMarkdown(rawSlug, result),
+    text: renderTopicMarkdown(rawSlug, scoped),
   };
 }
 
-function readLog(ctx: ResourceContext, uri: string, rawDate: string): ResourceContent {
+/**
+ * Every artifact one log entry would name, as the owner-scope view
+ * spells references.
+ *
+ * A log body is an untyped payload record; the fields that carry an
+ * artifact are the wikilink-shaped ones, and the view unbrackets them
+ * itself. `path` is the vault-relative page the event was about.
+ */
+function logEventRefs(entry: BrainLogEntry): ReadonlyArray<string | undefined> {
+  const body = (entry.body ?? {}) as Record<string, unknown>;
+  const field = (key: string): string | undefined =>
+    typeof body[key] === "string" ? (body[key] as string) : undefined;
+  return [field("path"), field("preference"), field("signal"), field("artifact")];
+}
+
+function readLog(
+  ctx: ResourceContext,
+  uri: string,
+  rawDate: string,
+  view: OwnerScopeView,
+): ResourceContent {
   validateIsoDate(rawDate);
   // Per-device shards (Memory Integrity Suite): a day's human view can
   // span several markdown files. The legacy single file is returned
@@ -354,20 +469,77 @@ function readLog(ctx: ResourceContext, uri: string, rawDate: string): ResourceCo
   if (files.length === 0) {
     throw new MCPError(INTERNAL_ERROR, `no log file for date '${rawDate}'`);
   }
-  if (files.length === 1) return readMarkdown(uri, files[0]!.path);
-  const text = files.map((f) => readFileSync(f.path, "utf8").trimEnd()).join("\n\n");
-  return { uri, mimeType: MIME_MARKDOWN, text };
+  const shard = (f: { path: string }): string =>
+    withVisibleLogEvents(readFileSync(f.path, "utf8"), view);
+  // The single-shard read stays verbatim (trailing newline included), so
+  // a vault with the gate off is byte-identical to the pre-filter shape.
+  if (files.length === 1) return { uri, mimeType: MIME_MARKDOWN, text: shard(files[0]!) };
+  return { uri, mimeType: MIME_MARKDOWN, text: files.map((f) => shard(f).trimEnd()).join("\n\n") };
 }
 
-function readBacklinks(ctx: ResourceContext, uri: string, rawId: string): ResourceContent {
+/** Start of one rendered log event: `## <time> — <kind>`. */
+const LOG_EVENT_HEADING = "\n## ";
+
+/**
+ * Drop the rendered log events naming an artifact this caller may not
+ * see, keeping the shard's frontmatter and day heading.
+ *
+ * A shard is shared by construction - it is named by date and carries no
+ * `owner:`, which is why `owner-scope-view.ts` leaves `Brain/log/` out
+ * of its id-resolution directories. Its CONTENTS are not: every
+ * `apply-evidence`, `promote` and `retire` event names the preference it
+ * was about, by id and by vault-relative path, and `brain_event_trace`
+ * already filters exactly those rows. Serving the same events as raw
+ * markdown was the tool's boundary re-opened one protocol verb along.
+ *
+ * The split is structural - the `## ` heading the log renderer emits per
+ * event, and the wikilink / `.md` path tokens inside the section - not a
+ * match on any event's prose.
+ */
+function withVisibleLogEvents(markdown: string, view: OwnerScopeView): string {
+  if (view.scope === null) return markdown;
+  const parts = markdown.split(LOG_EVENT_HEADING);
+  const head = parts[0]!;
+  const kept = parts
+    .slice(1)
+    .filter((section) => view.row(...logSectionRefs(section)))
+    .map((section) => LOG_EVENT_HEADING + section);
+  return head + kept.join("");
+}
+
+/** Every artifact one rendered log section names, id- or path-shaped. */
+function logSectionRefs(section: string): ReadonlyArray<string> {
+  const refs = [...extractWikilinkRichBodies(section)];
+  for (const token of section.split(/\s+/)) {
+    if (token.endsWith(".md")) refs.push(token);
+  }
+  return refs;
+}
+
+function readBacklinks(
+  ctx: ResourceContext,
+  uri: string,
+  rawId: string,
+  view: OwnerScopeView,
+): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `backlinks target must not be empty: ${uri}`);
   }
   // Normalise to the same form the index keys use so `[[pref-foo]]`,
   // `pref-foo`, and `Brain/preferences/pref-foo.md` all resolve.
   const target = normaliseWikilinkTarget(rawId);
-  const index = buildBacklinkIndex(ctx.vault);
-  const refs = index.get(target) ?? [];
+  // The last unscoped `buildBacklinkIndex` call in the product. Every
+  // ref it yields names its SOURCE artifact by id, so an unscoped index
+  // here published the same list `brain_backlinks` had already learned
+  // to withhold.
+  //
+  // A hidden TARGET answers exactly as an ABSENT one does - the empty
+  // backlink document - rather than refusing: this reader has no
+  // not-found path at all (an unknown target is a legitimate zero), so a
+  // refusal here would be the one response shape that proves the page
+  // exists. The echoed target is the caller's own argument.
+  const index = buildBacklinkIndex(ctx.vault, view.scope);
+  const refs = view.visible(target) ? (index.get(target) ?? []) : [];
   return {
     uri,
     mimeType: MIME_MARKDOWN,

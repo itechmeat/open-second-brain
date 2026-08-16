@@ -63,14 +63,29 @@ describe("brain_codegraph_report tool", () => {
     ).toBeUndefined();
   });
 
-  test("returns a schema-versioned read-only report envelope", async () => {
-    const response = await call();
-    expect(response.error).toBeUndefined();
-    const report = payload(response as { result?: unknown });
-    expect(report["schema_version"]).toBe(1);
-    expect(report).toHaveProperty("cli");
-    expect(report).toHaveProperty("index");
-    expect(report).toHaveProperty("cargo_workspace");
-    expect(report).toHaveProperty("cargo_workspace_reason");
-  });
+  // Budget, not a guess. `buildCodegraphReport` spawns the `codegraph`
+  // binary once per discovered code project under a per-spawn deadline of
+  // `CODEGRAPH_PARTNER_TIMEOUT_MS` (10s) - twice bun's 5s default for a
+  // test. Measured at 4.21s on an idle machine WITH the binary installed,
+  // i.e. 84% of that default, and it crossed it at 5306ms during a loaded
+  // full-suite run. A test whose subject may legitimately outlive the
+  // harness's default needs the deadline stated rather than the flake
+  // rediscovered; the ceiling here sits above the spawn deadline, so a
+  // real hang still fails rather than hanging the suite.
+  const CODEGRAPH_SPAWN_BUDGET_MS = 20_000;
+
+  test(
+    "returns a schema-versioned read-only report envelope",
+    async () => {
+      const response = await call();
+      expect(response.error).toBeUndefined();
+      const report = payload(response as { result?: unknown });
+      expect(report["schema_version"]).toBe(1);
+      expect(report).toHaveProperty("cli");
+      expect(report).toHaveProperty("index");
+      expect(report).toHaveProperty("cargo_workspace");
+      expect(report).toHaveProperty("cargo_workspace_reason");
+    },
+    CODEGRAPH_SPAWN_BUDGET_MS,
+  );
 });

@@ -355,3 +355,35 @@ export function loadIntegrityConfigSafe(vault: string): ResolvedBrainIntegrityCo
     return brainConfigExists(vault) ? BRAIN_INTEGRITY_STRICT_FALLBACK : BRAIN_INTEGRITY_DEFAULTS;
   }
 }
+
+/**
+ * Load + resolve the `integrity:` block for a WRITER.
+ *
+ * The reader/writer asymmetry, stated on the side it belongs to. This
+ * sits on the WRITE side, and it is the absent-tolerant loader every
+ * other block already uses ({@link makeAbsentTolerantLoader}) - absent
+ * config resolves to the documented defaults, an unreadable one raises.
+ *
+ * It is NOT {@link loadIntegrityConfigSafe}, and the difference is the
+ * point. That loader's strict fallback has a rationale scoped entirely
+ * to READERS: "the unreadable config cannot loosen a gate, it can only
+ * close one". Closing a gate a reader cannot read is conservative -
+ * the reader withholds more than it had to, and nothing on disk
+ * changes. Handing the same strict verdict to a writer inverts it:
+ * `owner_scope_delivery` in its strict reading STAMPS, so one bad token
+ * anywhere in `_brain.yaml` made a preference writer start marking new
+ * pages `owner: <whoever wrote them>` - permanently, because ownership
+ * is carried forward and never re-derived, so the pages outlived the
+ * repair of the typo that caused them. On an install with no resolvable
+ * identity the same typo turned every preference write into a hard
+ * failure instead.
+ *
+ * A writer cannot infer an operator's intent to enable ownership from a
+ * file it could not read, so it does not try. It raises, naming the
+ * parse failure, and writes nothing: never a silent stamp, never a
+ * silent skip.
+ */
+export const loadIntegrityConfigForWrite = makeAbsentTolerantLoader(
+  resolveIntegrity,
+  BRAIN_INTEGRITY_DEFAULTS,
+);

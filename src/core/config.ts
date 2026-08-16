@@ -885,20 +885,25 @@ export function resolveRecallGateTelemetry(configPath?: string): boolean {
  * a-label-is-not-a-boundary, and the numbers kept their values while
  * their meaning moved. They used to bound a recall attempt's top
  * relevance SCORE, which could not work: the keyword lane is min-max
- * normalised inside the candidate set, so the top row of any non-empty
- * recall scored exactly the configured `search_keyword_weight` - shipped
- * at 0.6, identical to `recall_adequacy_sufficient`. Every keyword recall
- * in the product therefore graded `sufficient / proceed`, `weak` and
- * `insufficient` were unreachable, and a hundredth of a point on either
- * key would have inverted the verdict for every query at once.
+ * normalised inside the candidate set, so the top row of any recall with
+ * a non-empty keyword lane scored at or above the configured
+ * `search_keyword_weight` whatever it matched - shipped at 0.6, identical
+ * to `recall_adequacy_sufficient`, and 0.65 as measured end to end on a
+ * freshly written keyword-only vault, where the freshness prior is added
+ * on top of the normalised lane. Every keyword recall in the product
+ * therefore graded `sufficient / proceed`, `weak` and `insufficient` were
+ * unreachable, and a hundredth of a point on either key would have
+ * inverted the verdict for every query at once.
  *
  * They now bound MATCH QUALITY: the share of the query's IDF mass the
- * retrieved material covers, which is absolute and pool-independent. An
- * operator who tuned these keys against the old quantity was tuning
- * something that never varied, so no setting is being silently
- * reinterpreted - but the keys do decide something now, and 0.6 means
- * "covers at least three fifths of what was asked" rather than
- * "something was returned".
+ * retrieved material covers. That share is absolute where a score was
+ * relative - it does not move with rank position, lane magnitude or
+ * fusion mode - though it is measured over the rows a search delivers, so
+ * a narrower `limit` reports less of it. An operator who tuned these keys
+ * against the old quantity was tuning something that never varied, so no
+ * setting is being silently reinterpreted - but the keys do decide
+ * something now, and 0.6 means "covers at least three fifths of what was
+ * asked" rather than "something was returned".
  */
 export function resolveRecallAdequacyThresholds(configPath?: string): {
   sufficient: number;

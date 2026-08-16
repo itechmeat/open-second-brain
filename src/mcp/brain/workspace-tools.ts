@@ -15,6 +15,11 @@ import {
   type TriggerAction,
 } from "../../core/brain/triggers/store.ts";
 import {
+  extractWikilinkRichBodies,
+  parseWikilinkRich,
+} from "../../core/brain/link-graph/parse-wikilink.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import {
   isTriggerStatus,
   TRIGGER_STATUSES,
   TRIGGER_TERMINAL_STATUSES,
@@ -128,23 +133,53 @@ function isTriggerTransition(operation: string): operation is TriggerAction {
   return (TRIGGER_TRANSITIONS as ReadonlyArray<string>).includes(operation);
 }
 
+/**
+ * Every artifact one trigger record names
+ * (a-label-is-not-a-boundary, U3).
+ *
+ * A trigger is not the ownerless lane its classification once claimed.
+ * `source_artifacts` is a list of wikilinks to the preferences and
+ * retired pages the detector fired on, `reason` spells the same ids and
+ * their topics out in prose, and `cooldown_key` embeds them again - so a
+ * `batch_inflation` trigger enumerated every owner's preference by id to
+ * whoever ran the scan.
+ */
+function triggerRefs(record: TriggerRecord): ReadonlyArray<string> {
+  return [
+    ...record.sourceArtifacts,
+    ...extractWikilinkRichBodies(record.reason).map((b) => parseWikilinkRich(b).target),
+  ];
+}
+
 function toolBrainTrigger(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", true)!;
   const now = new Date();
+  // A trigger row is dropped WHOLE when any artifact it names is
+  // withheld: `reason` and `cooldown_key` repeat the same ids the
+  // `source_artifacts` list holds, so trimming the list alone would
+  // leave the prose naming what the list no longer does.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   if (operation === "scan") {
     const cooldownDays = resolveTriggerCooldownDays(ctx.configPath ?? undefined);
     const result = scanTriggers(ctx.vault, { now, cooldownDays });
     return {
       operation,
       candidates: result.candidates,
-      created: result.created.map(triggerToJson),
-      skipped: result.skipped.map((skip) => ({
-        cooldown_key: skip.cooldownKey,
-        reason: skip.reason,
-      })),
+      created: view.keep(result.created, triggerRefs).map(triggerToJson),
+      // A cooldown key is `<kind>:<artifact>:<artifact-or-action>` - it
+      // is BUILT from the ids the candidate fired on, so a `skipped` row
+      // names the same preferences a `created` one does. Split on the
+      // key's own separator and ask about every segment; a segment that
+      // is a kind or an action resolves to no artifact and passes.
+      skipped: view
+        .keep(result.skipped, (skip) => skip.cooldownKey.split(":"))
+        .map((skip) => ({
+          cooldown_key: skip.cooldownKey,
+          reason: skip.reason,
+        })),
       // A scan that walked around a broken record is not a clean scan.
       unreadable: result.unreadable.map(unreadableTriggerJson),
     };
@@ -168,13 +203,23 @@ function toolBrainTrigger(
     // read and held nothing rather than that part of it was skipped.
     return {
       operation,
-      triggers: records.map(triggerToJson),
+      triggers: view.keep(records, triggerRefs).map(triggerToJson),
       unreadable: scan.unreadable.map(unreadableTriggerJson),
     };
   }
   if (isTriggerTransition(operation)) {
     const id = coerceStr(args, "id", true)!;
     try {
+      // Checked BEFORE the transition, not after it: `transitionTrigger`
+      // writes, so a check on its return value would have moved another
+      // owner's trigger through the lifecycle and only then declined to
+      // say so. A trigger this caller may not see answers exactly as an
+      // absent id does - same message, byte for byte, from the store's
+      // own error - because a distinguishable refusal confirms it exists.
+      const target = readTriggers(ctx.vault, { now }).records.find((r) => r.id === id);
+      if (target !== undefined && !view.row(...triggerRefs(target))) {
+        throw new Error(`unknown trigger: ${id}`);
+      }
       return {
         operation,
         trigger: triggerToJson(transitionTrigger(ctx.vault, id, operation, { now })),

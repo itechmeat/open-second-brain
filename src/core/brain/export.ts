@@ -19,6 +19,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { hostPathFreeReason } from "./host-path-free.ts";
 import { parsePreference } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
 import { vaultDisplayName } from "./templates.ts";
@@ -132,6 +133,19 @@ export interface ExportedPreferencesJson {
 }
 
 /**
+ * Every row the walk produced, and every file it could not read.
+ *
+ * The pair, never one of them: a caller holding this has been told both
+ * how much it got and how much it missed, which is the property
+ * {@link collectExportRows}' refusal enforces for callers that cannot use
+ * a partial answer.
+ */
+export interface PreferenceCollection {
+  readonly rows: ReadonlyArray<ExportedPreferenceRow>;
+  readonly failures: ReadonlyArray<PreferenceParseFailure>;
+}
+
+/**
  * Walk `Brain/preferences/`, parse every `pref-*.md`, and project to
  * the export row shape sorted by `id` for deterministic output.
  *
@@ -144,8 +158,34 @@ export interface ExportedPreferencesJson {
  * cannot be parsed into a row.
  */
 export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferenceRow> {
+  const { rows, failures } = collectPreferenceRows(vault);
+  if (failures.length > 0) throw new PreferenceParseError(failures);
+  return rows;
+}
+
+/**
+ * The same walk, reporting its failures instead of raising them.
+ *
+ * Reserved for a caller that has a use for a partial answer AND reports
+ * the gap. There is exactly one - the bank import's prior-topic map, which
+ * reads the DESTINATION vault to learn which topics existing rules already
+ * claim. `collectExportRows`' refusal is right for an export and wrong
+ * there: one malformed rule already sitting in the destination would abort
+ * an entire import, wholesale, on a condition unrelated to the bundle
+ * being carried.
+ *
+ * Taking the failures without rendering them is the silent-drop defect
+ * this module's refusal exists to prevent, so
+ * {@link PreferenceRestoreResult.topicScanUnreadable} carries them all the
+ * way to the operator's terminal.
+ *
+ * The directory LISTING failure still raises: it is a permission or
+ * filesystem fault over the whole directory, not a per-file parse, and no
+ * partial answer exists to give.
+ */
+export function collectPreferenceRows(vault: string): PreferenceCollection {
   const dir = brainDirs(vault).preferences;
-  if (!existsSync(dir)) return [];
+  if (!existsSync(dir)) return { rows: [], failures: [] };
   const rows: ExportedPreferenceRow[] = [];
   const failures: PreferenceParseFailure[] = [];
   let entries: ReadonlyArray<string>;
@@ -155,13 +195,24 @@ export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferen
     // The directory exists - `existsSync` just said so - so a listing
     // failure is a permission or filesystem fault, not an empty Brain.
     // Returning `[]` here reported the second while the first was true.
-    throw new Error(`cannot list ${dir}: ${reasonOf(err)}`, { cause: err });
+    // Named vault-relative for the same reason the per-file failures are:
+    // this collector is reachable from an MCP error path.
+    const rel = relative(vault, dir);
+    throw new Error(`cannot list ${rel}: ${hostPathFreeReason(err, vault, dir, rel)}`, {
+      cause: err,
+    });
   }
   for (const name of entries) {
     if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
     const abs = join(dir, name);
     const record = (err: unknown): void => {
-      failures.push({ path: relative(vault, abs), reason: reasonOf(err) });
+      const rel = relative(vault, abs);
+      // The parser's own message carries the absolute host path
+      // (`BrainParseError` composes `<detail> (<path>)`, and a raw `node:fs`
+      // failure embeds it too), and this refusal is reachable from an MCP
+      // error path, where `src/mcp/tools.ts` forbids one. The `path` field
+      // beside it is already vault-relative; the reason now matches.
+      failures.push({ path: rel, reason: hostPathFreeReason(err, vault, abs, rel) });
     };
     let pref: BrainPreference;
     try {
@@ -186,14 +237,8 @@ export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferen
     }
     rows.push(toRow(pref, body));
   }
-  if (failures.length > 0) throw new PreferenceParseError(failures);
   rows.sort((a, b) => a.id.localeCompare(b.id));
-  return rows;
-}
-
-/** The message an unknown thrown value carries, with no `[object Object]`. */
-function reasonOf(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  return { rows, failures };
 }
 
 function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {

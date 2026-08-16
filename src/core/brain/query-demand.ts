@@ -178,9 +178,8 @@ export const DEMAND_SECRET_TOKEN_MIN_LEN = 20;
 
 /**
  * Normalize a raw query into the terms actually stored: the significant
- * terms (length ≥ 3, deduped) sorted for a stable bucket key, with the
- * privacy filters below applied. Capped at
- * {@link DEMAND_MAX_TERMS_PER_RECORD}.
+ * terms, deduped and sorted for a stable bucket key, with the privacy
+ * filters below applied. Capped at {@link DEMAND_MAX_TERMS_PER_RECORD}.
  */
 export function normalizeQueryTerms(query: string): string[] {
   return sanitizeTerms(significantTerms(query));
@@ -190,7 +189,15 @@ function sanitizeTerms(terms: ReadonlyArray<string>): string[] {
   const out = new Set<string>();
   for (const raw of terms) {
     const term = raw.toLocaleLowerCase().trim();
-    if (term.length < 3 || term.length > DEMAND_TERM_MAX_LEN) continue;
+    // Upper bound only. The lower bound of three characters used to sit
+    // here too, mirroring the one `significantTerms` carried, and it
+    // carried the same defect: a query written in a script whose words
+    // are one or two characters produced no terms, so it could never
+    // form a demand bucket and its recall gaps were invisible to the
+    // promotion loop - a whole language silently unrepresented in the
+    // measurement. Nothing about a short term makes it more identifying,
+    // which is what the remaining filters here are for.
+    if (term.length === 0 || term.length > DEMAND_TERM_MAX_LEN) continue;
     if (isSecretShapedTerm(term)) continue;
     // Belt-and-suspenders: a term the key/value redactor still rewrites
     // is secret-shaped — never a legitimate query word, so drop it rather

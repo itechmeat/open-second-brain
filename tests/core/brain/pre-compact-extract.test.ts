@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { extractPreCompactRecords } from "../../../src/core/brain/pre-compact-extract.ts";
+import { lexSource } from "../../helpers/source-lexer.ts";
 
 let vault: string;
 
@@ -152,7 +153,10 @@ describe("the label recognizer is structural, not a natural-language word list",
     const source = await Bun.file(
       new URL("../../../src/core/brain/pre-compact-extract.ts", import.meta.url).pathname,
     ).text();
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // The shared census lexer. `withoutComments`, not `code`: a word list
+    // would be written as string literals, and the code view would blank
+    // exactly what this test is looking for.
+    const code = lexSource(source).withoutComments;
     for (const word of ["decision", "commitment", "outcome", "rule", "open question"]) {
       expect(code.toLowerCase()).not.toContain(word);
     }

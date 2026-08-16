@@ -66,7 +66,11 @@
  */
 
 import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
-import { collectExportRows, type ExportedPreferenceRow } from "../export.ts";
+import {
+  collectPreferenceRows,
+  type ExportedPreferenceRow,
+  type PreferenceParseFailure,
+} from "../export.ts";
 import { topicKey } from "../dream-plan.ts";
 import {
   BrainCollisionError,
@@ -232,8 +236,30 @@ export interface PreferenceRestoreResult {
    * Folded topic keys that more than one raw topic now claims in the
    * destination vault as a result of this restore. Empty for a restore that
    * created none - the ordinary case.
+   *
+   * Read together with {@link topicScanUnreadable}: an empty list beside a
+   * non-empty one is "no collision among the rules I could read", not "no
+   * collision".
    */
   readonly topicKeyCollisions: ReadonlyArray<RestoredTopicKeyCollision>;
+  /**
+   * Destination preference files the prior-topic scan could not parse.
+   *
+   * The scan reads the DESTINATION vault to learn which topics each
+   * existing rule already claims, and `collectExportRows` refuses the whole
+   * directory when any file in it is unreadable - correctly, for an export,
+   * where "there is no caller for whom a shorter list is the right answer".
+   * An import is that caller. Letting the refusal through made one
+   * pre-existing malformed rule in the destination abort an entire import,
+   * wholesale, on a condition that has nothing to do with the bundle being
+   * carried; the rows would have written fine.
+   *
+   * So the import proceeds on the readable rules and says so here. Empty
+   * for a healthy destination, which is every ordinary run, so a clean
+   * result is unchanged. Non-empty means {@link topicKeyCollisions} is a
+   * partial answer and every surface that renders one must render this too.
+   */
+  readonly topicScanUnreadable: ReadonlyArray<PreferenceParseFailure>;
 }
 
 export interface RestorePreferencesOptions {
@@ -523,8 +549,10 @@ export function restorePreferences(
   const derived: PreferenceRestoreDerivation[] = [];
   // The destination's topics BEFORE this run, so a row that overwrites a
   // rule of the same id replaces its claim rather than contending with it.
+  // Partial by design, and reported: see `topicScanUnreadable`.
+  const scan = collectPreferenceRows(vault);
   const priorTopics = new Map<string, string>();
-  for (const existing of collectExportRows(vault)) priorTopics.set(existing.id, existing.topic);
+  for (const existing of scan.rows) priorTopics.set(existing.id, existing.topic);
   const restoredTopics = new Map<string, string>();
 
   for (let index = 0; index < rows.length; index++) {
@@ -563,6 +591,7 @@ export function restorePreferences(
     fieldsNotRestored: PREFERENCE_FIELDS_NOT_RESTORED,
     derived: Object.freeze(derived),
     topicKeyCollisions: collisionsAfterRestore(priorTopics, restoredTopics),
+    topicScanUnreadable: Object.freeze(scan.failures),
   });
 }
 

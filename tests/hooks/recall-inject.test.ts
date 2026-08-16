@@ -190,17 +190,82 @@ describe("recall-inject telemetry", () => {
     expect(String(details["detail"])).toContain("brain.sqlite");
   });
 
-  test("the two projections agree wherever nothing is being withheld", () => {
-    const decisions: ReadonlyArray<RecallInjectDecision> = [
-      { kind: "inject", brief: "a fenced brief", noteCount: 2, topScore: 0.9, matchQuality: 0.8 },
-      { kind: "abstain", reason: "empty_prompt", topScore: 0, matchQuality: 0 },
-      { kind: "error", fault: RECALL_INJECT_FAULT.timeout },
-    ];
-    for (const decision of decisions) {
-      expect(recallInjectAuditDetails(decision), decision.kind).toEqual(
-        recallInjectTelemetryMetadata(decision) as Record<string, unknown>,
-      );
-    }
+  test("the telemetry projection carries the whole decision, match quality included", () => {
+    // Asserted against literals rather than against the other projection.
+    // Comparing the two proves nothing: `recallInjectAuditDetails` RETURNS
+    // the telemetry object unchanged except on `error` with a `detail`, so
+    // over these three fixtures the comparison is an identity, and every
+    // field could be deleted from both with the test still green.
+    // `match_quality` is the field that reaches the synced continuity log
+    // and `brain_recall_telemetry`, so it is the one that needs naming.
+    expect(
+      recallInjectTelemetryMetadata({
+        kind: "inject",
+        brief: "a fenced brief",
+        noteCount: 2,
+        topScore: 0.9,
+        matchQuality: 0.8,
+      }),
+    ).toEqual({ decision: "inject", note_count: 2, top_score: 0.9, match_quality: 0.8 });
+    expect(
+      recallInjectTelemetryMetadata({
+        kind: "abstain",
+        reason: "below_floor",
+        topScore: 0.65,
+        matchQuality: 0.2,
+      }),
+    ).toEqual({
+      decision: "abstain",
+      reason: "below_floor",
+      top_score: 0.65,
+      match_quality: 0.2,
+    });
+    // An unmeasurable quality travels as null, not as a substituted
+    // number: the log must be able to say "there was no measurement".
+    expect(
+      recallInjectTelemetryMetadata({
+        kind: "abstain",
+        reason: "unmeasurable_quality",
+        topScore: 0.65,
+        matchQuality: null,
+      }),
+    ).toEqual({
+      decision: "abstain",
+      reason: "unmeasurable_quality",
+      top_score: 0.65,
+      match_quality: null,
+    });
+    expect(recallInjectTelemetryMetadata({ kind: "error", fault: RECALL_INJECT_FAULT.timeout }))
+      // The error projection carries no quality and no score at all.
+      .toEqual({ decision: "error", fault: RECALL_INJECT_FAULT.timeout });
+  });
+
+  test("the audit projection adds the message and nothing else", () => {
+    // The one place the two projections may differ, stated as a
+    // difference rather than as an identity over fixtures that cannot
+    // produce one.
+    const withDetail: RecallInjectDecision = {
+      kind: "error",
+      fault: RECALL_INJECT_FAULT.retrieverFailed,
+      detail: "disk I/O error",
+    };
+    expect(recallInjectAuditDetails(withDetail)).toEqual({
+      decision: "error",
+      fault: RECALL_INJECT_FAULT.retrieverFailed,
+      detail: "disk I/O error",
+    });
+    const noDetail: RecallInjectDecision = { kind: "error", fault: RECALL_INJECT_FAULT.timeout };
+    expect(recallInjectAuditDetails(noDetail)).toEqual(
+      recallInjectTelemetryMetadata(noDetail) as Record<string, unknown>,
+    );
+    // And an abstain never grows one, however the retriever failed.
+    const abstain: RecallInjectDecision = {
+      kind: "abstain",
+      reason: "no_matches",
+      topScore: 0,
+      matchQuality: 0,
+    };
+    expect(Object.keys(recallInjectAuditDetails(abstain))).not.toContain("detail");
   });
 
   test("every fault a decision can carry is a member of the closed vocabulary", () => {

@@ -47,6 +47,109 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.49.0
+
+1.49.0 is a MINOR release that nevertheless changes behaviour for input
+and vaults that 1.48.0 accepted. [`docs/stability.md`](stability.md) lists
+"tightening validation so previously accepted input is rejected" as a
+breaking change, so each one is written here rather than left to be
+discovered at the terminal. Nothing below needs a migration step; they all
+need a reader.
+
+**A recall-gate call that passed `scores` alone is now refused.**
+`brain_recall_gate` and `brain_context_pack` decide the adequacy level
+from `match_quality` (a search outcome's `idf_weighted_coverage`) and no
+longer derive one from the scores, because the keyword lane is min-max
+normalised inside its own candidate set and its top row is pinned at the
+configured weight however well it matched. The two arguments now stand or
+fall together: `scores` without `match_quality`, or `match_quality`
+without `scores`, answers `INVALID_PARAMS` naming both. The tool schema
+states the pairing as `dependentRequired`, and the verdict now echoes
+`match_quality` back so the quantity that decided the level travels with
+it. **Fix:** send both, taking `match_quality` from the search outcome's
+`idf_weighted_coverage`. Omit both to get the structural gate alone, which
+is unchanged.
+
+**An unreadable preference file now fails the verb instead of being
+skipped.** `collectExportRows` used to `continue` past a `pref-*.md` it
+could not parse, so an export silently omitted rules - and an export that
+omits a rule reads exactly like a vault that never had it. It now collects
+every failure in the directory (one run names them all) and refuses. Three
+verbs that exited 0 on such a vault now exit **1** with
+`N preference file(s) could not be parsed …`:
+
+- `o2b brain export` (both `--format` values, with or without `--out`)
+- `o2b brain bank-export`
+- `o2b brain explorer --export <path>` - and nothing is written
+
+`o2b brain doctor` reports the same files. **Fix:** repair or remove the
+named files, then re-run. A vault with no malformed preference is
+unaffected.
+
+**`o2b brain bank-import` is deliberately NOT in that list.** It calls the
+same collector against the DESTINATION vault, to learn which topics its
+existing rules already claim. A pre-existing malformed rule there has
+nothing to do with the bundle being carried, so the import proceeds on the
+rules it could read and prints `topic-key check incomplete: <path> …` for
+each one it could not - the topic-key collision list beside it is a
+partial answer, not an empty one. The rows still restore, and the exit
+code is still governed by the bundle's own failed rows.
+
+**`o2b brain explorer` (live mode) refuses to start on an unparseable
+Brain file.** The live server re-reads the vault on every request, so the
+refusal is applied once at boot: a browser showing a silently smaller
+graph is the same lie as a written file. Previously the server started and
+served the incomplete graph. **Fix:** the refusal names every file;
+repair or remove them.
+
+**`o2b brain explorer --export` output content changes.** The exported
+HTML now passes the shared egress redactor before the template
+substitution, so a preference whose text contains a credential-shaped
+value exports with a placeholder in place of it, and stderr carries a
+one-line notice when anything was removed. Byte-for-byte comparisons of
+exports across this boundary will differ on vaults that contain such
+values; a vault that contains none produces the same document.
+
+**`o2b brain feedback --json` mirror fields.** When a shared namespace is
+configured, the payload carried a single `mirror` string. It now carries
+`mirror` plus an optional `mirror_reason`, and the vocabulary changed:
+
+| 1.48.0 | 1.49.0 |
+| --- | --- |
+| `mirror: "ok"` | unchanged |
+| `mirror: "failed"` for an I/O failure | unchanged, plus `mirror_reason` |
+| `mirror: "failed"` for a self-mirror | `mirror: "misconfigured"` plus `mirror_reason` |
+| `mirror: "off"` | the key is absent entirely |
+
+A self-mirror - `shared_namespace` resolving to the origin vault - is
+decided before any I/O and is repaired by editing one config key, while
+`failed` is a write that was attempted and raised; reporting them
+identically sent the operator after the wrong fault. `off` was never
+producible: no caller ever emitted it, and the absence of a mirror is
+expressed by the key not being there. **Fix:** a consumer switching on
+`mirror` must handle `misconfigured` and must not expect `off`.
+
+**Four thresholds now measure something different for an unchanged
+config.** No threshold VALUE changed; what each compares against did. The
+recall-inject floor (`RECALL_INJECT_CONFIDENCE_FLOOR`), the recall-adequacy
+verdict (`recall_adequacy_sufficient` / `recall_adequacy_weak`), the
+gap-loop auto-close floor (`GAP_LOOP_AUTO_CLOSE_FLOOR`) and the cross-vault
+chain stop (`search_chain_stop_score`) all compared their constant against
+a result SCORE. The keyword lane is min-max normalised within its
+candidate set, so the top row of any non-empty recall scored exactly
+`search_keyword_weight` - shipped at 0.6, identical to
+`recall_adequacy_sufficient`. Every keyword recall graded
+`sufficient / proceed`, `weak` and `insufficient` were unreachable, a gap
+task auto-closed on a hit of any quality, and the chain stop meant
+opposite things under the two fusion modes (unreachable in `linear`,
+always met in `rrf`). All four now read IDF-weighted coverage, which is
+absolute and pool-independent. **Expect different outcomes from the same
+numbers**: recall-inject abstains more often on weak matches, adequacy
+verdicts span all three levels, gap tasks stay open on a poor hit, and a
+configured chain stop starts firing (or stops firing) where it did not.
+If you tuned any of these against the old behaviour, re-tune them against
+`idf_weighted_coverage`, which `o2b search --evidence-pack` reports.
+
 ## For operators
 
 Normal updates need no manual steps:

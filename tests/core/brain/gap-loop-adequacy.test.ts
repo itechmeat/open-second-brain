@@ -48,9 +48,14 @@ const QUERY_BUCKET = normalizeQueryTerms(QUERY).join(" ");
  * Recall attempts producing each verdict level under the default
  * thresholds. The level follows `matchQuality`; the scores only carry the
  * usable-result count that `minResults` gates on.
+ *
+ * Each pair puts its score on the OPPOSITE side of the boundary from its
+ * quality, so no case here can be produced by reading the score instead -
+ * the substitution this release removed and which several sibling
+ * fixtures still could not have detected.
  */
 const WEAK_RECALL = Object.freeze({ matchQuality: 0.4, scores: [0.9] });
-const SUFFICIENT_RECALL = Object.freeze({ matchQuality: 0.9, scores: [0.9] });
+const SUFFICIENT_RECALL = Object.freeze({ matchQuality: 0.9, scores: [0.1] });
 const INSUFFICIENT_RECALL = Object.freeze({
   matchQuality: 0,
   scores: [] as ReadonlyArray<number>,
@@ -87,18 +92,22 @@ function seedStructuralGap(topic: string, times: number): void {
 }
 
 /**
- * A retrieval that covers `matchQuality` of the topic. The candidate's own
- * score is fixed and deliberately high: the auto-close floor reads
- * coverage, so a score can neither open nor close a gap task.
+ * A retrieval that covers `matchQuality` of the topic with a candidate
+ * scoring `score`.
+ *
+ * Both are parameters, and callers pass them on opposite sides of the
+ * floor. The score used to be hardcoded at 0.92 while every caller passed
+ * 0.92 as the coverage too, which made the fixture unable to tell the
+ * coverage gate from a score gate.
  */
-function retrieverWithCoverage(matchQuality: number): RecallRetriever {
+function retrieverWithCoverage(matchQuality: number, score: number): RecallRetriever {
   return async () =>
     ({
       candidates: [
         {
           path: "Brain/x.md",
           title: "X",
-          score: 0.92,
+          score,
           searchType: "hybrid",
           startLine: 1,
           endLine: 2,
@@ -143,7 +152,10 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
 
   test("a query with no significant terms records nothing rather than an empty bucket", () => {
     const record = recordRecallAdequacyDemand(vault, {
-      query: "a b c",
+      // Punctuation only. "a b c" used to land here, because the term
+      // floor dropped every token under three characters - which also
+      // dropped every CJK query, so those gaps could never be counted.
+      query: "?!? ...",
       verdict: assessRecallAdequacy(WEAK_RECALL),
     });
     expect(record).toBeNull();
@@ -212,7 +224,8 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   test("an adequacy gap task auto-closes once its topic recalls with sufficient confidence", async () => {
     stampUnmet(QUERY, 3, WEAK_RECALL);
     promoteGapsToTasks(vault, { threshold: 3, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92), {
+    // Coverage above the floor, score far below it.
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92, 0.05), {
       confidenceFloor: 0.5,
       now: NOW,
     });

@@ -31,6 +31,7 @@ import {
   VAULT_BACKING_UNDETERMINED_REASON,
   VAULT_BACKING_UNDETERMINED_REASONS,
 } from "../../src/core/vault-backing.ts";
+import { lexSource } from "../helpers/source-lexer.ts";
 
 const EXT4 = 0xef53;
 const TMPFS = 0x01021994;
@@ -149,7 +150,12 @@ describe("no container signal reaches this verdict", () => {
    * order to explain why it reads none of them, and a scan that counted
    * the explanation as a use would force the reasoning out of the file.
    */
-  const CODE = SOURCE.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // The shared census lexer, not a pair of regexes: the old strip read
+  // a `//` inside a string as a comment opener (hence the `[^:]` guard
+  // for `https://`, which is one shape of that bug, not all of them).
+  // `withoutComments`, because this scan reads STRING literals - a marker
+  // path and an import specifier are both strings.
+  const CODE = lexSource(SOURCE).withoutComments;
 
   test("the module never reads a one-way container marker", () => {
     // Naming them, not counting them: every one of these is evidence of a

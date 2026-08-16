@@ -13,6 +13,7 @@ import { applyRepair } from "../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { NO_EXIT_KEY, noExitReasons } from "../../core/brain/doctor-exits.ts";
 import { buildOperatorSnapshot } from "../../core/brain/operator-snapshot.ts";
+import { foldSemanticHealthVerdict } from "../../core/brain/health/reconcile.ts";
 import {
   extractWikilinkRichBodies,
   parseWikilinkRich,
@@ -73,6 +74,12 @@ async function toolBrainDoctor(
     const outcome = applyRepair(ctx.vault, {
       dryRun: !apply,
       ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+      // The repair branch returns HERE, before the diagnostic streams
+      // below are filtered - so until this argument existed a scoped
+      // caller both read and REWROTE another owner's preferences
+      // (a-label-is-not-a-boundary, U3). The scope bounds the plan, so
+      // the write is bounded too, not just the report.
+      ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
     });
     return { format, repair: outcome };
   }
@@ -215,40 +222,50 @@ async function toolBrainHealth(
   // `topics` describe the batch the detector measured, so a batch of five
   // reported as four is not a narrower true finding, it is a false one.
   const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const contradictions = view.keep(sh?.contradictions ?? [], (c) => [c.aId, c.bId]);
+  const conceptGaps = sh?.conceptGaps ?? [];
+  const staleClaims = view.keep(sh?.staleClaims ?? [], (s) => [s.id]);
+  const batchInflation = view.keep(sh?.batchInflation ?? [], (b) => b.ids);
   return {
     format,
-    verdict: sh?.verdict ?? "clean",
-    contradictions: view
-      .keep(sh?.contradictions ?? [], (c) => [c.aId, c.bId])
-      .map((c) => ({
-        a: c.aId,
-        b: c.bId,
-        ...(c.scope !== null ? { scope: c.scope } : {}),
-        jaccard: c.jaccard,
-        a_sign: c.aSign,
-        b_sign: c.bSign,
-      })),
+    // Folded over the FILTERED families, through the same arithmetic
+    // that produced the unfiltered one. `sh.verdict` summarises findings
+    // this caller may not see, so shipping it beside the emptied arrays
+    // said `watch` with nothing to point at - which tells the caller a
+    // hidden artifact tripped a detector, the existence leak with the
+    // evidence removed. `toolBrainDoctor` above recomputes its `ok` for
+    // exactly this reason.
+    verdict: foldSemanticHealthVerdict({
+      contradictions,
+      conceptGaps,
+      staleClaims,
+      batchInflation,
+    }),
+    contradictions: contradictions.map((c) => ({
+      a: c.aId,
+      b: c.bId,
+      ...(c.scope !== null ? { scope: c.scope } : {}),
+      jaccard: c.jaccard,
+      a_sign: c.aSign,
+      b_sign: c.bSign,
+    })),
     // A term and its frequency; the only family that names no artifact.
-    concept_gaps: (sh?.conceptGaps ?? []).map((g) => ({
+    concept_gaps: conceptGaps.map((g) => ({
       term: g.term,
       frequency: g.frequency,
     })),
-    stale_claims: view
-      .keep(sh?.staleClaims ?? [], (s) => [s.id])
-      .map((s) => ({
-        id: s.id,
-        last_evidence_at: s.lastEvidenceAt,
-        age_days: s.ageDays,
-      })),
-    batch_inflation: view
-      .keep(sh?.batchInflation ?? [], (b) => b.ids)
-      .map((b) => ({
-        ids: b.ids,
-        window_start: b.windowStart,
-        window_end: b.windowEnd,
-        count: b.count,
-        topics: b.topics,
-      })),
+    stale_claims: staleClaims.map((s) => ({
+      id: s.id,
+      last_evidence_at: s.lastEvidenceAt,
+      age_days: s.ageDays,
+    })),
+    batch_inflation: batchInflation.map((b) => ({
+      ids: b.ids,
+      window_start: b.windowStart,
+      window_end: b.windowEnd,
+      count: b.count,
+      topics: b.topics,
+    })),
     ...(sh?.suppressed
       ? {
           suppressed: {

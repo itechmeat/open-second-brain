@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  utimesSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -307,8 +315,8 @@ describe("schema MCP tools", () => {
  * `catch { continue }` and reported nothing at all).
  */
 describe("schema_inspect reports the malformed artifact instead of dying on it", () => {
-  /** Plant both malformed artifacts; returns their vault-relative paths. */
-  function plantMalformedArtifacts(): { retired: string; log: string } {
+  /** Plant every malformed artifact; returns their vault-relative paths. */
+  function plantMalformedArtifacts(): { retired: string; log: string; dangling: string } {
     const retiredRel = join("Brain", "retired", "ret-broken.md");
     mkdirSync(join(vault, "Brain", "retired"), { recursive: true });
     atomicWriteFileSync(
@@ -331,7 +339,18 @@ describe("schema_inspect reports the malformed artifact instead of dying on it",
     // not (a test run as root reads a 0000 file).
     const logRel = join("Brain", "log", "2026-08-16.md");
     mkdirSync(join(vault, logRel), { recursive: true });
-    return { retired: retiredRel, log: logRel };
+    // A DANGLING SYMLINK. Neither fixture above produces a message with a
+    // host path in it - `BrainParseError` keeps the location in its own
+    // `path` field, and EISDIR reads `illegal operation on a directory,
+    // read` with no path at all - so `locationFreeDetail` had nothing to
+    // rewrite and its only test could not fail: replacing the whole
+    // function body with `return raw` left 15 pass, 0 fail. ENOENT is the
+    // shape the function's own docblock cites, and it embeds the absolute
+    // path INSIDE the message: `ENOENT: no such file or directory, open
+    // '/tmp/…/Brain/log/2026-08-15.md'`.
+    const danglingRel = join("Brain", "log", "2026-08-15.md");
+    symlinkSync(join(vault, "Brain", "log", "nothing-here.md"), join(vault, danglingRel));
+    return { retired: retiredRel, log: logRel, dangling: danglingRel };
   }
 
   for (const view of ["lint", "orphans"] as const) {
@@ -353,13 +372,24 @@ describe("schema_inspect reports the malformed artifact instead of dying on it",
       >;
       const unreadable = findings.filter((f) => f["kind"] === "unreadable-artifact");
       expect(unreadable.map((f) => f["path"]).toSorted()).toEqual(
-        [planted.log, planted.retired].toSorted(),
+        [planted.dangling, planted.log, planted.retired].toSorted(),
       );
       // The reason travels with the report, so the operator can act on it
       // without re-running the parser by hand.
       expect(unreadable.every((f) => typeof f["detail"] === "string" && f["detail"] !== "")).toBe(
         true,
       );
+      // The one fixture whose raw message really carries the host path.
+      // Asserted on the DETAIL rather than only on the payload, so the
+      // failure names the field that leaked rather than the whole
+      // response, and so the rewrite is measured where it happens.
+      const dangling = unreadable.find((f) => f["path"] === planted.dangling);
+      const detail = String(dangling?.["detail"]);
+      expect(detail).toContain("ENOENT");
+      expect(detail).not.toContain(vault);
+      // Rewritten to the vault-relative form, not merely deleted: a
+      // message that lost the filename would name nothing at all.
+      expect(detail).toContain(planted.dangling);
       // …and the absolute host path stays out of the payload entirely.
       expect(JSON.stringify(payload)).not.toContain(vault);
     });

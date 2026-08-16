@@ -48,6 +48,17 @@ export interface BuildConceptClusterOptions {
   readonly includeUnlinked?: boolean;
   /** Cap on unlinked-mention rows when included. Default `100`. */
   readonly unlinkedLimit?: number;
+  /**
+   * Owner scope both producers are asked under
+   * (a-label-is-not-a-boundary, U3). `null` / absent hides nothing.
+   *
+   * Both of them, because a cluster is exactly the two: `linkers`
+   * carries the id of every artifact that points AT the target, and
+   * `unlinkedMentions` carries a verbatim line of body prose out of the
+   * page that mentioned it. Threading the scope into one and not the
+   * other would leave the more disclosive half open.
+   */
+  readonly ownerScope?: string | null;
 }
 
 /**
@@ -63,9 +74,10 @@ export function buildConceptCluster(
   opts: BuildConceptClusterOptions = {},
 ): ConceptClusterEnvelope {
   const normalised = normaliseWikilinkTarget(targetId);
+  const scope = opts.ownerScope ?? null;
   const targetTitle = resolveTitle(vault, normalised);
 
-  const index = buildBacklinkIndex(vault);
+  const index = buildBacklinkIndex(vault, scope);
   const refs = index.get(normalised) ?? [];
   const linkers: ConceptLinker[] = refs
     .map((r) =>
@@ -86,11 +98,10 @@ export function buildConceptCluster(
     });
 
   const unlinkedMentions = opts.includeUnlinked
-    ? findUnlinkedMentions(
-        vault,
-        normalised,
-        opts.unlinkedLimit !== undefined ? { limit: opts.unlinkedLimit } : {},
-      )
+    ? findUnlinkedMentions(vault, normalised, {
+        ...(opts.unlinkedLimit !== undefined ? { limit: opts.unlinkedLimit } : {}),
+        ownerScope: scope,
+      })
     : Object.freeze([] as MentionRef[]);
 
   return Object.freeze({

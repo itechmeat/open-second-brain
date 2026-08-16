@@ -35,7 +35,7 @@ import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { aggregateUnmetRecall } from "../query-demand.ts";
 import { summarizeRecallTelemetry } from "../recall-telemetry.ts";
 import { renderActivityTimeline, type ActivityItem } from "../render/activity-line.ts";
-import type { RecallRetriever } from "../recall-inject.ts";
+import type { RecallResultSet, RecallRetriever } from "../recall-inject.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../vault.ts";
 import type { FrontmatterMap } from "../../types.ts";
@@ -50,10 +50,12 @@ export const GAP_LOOP_RECURRENCE_THRESHOLD = 3;
  * of the topic's IDF mass the vault now covers - and not against a result
  * score. Against a score this floor could never refuse anything: the
  * keyword lane min-max normalises within the candidate set, so the top
- * row of ANY non-empty recall scores the configured `keywordWeight`
- * (0.6 by default), which clears 0.5 whatever the hit was worth. A gap
- * task therefore auto-closed on the first keyword match of any quality,
- * which is the outcome this floor exists to prevent.
+ * row of ANY recall with a non-empty keyword lane scores at or above the
+ * configured `keywordWeight` (`DEFAULT_KEYWORD_WEIGHT`, 0.6 by default,
+ * measured at 0.65 on a freshly written keyword-only vault once the
+ * freshness prior is added on top), which clears 0.5 whatever the hit was
+ * worth. A gap task therefore auto-closed on the first keyword match of
+ * any quality, which is the outcome this floor exists to prevent.
  */
 export const GAP_LOOP_AUTO_CLOSE_FLOOR = 0.5;
 
@@ -387,6 +389,46 @@ export function renderGapAgenda(vault: string, now: Date): string {
   return `# Open recall-gap tasks\n${renderActivityTimeline(items, now)}`;
 }
 
+/**
+ * Retrieval for the auto-close gate: the topic, and the membership rule
+ * the answer will be judged by.
+ *
+ * The predicate is an ARGUMENT rather than a post-filter the loop applies
+ * afterwards, and that is the whole point. A gap-task note carries its own
+ * topic verbatim, so it matches its own recall better than anything else
+ * in the vault. Filtering it out of the returned rows afterwards - which
+ * is what this gate used to do - removes it from the membership test and
+ * leaves it inside the number: `idfWeightedCoverage` is computed over the
+ * rows the retrieval returned, so the note the loop is trying not to count
+ * was still supplying the IDF mass the floor read. Every task then cleared
+ * the floor on its own text.
+ *
+ * So the rule travels WITH the query, and the two answers - "is there
+ * anything" and "how much of the topic does it cover" - are measured over
+ * one row set. A retriever that returns a row the predicate rejects has
+ * measured something else, and {@link autoCloseRecalledGaps} refuses its
+ * answer by name rather than reading the number anyway.
+ *
+ * A plain {@link RecallRetriever} is still assignable (it ignores the
+ * second argument) and is still correct for a retrieval that cannot
+ * surface a rejected path at all - which is what the vault-identity
+ * guard's fixture is.
+ */
+export type GapRecallRetriever = (
+  topic: string,
+  admits: (path: string) => boolean,
+) => Promise<RecallResultSet>;
+
+/** Thrown when a {@link GapRecallRetriever} answers outside its membership rule. */
+export class GapRecallScopeError extends Error {
+  constructor(topic: string, paths: ReadonlyArray<string>) {
+    super(
+      `gap auto-close: retriever for "${topic}" returned ${paths.length} row(s) the membership rule excludes (${paths.join(", ")}); its match quality measures rows the gate rejected`,
+    );
+    this.name = "GapRecallScopeError";
+  }
+}
+
 export interface GapAutoCloseResult {
   /** Keys of gap tasks closed by this run. */
   readonly closed: ReadonlyArray<string>;
@@ -408,10 +450,16 @@ export interface GapAutoCloseResult {
  * it as "its score must clear a floor" is what let the floor pretend to be
  * a quality test while only ever testing presence. The floor then judges
  * the quality of the retrieval, which it reads from the retrieval itself.
+ *
+ * Both conditions are measured over ONE row set - see
+ * {@link GapRecallRetriever} for why the membership rule is handed to the
+ * retriever instead of applied to its answer. An unmeasurable match
+ * quality never closes a task: "the vault covers this" is a claim, and a
+ * retrieval that could not weigh the topic has not made it.
  */
 export async function autoCloseRecalledGaps(
   vault: string,
-  retriever: RecallRetriever,
+  retriever: GapRecallRetriever,
   opts: { confidenceFloor?: number; now: Date },
 ): Promise<GapAutoCloseResult> {
   // Vault-identity write guard (context-integrity-gates, Unit J), like
@@ -423,20 +471,28 @@ export async function autoCloseRecalledGaps(
   const kept: string[] = [];
   for (const task of listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })) {
     let coveredElsewhere = false;
-    let matchQuality = 0;
+    let matchQuality: number | null = null;
+    let result: RecallResultSet | null = null;
     try {
       // eslint-disable-next-line no-await-in-loop -- one recall per open task, sequential by design
-      const set = await retriever(task.topic);
-      // Exclude the gap-task notes themselves: a task note carries its own
-      // topic verbatim, so counting it would self-close every gap. Only
-      // genuine vault coverage elsewhere may close a task.
-      coveredElsewhere = set.candidates.some((candidate) => !isGapTaskPath(candidate.path));
-      matchQuality = set.idfWeightedCoverage;
+      result = await retriever(task.topic, admitsGapCoverageRow);
     } catch {
       kept.push(task.key);
       continue;
     }
-    if (coveredElsewhere && matchQuality >= floor) {
+    // Outside the catch: a retriever that answered outside its membership
+    // rule is a broken caller, not a failed recall, and folding it into
+    // "keep the task open" would hide it behind the fail-safe path.
+    const rejected = result.candidates
+      .map((candidate) => candidate.path)
+      .filter((path) => !admitsGapCoverageRow(path));
+    if (rejected.length > 0) throw new GapRecallScopeError(task.topic, rejected);
+    // Only genuine vault coverage elsewhere may close a task - and the
+    // quality now describes the same rows, because the retriever was told
+    // which rows count before it measured them.
+    coveredElsewhere = result.candidates.length > 0;
+    matchQuality = result.idfWeightedCoverage;
+    if (coveredElsewhere && matchQuality !== null && matchQuality >= floor) {
       closeGapTask(task, opts.now);
       closed.push(task.key);
     } else {
@@ -464,4 +520,13 @@ function stringField(value: unknown): string {
 /** Whether a recall candidate path points at a gap-task note (any origin). */
 function isGapTaskPath(path: string): boolean {
   return path.includes(BRAIN_GAP_TASKS_REL);
+}
+
+/**
+ * The membership rule the auto-close gate judges by, as the predicate a
+ * {@link GapRecallRetriever} receives. One definition, used both to shape
+ * the retrieval and to verify what came back, so the two cannot disagree.
+ */
+function admitsGapCoverageRow(path: string): boolean {
+  return !isGapTaskPath(path);
 }

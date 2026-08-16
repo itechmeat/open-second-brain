@@ -20,7 +20,8 @@ import type { CompletenessReport, CompletenessVerdict } from "./types.ts";
 export const RARE_TERM_CORPUS_SHARE = 0.02;
 
 /**
- * Significant query terms: length >= 3, deduplicated, in query order.
+ * Significant query terms: every word-character run, deduplicated, in
+ * query order.
  *
  * Language-agnostic by construction: there is deliberately NO stopword
  * list. A per-language stopword set (the old English-only one) would
@@ -29,14 +30,47 @@ export const RARE_TERM_CORPUS_SHARE = 0.02;
  * {@link buildCoverageReport} — a term that appears in most documents
  * earns near-zero IDF and contributes almost nothing to the weighted
  * coverage, in any language, without a vocabulary list.
+ *
+ * ## Why there is no length floor any more
+ *
+ * There used to be one: a token had to be three characters. It was a
+ * stopword list in disguise, written for a script whose function words
+ * are short and whose content words are not, and it did not survive
+ * contact with a script where the common word length IS one or two
+ * characters. `検索` ("search") is two characters and was dropped whole;
+ * so was every one- and two-character Chinese or Japanese query, which
+ * left the report with nothing to weigh and — before this changed —
+ * scoring a perfect 1.0 for a retrieval that matched nothing.
+ *
+ * A character count cannot be made script-neutral: the same count means
+ * "a function word" in one writing system and "a full noun" in another.
+ * So the count is gone rather than tuned, and the job it was pretending
+ * to do is left where it was always actually done, in the IDF weight. A
+ * one-character term that appears in most documents earns near-zero IDF
+ * in exactly the same way a three-character one does; a one-character
+ * term that appears in two documents is a discriminating term and is now
+ * treated as one.
+ *
+ * The visible cost is on the preview surfaces that share this splitter:
+ * `matchOffset` can now anchor a snippet on a one-character common word
+ * where it previously anchored on a three-character one. That cost is
+ * the same one its docblock already accepted, one character smaller.
  */
 export function significantTerms(query: string): string[] {
   const terms = new Set<string>();
   for (const token of query.toLocaleLowerCase().split(/[^\p{L}\p{N}_-]+/u)) {
-    if (token.length >= 3) terms.add(token);
+    // At least one letter or digit. The splitter keeps `-` and `_` inside
+    // a token so `well-known` and `snake_case` survive whole, which means
+    // a run of pure punctuation (`--`) also survives the split; it is not
+    // a word in any language, and with the length floor gone nothing else
+    // would have stopped it from earning IDF mass.
+    if (HAS_WORD_CHARACTER.test(token)) terms.add(token);
   }
   return [...terms];
 }
+
+/** A token counts as a word once it carries one letter or digit. */
+const HAS_WORD_CHARACTER = /[\p{L}\p{N}]/u;
 
 /** Case-folded containment check shared by pack record building. */
 export function termIncludedIn(haystack: string, term: string): boolean {
@@ -99,8 +133,17 @@ export interface CoverageReport {
    * Support coverage weighted by IDF: the share of the query's total
    * IDF mass the covered terms carry. A result set matching only the
    * common words scores low even when it matches most terms by count.
+   *
+   * `null` when the query carries no IDF mass to weigh at all — see
+   * {@link buildCoverageReport}. NOT a number, deliberately: the previous
+   * shape reported that case as `1`, so a query nothing could be measured
+   * about was indistinguishable from a complete retrieval, and every
+   * threshold reading it fired at maximum confidence. A nullable field
+   * makes the type system ask each consumer what it wants to do about an
+   * unmeasurable query, which is the same question the code was silently
+   * answering "perfect" to.
    */
-  readonly idfWeightedCoverage: number;
+  readonly idfWeightedCoverage: number | null;
   readonly rareTerms: ReadonlyArray<string>;
   readonly uncoveredRareTerms: ReadonlyArray<string>;
 }
@@ -110,15 +153,27 @@ export const COMPLETENESS_COMPLETE_THRESHOLD = 0.8;
 /** IDF-weighted coverage at/above this (below complete) is partial. */
 export const COMPLETENESS_PARTIAL_THRESHOLD = 0.4;
 
+/**
+ * The three-way verdict, plus the fourth state that is not a verdict.
+ *
+ * An unmeasurable coverage (`null`) becomes `unmeasurable` rather than
+ * being folded into `sparse`: "the retrieval missed" and "there was
+ * nothing here to weigh" call for different repairs, and reporting the
+ * second as the first would tell a reader the corpus is thin when the
+ * measurement never ran.
+ */
 export function buildCompletenessReport(coverage: CoverageReport): CompletenessReport {
   const covered = coverage.terms.filter((t) => t.covered).map((t) => t.term);
   const uncovered = coverage.terms.filter((t) => !t.covered);
+  const weighted = coverage.idfWeightedCoverage;
   const verdict: CompletenessVerdict =
-    coverage.idfWeightedCoverage >= COMPLETENESS_COMPLETE_THRESHOLD
-      ? "complete"
-      : coverage.idfWeightedCoverage >= COMPLETENESS_PARTIAL_THRESHOLD
-        ? "partial"
-        : "sparse";
+    weighted === null
+      ? "unmeasurable"
+      : weighted >= COMPLETENESS_COMPLETE_THRESHOLD
+        ? "complete"
+        : weighted >= COMPLETENESS_PARTIAL_THRESHOLD
+          ? "partial"
+          : "sparse";
   return Object.freeze({
     verdict,
     idfWeightedCoverage: coverage.idfWeightedCoverage,
@@ -151,7 +206,13 @@ export interface TargetedRetryPlan {
 }
 
 export function planTargetedRetry(coverage: CoverageReport): TargetedRetryPlan {
-  const belowThreshold = coverage.idfWeightedCoverage < COMPLETENESS_COMPLETE_THRESHOLD;
+  // An unmeasurable coverage does not fire the retry. Stated rather than
+  // left to the empty rare-term list that would also stop it: a retry
+  // aimed at "the specifically-missing high-signal facts" needs a
+  // measurement naming them, and there is none.
+  const belowThreshold =
+    coverage.idfWeightedCoverage !== null &&
+    coverage.idfWeightedCoverage < COMPLETENESS_COMPLETE_THRESHOLD;
   const fire = belowThreshold && coverage.uncoveredRareTerms.length > 0;
   return Object.freeze({
     fire,
@@ -159,6 +220,15 @@ export function planTargetedRetry(coverage: CoverageReport): TargetedRetryPlan {
   });
 }
 
+/**
+ * The report, and the one condition under which there is no number.
+ *
+ * `idfWeightedCoverage` is a SHARE of the query's IDF mass, so it exists
+ * only when there is mass to take a share of. Two inputs leave none: a
+ * query with no word characters at all, and a corpus with no documents
+ * (every `idfForTerm` is then `ln(1) = 0`). Both are reported as `null`,
+ * because neither is a statement about how well the retrieval did.
+ */
 export function buildCoverageReport(inputs: CoverageInputs): CoverageReport {
   const terms: TermCoverage[] = inputs.significantTerms.map((term) => {
     const df = inputs.dfByTerm.get(term) ?? 0;
@@ -180,7 +250,9 @@ export function buildCoverageReport(inputs: CoverageInputs): CoverageReport {
   const uncoveredRareTerms = terms.filter((t) => t.rare && !t.covered).map((t) => t.term);
   return Object.freeze({
     terms: Object.freeze(terms),
-    idfWeightedCoverage: totalIdf === 0 ? 1 : coveredIdf / totalIdf,
+    // No IDF mass means there is nothing to take a share OF, so there is
+    // no coverage — not full coverage. `null`, and every consumer decides.
+    idfWeightedCoverage: totalIdf === 0 ? null : coveredIdf / totalIdf,
     rareTerms: Object.freeze(rareTerms),
     uncoveredRareTerms: Object.freeze(uncoveredRareTerms),
   });

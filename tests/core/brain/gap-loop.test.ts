@@ -19,9 +19,11 @@ import {
   listGapTasks,
   promoteGapsToTasks,
   renderGapAgenda,
+  GapRecallScopeError,
+  type GapRecallRetriever,
 } from "../../../src/core/brain/gaps/gap-loop.ts";
 import { brainGapTasksDir } from "../../../src/core/brain/paths.ts";
-import type { RecallRetriever, RecallResultSet } from "../../../src/core/brain/recall-inject.ts";
+import type { RecallResultSet } from "../../../src/core/brain/recall-inject.ts";
 import { parseFrontmatterText, writeFrontmatterAtomic } from "../../../src/core/vault.ts";
 
 let vault: string;
@@ -51,19 +53,30 @@ function seedGap(topic: string, times: number): void {
 
 const NOW = new Date("2026-06-01T12:00:00.000Z");
 
+/** Path of the one ordinary note the fixtures below recall. */
+const ORDINARY_NOTE = "Brain/x.md";
+
+/** Path of a gap-task note - the row the membership rule excludes. */
+const GAP_TASK_NOTE = "Brain/gap-tasks/gap-abc.md";
+
 /**
- * A retrieval that covers `matchQuality` of the topic. The candidate score
- * is fixed and high on purpose: the auto-close floor reads coverage, so no
- * score can decide whether a gap task closes.
+ * A retrieval that covers `matchQuality` of the topic with a candidate
+ * scoring `score`.
+ *
+ * Both are parameters, and callers are required to pass them on OPPOSITE
+ * sides of the floor. A fixture where the two agree cannot tell the gate
+ * apart from the substitution this release removed: with `score` and
+ * coverage both at 0.92, reverting the gate to `topScore >= floor` leaves
+ * the test green, so it asserts the outcome without asserting the reason.
  */
-function retrieverWithCoverage(matchQuality: number): RecallRetriever {
+function retrieverWithCoverage(matchQuality: number | null, score: number): GapRecallRetriever {
   return async () =>
     ({
       candidates: [
         {
-          path: "Brain/x.md",
+          path: ORDINARY_NOTE,
           title: "X",
-          score: 0.92,
+          score,
           searchType: "hybrid",
           startLine: 1,
           endLine: 2,
@@ -72,6 +85,42 @@ function retrieverWithCoverage(matchQuality: number): RecallRetriever {
       total: 1,
       idfWeightedCoverage: matchQuality,
     }) satisfies RecallResultSet;
+}
+
+/** One row of the fixture corpus {@link retrieverOverRows} recalls. */
+interface FixtureRow {
+  readonly path: string;
+  readonly score: number;
+  /** Share of the topic this row alone covers. */
+  readonly coverage: number;
+}
+
+/**
+ * A retrieval that honours its membership rule the way a real one must:
+ * the predicate selects the rows BEFORE the quality is measured, so the
+ * number describes the rows the gate is about to judge.
+ *
+ * Coverage over the admitted rows is modelled as the best admitted row's
+ * share, and zero when none survived - a measured zero, since the topic
+ * has terms and nothing covered them.
+ */
+function retrieverOverRows(rows: ReadonlyArray<FixtureRow>): GapRecallRetriever {
+  return async (_topic, admits) => {
+    const admitted = rows.filter((row) => admits(row.path));
+    return {
+      candidates: admitted.map((row) => ({
+        path: row.path,
+        title: "X",
+        score: row.score,
+        searchType: "hybrid" as const,
+        startLine: 1,
+        endLine: 2,
+      })),
+      total: admitted.length,
+      idfWeightedCoverage:
+        admitted.length === 0 ? 0 : Math.max(...admitted.map((row) => row.coverage)),
+    } satisfies RecallResultSet;
+  };
 }
 
 describe("gap loop (A3 / t_67d38036)", () => {
@@ -125,7 +174,9 @@ describe("gap loop (A3 / t_67d38036)", () => {
   test("auto-closes a gap task once its topic is recalled with sufficient confidence", async () => {
     seedGap("alpha topic", 3);
     promoteGapsToTasks(vault, { threshold: 2, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92), {
+    // Coverage above the floor, score far below it: only the gate that
+    // reads coverage can close this task.
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92, 0.05), {
       confidenceFloor: 0.5,
       now: NOW,
     });
@@ -139,15 +190,41 @@ describe("gap loop (A3 / t_67d38036)", () => {
     expect(typeof fm["closed_at"]).toBe("string");
   });
 
-  test("never self-closes: a hit on the gap-task note itself does not count as coverage", async () => {
+  test("never self-closes: the gap-task note cannot supply the coverage the floor reads", async () => {
     seedGap("alpha topic", 3);
     promoteGapsToTasks(vault, { threshold: 2, now: NOW });
-    // The only confident hit is the gap-task note itself; it must be ignored.
-    const selfMatch: RecallRetriever = async () =>
+    // The gap-task note covers its own topic completely - it carries the
+    // topic verbatim - and one ordinary note mentions it in passing. The
+    // membership rule excludes the first, so the quality the floor reads
+    // must be the second's 0.1, not the pair's 1.0.
+    //
+    // This is the case the previous shape got wrong. It filtered the task
+    // note out of `coveredElsewhere` but read a coverage number measured
+    // over BOTH rows, so the note it was excluding still cleared the floor
+    // for it and the task closed on its own text.
+    const result = await autoCloseRecalledGaps(
+      vault,
+      retrieverOverRows([
+        { path: GAP_TASK_NOTE, score: 0.99, coverage: 1 },
+        { path: ORDINARY_NOTE, score: 0.4, coverage: 0.1 },
+      ]),
+      { confidenceFloor: 0.5, now: NOW },
+    );
+    expect(result.closed).toHaveLength(0);
+    expect(listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })).toHaveLength(1);
+  });
+
+  test("a retriever that answers outside the membership rule is refused by name", async () => {
+    seedGap("alpha topic", 3);
+    promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    // Ignores `admits` and returns the excluded row anyway. Its quality
+    // number therefore describes rows the gate rejects, and reading it
+    // would be reading a measurement of something else.
+    const ignoresTheRule: GapRecallRetriever = async () =>
       ({
         candidates: [
           {
-            path: "Brain/gap-tasks/gap-abc.md",
+            path: GAP_TASK_NOTE,
             title: "gap",
             score: 0.99,
             searchType: "hybrid",
@@ -156,10 +233,20 @@ describe("gap loop (A3 / t_67d38036)", () => {
           },
         ],
         total: 1,
-        // Full coverage, so only the path rule can keep the task open.
         idfWeightedCoverage: 1,
       }) satisfies RecallResultSet;
-    const result = await autoCloseRecalledGaps(vault, selfMatch, {
+    await expect(
+      autoCloseRecalledGaps(vault, ignoresTheRule, { confidenceFloor: 0.5, now: NOW }),
+    ).rejects.toThrow(GapRecallScopeError);
+    expect(listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })).toHaveLength(1);
+  });
+
+  test("keeps a gap task open when recall stays below the confidence floor", async () => {
+    seedGap("alpha topic", 3);
+    promoteGapsToTasks(vault, { threshold: 2, now: NOW });
+    // Coverage below the floor, score far above it: only the gate that
+    // reads coverage can keep this task open.
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.2, 0.99), {
       confidenceFloor: 0.5,
       now: NOW,
     });
@@ -167,10 +254,13 @@ describe("gap loop (A3 / t_67d38036)", () => {
     expect(listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })).toHaveLength(1);
   });
 
-  test("keeps a gap task open when recall stays below the confidence floor", async () => {
+  test("an unmeasurable recall never closes a task", async () => {
     seedGap("alpha topic", 3);
     promoteGapsToTasks(vault, { threshold: 2, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.2), {
+    // A confident-looking row with no measurable quality behind it: the
+    // exact pair the old `totalIdf === 0 ? 1` produced, which cleared
+    // every floor.
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(null, 0.99), {
       confidenceFloor: 0.5,
       now: NOW,
     });

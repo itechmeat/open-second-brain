@@ -165,3 +165,41 @@ describe("arguments that belong to the other action (D)", () => {
     expect(res["action"]).toBe("list");
   });
 });
+
+/**
+ * The `limit` capped the scan BEFORE the ownership filter ran, so a
+ * scoped caller silently received fewer rows than it asked for and than
+ * the vault holds - and the shortfall is proportional to how much the
+ * other owner wrote, which is a row count read as an existence signal.
+ */
+describe("limit is applied after the ownership filter", () => {
+  test("a scoped caller gets the limit it asked for, not the limit minus what was hidden", async () => {
+    const { indexVault, resolveSearchConfig } = await import("../../src/core/search/index.ts");
+    const configPath = ctx.configPath!;
+
+    // Three dangling targets from an owner-A note, sorting FIRST, plus
+    // three from a shared note. With the limit applied before the filter
+    // a scoped caller sees zero of the three it is entitled to.
+    writeFileSync(
+      join(vault, "aaa-owned.md"),
+      "---\nowner: agent-a\n---\n\n[[aaa-1]] [[aaa-2]] [[aaa-3]]\n",
+    );
+    writeFileSync(join(vault, "zzz-shared.md"), "[[zzz-1]] [[zzz-2]] [[zzz-3]]\n");
+    atomicWriteFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\nintegrity:\n  owner_scope_delivery: fail\n",
+    );
+    await indexVault(resolveSearchConfig({ vault, configPath }), { force: true });
+
+    const scoped = (await tool.handler(
+      { ...ctx, agentName: "agent-b" },
+      {
+        action: "list",
+        limit: 3,
+      },
+    )) as { state: string; targets: Array<{ target: string }> };
+
+    expect(scoped.state).toBe("measured");
+    expect(scoped.targets.map((t) => t.target).toSorted()).toEqual(["zzz-1", "zzz-2", "zzz-3"]);
+  });
+});

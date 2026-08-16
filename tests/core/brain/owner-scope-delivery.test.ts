@@ -36,17 +36,33 @@ import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/bra
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
 const NOW = new Date("2026-05-10T00:00:00Z");
+/**
+ * The identity the WRITER resolves to for this file.
+ *
+ * Pinned because `writePreference` refuses to stamp a placeholder
+ * (a-label-is-not-a-boundary, U3): with no `agent_name` configured,
+ * `resolveAgentName` answers `"agent"`, which owner-scope delivery
+ * refuses as an unverifiable identity and therefore also refuses as an
+ * owner. Unpinned, the `warn` case below wrote pages owned by the
+ * literal `agent` - the state no caller can ever be shown to own.
+ */
+const WRITER = "agent-writer";
 
 let vault: string;
+let savedAgentName: string | undefined;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-owner-delivery-"));
   for (const sub of ["preferences", "retired", "inbox", "log"]) {
     mkdirSync(join(vault, "Brain", sub), { recursive: true });
   }
+  savedAgentName = process.env["VAULT_AGENT_NAME"];
+  process.env["VAULT_AGENT_NAME"] = WRITER;
 });
 afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
+  if (savedAgentName === undefined) delete process.env["VAULT_AGENT_NAME"];
+  else process.env["VAULT_AGENT_NAME"] = savedAgentName;
 });
 
 function setGate(mode: string | null): void {

@@ -77,13 +77,31 @@ interface HookGroupSpec {
  * grok's rules: lifecycle events (SessionStart, UserPromptSubmit, Stop,
  * SessionEnd) reject a `matcher`, so they carry none; PostToolUse keeps a
  * matcher and lists grok's `search_replace` alongside the Claude tool names.
+ *
+ * "Mirroring" is asserted rather than claimed:
+ * `tests/core/install/adapters/grok-hook-parity.test.ts` derives the
+ * plugin's own event -> hook-name map out of `hooks/hooks.json` and
+ * requires this table to cover it, with every deliberate difference
+ * declared there by name and reason. It was a claim for two releases, and
+ * for two releases this table was missing `SubagentStop` and `PreToolUse`
+ * - so a grok install got no delegated-sub-agent capture at all, which is
+ * the headline capability of one of the units that shipped alongside it.
+ *
+ * The MATCHERS still differ, and only the matchers: grok rejects one on a
+ * lifecycle event, so `SessionStart` / `PostCompact` / `PreToolUse` carry
+ * none where the plugin narrows them. That is grok's rule, not a reduced
+ * hook set - an absent matcher fires on every trigger of the event.
  */
 const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupSpec> }> = [
   {
     event: "SessionStart",
     groups: [{ hooks: ["active-inject", "gap-agenda", "session-capture"] }],
   },
-  { event: "UserPromptSubmit", groups: [{ hooks: ["session-capture", "recall-inject"] }] },
+  {
+    event: "UserPromptSubmit",
+    groups: [{ hooks: ["session-capture", "recall-inject", "nav-inject"] }],
+  },
+  { event: "PreToolUse", groups: [{ hooks: ["pretool-orient"] }] },
   {
     event: "PostToolUse",
     groups: [
@@ -95,6 +113,10 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
     ],
   },
   { event: "Stop", groups: [{ hooks: ["session-capture", "stop-log-guardrail"] }] },
+  // The delegated sub-agent's close. Without it a grok install records the
+  // parent's turns and drops every sub-agent's, and a sub-agent transcript
+  // reuses the PARENT's session id - so the loss is invisible in the data.
+  { event: "SubagentStop", groups: [{ hooks: ["session-capture"] }] },
   { event: "SessionEnd", groups: [{ hooks: ["session-capture", "gap-promote"] }] },
   { event: "PostCompact", groups: [{ hooks: ["active-inject", "session-capture"] }] },
 ];

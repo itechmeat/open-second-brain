@@ -59,8 +59,10 @@ import {
   ENTITY_QUOTE_VARIANT_COLLISION_COMMAND,
 } from "./entities/canonical.ts";
 import { scanDanglingWorkruns, WORKRUN_PHASE } from "./dream-workrun.ts";
+import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { LINT_CONSOLIDATE_KIND } from "./lint-consolidate.ts";
 import { appendLogEvent } from "./log.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type DoctorIssue } from "./types.ts";
@@ -1134,6 +1136,33 @@ export interface ApplyRepairOptions {
   readonly agent?: string;
   /** Config path for the agent-name resolver. */
   readonly configPath?: string;
+  /**
+   * Owner scope the repair is bounded by (a-label-is-not-a-boundary,
+   * U3). Absent / `null` repairs everything, which is what the CLI and
+   * every pre-gate caller get.
+   *
+   * Bounds the PLAN, not the report. `toolBrainDoctor` filters the
+   * diagnostic streams it returns, and the repair branch returned before
+   * reaching that filter - so a caller scoped to one owner both read and
+   * REWROTE another owner's preferences, pruning their frontmatter and
+   * logging a `doctor-repair` event for each. Filtering the outcome
+   * afterwards would have hidden the second half while still doing it.
+   */
+  readonly ownerScope?: string | null;
+}
+
+/**
+ * Every artifact one planned fix would name.
+ *
+ * `target` is a stable identifier whose first `::` segment is the
+ * vault-relative page ({@link RepairItem.target}); `detail` spells the
+ * same page and the reference being pruned in prose, as wikilinks. Both
+ * are asked, because a fix that survives on one and discloses on the
+ * other is not filtered.
+ */
+function repairRefs(item: RepairItem): ReadonlyArray<string> {
+  const page = item.target.split("::", 1)[0]!;
+  return [page, ...extractWikilinkRichBodies(item.detail).map((b) => parseWikilinkRich(b).target)];
 }
 
 /**
@@ -1150,8 +1179,10 @@ export function applyRepair(vault: string, opts: ApplyRepairOptions): RepairOutc
   // section of `applier-capability.ts`.
   if (opts.dryRun !== true) assertVaultIdentityForWrite(vault);
   const plan = planRepair(vault);
-  const needsReview = plan.fixes.filter((f) => !f.applicable);
-  const applicable = plan.fixes.filter((f) => f.applicable);
+  const view = ownerScopeView(vault, opts.ownerScope ?? null);
+  const fixes = view.keep(plan.fixes, repairRefs);
+  const needsReview = fixes.filter((f) => !f.applicable);
+  const applicable = fixes.filter((f) => f.applicable);
 
   if (opts.dryRun) {
     const applied = applicable.map((f) => ({ code: f.code, target: f.target, detail: f.detail }));

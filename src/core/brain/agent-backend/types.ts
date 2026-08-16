@@ -39,6 +39,18 @@ export interface MemoryRenderInput {
   readonly memoryPath: string;
   readonly importedAt: string;
   readonly bodySha256: string;
+  /**
+   * Owner token the rendered frontmatter must carry, or `undefined` for
+   * an ownerless (shared) page.
+   *
+   * Resolved by the importer through `resolvedOwnerFor` - the same
+   * decision `writePreference` makes - because a backend that renders
+   * its own frontmatter is a preference writer, and a preference writer
+   * that omits `owner:` under `integrity.owner_scope_delivery` hands
+   * every imported memory to every agent (a-label-is-not-a-boundary,
+   * U3).
+   */
+  readonly owner?: string | undefined;
 }
 
 /** One runtime's memory-format adapter. */

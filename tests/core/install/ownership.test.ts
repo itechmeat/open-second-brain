@@ -60,6 +60,7 @@ import {
   VAULT_BACKING,
   VAULT_BACKING_UNDETERMINED_REASON,
 } from "../../../src/core/vault-backing.ts";
+import { lexSource } from "../../helpers/source-lexer.ts";
 
 const REPO_ROOT = resolve(import.meta.dir, "..", "..", "..");
 const VAULT = "/tmp/some-vault";
@@ -518,7 +519,11 @@ const OUT_OF_VAULT_ANCHOR_RE =
  * `[^:]` guard keeps `https://` out of the line-comment arm.
  */
 function code(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  // The shared census lexer. The `[^:]` guard this replaces was one
+  // patch for one shape of "a `//` inside a string is not a comment"; the
+  // lexer answers the whole class. `withoutComments` keeps the path
+  // literals the anchor pattern matches on.
+  return lexSource(source).withoutComments;
 }
 
 function walk(dir: string, out: string[]): string[] {

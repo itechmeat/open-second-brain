@@ -34,6 +34,7 @@ import { filterExpired, isExpired } from "./expiration.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
+import { ownerScopeView, type OwnerScopeView } from "./owner-scope-view.ts";
 import { parseSignal } from "./signal.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -112,6 +113,20 @@ export interface QueryByTopicOptions {
   readonly showExpired?: boolean;
   /** Wall clock the expiration is compared against. Defaults to `new Date()`. */
   readonly now?: Date;
+  /**
+   * Owner scope the topic's CURRENT RULE is selected under
+   * (a-label-is-not-a-boundary, U3). Absent / `null` selects as before.
+   *
+   * It has to reach the selection rather than filter the result,
+   * because a topic resolves to exactly one preference - the first
+   * match by filename - and several preferences may carry the topic.
+   * Filtering afterwards would drop the row and report the topic as
+   * having no rule at all, so one owner's private preference sorting
+   * ahead of the shared one would HIDE the shared one from everybody
+   * else. Skipping the invisible candidates during the walk returns the
+   * rule this caller actually has.
+   */
+  readonly ownerScope?: string | null;
 }
 
 // ----- Public API -----------------------------------------------------------
@@ -234,10 +249,11 @@ export function queryByTopic(
   signals = filterExpired(signals, { now, showExpired });
 
   // Current rule — prefer the active preference; fall back to retired.
+  const view = ownerScopeView(vault, options.ownerScope ?? null);
   let preference: BrainPreference | BrainRetired | null = null;
-  preference = findPreferenceForTopic(dirs.preferences, want, "preference");
+  preference = findPreferenceForTopic(dirs.preferences, want, "preference", view);
   if (!preference) {
-    preference = findPreferenceForTopic(dirs.retired, want, "retired");
+    preference = findPreferenceForTopic(dirs.retired, want, "retired", view);
   }
   // Expiration filter (C5): an active preference past its expiration_date
   // is dropped from the default result (surfaced only under showExpired).
@@ -356,6 +372,7 @@ function findPreferenceForTopic(
   dir: string,
   topic: string,
   kind: "preference" | "retired",
+  view: OwnerScopeView,
 ): BrainPreference | BrainRetired | null {
   if (!existsSync(dir)) return null;
   const prefix = kind === "preference" ? "pref-" : "ret-";
@@ -378,7 +395,9 @@ function findPreferenceForTopic(
     if (isTombstoned(parseFrontmatter(path)[0])) continue;
     try {
       const parsed = kind === "preference" ? parsePreference(path) : parseRetired(path);
-      if (parsed.topic === topic) return parsed;
+      // Skipped, not returned-then-dropped: see `ownerScope` on
+      // {@link QueryByTopicOptions}.
+      if (parsed.topic === topic && view.visible(parsed.id)) return parsed;
     } catch {
       // Unit F, deliberately NOT converted - same reasoning as
       // collectSignals above: `parsePreference` / `parseRetired` throw on

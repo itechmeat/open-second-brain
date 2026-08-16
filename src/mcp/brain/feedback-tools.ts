@@ -43,6 +43,8 @@ import {
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
+import { gatedOwnerScopeView, type OwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { brainArtifactSlug } from "../../core/brain/wikilink.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
 import { isoDate, isoSecond } from "../../core/brain/time.ts";
 import { slugify } from "../../core/vault.ts";
@@ -355,6 +357,52 @@ function readDreamGates(args: Record<string, unknown>): DreamGateOverrides | und
   }
 }
 
+/**
+ * The rows of a dream plan or run summary the caller may see
+ * (a-label-is-not-a-boundary, U3).
+ *
+ * Every list here names a preference or a signal by id, and the pass
+ * that produced them is vault-wide by construction: consolidation reads
+ * every topic, and clustering only half a vault would produce different
+ * preferences for every caller. So the PASS stays unscoped and the
+ * REPORT is filtered - a caller is told what it did to the artifacts
+ * that caller may see, and nothing about the rest.
+ *
+ * `contradictions`, `quarantined` and `intent_reviews` are absent from
+ * the fold on purpose: their subject is a TOPIC over inbox signals, and
+ * a signal carries no `owner:` anywhere in this product, so there is no
+ * ownership claim on disk to read.
+ */
+function scopedDreamRows<R extends string>(
+  view: OwnerScopeView,
+  plan: {
+    readonly new_unconfirmed: ReadonlyArray<string>;
+    readonly confirmed: ReadonlyArray<string>;
+    readonly retired: ReadonlyArray<{ readonly id: string; readonly reason: R }>;
+    readonly moved_to_processed: ReadonlyArray<string>;
+    readonly suppressed: ReadonlyArray<string>;
+  },
+): {
+  new_unconfirmed: ReadonlyArray<string>;
+  confirmed: ReadonlyArray<string>;
+  retired: ReadonlyArray<{ id: string; reason: R }>;
+  moved_to_processed: ReadonlyArray<string>;
+  suppressed: ReadonlyArray<string>;
+} {
+  const ids = (list: ReadonlyArray<string>): ReadonlyArray<string> => view.keep(list, (id) => [id]);
+  return {
+    new_unconfirmed: ids(plan.new_unconfirmed),
+    confirmed: ids(plan.confirmed),
+    // A retire names the preference by BOTH spellings across the move:
+    // `ret-<slug>` after the pass, `pref-<slug>` before it.
+    retired: view
+      .keep(plan.retired, (r) => [r.id, `pref-${brainArtifactSlug(r.id)}`])
+      .map((r) => ({ id: r.id, reason: r.reason })),
+    moved_to_processed: ids(plan.moved_to_processed),
+    suppressed: ids(plan.suppressed),
+  };
+}
+
 async function toolBrainDream(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -380,6 +428,9 @@ async function toolBrainDream(
   const agent = normalizeAgentArgument(agentArg) ?? resolveAgentName(ctx.configPath ?? undefined);
   const gates = readDreamGates(args);
   const stepArg = coerceStr(args, "step", false);
+  // One view for the whole call: every branch below reports preference
+  // and signal ids, and the staged lifecycle reports them twice.
+  const dreamView = gatedOwnerScopeView(ctx.vault, ctx.agentName);
 
   // Single-step requests (no-dead-ends, Unit E - operator surface).
   // Deliberately checked before any environment work: a step the pass
@@ -446,7 +497,7 @@ async function toolBrainDream(
         return {
           action,
           run_id: bundle.runId,
-          plan: bundle.plan,
+          plan: { ...bundle.plan, ...scopedDreamRows(dreamView, bundle.plan) },
           sources: bundle.sources.length,
           dir: `Brain/dream/staged/${bundle.runId}`,
         };
@@ -463,12 +514,7 @@ async function toolBrainDream(
           applied: outcome.applied,
           drift: [...outcome.validation.drift],
           ...(outcome.summary !== undefined
-            ? {
-                changed: outcome.summary.changed,
-                new_unconfirmed: [...outcome.summary.new_unconfirmed],
-                confirmed: [...outcome.summary.confirmed],
-                retired: outcome.summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
-              }
+            ? { changed: outcome.summary.changed, ...scopedDreamRows(dreamView, outcome.summary) }
             : {}),
         };
       }
@@ -546,12 +592,8 @@ async function toolBrainDream(
     matched: changeList.length,
     changed_count: dryRun ? 0 : changeList.length,
     dry_run: dryRun,
-    new_unconfirmed: [...summary.new_unconfirmed],
-    confirmed: [...summary.confirmed],
-    retired: summary.retired.map((r) => ({ id: r.id, reason: r.reason })),
+    ...scopedDreamRows(dreamView, summary),
     contradictions: [...summary.contradictions],
-    moved_to_processed: [...summary.moved_to_processed],
-    suppressed: [...summary.suppressed],
     warnings: summary.warnings.map((w) => ({
       code: w.code,
       message: w.message,

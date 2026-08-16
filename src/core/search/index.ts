@@ -14,6 +14,7 @@ import { resolveVaultScope } from "../vault-scope/index.ts";
 import { resolveIndexPath, SEARCH_DB_CONFIG_KEY, SEARCH_DB_ENV } from "./paths.ts";
 import { buildFtsTokenize } from "./schema.ts";
 import { isFusionMode, DEFAULT_RRF_K } from "./fusion.ts";
+import { DEFAULT_RECENCY } from "./recency.ts";
 import {
   loadProviderRegistry,
   expandRegisteredProvider,
@@ -150,14 +151,48 @@ export {
 /**
  * Shipped keyword-lane weight.
  *
- * Named because it is quoted outside this module: `rankResults` min-max
- * normalises the keyword lane, so this number is exactly what the
- * top-ranked row of any non-empty keyword recall scores, whatever it
- * matched. Prose that states the pin - `src/core/bench/failure-modes.ts` -
- * imports it rather than repeating the digits, and a test ties the two
- * together so the stated number cannot drift from the shipped one again.
+ * Named because it is quoted outside this module. `rankResults` min-max
+ * normalises the keyword lane, so the top-ranked row of any recall whose
+ * KEYWORD lane is non-empty carries exactly this much keyword term
+ * whatever it matched - and every layer `rankResults` adds on top of that
+ * term (freshness, link, tag, entity, activation, co-access, reuse,
+ * temporal intent, session focus) is non-negative. So this number is a
+ * FLOOR on that row's score, not the score: `>=`, never `=`.
+ *
+ * The distinction is not academic. Measured on a keyword-only vault whose
+ * files were just written, the top row scores 0.6499997... - this weight
+ * plus the freshness prior sitting at its amplitude, which is the one
+ * other layer such a vault has live ({@link FRESH_KEYWORD_ONLY_TOP_SCORE}).
+ * On the committed benchmark corpus a row that also draws a link or entity
+ * boost reaches 0.67, and with the semantic lane on the pinned window runs
+ * from 0.2675 to 0.9405. What is invariant is the floor, and only while
+ * the keyword lane is non-empty.
+ *
+ * Prose that states the pin - `src/core/bench/failure-modes.ts`,
+ * `src/core/config.ts`, `src/core/brain/recall-adequacy.ts`,
+ * `src/core/brain/gaps/gap-loop.ts`, `src/core/search/types.ts` - cites
+ * these two symbols rather than repeating the digits, and
+ * `tests/core/search/keyword-lane-top-score.test.ts` drives the shipped
+ * pipeline over such a vault and asserts both numbers against these
+ * bindings, so the stated number cannot drift from the shipped one again.
  */
 export const DEFAULT_KEYWORD_WEIGHT = 0.6;
+
+/**
+ * What the top row of a keyword-only recall over freshly written files
+ * actually scores: {@link DEFAULT_KEYWORD_WEIGHT} plus the freshness
+ * prior at its full amplitude.
+ *
+ * Derived rather than written out, because it is the sum of two shipped
+ * defaults and a hand-copied 0.65 is exactly the digit that drifted.
+ * An upper bound for that vault only - nothing else is live there - and
+ * not a ceiling in general: the other eight boost layers are additive.
+ * The real content of the number is the pair of unreachability facts the
+ * threshold moves rest on: it clears every floor a score used to be
+ * compared against (0.35, 0.5, 0.6), and it falls short of the 0.8 chain
+ * stop.
+ */
+export const FRESH_KEYWORD_ONLY_TOP_SCORE = DEFAULT_KEYWORD_WEIGHT + DEFAULT_RECENCY.amplitude;
 
 const DEFAULTS = {
   chunkSize: 800,
@@ -175,9 +210,12 @@ const DEFAULTS = {
   maxHops: 1,
   hopDecay: 0.5,
   maxExpansionPerHit: 3,
-  recencyShape: 0.8,
-  recencyScale: 30,
-  recencyAmplitude: 0.05,
+  // Read off the curve module rather than copied: `FRESH_KEYWORD_ONLY_TOP_SCORE`
+  // is derived from the amplitude, so a second copy of it here could make
+  // the derived constant describe a curve the resolver does not ship.
+  recencyShape: DEFAULT_RECENCY.shape,
+  recencyScale: DEFAULT_RECENCY.scale,
+  recencyAmplitude: DEFAULT_RECENCY.amplitude,
   synonymMaxTerms: 3,
   cacheTtlSeconds: 300,
   fusionMode: "linear" as const,

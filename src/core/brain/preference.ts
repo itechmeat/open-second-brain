@@ -55,10 +55,10 @@ import {
 import { brainDirsForWrite, preferencePath, retiredPath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { OWNER_UNRESOLVED, ownerStampFor } from "../graph/agent-scope.ts";
-import { resolveAgentName } from "../config.ts";
+import { resolveAgentName, UNCONFIGURED_AGENT_NAME } from "../config.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import { GATE_MODE } from "../integrity/stamp.ts";
-import { loadIntegrityConfigSafe } from "./policy.ts";
+import { loadIntegrityConfigForWrite } from "./policy.ts";
 import { asProvenanceLevel, type ProvenanceLevel } from "./provenance/provenance.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
 import {
@@ -468,9 +468,27 @@ export function writePreference(
  * never opted in is byte-identical - the same contract `agent-scope.ts`
  * and the delivery collector state for the read side.
  *
- * `warn` stamps as `fail` does, deliberately: `warn` exists so an
- * operator can watch what `fail` would withhold before tightening the
- * gate, and a mode that wrote no ownership would have nothing to report.
+ * `warn` stamps as `fail` does, deliberately: it exists so an operator
+ * can see what `fail` would withhold before tightening the gate, and a
+ * mode that wrote no ownership would leave nothing to look at.
+ *
+ * Where they look is the FILES. This stamp is the whole of `warn`'s
+ * observability today: the read surfaces are inert under `warn`
+ * (`owner-scope-view.ts` states why), so the population `fail` would
+ * start withholding is visible by reading `owner:` off
+ * `Brain/preferences/`, not by any per-response field.
+ *
+ * The gate is read through {@link loadIntegrityConfigForWrite}, NOT the
+ * safe loader every reader uses. This is the WRITE side of the
+ * reader/writer asymmetry that loader documents: an unreadable
+ * `_brain.yaml` resolves STRICT for a reader, which only withholds more,
+ * but strict here means STAMP - so a single bad token in the YAML would
+ * have started marking new pages with an owner the operator never asked
+ * for, permanently, since ownership is carried forward and never
+ * re-derived. A writer cannot infer an intent to enable ownership from a
+ * file it could not read, so the write is refused with the parse failure
+ * named. Absent config is a different condition and still resolves to
+ * the defaults, i.e. `off`.
  */
 function withResolvedOwner(
   vault: string,
@@ -478,10 +496,50 @@ function withResolvedOwner(
   input: WritePreferenceInput,
   configPath: string | undefined,
 ): WritePreferenceInput {
-  if (input.owner?.trim()) return input;
-  const mode = loadIntegrityConfigSafe(vault).owner_scope_delivery;
-  if (mode === GATE_MODE.off) return input;
-  if (existsSync(path)) return { ...input, ...carriedOwner(path) };
+  const owner = resolvedOwnerFor(vault, path, input.owner, configPath);
+  return owner === undefined ? input : { ...input, owner };
+}
+
+/**
+ * The `owner:` value a NEW preference file at `path` must carry, or
+ * `undefined` for "write no `owner:` field".
+ *
+ * The rule {@link withResolvedOwner} documents, exposed on its own so a
+ * writer that does not build a {@link WritePreferenceInput} can still
+ * ask it. `import-claude-memory.ts` is that writer: it renders its own
+ * frontmatter and calls `atomicWriteFileSync` directly, so it never
+ * reached `writePreference` and every memory it imported landed
+ * ownerless and was then delivered to every agent - while the claim
+ * "every production preference writer stamps the identity" was held true
+ * by a hand-written list of four writers that did not include it.
+ *
+ * Exported rather than duplicated for that reason: a second copy of this
+ * decision is how the fifth writer gets it wrong again.
+ */
+export function resolvedOwnerFor(
+  vault: string,
+  path: string,
+  explicit: string | undefined,
+  configPath: string | undefined,
+): string | undefined {
+  const given = explicit?.trim();
+  if (given) return given;
+  let mode: string;
+  try {
+    mode = loadIntegrityConfigForWrite(vault).owner_scope_delivery;
+  } catch (err) {
+    throw new Error(
+      `preference owner cannot be resolved: Brain/_brain.yaml exists but could not be ` +
+        `read (${err instanceof Error ? err.message : String(err)}), so whether ` +
+        `integrity.owner_scope_delivery asks this write to stamp an owner is unknown. ` +
+        `A writer does not guess that: stamping would mark this page with an owner the ` +
+        `operator may never have asked for, and skipping would leave it shared under a ` +
+        `gate that may be on. Fix the file, then re-run.`,
+      { cause: err },
+    );
+  }
+  if (mode === GATE_MODE.off) return undefined;
+  if (existsSync(path)) return carriedOwner(path).owner;
   const agent = resolveAgentName(configPath);
   const stamp = ownerStampFor(agent);
   if (stamp === null) {
@@ -489,11 +547,14 @@ function withResolvedOwner(
       `preference owner cannot be resolved: integrity.owner_scope_delivery is ` +
         `${JSON.stringify(mode)}, which stamps the writing agent onto every new ` +
         `preference, and the resolved identity ${JSON.stringify(agent)} does not ` +
-        `reduce to one ownership token; set VAULT_AGENT_NAME or 'agent_name' in ` +
-        `the plugin config to a non-blank name`,
+        `reduce to one ownership token - it is blank, it is not one string, or it is a ` +
+        `placeholder name (${JSON.stringify(UNCONFIGURED_AGENT_NAME)} and the rest of ` +
+        `PLACEHOLDER_AGENT_VALUES), which owner-scope delivery refuses as an identity ` +
+        `and therefore refuses as an owner; set VAULT_AGENT_NAME or 'agent_name' in ` +
+        `the plugin config to a real, non-placeholder name`,
     );
   }
-  return { ...input, owner: stamp };
+  return stamp;
 }
 
 /** Attribution recorded on the notices the ownership carry-forward reads produce. */

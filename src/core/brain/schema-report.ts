@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join, sep } from "node:path";
+import { join } from "node:path";
 
 import { listVaultPages } from "../vault.ts";
 import { loadBrainConfig } from "./policy.ts";
-import { BrainParseError } from "./parse-error.ts";
+import { hostPathFreeReason } from "./host-path-free.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import {
@@ -124,6 +124,10 @@ export function buildSchemaReport(vault: string): BrainSchemaReport {
  * the message (`ENOENT: … open '/home/…/Brain/log/x.md'`). This report
  * states its locations as vault-relative paths in a `path` field, so the
  * detail is rewritten to match rather than trusted to be clean.
+ *
+ * The rewrite itself is {@link hostPathFreeReason}: the export collector
+ * needs the identical guarantee for the identical reason, and two copies
+ * would let one of them go stale on the next error shape.
  */
 function locationFreeDetail(
   err: unknown,
@@ -131,11 +135,7 @@ function locationFreeDetail(
   absolutePath: string,
   rel: string,
 ): string {
-  const raw =
-    err instanceof BrainParseError ? err.detail : err instanceof Error ? err.message : String(err);
-  // The artifact's own path becomes its vault-relative form; any other
-  // in-vault path mentioned alongside it loses the vault root.
-  return raw.split(absolutePath).join(rel).split(`${vault}${sep}`).join("");
+  return hostPathFreeReason(err, vault, absolutePath, rel);
 }
 
 /**

@@ -37,17 +37,27 @@
  *
  * A measured caveat that used to belong with the number, kept because it
  * is what the floor's current shape is a response to: through the shipped
- * keyword lane the top-ranked result's SCORE is pinned at the configured
- * keyword weight (`DEFAULT_KEYWORD_WEIGHT`, `src/core/search/index.ts`),
- * because `rankResults`
- * min-max normalizes the lane. While the floor was compared against that
- * score, `below_floor` was unreachable via the default retriever and the
- * abstain that actually fired on an off-topic prompt was `no_matches` -
- * the term under pressure was not the term that fired. The floor now
- * reads `idfWeightedCoverage`, which is absolute and pool-independent, so
- * a weak match reaches `below_floor` and this bench grades the bound it
- * says it grades. The stated weight is imported rather than written out,
- * so it cannot drift from the shipped default again.
+ * keyword lane the top-ranked result's SCORE sits at or above the
+ * configured keyword weight (`DEFAULT_KEYWORD_WEIGHT`,
+ * `src/core/search/index.ts`) whenever that lane is non-empty, because
+ * `rankResults` min-max normalizes it and then adds nine non-negative
+ * layers on top - measured at `FRESH_KEYWORD_ONLY_TOP_SCORE` (0.65) on a
+ * freshly written keyword-only vault, and higher still where a link or
+ * entity boost fires. While the floor was compared against that score,
+ * `below_floor` was unreachable via the default retriever and the abstain
+ * that actually fired on an off-topic prompt was `no_matches` - the term
+ * under pressure was not the term that fired. The floor now reads
+ * `idfWeightedCoverage`, which grades the match rather than the pool's
+ * shape, so a weak match reaches `below_floor` and this bench grades the
+ * bound it says it grades.
+ *
+ * Both figures are named rather than written out here, and
+ * `tests/core/search/keyword-lane-top-score.test.ts` drives the shipped
+ * pipeline and asserts what it measures against those two bindings - that
+ * test, not this sentence, is what keeps the stated number from drifting
+ * from the shipped one. It drifted once: this paragraph read 0.65 before
+ * the branch that rewrote it, the rewrite substituted 0.6, and 0.6 is the
+ * floor rather than the measurement.
  *
  * ## 2. Write-back fidelity
  *

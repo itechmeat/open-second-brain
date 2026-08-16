@@ -148,7 +148,7 @@ describe("gap-promote hook (SessionEnd)", () => {
   });
 });
 
-describe("gap-promote hook audit line", () => {
+describe("gap-promote hook audit line and auto-close", () => {
   /** Every `gap_loop_run` details object the hook appended, oldest first. */
   function auditDetails(): ReadonlyArray<Record<string, unknown>> {
     const dir = join(vault, ".open-second-brain", "hook-audit");
@@ -163,20 +163,39 @@ describe("gap-promote hook audit line", () => {
   }
 
   /** Write one gap-task note directly, bypassing the hook's mint budget. */
-  function writeTask(key: string, status: string, closedAt?: string): void {
+  function writeTask(
+    key: string,
+    status: string,
+    opts: { closedAt?: string; topic?: string } = {},
+  ): void {
+    const topic = opts.topic ?? key;
     writeFrontmatterAtomic(
       join(brainGapTasksDir(vault), `${key}.md`),
       {
         kind: GAP_TASK_KIND,
         gap_key: key,
-        gap_topic: key,
+        gap_topic: topic,
         gap_source: GAP_SOURCE_TELEMETRY,
         status,
         occurrences: "3",
         created_at: "2026-01-01T00:00:00.000Z",
-        ...(closedAt !== undefined ? { closed_at: closedAt, closed_reason: "recalled" } : {}),
+        ...(opts.closedAt !== undefined
+          ? { closed_at: opts.closedAt, closed_reason: "recalled" }
+          : {}),
       },
-      "body",
+      // The body repeats the topic, exactly as a minted note does: that is
+      // why the auto-close gate excludes gap-task notes by path.
+      `Recurring recall gap for ${topic}.`,
+      { vaultForRelativePath: vault, overwrite: true },
+    );
+  }
+
+  /** A plain vault note that genuinely covers `topic`, outside the gap area. */
+  function writeCoveringNote(topic: string): void {
+    writeFrontmatterAtomic(
+      join(vault, "notes", "coverage.md"),
+      { title: topic },
+      `This note documents ${topic} end to end. The ${topic} steps are recorded here.`,
       { vaultForRelativePath: vault, overwrite: true },
     );
   }
@@ -211,7 +230,7 @@ describe("gap-promote hook audit line", () => {
 
   test("reports a closed task removed under the retention window as pruned", async () => {
     const stale = new Date(Date.now() - GAP_TASK_CLOSED_RETENTION_MS - 60_000).toISOString();
-    writeTask("gap-stale", GAP_TASK_STATUS_CLOSED, stale);
+    writeTask("gap-stale", GAP_TASK_STATUS_CLOSED, { closedAt: stale });
     const run = await runHook(
       "gap-promote",
       { hook_event_name: "SessionEnd" },
@@ -228,7 +247,7 @@ describe("gap-promote hook audit line", () => {
     // auto-close pass anything to recall.
     const recent = new Date().toISOString();
     for (let i = 0; i < GAP_TASKS_MAX_NOTES; i++) {
-      writeTask(`gap-filler-${i}`, GAP_TASK_STATUS_CLOSED, recent);
+      writeTask(`gap-filler-${i}`, GAP_TASK_STATUS_CLOSED, { closedAt: recent });
     }
     seedGap("alpha topic", 3);
     const run = await runHook(
@@ -241,6 +260,52 @@ describe("gap-promote hook audit line", () => {
     expect(details?.["capped"]).toBe(1);
     expect(details?.["promoted"]).toBe(0);
     expect(listGapTasks(vault)).toHaveLength(GAP_TASKS_MAX_NOTES);
+  });
+
+  // The two tests below drive the WHOLE hook, not `autoCloseRecalledGaps`
+  // in isolation, because the fault they exist to catch lives in the
+  // wiring rather than in either piece. The gate takes a retriever of
+  // `(topic, admits)`; a plain one-argument `RecallRetriever` is
+  // structurally assignable to that type, so passing one type-checks
+  // cleanly, ignores the membership rule, returns the gap-task note
+  // itself and makes the gate throw - into the hook's outer catch, which
+  // left every run doing nothing. Only an end-to-end run can tell the
+  // difference: a core-level test supplies its own retriever and so can
+  // never observe which one the hook actually passes.
+  const COVERED_TOPIC = "widget calibration procedure";
+
+  test("closes a gap task the vault now covers outside the gap area", async () => {
+    writeTask("gap-covered", GAP_TASK_STATUS_OPEN, { topic: COVERED_TOPIC });
+    writeCoveringNote(COVERED_TOPIC);
+    const run = await runHook(
+      "gap-promote",
+      { hook_event_name: "SessionEnd" },
+      { VAULT_DIR: vault, ...FLAG_ON },
+    );
+    expect(run.exit).toBe(0);
+    const [details] = auditDetails();
+    expect(details).toBeDefined();
+    expect(details?.["closed"]).toBe(1);
+    expect(details?.["kept"]).toBe(0);
+    expect(listGapTasks(vault, { status: GAP_TASK_STATUS_CLOSED }).map((t) => t.key)).toEqual([
+      "gap-covered",
+    ]);
+  });
+
+  test("keeps a gap task whose only match is its own note", async () => {
+    writeTask("gap-uncovered", GAP_TASK_STATUS_OPEN, { topic: COVERED_TOPIC });
+    const run = await runHook(
+      "gap-promote",
+      { hook_event_name: "SessionEnd" },
+      { VAULT_DIR: vault, ...FLAG_ON },
+    );
+    expect(run.exit).toBe(0);
+    const [details] = auditDetails();
+    expect(details?.["closed"]).toBe(0);
+    expect(details?.["kept"]).toBe(1);
+    expect(listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN }).map((t) => t.key)).toEqual([
+      "gap-uncovered",
+    ]);
   });
 });
 

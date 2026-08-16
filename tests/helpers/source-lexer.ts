@@ -33,7 +33,9 @@
  *
  * ## The two views
  *
- * {@link lexSource} returns both, each the same LENGTH as the source, so
+ * {@link lexSource} returns both, each the same LENGTH as the source -
+ * measured in UTF-16 code units, the unit `String.length` and `text[i]`
+ * both speak, and the unit {@link toCodeUnits} builds the views in - so
  * every offset still points at the same character and a rule that needs a
  * literal value reads it back out of the original text at the same index.
  *
@@ -159,11 +161,28 @@ function regexCanStart(text: string, at: number, prev: string): boolean {
   return word !== null && REGEX_PRECEDING_KEYWORDS.has(word[0]);
 }
 
+/**
+ * Split into UTF-16 code UNITS, the unit the scanner indexes in.
+ *
+ * `[...text]` and `Array.from(text)` iterate code POINTS, so an astral
+ * character (one point, two units) makes the array one slot shorter than
+ * the string it came from - and every offset the scanner computed with
+ * `text[i]` / `text.length` then addresses the wrong slot. Shipped source
+ * really carries one: `src/core/discipline/render.ts`, where the two
+ * views measured 4359 against a 4360-character file and every blanking
+ * window past the astral character landed a slot early. `split("")`
+ * yields code units, and joining surrogate halves back in order rebuilds
+ * the same string.
+ */
+function toCodeUnits(text: string): string[] {
+  return text.split("");
+}
+
 /** Both views of `text`, with every offset and every newline preserved. */
 export function lexSource(text: string): LexedSource {
   const n = text.length;
-  const withoutComments = [...text];
-  const code = [...text];
+  const withoutComments = toCodeUnits(text);
+  const code = toCodeUnits(text);
   const blank = (arr: string[], from: number, to: number): void => {
     for (let k = Math.max(from, 0); k < Math.min(to, n); k++) {
       if (arr[k] !== "\n") arr[k] = " ";

@@ -287,15 +287,42 @@ async function toolBrainClusters(
     } catch {
       // Metrics are observability, not correctness.
     }
+    // A community is reported by the pages it contains: `members` are
+    // vault-relative paths, `id` is derived from the seed page's path,
+    // and the materialised `written` note is named after the same seed
+    // (a-label-is-not-a-boundary, U3). A community is dropped WHOLE
+    // rather than trimmed - its `size` and `density` describe the
+    // subgraph the detector measured, so a community of seven reported
+    // as four is not a narrower true finding, it is a false one, and the
+    // same argument `brain_health` makes about a batch-inflation burst.
+    //
+    // Detection and materialisation stay vault-wide: clustering the
+    // visible half of a link graph would produce different communities
+    // for every caller and write them over each other. This filters what
+    // the CALLER is told, which is the boundary the gate declares.
+    const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+    const visible = view.keep(communities, (c) => c.members.map((m) => m.path));
+    // `written` / `removed` are the cluster NOTES, and a cluster note is
+    // named `cluster-<community id>.md` after the seed page - so its own
+    // frontmatter carries no owner while its filename spells one. They
+    // are therefore filtered by which community they belong to, through
+    // the materialiser's own naming rule, not by asking the note file
+    // what it owns.
+    const visibleNotes = new Set(visible.map((c) => `Brain/clusters/cluster-${c.id}.md`));
     return {
-      communities: communities.map((c) => ({
+      communities: visible.map((c) => ({
         id: c.id,
         size: c.size,
         density: c.density,
         members: c.members.map((m) => m.path),
       })),
-      written: materialized.written,
-      removed: materialized.removed,
+      written: materialized.written.filter((p) => visibleNotes.has(p)),
+      // A removal names a community that no longer exists, so there is
+      // no surviving membership to ask about. Under a scope the list is
+      // withheld whole: it is the one field here whose subject cannot be
+      // resolved, and a `removed` entry naming a hidden seed is the same
+      // disclosure as a `written` one.
+      removed: view.scope === null ? materialized.removed : [],
       ...(materialized.batches ? { batches: materialized.batches } : {}),
     };
   } finally {

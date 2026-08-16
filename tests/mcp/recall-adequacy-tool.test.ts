@@ -57,7 +57,9 @@ test("gate omits adequacy when no scores are supplied", async () => {
 test("gate returns a sufficient/proceed verdict for strong coverage", async () => {
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "what did we decide?",
-    scores: [0.83, 0.4],
+    // Scores below the `weak` floor, coverage above the `sufficient`
+    // one: a verdict read off the score would be `insufficient`.
+    scores: [0.2, 0.1],
     match_quality: 0.83,
   })) as { adequacy: Record<string, unknown> };
   expect(out.adequacy["level"]).toBe("sufficient");
@@ -93,7 +95,8 @@ test("gate honours configurable thresholds", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_adequacy_sufficient: "0.9"\n`);
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "x",
-    scores: [0.7],
+    // Score above the raised floor, coverage below it.
+    scores: [0.95],
     match_quality: 0.7,
   })) as { adequacy: Record<string, unknown> };
   // 0.7 coverage would be sufficient at the default 0.6 floor, not at 0.9.
@@ -257,7 +260,9 @@ test("context_pack persists the verdict into the receipt and returns it", async 
   const packed = (await tool("brain_context_pack").handler(ctx(), {
     max_tokens: 1000,
     receipt: true,
-    recall_scores: [0.2, 0.1],
+    // Scores high, coverage low: only the coverage can produce
+    // `insufficient` here.
+    recall_scores: [0.95, 0.9],
     match_quality: 0.2,
   })) as { adequacy?: Record<string, unknown>; receipt_id?: string };
   expect(packed.adequacy).toBeDefined();
@@ -278,7 +283,8 @@ test("context_pack persists the verdict into the receipt and returns it", async 
   })) as { payload: Record<string, unknown> };
   const adequacy = shown.payload["adequacy"] as Record<string, unknown>;
   expect(adequacy["level"]).toBe("insufficient");
-  expect(adequacy["top_score"]).toBeCloseTo(0.2);
+  // The top score rides along as description and decided nothing.
+  expect(adequacy["top_score"]).toBeCloseTo(0.95);
 });
 
 test("context_pack omits adequacy when recall_scores is absent", async () => {

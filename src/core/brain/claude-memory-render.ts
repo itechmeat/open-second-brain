@@ -5,6 +5,8 @@ export interface RenderMemoryInput {
   readonly memoryPath: string;
   readonly importedAt: string; // ISO Z
   readonly bodySha256: string;
+  /** Owner token for the rendered page; omitted renders no `owner:`. */
+  readonly owner?: string | undefined;
 }
 
 /**
@@ -73,6 +75,10 @@ export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
     "_confidence: high",
     "pinned: false",
     `scope: ${scope}`,
+    // Ownership, on the same terms every other preference writer uses.
+    // Absent when the gate is off, so a vault that never opted in keeps
+    // byte-identical imports.
+    ...(input.owner === undefined ? [] : [`owner: ${input.owner}`]),
     "_force_confirmed_via: claude-memory",
     `_imported_from: ${JSON.stringify(input.memoryPath)}`,
     `_imported_sha256: ${input.bodySha256}`,

@@ -599,7 +599,13 @@ export interface EvidenceUnionRecord {
   readonly chunkId: number;
 }
 
-export type CompletenessVerdict = "complete" | "partial" | "sparse";
+/**
+ * Three grades and one non-grade. `unmeasurable` is what a query with no
+ * IDF mass to weigh returns; it is not a worse `sparse`, it is the
+ * absence of a measurement, and folding it into either end of the scale
+ * is what let a query nothing could be said about read as a perfect one.
+ */
+export type CompletenessVerdict = "complete" | "partial" | "sparse" | "unmeasurable";
 
 /**
  * Search-completeness guard (Feature E): a deterministic verdict over
@@ -610,7 +616,8 @@ export type CompletenessVerdict = "complete" | "partial" | "sparse";
  */
 export interface CompletenessReport {
   readonly verdict: CompletenessVerdict;
-  readonly idfWeightedCoverage: number;
+  /** `null` exactly when `verdict` is `unmeasurable`. */
+  readonly idfWeightedCoverage: number | null;
   readonly coveredTerms: ReadonlyArray<string>;
   readonly uncoveredTerms: ReadonlyArray<string>;
   readonly uncoveredButPresentInCorpus: ReadonlyArray<string>;
@@ -629,10 +636,12 @@ export interface EvidencePack {
   readonly abstention: string | null;
   /**
    * IDF-weighted support coverage (Feature C): the share of the query's
-   * IDF mass the covered terms carry. Present only when the search ran
-   * with coverage verification.
+   * IDF mass the covered terms carry. Absent when the search ran without
+   * coverage verification; `null` when it ran WITH verification and the
+   * query had no IDF mass to weigh. Two different facts, kept apart on
+   * the wire too: no key at all, versus an explicit null.
    */
-  readonly idfWeightedCoverage?: number;
+  readonly idfWeightedCoverage?: number | null;
   /** Rare (high-signal) significant terms per the corpus statistics. */
   readonly rareTerms?: ReadonlyArray<string>;
   /** Rare terms no returned record covers — the abstention trigger. */
@@ -845,24 +854,45 @@ export interface SearchOutcome {
   /**
    * Absolute match quality of this retrieval: the share of the query's
    * IDF mass that the returned material actually covers, in `[0,1]`
-   * (`buildCoverageReport`, `search/coverage.ts`). One, by definition,
-   * when the query carries no significant term for the report to weigh.
+   * (`buildCoverageReport`, `search/coverage.ts`).
+   *
+   * `null` when there was no IDF mass to take a share of - a query with
+   * no word characters, or an empty corpus. Not a number, and in
+   * particular not `1`: an unmeasurable query is not a complete
+   * retrieval, and the nullable type is what forces each threshold to say
+   * which it is treating it as.
    *
    * This is the ONLY number on the outcome that a confidence threshold
    * may be compared against. `BrainSearchResult.score` cannot be: the
    * keyword lane is min-max normalised within the candidate set
-   * (`normalizeBm25`), so the top row's score is pinned at the configured
-   * `keywordWeight` and the bottom row's at zero regardless of how well
-   * either matched. A constant compared against that measures which rows
-   * survived the filter stack, not how well anything matched - which is
-   * exactly what four separate thresholds in this product used to do.
+   * (`normalizeBm25`), so whenever that lane is non-empty the top row's
+   * score sits at or above the configured `keywordWeight` whatever it
+   * matched, and the bottom row's at zero whatever IT matched. A constant
+   * compared against that measures which rows survived the filter stack,
+   * not how well anything matched - which is exactly what four separate
+   * thresholds in this product used to do.
    *
-   * Pool-independent by construction: removing, fading or re-weighting a
-   * candidate cannot move it, and it means the same thing under both
-   * fusion modes. Required, not optional, so no consumer can silently
-   * fall back to reading a rank position when it is absent.
+   * ## What "absolute" does and does not claim
+   *
+   * Absolute in the sense that separates it from a score: it is a share
+   * of a fixed quantity - the query's own IDF mass, computed from corpus
+   * document frequencies - so it does not depend on rank position, on
+   * lane magnitudes, on the fusion mode, or on how the pool's best and
+   * worst rows happened to compare. Two different retrievals for one
+   * query are comparable numbers.
+   *
+   * It is NOT independent of which rows this outcome carries, and an
+   * earlier draft of this docblock claimed it was. It is computed over
+   * `finalResults` - the limit-sliced, filter-survived window - so the
+   * same query at `limit: 1` and at `limit: 20` can report different
+   * coverage, and a row an owner or visibility filter removed takes its
+   * terms' IDF mass out of the numerator with it. It measures how much of
+   * the query the DELIVERED material covers, which is the question every
+   * consumer of it is actually asking; it is not a statement about the
+   * corpus. `tests/core/search/coverage-window-dependence.test.ts` pins
+   * that dependence so the stronger claim cannot regrow.
    */
-  readonly idfWeightedCoverage: number;
+  readonly idfWeightedCoverage: number | null;
   /**
    * Layer-1 compact cards (progressive disclosure). Present only when the
    * caller set `disclosure: "cards"`; in that mode `results` is empty and

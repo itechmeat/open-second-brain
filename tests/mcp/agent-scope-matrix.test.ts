@@ -35,7 +35,15 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -46,6 +54,9 @@ import { brainActivePath, brainConfigPath, brainDirs } from "../../src/core/brai
 import { regenerateActive } from "../../src/core/brain/active.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { runHygieneScan } from "../../src/core/brain/hygiene/scan.ts";
+import { scanTriggers } from "../../src/core/brain/triggers/scan.ts";
+import { transitionTrigger } from "../../src/core/brain/triggers/store.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import {
   BRAIN_CONFIDENCE,
@@ -95,6 +106,17 @@ const HUB_ID = "pref-hub";
 const SHARED_ID = "pref-shared";
 /** Title of {@link SHARED_ID}; the term `brain_unlinked_mentions` matches on. */
 const SHARED_TITLE = "Shared Pref";
+/**
+ * Topic of {@link SHARED_ID}, and deliberately ALSO the topic of one
+ * owner-A preference.
+ *
+ * A `topic:` argument is a fan-out: `buildBeliefEvolution` resolves it to
+ * every `pref-`/`ret-` page carrying that topic, so a caller naming a
+ * topic it is entitled to still reaches preferences it is not. Probing
+ * that with a marker-bearing topic would prove nothing - the marker
+ * would be the caller's own argument echoed back.
+ */
+const SHARED_TOPIC = "shared";
 /** Slug of the ownerless signal that evidences the owner-A preference. */
 const NEUTRAL_SIGNAL_SLUG = "neutral-probe-signal";
 
@@ -141,23 +163,48 @@ const SCOPED_SURFACES: ReadonlyArray<ScopedSurface> = [
 ];
 
 /**
- * One probe recipe: a tool, the arguments that DRIVE it against the
- * two-owner fixture, and a written reason for its classification.
+ * One probe recipe: the arguments that DRIVE one mode / view / operation
+ * of a tool against the two-owner fixture, and a written reason for the
+ * classification THAT CALL carries.
  *
- * `args` is not optional and not defaultable. The bucket it replaced was
- * 88 bare strings, and a bare string cannot be executed - which is why
- * nothing ever executed the claim those strings made.
+ * The reason lives on the call rather than on the tool because a tool is
+ * not one classification. `brain_analytics view=concept_synthesis`
+ * reaches another owner's body prose and `view=dedup` reaches an ingest
+ * counter; one entry claiming one reason for both is the same
+ * unexecuted label this file exists to remove, and it is how
+ * `concept_synthesis` shipped unfiltered behind a green `view=timeline`.
  */
+interface ProbeCall {
+  /**
+   * Arguments the isolation probe calls the tool with, or a function of
+   * the vault that computes them after the fixture is seeded.
+   *
+   * `{}` only where the tool's input schema declares no property the
+   * probe needs, never as a stand-in for "I did not work out what
+   * drives this one". The function form exists for the one recipe whose
+   * arguments are derived from vault state - `brain_hygiene mode=apply`
+   * selects findings by id, and a static id would drive a call that
+   * matches nothing.
+   */
+  readonly args: Record<string, unknown> | ((vault: string) => Record<string, unknown>);
+  /** Why THIS call sits in the bucket it sits in. */
+  readonly reason: string;
+  /**
+   * Test-name suffix for a recipe whose arguments are computed, where
+   * the dispatch key cannot be read off a literal record.
+   */
+  readonly label?: string;
+}
+
+/** One tool, and every call recipe the probe drives it with. */
 interface ProbeEntry {
   readonly name: string;
-  /**
-   * Arguments the isolation probe calls the tool with. `{}` only where
-   * the tool's input schema declares no property the probe needs, never
-   * as a stand-in for "I did not work out what drives this one".
-   */
-  readonly args: Record<string, unknown>;
-  /** Why this tool sits in the bucket it sits in. */
-  readonly reason: string;
+  readonly calls: ReadonlyArray<ProbeCall>;
+}
+
+/** A single-recipe entry, spelled without the array ceremony. */
+function one(args: ProbeCall["args"], reason: string): ReadonlyArray<ProbeCall> {
+  return [{ args, reason }];
 }
 
 /**
@@ -167,7 +214,7 @@ interface ProbeEntry {
 const REASON_MIN_CHARS = 24;
 
 /**
- * Refuse an entry that carries no arguments or no reason.
+ * Refuse an entry that carries no call recipes or no reason.
  *
  * `unknown` rather than {@link ProbeEntry}: the compiler already rejects
  * a bare name, and this is the second lock, for a `satisfies`-free cast
@@ -176,32 +223,51 @@ const REASON_MIN_CHARS = 24;
  */
 function assertProbeEntry(bucket: string, entry: unknown): ProbeEntry {
   if (typeof entry !== "object" || entry === null) {
-    throw new Error(`${bucket}: every entry must be a {name, args, reason} record`);
+    throw new Error(`${bucket}: every entry must be a {name, calls} record`);
   }
   const row = entry as Partial<ProbeEntry>;
   if (typeof row.name !== "string" || row.name.length === 0) {
     throw new Error(`${bucket}: every entry must name a tool`);
   }
-  if (typeof row.args !== "object" || row.args === null || Array.isArray(row.args)) {
+  if (!Array.isArray(row.calls) || row.calls.length === 0) {
     throw new Error(
-      `${bucket}: ${row.name} has no 'args'; a bucket entry the probe cannot call is a label`,
+      `${bucket}: ${row.name} has no 'calls'; a bucket entry the probe cannot call is a label`,
     );
   }
-  if (typeof row.reason !== "string" || row.reason.trim().length < REASON_MIN_CHARS) {
-    throw new Error(
-      `${bucket}: ${row.name} needs a reason of at least ${REASON_MIN_CHARS} characters`,
-    );
+  for (const recipe of row.calls) {
+    const shaped = recipe as Partial<ProbeCall>;
+    const args = shaped.args;
+    const argsOk =
+      typeof args === "function" ||
+      (typeof args === "object" && args !== null && !Array.isArray(args));
+    if (!argsOk) {
+      throw new Error(
+        `${bucket}: ${row.name} has a call with no 'args'; a recipe the probe cannot call is a label`,
+      );
+    }
+    if (typeof shaped.reason !== "string" || shaped.reason.trim().length < REASON_MIN_CHARS) {
+      throw new Error(
+        `${bucket}: ${row.name} needs a reason of at least ${REASON_MIN_CHARS} characters`,
+      );
+    }
   }
   return row as ProbeEntry;
 }
 
 /**
- * Reasons shared by more than one entry, named once.
+ * Reasons shared by more than one call, named once.
  *
- * The alternative - 96 hand-written sentences, most of them saying the
- * same thing in different words - is the natural-language word list this
- * repository forbids, and it would make two entries with the same
- * classification look like two different classifications.
+ * The alternative - hundreds of hand-written sentences, most of them
+ * saying the same thing in different words - is the natural-language
+ * word list this repository forbids, and it would make two calls with
+ * the same classification look like two different classifications.
+ *
+ * Each of these is a CLAIM the differential below executes. Every reason
+ * except {@link REASON.ownerFiltered} asserts that the call cannot name
+ * an owner-private artifact AT ALL, so the probe requires the marker to
+ * be absent even with the gate OFF, where nothing is hidden. A call that
+ * surfaces the marker unscoped has a false reason and fails here, which
+ * is the difference between a classification and a label.
  */
 const REASON = Object.freeze({
   sessionLane:
@@ -229,7 +295,85 @@ const REASON = Object.freeze({
   configuredCorpus:
     "operates on an operator-configured corpus outside `Brain/` - a dataset file, a source " +
     "directory, a codegraph index - which carries no page frontmatter to own.",
+  signalCluster:
+    "reads the pre-dream review over INBOX SIGNAL clusters. A signal carries no `owner:` " +
+    "anywhere in this product, so every row here - a topic, a decision, a count - is a fold " +
+    "over shared artifacts and names no owner-private page.",
+  recompileLane:
+    "plans a recompile of DERIVED pages whose sources moved (`Brain/sources`, `Brain/reports`). " +
+    "The fixture holds no derived page, so this recipe reaches no owner-taggable content; the " +
+    "gap is recorded rather than papered over with a recipe that cannot fail.",
+  signalAuthorship:
+    "groups SIGNALS by the `agent:` that wrote them. A signal carries no `owner:` anywhere in " +
+    "this product, so the agent column names the author of a SHARED artifact - the same fact " +
+    "`brain_agent_query`'s roster publishes by design - and never an owner-private page.",
 });
+
+/**
+ * The one reason that claims a call REACHES owner-bearing content.
+ *
+ * Named as a set rather than compared inline so the differential's
+ * exemption is an explicit list of classifications, not a silence: every
+ * other reason in {@link REASON} asserts unreachability, and the probe
+ * holds it to that.
+ */
+const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REASON.ownerFiltered]);
+
+/**
+ * Measured shape of the probe, quoted in `docs/architecture.md`,
+ * `docs/mcp.md` and the release notes. Equalities, not floors - see the
+ * test that reads them.
+ */
+const PROBE_ENTRY_COUNT = 96;
+const PROBE_RECIPE_COUNT = 220;
+const PROBE_TWO_SIDED_COUNT = 31;
+
+/**
+ * `brain_trigger` read arguments, with the queue populated first.
+ *
+ * `list` and `history` read what a PRIOR scan persisted, so against an
+ * empty queue their isolation claim is untestable - the "clean sweep
+ * over an empty fixture" this file exists to prevent. The scan is done
+ * HERE rather than in {@link seedTwoOwnerFixture} because a populated
+ * queue suppresses `brain_idea_discovery`: idea discovery skips
+ * candidates already queued, so seeding globally would silently empty
+ * that probe instead.
+ *
+ * `terminal` dismisses what the scan created, because `history` reports
+ * only terminal records and `list` reports only non-terminal ones - one
+ * queue state cannot exercise both. Each recipe gets its own vault, so
+ * the two states never collide.
+ */
+function triggerQueueArgs(
+  operation: string,
+  terminal = false,
+): (vault: string) => Record<string, unknown> {
+  return (vault: string) => {
+    const now = new Date();
+    const scan = scanTriggers(vault, { now });
+    if (terminal) {
+      for (const record of scan.created) transitionTrigger(vault, record.id, "dismiss", { now });
+    }
+    return { operation };
+  };
+}
+
+/**
+ * `brain_hygiene mode=apply` arguments, derived from a live scan.
+ *
+ * A finding id is `sha256(targets.sorted().join("\0")).slice(0, 12)`
+ * (`hygiene/detectors/id.ts`) - derivable rather than secret, which is
+ * why withholding it from the scan was never the boundary. A LITERAL id
+ * in the recipe would select nothing and the probe would go green over
+ * an apply that did nothing, which is exactly how this mode shipped
+ * planning against the unfiltered report.
+ */
+function hygieneApplyArgs(vault: string): Record<string, unknown> {
+  return {
+    mode: "apply",
+    ids: runHygieneScan(vault, { now: new Date() }).findings.map((f) => f.id),
+  };
+}
 
 /**
  * Tools that return vault content but are NOT owner-scoped after this
@@ -237,222 +381,664 @@ const REASON = Object.freeze({
  * forgotten — this is the honest half of the matrix.
  */
 const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
-  { name: "brain_session_grep", args: { query: QUERY }, reason: REASON.sessionLane },
-  { name: "brain_session_expand", args: { id: "sess-probe:0" }, reason: REASON.sessionLane },
-  { name: "brain_session_summary", args: { operation: "list" }, reason: REASON.sessionLane },
+  { name: "brain_session_grep", calls: one({ query: QUERY }, REASON.sessionLane) },
+  { name: "brain_session_expand", calls: one({ id: "sess-probe:0" }, REASON.sessionLane) },
+  {
+    name: "brain_session_summary",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.sessionLane },
+      { args: { operation: "get", session_id: "sess-probe" }, reason: REASON.sessionLane },
+      {
+        args: { operation: "write", session_id: "sess-probe", request: "probe digest" },
+        reason: REASON.sessionLane,
+      },
+    ],
+  },
   {
     name: "brain_session_describe",
-    args: { session_id: "sess-probe" },
-    reason: REASON.sessionLane,
+    calls: one({ session_id: "sess-probe" }, REASON.sessionLane),
   },
   {
     name: "brain_note_history",
-    args: { path: "notes/shared.md" },
-    reason:
+    calls: one(
+      { path: "notes/shared.md" },
       "git commit metadata (subjects, authors, dates) for a path the caller already names, " +
-      "read from the repository rather than from page frontmatter. Every response shape it " +
-      "can produce - no repo, no commits, N phases - is distinguishable from a refusal, so a " +
-      "filter here would announce the existence of the page it is meant to hide while the " +
-      "same history stays readable through git itself.",
+        "read from the repository rather than from page frontmatter. Every response shape it " +
+        "can produce - no repo, no commits, N phases - is distinguishable from a refusal, so a " +
+        "filter here would announce the existence of the page it is meant to hide while the " +
+        "same history stays readable through git itself.",
+    ),
   },
   {
     name: "brain_artifact_get",
-    args: { artifact_id: "art-never-issued" },
-    reason:
+    calls: one(
+      { artifact_id: "art-never-issued" },
       "replays, by opaque id, a payload this process already returned to this caller - and " +
-      "already filtered under whatever scope produced it. The stored envelope keeps no page " +
-      "identity, so there is nothing left to re-apply the ownership rule to.",
+        "already filtered under whatever scope produced it. The stored envelope keeps no page " +
+        "identity, so there is nothing left to re-apply the ownership rule to.",
+    ),
   },
   {
     name: "brain_pre_compact_extract",
-    args: { session_id: "sess-probe", turn_start: 1, turn_end: 2, text: QUERY },
-    reason:
+    calls: one(
+      { session_id: "sess-probe", turn_start: 1, turn_end: 2, text: QUERY },
       "extracts from caller-supplied text, not the vault: every byte of the response is " +
-      "derived from the `text` argument the caller passed in.",
+        "derived from the `text` argument the caller passed in.",
+    ),
   },
   {
     name: "brain_recall_gate",
-    args: { prompt: QUERY },
-    reason:
+    calls: one(
+      { prompt: QUERY },
       "a verdict over a caller-supplied question - recall/skip and why - with no artifact " +
-      "identity and no body prose in the payload.",
+        "identity and no body prose in the payload.",
+    ),
   },
 ];
 
 /**
  * Everything else: metadata, analytics, maintenance, writers, catalog.
  *
- * Ten of these entries carry {@link REASON.ownerFiltered} because the
- * probe caught them returning another owner's artifacts, and the filter
- * that closed each one landed in the same commit as this line.
+ * A tool with several modes, views or operations carries one recipe per
+ * mode, view or operation. One executed view is not an executed
+ * classification, and the two leaks this file missed - `brain_hygiene
+ * mode=apply` writing across the boundary, and three of
+ * `brain_analytics`' five views returning another owner's prose - were
+ * both hidden behind a single green recipe for a sibling mode.
  */
 const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
-  { name: "brain_agenda", args: { events: [] }, reason: REASON.writerEcho },
-  { name: "brain_agent_diff", args: { mode: "browse" }, reason: REASON.aggregateOnly },
-  { name: "brain_analytics", args: { view: "timeline" }, reason: REASON.aggregateOnly },
+  { name: "brain_agenda", calls: one({ events: [] }, REASON.writerEcho) },
+  {
+    name: "brain_agent_diff",
+    calls: [
+      { args: { mode: "browse" }, reason: REASON.ownerFiltered },
+      { args: { mode: "search", query: CROSS_OWNER_MARKER }, reason: REASON.ownerFiltered },
+      { args: { mode: "diff" }, reason: REASON.ownerFiltered },
+      { args: { mode: "map" }, reason: REASON.ownerFiltered },
+    ],
+  },
+  {
+    name: "brain_analytics",
+    calls: [
+      { args: { view: "timeline" }, reason: REASON.ownerFiltered },
+      { args: { view: "attention_flows", operation: "list" }, reason: REASON.ownerlessLane },
+      // The topic is the SHARED one on purpose. A marker-bearing topic
+      // would be the caller's own argument echoed back, which is not a
+      // disclosure; the fixture instead gives an owner-A preference that
+      // shared topic, so the fan-out from one topic to every preference
+      // carrying it is what the probe measures.
+      { args: { view: "belief_evolution", topic: SHARED_TOPIC }, reason: REASON.ownerFiltered },
+      {
+        args: { view: "concept_synthesis", id: SHARED_ID, include_unlinked: true },
+        reason: REASON.ownerFiltered,
+      },
+      { args: { view: "dedup" }, reason: REASON.ownerlessLane },
+    ],
+  },
   {
     name: "brain_append_note",
-    args: { path: "notes/shared.md", content: "probe append" },
-    reason: REASON.writerEcho,
+    calls: one({ path: "notes/shared.md", content: "probe append" }, REASON.writerEcho),
   },
   {
     name: "brain_apply_evidence",
-    args: { pref_id: "pref-shared", artifact: "[[notes/shared.md]]", result: "applied" },
-    reason: REASON.writerEcho,
+    calls: one(
+      { pref_id: "pref-shared", artifact: "[[notes/shared.md]]", result: "applied" },
+      REASON.writerEcho,
+    ),
   },
-  { name: "brain_audit", args: { pref_id: "pref-shared" }, reason: REASON.callerNamedArtifact },
-  { name: "brain_backlinks", args: { id: "pref-shared" }, reason: REASON.ownerFiltered },
+  { name: "brain_audit", calls: one({ pref_id: "pref-shared" }, REASON.callerNamedArtifact) },
+  { name: "brain_backlinks", calls: one({ id: SHARED_ID }, REASON.ownerFiltered) },
   {
     name: "brain_benchmark",
-    args: { operation: "run", dataset: "datasets/probe-absent.jsonl" },
-    reason: REASON.configuredCorpus,
+    calls: one(
+      { operation: "run", dataset: "datasets/probe-absent.jsonl" },
+      REASON.configuredCorpus,
+    ),
   },
-  { name: "brain_bridges", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_claims", args: { operation: "current" }, reason: REASON.ownerFiltered },
-  { name: "brain_clusters", args: { operation: "list" }, reason: REASON.aggregateOnly },
-  { name: "brain_codegraph_report", args: {}, reason: REASON.configuredCorpus },
-  { name: "brain_context_pack_outcome", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_context_presets", args: { operation: "show" }, reason: REASON.catalog },
-  { name: "brain_context_receipts", args: { operation: "list" }, reason: REASON.ownerlessLane },
+  {
+    name: "brain_bridges",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "discover" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "accept", source: "notes/shared.md", target: "notes/owned-a.md" },
+        reason: REASON.ownerlessLane,
+      },
+      {
+        args: { operation: "dismiss", source: "notes/shared.md", target: "notes/owned-a.md" },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  {
+    name: "brain_claims",
+    calls: [
+      { args: { operation: "current" }, reason: REASON.ownerFiltered },
+      { args: { operation: "at", at: LOG_EVENT_DATE }, reason: REASON.ownerFiltered },
+      { args: { operation: "history" }, reason: REASON.ownerFiltered },
+      { args: { operation: "replaced", id: SHARED_ID }, reason: REASON.callerNamedArtifact },
+      { args: { operation: "contests", id: SHARED_ID }, reason: REASON.callerNamedArtifact },
+      { args: { operation: "rebuild" }, reason: REASON.aggregateOnly },
+    ],
+  },
+  {
+    name: "brain_clusters",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.aggregateOnly },
+      { args: { operation: "run" }, reason: REASON.ownerFiltered },
+    ],
+  },
+  { name: "brain_codegraph_report", calls: one({}, REASON.configuredCorpus) },
+  {
+    name: "brain_context_pack_outcome",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "summary" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "post", sample_id: "probe-sample", first_pass_success: true },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  {
+    name: "brain_context_presets",
+    calls: [
+      { args: { operation: "show" }, reason: REASON.catalog },
+      { args: { operation: "suggest" }, reason: REASON.catalog },
+      { args: { operation: "diff" }, reason: REASON.catalog },
+    ],
+  },
+  {
+    name: "brain_context_receipts",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "summary" }, reason: REASON.ownerlessLane },
+      { args: { operation: "show", id: "rcpt-probe-absent" }, reason: REASON.ownerlessLane },
+    ],
+  },
   {
     name: "brain_create_note",
-    args: { path: "notes/probe-created.md" },
-    reason: REASON.writerEcho,
+    calls: one({ path: "notes/probe-created.md" }, REASON.writerEcho),
   },
-  { name: "brain_dead_ends", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_decision", args: { action: "list" }, reason: REASON.ownerlessLane },
+  {
+    name: "brain_dead_ends",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "record", approach: "probe approach", reason: "probe reason" },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  {
+    name: "brain_decision",
+    calls: [
+      { args: { action: "list" }, reason: REASON.ownerlessLane },
+      { args: { action: "show", id: "dec-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "history" }, reason: REASON.ownerlessLane },
+      { args: { action: "recall" }, reason: REASON.ownerlessLane },
+      { args: { action: "similar", id: "dec-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "compare", id: "dec-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "outcome", id: "dec-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "rate", id: "dec-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "record", title: "probe decision" }, reason: REASON.ownerlessLane },
+    ],
+  },
   {
     name: "brain_delete_by_source",
-    args: { source_file: "sources/paper.md" },
-    reason: REASON.writerEcho,
+    calls: one({ source_file: "sources/paper.md" }, REASON.writerEcho),
   },
   {
     name: "brain_derive_fact",
-    args: {
-      slug: "probe-derived",
-      topic: "probe",
-      principle: "probe derived principle",
-      premises: ["[[pref-shared]]"],
-      level: "deduced",
-    },
-    reason: REASON.writerEcho,
+    calls: one(
+      {
+        slug: "probe-derived",
+        topic: "probe",
+        principle: "probe derived principle",
+        premises: [`[[${SHARED_ID}]]`],
+        level: "deduced",
+      },
+      REASON.writerEcho,
+    ),
   },
-  { name: "brain_diarize", args: { entity: "probe-entity" }, reason: REASON.ownerlessLane },
+  { name: "brain_diarize", calls: one({ entity: "probe-entity" }, REASON.ownerlessLane) },
   {
     name: "brain_distill_source",
-    args: { source_path: "sources/paper.md", claims: ["probe claim"] },
-    reason: REASON.writerEcho,
+    calls: one({ source_path: "sources/paper.md", claims: ["probe claim"] }, REASON.writerEcho),
   },
-  { name: "brain_doctor", args: {}, reason: REASON.ownerFiltered },
-  { name: "brain_dream", args: { action: "list" }, reason: REASON.aggregateOnly },
-  { name: "brain_entity", args: { view: "list" }, reason: REASON.ownerlessLane },
+  {
+    name: "brain_doctor",
+    calls: [
+      { args: {}, reason: REASON.ownerFiltered },
+      { args: { strict: true }, reason: REASON.ownerFiltered },
+      { args: { repair: true }, reason: REASON.ownerFiltered },
+    ],
+  },
+  {
+    name: "brain_dream",
+    calls: [
+      { args: { action: "list" }, reason: REASON.aggregateOnly },
+      { args: { action: "run", dry_run: true }, reason: REASON.ownerFiltered },
+      { args: { action: "stage" }, reason: REASON.ownerFiltered },
+      { args: { action: "validate", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
+      { args: { action: "apply", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
+      { args: { action: "discard", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
+    ],
+  },
+  {
+    name: "brain_entity",
+    calls: [
+      { args: { view: "list" }, reason: REASON.ownerlessLane },
+      { args: { view: "get", query: "probe-entity" }, reason: REASON.ownerlessLane },
+    ],
+  },
   {
     name: "brain_eval",
-    args: { dataset: "datasets/probe-absent.jsonl" },
-    reason: REASON.configuredCorpus,
+    calls: one({ dataset: "datasets/probe-absent.jsonl" }, REASON.configuredCorpus),
   },
-  { name: "brain_event_trace", args: { date: LOG_EVENT_DATE }, reason: REASON.ownerFiltered },
+  { name: "brain_event_trace", calls: one({ date: LOG_EVENT_DATE }, REASON.ownerFiltered) },
   {
     name: "brain_feedback",
-    args: { topic: "probe", signal: "positive", principle: "probe principle" },
-    reason: REASON.writerEcho,
+    calls: one(
+      { topic: "probe", signal: "positive", principle: "probe principle" },
+      REASON.writerEcho,
+    ),
   },
-  { name: "brain_foresight", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_generation_reports", args: { action: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_health", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_hygiene", args: { mode: "scan" }, reason: REASON.ownerFiltered },
-  { name: "brain_idea_discovery", args: {}, reason: REASON.ownerFiltered },
-  { name: "brain_idea_lineage", args: { id: "pref-shared" }, reason: REASON.callerNamedArtifact },
+  { name: "brain_foresight", calls: one({}, REASON.aggregateOnly) },
+  {
+    name: "brain_generation_reports",
+    calls: [
+      { args: { action: "list" }, reason: REASON.ownerlessLane },
+      { args: { action: "summary" }, reason: REASON.ownerlessLane },
+      {
+        args: {
+          action: "record",
+          handoff_kind: "context_pack",
+          ref: "probe-ref",
+          agent: OWNER_B,
+          prompt: "probe prompt",
+          enable: true,
+        },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  { name: "brain_health", calls: one({}, REASON.ownerFiltered) },
+  {
+    name: "brain_hygiene",
+    calls: [
+      { args: { mode: "scan" }, reason: REASON.ownerFiltered },
+      { args: { mode: "refresh", dry_run: true }, reason: REASON.recompileLane },
+      // The ids come from a LIVE scan of the seeded fixture. A literal
+      // id here would select nothing, and a recipe that selects nothing
+      // is how `apply` kept a green probe while planning against the
+      // unfiltered report and retiring another owner's preference.
+      { args: hygieneApplyArgs, label: "mode=apply", reason: REASON.ownerFiltered },
+    ],
+  },
+  { name: "brain_idea_discovery", calls: one({}, REASON.ownerFiltered) },
+  { name: "brain_idea_lineage", calls: one({ id: SHARED_ID }, REASON.callerNamedArtifact) },
   {
     name: "brain_ingest_batch_plan",
-    args: { source_dir: "sources" },
-    reason: REASON.configuredCorpus,
+    calls: one({ source_dir: "sources" }, REASON.configuredCorpus),
   },
   {
     name: "brain_ingest_source",
-    args: { source_path: "sources/paper.md", summary: "probe summary", entities: [] },
-    reason: REASON.writerEcho,
+    calls: one(
+      { source_path: "sources/paper.md", summary: "probe summary", entities: [] },
+      REASON.writerEcho,
+    ),
   },
   {
     name: "brain_intake_entities",
-    args: { entities: [], source: "sources/paper.md" },
-    reason: REASON.writerEcho,
+    calls: one({ entities: [], source: "sources/paper.md" }, REASON.writerEcho),
   },
-  { name: "brain_intent_review", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_intention", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_knowledge_gaps", args: {}, reason: REASON.aggregateOnly },
+  { name: "brain_intent_review", calls: one({}, REASON.signalCluster) },
+  {
+    name: "brain_intention",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "show" }, reason: REASON.ownerlessLane },
+      { args: { operation: "set", text: "probe intention" }, reason: REASON.ownerlessLane },
+      { args: { operation: "move", scope: "probe-scope" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  { name: "brain_knowledge_gaps", calls: one({}, REASON.aggregateOnly) },
   {
     name: "brain_labels",
-    args: { operation: "show", path: "notes/shared.md" },
-    reason: REASON.callerNamedArtifact,
+    calls: [
+      { args: { operation: "show", path: "notes/shared.md" }, reason: REASON.callerNamedArtifact },
+      {
+        args: {
+          operation: "assign",
+          path: "notes/shared.md",
+          dimension: "probe",
+          value: "probe",
+        },
+        reason: REASON.callerNamedArtifact,
+      },
+      {
+        args: { operation: "remove", path: "notes/shared.md", dimension: "probe" },
+        reason: REASON.callerNamedArtifact,
+      },
+    ],
   },
-  { name: "brain_lifecycle", args: { action: "curator" }, reason: REASON.aggregateOnly },
-  { name: "brain_maintenance", args: { operation: "status" }, reason: REASON.aggregateOnly },
-  { name: "brain_mcp_landscape", args: {}, reason: REASON.catalog },
-  { name: "brain_memory_bridge", args: {}, reason: REASON.writerEcho },
-  { name: "brain_moc_audit", args: { id: "pref-hub" }, reason: REASON.ownerFiltered },
-  { name: "brain_note", args: { text: "probe note" }, reason: REASON.writerEcho },
+  {
+    name: "brain_lifecycle",
+    calls: [
+      { args: { action: "curator" }, reason: REASON.aggregateOnly },
+      { args: { action: "tip", id: SHARED_ID }, reason: REASON.callerNamedArtifact },
+      {
+        args: { action: "tombstone", path: "notes/shared.md", reason: "probe" },
+        reason: REASON.writerEcho,
+      },
+      {
+        args: {
+          action: "supersede",
+          predecessor: "notes/shared.md",
+          successor: `[[${SHARED_ID}]]`,
+          reason: "probe",
+        },
+        reason: REASON.writerEcho,
+      },
+      {
+        args: {
+          action: "temporal-replace",
+          predecessor: "notes/shared.md",
+          successor: "notes/renamed.md",
+          at: LOG_EVENT_DATE,
+        },
+        reason: REASON.writerEcho,
+      },
+    ],
+  },
+  {
+    name: "brain_maintenance",
+    calls: [
+      { args: { operation: "status" }, reason: REASON.aggregateOnly },
+      { args: { operation: "run", force: true }, reason: REASON.aggregateOnly },
+    ],
+  },
+  { name: "brain_mcp_landscape", calls: one({}, REASON.catalog) },
+  {
+    name: "brain_memory_bridge",
+    calls: [
+      { args: {}, reason: REASON.writerEcho },
+      {
+        args: { action: "add", target: "memory", content: "probe memory" },
+        reason: REASON.writerEcho,
+      },
+      {
+        args: { action: "replace", target: "memory", content: "probe memory" },
+        reason: REASON.writerEcho,
+      },
+    ],
+  },
+  { name: "brain_moc_audit", calls: one({ id: HUB_ID }, REASON.ownerFiltered) },
+  { name: "brain_note", calls: one({ text: "probe note" }, REASON.writerEcho) },
   {
     name: "brain_note_lifecycle",
-    args: { action: "rename", path: "notes/shared.md", to: "notes/renamed.md" },
-    reason: REASON.writerEcho,
+    calls: [
+      {
+        args: { action: "rename", path: "notes/shared.md", to: "notes/renamed.md" },
+        reason: REASON.writerEcho,
+      },
+      {
+        args: { action: "move", path: "notes/shared.md", to: "notes/moved.md" },
+        reason: REASON.writerEcho,
+      },
+      { args: { action: "archive", path: "notes/shared.md" }, reason: REASON.writerEcho },
+      { args: { action: "delete", path: "notes/shared.md" }, reason: REASON.writerEcho },
+    ],
   },
-  { name: "brain_obligation", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_observed_use", args: { entries: [] }, reason: REASON.writerEcho },
-  { name: "brain_pinned_context", args: { operation: "read" }, reason: REASON.ownerlessLane },
-  { name: "brain_procedural_graph", args: { operation: "show" }, reason: REASON.ownerlessLane },
-  { name: "brain_procedural_memory", args: { operation: "list" }, reason: REASON.ownerlessLane },
+  {
+    name: "brain_obligation",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "show", slug: "probe-obligation" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "add", title: "probe obligation", cadence: "weekly" },
+        reason: REASON.ownerlessLane,
+      },
+      { args: { operation: "done", slug: "probe-obligation" }, reason: REASON.ownerlessLane },
+      { args: { operation: "remove", slug: "probe-obligation" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  { name: "brain_observed_use", calls: one({ entries: [] }, REASON.writerEcho) },
+  {
+    name: "brain_pinned_context",
+    calls: [
+      { args: { operation: "read" }, reason: REASON.ownerlessLane },
+      { args: { operation: "write", content: "probe pinned" }, reason: REASON.ownerlessLane },
+      { args: { operation: "append", content: "probe pinned" }, reason: REASON.ownerlessLane },
+      { args: { operation: "clear" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_procedural_graph",
+    calls: [
+      { args: { operation: "show" }, reason: REASON.ownerlessLane },
+      { args: { operation: "rebuild" }, reason: REASON.ownerlessLane },
+      { args: { operation: "hints" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_procedural_memory",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "reconcile" }, reason: REASON.ownerlessLane },
+      { args: { operation: "mark_used", id: "proc-probe-absent" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "mark_outcome", id: "proc-probe-absent", outcome: "success" },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
   {
     name: "brain_recall_feedback",
-    args: { query: QUERY, result_path: "notes/shared.md", verdict: "up" },
-    reason: REASON.writerEcho,
+    calls: one({ query: QUERY, result_path: "notes/shared.md", verdict: "up" }, REASON.writerEcho),
   },
-  { name: "brain_recall_telemetry", args: { operation: "summary" }, reason: REASON.aggregateOnly },
-  { name: "brain_recurrence", args: { operation: "list" }, reason: REASON.ownerlessLane },
+  {
+    name: "brain_recall_telemetry",
+    calls: [
+      { args: { operation: "summary" }, reason: REASON.ownerlessLane },
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "gate_list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "gate_summary" }, reason: REASON.ownerlessLane },
+      { args: { operation: "observed_reuse" }, reason: REASON.ownerlessLane },
+      { args: { operation: "cost" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_recurrence",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "show", content_hash: "probe-hash" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "learn", content_hash: "probe-hash", scope: "probe" },
+        reason: REASON.ownerlessLane,
+      },
+      {
+        args: { operation: "forget", content_hash: "probe-hash", scope: "probe" },
+        reason: REASON.ownerlessLane,
+      },
+      { args: { operation: "purge_source", source_id: "probe" }, reason: REASON.ownerlessLane },
+    ],
+  },
   {
     name: "brain_research_report",
-    args: { title: "probe report", sources: ["sources/paper.md"], findings: ["probe finding"] },
-    reason: REASON.writerEcho,
+    calls: one(
+      { title: "probe report", sources: ["sources/paper.md"], findings: ["probe finding"] },
+      REASON.writerEcho,
+    ),
   },
-  { name: "brain_retention", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_review_candidates", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_route_metrics", args: { operation: "summary" }, reason: REASON.aggregateOnly },
-  { name: "brain_scaffold_stub", args: { action: "list" }, reason: REASON.ownerFiltered },
-  { name: "brain_secrets", args: { operation: "list" }, reason: REASON.ownerlessLane },
+  { name: "brain_retention", calls: one({}, REASON.ownerFiltered) },
+  { name: "brain_review_candidates", calls: one({}, REASON.ownerFiltered) },
+  {
+    name: "brain_route_metrics",
+    calls: [
+      { args: { operation: "summary" }, reason: REASON.ownerlessLane },
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_scaffold_stub",
+    calls: [
+      { args: { action: "list" }, reason: REASON.ownerFiltered },
+      // A neutral target: naming the marker here would be the caller's
+      // own argument echoed back by the writer, not a disclosure.
+      { args: { action: "write", target: "Projects/ProbeStub" }, reason: REASON.writerEcho },
+    ],
+  },
+  {
+    name: "brain_secrets",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "run", name: "probe-secret", command: ["true"] },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
   {
     name: "brain_session_checkpoint",
-    args: { session_id: "sess-probe" },
-    reason: REASON.writerEcho,
+    calls: one({ session_id: "sess-probe" }, REASON.writerEcho),
   },
-  { name: "brain_skill_proposals", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_sources", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_stale_scan", args: {}, reason: REASON.ownerFiltered },
-  { name: "brain_status", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_switch_vault", args: { name: "probe-profile" }, reason: REASON.writerEcho },
-  { name: "brain_tension", args: { action: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_tiers", args: { operation: "check" }, reason: REASON.aggregateOnly },
-  { name: "brain_token_impact", args: { operation: "summary" }, reason: REASON.aggregateOnly },
-  { name: "brain_trigger", args: { operation: "list" }, reason: REASON.ownerlessLane },
-  { name: "brain_truth", args: { operation: "slots" }, reason: REASON.ownerlessLane },
-  { name: "brain_tune", args: { operation: "status" }, reason: REASON.aggregateOnly },
-  { name: "brain_unlinked_mentions", args: { id: "pref-shared" }, reason: REASON.ownerFiltered },
+  {
+    name: "brain_skill_proposals",
+    calls: [
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      { args: { operation: "learn" }, reason: REASON.ownerlessLane },
+      { args: { operation: "usage" }, reason: REASON.ownerlessLane },
+      { args: { operation: "recover" }, reason: REASON.ownerlessLane },
+      { args: { operation: "evidence", slug: "probe-proposal" }, reason: REASON.ownerlessLane },
+      { args: { operation: "accept", slug: "probe-proposal" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "reject", slug: "probe-proposal", note: "probe" },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  { name: "brain_sources", calls: one({}, REASON.signalAuthorship) },
+  { name: "brain_stale_scan", calls: one({}, REASON.ownerFiltered) },
+  { name: "brain_status", calls: one({}, REASON.aggregateOnly) },
+  { name: "brain_switch_vault", calls: one({ name: "probe-profile" }, REASON.writerEcho) },
+  {
+    name: "brain_tension",
+    calls: [
+      { args: { action: "list" }, reason: REASON.ownerlessLane },
+      { args: { action: "detect" }, reason: REASON.ownerlessLane },
+      { args: { action: "show", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "confirm", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "dismiss", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "resolve", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_tiers",
+    calls: [
+      { args: { operation: "check" }, reason: REASON.aggregateOnly },
+      { args: { operation: "restore", path: "notes/shared.md" }, reason: REASON.aggregateOnly },
+      { args: { operation: "accept", path: "notes/shared.md" }, reason: REASON.aggregateOnly },
+    ],
+  },
+  {
+    name: "brain_token_impact",
+    calls: [
+      { args: { operation: "summary" }, reason: REASON.ownerlessLane },
+      { args: { operation: "list" }, reason: REASON.ownerlessLane },
+      {
+        args: { operation: "record", baseline_tokens: 100, packed_tokens: 50 },
+        reason: REASON.ownerlessLane,
+      },
+      { args: { operation: "outcome", outcome: "first_pass" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_trigger",
+    calls: [
+      { args: triggerQueueArgs("list"), label: "operation=list", reason: REASON.ownerFiltered },
+      { args: { operation: "scan" }, reason: REASON.ownerFiltered },
+      {
+        args: triggerQueueArgs("history", true),
+        label: "operation=history",
+        reason: REASON.ownerFiltered,
+      },
+      { args: { operation: "acknowledge", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "dismiss", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "act", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "suppress", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { operation: "unsuppress", id: "trg-probe-absent" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  {
+    name: "brain_truth",
+    calls: [
+      { args: { operation: "slots" }, reason: REASON.ownerlessLane },
+      { args: { operation: "conflicts" }, reason: REASON.ownerlessLane },
+      { args: { operation: "collisions" }, reason: REASON.ownerlessLane },
+      { args: { operation: "aggregate" }, reason: REASON.ownerlessLane },
+      {
+        args: {
+          operation: "ingest",
+          entity: "probe-entity",
+          aspect: "probe-aspect",
+          value: "probe",
+          source: "[[notes/shared.md]]",
+        },
+        reason: REASON.ownerlessLane,
+      },
+    ],
+  },
+  {
+    name: "brain_tune",
+    calls: [
+      { args: { operation: "status" }, reason: REASON.aggregateOnly },
+      { args: { operation: "reset" }, reason: REASON.aggregateOnly },
+      { args: { operation: "run" }, reason: REASON.aggregateOnly },
+    ],
+  },
+  { name: "brain_unlinked_mentions", calls: one({ id: SHARED_ID }, REASON.ownerFiltered) },
   {
     name: "brain_update_note",
-    args: { path: "notes/shared.md", content: "probe update" },
-    reason: REASON.writerEcho,
+    calls: one({ path: "notes/shared.md", content: "probe update" }, REASON.writerEcho),
   },
-  { name: "brain_watchdog", args: {}, reason: REASON.aggregateOnly },
-  { name: "brain_write_batch", args: { operations: [] }, reason: REASON.writerEcho },
-  { name: "brain_write_session", args: { op: "list" }, reason: REASON.ownerlessLane },
-  { name: "get_skill", args: { name: "open-second-brain" }, reason: REASON.catalog },
-  { name: "list_skills", args: {}, reason: REASON.catalog },
-  { name: "schema_apply_mutations", args: { mutations: [] }, reason: REASON.writerEcho },
-  { name: "schema_inspect", args: { view: "stats" }, reason: REASON.aggregateOnly },
-  { name: "second_brain_capabilities", args: {}, reason: REASON.catalog },
-  { name: "second_brain_status", args: {}, reason: REASON.aggregateOnly },
-  { name: "skills_attach", args: { query: QUERY }, reason: REASON.catalog },
-  { name: "tool_hydrate", args: {}, reason: REASON.catalog },
-  { name: "vault_health", args: {}, reason: REASON.aggregateOnly },
+  { name: "brain_watchdog", calls: one({}, REASON.aggregateOnly) },
+  { name: "brain_write_batch", calls: one({ operations: [] }, REASON.writerEcho) },
+  {
+    name: "brain_write_session",
+    calls: [
+      { args: { op: "list" }, reason: REASON.ownerlessLane },
+      { args: { op: "status", session_id: "ws-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { op: "open", target: "Brain/probe-session.md" }, reason: REASON.ownerlessLane },
+      {
+        args: { op: "submit", session_id: "ws-probe-absent", text: "probe text" },
+        reason: REASON.ownerlessLane,
+      },
+      { args: { op: "approve", session_id: "ws-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { op: "abandon", session_id: "ws-probe-absent" }, reason: REASON.ownerlessLane },
+    ],
+  },
+  { name: "get_skill", calls: one({ name: "open-second-brain" }, REASON.catalog) },
+  { name: "list_skills", calls: one({}, REASON.catalog) },
+  { name: "schema_apply_mutations", calls: one({ mutations: [] }, REASON.writerEcho) },
+  {
+    name: "schema_inspect",
+    calls: [
+      { args: { view: "stats" }, reason: REASON.aggregateOnly },
+      { args: { view: "graph" }, reason: REASON.aggregateOnly },
+      { args: { view: "lint" }, reason: REASON.aggregateOnly },
+      { args: { view: "orphans" }, reason: REASON.aggregateOnly },
+      { args: { view: "packs" }, reason: REASON.catalog },
+      { args: { view: "active_pack" }, reason: REASON.catalog },
+      { args: { view: "explain_type", type: "brain-preference" }, reason: REASON.catalog },
+    ],
+  },
+  { name: "second_brain_capabilities", calls: one({}, REASON.catalog) },
+  { name: "second_brain_status", calls: one({}, REASON.aggregateOnly) },
+  { name: "skills_attach", calls: one({ query: QUERY }, REASON.catalog) },
+  { name: "tool_hydrate", calls: one({}, REASON.catalog) },
+  { name: "vault_health", calls: one({}, REASON.aggregateOnly) },
 ];
 
 /**
@@ -939,6 +1525,8 @@ function patchArtifact(rel: string, frontmatter: ReadonlyArray<string>, body: st
 async function seedTwoOwnerFixture(): Promise<void> {
   const ownedPref = `${CROSS_OWNER_MARKER}-a`;
   const ownedPref2 = `${CROSS_OWNER_MARKER}-a2`;
+  const ownedPrefOnSharedTopic = `${CROSS_OWNER_MARKER}-a3`;
+  const ownedPrefDuplicate = `${CROSS_OWNER_MARKER}-a4`;
 
   // The evidence signal is deliberately NEUTRAL-named and ownerless: a
   // signal carries no `owner:` anywhere in this product (`signal.ts` has
@@ -961,6 +1549,22 @@ async function seedTwoOwnerFixture(): Promise<void> {
   const unused = { evidenced_by: [`[[sig-2026-05-01-${NEUTRAL_SIGNAL_SLUG}]]`], applied_count: 0 };
   makePref(ownedPref, OWNER_A, unused);
   makePref(ownedPref2, OWNER_A, { applied_count: 0 });
+  // A THIRD owner-A preference carrying `ownedPref2`'s principle
+  // verbatim, so the dedup detector nominates that pair for a MERGE -
+  // the one hygiene action with an applier behind it. Without an
+  // applicable finding, `mode=apply` returns nothing but opaque hashes
+  // and the probe cannot see whether it wrote across the boundary.
+  // Same TOPIC as well as the same principle: `findMergeCandidates`
+  // buckets by `(topic, scope)` and only compares inside a bucket, so a
+  // duplicate principle under a different topic is never nominated.
+  makePref(ownedPrefDuplicate, OWNER_A, {
+    applied_count: 0,
+    topic: ownedPref2,
+    principle: `principle for ${ownedPref2}`,
+  });
+  // Owner-A's preference on the SHARED topic: the artifact a topic
+  // fan-out reaches without the caller ever naming it.
+  makePref(ownedPrefOnSharedTopic, OWNER_A, { topic: SHARED_TOPIC });
   makePref("hub");
 
   // The shared preference gains the title the mention scanner matches on;
@@ -1010,19 +1614,21 @@ async function seedTwoOwnerFixture(): Promise<void> {
     `---\nowner: ${OWNER_A}\n---\n\n${QUERY} ${PROBE_TERMS} [[missing-${CROSS_OWNER_MARKER}-target]]\n`,
   );
 
-  appendLogEvent(
-    vault,
-    {
-      timestamp: `${LOG_EVENT_DATE}T00:00:00Z`,
-      eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
-      body: {
-        path: `Brain/preferences/pref-${ownedPref}.md`,
-        preference: `[[pref-${ownedPref}]]`,
-        result: "applied",
+  for (const slug of [ownedPref, ownedPrefOnSharedTopic]) {
+    appendLogEvent(
+      vault,
+      {
+        timestamp: `${LOG_EVENT_DATE}T00:00:00Z`,
+        eventType: BRAIN_LOG_EVENT_KIND.applyEvidence,
+        body: {
+          path: `Brain/preferences/pref-${slug}.md`,
+          preference: `[[pref-${slug}]]`,
+          result: "applied",
+        },
       },
-    },
-    { deviceId: "" },
-  );
+      { deviceId: "" },
+    );
+  }
 
   await indexVault(resolveSearchConfig({ vault, configPath: ctx.configPath ?? undefined }), {
     force: true,
@@ -1030,19 +1636,42 @@ async function seedTwoOwnerFixture(): Promise<void> {
 }
 
 /**
- * Drive one entry and return everything the caller would see.
+ * Drive one recipe and return everything the caller would see.
  *
  * A thrown message counts: a refusal that quotes the artifact it choked
  * on discloses exactly as much as a successful response would, and this
  * repository has already shipped one of those (`schema_inspect view=lint`
  * naming a host path in its parse error).
  */
-async function probeResponse(entry: ProbeEntry): Promise<string> {
+async function probeResponse(name: string, args: Record<string, unknown>): Promise<string> {
   try {
-    return await call(entry.name, entry.args, OWNER_B);
+    return await call(name, args, OWNER_B);
   } catch (err) {
     return `threw: ${err instanceof Error ? err.message : String(err)}`;
   }
+}
+
+/** Resolve a recipe's arguments against the seeded fixture. */
+function probeArgs(recipe: ProbeCall): Record<string, unknown> {
+  return typeof recipe.args === "function" ? recipe.args(vault) : recipe.args;
+}
+
+/**
+ * A recipe's test name: the tool plus whatever selects the code path.
+ *
+ * Read off the recipe rather than hand-written, so a recipe added later
+ * cannot be the one with a name that no longer matches its arguments.
+ */
+const DISPATCH_KEYS = ["mode", "view", "operation", "action", "op"] as const;
+
+function probeLabel(name: string, recipe: ProbeCall, index: number): string {
+  if (recipe.label !== undefined) return `${name} ${recipe.label}`;
+  if (typeof recipe.args === "function") return `${name} #${index}`;
+  for (const key of DISPATCH_KEYS) {
+    const value = recipe.args[key];
+    if (typeof value === "string") return `${name} ${key}=${value}`;
+  }
+  return index === 0 ? name : `${name} #${index}`;
 }
 
 test("the probe's own fixture puts the marker in front of an unscoped caller", async () => {
@@ -1051,12 +1680,7 @@ test("the probe's own fixture puts the marker in front of an unscoped caller", a
   // Without this, every `not.toContain` below would pass on a fixture that
   // simply never produced the rows - the failure mode recon named when it
   // said several clean sweeps were clean because the fixture was empty.
-  const out = await probeResponse({
-    name: "brain_backlinks",
-    args: { id: SHARED_ID },
-    reason: "fixture self-check",
-  });
-  expect(out).toContain(CROSS_OWNER_MARKER);
+  expect(await probeResponse("brain_backlinks", { id: SHARED_ID })).toContain(CROSS_OWNER_MARKER);
 });
 
 /**
@@ -1069,26 +1693,201 @@ test("the probe's own fixture puts the marker in front of an unscoped caller", a
  */
 const PROBE_TIMEOUT_MS = 30_000;
 
+/**
+ * The differential: gate OFF versus gate FAIL, per recipe.
+ *
+ * A one-sided probe cannot fail. `off` discloses a SUPERSET of what
+ * `fail` discloses, so a recipe that does not surface the marker
+ * unscoped can never surface it scoped either - and a sweep of the
+ * previous, one-recipe-per-tool version found 81 of 96 entries in
+ * exactly that state, naming artifacts the fixture never created or
+ * driving an empty lane. Every one of them read as a clean isolation
+ * result over a call that was never isolating anything.
+ *
+ * So both directions are asserted, and which direction depends on the
+ * recipe's own reason:
+ *
+ *   - {@link REASON.ownerFiltered} claims the call REACHES owner-taggable
+ *     artifacts and filters them. Both halves are executed: the marker
+ *     MUST appear with the gate off, and MUST NOT with the gate on. The
+ *     first half is what stops the second from being vacuous.
+ *   - every other reason in {@link REASON} claims the call cannot name
+ *     an owner-private artifact at all - a session lane, an ownerless
+ *     lane, a catalog, a caller-named artifact, a writer's echo, an
+ *     aggregate with no per-artifact identity. That claim is executed
+ *     directly: the marker must be absent even with the gate OFF, where
+ *     nothing is hidden. A recipe that surfaces it there has a FALSE
+ *     reason, and the fix is to filter the surface and move it to
+ *     `ownerFiltered` - never to widen the reason.
+ *
+ * The exemption from the two-sided form is therefore an explicit,
+ * enumerated set ({@link REASONS_REACHING_OWNER_CONTENT}) read off the
+ * classification each recipe already carries, not a silence.
+ *
+ * `fail` runs FIRST so the isolation assertion sees the pristine
+ * fixture: several recipes are writers, and the reachability half must
+ * not be what decides whether the boundary held.
+ */
 for (const entry of PROBE_ENTRIES) {
-  test(
-    `${entry.name}: no cross-owner marker under a failing gate`,
-    async () => {
-      setGate(GATE_MODE.fail);
-      await seedTwoOwnerFixture();
-      expect(await probeResponse(entry), entry.reason).not.toContain(CROSS_OWNER_MARKER);
-    },
-    PROBE_TIMEOUT_MS,
-  );
+  for (const [index, recipe] of entry.calls.entries()) {
+    const label = probeLabel(entry.name, recipe, index);
+    const reaches = REASONS_REACHING_OWNER_CONTENT.has(recipe.reason);
+    test(
+      `${label}: ${reaches ? "reaches owner content and withholds it" : "reaches no owner content"}`,
+      async () => {
+        await seedTwoOwnerFixture();
+
+        setGate(GATE_MODE.fail);
+        const scoped = await probeResponse(entry.name, probeArgs(recipe));
+        expect(scoped, `${label} under fail\n${recipe.reason}`).not.toContain(CROSS_OWNER_MARKER);
+
+        setGate(GATE_MODE.off);
+        const unscoped = await probeResponse(entry.name, probeArgs(recipe));
+        if (reaches) {
+          expect(unscoped, `${label} under off\n${recipe.reason}`).toContain(CROSS_OWNER_MARKER);
+        } else {
+          expect(unscoped, `${label} under off\n${recipe.reason}`).not.toContain(
+            CROSS_OWNER_MARKER,
+          );
+        }
+      },
+      PROBE_TIMEOUT_MS,
+    );
+  }
 }
 
-test("a bucket entry without arguments is refused", () => {
+/**
+ * F1: `apply` planned against the UNFILTERED report.
+ *
+ * The probe above catches the disclosure - the applier's `detail` names
+ * both merged ids - but not the WRITE, which is the worse half: a caller
+ * whose scan correctly returned nothing could still retire another
+ * owner's preference by handing `apply` an id it had never been shown.
+ * Finding ids are `sha256(sorted targets).slice(0, 12)`, so they are
+ * derivable rather than secret and withholding them was never the
+ * boundary.
+ */
+test("brain_hygiene apply cannot execute a finding the same caller's scan withheld", async () => {
+  await seedTwoOwnerFixture();
+  setGate(GATE_MODE.fail);
+
+  const hidden = runHygieneScan(vault, { now: new Date() }).findings.filter((f) =>
+    f.targets.some((t) => t.includes(CROSS_OWNER_MARKER)),
+  );
+  expect(hidden.length, "the fixture must produce findings over owner-A artifacts").toBeGreaterThan(
+    0,
+  );
+  const ids = hidden.map((f) => f.id);
+
+  const scan = JSON.parse(await call("brain_hygiene", { mode: "scan" }, OWNER_B));
+  expect(JSON.stringify(scan)).not.toContain(CROSS_OWNER_MARKER);
+
+  const applied = JSON.parse(await call("brain_hygiene", { mode: "apply", ids }, OWNER_B));
+  expect(applied.applied).toEqual([]);
+  expect(applied.changed).toBe(0);
+
+  // The artifacts are still on disk, still owned, still unmerged.
+  for (const slug of [`${CROSS_OWNER_MARKER}-a2`, `${CROSS_OWNER_MARKER}-a4`]) {
+    expect(existsSync(join(vault, "Brain", "preferences", `pref-${slug}.md`))).toBe(true);
+  }
+});
+
+/**
+ * F1, second half: the dry run was an existence oracle.
+ *
+ * A hidden finding came back as `excluded_review:[id]` and an id nobody
+ * ever issued came back as `unknown_ids:[id]`, so a caller could
+ * enumerate the hidden population one derived id at a time without ever
+ * being shown a finding. IDENTICAL TO ABSENT is the convention
+ * `preferences-collect.ts` states; this is it, executed.
+ */
+test("a withheld hygiene finding id answers exactly as an id nobody issued", async () => {
+  await seedTwoOwnerFixture();
+  setGate(GATE_MODE.fail);
+
+  const hiddenId = runHygieneScan(vault, { now: new Date() }).findings.find((f) =>
+    f.targets.some((t) => t.includes(CROSS_OWNER_MARKER)),
+  )!.id;
+  const inventedId = "dedup:000000000000";
+
+  const withheld = JSON.parse(
+    await call("brain_hygiene", { mode: "apply", ids: [hiddenId], dry_run: true }, OWNER_B),
+  );
+  const absent = JSON.parse(
+    await call("brain_hygiene", { mode: "apply", ids: [inventedId], dry_run: true }, OWNER_B),
+  );
+
+  expect(withheld.unknown_ids).toEqual([hiddenId]);
+  expect(withheld.excluded_review).toEqual([]);
+  // Same shape, same fields, same emptiness - only the echoed id differs.
+  expect({ ...withheld, unknown_ids: [] }).toEqual({ ...absent, unknown_ids: [] });
+});
+
+/**
+ * F3: the verdict was folded over findings the arrays no longer carried.
+ *
+ * `verdict: watch` beside four empty arrays tells the caller that a
+ * hidden artifact tripped a detector - the existence leak with the
+ * evidence removed.
+ */
+test("brain_health's verdict is folded over the findings it actually returns", async () => {
+  await seedTwoOwnerFixture();
+
+  setGate(GATE_MODE.off);
+  const unscoped = JSON.parse(await call("brain_health", {}, OWNER_B));
+  expect(unscoped.verdict).not.toBe("clean");
+  expect(JSON.stringify(unscoped)).toContain(CROSS_OWNER_MARKER);
+
+  setGate(GATE_MODE.fail);
+  const scoped = JSON.parse(await call("brain_health", {}, OWNER_B));
+  const named =
+    scoped.contradictions.length + scoped.stale_claims.length + scoped.batch_inflation.length;
+  if (named === 0 && scoped.concept_gaps.length === 0) {
+    expect(scoped.verdict).toBe("clean");
+  }
+  expect(JSON.stringify(scoped)).not.toContain(CROSS_OWNER_MARKER);
+});
+
+/**
+ * The probe's own shape, pinned as equalities.
+ *
+ * Three numbers are quoted outside this file - `docs/architecture.md`,
+ * `docs/mcp.md` and the release notes all state how much of the tool
+ * surface is really driven - and a number quoted in prose with nothing
+ * keeping it true is the defect this whole release is about. The
+ * two-sided count is the load-bearing one: it is how many recipes prove
+ * their own reachability before asserting withholding, and the release
+ * before this one shipped a probe where that number was effectively one.
+ *
+ * Raising any of these is ordinary; lowering the two-sided count means a
+ * surface stopped being exercised, which is exactly the regression a
+ * floor would have let through.
+ */
+test("the probe's population and its two-sided share are what the docs say", () => {
+  const recipes = PROBE_ENTRIES.flatMap((entry) => entry.calls);
+  const twoSided = recipes.filter((r) => REASONS_REACHING_OWNER_CONTENT.has(r.reason));
+  expect(PROBE_ENTRIES.length).toBe(PROBE_ENTRY_COUNT);
+  expect(recipes.length).toBe(PROBE_RECIPE_COUNT);
+  expect(twoSided.length).toBe(PROBE_TWO_SIDED_COUNT);
+});
+
+test("a bucket entry without call recipes is refused", () => {
   expect(() => assertProbeEntry("NON_CONTENT", "brain_backlinks")).toThrow(
-    "every entry must be a {name, args, reason} record",
+    "every entry must be a {name, calls} record",
+  );
+  expect(() => assertProbeEntry("NON_CONTENT", { name: "brain_backlinks", calls: [] })).toThrow(
+    "has no 'calls'",
   );
   expect(() =>
-    assertProbeEntry("NON_CONTENT", { name: "brain_backlinks", reason: REASON.ownerFiltered }),
-  ).toThrow("has no 'args'");
+    assertProbeEntry("NON_CONTENT", {
+      name: "brain_backlinks",
+      calls: [{ reason: REASON.ownerFiltered }],
+    }),
+  ).toThrow("has a call with no 'args'");
   expect(() =>
-    assertProbeEntry("NON_CONTENT", { name: "brain_backlinks", args: {}, reason: "metadata" }),
+    assertProbeEntry("NON_CONTENT", {
+      name: "brain_backlinks",
+      calls: [{ args: {}, reason: "metadata" }],
+    }),
   ).toThrow(`at least ${REASON_MIN_CHARS} characters`);
 });

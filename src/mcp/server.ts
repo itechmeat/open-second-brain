@@ -345,7 +345,7 @@ export class MCPServer {
     if (typeof uri !== "string") {
       throw new MCPError(INVALID_PARAMS, "resources/read requires a string `uri`");
     }
-    const content = readResource({ vault: this.vault }, uri);
+    const content = readResource({ vault: this.vault, agentName: this.context.agentName }, uri);
     return { contents: [content] };
   }
 

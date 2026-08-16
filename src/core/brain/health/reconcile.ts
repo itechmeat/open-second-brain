@@ -96,6 +96,49 @@ export interface SemanticHealthReport {
   readonly suppressed?: SemanticHealthSuppression;
 }
 
+/** The four surfaced finding families a verdict is folded from. */
+export interface SemanticHealthFindings {
+  readonly contradictions: ReadonlyArray<unknown>;
+  readonly conceptGaps: ReadonlyArray<unknown>;
+  readonly staleClaims: ReadonlyArray<unknown>;
+  readonly batchInflation: ReadonlyArray<unknown>;
+}
+
+/**
+ * Fold four finding families into one verdict.
+ *
+ * A contradiction between two confirmed preferences is the most serious
+ * finding - two active rules disagree, so an agent will apply a
+ * coin-flip. Gaps, stale claims, and batch-inflation bursts are quality
+ * nudges, not active conflicts, so they only raise a watch.
+ *
+ * Exported because the verdict must be recomputed wherever the arrays it
+ * summarises are NARROWED after detection, and there are two such
+ * narrowings. The acknowledge-before watermark is one: a fully
+ * acknowledged burst must not pin `watch`. An owner-scope filter is the
+ * other (a-label-is-not-a-boundary, U3): `brain_health` withholds the
+ * findings a caller may not see, and shipping the unfiltered verdict
+ * beside those emptied arrays told the caller a hidden artifact had
+ * tripped a detector - the existence leak with the evidence removed.
+ * `toolBrainDoctor` already recomputes its `ok` for the same reason; the
+ * arithmetic is here so the two cannot drift.
+ *
+ * Deliberately over `ReadonlyArray<unknown>`: only the lengths decide,
+ * and a signature naming the four finding types would force every caller
+ * that filtered them to reconstruct those types to say "none left".
+ */
+export function foldSemanticHealthVerdict(findings: SemanticHealthFindings): SemanticHealthVerdict {
+  if (findings.contradictions.length > 0) return "investigate";
+  if (
+    findings.conceptGaps.length > 0 ||
+    findings.staleClaims.length > 0 ||
+    findings.batchInflation.length > 0
+  ) {
+    return "watch";
+  }
+  return "clean";
+}
+
 export function reconcileSemanticHealth(
   input: SemanticHealthInput,
   config: SemanticHealthConfig,
@@ -129,16 +172,12 @@ export function reconcileSemanticHealth(
     config.silenceBefore,
   );
 
-  // A contradiction between two confirmed preferences is the most
-  // serious finding - two active rules disagree, so an agent will apply
-  // a coin-flip. Gaps, stale claims, and batch-inflation bursts are
-  // quality nudges, not active conflicts, so they only raise a watch.
-  // The verdict folds the SURFACED findings, so a fully-acknowledged
-  // burst no longer pins `watch`.
-  let verdict: SemanticHealthVerdict = "clean";
-  if (contradictions.length > 0) verdict = "investigate";
-  else if (conceptGaps.length > 0 || staleClaims.length > 0 || batchInflation.length > 0)
-    verdict = "watch";
+  const verdict = foldSemanticHealthVerdict({
+    contradictions,
+    conceptGaps,
+    staleClaims,
+    batchInflation,
+  });
 
   return {
     contradictions,

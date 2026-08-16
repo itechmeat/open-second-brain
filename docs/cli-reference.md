@@ -133,8 +133,10 @@ o2b brain snapshot log        (CLI-only) Newest-first listing of every recovery 
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
 o2b brain rollback            (CLI-only) Restore Brain/ from a snapshot (--dry-run previews; drift abort vs --force-rollback); --list, the prompt and --json name the snapshot reason ('unknown' when the sidecar records none)
 o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
-o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force])
-o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode).
+o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force]). Since v1.49.0 the bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
+o2b brain bank-export         (CLI-only) One-file backup bundle: preferences, the page graph, page contracts, the sources dashboard. Redacted on the way out; refuses with exit 1 on an unreadable `pref-*.md` (since v1.49.0)
+o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge). A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)
+o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode). Since v1.49.0 BOTH modes refuse a Brain file they cannot parse - `--export` writes nothing and exits 1, and live mode does not start, because a browser showing a silently smaller graph is the same lie as a written file - and `--export` runs the shared redactor over the graph, so its output differs from a pre-v1.49.0 export on any vault holding a credential-shaped value
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, ...). --remediate [--dry-run] plans a dependency-ordered repair and applies auto-safe content-hash re-stamps
 o2b brain health              Semantic-health report (since v0.14.0): contradictory confirmed preferences, recurring concepts with no dedicated preference, stale claims, plus a clean | watch | investigate verdict
 o2b brain history             Render a preference's edit-history timeline (since v0.14.0): one entry per content mutation (principle / scope / status before -> after)
@@ -1101,6 +1103,34 @@ before a context-compression event, with the same safety report shape.
 Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a
 `why_retrieved` list naming the scoring layers that ranked it.
+
+## What leaves the machine unscanned (network egress)
+
+Every export that writes a FILE - `brain export`, `brain explorer --export`,
+`brain bank-export`, `brain graph-export`, `brain okf-export`,
+`export-config`, `install --out` - runs the shared redactor over its bytes
+before they land, and prints a notice on stderr when it removed something.
+
+Five paths send vault-derived bytes to a NETWORK destination and are
+**not** scanned. That is a stated exposure, not an oversight: redacting an
+embedding input produces a vector for the placeholder rather than for the
+text, so the chunk comes back unfindable while the index reports success.
+The full decision record for each is `src/core/egress/registry.ts`, keyed
+by the id below.
+
+| id | verb | what leaves | when it can happen |
+| --- | --- | --- | --- |
+| `search-embedding-openai-compat` | `o2b search index` / any reindex | every indexed chunk BODY, verbatim | only once `search_embedding_endpoint` + an API key are configured; the endpoint is whichever host you name, including a local one |
+| `search-embedding-zeroentropy` | `o2b search index` (zeroentropy profile) | the same chunk bodies, to a second vendor's embed endpoint | same gate, when that provider profile is selected |
+| `search-rerank-cross-encoder` | `o2b search --rerank` | the QUERY plus the top-of-pool candidate DOCUMENTS - vault text the embedding path may never have seen, chosen by relevance to what you just asked | only with a reranker endpoint configured |
+| `brain-telegram-capture` | `o2b brain telegram-run` | reply text POSTed to the Telegram Bot API; the `/catchup` reply is composed from vault content | only while the runner verb is running; an install that never starts it never reaches this path |
+| `research-external-fetch` | `o2b brain research` | an agent-composed search query (not a page body) to the configured research provider | key-gated: with no key set every call is a typed `disabled` error |
+
+Semantic search, reranking, Telegram capture and research are all off
+until you configure an endpoint, so a default install has no network
+egress at all. `tests/core/architecture/egress-census.test.ts` fails if a
+sixth such path is added without a declaration, and fails if a declared
+one is missing from this table.
 
 ## Helpers
 

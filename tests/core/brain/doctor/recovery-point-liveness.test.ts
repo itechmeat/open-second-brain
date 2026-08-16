@@ -46,6 +46,7 @@ import { DOCTOR_EXIT_EXCLUSIONS } from "../../../../src/core/brain/doctor-exits.
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { SNAPSHOT_ARCHIVE_SUFFIX, snapshotsDir } from "../../../../src/core/brain/paths.ts";
 import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
+import { lexCode } from "../../../helpers/source-lexer.ts";
 
 let vault: string;
 
@@ -235,7 +236,9 @@ describe("the verdict comes from the injected clock, never from the wall", () =>
       ),
     );
     return source.text().then((text) => {
-      const code = text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+      // The shared census lexer, `code` view: the subject here is a CALL,
+      // so a `Date.now(` quoted inside a string is correctly not one.
+      const code = lexCode(text);
       expect(code.includes("Date.now(")).toBe(false);
       expect(code.includes("new Date()")).toBe(false);
     });

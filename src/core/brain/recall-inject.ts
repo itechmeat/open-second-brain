@@ -42,9 +42,11 @@ export const RECALL_INJECT_TIME_BUDGET_MS = 2_500;
  * Compared against {@link RecallResultSet.idfWeightedCoverage} - the share
  * of the prompt's IDF mass the retrieved notes actually cover - and NOT
  * against a result score. A score cannot carry a floor here: the keyword
- * lane is min-max normalised within the candidate set, so the top row's
- * score is pinned at the configured `keywordWeight` no matter how well it
- * matched, and the bottom row's at zero no matter how well IT matched.
+ * lane is min-max normalised within the candidate set, so whenever that
+ * lane is non-empty the top row's score sits at or above the configured
+ * `keywordWeight` (`DEFAULT_KEYWORD_WEIGHT`, 0.6; 0.65 measured on a
+ * freshly written keyword-only vault) no matter how well it matched, and
+ * the bottom row's at zero no matter how well IT matched.
  * Against that number this constant measured which rows the filter stack
  * had removed - it abstained hardest exactly when a visibility or owner
  * scope had just taken the pool's best row, which is the one moment the
@@ -81,8 +83,14 @@ export interface RecallResultSet {
    * (`SearchOutcome.idfWeightedCoverage`). Required, so a retriever cannot
    * leave the floor with nothing to read and no consumer can fall back to
    * a rank position.
+   *
+   * `null` when the retrieval had no IDF mass to weigh - the prompt
+   * carried no word characters, or the corpus is empty. Nullable rather
+   * than optional for the same reason: an absent field would be a
+   * retriever that forgot to report, and this is a retriever reporting
+   * that there is nothing to report.
    */
-  readonly idfWeightedCoverage: number;
+  readonly idfWeightedCoverage: number | null;
 }
 
 /** Relevance retriever: maps a query to a candidate set. */
@@ -95,7 +103,22 @@ export interface RecallInjectOptions {
   readonly confidenceFloor?: number;
 }
 
-export type RecallAbstainReason = "empty_prompt" | "no_matches" | "below_floor";
+/**
+ * Why the hook injected nothing.
+ *
+ * `unmeasurable_quality` is the fourth member and the one that is not a
+ * judgement about the material: the floor reads a match quality, and for
+ * a prompt with no IDF mass to weigh there is no quality to compare. The
+ * hook abstains, because injecting on a measurement that did not happen
+ * is the false fire the floor exists to prevent - but the reason says
+ * which of the two it was, since the repairs differ (a weak match is a
+ * corpus problem, an unmeasurable one is a prompt or an empty index).
+ */
+export type RecallAbstainReason =
+  | "empty_prompt"
+  | "no_matches"
+  | "below_floor"
+  | "unmeasurable_quality";
 
 /**
  * Why an attempt failed, as a closed vocabulary rather than as prose.
@@ -155,8 +178,13 @@ export type RecallInjectDecision =
       readonly kind: "abstain";
       readonly reason: RecallAbstainReason;
       readonly topScore: number;
-      /** The quantity the floor was compared against; see the floor's docblock. */
-      readonly matchQuality: number;
+      /**
+       * The quantity the floor was compared against; see the floor's
+       * docblock. `null` on the abstains where there was no comparison to
+       * make - `unmeasurable_quality` always, and the earlier
+       * short-circuits when the retrieval could not weigh the prompt.
+       */
+      readonly matchQuality: number | null;
     }
   | {
       readonly kind: "error";
@@ -224,6 +252,19 @@ export async function decideRecallInject(
   // reports. `topScore` is still carried on the decision because it is
   // what the brief's bullets show and what the audit line records - it is
   // simply no longer allowed to decide anything.
+  //
+  // No quality means no comparison. Abstaining is the explicit choice
+  // this branch makes rather than a fallback: the alternative was the
+  // producer's old `1`, which put every unweighable prompt above every
+  // floor and injected on it.
+  if (matchQuality === null) {
+    return Object.freeze({
+      kind: "abstain",
+      reason: "unmeasurable_quality",
+      topScore,
+      matchQuality,
+    });
+  }
   if (matchQuality < floor) {
     return Object.freeze({ kind: "abstain", reason: "below_floor", topScore, matchQuality });
   }

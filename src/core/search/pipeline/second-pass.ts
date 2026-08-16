@@ -151,7 +151,10 @@ function runTargetedRetry(input: SecondPassInput): SecondPassOutcome {
     secondPass: Object.freeze({
       triggered: true,
       kind: "targeted",
-      reason: `partial coverage ${poolCoverage.idfWeightedCoverage.toFixed(2)} < ${COMPLETENESS_COMPLETE_THRESHOLD}; targeted retry on uncovered rare terms: ${retryPlan.terms.join(", ")}`,
+      // `retryPlan.fire` is false for an unmeasurable coverage, so the
+      // non-null assertion below is the plan's own precondition rather
+      // than an assumption: this line is unreachable without a number.
+      reason: `partial coverage ${poolCoverage.idfWeightedCoverage!.toFixed(2)} < ${COMPLETENESS_COMPLETE_THRESHOLD}; targeted retry on uncovered rare terms: ${retryPlan.terms.join(", ")}`,
       added: newHits.length,
       targetedTerms: retryPlan.terms,
     }),

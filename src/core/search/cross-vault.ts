@@ -130,11 +130,16 @@ export async function searchAcrossVaults(
   let activeCorpus: RetrievalCorpusStatement | null = null;
   let total = 0;
   // Match quality of the union, folded from the origins that answered.
-  // Starts at zero rather than one: a union in which every origin failed
-  // covered nothing, and reporting a full cover for it would be the exact
-  // over-claim the confidence thresholds downstream now depend on not
-  // making.
-  let unionCoverage = 0;
+  //
+  // Starts at `null` - unmeasurable - and becomes a number the moment any
+  // origin returns one. Not zero: zero is the claim "the union covered
+  // nothing of the query", and before an origin has answered, and for a
+  // query no origin could weigh at all, that claim has not been earned
+  // either. A union in which every origin FAILED is a different thing
+  // again, and it reads null too: nothing measured it. Reporting a full
+  // cover for any of these would be the exact over-claim the confidence
+  // thresholds downstream now depend on not making.
+  let unionCoverage: number | null = null;
 
   // Session focus resolves ONCE in the active-vault context: otherwise
   // each origin would load ITS OWN persisted search-focus state and
@@ -214,8 +219,15 @@ export async function searchAcrossVaults(
       // the conservative fold: the merged window is a superset of any one
       // origin's rows, so its true coverage is at least the best origin's
       // and never less. Summing or averaging would invent a number no
-      // origin measured.
-      unionCoverage = Math.max(unionCoverage, outcome.idfWeightedCoverage);
+      // origin measured. An origin that could not measure the query
+      // contributes nothing to the fold - it is skipped, not read as a
+      // zero, because a zero would drag a max nowhere but would read as a
+      // measurement if it were the only origin.
+      const originCoverage = outcome.idfWeightedCoverage;
+      if (originCoverage !== null) {
+        unionCoverage =
+          unionCoverage === null ? originCoverage : Math.max(unionCoverage, originCoverage);
+      }
       // Chain-stop: if this origin answered the QUESTION - covered the
       // query's IDF mass to the configured share - and origins remain,
       // skip them.
@@ -223,16 +235,26 @@ export async function searchAcrossVaults(
       // It used to read the origin's top result score, which meant two
       // different things under the two fusion modes and neither of them
       // "answered confidently": in `linear` mode the keyword lane's
-      // min-max normalisation pins the top row at `keywordWeight` (0.6 by
-      // default), so the shipped 0.8 threshold was unreachable and the
-      // chain never stopped; in `rrf` mode the fused lane is min-max
-      // normalised to exactly 1.0 at the top, so the same 0.8 was met by
-      // every non-empty origin and the chain always stopped after the
-      // first. `idfWeightedCoverage` is absolute, so the knob now means
-      // one thing in both modes - and 0.8 is the share
-      // `COMPLETENESS_COMPLETE_THRESHOLD` already calls a complete
-      // retrieval. Only recorded when origins were actually skipped,
-      // keeping the single-origin and never-triggered paths identical.
+      // min-max normalisation puts the top row of any origin with a
+      // non-empty keyword lane at or above `keywordWeight`
+      // (`DEFAULT_KEYWORD_WEIGHT`, plus whichever boost layers fired -
+      // 0.65 measured on a freshly written keyword-only vault), so the
+      // shipped 0.8 threshold was out of reach there and the chain never
+      // stopped; in `rrf` mode the fused lane is min-max normalised to
+      // exactly 1.0 at the top, so the same 0.8 was met by every
+      // non-empty origin and the chain always stopped after the first.
+      // `idfWeightedCoverage` measures the match rather than the pool's
+      // shape, so the knob now means one thing in both modes - and 0.8 is
+      // the share `COMPLETENESS_COMPLETE_THRESHOLD` already calls a
+      // complete retrieval. Only recorded when origins were actually
+      // skipped, keeping the single-origin and never-triggered paths
+      // identical.
+      //
+      // An origin whose coverage is unmeasurable never stops the chain:
+      // "I could not weigh this query" is not "I answered it", and
+      // treating the two alike is what the old `totalIdf === 0 ? 1`
+      // shortcut did - it would have stopped the chain on the FIRST
+      // origin for every query the report could not weigh.
       const remaining = origins.slice(i + 1);
       // Gate on whichever collection THIS mode populates: in cards mode results
       // is empty, so reading it would never short-circuit (the latent bug).
@@ -243,7 +265,8 @@ export async function searchAcrossVaults(
         activeRecall.chainStopEnabled &&
         remaining.length > 0 &&
         hits.length > 0 &&
-        outcome.idfWeightedCoverage >= activeRecall.chainStopScore
+        originCoverage !== null &&
+        originCoverage >= activeRecall.chainStopScore
       ) {
         chainStop = Object.freeze({
           triggered: true as const,

@@ -45,8 +45,14 @@ describe("normalizeQueryTerms", () => {
     expect(terms.some((t) => t.includes("REDACTED"))).toBe(false);
   });
 
-  test("empty when no significant terms", () => {
-    expect(normalizeQueryTerms("a it")).toEqual([]);
+  test("empty only when the query carries no word characters at all", () => {
+    // Short tokens are terms now. The three-character floor that dropped
+    // them was an English-shaped stopword rule: it also erased every
+    // one- and two-character CJK query, so a whole class of recall gap
+    // could never form a bucket and was invisible to the promotion loop.
+    expect(normalizeQueryTerms("a it")).toEqual(["a", "it"]);
+    expect(normalizeQueryTerms("検索")).toEqual(["検索"]);
+    expect(normalizeQueryTerms("?? -- ??")).toEqual([]);
   });
 });
 
@@ -74,7 +80,8 @@ describe("recordQueryDemand", () => {
   });
 
   test("does not record a query with no significant terms", () => {
-    const record = recordQueryDemand(vault, { query: "a of to", resultCount: 5 });
+    // Punctuation only: nothing to bucket in any language.
+    const record = recordQueryDemand(vault, { query: "?!? ...", resultCount: 5 });
     expect(record).toBeNull();
     expect(existsSync(queryDemandLogPath(vault))).toBe(false);
   });

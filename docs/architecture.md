@@ -299,6 +299,16 @@ stating plainly that chunk bodies leave unscanned. Both rules are proved by
 synthetic modules, so each fails the build until the site it finds is
 declared.
 
+Five paths send vault-derived bytes to a network destination without passing
+the shared redactor - the two embedding providers, the cross-encoder reranker
+(which POSTs the query PLUS the candidate documents), the Telegram capture
+reply, and the research transport. Each is declared in
+`src/core/egress/registry.ts` as `unscanned_network_payload` with the reason
+redaction would corrupt rather than protect the result, and
+`docs/cli-reference.md` carries the operator-facing table; the census fails if
+a sixth appears undeclared or an existing one falls out of that table. A
+default install reaches none of them.
+
 Ownership is a boundary only where something writes it. With
 `integrity.owner_scope_delivery` on, every production preference writer stamps
 the server-resolved agent identity onto a NEW record; a rewrite never re-owns,
@@ -310,18 +320,36 @@ silently narrowed to the caller's own - a narrowing would leave the caller
 believing it had read what it asked for.
 
 The surfaces that take no `agent_scope` argument honour the same gate through
-the server-resolved identity. Fourteen of them - the backlink index, unlinked
-mentions, the MOC audit, the hygiene scan, the dangling-target listing, the
-doctor, the claim graph, idea discovery, the stale scan, the event trace, the
-agent diff, the timeline, the semantic-health report and the retention and
-review-candidate previews - aggregated their own rows and asked nothing, so
-under `fail` they returned another owner's artifact ids, paths, titles and body
-prose. Each now filters through `ownerScopeView`, which is an adapter over the
-one ownership rule rather than a second one. A withheld row is dropped and
+the server-resolved identity. They aggregated their own rows and asked nothing,
+so under `fail` they returned another owner's artifact ids, paths, titles and
+body prose. Each now filters through `ownerScopeView`, an adapter over the one
+ownership rule rather than a second one, and the set spans the tool surface,
+the MCP resources surface and one CLI verb. A withheld row is dropped and
 nothing counts it: `brain_hygiene`'s per-detector counts, `brain_claims`'
 `count` and the timeline's `total` are recomputed over the visible rows, so a
 filtered report is indistinguishable from a report over a vault that never held
-them. With the gate off every one of these is byte-identical, because the view
-short-circuits before it reads a file. The enforcement lives in
-`tests/mcp/agent-scope-matrix.test.ts`, where the unasserted buckets carry
-`{name, args, reason}` and every entry is driven against one two-owner fixture.
+them. Two surfaces also bound a WRITE rather than only a payload -
+`brain_hygiene mode=apply` and `brain_doctor repair` planned against the
+unfiltered report, so a caller whose scan correctly returned nothing could
+still act on a row it had never been shown. With the gate off every one of
+these is byte-identical, because the view short-circuits before it reads a
+file.
+
+`warn` is inert on this set, deliberately and now stated where it is
+implemented: reporting how many rows `fail` would withhold is itself the
+disclosure, so `warn`'s observability here is the `owner:` stamp appearing on
+new files, not a count in any response.
+
+The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
+is the point rather than its size. Ninety-six classified tools carry 220 call
+recipes - one per mode, view or operation, because one executed view is not an
+executed classification. Every recipe runs TWICE against the same two-owner
+fixture, once with the gate closed and once with it open, and the classification
+decides what the open run must show: the 31 recipes classified as reaching
+owner-taggable content must surface the marker with the gate off, which is what
+stops the closed run from passing vacuously. The other 189 carry a claim of
+unreachability, and that claim is executed directly - the marker must be absent
+even where nothing is hidden. The first version of this probe asserted only the
+closed half, and 81 of its entries were driven against arguments that named
+artifacts the fixture never created; they could not have failed. Those three
+numbers are pinned as equalities in the same file.

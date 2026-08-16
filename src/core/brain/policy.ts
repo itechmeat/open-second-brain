@@ -55,6 +55,7 @@ export {
   loadBrainConfigDetailed,
   loadFeedbackDefaultScopeSafe,
   loadGuardrailsConfigSafe,
+  loadIntegrityConfigForWrite,
   loadIntegrityConfigSafe,
   loadMaintenanceConfigSafe,
   loadNotesConfigSafe,

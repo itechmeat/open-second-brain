@@ -15,6 +15,7 @@ import {
   TOKEN_COUNT_METHOD,
   TOKEN_COUNT_METHODS,
 } from "../../../src/core/brain/token-impact.ts";
+import { lexSource } from "../../helpers/source-lexer.ts";
 
 let tmp: string;
 let vault: string;
@@ -326,7 +327,10 @@ describe("the ledger no longer claims exactness over caller-supplied integers", 
     ).text();
     // Comments may (and do) explain the retired label; code may not use it
     // for anything but the documented legacy read.
-    const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+    // The shared census lexer. `withoutComments`, not `code`: the strings
+    // below ARE the subject, and the code view would blank them and make
+    // every assertion here vacuously true.
+    const code = lexSource(source).withoutComments;
     expect(code).not.toContain('"exact"');
     expect(code).not.toContain('"fallback"');
     expect(code).not.toContain("byMethod.exact");

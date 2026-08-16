@@ -24,6 +24,7 @@
  * nothing here hardcodes a natural-language phrase or a closed enum.
  */
 
+import { normalizeAgentArgument } from "../agent-identity.ts";
 import type { FrontmatterMap } from "../types.ts";
 
 /** NFC + trim + lower-case a single ownership token. */
@@ -95,8 +96,29 @@ export function pageOwner(meta: FrontmatterMap): string | null {
  * what they had just written, and nothing would ever say why. An
  * identity a writer cannot spell is an error to report, not a page to
  * bury.
+ *
+ * ## Why the placeholder is refused here and not only at the reader
+ *
+ * `normalizeAgentArgument` is the predicate the whole product uses for
+ * "is this a real identity or a name a model guessed": it rejects
+ * `agent`, `assistant`, `claude`, `gpt` and the rest, and
+ * `refuseOwnerScopeRequest` cites it when it refuses a caller asking to
+ * be answered as one of them - "the bottom of the identity chain is the
+ * literal `agent`, which that predicate rejects, so an unconfigured
+ * install cannot silently become an owner"
+ * (`src/mcp/owner-scope-refusal.ts`).
+ *
+ * That sentence was false while this function accepted the same string.
+ * `resolveAgentName` never fails; it returns `UNCONFIGURED_AGENT_NAME`
+ * (`"agent"`), so on an install with no `agent_name` and the gate on,
+ * every new preference was stamped `owner: agent` while every caller
+ * asking for `agent_scope: "agent"` was refused as unverifiable - the
+ * vault accumulated owner-private memories no caller could ever be
+ * shown to own. One predicate, both halves: an identity that cannot be
+ * requested cannot be stamped either.
  */
 export function ownerStampFor(agent: string): string | null {
+  if (normalizeAgentArgument(agent) === null) return null;
   const token = ownerToken(agent);
   return token === null || token === OWNER_UNRESOLVED ? null : token;
 }

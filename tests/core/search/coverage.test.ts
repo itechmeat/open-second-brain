@@ -23,16 +23,69 @@ import { search } from "../../../src/core/search/search.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 describe("coverage engine (pure)", () => {
-  test("significantTerms drops short tokens but keeps every word - no stopword list", () => {
-    // Language-agnostic: there is no stopword list. Tokens under length 3
-    // are dropped structurally ("is"); common words like "the"/"what" are
-    // kept here and deprioritised downstream by IDF, in any language.
+  test("significantTerms keeps every word - no stopword list, no length rule", () => {
+    // Language-agnostic: there is no stopword list and no longer a length
+    // floor. "is" is kept for the same reason "the" always was - it is a
+    // word the query asked with, and how much it is worth is the IDF
+    // weighting's answer downstream, in any language.
     expect(significantTerms("what is the alpha zephyr")).toEqual([
       "what",
+      "is",
       "the",
       "alpha",
       "zephyr",
     ]);
+  });
+
+  test("a query whose words are one or two characters is weighed, not dropped", () => {
+    // The length floor was an English-shaped stopword rule wearing a
+    // structural disguise: it removed every term of a CJK query, whose
+    // common word length IS one or two characters, and the report then
+    // had nothing to weigh. Nothing here is about CJK specifically - the
+    // splitter never asks what script a token is in - it is about a
+    // character count meaning different things in different ones.
+    expect(significantTerms("検索")).toEqual(["検索"]);
+    expect(significantTerms("ai")).toEqual(["ai"]);
+    expect(significantTerms("x")).toEqual(["x"]);
+  });
+
+  test("a token of pure punctuation is not a word in any language", () => {
+    // The splitter keeps `-` and `_` inside tokens so `well-known` and
+    // `snake_case` survive whole, which lets a run of them survive the
+    // split as well. With the length floor gone, this is what stops it
+    // earning IDF mass.
+    expect(significantTerms("?? -- ??")).toEqual([]);
+    expect(significantTerms("well-known snake_case")).toEqual(["well-known", "snake_case"]);
+  });
+
+  test("an unweighable query reports no coverage, not perfect coverage", () => {
+    // The defect: `totalIdf === 0 ? 1` scored a query nothing could be
+    // measured about as a complete retrieval, at maximum confidence, for
+    // every threshold reading it.
+    const noTerms = buildCoverageReport({
+      significantTerms: [],
+      coveredTerms: new Set(),
+      documentCount: 100,
+      dfByTerm: new Map(),
+    });
+    expect(noTerms.idfWeightedCoverage).toBeNull();
+    // An empty corpus is the other unweighable input: every IDF is
+    // ln(1 + 0/(1+df)) = 0, so there is no mass to take a share of.
+    const emptyCorpus = buildCoverageReport({
+      significantTerms: ["alpha"],
+      coveredTerms: new Set(),
+      documentCount: 0,
+      dfByTerm: new Map(),
+    });
+    expect(emptyCorpus.idfWeightedCoverage).toBeNull();
+    // And a genuine zero is still a zero: measured, and distinguishable.
+    const missed = buildCoverageReport({
+      significantTerms: ["alpha"],
+      coveredTerms: new Set(),
+      documentCount: 100,
+      dfByTerm: new Map([["alpha", 1]]),
+    });
+    expect(missed.idfWeightedCoverage).toBe(0);
   });
 
   test("idf is monotonically decreasing in document frequency", () => {
