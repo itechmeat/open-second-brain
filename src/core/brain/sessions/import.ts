@@ -25,7 +25,7 @@
  * second run on the same file finds every hash already present.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
 import { delegatedAgentName } from "../../agent-identity.ts";
@@ -37,6 +37,7 @@ import { writeSignal } from "../signal.ts";
 import { importSessionRecall } from "../session-recall.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
+import { readFirstLine } from "./read-lines.ts";
 import { detectAdapter, getAdapter } from "./registry.ts";
 import {
   SessionImportError,
@@ -197,15 +198,6 @@ export interface ImportSessionPathResult {
   readonly warnings: ReadonlyArray<{ path: string; message: string }>;
 }
 
-function firstLineOfFile(path: string): string {
-  // Read the file and slice up to the first newline. Cheaper than a
-  // streaming reader for our small fixtures, fine for production
-  // session files that are typically 50-500 KB.
-  const text = readFileSync(path, "utf8");
-  const nl = text.indexOf("\n");
-  return nl < 0 ? text : text.slice(0, nl);
-}
-
 /**
  * Portable session identity for provenance refs (Vault portability suite).
  *
@@ -222,12 +214,18 @@ export function sessionRefIdentity(absPath: string, recallSessionId?: string): s
   return explicit && explicit.length > 0 ? explicit : basename(absPath);
 }
 
-/** Pick an adapter — by explicit format, or autodetect. */
-function chooseAdapter(path: string, format?: SessionAdapterId): SessionAdapter {
+/**
+ * Pick an adapter — by explicit format, or autodetect.
+ *
+ * Autodetect needs exactly one line, and `readFirstLine` stops at the first
+ * newline: the file used to be read whole here and then read a second time by
+ * `adapter.iterate`. An explicit `--format` reads nothing at all.
+ */
+async function chooseAdapter(path: string, format?: SessionAdapterId): Promise<SessionAdapter> {
   if (format !== undefined) {
     return getAdapter(format);
   }
-  const first = firstLineOfFile(path);
+  const first = await readFirstLine(path);
   const a = detectAdapter(first);
   if (!a) {
     throw new SessionImportError(
@@ -246,7 +244,7 @@ export async function importSession(
   if (!existsSync(path)) {
     throw new SessionImportError("IO", `session file does not exist: ${path}`);
   }
-  const adapter = chooseAdapter(path, opts.format);
+  const adapter = await chooseAdapter(path, opts.format);
   // Reuse the caller-supplied index when present (directory walk lifts
   // the build out of the per-file loop). Otherwise build our own.
   const dedup = opts.dedupIndex ?? buildDedupIndex(vault);

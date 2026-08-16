@@ -21,8 +21,7 @@
  * orchestrator can construct a stable `session_ref` for dedup.
  */
 
-import { readFileSync } from "node:fs";
-
+import { readLines } from "./read-lines.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface CodexBlock {
@@ -123,9 +122,8 @@ export const codexAdapter: SessionAdapter = {
     return p["originator"] === "codex_exec" || typeof p["cli_version"] === "string";
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {
-    const text = readFileSync(path, "utf8");
     let i = 0;
-    for (const line of text.split("\n")) {
+    for await (const line of readLines(path)) {
       i++;
       const trimmed = line.trim();
       if (trimmed === "") continue;

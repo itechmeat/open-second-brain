@@ -24,9 +24,9 @@
  * `session/update`, or the import throws PARSE.
  */
 
-import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
+import { readLines } from "./read-lines.ts";
 import { SessionImportError } from "./types.ts";
 import type { SessionAdapter, SessionTurn } from "./types.ts";
 
@@ -89,6 +89,13 @@ function bareToolName(title: string): string {
   return sep === -1 ? title : title.slice(sep + 2);
 }
 
+function notAGrokStream(): SessionImportError {
+  return new SessionImportError(
+    "PARSE",
+    "grok session: first line is not an ACP session/update; not a grok updates.jsonl stream",
+  );
+}
+
 const ROLE_BY_KIND: Readonly<Record<string, "user" | "assistant">> = {
   user_message_chunk: "user",
   agent_message_chunk: "assistant",
@@ -102,16 +109,11 @@ export const grokAdapter: SessionAdapter = {
   },
 
   async *iterate(path: string): AsyncIterable<SessionTurn> {
-    const lines = readFileSync(path, "utf8").split("\n");
-    const firstNonEmpty = lines.find((l) => l.trim() !== "");
-    if (firstNonEmpty === undefined || parseUpdateLine(firstNonEmpty.trim()) === null) {
-      throw new SessionImportError(
-        "PARSE",
-        "grok session: first line is not an ACP session/update; not a grok updates.jsonl stream",
-      );
-    }
-
-    const sessionId = parseUpdateLine(firstNonEmpty.trim())?.sessionId ?? basename(dirname(path));
+    // The structural gate is the first non-empty line. Streaming cannot
+    // rewind, so that line is gated as it arrives and then processed by the
+    // same loop body as every other line.
+    let sessionId = "";
+    let gated = false;
     let seq = 0;
     const nextId = (): string => `${sessionId}:${seq++}`;
 
@@ -129,10 +131,15 @@ export const grokAdapter: SessionAdapter = {
       return turn;
     };
 
-    for (const rawLine of lines) {
+    for await (const rawLine of readLines(path)) {
       const trimmed = rawLine.trim();
       if (trimmed === "") continue;
       const parsed = parseUpdateLine(trimmed);
+      if (!gated) {
+        gated = true;
+        if (parsed === null) throw notAGrokStream();
+        sessionId = parsed.sessionId ?? basename(dirname(path));
+      }
       if (parsed === null) continue;
       const timestamp = parsed.timestamp;
 
@@ -171,6 +178,9 @@ export const grokAdapter: SessionAdapter = {
       // Every other kind (available_commands_update, agent_thought_chunk,
       // tool_call_update, plan, ...) is intentionally skipped.
     }
+
+    // A file that is empty or entirely blank never reached the gate.
+    if (!gated) throw notAGrokStream();
 
     const tail = flush();
     if (tail !== null) yield tail;

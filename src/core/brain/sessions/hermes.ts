@@ -21,8 +21,7 @@
  * the same with `new Date()`.
  */
 
-import { readFileSync } from "node:fs";
-
+import { readLines } from "./read-lines.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface HermesToolCall {
@@ -113,9 +112,8 @@ export const hermesAdapter: SessionAdapter = {
     return Array.isArray(o["tools"]);
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {
-    const text = readFileSync(path, "utf8");
     let i = 0;
-    for (const line of text.split("\n")) {
+    for await (const line of readLines(path)) {
       i++;
       const trimmed = line.trim();
       if (trimmed === "") continue;

@@ -18,8 +18,7 @@
  * fields it does not understand.
  */
 
-import { readFileSync } from "node:fs";
-
+import { readLines } from "./read-lines.ts";
 import { SessionImportError } from "./types.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
@@ -82,46 +81,57 @@ export const opencodeAdapter: SessionAdapter = {
     return parseMetaLine(firstLine) !== null;
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {
-    const text = readFileSync(path, "utf8");
-    const lines = text.split("\n");
     // Hard gate even under explicit `--format opencode`: a file whose
-    // first line is not our meta line must not partially import.
-    const meta = lines.length > 0 ? parseMetaLine(lines[0]!.trim()) : null;
-    if (meta === null) {
-      throw new SessionImportError(
-        "PARSE",
-        `opencode spool meta line missing or invalid; expected first line ` +
-          `with originator ${ORIGINATOR}`,
-      );
-    }
-    const format = meta["format"];
-    if (typeof format !== "number") {
-      throw new SessionImportError(
-        "PARSE",
-        `opencode spool meta line carries no numeric format field; ` +
-          `expected format ${SUPPORTED_FORMAT}`,
-      );
-    }
-    if (format > SUPPORTED_FORMAT) {
-      throw new SessionImportError(
-        "PARSE",
-        `opencode spool format ${format} is newer than supported ` +
-          `format ${SUPPORTED_FORMAT}; upgrade Open Second Brain to import it`,
-      );
-    }
-    for (const line of lines.slice(1)) {
-      const trimmed = line.trim();
-      if (trimmed === "") continue;
-      let obj: unknown;
-      try {
-        obj = JSON.parse(trimmed);
-      } catch {
-        continue;
+    // first line is not our meta line must not partially import. The head
+    // is pulled on its own so the gate still runs before the body streams.
+    const lines = readLines(path);
+    try {
+      const head = await lines.next();
+      const meta = head.done === true ? null : parseMetaLine(head.value.trim());
+      if (meta === null) {
+        throw new SessionImportError(
+          "PARSE",
+          `opencode spool meta line missing or invalid; expected first line ` +
+            `with originator ${ORIGINATOR}`,
+        );
       }
-      const o = asRecord(obj);
-      if (!o) continue;
-      const turn = buildTurn(o);
-      if (turn) yield turn;
+      const format = meta["format"];
+      if (typeof format !== "number") {
+        throw new SessionImportError(
+          "PARSE",
+          `opencode spool meta line carries no numeric format field; ` +
+            `expected format ${SUPPORTED_FORMAT}`,
+        );
+      }
+      if (format > SUPPORTED_FORMAT) {
+        throw new SessionImportError(
+          "PARSE",
+          `opencode spool format ${format} is newer than supported ` +
+            `format ${SUPPORTED_FORMAT}; upgrade Open Second Brain to import it`,
+        );
+      }
+      for (;;) {
+        // A stream is read one line at a time, by definition.
+        // oxlint-disable-next-line no-await-in-loop
+        const next = await lines.next();
+        if (next.done === true) break;
+        const trimmed = next.value.trim();
+        if (trimmed === "") continue;
+        let obj: unknown;
+        try {
+          obj = JSON.parse(trimmed);
+        } catch {
+          continue;
+        }
+        const o = asRecord(obj);
+        if (!o) continue;
+        const turn = buildTurn(o);
+        if (turn) yield turn;
+      }
+    } finally {
+      // A gate throw leaves the reader suspended mid-file; close it here
+      // rather than waiting for the handle to be collected.
+      await lines.return(undefined);
     }
   },
 };

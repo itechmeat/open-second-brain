@@ -24,8 +24,7 @@
  * sub-agent transcript parses as an ordinary session of its parent.
  */
 
-import { readFileSync } from "node:fs";
-
+import { readLines } from "./read-lines.ts";
 import type { SessionAdapter, SessionToolCall, SessionTurn } from "./types.ts";
 
 interface ClaudeBlock {
@@ -122,10 +121,8 @@ export const claudeAdapter: SessionAdapter = {
     return hasClaudeShape;
   },
   async *iterate(path: string): AsyncIterable<SessionTurn> {
-    const text = readFileSync(path, "utf8");
-    const lines = text.split("\n");
     let i = 0;
-    for (const line of lines) {
+    for await (const line of readLines(path)) {
       i++;
       const trimmed = line.trim();
       if (trimmed === "") continue;
