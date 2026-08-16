@@ -49,11 +49,15 @@
  * mis-parse reports a fact about a block that was never examined.
  *
  * So the population is now read from a lexed view of each module rather
- * than from its raw text. {@link lex} blanks comment bodies and string,
+ * than from its raw text. {@link lexCode}, the shared lexer in
+ * `tests/helpers/source-lexer.ts`, blanks comment bodies and string,
  * template and regex CONTENTS while preserving every offset, so brace
  * matching cannot be steered by a `"{"` in a string or by a commented-out
  * member, and a rule that needs the literal value reads it back out of
- * the original text at the same offset. On top of that view sit three
+ * the original text at the same offset. This file used to carry its own
+ * character-identical copy of that lexer; the copy is gone, and the
+ * helper is tested in its own right rather than only through this
+ * census. On top of that view sit three
  * small parsers - one for declarations (`interface`, `class` and `type`
  * alike, with generic constraints skipped rather than walked into), one
  * for object members, and one for the string constants a stage can be
@@ -89,6 +93,8 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
+import { lexCode } from "../../helpers/source-lexer.ts";
+
 const SRC_ROOT = join(import.meta.dir, "..", "..", "..", "src");
 
 /** Directories with no operation code in them. */
@@ -115,174 +121,6 @@ const STAGE_IDENTIFIER = /^[a-z0-9]+([-_][a-z0-9]+)*$/;
 
 /** Constants whose values are stage names by their own name. */
 const STAGE_CONSTANT = /(?:^|_)STAGES?$/;
-
-// ---------------------------------------------------------------------------
-// Lexing
-// ---------------------------------------------------------------------------
-
-/** Characters after which a `/` opens a regex rather than divides. */
-const REGEX_PRECEDING: ReadonlySet<string> = new Set([
-  "",
-  "(",
-  ",",
-  "=",
-  ":",
-  "[",
-  "!",
-  "&",
-  "|",
-  "?",
-  "{",
-  "}",
-  ";",
-  "+",
-  "-",
-  "*",
-  "%",
-  "~",
-  "^",
-  "<",
-  ">",
-]);
-
-/** Keywords after which a `/` opens a regex, e.g. `return /x/.test(s)`. */
-const REGEX_PRECEDING_KEYWORDS: ReadonlySet<string> = new Set([
-  "return",
-  "typeof",
-  "instanceof",
-  "in",
-  "of",
-  "case",
-  "do",
-  "else",
-  "yield",
-  "await",
-  "void",
-  "delete",
-  "new",
-]);
-
-function regexCanStart(text: string, at: number, prev: string): boolean {
-  if (REGEX_PRECEDING.has(prev)) return true;
-  const before = text.slice(0, at).trimEnd();
-  const word = /[A-Za-z_$][\w$]*$/.exec(before);
-  return word !== null && REGEX_PRECEDING_KEYWORDS.has(word[0]);
-}
-
-/**
- * `text` with comment bodies and string, template and regex CONTENTS
- * replaced by spaces, every other character and every offset preserved.
- *
- * Quotes and delimiters survive so a literal is still recognisable as
- * one; what does not survive is anything a literal could be carrying that
- * a structural scan would otherwise read as syntax. This is the same
- * lexer the destructive-site census runs, for the same reason.
- */
-function lex(text: string): string {
-  const n = text.length;
-  const code = [...text];
-  const blank = (from: number, to: number): void => {
-    for (let k = Math.max(from, 0); k < Math.min(to, n); k++) {
-      if (code[k] !== "\n") code[k] = " ";
-    }
-  };
-  // Top of the stack is the current mode. A template literal pushes
-  // `template`; a `${` inside one pushes `code` back on, with its own
-  // brace counter, so an interpolated expression is read as code.
-  const modes: string[] = ["code"];
-  const braces: number[] = [0];
-  let prev = "";
-  let i = 0;
-  while (i < n) {
-    const c = text[i]!;
-    if (modes[modes.length - 1] === "template") {
-      if (c === "\\") {
-        blank(i, i + 2);
-        i += 2;
-        continue;
-      }
-      if (c === "`") {
-        modes.pop();
-        prev = "`";
-        i += 1;
-        continue;
-      }
-      if (c === "$" && text[i + 1] === "{") {
-        modes.push("code");
-        braces.push(0);
-        prev = "{";
-        i += 2;
-        continue;
-      }
-      blank(i, i + 1);
-      i += 1;
-      continue;
-    }
-    const next = text[i + 1];
-    if (c === "/" && next === "/") {
-      let end = text.indexOf("\n", i);
-      if (end === -1) end = n;
-      blank(i, end);
-      i = end;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      const close = text.indexOf("*/", i + 2);
-      const end = close === -1 ? n : close + 2;
-      blank(i, end);
-      i = end;
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      let j = i + 1;
-      while (j < n && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
-      blank(i + 1, j);
-      prev = c;
-      i = j + 1;
-      continue;
-    }
-    if (c === "`") {
-      modes.push("template");
-      i += 1;
-      continue;
-    }
-    if (c === "/" && regexCanStart(text, i, prev)) {
-      let j = i + 1;
-      let inClass = false;
-      while (j < n) {
-        const e = text[j]!;
-        if (e === "\\") {
-          j += 2;
-          continue;
-        }
-        if (e === "\n") break;
-        if (e === "[") inClass = true;
-        else if (e === "]") inClass = false;
-        else if (e === "/" && !inClass) break;
-        j += 1;
-      }
-      blank(i + 1, j);
-      prev = "/";
-      i = j + 1;
-      continue;
-    }
-    if (c === "{") {
-      braces[braces.length - 1]! += 1;
-    } else if (c === "}") {
-      if (braces[braces.length - 1] === 0 && modes.length > 1) {
-        modes.pop();
-        braces.pop();
-        prev = "}";
-        i += 1;
-        continue;
-      }
-      braces[braces.length - 1]! -= 1;
-    }
-    if (!/\s/.test(c)) prev = c;
-    i += 1;
-  }
-  return code.join("");
-}
 
 /**
  * Bracket depth before each character, counting `{}`, `()` and `[]` only.
@@ -619,7 +457,7 @@ function analyze(files: ReadonlyArray<CensusFile>): ReadonlyArray<CensusSource> 
   return files.map((file) => {
     const cached = ANALYZED.get(file.path);
     if (cached !== undefined && cached.text === file.text) return cached;
-    const code = lex(file.text);
+    const code = lexCode(file.text);
     const nesting = depths(code);
     const source: CensusSource = {
       ...file,

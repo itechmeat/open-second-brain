@@ -24,6 +24,7 @@
 
 import { resolve } from "node:path";
 
+import { ORIGIN_REACH, ORIGIN_REACH_REASON } from "../brain/portability/origin-reach.ts";
 import { listSearchOrigins } from "../brain/portability/origins.ts";
 import { resolveSearchConfig } from "./index.ts";
 import { RETRIEVAL_DEGRADATION, buildRetrievalTrail, noteDegradation } from "./retrieval-trail.ts";
@@ -73,6 +74,16 @@ function labelledCard(card: SearchCard, label: string): SearchCard {
 const ORIGIN_UNREACHABLE_UNCLASSIFIED = "unclassified";
 const ORIGIN_UNREACHABLE_FIX = "run: o2b search check against that vault";
 
+/**
+ * The fix for an origin that was never opened at all. Deliberately not the
+ * one above: `o2b search check` inspects an index, and there is no index to
+ * inspect when the vault directory itself could not be read. The path stays
+ * out of the sentence for the same reason it does everywhere on this
+ * channel - the label is the actionable part and the reason says which
+ * repair applies.
+ */
+const ORIGIN_UNREACHABLE_REGISTRY_FIX = "check the origin's registered vault path";
+
 /** The fields the merge order reads - shared by results and cards. */
 interface MergeKey {
   readonly score: number;
@@ -118,6 +129,12 @@ export async function searchAcrossVaults(
   // question an operator asks when their own vault answers nothing.
   let activeCorpus: RetrievalCorpusStatement | null = null;
   let total = 0;
+  // Match quality of the union, folded from the origins that answered.
+  // Starts at zero rather than one: a union in which every origin failed
+  // covered nothing, and reporting a full cover for it would be the exact
+  // over-claim the confidence thresholds downstream now depend on not
+  // making.
+  let unionCoverage = 0;
 
   // Session focus resolves ONCE in the active-vault context: otherwise
   // each origin would load ITS OWN persisted search-focus state and
@@ -148,6 +165,22 @@ export async function searchAcrossVaults(
   for (let i = 0; i < origins.length; i++) {
     const origin = origins[i]!;
     const isActive = origin.kind === "active";
+    // An origin that could not be read is REPORTED, never dropped: it was
+    // dropped one layer up until this release, which made a dead origin
+    // indistinguishable from one that honestly held no match. `unreachable`
+    // and `unknown` both land here, each carrying its own reason, because
+    // "it is not there" and "I could not look" have different repairs.
+    if (origin.reach !== ORIGIN_REACH.reachable) {
+      const cause = origin.reason ?? ORIGIN_REACH_REASON.vaultUnreadable;
+      warnings.push(
+        `[${origin.label}] origin not searched [${cause}]: ${ORIGIN_UNREACHABLE_REGISTRY_FIX}`,
+      );
+      noteDegradation(degraded, RETRIEVAL_DEGRADATION.crossVaultOriginFailed, {
+        origin: origin.label,
+        cause,
+      });
+      continue;
+    }
     try {
       const base =
         isActive && activeConfig !== undefined
@@ -177,27 +210,40 @@ export async function searchAcrossVaults(
         activeCorpus = outcome.retrievalTrail.empty;
       }
       total += outcome.total;
-      // Chain-stop: if this origin answered confidently (its top NORMALIZED
-      // [0,1] result score reached the threshold) and origins remain, skip
-      // them. Take the MAX score over the origin's results rather than `[0]`:
-      // the final result order is not always score-desc (rerank and MMR reorder
-      // by relevance/diversity), so the positional first element is not
-      // necessarily the score-max. The gate reads the normalized result score,
-      // never the raw lane score, so a tiny-corpus origin with a high raw score
-      // does not short-circuit. Only recorded when origins were actually
-      // skipped, keeping the single-origin and never-triggered paths identical.
+      // The union's own match quality. Taking the MAX over the origins is
+      // the conservative fold: the merged window is a superset of any one
+      // origin's rows, so its true coverage is at least the best origin's
+      // and never less. Summing or averaging would invent a number no
+      // origin measured.
+      unionCoverage = Math.max(unionCoverage, outcome.idfWeightedCoverage);
+      // Chain-stop: if this origin answered the QUESTION - covered the
+      // query's IDF mass to the configured share - and origins remain,
+      // skip them.
+      //
+      // It used to read the origin's top result score, which meant two
+      // different things under the two fusion modes and neither of them
+      // "answered confidently": in `linear` mode the keyword lane's
+      // min-max normalisation pins the top row at `keywordWeight` (0.6 by
+      // default), so the shipped 0.8 threshold was unreachable and the
+      // chain never stopped; in `rrf` mode the fused lane is min-max
+      // normalised to exactly 1.0 at the top, so the same 0.8 was met by
+      // every non-empty origin and the chain always stopped after the
+      // first. `idfWeightedCoverage` is absolute, so the knob now means
+      // one thing in both modes - and 0.8 is the share
+      // `COMPLETENESS_COMPLETE_THRESHOLD` already calls a complete
+      // retrieval. Only recorded when origins were actually skipped,
+      // keeping the single-origin and never-triggered paths identical.
       const remaining = origins.slice(i + 1);
       // Gate on whichever collection THIS mode populates: in cards mode results
       // is empty, so reading it would never short-circuit (the latent bug).
       const hits: ReadonlyArray<{ readonly score: number }> = cardsMode
         ? (outcome.cards ?? [])
         : outcome.results;
-      const topScore = hits.reduce((max, h) => Math.max(max, h.score), 0);
       if (
         activeRecall.chainStopEnabled &&
         remaining.length > 0 &&
         hits.length > 0 &&
-        topScore >= activeRecall.chainStopScore
+        outcome.idfWeightedCoverage >= activeRecall.chainStopScore
       ) {
         chainStop = Object.freeze({
           triggered: true as const,
@@ -247,6 +293,7 @@ export async function searchAcrossVaults(
     // Sum of per-origin totals - informational, mirrors single-vault
     // semantics where `total` can exceed the capped result/card length.
     total,
+    idfWeightedCoverage: unionCoverage,
     ...(chainStop ? { chainStop } : {}),
     ...(retrievalTrail !== undefined ? { retrievalTrail } : {}),
   });

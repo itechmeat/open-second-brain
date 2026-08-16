@@ -15,6 +15,13 @@
  * `text` (flat-text view) and optional `toolCalls`. `system` and
  * `tool` roles are not emitted by Claude Code's JSONL — we map any
  * non-user/non-assistant `type` to skip.
+ *
+ * Delegated work is written to its own file under
+ * `<session>/subagents/agent-<id>.jsonl`, whose lines carry the PARENT's
+ * `sessionId` plus their own `agentId` and `isSidechain: true`. Those two
+ * fields are the only record that a turn crossed a delegation boundary,
+ * so the adapter lifts them onto {@link SessionTurn}; without them a
+ * sub-agent transcript parses as an ordinary session of its parent.
  */
 
 import { readFileSync } from "node:fs";
@@ -29,6 +36,20 @@ interface ClaudeBlock {
   readonly input?: Record<string, unknown>;
 }
 
+/**
+ * Delegation discriminators a sidechain line carries, in the additive
+ * shape {@link SessionTurn} declares them: absent on an ordinary turn, so
+ * a flat transcript parses to exactly the object it did before.
+ */
+function delegationOf(o: Record<string, unknown>): Pick<SessionTurn, "agentId" | "sidechain"> {
+  const rawId = o["agentId"];
+  const agentId = typeof rawId === "string" && rawId.trim().length > 0 ? rawId.trim() : undefined;
+  return {
+    ...(o["isSidechain"] === true ? { sidechain: true } : {}),
+    ...(agentId !== undefined ? { agentId } : {}),
+  };
+}
+
 /** Parse a single Claude JSONL line into a `SessionTurn`, or null to skip. */
 function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
   if (obj === null || typeof obj !== "object") return null;
@@ -38,6 +59,7 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
   const role = o["type"];
   if (role !== "user" && role !== "assistant") return null;
 
+  const delegation = delegationOf(o);
   const turnId =
     typeof o["uuid"] === "string" && o["uuid"].length > 0 ? o["uuid"] : `synth-${fallbackIndex}`;
   const timestamp =
@@ -48,15 +70,15 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
   const message = o["message"];
   if (message === null || typeof message !== "object") {
     // Turn without payload — emit empty (still distinguishes user-vs-assistant).
-    return { turnId, timestamp, role };
+    return { turnId, timestamp, role, ...delegation };
   }
   const content = (message as Record<string, unknown>)["content"];
 
   if (typeof content === "string") {
-    return { turnId, timestamp, role, text: content };
+    return { turnId, timestamp, role, text: content, ...delegation };
   }
   if (!Array.isArray(content)) {
-    return { turnId, timestamp, role };
+    return { turnId, timestamp, role, ...delegation };
   }
   const texts: string[] = [];
   const tools: SessionToolCall[] = [];
@@ -79,13 +101,13 @@ function turnFromLine(obj: unknown, fallbackIndex: number): SessionTurn | null {
     role,
     ...(texts.length > 0 ? { text: texts.join("\n") } : {}),
     ...(tools.length > 0 ? { toolCalls: tools } : {}),
+    ...delegation,
   };
   return turn;
 }
 
 export const claudeAdapter: SessionAdapter = {
   id: "claude",
-  defaultAgent: "claude",
   detect(firstLine: string): boolean {
     let obj: unknown;
     try {

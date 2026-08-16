@@ -30,6 +30,7 @@ import { isCanonicalUtcTimestamp } from "../../core/brain/continuity/store.ts";
 import type { ContinuitySourceRef } from "../../core/brain/continuity/types.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 
@@ -43,7 +44,7 @@ async function toolBrainGenerationReports(
   if (action === "record") return recordAction(ctx, args);
   if (action === "list") {
     const reports = listGenerationReports(ctx.vault, readFilter(args));
-    return { vault_path: ctx.vault, total: reports.length, reports };
+    return { vault_path: vaultPathField(ctx), total: reports.length, reports };
   }
   if (action === "summary") {
     return { ...summarizeGenerationReports(ctx.vault, readFilter(args)) };
@@ -107,8 +108,8 @@ function recordAction(ctx: ServerContext, args: Record<string, unknown>): Record
   );
 
   return record !== null
-    ? { vault_path: ctx.vault, recorded: true, id: record.id }
-    : { vault_path: ctx.vault, recorded: false, reason: "disabled" };
+    ? { vault_path: vaultPathField(ctx), recorded: true, id: record.id }
+    : { vault_path: vaultPathField(ctx), recorded: false, reason: "disabled" };
 }
 
 function readFilter(args: Record<string, unknown>): GenerationReportFilter {

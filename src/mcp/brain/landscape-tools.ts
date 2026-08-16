@@ -8,11 +8,12 @@
 
 import { buildMcpLandscape } from "../../core/graph/mcp-config.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 
 async function toolMcpLandscape(ctx: ServerContext): Promise<Record<string, unknown>> {
   const landscape = buildMcpLandscape(ctx.vault);
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     servers: landscape.servers.map((s) => ({
       name: s.name,
       source: s.source,
@@ -38,7 +39,7 @@ export const LANDSCAPE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       type: "object",
       required: ["vault_path", "servers"],
       properties: {
-        vault_path: { type: "string" },
+        vault_path: VAULT_PATH_OUTPUT_SCHEMA,
         servers: {
           type: "array",
           items: {

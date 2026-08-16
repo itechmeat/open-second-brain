@@ -124,8 +124,13 @@ test("gate off: explicit off behaves exactly like an absent block", () => {
 });
 
 test("gate fail: another owner's preference is absent from every surface", () => {
-  setGate(GATE_MODE.fail);
+  // The shared preference is written BEFORE the gate goes on, because
+  // that is the only way a shared one comes to exist: with the gate on,
+  // every new preference is stamped with the identity of the agent that
+  // wrote it, and a page created before the gate stays shared rather than
+  // being retro-owned by whoever rewrites it first.
   makePref("shared");
+  setGate(GATE_MODE.fail);
   makePref("owned-by-a", OWNER_A);
 
   const asB = renderAll(OWNER_B);
@@ -143,8 +148,13 @@ test("gate fail: another owner's preference is absent from every surface", () =>
 });
 
 test("gate fail with no scope requested still delivers everything", () => {
-  setGate(GATE_MODE.fail);
+  // The shared preference is written BEFORE the gate goes on, because
+  // that is the only way a shared one comes to exist: with the gate on,
+  // every new preference is stamped with the identity of the agent that
+  // wrote it, and a page created before the gate stays shared rather than
+  // being retro-owned by whoever rewrites it first.
   makePref("shared");
+  setGate(GATE_MODE.fail);
   makePref("owned-by-a", OWNER_A);
 
   expect(renderAll()["pack"]).toContain("pref-owned-by-a");
@@ -251,8 +261,13 @@ for (const mode of [null, GATE_MODE.off, GATE_MODE.warn]) {
  * trivially true for it.
  */
 test("a retired memory keeps its owner on every delivery surface", () => {
-  setGate(GATE_MODE.fail);
+  // The shared preference is written BEFORE the gate goes on, because
+  // that is the only way a shared one comes to exist: with the gate on,
+  // every new preference is stamped with the identity of the agent that
+  // wrote it, and a page created before the gate stays shared rather than
+  // being retro-owned by whoever rewrites it first.
   makePref("shared");
+  setGate(GATE_MODE.fail);
   makePref("owned-by-a", OWNER_A);
   moveToRetired(vault, preferencePath(vault, "owned-by-a"), "stale-no-evidence", {
     now: NOW,

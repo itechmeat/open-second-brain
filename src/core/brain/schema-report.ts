@@ -1,8 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { listVaultPages } from "../vault.ts";
 import { loadBrainConfig } from "./policy.ts";
+import { BrainParseError } from "./parse-error.ts";
 import { brainDirs, vaultRelative } from "./paths.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
 import {
@@ -44,6 +45,35 @@ export type SchemaReportFinding =
       readonly target: string;
       readonly source_type: string | null;
       readonly target_type: string | null;
+    }
+  | {
+      /**
+       * An artifact this report could not read or parse
+       * (a-label-is-not-a-boundary, U12).
+       *
+       * The scans used to let a parse failure escape the whole report,
+       * so ONE malformed file cost the caller every finding in the
+       * vault - from the two views (`lint`, `orphans`) whose entire
+       * purpose is to report malformed files. The log scan had the
+       * opposite failure and the same effect: a bare `catch { continue }`
+       * over the read, so an unreadable shard contributed nothing and
+       * said nothing.
+       *
+       * It is a FINDING rather than a raise because it is also a caveat
+       * on the rest of the report: a token used only inside an artifact
+       * that could not be read is invisible to the usage maps, so an
+       * `unused-declaration` verdict computed beside one of these is not
+       * final. Both views carry these for that reason.
+       *
+       * `path` is vault-relative like every other finding's, which is
+       * also what keeps the absolute host path out of a payload that
+       * lands in model context; `detail` is the failure with no location
+       * in it, so a renderer supplies the location once.
+       */
+      readonly kind: "unreadable-artifact";
+      readonly category: SchemaVocabularyCategory;
+      readonly path: string;
+      readonly detail: string;
     };
 
 export interface BrainSchemaUsage {
@@ -85,6 +115,60 @@ export function buildSchemaReport(vault: string): BrainSchemaReport {
   });
 }
 
+/**
+ * The failure text with no host location in it.
+ *
+ * A {@link BrainParseError} already separates the two - `detail` is the
+ * prose, `path` is the location - but the scans also meet plain
+ * `node:fs` and YAML errors, and those carry the absolute path INSIDE
+ * the message (`ENOENT: … open '/home/…/Brain/log/x.md'`). This report
+ * states its locations as vault-relative paths in a `path` field, so the
+ * detail is rewritten to match rather than trusted to be clean.
+ */
+function locationFreeDetail(
+  err: unknown,
+  vault: string,
+  absolutePath: string,
+  rel: string,
+): string {
+  const raw =
+    err instanceof BrainParseError ? err.detail : err instanceof Error ? err.message : String(err);
+  // The artifact's own path becomes its vault-relative form; any other
+  // in-vault path mentioned alongside it loses the vault root.
+  return raw.split(absolutePath).join(rel).split(`${vault}${sep}`).join("");
+}
+
+/**
+ * Read one artifact, or record why it could not be read and move on.
+ *
+ * The scans reach files whose bytes this report does not control, which
+ * is the point of the two views built on it: `lint` and `orphans` exist
+ * to REPORT malformed artifacts. Letting the parse escape made one bad
+ * file cost the caller every finding in the vault; swallowing it (the
+ * log scan's `catch { continue }`) made the same file invisible. Neither
+ * is an answer, so the failure becomes a row.
+ */
+function readArtifact<T>(
+  vault: string,
+  path: string,
+  category: SchemaVocabularyCategory,
+  findings: SchemaReportFinding[],
+  read: (path: string) => T,
+): T | undefined {
+  try {
+    return read(path);
+  } catch (err) {
+    const rel = vaultRelative(path, vault);
+    findings.push({
+      kind: "unreadable-artifact",
+      category,
+      path: rel,
+      detail: locationFreeDetail(err, vault, path, rel),
+    });
+    return undefined;
+  }
+}
+
 function scanPreferences(
   vault: string,
   vocabulary: BrainSchemaVocabulary,
@@ -93,7 +177,8 @@ function scanPreferences(
 ): void {
   const dirs = brainDirs(vault);
   for (const path of listMarkdown(dirs.preferences, "pref-")) {
-    const pref = parsePreference(path);
+    const pref = readArtifact(vault, path, "preference_types", findings, parsePreference);
+    if (pref === undefined) continue;
     recordSchemaType(
       vault,
       path,
@@ -105,7 +190,8 @@ function scanPreferences(
     );
   }
   for (const path of listMarkdown(dirs.retired, "ret-")) {
-    const retired = parseRetired(path);
+    const retired = readArtifact(vault, path, "preference_types", findings, parseRetired);
+    if (retired === undefined) continue;
     recordSchemaType(
       vault,
       path,
@@ -125,13 +211,20 @@ function scanSignals(
   findings: SchemaReportFinding[],
 ): void {
   const dirs = brainDirs(vault);
-  for (const path of listMarkdown(dirs.inbox, "sig-")) {
-    const signal = parseSignal(path);
-    recordSchemaType(vault, path, "signal_types", signal.schema_type, vocabulary, counts, findings);
-  }
-  for (const path of listMarkdown(dirs.processed, "sig-")) {
-    const signal = parseSignal(path);
-    recordSchemaType(vault, path, "signal_types", signal.schema_type, vocabulary, counts, findings);
+  for (const dir of [dirs.inbox, dirs.processed]) {
+    for (const path of listMarkdown(dir, "sig-")) {
+      const signal = readArtifact(vault, path, "signal_types", findings, parseSignal);
+      if (signal === undefined) continue;
+      recordSchemaType(
+        vault,
+        path,
+        "signal_types",
+        signal.schema_type,
+        vocabulary,
+        counts,
+        findings,
+      );
+    }
   }
 }
 
@@ -159,12 +252,10 @@ function scanLogEventKinds(
   findings: SchemaReportFinding[],
 ): void {
   for (const path of listMarkdown(brainDirs(vault).log, "")) {
-    let text: string;
-    try {
-      text = readFileSync(path, "utf8");
-    } catch {
-      continue;
-    }
+    const text = readArtifact(vault, path, "log_event_kinds", findings, (p) =>
+      readFileSync(p, "utf8"),
+    );
+    if (text === undefined) continue;
     for (const line of text.split(/\r?\n/)) {
       const match = LOG_EVENT_HEADER_RE.exec(line.trim());
       if (!match) continue;

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -288,4 +288,80 @@ describe("schema MCP tools", () => {
     expect((response as any).error.code).toBe(INVALID_PARAMS);
     expect((response as any).error.message).toContain("mutations must be an array");
   });
+});
+
+/**
+ * a-label-is-not-a-boundary, U12: the lint that died on its own subject.
+ *
+ * `view=lint` and `view=orphans` exist to REPORT malformed Brain
+ * artifacts, and both raised on the first one they met - the parse error
+ * escaped `buildSchemaReport` unhandled, so a single bad file cost the
+ * caller every finding in the vault. The message carried the absolute
+ * host path as well, which is the leak `vaultPathField` closes on the
+ * same surface.
+ *
+ * Two shapes are driven, because two different mechanisms produced the
+ * same silence: a parse failure (a retired preference missing a required
+ * field, which THREW) and a read failure (a directory occupying a `.md`
+ * name under the log dir, which was swallowed by a bare
+ * `catch { continue }` and reported nothing at all).
+ */
+describe("schema_inspect reports the malformed artifact instead of dying on it", () => {
+  /** Plant both malformed artifacts; returns their vault-relative paths. */
+  function plantMalformedArtifacts(): { retired: string; log: string } {
+    const retiredRel = join("Brain", "retired", "ret-broken.md");
+    mkdirSync(join(vault, "Brain", "retired"), { recursive: true });
+    atomicWriteFileSync(
+      join(vault, retiredRel),
+      // `retired_at` is required by `parseRetired`; without it the parse
+      // throws a BrainParseError naming the absolute path.
+      [
+        "---",
+        "kind: brain-retired",
+        "_status: retired",
+        "id: ret-broken",
+        "---",
+        "",
+        "body",
+        "",
+      ].join("\n"),
+    );
+    // A DIRECTORY under a `.md` name: `readFileSync` fails with EISDIR on
+    // every platform and for every user, which a chmod-based fixture does
+    // not (a test run as root reads a 0000 file).
+    const logRel = join("Brain", "log", "2026-08-16.md");
+    mkdirSync(join(vault, logRel), { recursive: true });
+    return { retired: retiredRel, log: logRel };
+  }
+
+  for (const view of ["lint", "orphans"] as const) {
+    test(`view=${view} answers with findings, not an error`, async () => {
+      const planted = plantMalformedArtifacts();
+      const server = makeServer();
+      await initialize(server);
+
+      const response = await call(server, "schema_inspect", { view });
+
+      expect((response as any).error).toBeUndefined();
+      // A raised handler comes back as `isError: true` with the raw
+      // message as text - which is how this surface used to answer, and
+      // the message named the absolute host path.
+      expect((response as any).result.isError).not.toBe(true);
+      const payload = (response as any).result.structuredContent as Record<string, unknown>;
+      const findings = (payload["findings"] ?? payload["orphans"]) as ReadonlyArray<
+        Record<string, unknown>
+      >;
+      const unreadable = findings.filter((f) => f["kind"] === "unreadable-artifact");
+      expect(unreadable.map((f) => f["path"]).toSorted()).toEqual(
+        [planted.log, planted.retired].toSorted(),
+      );
+      // The reason travels with the report, so the operator can act on it
+      // without re-running the parser by hand.
+      expect(unreadable.every((f) => typeof f["detail"] === "string" && f["detail"] !== "")).toBe(
+        true,
+      );
+      // …and the absolute host path stays out of the payload entirely.
+      expect(JSON.stringify(payload)).not.toContain(vault);
+    });
+  }
 });

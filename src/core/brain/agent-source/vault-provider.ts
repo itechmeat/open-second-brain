@@ -118,6 +118,10 @@ function signalContribution(signal: BrainSignal): AgentSourceContribution {
     timestamp: signal.created_at,
     topic: signal.topic,
     ...(signal.scope !== undefined ? { scope: signal.scope } : {}),
+    // Attribution written by the shared-namespace mirror, surfaced here so
+    // a shared vault's roster can say which vault a contribution came from
+    // (a-label-is-not-a-boundary, U5).
+    ...(signal.origin_vault !== undefined ? { origin_vault: signal.origin_vault } : {}),
     title: signal.topic,
     text: [signal.topic, signal.signal, signal.principle, signal.raw ?? ""].join("\n").trim(),
     data: {

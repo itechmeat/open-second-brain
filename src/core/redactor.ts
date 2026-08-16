@@ -358,6 +358,43 @@ function isContentAddress(run: string): boolean {
 }
 
 /**
+ * A SIGNAL ID: `sig-<YYYY-MM-DD>-<slug>`, the filename and frontmatter
+ * `id` every taste signal in a Brain vault carries, and the target every
+ * preference's `_evidenced_by` wikilink points at. The same carve-out
+ * argument as {@link CONTENT_ADDRESS_RE}, arriving through a second
+ * shape: 26 characters of `[A-Za-z0-9_-]` mixing letters and digits, not
+ * pure hexadecimal, so `HIGH_ENTROPY_TOKEN_RE` claimed it. A slug of nine
+ * characters is enough to cross the gate, which is routine, so an export
+ * shipped `_evidenced_by: ["[[***REDACTED***]]"]` and the import wrote
+ * that back verbatim - reporting a full success while every preference
+ * that lost a signal id landed on ONE dangling wikilink. A placeholder is
+ * a constant, so replacing an identifier merges the things it identified.
+ *
+ * The carve-out is the SHAPE, not the prefix: an ISO date, then lowercase
+ * alphanumeric runs joined by dashes, which is exactly what `slugify`
+ * emits plus the `-<n>` collision suffix `allocateAndCreate` appends. A
+ * credential wearing a `sig-` prefix matches neither half - it has no
+ * date, or it carries the mixed case and punctuation a slug cannot - so
+ * it is still redacted.
+ */
+const SIGNAL_ID_RE = /^sig-\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+function isSignalId(run: string): boolean {
+  return SIGNAL_ID_RE.test(run);
+}
+
+/**
+ * True when a high-entropy run is an IDENTIFIER this boundary must hand
+ * through unchanged rather than a payload it may replace. One predicate
+ * so the two passes that ask the question - the bare-token replacer and
+ * the identifier scan - cannot drift into disagreeing about what an
+ * identifier is.
+ */
+function isPreservedIdentifier(run: string): boolean {
+  return isContentAddress(run) || isSignalId(run);
+}
+
+/**
  * A base64 credential: the shape `HIGH_ENTROPY_TOKEN_RE` cannot see,
  * because its class excludes `+` and `/`. An AWS secret access key
  * (`wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY`) splits into sub-runs of
@@ -394,7 +431,9 @@ function redactBareTokens(text: string): string {
   return text
     .replace(VENDOR_TOKEN_RE, PLACEHOLDER)
     .replace(BASE64_SECRET_RE, PLACEHOLDER)
-    .replace(HIGH_ENTROPY_TOKEN_RE, (run: string) => (isContentAddress(run) ? run : PLACEHOLDER));
+    .replace(HIGH_ENTROPY_TOKEN_RE, (run: string) =>
+      isPreservedIdentifier(run) ? run : PLACEHOLDER,
+    );
 }
 
 /**
@@ -740,7 +779,7 @@ function identifierCarriesSecret(value: string): boolean {
 function keyNameCarriesSecret(name: string): boolean {
   if (identifierCarriesSecret(name)) return true;
   for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
-    if (!isContentAddress(match[0])) return true;
+    if (!isPreservedIdentifier(match[0])) return true;
   }
   return false;
 }

@@ -49,6 +49,7 @@ import {
 } from "../../core/brain/pinned.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { VAULT_PATH_OUTPUT_SCHEMA, vaultPathField } from "../vault-path-field.ts";
 import { coerceStr, coerceInt } from "../coerce.ts";
 import { vaultRelativeSafe } from "./shared.ts";
 
@@ -339,7 +340,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
 
   if (!existsSync(dirs.brain)) {
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       present: false,
       active_path: activePath,
       content: prependStandingBlock(standing, ""),
@@ -427,7 +428,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   }
 
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     present: true,
     active_path: activePath,
     content,
@@ -535,7 +536,7 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
   type: "object",
   required: ["vault_path", "present", "active_path", "content", "counts", "generated_at", "pinned"],
   properties: {
-    vault_path: { type: "string" },
+    vault_path: VAULT_PATH_OUTPUT_SCHEMA,
     present: { type: "boolean" },
     active_path: { type: "string" },
     content: { type: "string" },

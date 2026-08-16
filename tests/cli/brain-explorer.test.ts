@@ -12,7 +12,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+/**
+ * A vendor-prefixed credential shape, synthesised for this test. Caught by
+ * shape rather than by a word list, which is why an obviously fake body is
+ * enough to prove the boundary runs.
+ */
+const FAKE_VENDOR_TOKEN = "sk-live-FAKEEXAMPLE0000111122223333";
 
 let tmp: string;
 let vault: string;
@@ -91,6 +99,55 @@ describe("o2b brain explorer --export", () => {
     const parsed = JSON.parse(match![1]!);
     expect(parsed.nodes.length).toBe(1);
     expect(parsed.nodes[0].id).toBe("pref-explorer-seed");
+  });
+
+  test("the exported graph goes through the shared egress guard", async () => {
+    // The eighth egress site. Every other export path scans its bytes;
+    // this one wrote the preference graph - principles verbatim - to an
+    // operator-named path with no scan at all.
+    await bootstrap();
+    writePreference(vault, {
+      slug: "secret-leak",
+      topic: "secret-leak",
+      principle: `Always deploy with OPENAI_API_KEY=${FAKE_VENDOR_TOKEN} set`,
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: "confirmed",
+      evidenced_by: ["[[sig-2026-05-01-secret-leak]]"],
+      confirmed_at: "2026-05-02T00:00:00Z",
+      applied_count: 1,
+      violated_count: 0,
+      last_evidence_at: "2026-05-02T00:00:00Z",
+      confidence: "high",
+      confidence_value: 0.8,
+      pinned: false,
+    });
+    const out = join(tmp, "brain.html");
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(0);
+    const body = readFileSync(out, "utf8");
+    expect(body).not.toContain(FAKE_VENDOR_TOKEN);
+    expect(body).toContain(REDACTION_PLACEHOLDER);
+    // stdout stays the parseable line it was; the notice goes to stderr.
+    expect(r.stdout).toContain("exported");
+    expect(r.stderr).toContain("no longer matches the vault byte for byte");
+  });
+
+  test("a preference that cannot be parsed refuses the export by name", async () => {
+    // An export that omits a rule reads identically to a vault that never
+    // had it, so the graph is not written at all.
+    await bootstrap();
+    seedOnePref();
+    writeFileSync(join(vault, "Brain", "preferences", "pref-broken.md"), "no frontmatter here\n");
+    const out = join(tmp, "brain.html");
+    const r = await runCli(["brain", "explorer", "--vault", vault, "--export", out], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("pref-broken.md");
+    expect(existsSync(out)).toBe(false);
   });
 
   test("refuses to overwrite without --force", async () => {

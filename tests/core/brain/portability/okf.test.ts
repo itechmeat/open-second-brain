@@ -88,6 +88,52 @@ describe("buildOkfBundle", () => {
     expect(page).toContain("body.");
   });
 
+  test("a per-device log shard is a log day, not an invisible file", () => {
+    // `Brain/log/` writes `<date>.<deviceId>.md` on every default install
+    // since the per-device shard layout landed, so a pattern that matched
+    // only the legacy un-sharded name reported `0 log day(s)` and an empty
+    // `log.md` for a vault with a full change log.
+    note("Brain/log/2026-06-01.bb4363ed.md", "- sharded entry\n");
+    note("Brain/log/2026-06-02.md", "- legacy entry\n");
+
+    const bundle = buildOkfBundle(vault);
+    const log = fileOf(bundle.files, "log.md");
+    expect(log).toContain("## 2026-06-01");
+    expect(log).toContain("sharded entry");
+    expect(bundle.manifest.log_days).toBe(2);
+  });
+
+  test("two shards of one day fold into one dated section", () => {
+    note("Brain/log/2026-06-01.aaaaaaaa.md", "- from device a\n");
+    note("Brain/log/2026-06-01.bbbbbbbb.md", "- from device b\n");
+
+    const bundle = buildOkfBundle(vault);
+    const log = fileOf(bundle.files, "log.md");
+    expect(log.match(/## 2026-06-01/g)?.length).toBe(1);
+    expect(log).toContain("from device a");
+    expect(log).toContain("from device b");
+    expect(bundle.manifest.log_days).toBe(1);
+  });
+
+  test("a `private: true` page exports in full - the key is not a boundary", () => {
+    // Retraction, asserted rather than assumed. Nothing under
+    // `portability/` reads this frontmatter key, the export composers are
+    // content composers rather than visibility filters, and the
+    // `<private>` REGION marker is the product's only content-derived
+    // privacy primitive. The test exists so the label cannot be re-read as
+    // a boundary by a later reader.
+    note(
+      "Notes/Labelled.md",
+      "---\ntitle: Labelled\nprivate: true\ntags: [private, confidential]\n---\nsalary discussion.\n",
+    );
+
+    const bundle = buildOkfBundle(vault);
+    const page = fileOf(bundle.files, "concepts/Labelled.md");
+    expect(page).toContain("private: true");
+    expect(page).toContain("salary discussion.");
+    expect(bundle.manifest.pages.map((p) => p.path)).toContain("Notes/Labelled.md");
+  });
+
   test("excludes Brain machinery (preferences, inbox) from pages", () => {
     note("Notes/Real.md", "---\ntitle: Real\n---\nx\n");
     note("Brain/preferences/pref-foo.md", "---\nid: pref-foo\n---\nrule\n");

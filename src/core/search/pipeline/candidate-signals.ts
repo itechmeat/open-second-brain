@@ -8,6 +8,7 @@
  * carries none of these signals ranks bit-identically.
  */
 
+import { PAGE_TIER_DEFAULT, readTier, type PageTier } from "../../brain/page-meta/tier.ts";
 import { parseFreshnessTrend } from "../../brain/temporal/freshness-trend.ts";
 import { observedReuseRates } from "../../brain/observed-use.ts";
 import { effectiveActivation, halfLifeDays, resolveActivationKind } from "../activation/decay.ts";
@@ -48,6 +49,13 @@ export interface CandidateSignals {
   readonly activationByChunk: ReadonlyMap<number, number> | undefined;
   readonly coAccessByChunk: ReadonlyMap<number, ReadonlyMap<number, number>> | undefined;
   readonly trendByDoc: ReadonlyMap<number, string> | undefined;
+  /**
+   * Operator-declared importance tier per document, carrying only the
+   * documents whose tier is NOT the default. The ranker's tier weight for
+   * `supporting` is the identity, so an untagged vault produces no map at
+   * all and ranks bit-identically.
+   */
+  readonly tierByDoc: ReadonlyMap<number, PageTier> | undefined;
   readonly reuseRateByChunk: ReadonlyMap<number, number> | undefined;
   readonly eventTimeMsByChunk: ReadonlyMap<number, number> | undefined;
 }
@@ -88,6 +96,7 @@ export function collectCandidateSignals(input: CandidateSignalsInput): Candidate
     activationByChunk: activation.activationByChunk,
     coAccessByChunk: activation.coAccessByChunk,
     trendByDoc: collectFreshnessTrend(input),
+    tierByDoc: collectPageTier(input),
     reuseRateByChunk: collectReuseRates(input),
     eventTimeMsByChunk: input.temporalIntentActive ? collectDeclaredEventTimes(input) : undefined,
   };
@@ -205,10 +214,10 @@ function coAccessCompanions(
  * `freshness_trend` by the dream refresh get a bounded relevance
  * multiplier. O(candidate preference pages) frontmatter reads.
  *
- * Cache note: like the tier signal, the stamp is read from frontmatter at
- * query time and is NOT part of the query-cache key; a dream re-stamp
- * reaches cached queries on the next reindex (the content change bumps the
- * corpus generation).
+ * Cache note: like the tier signal in {@link collectPageTier}, the stamp
+ * is read from frontmatter at query time and is NOT part of the
+ * query-cache key; a dream re-stamp reaches cached queries on the next
+ * reindex (the content change bumps the corpus generation).
  */
 function collectFreshnessTrend(
   input: CandidateSignalsInput,
@@ -227,6 +236,43 @@ function collectFreshnessTrend(
       if (trend !== null) byDoc.set(h.documentId, trend);
     } catch {
       // Unreadable frontmatter stays neutral.
+    }
+  }
+  return byDoc.size > 0 ? byDoc : undefined;
+}
+
+/**
+ * Operator-declared importance tier, the producer `tierByDoc` never had.
+ *
+ * `readTier` and `tierWeight` shipped together with the ranker input and
+ * its docblock, and nothing ever populated the map: a page stamped
+ * `tier: peripheral` reported `breakdown.tier === 1` and ranked
+ * identically to an untagged one, so the documented, hand-editable knob
+ * could not change an outcome. This is the missing half, not a new
+ * signal.
+ *
+ * Entries equal to {@link PAGE_TIER_DEFAULT} are omitted and an all-default
+ * candidate set produces no map, because that tier's weight is the
+ * identity - which is what keeps an untagged vault bit-identical.
+ *
+ * Cost is one frontmatter read per candidate DOCUMENT (not chunk), taken
+ * from the same request-scoped cache the sibling collectors use.
+ */
+function collectPageTier(input: CandidateSignalsInput): ReadonlyMap<number, PageTier> | undefined {
+  const { config, ids, hydrated, frontmatterCache } = input;
+  const byDoc = new Map<number, PageTier>();
+  const seenDocs = new Set<number>();
+  for (const chunkId of ids) {
+    const h = hydrated.get(chunkId);
+    if (h === undefined || seenDocs.has(h.documentId)) continue;
+    seenDocs.add(h.documentId);
+    try {
+      const tier = readTier(readCachedFrontmatter(frontmatterCache, config.vault, h.path));
+      if (tier !== PAGE_TIER_DEFAULT) byDoc.set(h.documentId, tier);
+    } catch {
+      // Unreadable frontmatter stays at the default tier, whose weight is
+      // the identity: a page this pass could not read is ranked exactly as
+      // it was before tiers existed, never demoted for being unreadable.
     }
   }
   return byDoc.size > 0 ? byDoc : undefined;

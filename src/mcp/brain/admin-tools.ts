@@ -31,7 +31,7 @@ import {
 } from "../../core/brain/link-graph/communities.ts";
 import { appendMetric } from "../../core/brain/metrics.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
-import { toolSafeguard } from "./shared.ts";
+import { requiredStringArg, toolSafeguard } from "./shared.ts";
 import { currentLease } from "../../core/brain/maintenance/lease.ts";
 import { listJournal } from "../../core/brain/maintenance/journal.ts";
 import { runMaintenance, type DailyWindow } from "../../core/brain/maintenance/lane.ts";
@@ -55,10 +55,17 @@ function toolBrainLabels(
   if (op !== "assign" && op !== "remove" && op !== "show") {
     throw new MCPError(INVALID_PARAMS, "brain_labels: operation must be assign|remove|show");
   }
-  const path = args["path"];
-  if (typeof path !== "string" || path.trim() === "") {
-    throw new MCPError(INVALID_PARAMS, "brain_labels: path must be a vault-relative string");
-  }
+  // a-label-is-not-a-boundary, U12: the ARGUMENT is right and the
+  // VALIDATOR's message was wrong. `path` is the only name this tool
+  // declares for the note - a caller passing `id` is refused by name by
+  // the unknown-argument gate (`src/mcp/argument-guard.ts`) before the
+  // handler runs - but this check answered an ABSENT `path` with a
+  // sentence about its SHAPE, so a caller who sent the wrong name read
+  // it as "my path is malformed" and retried the same call. The shared
+  // coercion already tells absence and malformation apart, and stamps
+  // the operation into both, so the two failures no longer share a
+  // sentence.
+  const path = requiredStringArg(`brain_labels ${op}`, args, "path");
   if (op === "show") {
     const [metadata] = parseFrontmatter(vaultContainedPath(ctx.vault, path, "brain_labels show"));
     return { path, labels: readLabels(metadata) };
@@ -123,10 +130,11 @@ async function toolBrainTiers(
       await store.close();
     }
   }
-  const path = args["path"];
-  if (typeof path !== "string" || path.trim() === "") {
-    throw new MCPError(INVALID_PARAMS, `brain_tiers ${op}: path must be a vault-relative string`);
-  }
+  // Same conflation as `brain_labels` above, same cure: `path` is
+  // optional for `check` and required for the two write operations, and
+  // "you did not send it" is a different sentence from "what you sent is
+  // not a path".
+  const path = requiredStringArg(`brain_tiers ${op}`, args, "path");
   if (op === "restore" && args["apply"] !== true) {
     throw new MCPError(
       INVALID_PARAMS,

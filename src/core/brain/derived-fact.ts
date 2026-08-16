@@ -35,6 +35,13 @@ export interface DeriveFactInput {
 
 export interface DeriveFactOptions {
   readonly now: Date;
+  /**
+   * Plugin config the writing agent's identity is resolved from when the
+   * ownership gate stamps the new preference. Absent falls back to the
+   * default config discovery; a surface running against a non-default
+   * config passes its own.
+   */
+  readonly configPath?: string;
 }
 
 export interface DeriveFactResult {
@@ -132,16 +139,20 @@ export function deriveFact(
   }
 
   const now = opts.now;
-  writePreference(vault, {
-    slug: input.slug,
-    topic: input.topic,
-    principle: input.principle,
-    created_at: isoSecond(now),
-    unconfirmed_until: isoSecond(addDays(now, unconfirmedWindowDays(vault))),
-    status: "unconfirmed",
-    evidenced_by: evidencedBy,
-    provenance: level,
-  });
+  writePreference(
+    vault,
+    {
+      slug: input.slug,
+      topic: input.topic,
+      principle: input.principle,
+      created_at: isoSecond(now),
+      unconfirmed_until: isoSecond(addDays(now, unconfirmedWindowDays(vault))),
+      status: "unconfirmed",
+      evidenced_by: evidencedBy,
+      provenance: level,
+    },
+    opts.configPath !== undefined ? { configPath: opts.configPath } : {},
+  );
 
   return { id: `pref-${input.slug.trim()}` };
 }

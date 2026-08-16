@@ -18,6 +18,7 @@ import lockfile from "proper-lockfile";
 
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { brainDirsForWrite } from "../paths.ts";
+import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
 
@@ -304,8 +305,4 @@ function audit(
     ok: true,
     details,
   });
-}
-
-function isoSecond(date: Date): string {
-  return date.toISOString().replace(/\.\d{3}Z$/, "Z");
 }

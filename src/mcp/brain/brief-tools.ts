@@ -34,6 +34,7 @@ import { isoDate } from "../../core/brain/time.ts";
 import { captureReportDelta } from "../../core/brain/report-snapshot.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_ARG_NAME,
@@ -213,7 +214,7 @@ async function toolBrainDailyBrief(
     offsetHours: cfg.daily_window_offset_hours,
   });
   const envelope: Record<string, unknown> = {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     date: brief.date,
     window: brief.window,
     events_by_kind: brief.eventsByKind,
@@ -254,7 +255,7 @@ async function toolBrainWeeklySynthesis(
   const index = buildTimelineIndex(ctx.vault, {});
   const synth = buildWeeklySynthesis(index, ctx.vault, weekEnd, cfg);
   const envelope: Record<string, unknown> = {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     window_start: synth.windowStart,
     window_end: synth.windowEnd,
     events_by_kind: synth.eventsByKind,
@@ -386,7 +387,7 @@ async function toolBrainOperatorSummary(
     ...(topActionsN !== undefined ? { topActionsN } : {}),
   });
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     trust_verdict: summary.trust_verdict,
     digest_summary: summary.digest_summary,
     doctor_summary: {
@@ -432,7 +433,7 @@ async function toolBrainToday(
     ...(limit !== undefined ? { activityLimit: limit } : {}),
   });
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     text: dashboard.text,
     obligations: dashboard.obligations,
     open_loops: dashboard.openLoops,

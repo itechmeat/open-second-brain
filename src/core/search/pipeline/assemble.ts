@@ -406,6 +406,7 @@ function rankCandidates(input: AssemblyInput, rankCap: number): BrainSearchResul
         ? { coAccessByChunk: signals.coAccessByChunk }
         : {}),
       ...(signals.trendByDoc !== undefined ? { trendByDoc: signals.trendByDoc } : {}),
+      ...(signals.tierByDoc !== undefined ? { tierByDoc: signals.tierByDoc } : {}),
       ...(signals.reuseRateByChunk !== undefined
         ? { reuseRateByChunk: signals.reuseRateByChunk }
         : {}),

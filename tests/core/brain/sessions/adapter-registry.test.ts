@@ -40,7 +40,6 @@ const FIXTURE_MARKER = `"runtime":"fixture-runtime"`;
 
 const fixtureAdapter: SessionAdapter = {
   id: "fixture",
-  defaultAgent: "fixture-agent",
   detect(firstLine: string): boolean {
     return firstLine.includes(FIXTURE_MARKER);
   },

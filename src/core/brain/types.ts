@@ -739,6 +739,13 @@ export interface BrainSignal {
    * `<path>#<turn-id>`. Empty / absent for inline / live signals.
    */
   readonly session_ref?: string;
+  /**
+   * Basename of the vault this signal was mirrored FROM, stamped by the
+   * shared-namespace mirror (t_936a1a61). Absent on every signal written
+   * directly into the vault holding it, so a shared vault can tell a
+   * mirrored record from a local one.
+   */
+  readonly origin_vault?: string;
   /** Bi-temporal event-time start (additive optional, v0.10.18). */
   readonly valid_from?: string;
   /** Bi-temporal event-time end (additive optional, v0.10.18). */

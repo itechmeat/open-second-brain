@@ -21,14 +21,19 @@
  * fraction of `dream`'s cost; a smarter cache can land later if a
  * profile shows it pays.
  *
- * Pure read. Skips files that fail to parse — `brain_doctor` is the
- * surface that flags malformed artifacts, not this aggregator.
+ * Pure read. `brain_doctor` is the surface that flags malformed
+ * artifacts, not this aggregator — but an artifact this collector could
+ * not parse is REPORTED here rather than skipped in silence, because a
+ * dropped source produces a confidently wrong `count: 0` and the caller
+ * has no way to tell that from a genuine zero
+ * (a-label-is-not-a-boundary, U3; recon defect D4).
  */
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../vault.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
 import { relationFromFrontmatterField } from "../graph/relation-vocab.ts";
 import { normalizeRelationTarget } from "../graph/frontmatter-relations.ts";
 import { buildAliasIndex } from "./link-graph/alias-index.ts";
@@ -83,8 +88,56 @@ export interface BacklinkRef {
   readonly relation?: string;
 }
 
-/** Frozen target → refs map. Keys are normalised wikilink targets. */
-export type BacklinkIndex = ReadonlyMap<string, ReadonlyArray<BacklinkRef>>;
+/**
+ * One artifact whose references could not be collected, and why.
+ *
+ * `source` is the artifact id, never a host path: this record crosses the
+ * MCP boundary through `brain_backlinks` and the contract at
+ * `src/mcp/tools.ts:94-119` keeps absolute paths out of model context.
+ */
+export interface BacklinkParseFailure {
+  /** Source id (basename without `.md`), as {@link BacklinkRef.source} spells it. */
+  readonly source: string;
+  /**
+   * Which collector was reading it, in the SAME vocabulary
+   * {@link BacklinkRef.sourceKind} uses - a failure and a ref describe
+   * the same artifact, so a second spelling of "which lane" would be a
+   * parallel vocabulary over one population. A log shard that cannot be
+   * read has no event type to name, so it reports {@link LOG_READ_KIND}.
+   */
+  readonly sourceKind: BacklinkSourceKind;
+  /** The failure's own message, with no host path in it. */
+  readonly reason: string;
+}
+
+/**
+ * `sourceKind` for a log shard whose entries could not be read at all.
+ *
+ * The per-ref form is `log-<eventType>`, and an unreadable shard has no
+ * events to take a type from; this names the read itself instead, inside
+ * the same `log-` namespace so no consumer needs a second branch.
+ */
+const LOG_READ_KIND = "log-read" as const;
+
+/**
+ * Frozen target → refs map, plus the artifacts the walk could not read.
+ *
+ * The failures ride on the index rather than in a second return value so
+ * that the nine existing call sites keep compiling unchanged; the ones
+ * that must report them read {@link BacklinkIndex.unparsed} and the rest
+ * carry on using the map.
+ */
+export interface BacklinkIndex extends ReadonlyMap<string, ReadonlyArray<BacklinkRef>> {
+  /**
+   * Artifacts skipped because they could not be parsed.
+   *
+   * A `count: 0` beside a NON-EMPTY list here is not a measurement, and
+   * a surface reporting the count must say so — the same distinction
+   * `listDanglingTargets` draws between "measured zero" and "could not
+   * measure". Empty on a healthy vault, so a clean payload is unchanged.
+   */
+  readonly unparsed: ReadonlyArray<BacklinkParseFailure>;
+}
 
 // ----- Public API ----------------------------------------------------------
 
@@ -94,10 +147,18 @@ export type BacklinkIndex = ReadonlyMap<string, ReadonlyArray<BacklinkRef>>;
  * The returned map is frozen and each entry's array is frozen too —
  * callers cannot mutate the shared index. Recompute by calling this
  * function again; there is no incremental update path on purpose.
+ *
+ * `ownerScope` (optional, second) drops every ref whose SOURCE artifact
+ * the scope may not see, and drops it from `unparsed` too — an artifact
+ * whose owner is unknowable is somebody else's, so naming it in a failure
+ * report would leak exactly what the filter withheld. Absent (every
+ * existing call site) means no ownership filtering at all.
  */
-export function buildBacklinkIndex(vault: string): BacklinkIndex {
+export function buildBacklinkIndex(vault: string, ownerScope?: string | null): BacklinkIndex {
   const dirs = brainDirs(vault);
+  const view = ownerScopeView(vault, ownerScope ?? null);
   const aliasIndex = buildAliasIndex(vault);
+  const unparsed: BacklinkParseFailure[] = [];
   const map = new Map<string, BacklinkRef[]>();
   // Dedup key: `<source>\x00<canonical>\x00<anchor>\x00<block>`.
   // Anchor + block are part of the dedup key so two refs to
@@ -106,6 +167,9 @@ export function buildBacklinkIndex(vault: string): BacklinkIndex {
   const seen = new Set<string>();
 
   const push = (target: string, ref: BacklinkRef): void => {
+    // The SOURCE decides visibility: a ref names the artifact that wrote
+    // it, so publishing one publishes that artifact's id.
+    if (!view.visible(ref.source)) return;
     const parsed = parseWikilinkRich(target);
     const bare = parsed.target;
     if (!bare) return;
@@ -140,17 +204,28 @@ export function buildBacklinkIndex(vault: string): BacklinkIndex {
     else map.set(canonicalId, [enriched]);
   };
 
-  collectPreferences(dirs.preferences, "preference", push);
-  collectPreferences(dirs.retired, "retired", push);
-  collectSignals(dirs.inbox, push);
-  collectSignals(dirs.processed, push);
-  collectLog(vault, dirs.log, push);
+  const fail = (row: BacklinkParseFailure): void => {
+    if (!view.visible(row.source)) return;
+    unparsed.push(Object.freeze(row));
+  };
+
+  collectPreferences(dirs.preferences, "preference", push, fail);
+  collectPreferences(dirs.retired, "retired", push, fail);
+  collectSignals(dirs.inbox, push, fail);
+  collectSignals(dirs.processed, push, fail);
+  collectLog(vault, dirs.log, push, fail);
 
   // Freeze each entry's array so downstream callers can't mutate the
   // shared index.
   const frozen = new Map<string, ReadonlyArray<BacklinkRef>>();
   for (const [k, v] of map) frozen.set(k, Object.freeze(v));
-  return frozen;
+  return Object.assign(frozen, { unparsed: Object.freeze(unparsed) });
+}
+
+/** The failure's own message, never the host path it happened at. */
+function failureReason(err: unknown, path: string): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.split(path).join("").replaceAll(" ()", "").trim();
 }
 
 /**
@@ -169,6 +244,7 @@ function collectPreferences(
   dir: string,
   kind: "preference" | "retired",
   push: (target: string, ref: BacklinkRef) => void,
+  fail: (row: BacklinkParseFailure) => void,
 ): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
@@ -190,7 +266,13 @@ function collectPreferences(
       // building.
       meta = normalizeDerivedKeys(rawMeta);
       body = rawBody;
-    } catch {
+    } catch (err) {
+      // The row still aborts - the fields cannot be read - but it aborts
+      // LOUDLY. `normalizeDerivedKeys` throws on the un-prefixed Group C
+      // shape a legacy vault is full of, and the silent `continue` this
+      // replaced produced an index missing every preference-sourced ref
+      // with no diagnostic anywhere.
+      fail({ source, sourceKind: kind, reason: failureReason(err, full) });
       continue;
     }
 
@@ -237,7 +319,11 @@ function collectPreferences(
   }
 }
 
-function collectSignals(dir: string, push: (target: string, ref: BacklinkRef) => void): void {
+function collectSignals(
+  dir: string,
+  push: (target: string, ref: BacklinkRef) => void,
+  fail: (row: BacklinkParseFailure) => void,
+): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".md")) continue;
@@ -252,7 +338,8 @@ function collectSignals(dir: string, push: (target: string, ref: BacklinkRef) =>
       for (const body0 of extractWikilinkRichBodies(body)) {
         push(body0, { source, sourceKind: "signal", field: "body" });
       }
-    } catch {
+    } catch (err) {
+      fail({ source, sourceKind: "signal", reason: failureReason(err, full) });
       continue;
     }
   }
@@ -262,6 +349,7 @@ function collectLog(
   vault: string,
   dir: string,
   push: (target: string, ref: BacklinkRef) => void,
+  fail: (row: BacklinkParseFailure) => void,
 ): void {
   if (!existsSync(dir)) return;
   // Shard-aware (Memory Integrity Suite): merged per-day reads. List the
@@ -275,7 +363,8 @@ function collectLog(
     let entries;
     try {
       entries = readLogDay(vault, date, shards).entries;
-    } catch {
+    } catch (err) {
+      fail({ source, sourceKind: LOG_READ_KIND, reason: failureReason(err, dir) });
       continue;
     }
     for (const e of entries) {

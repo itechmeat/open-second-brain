@@ -131,23 +131,40 @@ describe("brain_pre_compress_pack delivers with the breakage named", () => {
     expect(result!["warnings"]).toBeUndefined();
   });
 
-  test("a scoped call on an unreadable config still returns a pack", async () => {
+  test("an unscoped call on an unreadable config still returns a pack", async () => {
     breakConfig();
-    const { result, error } = await callTool("brain_pre_compress_pack", {
-      top_k: 5,
-      agent_scope: "agent-a",
-    });
+    const { result, error } = await callTool("brain_pre_compress_pack", { top_k: 5 });
     expect(error).toBeUndefined();
     expect(result?.["total_chars"]).toBeDefined();
   });
 
   test("the pack payload names the config the operator has to fix", async () => {
     breakConfig();
-    const { result } = await callTool("brain_pre_compress_pack", {
+    const { result } = await callTool("brain_pre_compress_pack", { top_k: 5 });
+    expect(result!["warnings"]).toEqual([brainConfigUnreadableReport(vault)!]);
+    expect(result!["active_head_included"]).toBe(false);
+  });
+
+  test("a SCOPED call on an unreadable config is refused, not delivered", async () => {
+    // The two rules that meet here, and which one wins.
+    //
+    // This surface is fail-soft: it delivers a pack and names the broken
+    // config rather than going dark. And an unreadable config resolves to
+    // the STRICT integrity fallback precisely so it "cannot loosen a gate,
+    // it can only close one" (`policy/load.ts`). A call that names an
+    // owner scope asks to be answered AS that owner, and under the closed
+    // gate no such claim can be verified - so honouring it would be the
+    // unreadable config loosening the very gate the fallback closed.
+    //
+    // Fail-soft therefore keeps its meaning for the unscoped call above,
+    // and stops short of answering a scope this server cannot check.
+    breakConfig();
+    const { result, error } = await callTool("brain_pre_compress_pack", {
       top_k: 5,
       agent_scope: "agent-a",
     });
-    expect(result!["warnings"]).toEqual([brainConfigUnreadableReport(vault)!]);
-    expect(result!["active_head_included"]).toBe(false);
+    expect(result).toBeUndefined();
+    expect(error).toContain("unresolved-identity");
+    expect(error).toContain("owner_scope_delivery");
   });
 });

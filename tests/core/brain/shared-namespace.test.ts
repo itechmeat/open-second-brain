@@ -10,6 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  MIRROR_OUTCOME,
+  MIRROR_OUTCOMES,
+  isMirrorOutcome,
   mirrorNote,
   mirrorSignal,
   resolveSharedNamespace,
@@ -57,7 +60,7 @@ test("resolveSharedNamespace reads the config key; absent means off", () => {
 });
 
 test("mirrorSignal lands the signal in the shared vault with origin attribution", () => {
-  expect(mirrorSignal(shared, vault, SIGNAL_INPUT)).toBe("ok");
+  expect(mirrorSignal(shared, vault, SIGNAL_INPUT)).toEqual({ outcome: MIRROR_OUTCOME.ok });
   const inbox = join(shared, "Brain", "inbox");
   const files = readdirSync(inbox).filter((f) => f.endsWith(".md"));
   expect(files).toHaveLength(1);
@@ -67,17 +70,52 @@ test("mirrorSignal lands the signal in the shared vault with origin attribution"
   expect(text).toContain("origin_vault: vault");
 });
 
-test("a broken shared namespace degrades to failed without throwing", () => {
+/**
+ * Fail-soft is not the same as mute. Both writes used to sit behind a bare
+ * `catch { return "failed" }`, so a permissions problem, a missing shared
+ * vault, a full disk and a schema violation reached the operator as one
+ * indistinguishable bit - on the one path they cannot observe any other way,
+ * because nothing read the shared vault back.
+ */
+test("a broken shared namespace degrades to failed and says why", () => {
   rmSync(shared, { recursive: true, force: true });
   writeFileSync(shared, "not a directory");
-  expect(mirrorSignal(shared, vault, SIGNAL_INPUT)).toBe("failed");
-  expect(mirrorNote(shared, vault, { text: "hello", agent: "coding-agent" })).toBe("failed");
+  const signal = mirrorSignal(shared, vault, SIGNAL_INPUT);
+  expect(signal.outcome).toBe(MIRROR_OUTCOME.failed);
+  expect(signal.reason).toBeDefined();
+  expect(signal.reason).not.toBe("");
+  const note = mirrorNote(shared, vault, { text: "hello", agent: "coding-agent" });
+  expect(note.outcome).toBe(MIRROR_OUTCOME.failed);
+  expect(note.reason).toBeDefined();
 });
 
-test("a shared namespace pointing at the origin vault is refused as failed", () => {
-  expect(mirrorSignal(vault, vault, SIGNAL_INPUT)).toBe("failed");
-  expect(mirrorNote(vault, vault, { text: "self", agent: "a" })).toBe("failed");
+/**
+ * A self-mirror is decided before any I/O and is repaired by editing one
+ * config key; a failed write is repaired on the filesystem. Reporting both
+ * as `failed` sent the operator after the wrong fault.
+ */
+test("a shared namespace pointing at the origin vault is misconfigured, not failed", () => {
+  const signal = mirrorSignal(vault, vault, SIGNAL_INPUT);
+  expect(signal.outcome).toBe(MIRROR_OUTCOME.misconfigured);
+  expect(signal.outcome).not.toBe(MIRROR_OUTCOME.failed);
+  expect(signal.reason).toContain("shared_namespace");
+  expect(mirrorNote(vault, vault, { text: "self", agent: "a" }).outcome).toBe(
+    MIRROR_OUTCOME.misconfigured,
+  );
   expect(readdirSync(join(vault, "Brain")).some((f) => f === "inbox")).toBe(false);
+});
+
+test("the mirror outcome vocabulary is closed, and carries no member nothing produces", () => {
+  expect([...MIRROR_OUTCOMES]).toEqual([
+    MIRROR_OUTCOME.ok,
+    MIRROR_OUTCOME.failed,
+    MIRROR_OUTCOME.misconfigured,
+  ]);
+  for (const member of MIRROR_OUTCOMES) expect(isMirrorOutcome(member)).toBe(true);
+  // `off` was retracted: the key being absent is reported by omitting the
+  // field, so no producer could ever return the token.
+  expect(isMirrorOutcome("off")).toBe(false);
+  expect(isMirrorOutcome(null)).toBe(false);
 });
 
 test("mirrorNote lands a note event with origin attribution", () => {
@@ -87,7 +125,7 @@ test("mirrorNote lands a note event with origin attribution", () => {
       agent: "coding-agent",
       now: new Date("2026-06-04T10:00:00Z"),
     }),
-  ).toBe("ok");
+  ).toEqual({ outcome: MIRROR_OUTCOME.ok });
   const { entries } = parseLogDay(shared, "2026-06-04");
   expect(entries).toHaveLength(1);
   expect(entries[0]!.eventType).toBe("note");
@@ -103,7 +141,8 @@ test("appendBrainNote mirrors when configured and reports the outcome", () => {
     configPath,
     now: new Date("2026-06-04T10:00:00Z"),
   });
-  expect(res.mirror).toBe("ok");
+  expect(res.mirror).toBe(MIRROR_OUTCOME.ok);
+  expect(res.mirror_reason).toBeUndefined();
   expect(parseLogDay(shared, "2026-06-04").entries).toHaveLength(1);
   // Primary log always lands regardless of mirror state.
   expect(parseLogDay(vault, "2026-06-04").entries).toHaveLength(1);
@@ -124,7 +163,7 @@ test("MCP brain_feedback mirrors the signal and reports mirror: ok", async () =>
     principle: "Mirrored facts stay attributed.",
     agent: "coding-agent",
   })) as Record<string, unknown>;
-  expect(res["mirror"]).toBe("ok");
+  expect(res["mirror"]).toBe(MIRROR_OUTCOME.ok);
   const files = readdirSync(join(shared, "Brain", "inbox")).filter((f) => f.endsWith(".md"));
   expect(files).toHaveLength(1);
 });
@@ -140,7 +179,10 @@ test("MCP brain_feedback mirror failure never breaks the primary write", async (
     principle: "Primary write survives.",
     agent: "coding-agent",
   })) as Record<string, unknown>;
-  expect(res["mirror"]).toBe("failed");
+  expect(res["mirror"]).toBe(MIRROR_OUTCOME.failed);
+  // The diagnosis reaches the caller on the MCP surface too, not only the
+  // bit that something went wrong.
+  expect(typeof res["mirror_reason"]).toBe("string");
   const files = readdirSync(join(vault, "Brain", "inbox")).filter((f) => f.endsWith(".md"));
   expect(files).toHaveLength(1);
 });
@@ -156,4 +198,5 @@ test("unconfigured setups keep the previous result shape (no mirror key)", async
     agent: "coding-agent",
   })) as Record<string, unknown>;
   expect("mirror" in res).toBe(false);
+  expect("mirror_reason" in res).toBe(false);
 });

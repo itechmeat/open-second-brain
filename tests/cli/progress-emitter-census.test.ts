@@ -64,6 +64,19 @@
  *   - **A surface that is not the CLI.** The MCP progress transport has
  *     its own tests; an emitter reachable only from there would have to
  *     name an entry point this file can drive, and today none does.
+ *
+ * ## Why the population is read off a lexed view
+ *
+ * A census that matched raw text would count `progressCounter(` inside a
+ * docblock as an emitter, and two docblocks in `src/` discuss the counter
+ * by name. This file used to blank comments with a scanner of its own
+ * that treated a quote as a string opener with no regex rule, so a line
+ * such as `/["]/` above a docblock left that docblock unblanked and the
+ * prose counted. It now reads {@link lexCode} from
+ * `tests/helpers/source-lexer.ts`, which is the lexer the three other
+ * source-reading censuses run and is tested beside itself. Blanking
+ * rather than deleting keeps every offset usable for the
+ * enclosing-function scan that follows.
  */
 
 import { beforeAll, afterAll, describe, expect, test } from "bun:test";
@@ -78,58 +91,13 @@ import { writeSignal } from "../../src/core/brain/signal.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { progressRecords } from "../helpers/progress-records.ts";
 import { runCli, type RunResult } from "../helpers/run-cli.ts";
+import { lexCode } from "../helpers/source-lexer.ts";
 
 const SRC = resolve(import.meta.dir, "..", "..", "src");
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The population: every `progressCounter(` call site in src/
 // ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Blank every comment body in `source`, preserving length and therefore
- * every offset.
- *
- * A census that matched raw text would count `progressCounter(` inside a
- * docblock as an emitter, and two docblocks in `src/` discuss the counter
- * by name. Blanking rather than deleting keeps the offsets usable for the
- * enclosing-function scan that follows.
- */
-function blankComments(source: string): string {
-  const out = source.split("");
-  let i = 0;
-  while (i < source.length) {
-    const ch = source[i]!;
-    const next = source[i + 1];
-    if (ch === "/" && next === "/") {
-      while (i < source.length && source[i] !== "\n") out[i++] = " ";
-      continue;
-    }
-    if (ch === "/" && next === "*") {
-      out[i++] = " ";
-      out[i++] = " ";
-      while (i < source.length && !(source[i] === "*" && source[i + 1] === "/")) {
-        if (source[i] !== "\n") out[i] = " ";
-        i++;
-      }
-      if (i < source.length) {
-        out[i++] = " ";
-        out[i++] = " ";
-      }
-      continue;
-    }
-    if (ch === '"' || ch === "'" || ch === "`") {
-      i++;
-      while (i < source.length && source[i] !== ch) {
-        if (source[i] === "\\") i++;
-        i++;
-      }
-      i++;
-      continue;
-    }
-    i++;
-  }
-  return out.join("");
-}
 
 /** Every `.ts` file under `dir`, recursively. */
 function tsFiles(dir: string): ReadonlyArray<string> {
@@ -155,7 +123,7 @@ const FUNCTION_RE = /^(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s+([A-Z
 function enumerateCallSites(): ReadonlyArray<string> {
   const sites: string[] = [];
   for (const file of tsFiles(SRC)) {
-    const code = blankComments(readFileSync(file, "utf8"));
+    const code = lexCode(readFileSync(file, "utf8"));
     const functions: Array<{ at: number; name: string }> = [];
     FUNCTION_RE.lastIndex = 0;
     for (let m = FUNCTION_RE.exec(code); m !== null; m = FUNCTION_RE.exec(code)) {

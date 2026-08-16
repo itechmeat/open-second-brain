@@ -17,7 +17,7 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 
 import { parsePreference } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
@@ -27,6 +27,57 @@ import { BRAIN_PREFERENCE_STATUS, type BrainPreference } from "./types.ts";
 import { parseFrontmatter } from "../vault.ts";
 
 export const BRAIN_EXPORT_SCHEMA_VERSION = 1 as const;
+
+/** How many unreadable files the error names before it stops listing. */
+const MAX_NAMED_PARSE_FAILURES = 10;
+
+/**
+ * One preference file the collector could not turn into a row, named the
+ * way the operator sees it - relative to the vault, so the message is the
+ * path they can open. Same shape as `ExplorerParseFailure`, because the
+ * two surfaces report the same event over the same directory.
+ */
+export interface PreferenceParseFailure {
+  readonly path: string;
+  readonly reason: string;
+}
+
+/**
+ * A preference file that could not be read into a row.
+ *
+ * Raised rather than skipped. The collector used to `continue` past a
+ * caught parse error, which produced `"preferences": []` on a vault that
+ * held rules, under exit code 0 and an empty stderr - an export that omits
+ * a rule reads exactly like a vault that never had it, and the file that
+ * would say otherwise is the one the recipient does not have. Every caller
+ * of {@link collectExportRows} is composing something for a reader
+ * (a bundle, a context pack, the topic map an import merges against), so
+ * there is no caller for whom a shorter list is the right answer.
+ */
+export class PreferenceParseError extends Error {
+  /** Vault-relative paths that failed, with the parser's own message. */
+  readonly failures: ReadonlyArray<PreferenceParseFailure>;
+  constructor(failures: ReadonlyArray<PreferenceParseFailure>) {
+    const named = failures
+      .slice(0, MAX_NAMED_PARSE_FAILURES)
+      .map((f) => `${f.path} (${f.reason})`)
+      .join("; ");
+    const rest =
+      failures.length > MAX_NAMED_PARSE_FAILURES
+        ? ` and ${failures.length - MAX_NAMED_PARSE_FAILURES} more`
+        : "";
+    super(
+      // Not "this export": the same collector backs the import's
+      // topic map, and an import told its EXPORT is incomplete sends
+      // the operator to the wrong end of the round trip.
+      `${failures.length} preference file(s) could not be parsed, so Brain/preferences/ ` +
+        `cannot be read completely: ${named}${rest}. Repair or remove them, then re-run; ` +
+        "`o2b brain doctor` reports the same files.",
+    );
+    this.name = "PreferenceParseError";
+    this.failures = failures;
+  }
+}
 
 export type ExportFormat = "json" | "llms-txt";
 
@@ -83,45 +134,66 @@ export interface ExportedPreferencesJson {
 /**
  * Walk `Brain/preferences/`, parse every `pref-*.md`, and project to
  * the export row shape sorted by `id` for deterministic output.
- * Files that fail to parse are silently skipped — the doctor surface
- * is the canonical place for surfacing those, not the read-only
- * exporter.
+ *
+ * A file that cannot be read raises {@link PreferenceParseError} rather
+ * than being skipped. Every failure in the directory is collected first,
+ * so one run names all of them instead of making the operator repair one
+ * file per re-run.
+ *
+ * @throws PreferenceParseError when any `pref-*.md` in the directory
+ * cannot be parsed into a row.
  */
 export function collectExportRows(vault: string): ReadonlyArray<ExportedPreferenceRow> {
   const dir = brainDirs(vault).preferences;
   if (!existsSync(dir)) return [];
   const rows: ExportedPreferenceRow[] = [];
+  const failures: PreferenceParseFailure[] = [];
   let entries: ReadonlyArray<string>;
   try {
     entries = readdirSync(dir);
-  } catch {
-    return [];
+  } catch (err) {
+    // The directory exists - `existsSync` just said so - so a listing
+    // failure is a permission or filesystem fault, not an empty Brain.
+    // Returning `[]` here reported the second while the first was true.
+    throw new Error(`cannot list ${dir}: ${reasonOf(err)}`, { cause: err });
   }
   for (const name of entries) {
     if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
     const abs = join(dir, name);
+    const record = (err: unknown): void => {
+      failures.push({ path: relative(vault, abs), reason: reasonOf(err) });
+    };
     let pref: BrainPreference;
     try {
       pref = parsePreference(abs);
-    } catch {
+    } catch (err) {
+      record(err);
       continue;
     }
     // `parsePreference` deliberately drops the body. We re-parse the
     // file here to capture the markdown sections the agent wrote
     // (`## Principle`, `## Origin`, …) — those are the bytes a
     // consumer wants when sharing or system-prompt-injecting the
-    // rule. A read failure here drops the row entirely.
+    // rule. A read failure here is the same defect as a frontmatter
+    // one: the row would go out missing what the agent wrote.
     let body = "";
     try {
       const [, parsedBody] = parseFrontmatter(abs);
       body = parsedBody;
-    } catch {
+    } catch (err) {
+      record(err);
       continue;
     }
     rows.push(toRow(pref, body));
   }
+  if (failures.length > 0) throw new PreferenceParseError(failures);
   rows.sort((a, b) => a.id.localeCompare(b.id));
   return rows;
+}
+
+/** The message an unknown thrown value carries, with no `[object Object]`. */
+function reasonOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function toRow(p: BrainPreference, body: string): ExportedPreferenceRow {

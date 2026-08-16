@@ -36,9 +36,25 @@ export const RECALL_INJECT_MAX_CHARS = 900;
 export const RECALL_INJECT_TIME_BUDGET_MS = 2_500;
 
 /**
- * Normalized-score floor ([0,1]) below which the top match is too weak to be
- * worth injecting, so the hook abstains. Sits well below the cross-vault
- * chain-stop "confident" threshold: this gate only filters out noise.
+ * Match-quality floor ([0,1]) below which the retrieved material is too
+ * weak to be worth injecting, so the hook abstains.
+ *
+ * Compared against {@link RecallResultSet.idfWeightedCoverage} - the share
+ * of the prompt's IDF mass the retrieved notes actually cover - and NOT
+ * against a result score. A score cannot carry a floor here: the keyword
+ * lane is min-max normalised within the candidate set, so the top row's
+ * score is pinned at the configured `keywordWeight` no matter how well it
+ * matched, and the bottom row's at zero no matter how well IT matched.
+ * Against that number this constant measured which rows the filter stack
+ * had removed - it abstained hardest exactly when a visibility or owner
+ * scope had just taken the pool's best row, which is the one moment the
+ * survivors were still a genuine match.
+ *
+ * The value is unchanged at 0.35 because it is the quantity that was
+ * wrong, not the bound: a brief is worth injecting once the notes cover
+ * about a third of what was asked, which sits below
+ * `COMPLETENESS_PARTIAL_THRESHOLD` (0.4) - this gate filters noise, it
+ * does not demand a complete retrieval.
  */
 export const RECALL_INJECT_CONFIDENCE_FLOOR = 0.35;
 
@@ -59,6 +75,14 @@ export interface RecallCandidate {
 export interface RecallResultSet {
   readonly candidates: ReadonlyArray<RecallCandidate>;
   readonly total: number;
+  /**
+   * Absolute match quality of this retrieval in `[0,1]`: the share of the
+   * query's IDF mass the candidates cover
+   * (`SearchOutcome.idfWeightedCoverage`). Required, so a retriever cannot
+   * leave the floor with nothing to read and no consumer can fall back to
+   * a rank position.
+   */
+  readonly idfWeightedCoverage: number;
 }
 
 /** Relevance retriever: maps a query to a candidate set. */
@@ -124,8 +148,16 @@ export type RecallInjectDecision =
       readonly brief: string;
       readonly noteCount: number;
       readonly topScore: number;
+      /** The quantity the floor was compared against; see the floor's docblock. */
+      readonly matchQuality: number;
     }
-  | { readonly kind: "abstain"; readonly reason: RecallAbstainReason; readonly topScore: number }
+  | {
+      readonly kind: "abstain";
+      readonly reason: RecallAbstainReason;
+      readonly topScore: number;
+      /** The quantity the floor was compared against; see the floor's docblock. */
+      readonly matchQuality: number;
+    }
   | {
       readonly kind: "error";
       readonly fault: RecallInjectFault;
@@ -159,7 +191,7 @@ export async function decideRecallInject(
 ): Promise<RecallInjectDecision> {
   const query = prompt.trim();
   if (query.length === 0) {
-    return Object.freeze({ kind: "abstain", reason: "empty_prompt", topScore: 0 });
+    return Object.freeze({ kind: "abstain", reason: "empty_prompt", topScore: 0, matchQuality: 0 });
   }
   const maxNotes = options.maxNotes ?? RECALL_INJECT_MAX_NOTES;
   const maxChars = options.maxChars ?? RECALL_INJECT_MAX_CHARS;
@@ -183,17 +215,22 @@ export async function decideRecallInject(
   const ranked = resultSet.candidates.toSorted(
     (a, b) => b.score - a.score || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0),
   );
+  const matchQuality = resultSet.idfWeightedCoverage;
   if (ranked.length === 0) {
-    return Object.freeze({ kind: "abstain", reason: "no_matches", topScore: 0 });
+    return Object.freeze({ kind: "abstain", reason: "no_matches", topScore: 0, matchQuality });
   }
   const topScore = ranked[0]!.score;
-  if (topScore < floor) {
-    return Object.freeze({ kind: "abstain", reason: "below_floor", topScore });
+  // The floor reads match quality, never the rank position `topScore`
+  // reports. `topScore` is still carried on the decision because it is
+  // what the brief's bullets show and what the audit line records - it is
+  // simply no longer allowed to decide anything.
+  if (matchQuality < floor) {
+    return Object.freeze({ kind: "abstain", reason: "below_floor", topScore, matchQuality });
   }
 
   const chosen = ranked.slice(0, maxNotes);
   const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars);
-  return Object.freeze({ kind: "inject", brief, noteCount, topScore });
+  return Object.freeze({ kind: "inject", brief, noteCount, topScore, matchQuality });
 }
 
 /**
@@ -304,6 +341,7 @@ export function recallInjectTelemetryMetadata(
       decision: "inject",
       note_count: decision.noteCount,
       top_score: decision.topScore,
+      match_quality: decision.matchQuality,
     });
   }
   if (decision.kind === "abstain") {
@@ -311,6 +349,7 @@ export function recallInjectTelemetryMetadata(
       decision: "abstain",
       reason: decision.reason,
       top_score: decision.topScore,
+      match_quality: decision.matchQuality,
     });
   }
   return Object.freeze({ decision: "error", fault: decision.fault });
@@ -376,6 +415,10 @@ export function defaultRecallRetriever(
         ...(result.origin !== undefined ? { origin: result.origin } : {}),
       }),
     );
-    return Object.freeze({ candidates: Object.freeze(candidates), total: outcome.total });
+    return Object.freeze({
+      candidates: Object.freeze(candidates),
+      total: outcome.total,
+      idfWeightedCoverage: outcome.idfWeightedCoverage,
+    });
   };
 }

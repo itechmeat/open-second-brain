@@ -28,6 +28,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, unlinkSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { isToolResponseError } from "../src/core/brain/tool-outcome.ts";
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { detectHookRuntime, isArtifactToolName } from "./lib/detect.ts";
 import { postWriteNudge, postWriteReminder } from "./lib/messages.ts";
@@ -123,12 +124,6 @@ async function main(): Promise<void> {
     },
   };
   process.stdout.write(JSON.stringify(out) + "\n");
-}
-
-function isToolResponseError(response: unknown): boolean {
-  if (response === null || typeof response !== "object") return false;
-  const r = response as Record<string, unknown>;
-  return r.is_error === true || r.success === false;
 }
 
 function extractFilePath(input: unknown): string | null {

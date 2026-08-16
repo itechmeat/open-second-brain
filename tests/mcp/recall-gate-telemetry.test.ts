@@ -106,6 +106,7 @@ test("fail-open: a broken continuity store never breaks the gate decision", asyn
   const negative = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "what did we decide about the index?",
     scores: [],
+    match_quality: 0,
   })) as { retrieve: boolean; negative?: Record<string, unknown> };
   expect(typeof negative.retrieve).toBe("boolean");
   expect(negative.negative?.["state"]).toBe("unknown");
@@ -125,6 +126,7 @@ test("default off: a negative verdict writes no continuity record", async () => 
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "reactor coolant",
     scores: [],
+    match_quality: 0,
   })) as { negative?: unknown };
   expect(out.negative).toBeDefined();
   expect(negativeRecallRecords()).toHaveLength(0);
@@ -132,7 +134,11 @@ test("default off: a negative verdict writes no continuity record", async () => 
 
 test("with the opt-in on, a negative verdict lands as a continuity record", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
-  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [],
+    match_quality: 0,
+  });
   const records = negativeRecallRecords();
   expect(records).toHaveLength(1);
   expect(records[0]!.payload["state"]).toBe("unknown");
@@ -147,6 +153,10 @@ test("with the opt-in on, a negative verdict lands as a continuity record", asyn
 
 test("a usable-score call writes no negative record even with the opt-in on", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
-  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [0.9] });
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [0.9],
+    match_quality: 0.9,
+  });
   expect(negativeRecallRecords()).toHaveLength(0);
 });

@@ -54,10 +54,11 @@ test("gate omits adequacy when no scores are supplied", async () => {
   expect(out["adequacy"]).toBeUndefined();
 });
 
-test("gate returns a sufficient/proceed verdict for strong scores", async () => {
+test("gate returns a sufficient/proceed verdict for strong coverage", async () => {
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "what did we decide?",
     scores: [0.83, 0.4],
+    match_quality: 0.83,
   })) as { adequacy: Record<string, unknown> };
   expect(out.adequacy["level"]).toBe("sufficient");
   expect(out.adequacy["action"]).toBe("proceed");
@@ -65,10 +66,15 @@ test("gate returns a sufficient/proceed verdict for strong scores", async () => 
   expect(out.adequacy["result_count"]).toBe(2);
 });
 
-test("gate returns weak/re_recall and insufficient/abstain per scores", async () => {
+test("gate returns weak/re_recall and insufficient/abstain per coverage", async () => {
+  // The scores are deliberately the SAME in both arms and both sit at the
+  // value the shipped keyword lane pins its top row to. Under the old
+  // score-driven rule both graded `sufficient`; only the coverage differs
+  // now, and only the coverage decides.
   const weak = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "x",
-    scores: [0.4],
+    scores: [0.6],
+    match_quality: 0.4,
   })) as { adequacy: Record<string, unknown> };
   expect(weak.adequacy["level"]).toBe("weak");
   expect(weak.adequacy["action"]).toBe("re_recall");
@@ -76,6 +82,7 @@ test("gate returns weak/re_recall and insufficient/abstain per scores", async ()
   const insufficient = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "x",
     scores: [],
+    match_quality: 0,
   })) as { adequacy: Record<string, unknown> };
   expect(insufficient.adequacy["level"]).toBe("insufficient");
   expect(insufficient.adequacy["action"]).toBe("abstain");
@@ -87,8 +94,9 @@ test("gate honours configurable thresholds", async () => {
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "x",
     scores: [0.7],
+    match_quality: 0.7,
   })) as { adequacy: Record<string, unknown> };
-  // 0.7 would be sufficient at the default 0.6 floor, but not at 0.9.
+  // 0.7 coverage would be sufficient at the default 0.6 floor, not at 0.9.
   expect(out.adequacy["level"]).toBe("weak");
 });
 
@@ -104,6 +112,7 @@ test("gate attaches a negative block when the query yields no usable result", as
   const out = (await gate.handler(ctx(), {
     prompt: "reactor coolant",
     scores: [],
+    match_quality: 0,
   })) as { negative?: Record<string, unknown> };
   // The server enforces the declared output schema on every call, so the
   // block and its declaration have to agree here rather than in
@@ -122,6 +131,7 @@ test("gate omits the negative block entirely when scores are usable", async () =
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "reactor coolant",
     scores: [0.83],
+    match_quality: 0.83,
   })) as Record<string, unknown>;
   expect(out["adequacy"]).toBeDefined();
   // Absent, never null - the convention the explain trace already sets.
@@ -152,6 +162,7 @@ test("over a keyword-only index a zero-result attempt is a not_found the receipt
   const out = (await gate.handler(ctx(), {
     prompt: "reactor coolant",
     scores: [],
+    match_quality: 0,
   })) as { negative: Record<string, unknown> };
   // The populated-receipt shape has to clear the contract too.
   assertOutputContract(gate.name, gate.outputSchema, out);
@@ -202,6 +213,7 @@ test("an authorized note root the index never reached forces unknown and names i
   const out = (await tool("brain_recall_gate").handler(ctx(), {
     prompt: "reactor coolant",
     scores: [],
+    match_quality: 0,
   })) as { negative: Record<string, unknown> };
   expect(out.negative["state"]).toBe("unknown");
   expect(out.negative["unknown_reason"]).toBe("coverage-divergent");
@@ -212,8 +224,33 @@ test("an authorized note root the index never reached forces unknown and names i
 
 test("gate rejects a malformed scores argument", async () => {
   await expect(
-    tool("brain_recall_gate").handler(ctx(), { prompt: "x", scores: ["nope"] }),
+    tool("brain_recall_gate").handler(ctx(), {
+      prompt: "x",
+      scores: ["nope"],
+      match_quality: 0.5,
+    }),
   ).rejects.toThrow();
+});
+
+test("the two adequacy arguments stand or fall together", async () => {
+  // Scores alone cannot be graded, and deriving a quality from them is the
+  // exact substitution this release removes - so an incomplete pair is
+  // refused by name rather than half-honoured.
+  await expect(
+    tool("brain_recall_gate").handler(ctx(), { prompt: "x", scores: [0.6] }),
+  ).rejects.toThrow(/match_quality/u);
+  await expect(
+    tool("brain_recall_gate").handler(ctx(), { prompt: "x", match_quality: 0.6 }),
+  ).rejects.toThrow(/scores/u);
+  await expect(
+    tool("brain_context_pack").handler(ctx(), { max_tokens: 1000, recall_scores: [0.6] }),
+  ).rejects.toThrow(/match_quality/u);
+});
+
+test("a match quality outside [0,1] is refused, never clamped", async () => {
+  await expect(
+    tool("brain_recall_gate").handler(ctx(), { prompt: "x", scores: [0.6], match_quality: 1.4 }),
+  ).rejects.toThrow(/match_quality/u);
 });
 
 test("context_pack persists the verdict into the receipt and returns it", async () => {
@@ -221,6 +258,7 @@ test("context_pack persists the verdict into the receipt and returns it", async 
     max_tokens: 1000,
     receipt: true,
     recall_scores: [0.2, 0.1],
+    match_quality: 0.2,
   })) as { adequacy?: Record<string, unknown>; receipt_id?: string };
   expect(packed.adequacy).toBeDefined();
   expect(packed.adequacy!["level"]).toBe("insufficient");
@@ -264,11 +302,16 @@ function unmetTopics(): ReadonlyArray<string> {
 }
 
 test("with the flag off neither surface writes the demand log", async () => {
-  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [],
+    match_quality: 0,
+  });
   await tool("brain_context_pack").handler(ctx(), {
     max_tokens: 1000,
     query: "reactor coolant",
     recall_scores: [],
+    match_quality: 0,
     telemetry: true,
   });
   expect(unmetTopics()).toEqual([]);
@@ -276,7 +319,11 @@ test("with the flag off neither surface writes the demand log", async () => {
 
 test("with the flag on both surfaces write it, pack telemetry argument or not", async () => {
   writeFileSync(configPath, `vault: "${vault}"\nrecall_gate_telemetry: "true"\n`);
-  await tool("brain_recall_gate").handler(ctx(), { prompt: "reactor coolant", scores: [] });
+  await tool("brain_recall_gate").handler(ctx(), {
+    prompt: "reactor coolant",
+    scores: [],
+    match_quality: 0,
+  });
   expect(unmetTopics().length).toBeGreaterThan(0);
 
   const before = unmetTopics().length;
@@ -284,6 +331,7 @@ test("with the flag on both surfaces write it, pack telemetry argument or not", 
     max_tokens: 1000,
     query: "turbine bearing vibration",
     recall_scores: [],
+    match_quality: 0,
   });
   expect(unmetTopics().length).toBeGreaterThan(before);
 });

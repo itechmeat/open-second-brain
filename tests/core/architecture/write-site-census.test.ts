@@ -70,6 +70,8 @@ import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { type LexedSource, lexSource } from "../../helpers/source-lexer.ts";
+
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const SRC_ROOT = join(REPO_ROOT, "src");
 
@@ -738,11 +740,17 @@ function readSourceTree(): CensusFile[] {
   return files;
 }
 
-/** Whether this module can address the vault - see the docblock. */
-function addressesVault(file: CensusFile): boolean {
-  if (VAULT_WRITE_ROOTS.some((root) => file.path.startsWith(root))) return true;
-  if (VAULT_WRITER_FILES.includes(file.path)) return true;
-  return VAULT_PATHS_IMPORT_RE.test(file.text);
+/**
+ * Whether this module can address the vault - see the docblock.
+ *
+ * `withoutComments` rather than `code`, because the clause that matters
+ * reads an import SPECIFIER, which is a string: the other view blanks it
+ * and no module would ever be found to import `paths.ts` again.
+ */
+function addressesVault(path: string, withoutComments: string): boolean {
+  if (VAULT_WRITE_ROOTS.some((root) => path.startsWith(root))) return true;
+  if (VAULT_WRITER_FILES.includes(path)) return true;
+  return VAULT_PATHS_IMPORT_RE.test(withoutComments);
 }
 
 interface FsImports {
@@ -799,11 +807,40 @@ function directWriteCalls(text: string, imported: FsImports): Set<string> {
   return direct;
 }
 
-/** Classify one file into its direct and shared write sites. */
+/**
+ * One lex per module, kept, because the fixtures below re-run the whole
+ * tree once per intruder shape and lexing is the expensive step. Keyed by
+ * path and re-checked against the text, so a synthetic module reusing a
+ * real path cannot read a stale view.
+ */
+const LEXED = new Map<string, { readonly text: string; readonly views: LexedSource }>();
+
+function lexedViews(file: CensusFile): LexedSource {
+  const cached = LEXED.get(file.path);
+  if (cached !== undefined && cached.text === file.text) return cached.views;
+  const views = lexSource(file.text);
+  LEXED.set(file.path, { text: file.text, views });
+  return views;
+}
+
+/**
+ * Classify one file into its direct and shared write sites.
+ *
+ * The two views are not interchangeable and the census dies quietly if
+ * they are swapped: imports are read off {@link LexedSource.withoutComments}
+ * because a specifier is a string, and calls off
+ * {@link LexedSource.code} because a `writeFileSync(` inside a quoted
+ * example is not a call. Routing the import read through `code` was
+ * measured to drop this census from 64 direct rows to zero with an EMPTY
+ * failure list - a clean sweep over nothing, which is the reading this
+ * file exists to remove. `the specifier view is the one imports are read
+ * from` below pins that.
+ */
 function classify(file: CensusFile): CensusRow | null {
-  if (!addressesVault(file)) return null;
-  const direct = directWriteCalls(file.text, fsImports(file.text));
-  const shared = [...file.text.matchAll(SHARED_WRITE_RE)].length;
+  const views = lexedViews(file);
+  if (!addressesVault(file.path, views.withoutComments)) return null;
+  const direct = directWriteCalls(views.code, fsImports(views.withoutComments));
+  const shared = [...views.code.matchAll(SHARED_WRITE_RE)].length;
   if (direct.size === 0 && shared === 0) return null;
   return { path: file.path, directCalls: [...direct].toSorted(), sharedCalls: shared };
 }

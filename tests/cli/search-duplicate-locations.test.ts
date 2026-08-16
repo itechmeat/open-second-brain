@@ -54,6 +54,9 @@ function outcomeWith(duplicates?: ReadonlyArray<DuplicatePassageLocation>): Sear
     results: Object.freeze([resultWith(duplicates)]),
     warnings: Object.freeze([]),
     total: 1,
+    // Neutral match quality: the folding assertions never read it, and 1 is
+    // what the coverage report yields when there is no term mass to weigh.
+    idfWeightedCoverage: 1,
   });
 }
 

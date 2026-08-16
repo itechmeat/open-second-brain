@@ -147,6 +147,12 @@ import {
   SNAPSHOT_PRUNE_REFUSALS,
 } from "../../../src/core/brain/snapshot.ts";
 import { GATE_MODE, GATE_MODES, isGateMode } from "../../../src/core/integrity/stamp.ts";
+import { isToolScope, TOOL_SCOPE, TOOL_SCOPES } from "../../../src/mcp/tool-contract.ts";
+import {
+  isRuntimeTarget,
+  KNOWN_RUNTIME_TARGETS,
+  RUNTIME_TARGET,
+} from "../../../src/core/identity-reminder.ts";
 import {
   isTriggerStatus,
   TRIGGER_STATUS,
@@ -343,6 +349,25 @@ import {
   isHostPressureState,
   isHostPressureUnmeasurableReason,
 } from "../../../src/core/brain/maintenance/host-pressure.ts";
+import {
+  isOwnerScopeRefusal,
+  OWNER_SCOPE_REFUSAL,
+  OWNER_SCOPE_REFUSALS,
+} from "../../../src/mcp/owner-scope-refusal.ts";
+import {
+  isOriginReach,
+  isOriginReachReason,
+  ORIGIN_REACH,
+  ORIGIN_REACH_REASON,
+  ORIGIN_REACH_REASONS,
+  ORIGIN_REACHES,
+} from "../../../src/core/brain/portability/origin-reach.ts";
+import {
+  isMirrorOutcome,
+  MIRROR_OUTCOME,
+  MIRROR_OUTCOMES,
+} from "../../../src/core/brain/shared-namespace.ts";
+import { lexCode } from "../../helpers/source-lexer.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1001,6 +1026,68 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: SNAPSHOT_ENTRY_SKIP_REASONS,
     guard: isSnapshotEntrySkipReason,
   },
+  {
+    // U6. Which tool surface a server process advertises. It shipped as a
+    // bare union with its three members hand-copied into four places - the
+    // union, the `second_brain_capabilities` output schema, the `--scope`
+    // validity check and the `--scope` error message - and nothing
+    // asserting the four agreed, which is the drift class this census
+    // exists for, one level up from the vocabularies it already held.
+    name: "TOOL_SCOPE",
+    values: TOOL_SCOPE,
+    members: TOOL_SCOPES,
+    guard: isToolScope,
+  },
+  {
+    // U6. Which host runtime the per-turn identity reminder is rendered
+    // for. It was the nearest thing to a selector in the tree and followed
+    // three of the four pieces: an array, a derived type and a guard typed
+    // `string | undefined`, which kept it out of this population entirely.
+    // The guard now takes `unknown`, so a target name read off an
+    // environment variable is narrowed by the same rule as every other
+    // persisted member here.
+    name: "RUNTIME_TARGET",
+    values: RUNTIME_TARGET,
+    members: KNOWN_RUNTIME_TARGETS,
+    guard: isRuntimeTarget,
+  },
+  {
+    // U2. A caller-supplied owner scope naming someone other than the
+    // server-resolved identity. Refused rather than narrowed: a silent
+    // narrowing leaves the caller believing it read what it asked for.
+    name: "OWNER_SCOPE_REFUSAL",
+    values: OWNER_SCOPE_REFUSAL,
+    members: OWNER_SCOPE_REFUSALS,
+    guard: isOwnerScopeRefusal,
+  },
+  {
+    // U5. Whether a registered search origin could be read at all.
+    // `unreachable` and `unknown` are distinct members because "it is not
+    // there" and "I could not look" have different repairs, and neither
+    // may read as a zero contribution the way a dropped origin did.
+    name: "ORIGIN_REACH",
+    values: ORIGIN_REACH,
+    members: ORIGIN_REACHES,
+    guard: isOriginReach,
+  },
+  {
+    // U5. Why an origin was not reachable - the axis that makes the
+    // verdict actionable rather than merely honest.
+    name: "ORIGIN_REACH_REASON",
+    values: ORIGIN_REACH_REASON,
+    members: ORIGIN_REACH_REASONS,
+    guard: isOriginReachReason,
+  },
+  {
+    // U5. The shared-namespace mirror's verdict. It was a two-piece type
+    // alias outside this population, and it conflated operator
+    // misconfiguration with an I/O failure under one token, so the caller
+    // could not tell a vault that never opted in from a write that broke.
+    name: "MIRROR_OUTCOME",
+    values: MIRROR_OUTCOME,
+    members: MIRROR_OUTCOMES,
+    guard: isMirrorOutcome,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1034,71 +1121,6 @@ function readSourceTree(): SourceFile[] {
   for (const root of SCANNED_ROOTS) walk(join(REPO_ROOT, root));
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return files;
-}
-
-/**
- * The same source with comment bodies and string CONTENTS replaced by
- * spaces, character offsets preserved.
- *
- * Structure is read off the mask and content off the original at the same
- * index. This is what makes bracket matching honest: a `"}"` inside a
- * value cannot close an object, and `// }` in a comment cannot either.
- */
-function maskSource(text: string): string {
-  const out = text.split("");
-  const blank = (from: number, to: number): void => {
-    for (let k = from; k < to && k < out.length; k += 1) if (out[k] !== "\n") out[k] = " ";
-  };
-  let i = 0;
-  while (i < text.length) {
-    const char = text[i]!;
-    const next = text[i + 1];
-    if (char === "/" && next === "/") {
-      const end = text.indexOf("\n", i);
-      const stop = end === -1 ? text.length : end;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (char === "/" && next === "*") {
-      const end = text.indexOf("*/", i + 2);
-      const stop = end === -1 ? text.length : end + 2;
-      blank(i, stop);
-      i = stop;
-      continue;
-    }
-    if (char === '"' || char === "'" || char === "`") {
-      let k = i + 1;
-      while (k < text.length) {
-        if (text[k] === "\\") {
-          k += 2;
-          continue;
-        }
-        if (text[k] === char) break;
-        // A `"` or `'` with no partner before the newline is not a string
-        // opener - it is a quote inside a regular expression literal,
-        // `/["']/` being the shape that occurs here. Treating it as an
-        // opener would blank real code from that point to the next quote
-        // ANYWHERE in the file, which is worse than a miss: the scan would
-        // report a fact about a module it never read. Only a template can
-        // legally span lines.
-        if (char !== "`" && text[k] === "\n") {
-          k = i;
-          break;
-        }
-        k += 1;
-      }
-      if (k === i) {
-        i += 1;
-        continue;
-      }
-      blank(i + 1, k);
-      i = k + 1;
-      continue;
-    }
-    i += 1;
-  }
-  return out.join("");
 }
 
 const CLOSER: Readonly<Record<string, string>> = Object.freeze({
@@ -1285,7 +1307,7 @@ interface ScannedVocabulary {
 function scanVocabularies(files: ReadonlyArray<SourceFile>): ScannedVocabulary[] {
   const found: ScannedVocabulary[] = [];
   for (const file of files) {
-    const masked = maskSource(file.text);
+    const masked = lexCode(file.text);
     const declared = bindings(masked);
     const guards = guardCandidates(masked);
     for (const binding of declared) {
@@ -1325,6 +1347,12 @@ function scanVocabularies(files: ReadonlyArray<SourceFile>): ScannedVocabulary[]
 
 const SOURCE_TREE = readSourceTree();
 const SCANNED = scanVocabularies(SOURCE_TREE);
+
+/**
+ * How many four-piece vocabularies `src/` currently holds. Measured, and
+ * kept as an equality rather than a floor - see the population test.
+ */
+const VOCABULARY_POPULATION = 63;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
@@ -1445,10 +1473,16 @@ describe("the census reads the tree", () => {
   });
 
   test("the scan still finds the population it measures", () => {
-    // A scanner that matched nothing would report a clean sweep over an
-    // empty set. Set just under the measurement: a floor of 20 against 57
-    // would let two thirds of the population stop being seen.
-    expect(SCANNED.length).toBeGreaterThan(50);
+    // An EQUALITY, not a floor. A scanner that matched nothing would
+    // report a clean sweep over an empty set, and a floor of 50 against a
+    // real 63 would let a fifth of the population stop being seen without
+    // anything going red - which is the same shape of defect this census
+    // exists to catch, one level up.
+    //
+    // Adding a vocabulary therefore means bumping this number, which is
+    // the point: the count is the measurement, and a measurement nobody
+    // has to keep true is not one.
+    expect(SCANNED.length).toBe(VOCABULARY_POPULATION);
     expect(SOURCE_TREE.length).toBeGreaterThan(500);
   });
 
@@ -1532,6 +1566,22 @@ describe("the scan sees the shapes it claims to", () => {
     [
       "a vocabulary behind a regex literal holding an unpaired quote",
       'const QUOTED = /["]/;\nexport const ok = QUOTED.source;\n' +
+        OBJECT +
+        DERIVED +
+        FROZEN_LIST +
+        GUARD,
+    ],
+    [
+      // The positive control for the backtick hole. The regex line is
+      // `src/core/vault.ts:88` verbatim, and before the shared lexer
+      // landed it opened a phantom template that blanked 9,706 of that
+      // module's 31,608 bytes - hiding `DOUBLE_QUOTED_ESCAPES`, the one
+      // frozen binding in the tree this census could not see. A masker
+      // that reads a backtick inside a regex as a template opener
+      // reports this file as carrying no vocabulary at all.
+      "a vocabulary behind a regex literal holding a backtick",
+      "const CODE_BLOCK_RE = /```[\\s\\S]*?```|`[^`]+`/g;\n" +
+        "export const source = CODE_BLOCK_RE.source;\n" +
         OBJECT +
         DERIVED +
         FROZEN_LIST +

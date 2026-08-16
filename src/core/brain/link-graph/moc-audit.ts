@@ -21,6 +21,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildBacklinkIndex } from "../backlinks.ts";
+import { ownerScopeView } from "../owner-scope-view.ts";
 import { brainDirs } from "../paths.ts";
 import { loadBrainConfig, resolveLinkGraph } from "../policy.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
@@ -66,12 +67,29 @@ export interface AuditMocOptions {
   readonly minOutboundLinks?: number;
   /** When set, skip the `link_graph` config lookup and use this. */
   readonly minLinkRatio?: number;
+  /**
+   * Owner scope the cluster is filtered against
+   * (a-label-is-not-a-boundary, U3). Absent / `null` filters nothing.
+   *
+   * A hidden member is dropped from EVERY bucket, not moved into
+   * `candidateMissing`: reporting it as missing would answer the
+   * exists-vs-absent question this audit exists to answer, in the
+   * direction that says "no such artifact" about one that exists. It
+   * simply does not appear, which is what "identical to absent" means
+   * everywhere else in this vault. `bodyChars` sizes a private body and
+   * `backlinkCount` counts references from artifacts the caller may not
+   * see, so both follow the member out.
+   */
+  readonly ownerScope?: string | null;
 }
 
 export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {}): MocAuditReport {
   const hubCanonical = normaliseWikilinkTarget(hubId);
+  const view = ownerScopeView(vault, opts.ownerScope ?? null);
   const hubPath = locateArtifact(vault, hubCanonical);
-  if (!hubPath) {
+  // A hub the caller may not see reads as a hub that is not there: the
+  // same sentence an absent hub produces, so the two are indistinguishable.
+  if (!hubPath || !view.visible(hubCanonical)) {
     throw new MocAuditError(`hub note not found: ${hubCanonical}`);
   }
 
@@ -103,7 +121,7 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
   }
 
   // Backlink index + cluster member metadata.
-  const index = buildBacklinkIndex(vault);
+  const index = buildBacklinkIndex(vault, view.scope);
   const wellCovered: MocClusterMember[] = [];
   const fragile: MocClusterMember[] = [];
   const candidateMissing: { id: string; referenceCount: number }[] = [];
@@ -111,6 +129,9 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
 
   for (const target of outboundTargets) {
     const memberPath = locateArtifact(vault, target);
+    // A member this caller may not see leaves no trace in any bucket -
+    // not even the missing one, which would decide exists-vs-absent for it.
+    if (memberPath && !view.visible(target)) continue;
     if (!memberPath) {
       missingCounts.set(target, (missingCounts.get(target) ?? 0) + 1);
       continue;
@@ -145,7 +166,7 @@ export function auditMoc(vault: string, hubId: string, opts: AuditMocOptions = {
     if (!missingCounts.has(target)) continue;
     for (const member of outboundTargets) {
       const path = locateArtifact(vault, member);
-      if (!path) continue;
+      if (!path || !view.visible(member)) continue;
       const body = stripFrontmatter(readFileSync(path, "utf8"));
       for (const bracketBody of extractWikilinkRichBodies(body)) {
         const t = parseWikilinkRich(bracketBody).target;

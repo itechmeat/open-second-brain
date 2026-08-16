@@ -67,6 +67,9 @@ function cardsOutcome(duplicates?: ReadonlyArray<DuplicatePassageLocation>): Sea
     cards: Object.freeze([toSearchCard(resultWith(duplicates), QUERY)]),
     warnings: Object.freeze([]),
     total: 1,
+    // Neutral match quality: the folding assertions never read it, and 1 is
+    // what the coverage report yields when there is no term mass to weigh.
+    idfWeightedCoverage: 1,
   });
 }
 

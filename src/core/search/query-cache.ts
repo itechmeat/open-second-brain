@@ -135,6 +135,12 @@ export function getCachedOutcome(
   if (nowMs - row.createdAt > ttlMs) return null;
   try {
     const parsed = JSON.parse(row.payload) as SearchOutcome;
+    // A row written before `idfWeightedCoverage` existed carries no match
+    // quality, and a hit that served one would hand every downstream
+    // confidence threshold `undefined` to compare against - the silent
+    // fallback those thresholds are being repaired to stop making. Such a
+    // row is a miss, so the outcome is recomputed with the number in it.
+    if (typeof parsed.idfWeightedCoverage !== "number") return null;
     // Match the fresh-compute path's immutability: freeze the results
     // array and each result so a hit is indistinguishable from a miss.
     for (const r of parsed.results) Object.freeze(r);

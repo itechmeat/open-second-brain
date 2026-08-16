@@ -1,6 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 
+import { delegatedAgentName } from "../agent-identity.ts";
 import { appendAuditRecord } from "../reliability/audit.ts";
 import { appendLogEvent } from "./log.ts";
 import { brainDirsForWrite } from "./paths.ts";
@@ -12,6 +13,7 @@ import { discoverMarkersDetailed, isFeedbackMarker } from "./inline.ts";
 import { writeSignal } from "./signal.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SIGNAL_SOURCE_TYPE } from "./types.ts";
+import { isToolResponseError } from "./tool-outcome.ts";
 import { validateBrainFeedbackInput } from "./sessions/validate-feedback.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { clearSessionFocus, sessionFocusPath } from "../search/session-focus.ts";
@@ -44,9 +46,21 @@ export interface CaptureSessionLifecycleOptions {
 export interface CaptureSessionLifecycleResult {
   readonly event: string;
   readonly session_id?: string;
+  /**
+   * Host-assigned id of the delegated sub-agent this event closed. Present
+   * only on `SubagentStop`, so a flat session's result shape is unchanged.
+   */
+  readonly agent_id?: string;
   readonly signals_created: number;
   readonly signals_deduped: number;
   readonly tool_replays: number;
+  /**
+   * Tool calls this event declined to replay because the host reported
+   * them as failed. Absent when nothing was declined, so a run with
+   * nothing to report keeps its previous shape and a real zero stays
+   * distinguishable from a silent skip.
+   */
+  readonly tool_calls_failed?: number;
   readonly malformed: number;
   /** Capture-boundary verdict for this event (Memory Integrity Suite). */
   readonly boundary_decision: SessionCaptureDecision;
@@ -87,7 +101,25 @@ interface NormalizedPayload {
   readonly promptText?: string;
   readonly toolName?: string;
   readonly toolInput?: unknown;
+  /**
+   * What the host reported the tool call returned. Declared on the hook
+   * payload since the grok adapter landed and lifted past here until
+   * v1.49.0, which meant a `brain_feedback` call the host REFUSED was
+   * still replayed into a signal - a record for a write that never
+   * happened. Read only through {@link isToolResponseError}; the response
+   * body itself never reaches disk.
+   */
+  readonly toolResponse?: unknown;
   readonly cwd?: string;
+  /**
+   * Host-assigned id of the delegated sub-agent a `SubagentStop` event is
+   * closing (Claude Code delivers `agent_id` on that event and no other).
+   * Its sibling `agent_transcript_path` is deliberately NOT lifted: it is
+   * a machine-local host path, this vault syncs between devices, and the
+   * sub-agent's turns reach memory through `o2b brain import-session`,
+   * which reads the sidechain flag and the id off the transcript itself.
+   */
+  readonly agentId?: string;
   readonly parentSessionId?: string;
   readonly rootSessionId?: string;
   readonly compressionDepth?: number;
@@ -135,6 +167,18 @@ export async function captureSessionLifecycleEvent(
   const boundary = buildCaptureBoundary(vault);
   const decision = boundary.sessionDecision(normalized.sessionId, normalized.transcriptPath);
   const mayWrite = decision === "capture";
+
+  // Delegation boundary (t_0c6f31ee): `SubagentStop` is the one event that
+  // names a sub-agent, and a sub-agent reuses its parent's session id - so
+  // without a distinct identity here the dispatched worker's observation
+  // reads as the orchestrator's own and the roster cannot tell them apart.
+  // Every other event resolves to `opts.agent` exactly as before.
+  const capturingAgent =
+    normalized.agentId !== undefined
+      ? delegatedAgentName(opts.agent, normalized.agentId)
+      : opts.agent;
+  const captureOpts: CaptureSessionLifecycleOptions =
+    capturingAgent === opts.agent ? opts : { ...opts, agent: capturingAgent };
 
   // Session lineage (continuity-hygiene-freshness): resolve BEFORE
   // recording this session's own ledger observation - the crutch
@@ -240,12 +284,12 @@ export async function captureSessionLifecycleEvent(
   }
 
   if (mayWrite && promptText !== undefined) {
-    captureMarkers(vault, normalized, promptText, opts, now, ensureDedup(), counters);
+    captureMarkers(vault, normalized, promptText, captureOpts, now, ensureDedup(), counters);
     // Fact extraction runs strictly AFTER the boundary: only captured,
     // unsuppressed user text reaches the pattern table.
     const routed = routeExtractedFacts(vault, {
       facts: extractFacts(promptText),
-      agent: opts.agent,
+      agent: capturingAgent,
       now,
       sessionRef: sessionReference(normalized),
       dedup: ensureDedup(),
@@ -255,8 +299,17 @@ export async function captureSessionLifecycleEvent(
     counters.facts_deduped += routed.deduped;
   }
 
+  // A call the host reported as FAILED is not replayed: `brain_feedback`
+  // refused to write, and replaying its input would mint the very record
+  // the tool declined to create. The decline is counted rather than
+  // swallowed, so a run that dropped something says so.
+  let toolCallsFailed = 0;
   if (mayWrite && normalized.toolName === "brain_feedback") {
-    captureToolFeedback(vault, normalized, opts, now, ensureDedup(), counters);
+    if (isToolResponseError(normalized.toolResponse)) {
+      toolCallsFailed++;
+    } else {
+      captureToolFeedback(vault, normalized, captureOpts, now, ensureDedup(), counters);
+    }
   }
 
   // Session-scoped focus lifecycle (Agent Surface Suite, t_5b478e47):
@@ -309,10 +362,10 @@ export async function captureSessionLifecycleEvent(
             counters.suppressed_messages++;
             continue;
           }
-          captureMarkers(vault, normalized, turn.text, opts, now, ensureDedup(), counters);
+          captureMarkers(vault, normalized, turn.text, captureOpts, now, ensureDedup(), counters);
           const routed = routeExtractedFacts(vault, {
             facts: extractFacts(turn.text),
-            agent: opts.agent,
+            agent: capturingAgent,
             now,
             sessionRef: sessionReference(normalized),
             dedup: ensureDedup(),
@@ -342,7 +395,7 @@ export async function captureSessionLifecycleEvent(
     resolveSessionHandoff()
   ) {
     try {
-      handoffPath = (await writeHandoffNoteFromTranscript(vault, normalized, opts.agent, now))
+      handoffPath = (await writeHandoffNoteFromTranscript(vault, normalized, capturingAgent, now))
         ?.path;
     } catch {
       // ignore - a malformed transcript never blocks lifecycle capture
@@ -372,7 +425,7 @@ export async function captureSessionLifecycleEvent(
 
   let logPath: string | undefined;
   if (mayWrite && !opts.dryRun) {
-    logPath = appendLifecycleLog(vault, normalized, opts.agent, now, counters);
+    logPath = appendLifecycleLog(vault, normalized, capturingAgent, now, counters);
     // Dedup observability (Unit F): persist the exact-hash drop counts
     // this event produced, keyed by the session being re-ingested.
     // Signals and facts are one count - both are items this event tried
@@ -391,13 +444,15 @@ export async function captureSessionLifecycleEvent(
 
   const auditPath = appendAuditRecord(join(brainDirsForWrite(vault).log, "session-lifecycle"), {
     timestamp: now.toISOString(),
-    actor: opts.agent,
+    actor: capturingAgent,
     action: "session_lifecycle_capture",
     target: "Brain/session-lifecycle",
     ok: true,
     details: {
       event: normalized.event,
       ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
+      ...(normalized.agentId ? { agent_id: normalized.agentId } : {}),
+      ...(toolCallsFailed > 0 ? { tool_calls_failed: toolCallsFailed } : {}),
       dry_run: opts.dryRun === true,
       boundary_decision: decision,
       ...(normalized.interrupted === true ? { interrupted: true } : {}),
@@ -429,9 +484,11 @@ export async function captureSessionLifecycleEvent(
   return {
     event: normalized.event,
     ...(normalized.sessionId ? { session_id: normalized.sessionId } : {}),
+    ...(normalized.agentId ? { agent_id: normalized.agentId } : {}),
     signals_created: counters.signals_created,
     signals_deduped: counters.signals_deduped,
     tool_replays: counters.tool_replays,
+    ...(toolCallsFailed > 0 ? { tool_calls_failed: toolCallsFailed } : {}),
     malformed: counters.malformed,
     boundary_decision: decision,
     suppressed_messages: counters.suppressed_messages,
@@ -549,9 +606,11 @@ function normalizePayload(payload: unknown): NormalizedPayload {
   const sessionStartSource = readNonEmptyString(record["source"]);
   const workId = readNonEmptyString(record["work_id"]);
   const laneId = readNonEmptyString(record["lane_id"]);
+  const agentId = readNonEmptyString(record["agent_id"]);
   return {
     event,
     ...(sessionId ? { sessionId } : {}),
+    ...(agentId ? { agentId } : {}),
     ...(transcriptPath ? { transcriptPath } : {}),
     ...(cwd ? { cwd } : {}),
     ...(parentSessionId ? { parentSessionId } : {}),
@@ -566,6 +625,7 @@ function normalizePayload(payload: unknown): NormalizedPayload {
       ? { toolName: readNonEmptyString(record["tool_name"])! }
       : {}),
     ...("tool_input" in record ? { toolInput: record["tool_input"] } : {}),
+    ...("tool_response" in record ? { toolResponse: record["tool_response"] } : {}),
     malformed: 0,
   };
 }

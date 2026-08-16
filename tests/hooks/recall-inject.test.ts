@@ -192,8 +192,8 @@ describe("recall-inject telemetry", () => {
 
   test("the two projections agree wherever nothing is being withheld", () => {
     const decisions: ReadonlyArray<RecallInjectDecision> = [
-      { kind: "inject", brief: "a fenced brief", noteCount: 2, topScore: 0.9 },
-      { kind: "abstain", reason: "empty_prompt", topScore: 0 },
+      { kind: "inject", brief: "a fenced brief", noteCount: 2, topScore: 0.9, matchQuality: 0.8 },
+      { kind: "abstain", reason: "empty_prompt", topScore: 0, matchQuality: 0 },
       { kind: "error", fault: RECALL_INJECT_FAULT.timeout },
     ];
     for (const decision of decisions) {

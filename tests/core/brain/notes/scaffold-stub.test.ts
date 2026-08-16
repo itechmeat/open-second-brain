@@ -124,6 +124,47 @@ describe("listing dangling targets", () => {
     expect(scan.state).toBe(DANGLING_SCAN.measured);
     expect(scan.targets.map((t) => t.target)).toContain("Projects/Ghost");
   });
+
+  /**
+   * a-label-is-not-a-boundary, U3. `sources` are vault-relative document
+   * paths and `target` is the link spelling the source wrote, so a
+   * dangling listing over an owner-tagged note published both.
+   */
+  test("an owner scope drops the whole target when every source is hidden", async () => {
+    note("Projects/Private.md", `---\nowner: agent-a\n---\n\n[[Projects/PrivateGhost]]\n`);
+    note("Projects/Shared.md", "[[Projects/SharedGhost]]\n");
+    await indexVault(resolveSearchConfig({ vault }), { force: true });
+
+    const unscoped = await listDanglingTargets(vault);
+    expect(unscoped.targets.map((t) => t.target).toSorted()).toEqual([
+      "Projects/PrivateGhost",
+      "Projects/SharedGhost",
+    ]);
+
+    const scoped = await listDanglingTargets(vault, { ownerScope: "agent-b" });
+    expect(scoped.state).toBe(DANGLING_SCAN.measured);
+    // Not a target with an empty `sources` array - the target string is
+    // itself the private note's outbound link, so it goes with it.
+    expect(scoped.targets.map((t) => t.target)).toEqual(["Projects/SharedGhost"]);
+    expect(JSON.stringify(scoped.targets)).not.toContain("Private");
+
+    const asOwner = await listDanglingTargets(vault, { ownerScope: "agent-a" });
+    expect(asOwner.targets.map((t) => t.target).toSorted()).toEqual([
+      "Projects/PrivateGhost",
+      "Projects/SharedGhost",
+    ]);
+  });
+
+  test("an owner scope keeps a target that still has a visible source", async () => {
+    note("Projects/Private.md", `---\nowner: agent-a\n---\n\n[[Projects/Ghost]]\n`);
+    note("Projects/Shared.md", "[[Projects/Ghost]]\n");
+    await indexVault(resolveSearchConfig({ vault }), { force: true });
+
+    const scoped = await listDanglingTargets(vault, { ownerScope: "agent-b" });
+    const ghost = scoped.targets.find((t) => t.target === "Projects/Ghost");
+    expect(ghost).toBeDefined();
+    expect([...ghost!.sources]).toEqual(["Projects/Shared.md"]);
+  });
 });
 
 describe("scaffolding a stub", () => {

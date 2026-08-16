@@ -96,7 +96,11 @@ describe("brain_knowledge_gaps tool", () => {
     await initialize(server);
 
     const report = await callTool(server, "brain_knowledge_gaps", {});
-    expect(report["vault_path"]).toBe(vault);
+    // The opaque store reference, never the absolute host path
+    // (a-label-is-not-a-boundary, U11): this payload lands in model
+    // context like every other MCP response.
+    expect(report["vault_path"]).toMatch(/^vault:\/\/[0-9a-f]{32}$/);
+    expect(report["vault_path"]).not.toBe(vault);
     expect(report["total_records"]).toBe(5);
     const gaps = report["gaps"] as ReadonlyArray<Record<string, unknown>>;
     expect(gaps).toHaveLength(1);

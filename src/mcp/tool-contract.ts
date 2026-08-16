@@ -16,7 +16,38 @@ import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import type { ProgressSink } from "../core/brain/progress.ts";
 
-export type ToolScope = "full" | "writer" | "catalog";
+/**
+ * The tool surfaces a server process can advertise.
+ *
+ * A closed vocabulary rather than a bare union because the members were
+ * hand-copied into four places - the union, the `second_brain_capabilities`
+ * output schema, the `--scope` validity check and the `--scope` error
+ * message - with nothing asserting the four agreed. Every one of those
+ * sites now derives from this object.
+ */
+export const TOOL_SCOPE = Object.freeze({
+  /** Every tool advertised. */
+  full: "full",
+  /** The always-loaded Brain writer/reader set, and nothing else. */
+  writer: "writer",
+  /** Two-pass catalog: a compact advertised set, everything still callable. */
+  catalog: "catalog",
+} as const);
+
+/** Closed union over {@link TOOL_SCOPE}. */
+export type ToolScope = (typeof TOOL_SCOPE)[keyof typeof TOOL_SCOPE];
+
+/** Membership list, in widest-surface-first order. */
+export const TOOL_SCOPES: ReadonlyArray<ToolScope> = Object.freeze([
+  TOOL_SCOPE.full,
+  TOOL_SCOPE.writer,
+  TOOL_SCOPE.catalog,
+]);
+
+/** Narrow a scope name arriving from argv, a config file or a profile. */
+export function isToolScope(value: unknown): value is ToolScope {
+  return typeof value === "string" && (TOOL_SCOPES as ReadonlyArray<string>).includes(value);
+}
 
 export interface ToolCapabilityEntry {
   readonly name: string;

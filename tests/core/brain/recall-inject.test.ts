@@ -23,8 +23,18 @@ function candidate(overrides: Partial<RecallCandidate> = {}): RecallCandidate {
   };
 }
 
-function retrieverOf(set: RecallResultSet): RecallRetriever {
-  return async () => set;
+/**
+ * Wrap a candidate set as a retriever.
+ *
+ * `idfWeightedCoverage` defaults to full coverage because most cases below
+ * are about briefs, caps and fences rather than about the floor: they have
+ * to clear it deliberately, not by whatever a candidate's score happened to
+ * be. The cases that ARE about the floor state their own coverage.
+ */
+function retrieverOf(
+  set: Omit<RecallResultSet, "idfWeightedCoverage"> & { readonly idfWeightedCoverage?: number },
+): RecallRetriever {
+  return async () => ({ ...set, idfWeightedCoverage: set.idfWeightedCoverage ?? 1 });
 }
 
 describe("decideRecallInject (A2 / t_2ce46130)", () => {
@@ -32,27 +42,64 @@ describe("decideRecallInject (A2 / t_2ce46130)", () => {
     let called = false;
     const decision = await decideRecallInject("   ", async () => {
       called = true;
-      return { candidates: [], total: 0 };
+      return { candidates: [], total: 0, idfWeightedCoverage: 0 };
     });
-    expect(decision).toEqual({ kind: "abstain", reason: "empty_prompt", topScore: 0 });
+    expect(decision).toEqual({
+      kind: "abstain",
+      reason: "empty_prompt",
+      topScore: 0,
+      matchQuality: 0,
+    });
     expect(called).toBe(false);
   });
 
   test("abstains when the retriever returns no matches", async () => {
     const decision = await decideRecallInject(
       "how do receipts work",
-      retrieverOf({ candidates: [], total: 0 }),
+      retrieverOf({ candidates: [], total: 0, idfWeightedCoverage: 0 }),
     );
-    expect(decision).toEqual({ kind: "abstain", reason: "no_matches", topScore: 0 });
+    expect(decision).toEqual({
+      kind: "abstain",
+      reason: "no_matches",
+      topScore: 0,
+      matchQuality: 0,
+    });
   });
 
   test("abstains below the confidence floor", async () => {
-    const weak = RECALL_INJECT_CONFIDENCE_FLOOR - 0.05;
+    // A high-scoring candidate that barely covers the prompt. Under the old
+    // rule the floor read the score and this injected; it is the case the
+    // shipped keyword lane produces on every off-topic prompt, because that
+    // lane pins its top row's score regardless of how well it matched.
+    const weakCoverage = RECALL_INJECT_CONFIDENCE_FLOOR - 0.05;
     const decision = await decideRecallInject(
       "receipts",
-      retrieverOf({ candidates: [candidate({ score: weak })], total: 1 }),
+      retrieverOf({
+        candidates: [candidate({ score: 0.99 })],
+        total: 1,
+        idfWeightedCoverage: weakCoverage,
+      }),
     );
-    expect(decision).toMatchObject({ kind: "abstain", reason: "below_floor" });
+    expect(decision).toMatchObject({
+      kind: "abstain",
+      reason: "below_floor",
+      matchQuality: weakCoverage,
+    });
+  });
+
+  test("a low-scoring candidate that covers the prompt still injects", async () => {
+    // The mirror of the case above, and the reason the floor moved: a row
+    // the filter stack left at the bottom of its pool can still be the
+    // material the prompt asked for.
+    const decision = await decideRecallInject(
+      "receipts",
+      retrieverOf({
+        candidates: [candidate({ score: 0.01 })],
+        total: 1,
+        idfWeightedCoverage: 0.8,
+      }),
+    );
+    expect(decision.kind).toBe("inject");
   });
 
   test("injects a bounded brief above the floor", async () => {

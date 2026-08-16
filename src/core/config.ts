@@ -363,10 +363,31 @@ export function resolveVault(configPath?: string, opts: { cwd?: string } = {}): 
 }
 
 /**
+ * The identity every install writes under until one is configured.
+ *
+ * It is a placeholder, not a name: two unconfigured installs write under
+ * the same token, so any surface that folds contributions per agent merges
+ * every one of them into a single row that reads as one very busy agent
+ * (a-label-is-not-a-boundary, U5). It is exported so the roster can say
+ * "unconfigured" instead of repeating the literal in a second place and
+ * calling it a name.
+ */
+export const UNCONFIGURED_AGENT_NAME = "agent";
+
+/**
+ * Whether an agent identity was actually chosen by an operator, as opposed
+ * to being the placeholder {@link resolveAgentName} falls back to.
+ */
+export function isConfiguredAgentName(name: string): boolean {
+  const trimmed = name.trim();
+  return trimmed.length > 0 && trimmed !== UNCONFIGURED_AGENT_NAME;
+}
+
+/**
  * Resolve the agent identity used when no explicit `agent` is supplied.
  *
  * Order: `VAULT_AGENT_NAME` env → `agent_name`/`agentName` in plugin config →
- * the literal placeholder `"agent"`. Used by every Brain writer that needs
+ * {@link UNCONFIGURED_AGENT_NAME}. Used by every Brain writer that needs
  * an `agent:` field (signals, evidence rows, log entries) and by the
  * Hermes pre_llm_call hook.
  */
@@ -376,8 +397,28 @@ export function resolveAgentName(configPath?: string): string {
   const data = discoverConfig(configPath).data;
   const value = data["agent_name"] ?? data["agentName"];
   if (value) return value;
-  return "agent";
+  return UNCONFIGURED_AGENT_NAME;
 }
+
+/**
+ * Shared-namespace root from the device config, or null when off
+ * (Agent Write Contract Suite, t_936a1a61).
+ *
+ * Lives here rather than in `brain/shared-namespace.ts` because it is a
+ * device-config key resolver like {@link resolveVaultPath} and
+ * {@link resolveAgentName}, and because the search-origin enumeration now
+ * reads it too: a module on the fan-out path must not have to import the
+ * mirror writer - and its signal, log and time dependencies - to learn one
+ * config key (a-label-is-not-a-boundary, U5).
+ */
+export function resolveSharedNamespace(configPath?: string | null): string | null {
+  const discovery = discoverConfig(configPath ?? undefined);
+  const value = discovery.data[SHARED_NAMESPACE_KEY]?.trim();
+  return value ? value : null;
+}
+
+/** Device-config key naming the shared vault that remember-writes mirror into. */
+const SHARED_NAMESPACE_KEY = "shared_namespace";
 
 /**
  * Stable per-install device identity (Memory Integrity Suite). Keys the
@@ -836,9 +877,28 @@ export function resolveRecallGateTelemetry(configPath?: string): boolean {
 /**
  * Recall adequacy thresholds (retrieval-precision-quality-loop,
  * t_b8f66fec). Configurable floors that drive the sufficient / weak /
- * insufficient verdict over existing recall relevance scores. Defaults
- * mirror DEFAULT_RECALL_ADEQUACY_THRESHOLDS (0.6 / 0.3 / 1). Invalid
- * values fail fast rather than silently reverting to a default.
+ * insufficient verdict. Defaults mirror
+ * DEFAULT_RECALL_ADEQUACY_THRESHOLDS (0.6 / 0.3 / 1). Invalid values fail
+ * fast rather than silently reverting to a default.
+ *
+ * What these floors are compared against CHANGED in
+ * a-label-is-not-a-boundary, and the numbers kept their values while
+ * their meaning moved. They used to bound a recall attempt's top
+ * relevance SCORE, which could not work: the keyword lane is min-max
+ * normalised inside the candidate set, so the top row of any non-empty
+ * recall scored exactly the configured `search_keyword_weight` - shipped
+ * at 0.6, identical to `recall_adequacy_sufficient`. Every keyword recall
+ * in the product therefore graded `sufficient / proceed`, `weak` and
+ * `insufficient` were unreachable, and a hundredth of a point on either
+ * key would have inverted the verdict for every query at once.
+ *
+ * They now bound MATCH QUALITY: the share of the query's IDF mass the
+ * retrieved material covers, which is absolute and pool-independent. An
+ * operator who tuned these keys against the old quantity was tuning
+ * something that never varied, so no setting is being silently
+ * reinterpreted - but the keys do decide something now, and 0.6 means
+ * "covers at least three fifths of what was asked" rather than
+ * "something was returned".
  */
 export function resolveRecallAdequacyThresholds(configPath?: string): {
   sufficient: number;

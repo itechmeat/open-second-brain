@@ -12,6 +12,14 @@
  * Closed-set ID enum: extending to a new runtime requires adding a
  * new id literal here, a new module under `sessions/`, and a registry
  * entry — no other code path needs to change.
+ *
+ * An adapter no longer carries a `defaultAgent`. It duplicated `id` in all
+ * five shipped adapters, and its single consumer stamped it onto every
+ * imported signal ahead of the operator's own `--agent` - so three
+ * runtimes attributed memory to `claude` / `codex` / `hermes`, strings
+ * `normalizeAgentArgument` rejects as placeholders everywhere else, and
+ * the flag the CLI validated could never take effect. Identity now comes
+ * from the caller, or from the delegated turn itself.
  */
 
 /**
@@ -70,6 +78,23 @@ export interface SessionTurn {
   readonly text?: string;
   /** Tool-use blocks emitted by the agent in this turn. */
   readonly toolCalls?: ReadonlyArray<SessionToolCall>;
+  /**
+   * Host-assigned id of the DELEGATED agent that wrote this turn.
+   *
+   * A sub-agent's transcript reuses its parent's session id, so the id is
+   * the only thing distinguishing the two; present only where the runtime
+   * records one, absent everywhere else so a flat transcript keeps the
+   * pre-delegation shape exactly.
+   */
+  readonly agentId?: string;
+  /**
+   * True when the runtime marked this turn as a delegated sidechain turn.
+   *
+   * Only `true` is carried - an absent or false flag emits no key, for the
+   * same reason the id does: an ordinary turn must stay byte-identical to
+   * what it was before the boundary was readable.
+   */
+  readonly sidechain?: boolean;
 }
 
 export interface SessionAdapter {
@@ -81,8 +106,6 @@ export interface SessionAdapter {
    * The shipped adapters carry ids from {@link SESSION_ADAPTER_ID}.
    */
   readonly id: string;
-  /** Default `agent` label stamped on imported signals for this runtime. */
-  readonly defaultAgent: string;
   /**
    * Match the first line of the session file. Adapters identify by
    * structural fields (`"originator":"codex_exec"`, `"role":"session_meta"`,

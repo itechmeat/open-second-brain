@@ -44,13 +44,24 @@ const QUERY = "widget calibration procedure";
 /** The bucket key `normalizeQueryTerms` derives for {@link QUERY}. */
 const QUERY_BUCKET = normalizeQueryTerms(QUERY).join(" ");
 
-/** Scores producing each verdict level under the default thresholds. */
-const WEAK_SCORES = [0.4];
-const SUFFICIENT_SCORES = [0.9];
-const INSUFFICIENT_SCORES: ReadonlyArray<number> = [];
+/**
+ * Recall attempts producing each verdict level under the default
+ * thresholds. The level follows `matchQuality`; the scores only carry the
+ * usable-result count that `minResults` gates on.
+ */
+const WEAK_RECALL = Object.freeze({ matchQuality: 0.4, scores: [0.9] });
+const SUFFICIENT_RECALL = Object.freeze({ matchQuality: 0.9, scores: [0.9] });
+const INSUFFICIENT_RECALL = Object.freeze({
+  matchQuality: 0,
+  scores: [] as ReadonlyArray<number>,
+});
 
-function stampUnmet(query: string, times: number, scores: ReadonlyArray<number>): void {
-  const verdict = assessRecallAdequacy(scores);
+function stampUnmet(
+  query: string,
+  times: number,
+  attempt: { readonly matchQuality: number; readonly scores: ReadonlyArray<number> },
+): void {
+  const verdict = assessRecallAdequacy(attempt);
   for (let i = 0; i < times; i++) {
     recordRecallAdequacyDemand(vault, {
       query,
@@ -75,13 +86,26 @@ function seedStructuralGap(topic: string, times: number): void {
   }
 }
 
-function retrieverWithScore(score: number): RecallRetriever {
+/**
+ * A retrieval that covers `matchQuality` of the topic. The candidate's own
+ * score is fixed and deliberately high: the auto-close floor reads
+ * coverage, so a score can neither open nor close a gap task.
+ */
+function retrieverWithCoverage(matchQuality: number): RecallRetriever {
   return async () =>
     ({
       candidates: [
-        { path: "Brain/x.md", title: "X", score, searchType: "hybrid", startLine: 1, endLine: 2 },
+        {
+          path: "Brain/x.md",
+          title: "X",
+          score: 0.92,
+          searchType: "hybrid",
+          startLine: 1,
+          endLine: 2,
+        },
       ],
       total: 1,
+      idfWeightedCoverage: matchQuality,
     }) satisfies RecallResultSet;
 }
 
@@ -89,7 +113,7 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
   test("a weak verdict stamps the record under the normalizeQueryTerms bucket key", () => {
     const record = recordRecallAdequacyDemand(vault, {
       query: QUERY,
-      verdict: assessRecallAdequacy(WEAK_SCORES),
+      verdict: assessRecallAdequacy(WEAK_RECALL),
     });
     expect(record).not.toBeNull();
     expect(record!.adequacy).toBe("weak");
@@ -102,7 +126,7 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
   });
 
   test("an insufficient verdict stamps the record and carries its result count", () => {
-    const verdict = assessRecallAdequacy(INSUFFICIENT_SCORES);
+    const verdict = assessRecallAdequacy(INSUFFICIENT_RECALL);
     const record = recordRecallAdequacyDemand(vault, { query: QUERY, verdict });
     expect(record!.adequacy).toBe("insufficient");
     expect(record!.results).toBe(verdict.resultCount);
@@ -111,7 +135,7 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
   test("a sufficient verdict stamps nothing — only unmet recall is demand", () => {
     const record = recordRecallAdequacyDemand(vault, {
       query: QUERY,
-      verdict: assessRecallAdequacy(SUFFICIENT_SCORES),
+      verdict: assessRecallAdequacy(SUFFICIENT_RECALL),
     });
     expect(record).toBeNull();
     expect(readQueryDemand(vault)).toHaveLength(0);
@@ -120,7 +144,7 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
   test("a query with no significant terms records nothing rather than an empty bucket", () => {
     const record = recordRecallAdequacyDemand(vault, {
       query: "a b c",
-      verdict: assessRecallAdequacy(WEAK_SCORES),
+      verdict: assessRecallAdequacy(WEAK_RECALL),
     });
     expect(record).toBeNull();
     expect(readQueryDemand(vault)).toHaveLength(0);
@@ -129,7 +153,7 @@ describe("recall-adequacy stamps the demand record (signals-that-survive, unit 6
 
 describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)", () => {
   test("a bucket at or above the threshold surfaces as an adequacy-sourced gap", () => {
-    stampUnmet(QUERY, 3, WEAK_SCORES);
+    stampUnmet(QUERY, 3, WEAK_RECALL);
     const gaps = detectRecurringGaps(vault, { threshold: 3 });
     expect(gaps).toHaveLength(1);
     expect(gaps[0]?.topic).toBe(QUERY_BUCKET);
@@ -138,7 +162,7 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   });
 
   test("a bucket below the threshold mints nothing", () => {
-    stampUnmet(QUERY, 2, WEAK_SCORES);
+    stampUnmet(QUERY, 2, WEAK_RECALL);
     expect(detectRecurringGaps(vault, { threshold: 3 })).toHaveLength(0);
     const result = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     expect(result.created).toHaveLength(0);
@@ -146,7 +170,7 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   });
 
   test("a recurring bucket promotes to exactly one gap task carrying its source", () => {
-    stampUnmet(QUERY, 3, WEAK_SCORES);
+    stampUnmet(QUERY, 3, WEAK_RECALL);
     const result = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     const key = gapTaskKey(QUERY_BUCKET, GAP_SOURCE_ADEQUACY);
     expect(result.created).toEqual([key]);
@@ -161,7 +185,7 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   });
 
   test("an existing open gap task for the same key is not duplicated", () => {
-    stampUnmet(QUERY, 3, WEAK_SCORES);
+    stampUnmet(QUERY, 3, WEAK_RECALL);
     const first = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     const second = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     expect(first.created).toHaveLength(1);
@@ -173,7 +197,7 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   test("promotion is capped per run at the named constant", () => {
     const buckets = GAP_LOOP_MAX_PROMOTIONS_PER_RUN + 1;
     for (let i = 0; i < buckets; i++) {
-      stampUnmet(`coverage gap topic${i}`, 3 + (buckets - i), WEAK_SCORES);
+      stampUnmet(`coverage gap topic${i}`, 3 + (buckets - i), WEAK_RECALL);
     }
     expect(detectRecurringGaps(vault, { threshold: 3 })).toHaveLength(buckets);
     const first = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
@@ -186,9 +210,9 @@ describe("verdict recurrence feeds the gap loop (signals-that-survive, unit 6)",
   });
 
   test("an adequacy gap task auto-closes once its topic recalls with sufficient confidence", async () => {
-    stampUnmet(QUERY, 3, WEAK_SCORES);
+    stampUnmet(QUERY, 3, WEAK_RECALL);
     promoteGapsToTasks(vault, { threshold: 3, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithScore(0.92), {
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92), {
       confidenceFloor: 0.5,
       now: NOW,
     });
@@ -203,7 +227,7 @@ describe("the two occurrence sources stay distinguishable (signals-that-survive,
     // Same literal topic string from BOTH sources: a coarse telemetry code
     // bucket and a fine term bucket that happen to collide textually.
     seedStructuralGap(QUERY_BUCKET, 3);
-    stampUnmet(QUERY, 4, WEAK_SCORES);
+    stampUnmet(QUERY, 4, WEAK_RECALL);
 
     const gaps = detectRecurringGaps(vault, { threshold: 3 });
     expect(gaps).toHaveLength(2);
@@ -217,7 +241,7 @@ describe("the two occurrence sources stay distinguishable (signals-that-survive,
 
   test("a textually identical topic from each source mints two separate tasks", () => {
     seedStructuralGap(QUERY_BUCKET, 3);
-    stampUnmet(QUERY, 4, WEAK_SCORES);
+    stampUnmet(QUERY, 4, WEAK_RECALL);
     const result = promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     expect(result.created).toHaveLength(2);
     // The keys are namespaced by source, so the two rows can never collapse
@@ -235,7 +259,7 @@ describe("the two occurrence sources stay distinguishable (signals-that-survive,
 
   test("the agenda labels each row by its source", () => {
     seedStructuralGap("alpha topic", 3);
-    stampUnmet(QUERY, 4, WEAK_SCORES);
+    stampUnmet(QUERY, 4, WEAK_RECALL);
     promoteGapsToTasks(vault, { threshold: 3, now: NOW });
     const agenda = renderGapAgenda(vault, NOW);
     // The structural row keeps its existing wording verbatim.

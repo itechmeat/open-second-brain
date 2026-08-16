@@ -85,6 +85,23 @@ export function pageOwner(meta: FrontmatterMap): string | null {
 }
 
 /**
+ * The owner token a writer stamps on a page it CREATES on behalf of
+ * `agent`, or `null` when that identity cannot be reduced to one token.
+ *
+ * `null` is a refusal for the caller to raise. It is deliberately NOT
+ * {@link OWNER_UNRESOLVED}: that token is the fail-closed reading of a
+ * claim already on disk, and writing it would hide the new page from
+ * every scope INCLUDING its author's - the author could not read back
+ * what they had just written, and nothing would ever say why. An
+ * identity a writer cannot spell is an error to report, not a page to
+ * bury.
+ */
+export function ownerStampFor(agent: string): string | null {
+  const token = ownerToken(agent);
+  return token === null || token === OWNER_UNRESOLVED ? null : token;
+}
+
+/**
  * Normalise a caller's requested agent scope. `undefined` / blank becomes
  * `null`, which means "no scope requested" - no ownership filtering.
  */

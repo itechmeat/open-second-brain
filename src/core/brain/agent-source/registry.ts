@@ -1,3 +1,4 @@
+import { isConfiguredAgentName } from "../../config.ts";
 import { vaultAgentSourceProvider } from "./vault-provider.ts";
 import type {
   AgentSourceContribution,
@@ -46,6 +47,7 @@ export function summarizeAgentSources(
       kinds: Set<AgentSourceContributionKind>;
       topics: Set<string>;
       contributionCount: number;
+      lastActivity: string;
     }
   >();
 
@@ -56,11 +58,18 @@ export function summarizeAgentSources(
         kinds: new Set<AgentSourceContributionKind>(),
         topics: new Set<string>(),
         contributionCount: 0,
+        lastActivity: contribution.timestamp,
       };
       current.providerIds.add(contribution.provider_id);
       current.kinds.add(contribution.kind);
       if (contribution.topic !== undefined) current.topics.add(contribution.topic);
       current.contributionCount++;
+      // Folded rather than read off the last element: the caller may hand
+      // in a filtered set, and an owner-scoped filter can remove exactly
+      // the newest contribution.
+      if (contribution.timestamp.localeCompare(current.lastActivity) > 0) {
+        current.lastActivity = contribution.timestamp;
+      }
       byAgent.set(agent, current);
     }
   }
@@ -72,6 +81,8 @@ export function summarizeAgentSources(
         id,
         provider_ids: Object.freeze([...summary.providerIds].toSorted()),
         contribution_count: summary.contributionCount,
+        last_activity: summary.lastActivity,
+        identity_configured: isConfiguredAgentName(id),
         kinds: Object.freeze([...summary.kinds].toSorted()),
         topics: Object.freeze([...summary.topics].toSorted()),
       }),

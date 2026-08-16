@@ -95,6 +95,9 @@ function outcomeWith(content: string): SearchOutcome {
     results: Object.freeze([resultWith(content)]),
     warnings: Object.freeze([]),
     total: 1,
+    // Neutral match quality: the window assertions never read it, and 1 is
+    // what the coverage report yields when there is no term mass to weigh.
+    idfWeightedCoverage: 1,
   });
 }
 

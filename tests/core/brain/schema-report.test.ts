@@ -131,6 +131,42 @@ describe("buildSchemaReport", () => {
     });
   });
 
+  /**
+   * a-label-is-not-a-boundary, U12: one malformed artifact used to cost
+   * the caller the whole report - the parse escaped `buildSchemaReport`
+   * and every finding in the vault went with it.
+   */
+  test("a malformed artifact becomes a finding and the rest of the report survives", () => {
+    writeBrainConfig(
+      ["schema_version: 1", "schema:", "  preference_types: [research, decision]"].join("\n"),
+    );
+    writePreference(vault, basePref("research-pref", { schema_type: "research" }));
+    // Missing `retired_at`: `parseRetired` raises with the absolute path.
+    writeFileSync(
+      join(vault, "Brain", "retired", "ret-broken.md"),
+      ["---", "kind: brain-retired", "_status: retired", "id: ret-broken", "---", "", "x"].join(
+        "\n",
+      ),
+      "utf8",
+    );
+
+    const report = buildSchemaReport(vault);
+
+    expect(report.findings).toContainEqual({
+      kind: "unreadable-artifact",
+      category: "preference_types",
+      path: "Brain/retired/ret-broken.md",
+      detail: "preference missing field: retired_at",
+    });
+    // The readable half of the vault is still measured and still linted.
+    expect(report.usage.preference_types).toEqual([{ token: "research", count: 1 }]);
+    expect(report.findings).toContainEqual({
+      kind: "unused-declaration",
+      category: "preference_types",
+      token: "decision",
+    });
+  });
+
   test("default vault has built-in vocabulary and no findings", () => {
     writeBrainConfig("schema_version: 1\n");
 

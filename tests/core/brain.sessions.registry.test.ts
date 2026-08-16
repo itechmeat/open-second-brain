@@ -43,15 +43,14 @@ describe("registry — single source of adapters", () => {
     expect(isSessionAdapterId("copilot")).toBe(false);
   });
 
-  test("exposes the default agent label per adapter", () => {
-    const labels = Object.fromEntries(SESSION_ADAPTERS.map((a) => [a.id, a.defaultAgent]));
-    expect(labels).toEqual({
-      claude: "claude",
-      codex: "codex",
-      hermes: "hermes",
-      opencode: "opencode",
-      grok: "grok",
-    });
+  test("no adapter carries an identity label of its own", () => {
+    // Retracted in v1.49.0: `defaultAgent` duplicated `id` in all five
+    // adapters and outranked the operator's `--agent`, so three runtimes
+    // attributed imported memory to `claude` / `codex` / `hermes` - the
+    // very strings `normalizeAgentArgument` rejects as placeholders.
+    for (const adapter of SESSION_ADAPTERS) {
+      expect(Object.hasOwn(adapter, "defaultAgent")).toBe(false);
+    }
   });
 
   test("getAdapter returns each by id", () => {

@@ -1,5 +1,9 @@
 import { readFileSync } from "node:fs";
-import { mirrorSignal, resolveSharedNamespace } from "../../../core/brain/shared-namespace.ts";
+import {
+  mirrorReportFields,
+  mirrorSignal,
+  resolveSharedNamespace,
+} from "../../../core/brain/shared-namespace.ts";
 import { resolveEffectiveScope, writeSignal } from "../../../core/brain/signal.ts";
 import {
   adviseIncomingFeedback,
@@ -159,7 +163,10 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
           confidence_value: 0,
           ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
         },
-        { overwrite: false },
+        // Ownership is resolved by the writer from the CLI's own config,
+        // never echoed from `--agent`: the flag is caller-supplied, and a
+        // caller must not be able to name whose memory this becomes.
+        { overwrite: false, configPath: config },
       );
     } catch (exc) {
       return fail(`failed to force-confirm preference: ${(exc as Error).message ?? exc}`);
@@ -184,7 +191,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     okJson({
       signal_path: sigResult.path,
       signal_id: sigResult.id,
-      ...(mirror !== undefined ? { mirror } : {}),
+      ...mirrorReportFields(mirror),
       ...(advisory !== null ? { advisory } : {}),
       // The machine stream carries the exit as a field, which is where a
       // forward pointer belongs on a payload the caller parses. The key
@@ -197,7 +204,10 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
   ok(`signal: ${sigResult.path}`);
   ok(`id: ${sigResult.id}`);
   if (mirror !== undefined) {
-    ok(`mirror: ${mirror}`);
+    ok(`mirror: ${mirror.outcome}`);
+    // A fail-soft outcome without its reason is a bit nobody can act on,
+    // and the mirror is the one path an operator cannot inspect otherwise.
+    if (mirror.reason !== undefined) ok(`mirror-reason: ${mirror.reason}`);
   }
   if (advisory !== null) {
     const where = advisory.scope ?? "(unscoped)";

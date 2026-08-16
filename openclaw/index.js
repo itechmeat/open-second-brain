@@ -1556,10 +1556,84 @@ var require_proper_lockfile = __commonJS((exports, module) => {
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 
 // src/core/config.ts
-import { mkdirSync, readFileSync, statSync as statSync2 } from "node:fs";
 var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
+import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
+import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, resolve } from "node:path";
+
+// src/core/fs-atomic.ts
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeSync
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
+function atomicWriteFileSync(target, contents, opts = {}) {
+  if (opts.skipIfUnchanged && isUnchanged(target, contents))
+    return false;
+  withTempFile(target, contents, (tmpPath) => {
+    renameSync(tmpPath, target);
+  });
+  return true;
+}
+function isUnchanged(target, contents) {
+  if (!existsSync(target))
+    return false;
+  try {
+    return readFileSync(target, "utf8") === contents;
+  } catch {
+    return false;
+  }
+}
+function withTempFile(target, contents, commit, mode = 420) {
+  const dir = dirname(target);
+  mkdirSync(dir, { recursive: true });
+  const tmpName = `.${basename(target)}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
+  const tmpPath = join(dir, tmpName);
+  let fd = null;
+  let committed = false;
+  try {
+    fd = openSync(tmpPath, "wx", mode);
+    const buf = Buffer.from(contents, "utf8");
+    let written = 0;
+    while (written < buf.byteLength) {
+      written += writeSync(fd, buf, written, buf.byteLength - written);
+    }
+    fsyncSync(fd);
+    closeSync(fd);
+    fd = null;
+    commit(tmpPath);
+    committed = true;
+    try {
+      const dfd = openSync(dir, "r");
+      try {
+        fsyncSync(dfd);
+      } finally {
+        closeSync(dfd);
+      }
+    } catch {}
+  } catch (err) {
+    if (fd !== null) {
+      try {
+        closeSync(fd);
+      } catch {}
+    }
+    if (!committed) {
+      try {
+        unlinkSync(tmpPath);
+      } catch {}
+    }
+    throw err;
+  }
+}
 
 // src/core/brain/portability/profiles.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
@@ -1590,6 +1664,8 @@ var WIKI_LINK_FORMATS = Object.freeze([
 var SUFFIX_INDEX_MEMO = new WeakMap;
 
 // src/core/config.ts
+var CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
+`, "\r"];
 var UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze(["win32"]);
 
 class UnsupportedPlatformError extends Error {
@@ -1615,11 +1691,11 @@ function resolveDefaultConfigPath(source) {
     return expandTilde(override);
   const xdg = source.env["XDG_CONFIG_HOME"];
   if (xdg)
-    return join(expandTilde(xdg), "open-second-brain", "config.yaml");
+    return join2(expandTilde(xdg), "open-second-brain", "config.yaml");
   if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
     throw new UnsupportedPlatformError(source.platform);
   }
-  return join(source.home, ".config", "open-second-brain", "config.yaml");
+  return join2(source.home, ".config", "open-second-brain", "config.yaml");
 }
 function defaultConfigPath() {
   return resolveDefaultConfigPath({
@@ -1669,7 +1745,7 @@ function statConfigPath(resolved) {
 function readConfigText(resolved) {
   let bytes;
   try {
-    bytes = readFileSync(resolved);
+    bytes = readFileSync2(resolved);
   } catch (err) {
     throw new ConfigReadError(resolved, err.message ?? String(err));
   }
@@ -1679,6 +1755,25 @@ function readConfigText(resolved) {
     throw new ConfigReadError(resolved, `not valid UTF-8: ${err.message ?? String(err)}`);
   }
 }
+function setConfigValue(key, value, path) {
+  if (typeof value !== "string") {
+    throw new TypeError(`config value for ${JSON.stringify(key)} must be a string`);
+  }
+  for (const bad of CONFIG_VALUE_REJECTED_CHARS) {
+    if (value.includes(bad)) {
+      throw new Error(`config value for ${JSON.stringify(key)} contains a disallowed character ` + `(${JSON.stringify(bad)}); reject rather than silently corrupting on read-back`);
+    }
+  }
+  const resolved = path ?? defaultConfigPath();
+  const discovery = discoverConfig(resolved);
+  const data = { ...discovery.data, [key]: value };
+  const body = Object.entries(data).map(([k, v]) => `${k}: "${v}"`).join(`
+`) + `
+`;
+  atomicWriteFileSync(resolved, body);
+  return resolved;
+}
+var UNCONFIGURED_AGENT_NAME = "agent";
 function resolveAgentName(configPath) {
   const env = process.env["VAULT_AGENT_NAME"];
   if (env)
@@ -1687,7 +1782,59 @@ function resolveAgentName(configPath) {
   const value = data["agent_name"] ?? data["agentName"];
   if (value)
     return value;
-  return "agent";
+  return UNCONFIGURED_AGENT_NAME;
+}
+function resolveExposeHostPaths(configPath) {
+  return resolveConfigFlag("OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS", "expose_host_paths", configPath);
+}
+var INSTALLATION_SECRET_CONFIG_KEY = "installation_secret";
+var INSTALLATION_SECRET_ENV_KEY = "O2B_INSTALLATION_SECRET";
+var INSTALLATION_SECRET_RE = /^[0-9a-f]{32}$/;
+function isValidInstallationSecret(value) {
+  return INSTALLATION_SECRET_RE.test(value);
+}
+function resolveInstallationSecret(configPath) {
+  const env = process.env[INSTALLATION_SECRET_ENV_KEY];
+  if (env !== undefined && isValidInstallationSecret(env))
+    return env;
+  const resolved = configPath ?? defaultConfigPath();
+  const read = () => {
+    const value = discoverConfig(resolved).data[INSTALLATION_SECRET_CONFIG_KEY];
+    return value && isValidInstallationSecret(value) ? value : null;
+  };
+  const existing = read();
+  if (existing !== null)
+    return existing;
+  const dir = dirname2(resolved);
+  mkdirSync2(dir, { recursive: true });
+  let release;
+  try {
+    for (let attempt = 0;attempt < 10; attempt++) {
+      try {
+        release = import_proper_lockfile2.default.lockSync(dir, { stale: 1e4, realpath: false });
+        break;
+      } catch (err) {
+        if (err.code !== "ELOCKED")
+          break;
+        Bun.sleepSync(50);
+      }
+    }
+    const won = read();
+    if (won !== null)
+      return won;
+    const generated = randomBytes(16).toString("hex");
+    setConfigValue(INSTALLATION_SECRET_CONFIG_KEY, generated, resolved);
+    return generated;
+  } finally {
+    release?.();
+  }
+}
+var VAULT_STORE_REF_PREFIX = "vault://";
+var VAULT_STORE_REF_HEX_LEN = 32;
+function vaultStoreReference(vaultPath, configPath) {
+  const key = resolveInstallationSecret(configPath);
+  const digest = createHmac("sha256", key).update(resolve(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
+  return `${VAULT_STORE_REF_PREFIX}${digest}`;
 }
 function resolveConfigFlag(envKey, configKey, configPath) {
   const env = process.env[envKey]?.trim();
@@ -1703,7 +1850,7 @@ function expandTilde(p) {
   if (p === "~")
     return homedir();
   if (p.startsWith("~/"))
-    return join(homedir(), p.slice(2));
+    return join2(homedir(), p.slice(2));
   return p;
 }
 
@@ -1798,9 +1945,16 @@ var CONTENT_ADDRESS_RE = /^[0-9a-fA-F]+(?:-[0-9a-fA-F]+)*$/;
 function isContentAddress(run) {
   return CONTENT_ADDRESS_RE.test(run);
 }
+var SIGNAL_ID_RE = /^sig-\d{4}-\d{2}-\d{2}-[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function isSignalId(run) {
+  return SIGNAL_ID_RE.test(run);
+}
+function isPreservedIdentifier(run) {
+  return isContentAddress(run) || isSignalId(run);
+}
 var BASE64_SECRET_RE = new RegExp("(?<![A-Za-z0-9+/=])" + "(?=[A-Za-z0-9+/=]{32,64}(?![A-Za-z0-9+/=]))" + "(?=[A-Za-z0-9+/=]{0,63}[a-z])" + "(?=[A-Za-z0-9+/=]{0,63}[A-Z])" + "(?=[A-Za-z0-9+/=]{0,63}\\d)" + "(?=[A-Za-z0-9+/=]{0,63}[+/=])" + "[A-Za-z0-9+=][A-Za-z0-9+/=]{30,62}[A-Za-z0-9+=]", "g");
 function redactBareTokens(text) {
-  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(BASE64_SECRET_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, (run) => isContentAddress(run) ? run : PLACEHOLDER);
+  return text.replace(VENDOR_TOKEN_RE, PLACEHOLDER).replace(BASE64_SECRET_RE, PLACEHOLDER).replace(HIGH_ENTROPY_TOKEN_RE, (run) => isPreservedIdentifier(run) ? run : PLACEHOLDER);
 }
 function redactUrlCredentials(text) {
   return text.replace(BASIC_AUTH_URL_RE, (_m, scheme) => `${scheme}${PLACEHOLDER}@`);
@@ -1931,7 +2085,7 @@ function keyNameCarriesSecret(name) {
   if (identifierCarriesSecret(name))
     return true;
   for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
-    if (!isContentAddress(match[0]))
+    if (!isPreservedIdentifier(match[0]))
       return true;
   }
   return false;
@@ -2002,11 +2156,13 @@ function redactStructured(input, opts = {}) {
 // src/core/egress/registry.ts
 var EGRESS_REDACTION = Object.freeze({
   sharedRedactor: "shared_redactor",
-  noVaultContent: "no_vault_content"
+  noVaultContent: "no_vault_content",
+  unscannedNetworkPayload: "unscanned_network_payload"
 });
 var EGRESS_REDACTION_STATUSES = Object.freeze([
   EGRESS_REDACTION.sharedRedactor,
-  EGRESS_REDACTION.noVaultContent
+  EGRESS_REDACTION.noVaultContent,
+  EGRESS_REDACTION.unscannedNetworkPayload
 ]);
 var R = EGRESS_REDACTION;
 var EGRESS_SITES = Object.freeze({
@@ -2029,7 +2185,7 @@ var EGRESS_SITES = Object.freeze({
     verb: "o2b brain okf-export",
     module: "src/cli/brain/verbs/okf-export.ts",
     redaction: R.sharedRedactor,
-    reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise."
+    reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise. What it does NOT " + "do is filter by label: a page carrying `private: true` in its frontmatter exports in " + "full, because the `<private>` region marker is this product's only content-derived " + "privacy primitive and these composers are content composers, not visibility filters."
   },
   "brain-preference-export": {
     id: "brain-preference-export",
@@ -2051,6 +2207,48 @@ var EGRESS_SITES = Object.freeze({
     module: "src/cli/brain/verbs/continuity.ts",
     redaction: R.sharedRedactor,
     reason: "was declared as covered by its read model, which was wrong in both directions. " + "The upstream call redacts at WRITE time with the redactor's DEFAULT options, so " + "`redactTokens` and `redactUrlCredentials` were both off and a vendor key, a bare " + "high-entropy token and a `user:pass@host` URL all left through here verbatim - " + "the two flags the export boundary exists to turn on. Write-time coverage also " + "says nothing about a record already on disk or appended by another writer, since " + "the read model never re-scans. The verb now scans what it READ, which answers " + "both, and gains the truncation refusal the other five already had."
+  },
+  "brain-explorer-export": {
+    id: "brain-explorer-export",
+    verb: "o2b brain explorer --export",
+    module: "src/cli/brain/verbs/explorer.ts",
+    redaction: R.sharedRedactor,
+    reason: "a self-contained HTML file with the whole rule graph embedded as JSON: every " + "preference and retired principle verbatim, plus each one's topic, scope and " + "provenance counts. It is the export most likely to be handed to a person rather " + "than a program - it opens in a browser - and it was the one export that never " + "scanned anything. Redaction runs over the graph TREE before the template " + "substitution, so a principle whose text contains a quote cannot disturb the " + "document. The label rule holds here too: a preference is not withheld for carrying " + "a `private` tag, because the `<private>` region marker is the only content-derived " + "privacy primitive in this product."
+  },
+  "search-embedding-openai-compat": {
+    id: "search-embedding-openai-compat",
+    verb: "o2b search index (embedding provider)",
+    module: "src/core/search/embeddings/openai-compat.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason: "the largest and most continuous egress in this product: every indexed chunk BODY " + "is POSTed verbatim to whichever endpoint the operator configured, for every " + "reindex, and nothing scans it. It is declared unscanned rather than wired to the " + "guard because redaction here would corrupt the thing being built - a vector " + "computed over a placeholder is a vector for the placeholder, so the chunk would " + "come back unfindable while the index reported success, which is a silent failure " + "where this one is at least a stated exposure. The controls that do exist are " + "the operator's: semantic search is off until an endpoint and a key are configured, " + "and the endpoint is whichever host they name, including a local one."
+  },
+  "search-embedding-zeroentropy": {
+    id: "search-embedding-zeroentropy",
+    verb: "o2b search index (zeroentropy provider)",
+    module: "src/core/search/embeddings/zeroentropy.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason: "the same chunk bodies as the OpenAI-compatible provider, to a second vendor's " + "embed endpoint under the same operator-configured base URL. Listed separately " + "rather than folded into one 'embedding' entry because the census keys on the " + "module, and a provider that stops being reachable from the resolver would " + "otherwise leave a declaration covering a path nobody can find."
+  },
+  "search-rerank-cross-encoder": {
+    id: "search-rerank-cross-encoder",
+    verb: "o2b search query --rerank",
+    module: "src/core/search/rerank/cross-encoder.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason: "sends the QUERY plus the candidate documents to a rerank endpoint, so it carries " + "vault text the embedding path may never have seen - the top-of-pool bodies of the " + "current result set, chosen by relevance to what the operator just asked. Unscanned " + "for the same reason as the embedding path: a reranker scoring placeholders returns " + "an order computed over text nobody wrote."
+  },
+  "brain-telegram-capture": {
+    id: "brain-telegram-capture",
+    verb: "o2b brain telegram-run",
+    module: "src/core/brain/capture/telegram-capture.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason: "POSTs reply text to the Telegram Bot API, and the `/catchup` reply is composed " + "from vault content. The transport is built only by the CLI runner verb, so an " + "install that never starts the runner never reaches this path at all - which is " + "why it is a declared narrow exposure rather than a guard call: the bytes are a " + "chat message the operator asked to be sent, and refusing to send one because it " + "quotes a credential-shaped string would break the surface without protecting a " + "destination the operator did not already choose."
+  },
+  "research-external-fetch": {
+    id: "research-external-fetch",
+    verb: "o2b brain research",
+    module: "src/core/brain/research/external-fetch.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason: "the one transport every research provider's POST goes through, which is why it is " + "declared here rather than at the provider modules that name the endpoints and " + "never call the network themselves. What leaves is an agent-composed search query, " + "not a page body, and the path is key-gated: with no key configured every call is " + "a typed `disabled` error, so an install that never sets one has no egress here."
   },
   "install-adapter-out": {
     id: "install-adapter-out",
@@ -2098,19 +2296,19 @@ function probeVaultDirectory(vault) {
 
 // src/core/doctor.ts
 import {
-  existsSync as existsSync2,
-  mkdirSync as mkdirSync2,
-  openSync,
-  readFileSync as readFileSync2,
+  existsSync as existsSync3,
+  mkdirSync as mkdirSync3,
+  openSync as openSync2,
+  readFileSync as readFileSync3,
   rmSync,
-  writeSync,
-  closeSync
+  writeSync as writeSync2,
+  closeSync as closeSync2
 } from "node:fs";
-import { dirname as dirname3, join as join3 } from "node:path";
+import { dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/partner/codegraph.ts
-import { existsSync, readdirSync, realpathSync } from "node:fs";
-import { dirname as dirname2, join as join2, resolve as resolve2 } from "node:path";
+import { existsSync as existsSync2, readdirSync, realpathSync } from "node:fs";
+import { dirname as dirname3, join as join3, resolve as resolve2 } from "node:path";
 
 // src/core/partner/codegraph-health.ts
 var GRAPH_HEALTH_CODES = Object.freeze({
@@ -2193,11 +2391,11 @@ function codegraphInitCommand(projectPath) {
 }
 function isCodeProject(dir) {
   try {
-    if (!existsSync(dir))
+    if (!existsSync2(dir))
       return false;
-    if (!isDir(join2(dir, ".git")))
+    if (!isDir(join3(dir, ".git")))
       return false;
-    return CODE_MANIFESTS.some((m) => existsSync(join2(dir, m)));
+    return CODE_MANIFESTS.some((m) => existsSync2(join3(dir, m)));
   } catch {
     return false;
   }
@@ -2221,7 +2419,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname2(resolve2(opts.vault));
+  const vaultParent = dirname3(resolve2(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -2233,7 +2431,7 @@ function findCodeProjects(opts) {
     for (const name of entries) {
       if (scanned >= limit)
         break;
-      consider(join2(vaultParent, name));
+      consider(join3(vaultParent, name));
     }
   }
   for (const extra of opts.scanExtraPaths ?? []) {
@@ -2375,7 +2573,7 @@ function codegraphDisabledResult() {
   };
 }
 function evaluateProjectStatus(project, deps) {
-  const indexDir = join2(project, ".codegraph");
+  const indexDir = join3(project, ".codegraph");
   let indexed;
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
@@ -2454,7 +2652,7 @@ function resolveRealpath(value) {
 // src/core/doctor.ts
 var MANIFEST_FIX = "o2b update";
 function checkVaultWriteable(vault) {
-  if (!existsSync2(vault)) {
+  if (!existsSync3(vault)) {
     return {
       name: "vault_writeable",
       ok: false,
@@ -2462,10 +2660,10 @@ function checkVaultWriteable(vault) {
       fix: `mkdir -p "${vault}"`
     };
   }
-  const probe = join3(vault, ".open-second-brain-doctor-test");
+  const probe = join4(vault, ".open-second-brain-doctor-test");
   try {
-    const fd = openSync(probe, "w");
-    closeSync(fd);
+    const fd = openSync2(probe, "w");
+    closeSync2(fd);
     rmSync(probe);
   } catch (exc) {
     return {
@@ -2480,12 +2678,12 @@ function checkVaultWriteable(vault) {
 function checkConfigWriteable(config) {
   let createdForCheck = false;
   try {
-    mkdirSync2(dirname3(config), { recursive: true });
-    if (!existsSync2(config))
+    mkdirSync3(dirname4(config), { recursive: true });
+    if (!existsSync3(config))
       createdForCheck = true;
-    const fd = openSync(config, "a");
-    writeSync(fd, "");
-    closeSync(fd);
+    const fd = openSync2(config, "a");
+    writeSync2(fd, "");
+    closeSync2(fd);
     if (createdForCheck)
       rmSync(config);
   } catch (exc) {
@@ -2493,7 +2691,7 @@ function checkConfigWriteable(config) {
       name: "config_writeable",
       ok: false,
       message: `cannot write config ${config}: ${exc.message ?? exc}`,
-      fix: `mkdir -p "${dirname3(config)}" && chmod u+rwx "${dirname3(config)}"`
+      fix: `mkdir -p "${dirname4(config)}" && chmod u+rwx "${dirname4(config)}"`
     };
   }
   return { name: "config_writeable", ok: true, message: `config writable: ${config}` };
@@ -2523,7 +2721,7 @@ function loadJsonManifest(path, name) {
   }
   let data;
   try {
-    data = JSON.parse(readFileSync2(path, "utf8"));
+    data = JSON.parse(readFileSync3(path, "utf8"));
   } catch (exc) {
     return {
       result: {
@@ -2649,7 +2847,7 @@ function checkHermesManifest(path) {
   }
   let text;
   try {
-    text = readFileSync2(path, "utf8");
+    text = readFileSync3(path, "utf8");
   } catch (exc) {
     return {
       name: "hermes_manifest",
@@ -2698,7 +2896,7 @@ function checkOpenclawManifest(path) {
 }
 function checkOpenclawInstallability(repoRoot) {
   const results = [];
-  const pkgPath = join3(repoRoot, "package.json");
+  const pkgPath = join4(repoRoot, "package.json");
   const { result, data } = loadJsonManifest(pkgPath, "openclaw_package_json");
   results.push(result);
   if (!data)
@@ -2729,7 +2927,7 @@ function checkOpenclawInstallability(repoRoot) {
       });
       continue;
     }
-    const entryPath = join3(repoRoot, entry);
+    const entryPath = join4(repoRoot, entry);
     const problem = manifestFileProblem(entryPath);
     if (problem === null) {
       results.push({
@@ -2765,10 +2963,10 @@ function doctor(opts) {
     results.push(checkConfigWriteable(opts.config));
   if (opts.repoRoot) {
     const root = opts.repoRoot;
-    results.push(checkClaudeManifest(join3(root, ".claude-plugin", "plugin.json")));
-    results.push(checkCodexManifest(join3(root, ".codex-plugin", "plugin.json")));
-    results.push(checkHermesManifest(join3(root, "plugins", "hermes", "plugin.yaml")));
-    results.push(checkOpenclawManifest(join3(root, "openclaw.plugin.json")));
+    results.push(checkClaudeManifest(join4(root, ".claude-plugin", "plugin.json")));
+    results.push(checkCodexManifest(join4(root, ".codex-plugin", "plugin.json")));
+    results.push(checkHermesManifest(join4(root, "plugins", "hermes", "plugin.yaml")));
+    results.push(checkOpenclawManifest(join4(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
   const cg = checkCodegraph({
@@ -2783,11 +2981,18 @@ function doctor(opts) {
 }
 
 // src/core/identity-reminder.ts
-import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname4, resolve as resolve3 } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname5, resolve as resolve3 } from "node:path";
 import { fileURLToPath } from "node:url";
-var TEMPLATE_PATH = resolve3(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
-var KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"];
+var TEMPLATE_PATH = resolve3(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var RUNTIME_TARGET = Object.freeze({
+  hermes: "hermes",
+  openclaw: "openclaw"
+});
+var KNOWN_RUNTIME_TARGETS = Object.freeze([
+  RUNTIME_TARGET.hermes,
+  RUNTIME_TARGET.openclaw
+]);
 function isRuntimeTarget(value) {
   return typeof value === "string" && KNOWN_RUNTIME_TARGETS.includes(value);
 }
@@ -2796,7 +3001,7 @@ function loadReminderTemplate() {
   if (commonTemplateCache !== undefined)
     return commonTemplateCache;
   try {
-    commonTemplateCache = readFileSync3(TEMPLATE_PATH, "utf8").trimEnd();
+    commonTemplateCache = readFileSync4(TEMPLATE_PATH, "utf8").trimEnd();
     return commonTemplateCache;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -2805,7 +3010,7 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve3(dirname4(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var TEMPLATES_DIR = resolve3(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates");
 var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve3(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
@@ -2814,7 +3019,7 @@ function tryReadTargetTemplate(target) {
     return cached;
   let body;
   try {
-    body = readFileSync3(PER_TARGET_PATHS[target], "utf8").trimEnd();
+    body = readFileSync4(PER_TARGET_PATHS[target], "utf8").trimEnd();
   } catch (err) {
     if (err.code !== "ENOENT")
       throw err;
@@ -2848,8 +3053,8 @@ function buildReminder(agent, target) {
 }
 
 // src/core/vault.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname6, join as join4, relative as relative2 } from "node:path";
+import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
+import { dirname as dirname7, join as join5, relative as relative2 } from "node:path";
 
 // src/core/integrity/degradation.ts
 var DEGRADATION_CODE = Object.freeze({
@@ -2895,7 +3100,7 @@ function emitDegradationNotice(sink, input) {
 }
 
 // src/core/path-safety.ts
-import { dirname as dirname5, posix, relative, resolve as resolve4, sep } from "node:path";
+import { dirname as dirname6, posix, relative, resolve as resolve4, sep } from "node:path";
 function vaultRelative(target, vault) {
   const rel = relative(resolve4(vault), resolve4(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
@@ -2939,7 +3144,7 @@ function parseFrontmatterWithNotices(path, opts = {}) {
   const site = opts.site ?? FRONTMATTER_SITE;
   let text;
   try {
-    text = readFileSync4(path, "utf8");
+    text = readFileSync5(path, "utf8");
   } catch (err) {
     const notices = [];
     emitDegradationNotice(notices, {
@@ -3049,7 +3254,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
     return;
   }
   for (const entry of entries) {
-    const full = join4(dir, entry.name);
+    const full = join5(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
@@ -3210,6 +3415,22 @@ function deriveRuntimeAgentName(runtimeId, operatorName) {
   return `${runtimeId}-${base}`;
 }
 
+// src/mcp/vault-path-field.ts
+function unresolvedField(err) {
+  return { error: err.message };
+}
+var VAULT_PATH_OUTPUT_SCHEMA = Object.freeze({});
+function vaultPathField(ctx) {
+  const configPath = ctx.configPath ?? undefined;
+  try {
+    return resolveExposeHostPaths(configPath) ? ctx.vault : vaultStoreReference(ctx.vault, configPath);
+  } catch (err) {
+    if (err instanceof ConfigReadError)
+      return unresolvedField(err);
+    throw err;
+  }
+}
+
 // src/openclaw/index.ts
 function resolveVaultPath(api) {
   const cfg = api.pluginConfig ?? {};
@@ -3242,7 +3463,7 @@ var openclaw_default = definePluginEntry({
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
           config: redactConfigMapping(discovery.data),
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           vault_exists: presence.unexaminable ?? presence.present
         };
         return {
@@ -3288,7 +3509,7 @@ var openclaw_default = definePluginEntry({
           metadata: p.metadata
         }));
         const result = {
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           total_pages: pages.length,
           returned: matched.length,
           limit,
@@ -3318,7 +3539,7 @@ var openclaw_default = definePluginEntry({
         const repoRoot = params["repo"] ?? null;
         const results = doctor({ vault, repoRoot });
         const result = {
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           ok: results.every((r) => r.ok),
           checks: results.map((r) => ({
             name: r.name,

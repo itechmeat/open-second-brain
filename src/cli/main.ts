@@ -70,6 +70,7 @@ import { SERVER_VERSION } from "../mcp/protocol.ts";
 import { buildToolTable } from "../mcp/tools.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "../mcp/capabilities.ts";
 import { resolveToolSurface, toolSurfaceProfileNames } from "../mcp/profiles.ts";
+import { TOOL_SCOPE, TOOL_SCOPES, isToolScope, type ToolScope } from "../mcp/tool-contract.ts";
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
@@ -618,19 +619,14 @@ async function cmdMcp(argv: string[]): Promise<number> {
   // rejected to avoid silent surprises.
   const writerOnly = Boolean(flags["writer-only"]);
   const explicitScope =
-    (flags["scope"] as string | undefined) ?? (writerOnly ? "writer" : undefined);
-  if (
-    explicitScope !== undefined &&
-    explicitScope !== "full" &&
-    explicitScope !== "writer" &&
-    explicitScope !== "catalog"
-  ) {
+    (flags["scope"] as string | undefined) ?? (writerOnly ? TOOL_SCOPE.writer : undefined);
+  if (explicitScope !== undefined && !isToolScope(explicitScope)) {
     process.stderr.write(
-      `o2b mcp: invalid --scope value: ${explicitScope}; expected one of: full, writer, catalog\n`,
+      `o2b mcp: invalid --scope value: ${explicitScope}; expected one of: ${TOOL_SCOPES.join(", ")}\n`,
     );
     return 2;
   }
-  if (writerOnly && explicitScope !== "writer") {
+  if (writerOnly && explicitScope !== TOOL_SCOPE.writer) {
     process.stderr.write(`o2b mcp: --writer-only conflicts with --scope ${explicitScope}\n`);
     return 2;
   }
@@ -759,7 +755,7 @@ function parseCapabilityWindow(
 async function runMcpProbe(args: {
   vault: string | undefined;
   config: string;
-  scope: "full" | "writer" | "catalog";
+  scope: ToolScope;
   serverName: string;
   json: boolean;
   capabilityWindow: RuntimeCapabilityWindow | undefined;

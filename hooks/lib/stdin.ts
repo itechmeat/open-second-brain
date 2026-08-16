@@ -38,7 +38,20 @@ export interface HookPayloadBase {
   readonly stop_hook_active?: boolean;
   readonly tool_name?: string;
   readonly tool_input?: unknown;
+  /**
+   * What the host reported the tool call returned. Read through
+   * `isToolResponseError` by both the post-write reminder and lifecycle
+   * capture; the body itself is never persisted.
+   */
   readonly tool_response?: unknown;
+  /**
+   * `SubagentStop`: the host-assigned id of the delegated sub-agent that
+   * just finished. The event's sibling field `agent_transcript_path` is
+   * deliberately not declared here - it is a machine-local host path and
+   * nothing in this tree may persist one into a vault that syncs between
+   * devices.
+   */
+  readonly agent_id?: string;
 }
 
 /**

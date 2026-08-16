@@ -147,11 +147,23 @@ export {
   type RecallFeedbackEvent,
 } from "./feedback.ts";
 
+/**
+ * Shipped keyword-lane weight.
+ *
+ * Named because it is quoted outside this module: `rankResults` min-max
+ * normalises the keyword lane, so this number is exactly what the
+ * top-ranked row of any non-empty keyword recall scores, whatever it
+ * matched. Prose that states the pin - `src/core/bench/failure-modes.ts` -
+ * imports it rather than repeating the digits, and a test ties the two
+ * together so the stated number cannot drift from the shipped one again.
+ */
+export const DEFAULT_KEYWORD_WEIGHT = 0.6;
+
 const DEFAULTS = {
   chunkSize: 800,
   chunkOverlap: 100,
   chunkMinSize: 100,
-  keywordWeight: 0.6,
+  keywordWeight: DEFAULT_KEYWORD_WEIGHT,
   semanticWeight: 0.4,
   provider: "openai-compat" as const,
   timeoutMs: 10_000,

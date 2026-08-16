@@ -34,6 +34,7 @@
  */
 
 import { readLogDay } from "./log-jsonl.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
 import type { BrainLogEntry, BrainLogEntryPayload } from "./log.ts";
 import { loadNormalizedContinuityRecords } from "./continuity/read-model.ts";
 import type { NormalizedContinuityRecord } from "./continuity/read-model.ts";
@@ -84,6 +85,18 @@ export interface EventTraceSelector {
   readonly limit?: number;
   /** Keep continuity records flagged `private` (default: drop them). */
   readonly keepPrivate?: boolean;
+  /**
+   * Owner scope the trace is filtered against
+   * (a-label-is-not-a-boundary, U3). Absent / `null` filters nothing.
+   *
+   * An event's `body` is echoed VERBATIM, so no allowlist of payload keys
+   * can bound what it discloses - `path` alone is outside
+   * {@link ARTIFACT_BODY_KEYS} and carried a preference path in the sweep
+   * that found this. Every string in the body is therefore asked about,
+   * and one hidden reference drops the whole event: a log line about an
+   * artifact this caller may not see is a log line about that artifact.
+   */
+  readonly ownerScope?: string | null;
 }
 
 /** One continuity record attached to a log event, with the join provenance. */
@@ -197,6 +210,7 @@ export function resolveLogEventTraces(
   }
 
   const { entries } = readLogDay(vault, date);
+  const view = ownerScopeView(vault, selector.ownerScope ?? null);
   const records = loadNormalizedContinuityRecords(
     vault,
     selector.keepPrivate === true ? { keepPrivate: true } : {},
@@ -213,6 +227,7 @@ export function resolveLogEventTraces(
     if (wantStamp !== undefined && entry.timestamp !== wantStamp) continue;
     const correlation = extractEventCorrelation(entry);
     if (selector.sessionId !== undefined && correlation.sessionId !== selector.sessionId) continue;
+    if (!view.row(...correlation.artifacts, ...bodyStrings(entry.body))) continue;
     if (cap !== undefined && results.length >= cap) break;
     const traces = attachTracesToEvent(records, correlation);
     results.push({
@@ -233,6 +248,23 @@ export function resolveLogEventTraces(
 }
 
 // ----- internals ------------------------------------------------------------
+
+/**
+ * Every string an event body would print, scalars and array items alike.
+ *
+ * Deliberately not keyed on {@link ARTIFACT_BODY_KEYS}: that list bounds
+ * which keys the CORRELATION reads, while the body is echoed whole, so a
+ * key nobody thought to add to the list still reaches the caller.
+ */
+function bodyStrings(body: BrainLogEntryPayload): ReadonlyArray<string> {
+  const out: string[] = [];
+  for (const value of Object.values(body)) {
+    for (const item of Array.isArray(value) ? value : [value]) {
+      if (typeof item === "string" && item.length > 0) out.push(item);
+    }
+  }
+  return out;
+}
 
 function joinReasons(
   record: NormalizedContinuityRecord,

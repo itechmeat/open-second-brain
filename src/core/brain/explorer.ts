@@ -16,10 +16,15 @@
  * `(source, target, kind)`. The collector emits a frozen object so
  * the live HTTP handler and the static export branch cannot
  * accidentally mutate it.
+ *
+ * A file that cannot be parsed is REPORTED on the graph
+ * ({@link ExplorerParseFailure}), never dropped. This surface both
+ * displays the graph and exports it, and a graph silently missing a rule
+ * is indistinguishable from a vault that never had one.
  */
 
 import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { buildBacklinkIndex, type BacklinkIndex } from "./backlinks.ts";
@@ -64,12 +69,33 @@ export interface ExplorerEdge {
   readonly relation?: string;
 }
 
+/**
+ * A file under `Brain/preferences/` or `Brain/retired/` that could not be
+ * parsed into a node.
+ *
+ * The collector used to skip these silently, on the reasoning that the
+ * doctor reports parse-level corruption. That reasoning holds for a VIEW
+ * and fails for an EXPORT: a graph missing a rule reads exactly like a
+ * vault that never had it, and the file that carries the answer is the one
+ * the reader no longer has. So the collector carries the failure out and
+ * the caller decides - which for every path that writes bytes outward is
+ * to refuse and name the file.
+ */
+export interface ExplorerParseFailure {
+  /** Vault-relative path, so the message names a file the operator can open. */
+  readonly path: string;
+  /** The parser's own message. Never flattened to "failed". */
+  readonly reason: string;
+}
+
 export interface ExplorerGraph {
   readonly generated_at: string;
   readonly schema_version: typeof EXPLORER_SCHEMA_VERSION;
   readonly vault_basename: string;
   readonly nodes: ReadonlyArray<ExplorerNode>;
   readonly edges: ReadonlyArray<ExplorerEdge>;
+  /** Empty on a healthy vault; never absent, so a reader cannot miss it. */
+  readonly parse_failures: ReadonlyArray<ExplorerParseFailure>;
 }
 
 export interface CollectExplorerDataOptions {
@@ -90,6 +116,13 @@ export function collectExplorerData(
 
   const nodes: ExplorerNode[] = [];
   const knownIds = new Set<string>();
+  const parseFailures: ExplorerParseFailure[] = [];
+  const recordFailure = (path: string, err: unknown): void => {
+    parseFailures.push({
+      path: relative(vault, path),
+      reason: err instanceof Error ? err.message : String(err),
+    });
+  };
 
   if (existsSync(dirs.preferences)) {
     for (const entry of readdirSync(dirs.preferences, {
@@ -102,9 +135,8 @@ export function collectExplorerData(
         const pref = parsePreference(path);
         nodes.push(nodeFromPreference(pref, countFor(pref.id)));
         knownIds.add(pref.id);
-      } catch {
-        // Doctor reports parse-level corruption; the explorer skips
-        // silently so one bad file does not blank the whole graph.
+      } catch (err) {
+        recordFailure(path, err);
       }
     }
   }
@@ -118,11 +150,12 @@ export function collectExplorerData(
         const ret = parseRetired(path);
         nodes.push(nodeFromRetired(ret, countFor(ret.id)));
         knownIds.add(ret.id);
-      } catch {
-        // ditto
+      } catch (err) {
+        recordFailure(path, err);
       }
     }
   }
+  parseFailures.sort((a, b) => a.path.localeCompare(b.path));
 
   // Edges derived from the backlink index. The index maps
   //    `target → ref[]` where each ref carries `source` + `field`.
@@ -152,6 +185,7 @@ export function collectExplorerData(
     vault_basename: basename(vault),
     nodes: Object.freeze(nodes),
     edges: Object.freeze(edges),
+    parse_failures: Object.freeze(parseFailures),
   });
 }
 

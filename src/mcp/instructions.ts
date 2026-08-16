@@ -8,7 +8,7 @@
  * the deferred full server.
  */
 
-import type { ToolScope } from "./tool-contract.ts";
+import { TOOL_SCOPE, type ToolScope } from "./tool-contract.ts";
 
 export interface BuildInstructionsOpts {
   /**
@@ -23,11 +23,12 @@ export interface BuildInstructionsOpts {
    * refusal is rendered in its place instead, naming the file.
    */
   readonly agent: string | Error;
-  /** Vault path — reserved for future per-vault customisation. */
-  readonly vault?: string;
-  /** When "writer", return the trimmed writer-surface text. */
+  /** Which surface's body follows the identity line. Defaults to full. */
   readonly scope?: ToolScope;
 }
+
+/** Separator between the identity sentence and every paragraph after it. */
+const PARAGRAPH_BREAK = "\n\n";
 
 const WRITER_INSTRUCTIONS = `Open Second Brain — always-loaded MCP surface.
 
@@ -77,7 +78,37 @@ Do not invent substitute workflows for a capability you cannot see:
 hydrate the catalog first; the tool is almost certainly already here.`;
 
 /**
- * The opening identity sentence of the full-surface instructions.
+ * The body every scope other than writer and catalog carries.
+ *
+ * Deliberately terse (token-diet): per-tool detail lives in the tool
+ * descriptions and docs/mcp.md; this text carries only the contract that
+ * cannot be read off the schemas.
+ */
+const FULL_INSTRUCTIONS =
+  "Memory contract: call brain_feedback once per taste signal the " +
+  "user expresses; brain_apply_evidence right after producing a " +
+  "durable artifact a preference in `Brain/preferences/` scopes to " +
+  "(result: applied | violated | outdated); brain_note for narrative " +
+  "milestones that fit neither; brain_pinned_context for current-task " +
+  "facts that must survive context rotation. brain_context " +
+  "bootstraps a session when the host injects no active.md hook. " +
+  "Skip Brain calls for casual chat, exploration, and trivial edits - " +
+  "a misrecorded signal is worse than a missed one." +
+  PARAGRAPH_BREAK +
+  "Consolidated read views: brain_brief (view: morning | daily | " +
+  "weekly | monthly | operator | digest), brain_analytics (view: " +
+  "timeline | attention_flows | belief_evolution | concept_synthesis), " +
+  "schema_inspect (view: graph | lint | stats | orphans | " +
+  "explain_type | active_pack | packs). The per-view predecessor " +
+  "names still resolve via tools/call as deprecated aliases." +
+  PARAGRAPH_BREAK +
+  "Preview budget: a large result may arrive as a JSON envelope with " +
+  "`preview_truncated: true` and an `artifact_id`; fetch the full " +
+  "payload with brain_artifact_get only when the preview is not " +
+  "enough.";
+
+/**
+ * The opening identity sentence of every scope's instructions.
  *
  * Both branches are an instruction, not a report: the resolved branch says
  * which name to log under, and the unresolved branch says that there is
@@ -102,38 +133,30 @@ function identityLine(agent: string | Error): string {
   );
 }
 
-export function buildInstructions(opts: BuildInstructionsOpts | string): string {
-  // Legacy call-site compat: plain string → full-surface branch.
-  const agent = typeof opts === "string" ? opts : opts.agent;
-  const scope = typeof opts === "string" ? undefined : opts.scope;
+/**
+ * The body each scope carries after the identity line.
+ *
+ * A total map rather than a chain of `if`s: a scope added to
+ * {@link TOOL_SCOPE} without a body here fails to compile, which is the
+ * only reason the omission that this function used to carry - two of three
+ * scopes returning before `agent` was read - could not recur.
+ */
+const SCOPE_BODIES: Readonly<Record<ToolScope, string>> = Object.freeze({
+  [TOOL_SCOPE.full]: FULL_INSTRUCTIONS,
+  [TOOL_SCOPE.writer]: WRITER_INSTRUCTIONS,
+  [TOOL_SCOPE.catalog]: CATALOG_INSTRUCTIONS,
+});
 
-  if (scope === "writer") return WRITER_INSTRUCTIONS;
-  if (scope === "catalog") return CATALOG_INSTRUCTIONS;
-
-  // Deliberately terse (token-diet): per-tool detail lives in the tool
-  // descriptions and docs/mcp.md; this text carries only the contract
-  // that cannot be read off the schemas.
-  return (
-    identityLine(agent) +
-    "\n\n" +
-    "Memory contract: call brain_feedback once per taste signal the " +
-    "user expresses; brain_apply_evidence right after producing a " +
-    "durable artifact a preference in `Brain/preferences/` scopes to " +
-    "(result: applied | violated | outdated); brain_note for narrative " +
-    "milestones that fit neither; brain_pinned_context for current-task " +
-    "facts that must survive context rotation. brain_context " +
-    "bootstraps a session when the host injects no active.md hook. " +
-    "Skip Brain calls for casual chat, exploration, and trivial edits - " +
-    "a misrecorded signal is worse than a missed one.\n\n" +
-    "Consolidated read views: brain_brief (view: morning | daily | " +
-    "weekly | monthly | operator | digest), brain_analytics (view: " +
-    "timeline | attention_flows | belief_evolution | concept_synthesis), " +
-    "schema_inspect (view: graph | lint | stats | orphans | " +
-    "explain_type | active_pack | packs). The per-view predecessor " +
-    "names still resolve via tools/call as deprecated aliases.\n\n" +
-    "Preview budget: a large result may arrive as a JSON envelope with " +
-    "`preview_truncated: true` and an `artifact_id`; fetch the full " +
-    "payload with brain_artifact_get only when the preview is not " +
-    "enough."
-  );
+/**
+ * Build the `initialize.instructions` block for one server process.
+ *
+ * Every scope opens with the identity line. The writer scope is the
+ * always-loaded surface and its four writers are exactly the
+ * identity-bearing ones, so the surface where the name matters most was
+ * the one that used to omit it; the catalog scope hydrates into the same
+ * writers.
+ */
+export function buildInstructions(opts: BuildInstructionsOpts): string {
+  const body = SCOPE_BODIES[opts.scope ?? TOOL_SCOPE.full];
+  return identityLine(opts.agent) + PARAGRAPH_BREAK + body;
 }

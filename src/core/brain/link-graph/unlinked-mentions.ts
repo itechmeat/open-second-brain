@@ -22,6 +22,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
+import { ownerScopeView, type OwnerScopeView } from "../owner-scope-view.ts";
 import { brainDirs } from "../paths.ts";
 
 /** One unlinked-mention occurrence. */
@@ -42,6 +43,15 @@ export interface FindUnlinkedMentionsOptions {
    * not exposed; callers needing more should call with a larger cap.
    */
   readonly limit?: number;
+  /**
+   * Owner scope the mentions are filtered against
+   * (a-label-is-not-a-boundary, U3). A mention carries its source
+   * artifact's id AND the line of prose the term sits in, so an
+   * unfiltered scan published an owner-private body verbatim. Absent /
+   * `null` means no ownership filtering, which is what every existing
+   * caller gets.
+   */
+  readonly ownerScope?: string | null;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -73,10 +83,11 @@ export function findUnlinkedMentions(
   const terms = resolveSearchTerms(vault, targetId);
   if (terms.length === 0) return Object.freeze([]) as ReadonlyArray<MentionRef>;
 
+  const view = ownerScopeView(vault, opts.ownerScope ?? null);
   const collected: MentionRef[] = [];
-  scanDir(dirs.preferences, targetId, terms, collected, limit);
+  scanDir(dirs.preferences, targetId, terms, collected, limit, view);
   if (collected.length < limit) {
-    scanDir(dirs.retired, targetId, terms, collected, limit);
+    scanDir(dirs.retired, targetId, terms, collected, limit, view);
   }
 
   return Object.freeze(collected) as ReadonlyArray<MentionRef>;
@@ -132,6 +143,7 @@ function scanDir(
   terms: ReadonlyArray<string>,
   out: MentionRef[],
   limit: number,
+  view: OwnerScopeView,
 ): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
@@ -139,6 +151,9 @@ function scanDir(
     if (!name.endsWith(".md")) continue;
     const source = name.slice(0, -".md".length);
     if (source === targetId) continue;
+    // A mention discloses its source artifact's id and one line of its
+    // body, so the source decides visibility before the file is read.
+    if (!view.visible(source)) continue;
     let text: string;
     try {
       text = readFileSync(join(dir, name), "utf8");

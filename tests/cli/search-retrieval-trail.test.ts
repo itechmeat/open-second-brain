@@ -89,6 +89,9 @@ function outcome(trail?: RetrievalTrail): SearchOutcome {
     results: Object.freeze([RESULT]),
     warnings: Object.freeze([]),
     total: 2,
+    // Neutral match quality: the trail assertions never read it, and 1 is
+    // what the coverage report yields when there is no term mass to weigh.
+    idfWeightedCoverage: 1,
     ...(trail !== undefined ? { retrievalTrail: trail } : {}),
   });
 }
@@ -98,6 +101,8 @@ function emptyOutcomeWith(trail?: RetrievalTrail): SearchOutcome {
     results: Object.freeze([]),
     warnings: Object.freeze([]),
     total: 0,
+    // A zero-result answer covers none of the query's IDF mass.
+    idfWeightedCoverage: 0,
     ...(trail !== undefined ? { retrievalTrail: trail } : {}),
   });
 }

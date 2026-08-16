@@ -843,6 +843,27 @@ export interface SearchOutcome {
    */
   readonly total: number;
   /**
+   * Absolute match quality of this retrieval: the share of the query's
+   * IDF mass that the returned material actually covers, in `[0,1]`
+   * (`buildCoverageReport`, `search/coverage.ts`). One, by definition,
+   * when the query carries no significant term for the report to weigh.
+   *
+   * This is the ONLY number on the outcome that a confidence threshold
+   * may be compared against. `BrainSearchResult.score` cannot be: the
+   * keyword lane is min-max normalised within the candidate set
+   * (`normalizeBm25`), so the top row's score is pinned at the configured
+   * `keywordWeight` and the bottom row's at zero regardless of how well
+   * either matched. A constant compared against that measures which rows
+   * survived the filter stack, not how well anything matched - which is
+   * exactly what four separate thresholds in this product used to do.
+   *
+   * Pool-independent by construction: removing, fading or re-weighting a
+   * candidate cannot move it, and it means the same thing under both
+   * fusion modes. Required, not optional, so no consumer can silently
+   * fall back to reading a rank position when it is absent.
+   */
+  readonly idfWeightedCoverage: number;
+  /**
    * Layer-1 compact cards (progressive disclosure). Present only when the
    * caller set `disclosure: "cards"`; in that mode `results` is empty and
    * the cards carry the surfaced rows. Absent on the default `full` path,

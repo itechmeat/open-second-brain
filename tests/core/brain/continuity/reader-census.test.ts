@@ -123,15 +123,21 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * these say how far the counts may fall before the split stops describing
  * anything.
  *
- * Four modules read through the read-model and twenty read the store
- * directly. The read-model floor is AT today's count because losing one
- * of four is a real regression; the direct floor sits one under, because
- * that set is the one this wave is actively adding to and an exact pin
- * would fail on another unit's honest new reader rather than on a lost
- * measurement.
+ * Four modules read through the read-model and twenty-one read the store
+ * directly. Both numbers are EQUALITIES, not floors.
+ *
+ * The direct floor used to sit at twenty against a reality of
+ * twenty-one, on the reasoning that an exact pin would fail on another
+ * unit's honest new reader. What it actually bought was room for the
+ * count to drift by one in either direction unseen - and the drift had
+ * already happened. A floor that is looser than the measurement is a
+ * measurement nobody is keeping, which is the defect this release is
+ * about; the two tables below are declared by name anyway, so a new
+ * reader has to be added to one of them regardless and the number costs
+ * nothing extra to keep true.
  */
-const MIN_READ_MODEL_READERS = 4;
-const MIN_DIRECT_STORE_READERS = 20;
+const READ_MODEL_READER_COUNT = 4;
+const DIRECT_STORE_READER_COUNT = 21;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 
@@ -197,8 +203,8 @@ describe("continuity reader census", () => {
     expect(pathsVia(rows, "viaStore").length).toBeGreaterThan(
       pathsVia(rows, "viaReadModel").length,
     );
-    expect(pathsVia(rows, "viaReadModel").length).toBeGreaterThanOrEqual(MIN_READ_MODEL_READERS);
-    expect(pathsVia(rows, "viaStore").length).toBeGreaterThanOrEqual(MIN_DIRECT_STORE_READERS);
+    expect(pathsVia(rows, "viaReadModel").length).toBe(READ_MODEL_READER_COUNT);
+    expect(pathsVia(rows, "viaStore").length).toBe(DIRECT_STORE_READER_COUNT);
   });
 
   test("the census reads bytes, so a NUL-carrying reader is not invisible to it", () => {

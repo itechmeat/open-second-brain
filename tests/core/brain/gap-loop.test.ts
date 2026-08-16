@@ -51,13 +51,26 @@ function seedGap(topic: string, times: number): void {
 
 const NOW = new Date("2026-06-01T12:00:00.000Z");
 
-function retrieverWithScore(score: number): RecallRetriever {
+/**
+ * A retrieval that covers `matchQuality` of the topic. The candidate score
+ * is fixed and high on purpose: the auto-close floor reads coverage, so no
+ * score can decide whether a gap task closes.
+ */
+function retrieverWithCoverage(matchQuality: number): RecallRetriever {
   return async () =>
     ({
       candidates: [
-        { path: "Brain/x.md", title: "X", score, searchType: "hybrid", startLine: 1, endLine: 2 },
+        {
+          path: "Brain/x.md",
+          title: "X",
+          score: 0.92,
+          searchType: "hybrid",
+          startLine: 1,
+          endLine: 2,
+        },
       ],
       total: 1,
+      idfWeightedCoverage: matchQuality,
     }) satisfies RecallResultSet;
 }
 
@@ -112,7 +125,7 @@ describe("gap loop (A3 / t_67d38036)", () => {
   test("auto-closes a gap task once its topic is recalled with sufficient confidence", async () => {
     seedGap("alpha topic", 3);
     promoteGapsToTasks(vault, { threshold: 2, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithScore(0.92), {
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.92), {
       confidenceFloor: 0.5,
       now: NOW,
     });
@@ -143,6 +156,8 @@ describe("gap loop (A3 / t_67d38036)", () => {
           },
         ],
         total: 1,
+        // Full coverage, so only the path rule can keep the task open.
+        idfWeightedCoverage: 1,
       }) satisfies RecallResultSet;
     const result = await autoCloseRecalledGaps(vault, selfMatch, {
       confidenceFloor: 0.5,
@@ -155,7 +170,7 @@ describe("gap loop (A3 / t_67d38036)", () => {
   test("keeps a gap task open when recall stays below the confidence floor", async () => {
     seedGap("alpha topic", 3);
     promoteGapsToTasks(vault, { threshold: 2, now: NOW });
-    const result = await autoCloseRecalledGaps(vault, retrieverWithScore(0.2), {
+    const result = await autoCloseRecalledGaps(vault, retrieverWithCoverage(0.2), {
       confidenceFloor: 0.5,
       now: NOW,
     });

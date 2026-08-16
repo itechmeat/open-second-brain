@@ -39,7 +39,12 @@ async function toolBrainDeriveFact(
     // Shape first: the payload is validated before any field is read, so a
     // structurally wrong request never reaches the premise lookup or a write.
     const input = parseDeriveFactInput(args);
-    const res = deriveFact(ctx.vault, input, { now: new Date() });
+    const res = deriveFact(ctx.vault, input, {
+      now: new Date(),
+      // The ownership stamp resolves the writing identity from the
+      // server's own config, not from anything the caller sent.
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
+    });
     return { id: res.id, level: input.level, premises: input.premises };
   });
 }

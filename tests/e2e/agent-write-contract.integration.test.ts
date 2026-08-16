@@ -133,7 +133,7 @@ test("shared namespace: signal and note mirror with attribution; primary always 
       created_at: "2026-06-04T12:00:00Z",
       date: "2026-06-04",
       slug: "e2e-topic",
-    }),
+    }).outcome,
   ).toBe("ok");
   const inbox = readdirSync(join(shared, "Brain", "inbox")).filter((f) => f.endsWith(".md"));
   expect(inbox).toHaveLength(1);

@@ -56,9 +56,9 @@ import {
   extractFrontmatterRelations,
   normalizeRelationTarget,
 } from "../../graph/frontmatter-relations.ts";
+import { listLogShardFiles } from "../log-jsonl.ts";
 import {
   BRAIN_ROOT_REL,
-  BRAIN_LOG_REL,
   BRAIN_SOURCES_REL,
   BRAIN_REPORTS_REL,
   ensureInsideVault,
@@ -160,7 +160,11 @@ export interface OkfManifest {
   readonly generated_at: string;
   readonly vault_basename: string;
   readonly pages: ReadonlyArray<OkfManifestPage>;
-  /** Count of `Brain/log/<date>.md` days folded into `log.md`. */
+  /**
+   * Count of DAYS folded into `log.md`, across every markdown shard of
+   * `Brain/log/` - `<date>.md` and `<date>.<deviceId>.md` alike. Two
+   * shards of one day are one day here, not two.
+   */
   readonly log_days: number;
 }
 
@@ -322,31 +326,48 @@ function listMarkdown(root: string, skipDirs: ReadonlyArray<string>): string[] {
   return found;
 }
 
-/** Read and date-group `Brain/log/<date>.md` into a single change log. */
+/**
+ * Read and date-group the markdown side of `Brain/log/` into one change
+ * log.
+ *
+ * Days come from {@link listLogShardFiles}, the recogniser in the module
+ * that owns the log layout, rather than from a pattern of this module's
+ * own. The local pattern here matched `<date>.md` only, while every
+ * default install has written the per-device `<date>.<deviceId>.md` since
+ * sharding landed - so a vault with a full change log exported an empty
+ * `log.md` and a manifest reading `0 log day(s)`, with nothing to
+ * distinguish that from a vault that had never logged anything.
+ *
+ * Shards of one day fold into ONE dated section, ordered by shard id
+ * (`listLogShardFiles` sorts by name), so the bundle is byte-identical
+ * whatever order Syncthing delivered the shards in.
+ */
 function buildLog(vault: string): { contents: string; days: number } {
-  const dir = join(vault, BRAIN_LOG_REL);
-  let entries: string[];
-  try {
-    entries = readdirSync(dir);
-  } catch {
-    return { contents: "", days: 0 };
-  }
-  const dateRe = /^(\d{4}-\d{2}-\d{2})\.md$/;
-  const days = entries
-    .map((name) => dateRe.exec(name)?.[1])
-    .filter((d): d is string => typeof d === "string")
-    .toSorted();
-  const sections: string[] = [];
-  for (const date of days) {
+  const bodiesByDate = new Map<string, string[]>();
+  for (const shard of listLogShardFiles(vault)) {
+    // The bundle is markdown; the JSONL sidecar of a day carries the same
+    // entries in machine form and would duplicate every line.
+    if (shard.ext !== "md") continue;
     let body: string;
     try {
-      body = readFileSync(join(dir, `${date}.md`), "utf8").trimEnd();
-    } catch {
-      continue;
+      body = readFileSync(shard.path, "utf8").trimEnd();
+    } catch (err) {
+      // Never `continue`: a shard the export could not read is a day of
+      // the change log missing from the bundle, and a bundle that is
+      // silently short a day is exactly what this export must not produce.
+      throw new Error(
+        `okf export: cannot read log shard ${shard.name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
-    sections.push(`## ${date}\n\n${body}`);
+    if (body.length === 0) continue;
+    const bodies = bodiesByDate.get(shard.date);
+    if (bodies === undefined) bodiesByDate.set(shard.date, [body]);
+    else bodies.push(body);
   }
-  return { contents: sections.join("\n\n"), days: days.length };
+  const sections = [...bodiesByDate.keys()]
+    .toSorted()
+    .map((date) => `## ${date}\n\n${bodiesByDate.get(date)!.join("\n\n")}`);
+  return { contents: sections.join("\n\n"), days: bodiesByDate.size };
 }
 
 function renderIndex(manifest: OkfManifest): string {

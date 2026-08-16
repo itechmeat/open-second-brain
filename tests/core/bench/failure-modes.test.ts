@@ -72,6 +72,9 @@ async function alwaysConfident(): Promise<RecallResultSet> {
       }),
     ]),
     total: 1,
+    // The gaming strategy claims a perfect match for every prompt - that
+    // unconditional confidence is exactly what the floor has to see through.
+    idfWeightedCoverage: 1,
   });
 }
 

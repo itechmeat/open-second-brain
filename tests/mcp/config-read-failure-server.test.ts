@@ -164,6 +164,25 @@ describe("the read-only diagnostics answer through the request path", () => {
     expect(JSON.stringify(payload!["vault_path"])).not.toContain(vault);
   });
 
+  /**
+   * a-label-is-not-a-boundary, U11: forty-one sites started producing the
+   * degraded `{ error }` value here instead of the raw host path, and two
+   * of them DECLARE `vault_path` in an `outputSchema` the server asserts
+   * on the way out. A descriptor saying `type: "string"` turns the
+   * degraded value into an output-contract failure - the whole payload
+   * lost, on exactly the condition the field exists to report, which is
+   * the failure the degraded value was introduced to prevent.
+   */
+  test("a tool that declares vault_path in its outputSchema still answers", async () => {
+    const { payload, toolError, rpcError } = await callThroughServer("brain_mcp_landscape");
+    expect(rpcError).toBeUndefined();
+    expect(toolError).toBeUndefined();
+    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toContain(
+      configPath,
+    );
+    expect(payload!["servers"]).toBeDefined();
+  });
+
   test("second_brain_status reports the condition instead of collapsing to absent", async () => {
     const { payload, toolError, rpcError } = await callThroughServer("second_brain_status");
     expect(rpcError).toBeUndefined();

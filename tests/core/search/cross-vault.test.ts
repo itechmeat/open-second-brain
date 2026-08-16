@@ -196,17 +196,43 @@ test("chain-stop on: a confident active origin skips the remaining origins", asy
   expect(stopped?.detail).toEqual({ stoppedAfter: "local", skipped: 1 });
 });
 
-test("chain-stop gates on the normalized score, never raw: a sub-threshold top does not stop", async () => {
+test("chain-stop gates on coverage: an origin that half-answers does not stop the chain", async () => {
   addRecallSource(configPath, active, "team", external);
-  // The active origin's top NORMALIZED score for this fixture is ~0.65,
-  // well under 0.9, so the gate must not fire and every origin is searched.
-  // The raw FTS/BM25 lane score is far higher than 0.9, so this also proves
-  // the gate reads the normalized result score, not the raw lane score.
+  // "aviary" appears only in the EXTERNAL vault, so the active origin
+  // covers part of this query and not the rest. Under a 0.9 coverage
+  // threshold the chain must walk on and find the origin that holds the
+  // missing half.
+  //
+  // This is the assertion the old score-based gate could not make. Its
+  // quantity was the top NORMALIZED result score, which the keyword lane
+  // min-max normalises within each origin's own pool - so it said the same
+  // thing about an origin that answered everything and one that answered a
+  // fragment, and it meant opposite things under the two fusion modes
+  // (unreachable in `linear`, always met in `rrf`).
+  withChainStop(0.9);
+  const outcome = await searchAcrossVaults(configPath, active, {
+    query: "griffin aviary",
+    limit: 10,
+  });
+  // The active origin is walked past rather than stopped at, so the origin
+  // holding "aviary" is reached and answers. (Only the external note carries
+  // both terms, so it is the only row in the window - what matters here is
+  // that the union got that far at all.)
+  expect(outcome.chainStop).toBeUndefined();
+  expect(new Set(outcome.results.map((r) => r.origin))).toContain("source/team");
+});
+
+test("chain-stop fires when the first origin covers the question", async () => {
+  addRecallSource(configPath, active, "team", external);
+  // The mirror of the case above: every significant term of this query is
+  // covered by the active origin, so the remaining origins add nothing the
+  // caller asked for and the chain stops - which is what the knob has
+  // always claimed to do and, on the shipped default fusion mode, never
+  // did.
   withChainStop(0.9);
   const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
-  const labels = new Set(outcome.results.map((r) => r.origin));
-  expect(labels).toEqual(new Set(["local", "source/team"]));
-  expect(outcome.chainStop).toBeUndefined();
+  expect(outcome.chainStop?.triggered).toBe(true);
+  expect(new Set(outcome.results.map((r) => r.origin))).toEqual(new Set(["local"]));
 });
 
 /**

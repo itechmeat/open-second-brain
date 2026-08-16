@@ -37,6 +37,7 @@ import {
 import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
@@ -62,6 +63,7 @@ import {
 } from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceBool } from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard } from "./shared.ts";
@@ -319,9 +321,14 @@ async function toolBrainMocAudit(
   }
   const targetId = normaliseWikilinkTarget(idRaw);
   try {
-    const report = auditMoc(ctx.vault, targetId);
+    // `fragile[].id`, `bodyChars` and the exists-vs-missing verdict all
+    // describe cluster members; unscoped they described another owner's
+    // (a-label-is-not-a-boundary, U3, recon C4).
+    const report = auditMoc(ctx.vault, targetId, {
+      ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+    });
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       hub_id: report.hubId,
       outbound_count: report.outboundCount,
       well_covered: report.wellCovered,
@@ -445,7 +452,12 @@ function toolBrainIdeaDiscovery(
   }
   const enqueue = coerceBool(args, "triggers");
   const now = new Date();
-  const ideas = discoverIdeas(ctx.vault, { now, cap });
+  // `source_artifacts` are vault-relative artifact paths and the `reason`
+  // sentence spells one out, so an unscoped ranking named another owner's
+  // notes (a-label-is-not-a-boundary, U3). Filtered BEFORE the trigger
+  // pass so a hidden artifact cannot be enqueued either.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const ideas = view.keep(discoverIdeas(ctx.vault, { now, cap }), (i) => i.sourceArtifacts);
   let triggersCreated: number | undefined;
   if (enqueue) {
     const result = createTriggers(ctx.vault, ideaCandidates(ideas), {
@@ -658,19 +670,33 @@ function toolBrainClaims(
   args: Record<string, unknown>,
 ): Record<string, unknown> {
   const operation = coerceStr(args, "operation", false) ?? "current";
+  // A claim row carries the artifact's id, its vault-relative path, its
+  // topic AND its full principle text - the sharpest counter-example in
+  // recon C6 to the "this bucket is metadata" label. Every row-returning
+  // operation is filtered, and so is the rebuild count: a count the
+  // caller cannot decompose still says how many claims exist.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const visible = (rows: ReadonlyArray<ClaimNode>): ReadonlyArray<ClaimNode> =>
+    view.keep(rows, (n) => [n.path, n.id]);
   switch (operation) {
     case "rebuild": {
       const graph = rebuildClaimGraph(ctx.vault);
-      return { operation, rebuilt: true, node_count: graph.node_count, truncated: graph.truncated };
+      return {
+        operation,
+        rebuilt: true,
+        node_count: visible(allClaims(graph)).length,
+        truncated: graph.truncated,
+      };
     }
     case "replaced": {
       const id = coerceStr(args, "id", true)!;
       const tip = whatReplaced(resolveClaimGraph(ctx.vault), id);
-      return { operation, id, tip: tip ? renderClaimNode(tip) : null };
+      const shown = tip !== null && view.row(tip.path, tip.id) ? tip : null;
+      return { operation, id, tip: shown ? renderClaimNode(shown) : null };
     }
     case "contests": {
       const id = coerceStr(args, "id", true)!;
-      const rows = whatContests(resolveClaimGraph(ctx.vault), id);
+      const rows = visible(whatContests(resolveClaimGraph(ctx.vault), id));
       return { operation, id, claims: rows.map(renderClaimNode) };
     }
     case "at": {
@@ -683,15 +709,15 @@ function toolBrainClaims(
           `brain_claims: 'at' must be an ISO instant or YYYY-MM-DD date; got ${at}`,
         );
       }
-      const rows = truthAt(resolveClaimGraph(ctx.vault), probe);
+      const rows = visible(truthAt(resolveClaimGraph(ctx.vault), probe));
       return { operation, at, count: rows.length, claims: rows.map(renderClaimNode) };
     }
     case "history": {
-      const rows = allClaims(resolveClaimGraph(ctx.vault));
+      const rows = visible(allClaims(resolveClaimGraph(ctx.vault)));
       return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
     }
     case "current": {
-      const rows = currentTruth(resolveClaimGraph(ctx.vault));
+      const rows = visible(currentTruth(resolveClaimGraph(ctx.vault)));
       return { operation, count: rows.length, claims: rows.map(renderClaimNode) };
     }
     default:

@@ -43,7 +43,18 @@ import type { FrontmatterMap } from "../../types.ts";
 /** Default recurrence threshold: a gap must recur this often to promote. */
 export const GAP_LOOP_RECURRENCE_THRESHOLD = 3;
 
-/** Default normalized-score floor a recall must clear to auto-close a task. */
+/**
+ * Default match-quality floor a recall must clear to auto-close a task.
+ *
+ * Compared against {@link RecallResultSet.idfWeightedCoverage} - the share
+ * of the topic's IDF mass the vault now covers - and not against a result
+ * score. Against a score this floor could never refuse anything: the
+ * keyword lane min-max normalises within the candidate set, so the top
+ * row of ANY non-empty recall scores the configured `keywordWeight`
+ * (0.6 by default), which clears 0.5 whatever the hit was worth. A gap
+ * task therefore auto-closed on the first keyword match of any quality,
+ * which is the outcome this floor exists to prevent.
+ */
 export const GAP_LOOP_AUTO_CLOSE_FLOOR = 0.5;
 
 /**
@@ -384,11 +395,19 @@ export interface GapAutoCloseResult {
 }
 
 /**
- * Auto-close every open gap task whose topic now recalls at or above the
- * confidence floor, flipping its frontmatter status to closed and stamping
- * `closed_at` / `closed_reason` (mirroring the dream freshness auto-resolve
- * precedent). A recall that fails or stays below the floor keeps the task
+ * Auto-close every open gap task whose topic the vault now covers at or
+ * above the match-quality floor, flipping its frontmatter status to closed
+ * and stamping `closed_at` / `closed_reason` (mirroring the dream freshness
+ * auto-resolve precedent). A recall that fails, returns nothing outside the
+ * gap-task directory, or covers the topic below the floor keeps the task
  * open - fail-safe, never a silent close.
+ *
+ * Two conditions, deliberately separate. The gap-task notes themselves are
+ * excluded by PATH, because a task note carries its own topic verbatim and
+ * would otherwise close itself; that is a membership rule, and expressing
+ * it as "its score must clear a floor" is what let the floor pretend to be
+ * a quality test while only ever testing presence. The floor then judges
+ * the quality of the retrieval, which it reads from the retrieval itself.
  */
 export async function autoCloseRecalledGaps(
   vault: string,
@@ -403,21 +422,21 @@ export async function autoCloseRecalledGaps(
   const closed: string[] = [];
   const kept: string[] = [];
   for (const task of listGapTasks(vault, { status: GAP_TASK_STATUS_OPEN })) {
-    let topScore = 0;
+    let coveredElsewhere = false;
+    let matchQuality = 0;
     try {
       // eslint-disable-next-line no-await-in-loop -- one recall per open task, sequential by design
       const set = await retriever(task.topic);
       // Exclude the gap-task notes themselves: a task note carries its own
       // topic verbatim, so counting it would self-close every gap. Only
       // genuine vault coverage elsewhere may close a task.
-      topScore = set.candidates
-        .filter((candidate) => !isGapTaskPath(candidate.path))
-        .reduce((max, candidate) => Math.max(max, candidate.score), 0);
+      coveredElsewhere = set.candidates.some((candidate) => !isGapTaskPath(candidate.path));
+      matchQuality = set.idfWeightedCoverage;
     } catch {
       kept.push(task.key);
       continue;
     }
-    if (topScore >= floor) {
+    if (coveredElsewhere && matchQuality >= floor) {
       closeGapTask(task, opts.now);
       closed.push(task.key);
     } else {

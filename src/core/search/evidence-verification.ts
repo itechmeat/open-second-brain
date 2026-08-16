@@ -64,12 +64,23 @@ export function coverageOverChunks(
   });
 }
 
-export function buildEvidenceVerification(
+/**
+ * IDF-weighted coverage of the query over the RESULT SET a search is
+ * about to return.
+ *
+ * Split out of {@link buildEvidenceVerification} because it is no longer
+ * an evidence-pack-only quantity: it is the absolute, pool-independent
+ * match-quality number every confidence threshold in the product now
+ * reads (`SearchOutcome.idfWeightedCoverage`). Evidence-pack mode calls
+ * it through {@link buildEvidenceVerification}, which takes the finished
+ * report rather than recomputing it, so one query performs exactly one
+ * document-frequency read whichever mode it runs in.
+ */
+export function coverageOverResults(
   store: Store,
   query: string,
   results: ReadonlyArray<BrainSearchResult>,
-  pathPrefix: string | undefined,
-): EvidenceVerification {
+): CoverageReport {
   const terms = significantTerms(query);
   const dfByTerm = store.documentFrequencies(terms);
   const documentCount = store.counts().documents;
@@ -80,13 +91,26 @@ export function buildEvidenceVerification(
       if (!covered.has(t) && termIncludedIn(haystack, t)) covered.add(t);
     }
   }
-  const coverage = buildCoverageReport({
+  return buildCoverageReport({
     significantTerms: terms,
     coveredTerms: covered,
     documentCount,
     dfByTerm,
   });
+}
 
+export function buildEvidenceVerification(
+  store: Store,
+  pathPrefix: string | undefined,
+  /**
+   * The coverage report the outcome already built for this exact result
+   * set. A parameter rather than a second computation: an internally
+   * rebuilt report would buy a second document-frequency read, and a
+   * report built over a DIFFERENT result set would make the evidence pack
+   * disagree with the outcome's own match quality.
+   */
+  coverage: CoverageReport,
+): EvidenceVerification {
   const unionRecords: EvidenceUnionRecord[] = [];
   for (const t of coverage.terms) {
     if (t.covered || t.df === 0) continue; // nothing in the corpus covers a df=0 term

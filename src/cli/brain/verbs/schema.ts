@@ -189,16 +189,31 @@ function renderSchemaReportText(report: BrainSchemaReport, integrity: SchemaPack
   return lines.join("\n") + "\n";
 }
 
+/**
+ * One finding as a line, exhaustively over the union.
+ *
+ * The `switch` with a `never` default is deliberate: this used to be two
+ * `if`s and a trailing `return` that rendered EVERY other kind as
+ * `[unused-declaration]`, so a new member of the union would have been
+ * printed under the wrong label with no compile error to say so.
+ */
 function renderFinding(finding: SchemaReportFinding): string {
-  if (finding.kind === "unknown-token") {
-    return `[unknown-token] ${finding.category} ${finding.token} (${finding.path})`;
+  switch (finding.kind) {
+    case "unknown-token":
+      return `[unknown-token] ${finding.category} ${finding.token} (${finding.path})`;
+    case "link-constraint-violation":
+      return (
+        `[link-constraint-violation] ${finding.relation} ` +
+        `${finding.source_type ?? "?"}->${finding.target_type ?? "?"} ` +
+        `(${finding.source} -> ${finding.target})`
+      );
+    case "unreadable-artifact":
+      return `[unreadable-artifact] ${finding.category} ${finding.path}: ${finding.detail}`;
+    case "unused-declaration":
+      return `[unused-declaration] ${finding.category} ${finding.token}`;
+    default: {
+      const unreachable: never = finding;
+      return unreachable;
+    }
   }
-  if (finding.kind === "link-constraint-violation") {
-    return (
-      `[link-constraint-violation] ${finding.relation} ` +
-      `${finding.source_type ?? "?"}->${finding.target_type ?? "?"} ` +
-      `(${finding.source} -> ${finding.target})`
-    );
-  }
-  return `[unused-declaration] ${finding.category} ${finding.token}`;
 }

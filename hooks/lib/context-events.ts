@@ -14,6 +14,13 @@
  * https://code.claude.com/docs/en/hooks, 2026-06-02). Post-compaction
  * re-injection is served by the `SessionStart` hook with the
  * `compact` matcher instead - see `hooks/hooks.json`.
+ *
+ * `SubagentStop` is deliberately absent for the opposite reason: the host
+ * DOES accept `additionalContext` there, and `hooks/hooks.json` registers
+ * the event, but only for capture - no hook in this tree injects context
+ * when a delegated sub-agent stops. Listing it would be a permission with
+ * no producer behind it, and this list is a statement about what is
+ * emitted, not about what would be accepted.
  */
 
 export const CONTEXT_EVENT_NAMES = Object.freeze(["SessionStart", "UserPromptSubmit"] as const);

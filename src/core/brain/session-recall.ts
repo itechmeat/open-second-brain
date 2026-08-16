@@ -7,7 +7,11 @@ import {
   clipPayloadToBudget,
   listContinuityRecords,
 } from "./continuity/store.ts";
-import type { ContinuityRecord, ContinuitySourceRef } from "./continuity/types.ts";
+import {
+  CONTINUITY_AGENT_ID_KEY,
+  type ContinuityRecord,
+  type ContinuitySourceRef,
+} from "./continuity/types.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import type { SessionLineage } from "./lineage/types.ts";
 import type { SessionTurn } from "./sessions/types.ts";
@@ -361,8 +365,27 @@ function importRawTurn(
       text_hash: textHash,
       dedupe_key: dedupeKey,
       ...lineagePayloadFields(lineage),
+      ...delegationPayloadFields(turn),
     },
   });
+}
+
+/**
+ * The delegation boundary, as additive payload fields.
+ *
+ * A sub-agent's transcript reuses its parent's session id, so without
+ * these two keys a recalled turn cannot say which agent produced it -
+ * which is what `docs/observability.md` recorded as the missing
+ * parent/child thread. `agent_id` is the key the envelope already
+ * protects from an output-budget clip, so a clipped delegated turn stays
+ * attributable. Absent on a flat turn, so an ordinary session's records
+ * are byte-identical to what they were.
+ */
+function delegationPayloadFields(turn: SessionTurn): Record<string, unknown> {
+  return {
+    ...(turn.agentId !== undefined ? { [CONTINUITY_AGENT_ID_KEY]: turn.agentId } : {}),
+    ...(turn.sidechain === true ? { sidechain: true } : {}),
+  };
 }
 
 function importSummaryDepth(

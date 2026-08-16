@@ -53,6 +53,14 @@
  * preserved), so a removal named in a comment is not a site and a site is
  * not hidden by a quote inside a regular expression.
  *
+ * That lexer used to live in this file, and a character-identical copy of
+ * it lived in the progress census while two further censuses ran partial
+ * maskers of their own - one of which was wrong on shipped source. It is
+ * now `tests/helpers/source-lexer.ts`, tested there in its own right, and
+ * this census reads both of its views: {@link LexedSource.withoutComments}
+ * for the import specifiers the binding detector needs, and
+ * {@link LexedSource.code} for the calls and the gate spans.
+ *
  * ## Gating is per SITE, not per file
  *
  * `gated` used to be a file-level boolean: any file containing the string
@@ -130,6 +138,7 @@ import {
   isRecoveryCoverage,
   RECOVERABILITY_STATE,
 } from "../../../src/core/brain/gates/recoverability.ts";
+import { type LexedSource, lexSource } from "../../helpers/source-lexer.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const BRAIN_ROOT = join(REPO_ROOT, "src", "core", "brain");
@@ -162,181 +171,6 @@ const WRITE_SITE_CENSUS = readFileSync(
   join(REPO_ROOT, "tests", "core", "architecture", "write-site-census.test.ts"),
   "utf8",
 );
-
-// ----- Lexing ---------------------------------------------------------------
-
-/**
- * Two views of one module, both the same LENGTH as the source so every
- * offset still points at the same character.
- *
- * `withoutComments` keeps string literals, because an import's specifier
- * IS a string and the binding detector has to read it. `code` blanks the
- * body of every string, template and regex literal too, and is what the
- * call and gate detectors run over: a `rmSync(` inside a quoted example
- * is not a call, and a comment naming the gate does not gate anything.
- */
-interface SourceViews {
-  readonly withoutComments: string;
-  readonly code: string;
-}
-
-/** Characters after which a `/` opens a regex rather than divides. */
-const REGEX_PRECEDING = new Set([
-  "",
-  "(",
-  ",",
-  "=",
-  ":",
-  "[",
-  "!",
-  "&",
-  "|",
-  "?",
-  "{",
-  "}",
-  ";",
-  "+",
-  "-",
-  "*",
-  "%",
-  "~",
-  "^",
-  "<",
-  ">",
-]);
-
-/** Keywords after which a `/` opens a regex, e.g. `return /x/.test(s)`. */
-const REGEX_PRECEDING_KEYWORDS = new Set([
-  "return",
-  "typeof",
-  "instanceof",
-  "in",
-  "of",
-  "case",
-  "do",
-  "else",
-  "yield",
-  "await",
-  "void",
-  "delete",
-  "new",
-]);
-
-function regexCanStart(text: string, at: number, prev: string): boolean {
-  if (REGEX_PRECEDING.has(prev)) return true;
-  const before = text.slice(0, at).trimEnd();
-  const word = /[A-Za-z_$][\w$]*$/.exec(before);
-  return word !== null && REGEX_PRECEDING_KEYWORDS.has(word[0]);
-}
-
-function lex(text: string): SourceViews {
-  const n = text.length;
-  const withoutComments = [...text];
-  const code = [...text];
-  const blank = (arr: string[], from: number, to: number): void => {
-    for (let k = Math.max(from, 0); k < Math.min(to, n); k++) {
-      if (arr[k] !== "\n") arr[k] = " ";
-    }
-  };
-  // Top of the stack is the current mode. A template literal pushes
-  // `template`; a `${` inside one pushes `code` back on, with its own
-  // brace counter, so an interpolated expression is read as code.
-  const modes: string[] = ["code"];
-  const braces: number[] = [0];
-  let prev = "";
-  let i = 0;
-  while (i < n) {
-    const c = text[i]!;
-    if (modes[modes.length - 1] === "template") {
-      if (c === "\\") {
-        blank(code, i, i + 2);
-        i += 2;
-        continue;
-      }
-      if (c === "`") {
-        modes.pop();
-        prev = "`";
-        i += 1;
-        continue;
-      }
-      if (c === "$" && text[i + 1] === "{") {
-        modes.push("code");
-        braces.push(0);
-        prev = "{";
-        i += 2;
-        continue;
-      }
-      blank(code, i, i + 1);
-      i += 1;
-      continue;
-    }
-    const next = text[i + 1];
-    if (c === "/" && next === "/") {
-      let end = text.indexOf("\n", i);
-      if (end === -1) end = n;
-      blank(withoutComments, i, end);
-      blank(code, i, end);
-      i = end;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      const close = text.indexOf("*/", i + 2);
-      const end = close === -1 ? n : close + 2;
-      blank(withoutComments, i, end);
-      blank(code, i, end);
-      i = end;
-      continue;
-    }
-    if (c === '"' || c === "'") {
-      let j = i + 1;
-      while (j < n && text[j] !== c) j += text[j] === "\\" ? 2 : 1;
-      blank(code, i + 1, j);
-      prev = c;
-      i = j + 1;
-      continue;
-    }
-    if (c === "`") {
-      modes.push("template");
-      i += 1;
-      continue;
-    }
-    if (c === "/" && regexCanStart(text, i, prev)) {
-      let j = i + 1;
-      let inClass = false;
-      while (j < n) {
-        const e = text[j]!;
-        if (e === "\\") {
-          j += 2;
-          continue;
-        }
-        if (e === "\n") break;
-        if (e === "[") inClass = true;
-        else if (e === "]") inClass = false;
-        else if (e === "/" && !inClass) break;
-        j += 1;
-      }
-      blank(code, i + 1, j);
-      prev = "/";
-      i = j + 1;
-      continue;
-    }
-    if (c === "{") {
-      braces[braces.length - 1]! += 1;
-    } else if (c === "}") {
-      if (braces[braces.length - 1] === 0 && modes.length > 1) {
-        modes.pop();
-        braces.pop();
-        prev = "}";
-        i += 1;
-        continue;
-      }
-      braces[braces.length - 1]! -= 1;
-    }
-    if (!/\s/.test(c)) prev = c;
-    i += 1;
-  }
-  return { withoutComments: withoutComments.join(""), code: code.join("") };
-}
 
 // ----- Binding detection ----------------------------------------------------
 
@@ -528,15 +362,15 @@ function gateSpans(code: string): Array<readonly [number, number]> {
  * once and the whole suite reuses it.
  */
 interface CensusSource extends CensusFile {
-  readonly views: SourceViews;
+  readonly views: LexedSource;
 }
 
 function lexed(file: CensusFile): CensusSource {
-  return { ...file, views: lex(file.text) };
+  return { ...file, views: lexSource(file.text) };
 }
 
 function classify(file: CensusFile | CensusSource): CensusRow | null {
-  const views = "views" in file ? file.views : lex(file.text);
+  const views = "views" in file ? file.views : lexSource(file.text);
   const sites = removalSites(views.code, fsImports(views.withoutComments));
   if (sites.length === 0) return null;
   const spans = gateSpans(views.code);

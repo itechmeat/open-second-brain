@@ -10,10 +10,21 @@
  * registry plus `tests/core/architecture/egress-census.test.ts` is what
  * stops a seventh appearing unredacted.
  *
+ * An eighth appeared anyway, and how it appeared is the more useful half.
+ * `o2b brain explorer --export` wrote the whole preference graph to an
+ * operator-named file with no scan for a whole release, and the census
+ * reported a clean sweep throughout - because its destination rule was a
+ * hardcoded list of destination WORDS, and this flag was spelled
+ * `export`. A registry whose membership rule is a name list is the same
+ * defect as a boundary that is only a label, one level up. The rule was
+ * widened, and a second rule added for the destinations that are not
+ * files at all: the endpoints this product POSTs vault-derived bytes to.
+ *
  * The census derives the POPULATION from source - a module that declares
- * an operator-named destination flag is an egress path - and asks this
- * table to account for it. It also checks the declaration against the
- * source rather than trusting it: an entry claiming
+ * an operator-named destination flag, or sends a body over the network,
+ * is an egress path - and asks this table to account for it. It also
+ * checks the declaration against the source rather than trusting it: an
+ * entry claiming
  * {@link EGRESS_REDACTION.sharedRedactor} whose module no longer calls
  * `redactForEgress` fails, and so does one that declares LESS than its
  * module does - the answer to which is to flip the declaration, never to
@@ -44,6 +55,17 @@ export const EGRESS_REDACTION = Object.freeze({
   sharedRedactor: "shared_redactor",
   /** The destination carries no vault content, so there is nothing to scan. */
   noVaultContent: "no_vault_content",
+  /**
+   * Vault-derived bytes go to a network destination without passing the
+   * shared guard. Unlike the status this registry deleted, it is decidable
+   * from the module's own text - the census asserts such an entry does NOT
+   * call `redactForEgress`, so the day one starts scanning, the
+   * declaration has to be flipped rather than left describing a gap that
+   * closed. It exists because a continuous unscanned egress that no table
+   * mentions is worse than one that is written down: the entry's `reason`
+   * is where the decision and its cost are stated.
+   */
+  unscannedNetworkPayload: "unscanned_network_payload",
 } as const);
 
 export type EgressRedactionStatus = (typeof EGRESS_REDACTION)[keyof typeof EGRESS_REDACTION];
@@ -51,6 +73,7 @@ export type EgressRedactionStatus = (typeof EGRESS_REDACTION)[keyof typeof EGRES
 export const EGRESS_REDACTION_STATUSES: ReadonlyArray<EgressRedactionStatus> = Object.freeze([
   EGRESS_REDACTION.sharedRedactor,
   EGRESS_REDACTION.noVaultContent,
+  EGRESS_REDACTION.unscannedNetworkPayload,
 ]);
 
 /** Takes `unknown`: a status can arrive from a hand-edited declaration. */
@@ -113,7 +136,10 @@ export const EGRESS_SITES = Object.freeze({
       "contract and also why it is the widest leak by volume. The manifest is redacted " +
       "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " +
       "as text. A bundle whose secrets were removed is no longer a lossless round-trip " +
-      "of the vault, and the verb says so rather than implying otherwise.",
+      "of the vault, and the verb says so rather than implying otherwise. What it does NOT " +
+      "do is filter by label: a page carrying `private: true` in its frontmatter exports in " +
+      "full, because the `<private>` region marker is this product's only content-derived " +
+      "privacy primitive and these composers are content composers, not visibility filters.",
   },
   "brain-preference-export": {
     id: "brain-preference-export",
@@ -150,6 +176,88 @@ export const EGRESS_SITES = Object.freeze({
       "says nothing about a record already on disk or appended by another writer, since " +
       "the read model never re-scans. The verb now scans what it READ, which answers " +
       "both, and gains the truncation refusal the other five already had.",
+  },
+  "brain-explorer-export": {
+    id: "brain-explorer-export",
+    verb: "o2b brain explorer --export",
+    module: "src/cli/brain/verbs/explorer.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "a self-contained HTML file with the whole rule graph embedded as JSON: every " +
+      "preference and retired principle verbatim, plus each one's topic, scope and " +
+      "provenance counts. It is the export most likely to be handed to a person rather " +
+      "than a program - it opens in a browser - and it was the one export that never " +
+      "scanned anything. Redaction runs over the graph TREE before the template " +
+      "substitution, so a principle whose text contains a quote cannot disturb the " +
+      "document. The label rule holds here too: a preference is not withheld for carrying " +
+      "a `private` tag, because the `<private>` region marker is the only content-derived " +
+      "privacy primitive in this product.",
+  },
+  "search-embedding-openai-compat": {
+    id: "search-embedding-openai-compat",
+    verb: "o2b search index (embedding provider)",
+    module: "src/core/search/embeddings/openai-compat.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason:
+      "the largest and most continuous egress in this product: every indexed chunk BODY " +
+      "is POSTed verbatim to whichever endpoint the operator configured, for every " +
+      "reindex, and nothing scans it. It is declared unscanned rather than wired to the " +
+      "guard because redaction here would corrupt the thing being built - a vector " +
+      "computed over a placeholder is a vector for the placeholder, so the chunk would " +
+      "come back unfindable while the index reported success, which is a silent failure " +
+      "where this one is at least a stated exposure. The controls that do exist are " +
+      "the operator's: semantic search is off until an endpoint and a key are configured, " +
+      "and the endpoint is whichever host they name, including a local one.",
+  },
+  "search-embedding-zeroentropy": {
+    id: "search-embedding-zeroentropy",
+    verb: "o2b search index (zeroentropy provider)",
+    module: "src/core/search/embeddings/zeroentropy.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason:
+      "the same chunk bodies as the OpenAI-compatible provider, to a second vendor's " +
+      "embed endpoint under the same operator-configured base URL. Listed separately " +
+      "rather than folded into one 'embedding' entry because the census keys on the " +
+      "module, and a provider that stops being reachable from the resolver would " +
+      "otherwise leave a declaration covering a path nobody can find.",
+  },
+  "search-rerank-cross-encoder": {
+    id: "search-rerank-cross-encoder",
+    verb: "o2b search query --rerank",
+    module: "src/core/search/rerank/cross-encoder.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason:
+      "sends the QUERY plus the candidate documents to a rerank endpoint, so it carries " +
+      "vault text the embedding path may never have seen - the top-of-pool bodies of the " +
+      "current result set, chosen by relevance to what the operator just asked. Unscanned " +
+      "for the same reason as the embedding path: a reranker scoring placeholders returns " +
+      "an order computed over text nobody wrote.",
+  },
+  "brain-telegram-capture": {
+    id: "brain-telegram-capture",
+    verb: "o2b brain telegram-run",
+    module: "src/core/brain/capture/telegram-capture.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason:
+      "POSTs reply text to the Telegram Bot API, and the `/catchup` reply is composed " +
+      "from vault content. The transport is built only by the CLI runner verb, so an " +
+      "install that never starts the runner never reaches this path at all - which is " +
+      "why it is a declared narrow exposure rather than a guard call: the bytes are a " +
+      "chat message the operator asked to be sent, and refusing to send one because it " +
+      "quotes a credential-shaped string would break the surface without protecting a " +
+      "destination the operator did not already choose.",
+  },
+  "research-external-fetch": {
+    id: "research-external-fetch",
+    verb: "o2b brain research",
+    module: "src/core/brain/research/external-fetch.ts",
+    redaction: R.unscannedNetworkPayload,
+    reason:
+      "the one transport every research provider's POST goes through, which is why it is " +
+      "declared here rather than at the provider modules that name the endpoints and " +
+      "never call the network themselves. What leaves is an agent-composed search query, " +
+      "not a page body, and the path is key-gated: with no key configured every call is " +
+      "a typed `disabled` error, so an install that never sets one has no egress here.",
   },
   "install-adapter-out": {
     id: "install-adapter-out",

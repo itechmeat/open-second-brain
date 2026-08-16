@@ -5,7 +5,7 @@
  * through MCPServer.handleRequest, the same core used by stdio.
  */
 
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { once } from "node:events";
 import type { Writable } from "node:stream";
@@ -162,11 +162,16 @@ async function handleHttpRequest(
     res.end();
     return;
   }
-  const headers: Record<string, string> = {};
-  if (jsonReq["method"] === "initialize") headers["mcp-session-id"] = randomUUID();
+  // No `mcp-session-id`. The header is a promise of per-session state, and
+  // this transport has none: one MCPServer instance serves every request
+  // (see `startHttp`), identity and scope are process-global, and the id
+  // that used to be minted here was never read back on any later request.
+  // A client that received it would be entitled to expect the server to
+  // recognise it - and to be told 404 once it expired - so advertising one
+  // was a claim nothing behind it could honour.
   const accept = String(req.headers.accept ?? "");
-  if (accept.includes("text/event-stream")) writeSse(res, response, headers);
-  else writeJson(res, response, headers);
+  if (accept.includes("text/event-stream")) writeSse(res, response);
+  else writeJson(res, response);
 }
 
 function authorized(req: IncomingMessage, apiKey: string): boolean {
@@ -270,24 +275,15 @@ async function readBody(req: IncomingMessage): Promise<string> {
   return Buffer.concat(chunks).toString("utf8");
 }
 
-function writeJson(
-  res: ServerResponse,
-  response: JsonRpcResponse,
-  extraHeaders: Record<string, string> = {},
-): void {
-  res.writeHead(200, { "content-type": "application/json", ...extraHeaders });
+function writeJson(res: ServerResponse, response: JsonRpcResponse): void {
+  res.writeHead(200, { "content-type": "application/json" });
   res.end(JSON.stringify(response));
 }
 
-function writeSse(
-  res: ServerResponse,
-  response: JsonRpcResponse,
-  extraHeaders: Record<string, string> = {},
-): void {
+function writeSse(res: ServerResponse, response: JsonRpcResponse): void {
   res.writeHead(200, {
     "content-type": "text/event-stream",
     "cache-control": "no-cache",
-    ...extraHeaders,
   });
   res.end(`event: message\ndata: ${JSON.stringify(response)}\n\n`);
 }

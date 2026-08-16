@@ -597,6 +597,12 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
 
   const dedup_hash = readOptionalTrimmedString(meta, "dedup_hash", path);
   const session_ref = readOptionalTrimmedString(meta, "session_ref", path);
+  // The write side has emitted `origin_vault` since the shared-namespace
+  // mirror shipped and nothing read it back, so a mirrored signal arrived in
+  // the shared vault indistinguishable from one written there
+  // (a-label-is-not-a-boundary, U5). Absent on every non-mirrored signal,
+  // which is every signal a single-vault install writes.
+  const origin_vault = readOptionalTrimmedString(meta, "origin_vault", path);
 
   const result: BrainSignal = {
     kind: "brain-signal",
@@ -614,6 +620,7 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     ...(schema_type !== undefined ? { schema_type } : {}),
     ...(dedup_hash !== undefined ? { dedup_hash } : {}),
     ...(session_ref !== undefined ? { session_ref } : {}),
+    ...(origin_vault !== undefined ? { origin_vault } : {}),
     ...readBiTemporal(meta, path),
     ...(readOptionalTrimmedString(meta, "expiration_date", path) !== undefined
       ? { expiration_date: readOptionalTrimmedString(meta, "expiration_date", path) }

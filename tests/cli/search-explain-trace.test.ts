@@ -84,6 +84,9 @@ function outcome(withReceipts: boolean): SearchOutcome {
     results: Object.freeze([RESULT]),
     warnings: Object.freeze([]),
     total: 2,
+    // Neutral match quality: this test weighs the receipts, not the match,
+    // and 1 is what the coverage report yields with no term mass to weigh.
+    idfWeightedCoverage: 1,
     ...(withReceipts ? { retrievalDecisionTrace: TRACE, memoryTrustAssessment: ASSESSMENT } : {}),
   });
 }

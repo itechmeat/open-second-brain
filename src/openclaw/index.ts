@@ -20,6 +20,7 @@ import { listVaultPages } from "../core/vault.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../core/brain/entities/page-scope.ts";
 import { deriveRuntimeAgentName, normalizeAgentArgument } from "../core/agent-identity.ts";
 import { vaultRelative as vaultRelativePath } from "../core/path-safety.ts";
+import { vaultPathField } from "../mcp/vault-path-field.ts";
 
 interface PluginConfig {
   vault?: string;
@@ -79,7 +80,7 @@ export default definePluginEntry({
           config_exists: discovery.exists,
           config_keys: Object.keys(discovery.data).toSorted(),
           config: redactConfigMapping(discovery.data),
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           vault_exists: presence.unexaminable ?? presence.present,
         };
         return {
@@ -139,7 +140,7 @@ export default definePluginEntry({
           }));
 
         const result = {
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           total_pages: pages.length,
           returned: matched.length,
           limit,
@@ -174,7 +175,7 @@ export default definePluginEntry({
         const repoRoot = (params["repo"] as string | undefined) ?? null;
         const results = doctor({ vault, repoRoot });
         const result = {
-          vault_path: vault,
+          vault_path: vaultPathField({ vault }),
           ok: results.every((r) => r.ok),
           checks: results.map((r) => ({
             name: r.name,

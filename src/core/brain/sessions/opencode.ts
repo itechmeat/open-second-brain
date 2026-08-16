@@ -78,7 +78,6 @@ function buildTurn(obj: Record<string, unknown>): SessionTurn | null {
 
 export const opencodeAdapter: SessionAdapter = {
   id: "opencode",
-  defaultAgent: "opencode",
   detect(firstLine: string): boolean {
     return parseMetaLine(firstLine) !== null;
   },

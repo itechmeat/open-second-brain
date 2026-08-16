@@ -35,13 +35,19 @@
  * heavily as a silent miss, which is what makes a strategy that always
  * injects score strictly worse than one that abstains correctly.
  *
- * A measured caveat that belongs with the number: through the shipped
- * keyword lane the top-ranked result's score is pinned at the configured
- * keyword weight (0.65 by default), because `rankResults` min-max
- * normalizes the lane. `below_floor` is therefore unreachable via the
- * default retriever today, and the abstain that actually fires on an
- * off-topic prompt is `no_matches`. The floor is still the term under
- * pressure - it is simply not, today, the term that fires.
+ * A measured caveat that used to belong with the number, kept because it
+ * is what the floor's current shape is a response to: through the shipped
+ * keyword lane the top-ranked result's SCORE is pinned at the configured
+ * keyword weight (`DEFAULT_KEYWORD_WEIGHT`, `src/core/search/index.ts`),
+ * because `rankResults`
+ * min-max normalizes the lane. While the floor was compared against that
+ * score, `below_floor` was unreachable via the default retriever and the
+ * abstain that actually fired on an off-topic prompt was `no_matches` -
+ * the term under pressure was not the term that fired. The floor now
+ * reads `idfWeightedCoverage`, which is absolute and pool-independent, so
+ * a weak match reaches `below_floor` and this bench grades the bound it
+ * says it grades. The stated weight is imported rather than written out,
+ * so it cannot drift from the shipped default again.
  *
  * ## 2. Write-back fidelity
  *
@@ -134,6 +140,7 @@ export function benchRecallRetriever(
         ),
       ),
       total: outcome.total,
+      idfWeightedCoverage: outcome.idfWeightedCoverage,
     });
   };
 }

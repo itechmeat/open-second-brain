@@ -14,7 +14,7 @@ import { toSearchCard } from "../cards.ts";
 import { classifyNegativeRecall } from "../../brain/negative-recall.ts";
 import { buildEvidencePack, downrankTerminalEvidenceResults } from "../evidence-pack.ts";
 import { buildRetrievalTrail, corpusStatementFor } from "../retrieval-trail.ts";
-import { buildEvidenceVerification } from "../evidence-verification.ts";
+import { buildEvidenceVerification, coverageOverResults } from "../evidence-verification.ts";
 import { fnv1aHex } from "../feedback.ts";
 import {
   attachTrustMetadata,
@@ -59,12 +59,17 @@ export interface EmptyOutcomeInput {
 
 /** The zero-candidate outcome: no pool to rank, filter or attribute. */
 export function emptyOutcome(input: EmptyOutcomeInput): SearchOutcome {
+  // Match quality is stated on every outcome, including this one: a
+  // retrieval that returned nothing covers none of the query's IDF mass,
+  // and saying so is what lets a floor distinguish "nothing matched" from
+  // "something matched badly" instead of inferring both from one score.
+  const coverage = coverageOverResults(input.store, input.query, NO_RESULTS);
   const evidencePack =
     input.opts.evidencePack === true
       ? buildEvidencePack(
           input.query,
           [],
-          buildEvidenceVerification(input.store, input.query, [], input.pathPrefix),
+          buildEvidenceVerification(input.store, input.pathPrefix, coverage),
         )
       : undefined;
   // A zero-candidate outcome is always attributable: either a lane
@@ -79,6 +84,7 @@ export function emptyOutcome(input: EmptyOutcomeInput): SearchOutcome {
     results: NO_RESULTS,
     warnings: Object.freeze(input.warnings),
     total: 0,
+    idfWeightedCoverage: coverage.idfWeightedCoverage,
     ...(evidencePack !== undefined ? { evidencePack } : {}),
     ...(input.routedSurface === "summary" ? { surface: input.routedSurface } : {}),
     ...(retrievalTrail !== undefined ? { retrievalTrail } : {}),
@@ -145,11 +151,18 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   const finalResults = wantsEvidencePack
     ? downrankTerminalEvidenceResults(input.results, terminalPaths)
     : input.results;
+  // Built once, over the rows this outcome actually carries, and read by
+  // both consumers: the evidence pack's verification block and the
+  // outcome's own `idfWeightedCoverage`. Computing it here rather than
+  // only in evidence-pack mode is the whole change - the number existed
+  // and was thrown away on every ordinary search, while four thresholds
+  // downstream had nothing absolute left to read.
+  const coverage = coverageOverResults(input.store, query, finalResults);
   const evidencePack = wantsEvidencePack
     ? buildEvidencePack(
         query,
         finalResults,
-        buildEvidenceVerification(input.store, query, finalResults, input.pathPrefix),
+        buildEvidenceVerification(input.store, input.pathPrefix, coverage),
         terminalPaths,
       )
     : undefined;
@@ -191,6 +204,7 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   });
 
   const tail = {
+    idfWeightedCoverage: coverage.idfWeightedCoverage,
     ...(retrievalTrail !== undefined ? { retrievalTrail } : {}),
     ...(evidencePack !== undefined ? { evidencePack } : {}),
     ...(input.secondPass !== undefined ? { secondPass: input.secondPass } : {}),

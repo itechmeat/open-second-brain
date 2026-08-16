@@ -19,6 +19,7 @@
 
 import { resolveAgentName } from "../../core/config.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { applyHygienePlan } from "../../core/brain/hygiene/apply.ts";
 import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
 import { resolveConflictFindings } from "../../core/brain/hygiene/resolve-conflicts.ts";
@@ -143,6 +144,26 @@ async function linkIntegrityView(ctx: ServerContext): Promise<Record<string, unk
   };
 }
 
+/**
+ * Per-detector counts over the findings actually returned.
+ *
+ * Every detector that RAN keeps a key, so a detector with nothing to say
+ * is still reported as having run with zero - the distinction between
+ * "not run" and "found nothing" that `detectors_run` and `counts`
+ * together carry.
+ */
+function countByDetector(
+  detectorsRun: ReadonlyArray<HygieneDetectorId>,
+  findings: ReadonlyArray<HygieneFinding>,
+): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const detector of detectorsRun) counts[detector] = 0;
+  for (const finding of findings) {
+    counts[finding.detector] = (counts[finding.detector] ?? 0) + 1;
+  }
+  return counts;
+}
+
 async function toolBrainHygiene(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -187,12 +208,21 @@ async function toolBrainHygiene(
   const report = scanWithResolver(ctx.vault, detectors, now);
 
   if (mode === "scan") {
+    // `findings[].targets` are artifact ids (or absolute paths rendered
+    // vault-relative) and the `title` spells the same artifact out in
+    // prose (a-label-is-not-a-boundary, U3, recon C2). `counts` is
+    // recomputed from the visible findings: a count over the unfiltered
+    // set would report how many findings were withheld.
+    const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+    const findings = view.keep(report.findings, (f) =>
+      f.targets.map((t) => (t.startsWith("/") ? vaultRelativeSafe(ctx.vault, t) : t)),
+    );
     return {
       mode,
       generated_at: report.generated_at,
       detectors_run: report.detectors_run,
-      counts: report.counts,
-      findings: report.findings.map((finding) => findingView(ctx.vault, finding)),
+      counts: countByDetector(report.detectors_run, findings),
+      findings: findings.map((finding) => findingView(ctx.vault, finding)),
       errors: report.errors,
       link_integrity: await linkIntegrityView(ctx),
     };

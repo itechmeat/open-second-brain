@@ -14,7 +14,12 @@
  *     filter against `PLACEHOLDER_AGENT_VALUES` (case-insensitive).
  *     Returns `null` for empty / placeholder inputs so the caller can
  *     fall back to the server-resolved default.
+ *   - `delegatedAgentName`: the identity a dispatched sub-agent writes
+ *     under, derived from its delegator's name and the id the host
+ *     assigned it.
  */
+
+import { createHash } from "node:crypto";
 
 export const PLACEHOLDER_AGENT_VALUES: ReadonlySet<string> = new Set([
   "agent",
@@ -52,6 +57,59 @@ export function normalizeAgentArgument(value: string | null | undefined): string
   const canonical = cleaned.toLowerCase().replace(/_/g, "-");
   if (PLACEHOLDER_AGENT_VALUES.has(canonical)) return null;
   return cleaned;
+}
+
+/**
+ * Marker segment joining a delegating identity to the sub-agent it
+ * dispatched. Kept as one token rather than a separator string so an
+ * absent delegator degrades to `sub-<id>` instead of a leading hyphen.
+ */
+const DELEGATED_NAME_MARKER = "sub";
+
+/** Characters of the host-supplied sub-agent id kept in a delegated name. */
+const DELEGATED_ID_SEGMENT_CHARS = 8;
+
+/** Runs of anything outside the canonical name alphabet, collapsed to one `-`. */
+const NON_CANONICAL_NAME_RUN_RE = /[^a-z0-9]+/g;
+
+/** Separator characters left at either end of a canonicalised segment. */
+const EDGE_SEPARATOR_RE = /^-+|-+$/g;
+
+/**
+ * Derive the Brain identity of a sub-agent from the identity that
+ * dispatched it and the id the host assigned it.
+ *
+ * A delegated turn was written by a different agent than the one that
+ * opened the session, and the host says so - Claude Code stamps `agentId`
+ * and `isSidechain: true` on every sidechain turn, under the PARENT's
+ * session id. Collapsing the two onto one name erases the only record of
+ * the boundary, which is why the roster could not tell a dispatched
+ * worker's contribution from its orchestrator's.
+ *
+ * The result is a real identity, not a placeholder: it carries the
+ * delegator's own name, so `normalizeAgentArgument` accepts it wherever a
+ * caller-supplied identity is accepted. The id is canonicalised to the
+ * name alphabet and truncated, because a host id is an opaque UUID and the
+ * whole of it in a frontmatter field is noise; an id that canonicalises to
+ * nothing falls back to a digest of the raw value rather than silently
+ * dropping the segment and reading as the delegator itself.
+ */
+export function delegatedAgentName(delegator: string, subAgentId: string): string {
+  const canonical = subAgentId
+    .toLowerCase()
+    .replace(NON_CANONICAL_NAME_RUN_RE, "-")
+    .replace(EDGE_SEPARATOR_RE, "")
+    .slice(0, DELEGATED_ID_SEGMENT_CHARS)
+    .replace(EDGE_SEPARATOR_RE, "");
+  const segment = canonical.length > 0 ? canonical : digestSegment(subAgentId);
+  return [delegator.trim(), DELEGATED_NAME_MARKER, segment]
+    .filter((part) => part.length > 0)
+    .join("-");
+}
+
+/** Stable short digest for an id with no character in the name alphabet. */
+function digestSegment(subAgentId: string): string {
+  return createHash("sha256").update(subAgentId).digest("hex").slice(0, DELEGATED_ID_SEGMENT_CHARS);
 }
 
 /**

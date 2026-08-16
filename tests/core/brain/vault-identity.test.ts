@@ -328,6 +328,9 @@ describe("the guard fires on Brain write paths", () => {
         },
       ],
       total: 1,
+      // A hit good enough to clear the 0.5 floor, so the guard under test is
+      // reached by a retriever that actually closes the gap task.
+      idfWeightedCoverage: 1,
     } satisfies RecallResultSet);
 
   function seedSnapshotArchive(vaultRoot: string): void {

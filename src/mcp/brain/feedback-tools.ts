@@ -56,7 +56,11 @@ import {
 } from "../../core/brain/types.ts";
 import { appendLogEvent } from "../../core/brain/log.ts";
 import { appendBrainNote } from "../../core/brain/note.ts";
-import { mirrorSignal, resolveSharedNamespace } from "../../core/brain/shared-namespace.ts";
+import {
+  mirrorReportFields,
+  mirrorSignal,
+  resolveSharedNamespace,
+} from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import {
@@ -228,27 +232,35 @@ async function toolBrainFeedback(
     // `confirmed_at` is now; `unconfirmed_until` is also now so the trial
     // window collapses on inspection. The just-written signal is recorded
     // as the rule's origin under `evidenced_by`.
-    prefResult = writePreference(ctx.vault, {
-      slug,
-      topic: topic.trim(),
-      principle: principle.trim(),
-      created_at: createdAt,
-      unconfirmed_until: createdAt,
-      status: BRAIN_PREFERENCE_STATUS.confirmed,
-      evidenced_by: [`[[${sigResult.id}]]`],
-      confirmed_at: createdAt,
-      // Issue #149: an explicit zero, not an absent value. The
-      // on-disk encoding of "absent" is the literal `null`, and two
-      // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
-      // `null` to negative infinity before sorting - so a rule
-      // force-confirmed a second ago would sort BELOW every rule
-      // that has a number, including one measured at zero. Zero is
-      // also the true Wilson lower bound on no evidence, which is
-      // why the dream pass already pre-seeds it for new
-      // preferences. This writer now matches it.
-      confidence_value: 0,
-      ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
-    });
+    prefResult = writePreference(
+      ctx.vault,
+      {
+        slug,
+        topic: topic.trim(),
+        principle: principle.trim(),
+        created_at: createdAt,
+        unconfirmed_until: createdAt,
+        status: BRAIN_PREFERENCE_STATUS.confirmed,
+        evidenced_by: [`[[${sigResult.id}]]`],
+        confirmed_at: createdAt,
+        // Issue #149: an explicit zero, not an absent value. The
+        // on-disk encoding of "absent" is the literal `null`, and two
+        // ranking surfaces (`pre-compress-pack`, `morning-brief`) map
+        // `null` to negative infinity before sorting - so a rule
+        // force-confirmed a second ago would sort BELOW every rule
+        // that has a number, including one measured at zero. Zero is
+        // also the true Wilson lower bound on no evidence, which is
+        // why the dream pass already pre-seeds it for new
+        // preferences. This writer now matches it.
+        confidence_value: 0,
+        ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+      },
+      // Ownership is resolved by the writer, never echoed from `agent`:
+      // that argument is caller-supplied, and a caller must not be able to
+      // name whose memory this becomes. The server's config path is handed
+      // over rather than a resolved name for the same reason.
+      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    );
     try {
       // Offset by 1s so the force-confirmed event sorts after the feedback
       // event on the same UTC second (parseLogDay is stable on ties, but a
@@ -270,7 +282,7 @@ async function toolBrainFeedback(
 
   return {
     kind: prefResult ? "preference" : "signal",
-    ...(mirror !== undefined ? { mirror } : {}),
+    ...mirrorReportFields(mirror),
     ...(advisory !== null ? { advisory } : {}),
     // Same key and same resolution as the CLI's `--json` renderer, from
     // the one composer: an agent that learns the exit on one surface

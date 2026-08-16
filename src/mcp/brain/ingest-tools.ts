@@ -23,7 +23,13 @@ import {
 import { resolveAgentName } from "../../core/config.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPathOwnerVisible, type FrontmatterCache } from "../../core/search/result-filters.ts";
-import { coerceBoolOptional, coerceInt, coerceStr, coerceStrList } from "../coerce.ts";
+import {
+  coerceAgentScope,
+  coerceBoolOptional,
+  coerceInt,
+  coerceStr,
+  coerceStrList,
+} from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
@@ -145,7 +151,7 @@ async function toolBrainSearchBySource(
   // fail-closed treatment of frontmatter that will not parse. `total`
   // counts what is returned; a total over the hidden pages would leak
   // their number. An absent scope filters nothing.
-  const scope = normalizeAgentScope(coerceStr(args, "agent_scope", false) ?? undefined);
+  const scope = normalizeAgentScope(coerceAgentScope(ctx, args, false));
   const cache: FrontmatterCache = new Map();
   const visible =
     scope === null

@@ -20,7 +20,12 @@ import { parseFrontmatterText } from "../src/core/vault.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import { buildInstructions } from "../src/mcp/instructions.ts";
 import { buildToolTable } from "../src/mcp/tools.ts";
-import type { ToolDefinition } from "../src/mcp/tool-contract.ts";
+import {
+  TOOL_SCOPE,
+  TOOL_SCOPES,
+  type ToolDefinition,
+  type ToolScope,
+} from "../src/mcp/tool-contract.ts";
 
 interface ToolRow {
   readonly name: string;
@@ -47,7 +52,7 @@ function sum(rows: ReadonlyArray<ToolRow>): { chars: number; tokens: number } {
 
 const json = process.argv.includes("--json");
 
-const rows: ToolRow[] = buildToolTable("full").map((t) => {
+const rows: ToolRow[] = buildToolTable(TOOL_SCOPE.full).map((t) => {
   const chars = wireSize(t);
   return {
     name: t.name,
@@ -59,8 +64,10 @@ const rows: ToolRow[] = buildToolTable("full").map((t) => {
 const listed = rows.filter((r) => !r.hidden);
 const hidden = rows.filter((r) => r.hidden);
 
-const fullInstructions = buildInstructions({ agent: "agent", scope: "full" });
-const writerInstructions = buildInstructions({ agent: "agent", scope: "writer" });
+// Every scope opens with the identity line, so every scope is measured.
+const instructionChars = Object.fromEntries(
+  TOOL_SCOPES.map((scope) => [scope, buildInstructions({ agent: "agent", scope }).length]),
+) as Record<ToolScope, number>;
 
 const vault = resolveVault();
 let active: { raw: number; budgeted: number } | null = null;
@@ -79,8 +86,9 @@ const report = {
   advertised_chars: sum(listed).chars,
   advertised_tokens_estimate: sum(listed).tokens,
   hidden_alias_chars: sum(hidden).chars,
-  instructions_full_chars: fullInstructions.length,
-  instructions_writer_chars: writerInstructions.length,
+  instructions_full_chars: instructionChars[TOOL_SCOPE.full],
+  instructions_writer_chars: instructionChars[TOOL_SCOPE.writer],
+  instructions_catalog_chars: instructionChars[TOOL_SCOPE.catalog],
   active_md: active,
   top_tools: listed
     .toSorted((a, b) => b.chars - a.chars)
@@ -95,8 +103,9 @@ if (json) {
     [
       `advertised tools      ${report.advertised_tools} (${report.advertised_chars} chars, ~${report.advertised_tokens_estimate} tokens)`,
       `hidden aliases        ${report.hidden_aliases} (${report.hidden_alias_chars} chars, callable but unlisted)`,
-      `instructions (full)   ${report.instructions_full_chars} chars`,
-      `instructions (writer) ${report.instructions_writer_chars} chars`,
+      `instructions (full)    ${report.instructions_full_chars} chars`,
+      `instructions (writer)  ${report.instructions_writer_chars} chars`,
+      `instructions (catalog) ${report.instructions_catalog_chars} chars`,
       active
         ? `active.md             ${active.raw} chars raw -> ${active.budgeted} chars injected (budget ${INJECT_BUDGET_CHARS_DEFAULT})`
         : "active.md             (no vault resolved)",

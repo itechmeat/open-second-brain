@@ -96,7 +96,6 @@ const ROLE_BY_KIND: Readonly<Record<string, "user" | "assistant">> = {
 
 export const grokAdapter: SessionAdapter = {
   id: "grok",
-  defaultAgent: "grok",
 
   detect(firstLine: string): boolean {
     return parseUpdateLine(firstLine) !== null;

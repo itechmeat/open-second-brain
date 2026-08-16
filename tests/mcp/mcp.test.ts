@@ -783,20 +783,69 @@ describe("serveStdioFromString respects scope+name", () => {
       "brain_pinned_context",
     ]);
   });
+
+  test("writer-scope initialize carries the resolved identity to the client", async () => {
+    // End to end over the transport the always-loaded server actually
+    // runs on, because `buildInstructions` returning the line is only
+    // half the claim: the handshake has to deliver it.
+    process.env["VAULT_AGENT_NAME"] = "vps-agent";
+    const ctx = { vault: "/tmp/x", configPath: null, repoRoot: null };
+    const initReq = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {} },
+    });
+    const out = await serveStdioFromString(ctx, `${initReq}\n`, {
+      scope: "writer",
+      serverName: "open-second-brain-writer",
+    });
+    const instructions = JSON.parse(out.trim()).result.instructions as string;
+    expect(instructions).toContain("You are @vps-agent on this Open Second Brain vault.");
+    expect(instructions).toContain("brain_feedback");
+  });
 });
 
 import { buildInstructions } from "../../src/mcp/instructions.ts";
+import { TOOL_SCOPE, TOOL_SCOPES } from "../../src/mcp/tool-contract.ts";
 
 describe("buildInstructions writer mode", () => {
   test("writer instructions name both tools and point at the full server", () => {
     const text = buildInstructions({
-      vault: "/tmp/x",
       agent: "@agent",
-      scope: "writer",
+      scope: TOOL_SCOPE.writer,
     });
     expect(text).toContain("brain_feedback");
     expect(text).toContain("brain_apply_evidence");
     expect(text).toContain("open-second-brain"); // points at sibling server
     expect(text).not.toMatch(/brain_dream/);
   });
+});
+
+describe("buildInstructions states the identity on every scope", () => {
+  // The writer scope is the always-loaded surface an agent carries into
+  // every session, and the four writers on it are exactly the
+  // identity-bearing ones - so the surface where the name matters most was
+  // the one that never said it. The identity line is not decoration: it is
+  // the standing instruction to log under one name and not invent another,
+  // and a scope that omits it leaves that instruction to chance.
+  const AGENT = "vps-agent";
+
+  // Driven off the membership list, not a copy of it: a fourth scope
+  // shipped without an identity line fails here without anyone
+  // remembering to extend this loop.
+  for (const scope of TOOL_SCOPES) {
+    test(`${scope} scope names the resolved agent`, () => {
+      const text = buildInstructions({ agent: AGENT, scope });
+      expect(text).toContain(`You are @${AGENT} on this Open Second Brain vault.`);
+    });
+
+    test(`${scope} scope renders a refusal, never a name, when identity is unresolved`, () => {
+      const reason = new Error("config unreadable: /etc/open-second-brain/config.yaml");
+      const text = buildInstructions({ agent: reason, scope });
+      expect(text).toContain("UNRESOLVED");
+      expect(text).toContain(reason.message);
+      expect(text).not.toContain("You are @");
+    });
+  }
 });

@@ -29,7 +29,6 @@ describe("SessionAdapter / SessionTurn / SessionToolCall shape (compile-time)", 
   test("a minimal stub adapter satisfies the interface", () => {
     const stub: SessionAdapter = {
       id: "claude",
-      defaultAgent: "claude",
       detect: () => false,
       iterate: async function* (_path: string) {
         void _path;

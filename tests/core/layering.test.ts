@@ -6,14 +6,21 @@
  * diagnostics on stderr (process.stderr.write, console.error) are an
  * established core pattern and stay allowed.
  *
- * This is a source scan, not an AST pass: comment-only lines are
- * skipped, everything else that mentions a banned call fails with a
- * file:line pointer.
+ * This is a source scan, not an AST pass, and it reads the shared census
+ * lexer's code view rather than deciding "is a comment" from a line
+ * prefix. The prefix rule was wrong in both directions: a continuation
+ * line inside a block comment does not start with `*` and was scanned as
+ * code, while a banned call quoted inside a string literal was reported
+ * as a violation. Neither is hypothetical - both shapes occur in this
+ * tree - and both are the same defect this repository keeps finding, a
+ * rule enforced by an instrument that cannot see its subject.
  */
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+
+import { lexCode } from "../helpers/source-lexer.ts";
 
 const CORE_ROOT = join(import.meta.dir, "..", "..", "src", "core");
 
@@ -36,33 +43,51 @@ function walk(dir: string): string[] {
   return out;
 }
 
-function isCommentLine(line: string): boolean {
-  const trimmed = line.trimStart();
-  return trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*");
+/**
+ * Banned calls in `text`, as `line:pattern` pairs. The code view blanks
+ * comment bodies and string / template / regex CONTENTS while preserving
+ * every offset, so a line number here still points at the same line of
+ * the original file.
+ */
+function bannedCallsIn(text: string): string[] {
+  const found: string[] = [];
+  lexCode(text)
+    .split("\n")
+    .forEach((line, i) => {
+      for (const { pattern, reason } of BANNED) {
+        if (line.includes(pattern)) found.push(`${i + 1} uses ${pattern} (${reason})`);
+      }
+    });
+  return found;
 }
 
 describe("core layering", () => {
   test("src/core never calls process.exit, process.stdout.write, or console.log", () => {
     const violations: string[] = [];
     for (const file of walk(CORE_ROOT)) {
-      const lines = readFileSync(file, "utf8").split("\n");
-      lines.forEach((line, i) => {
-        if (isCommentLine(line)) return;
-        for (const { pattern, reason } of BANNED) {
-          if (line.includes(pattern)) {
-            violations.push(`${file}:${i + 1} uses ${pattern} (${reason})`);
-          }
-        }
-      });
+      for (const hit of bannedCallsIn(readFileSync(file, "utf8"))) {
+        violations.push(`${file}:${hit}`);
+      }
     }
     expect(violations).toEqual([]);
   });
 
-  test("the scan actually detects a banned call", () => {
-    // Self-check so a broken walk or pattern list cannot rot into a
-    // vacuously green guard.
-    expect(isCommentLine("  // process.exit(1)")).toBe(true);
-    expect(isCommentLine("  process.exit(1);")).toBe(false);
+  test("the scan detects a banned call, and only where it is really code", () => {
+    // Positive control first: a guard that cannot fail proves nothing.
+    expect(bannedCallsIn("process.exit(1);\n")).toHaveLength(1);
+
+    // A line comment, the one shape the old prefix rule got right.
+    expect(bannedCallsIn("  // process.exit(1)\n")).toEqual([]);
+
+    // A CONTINUATION line of a block comment. It starts with neither
+    // `//`, `*` nor `/*`, so the prefix rule scanned it as code and this
+    // was a false violation waiting for someone to write the sentence.
+    expect(bannedCallsIn("/* explaining why\nconsole.log( is banned here\n*/\n")).toEqual([]);
+
+    // The other direction: the pattern quoted inside a string literal is
+    // not a call, and the prefix rule reported it as one.
+    expect(bannedCallsIn('const banned = "console.log(";\n')).toEqual([]);
+
     expect(walk(CORE_ROOT).length).toBeGreaterThan(100);
   });
 });

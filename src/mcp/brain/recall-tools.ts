@@ -74,6 +74,7 @@ import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/ret
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope } from "../coerce.ts";
@@ -203,7 +204,7 @@ async function toolBrainRecallTelemetry(
 
   if (operation === "list") {
     const records = listRecallTelemetry(ctx.vault, filter);
-    return { vault_path: ctx.vault, total: records.length, records };
+    return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
     const summary = summarizeRecallTelemetry(ctx.vault, filter);
@@ -218,7 +219,7 @@ async function toolBrainRecallTelemetry(
       ...(filter.until !== undefined ? { until: filter.until } : {}),
       ...(filter.limit !== undefined ? { limit: filter.limit } : {}),
     });
-    return { vault_path: ctx.vault, total: records.length, records };
+    return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "gate_summary") {
     const summary = summarizeGateTelemetry(ctx.vault, {
@@ -235,7 +236,7 @@ async function toolBrainRecallTelemetry(
     const artifacts = [...observedReuseRates(ctx.vault).entries()]
       .map(([key, r]) => ({ key, ...r }))
       .toSorted((a, b) => (a.score !== b.score ? b.score - a.score : a.key < b.key ? -1 : 1));
-    return { vault_path: ctx.vault, total: artifacts.length, artifacts };
+    return { vault_path: vaultPathField(ctx), total: artifacts.length, artifacts };
   }
   // Write-vs-read cost meter (memory cost meter): folds write volume
   // against the read telemetry above. Period-based; mode/status/host/limit
@@ -267,7 +268,7 @@ async function toolBrainRecallTelemetry(
         : {}),
       ...(writeHeavyRatio !== undefined ? { writeHeavyRatio } : {}),
     });
-    return { vault_path: ctx.vault, ...meter };
+    return { vault_path: vaultPathField(ctx), ...meter };
   }
   throw new MCPError(
     INVALID_PARAMS,
@@ -355,11 +356,11 @@ async function toolBrainRouteMetrics(
 
   if (operation === "list") {
     const records = listMcpRouteLatency(ctx.vault, filter);
-    return { vault_path: ctx.vault, total: records.length, records };
+    return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
     const summary = summarizeMcpRouteLatency(ctx.vault, filter);
-    return { vault_path: ctx.vault, ...summary };
+    return { vault_path: vaultPathField(ctx), ...summary };
   }
   throw new MCPError(INVALID_PARAMS, "brain_route_metrics: operation must be list or summary");
 }
@@ -381,7 +382,7 @@ async function toolBrainRetrievalPlan(
     ...(tokenBudget !== undefined ? { tokenBudget } : {}),
     ...(agentScope !== undefined ? { agentScope } : {}),
   });
-  return { vault_path: ctx.vault, ...serializeRetrievalPlan(plan) };
+  return { vault_path: vaultPathField(ctx), ...serializeRetrievalPlan(plan) };
 }
 
 function routeMetricsFilter(args: Record<string, unknown>): McpRouteLatencyFilter {
@@ -466,10 +467,10 @@ async function toolBrainTokenImpact(
       enabled || undefined,
     );
     if (record === null) {
-      return { vault_path: ctx.vault, recorded: false, enabled };
+      return { vault_path: vaultPathField(ctx), recorded: false, enabled };
     }
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       recorded: true,
       enabled,
       id: record.id,
@@ -504,18 +505,18 @@ async function toolBrainTokenImpact(
       enabled || undefined,
     );
     if (record === null) {
-      return { vault_path: ctx.vault, recorded: false, enabled };
+      return { vault_path: vaultPathField(ctx), recorded: false, enabled };
     }
-    return { vault_path: ctx.vault, recorded: true, enabled, id: record.id, outcome };
+    return { vault_path: vaultPathField(ctx), recorded: true, enabled, id: record.id, outcome };
   }
 
   const filter = tokenImpactFilter(args);
   if (operation === "list") {
     const records = listTokenImpact(ctx.vault, filter);
-    return { vault_path: ctx.vault, total: records.length, records };
+    return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
-    return { vault_path: ctx.vault, ...summarizeTokenImpact(ctx.vault, filter) };
+    return { vault_path: vaultPathField(ctx), ...summarizeTokenImpact(ctx.vault, filter) };
   }
   throw new MCPError(
     INVALID_PARAMS,
@@ -704,10 +705,10 @@ async function toolBrainContextPackOutcome(
       enabled || undefined,
     );
     if (post === null) {
-      return { vault_path: ctx.vault, recorded: false, enabled };
+      return { vault_path: vaultPathField(ctx), recorded: false, enabled };
     }
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       recorded: true,
       enabled,
       id: post.outcome.id,
@@ -724,10 +725,10 @@ async function toolBrainContextPackOutcome(
   const filter = contextPackOutcomeFilter(args);
   if (operation === "list") {
     const records = listContextPackOutcomes(ctx.vault, filter);
-    return { vault_path: ctx.vault, total: records.length, records };
+    return { vault_path: vaultPathField(ctx), total: records.length, records };
   }
   if (operation === "summary") {
-    return { vault_path: ctx.vault, ...summarizeContextPackOutcomes(ctx.vault, filter) };
+    return { vault_path: vaultPathField(ctx), ...summarizeContextPackOutcomes(ctx.vault, filter) };
   }
   throw new MCPError(
     INVALID_PARAMS,
@@ -861,7 +862,7 @@ async function toolBrainKnowledgeGaps(
     ...(maxSatisfaction !== undefined ? { maxSatisfaction } : {}),
     ...(limit !== undefined ? { limit } : {}),
   });
-  return { vault_path: ctx.vault, ...serializeQueryDemandReport(report) };
+  return { vault_path: vaultPathField(ctx), ...serializeQueryDemandReport(report) };
 }
 
 function coerceUnitInterval(name: string, raw: unknown): number | undefined {

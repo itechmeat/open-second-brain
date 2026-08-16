@@ -276,11 +276,23 @@ export function explainSchemaToken(vault: string, rawToken: string): SchemaExpla
   };
 }
 
+/**
+ * The declarations nothing uses - and, beside them, the artifacts this
+ * scan could not read.
+ *
+ * The second half is not a courtesy: "nothing uses this token" is a
+ * claim about every artifact in the vault, so an artifact that could not
+ * be read makes it provisional. Filtering the unreadable rows out would
+ * hand the caller a confident orphan list computed over a partial
+ * corpus, which is the shape a-label-is-not-a-boundary exists to remove.
+ */
 export function reviewSchemaOrphans(vault: string): SchemaOrphanReport {
+  const reported: ReadonlyArray<SchemaReportFinding["kind"]> = [
+    "unused-declaration",
+    "unreadable-artifact",
+  ];
   return {
-    orphans: buildSchemaReport(vault).findings.filter(
-      (finding) => finding.kind === "unused-declaration",
-    ),
+    orphans: buildSchemaReport(vault).findings.filter((finding) => reported.includes(finding.kind)),
   };
 }
 

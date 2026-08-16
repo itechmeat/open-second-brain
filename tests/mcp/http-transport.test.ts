@@ -222,7 +222,11 @@ describe("Streamable HTTP MCP transport", () => {
         { key: "secret" },
       );
       expect(initRes.status).toBe(200);
-      expect(initRes.headers.get("mcp-session-id")).toBeTruthy();
+      // No session header. One MCPServer instance serves every request on
+      // this transport and nothing is keyed by a session, so an id here
+      // would advertise state that does not exist - and the id that used
+      // to be minted was never read back on any later request.
+      expect(initRes.headers.get("mcp-session-id")).toBeNull();
       const init = await responseJson(initRes);
       expect(init.result.protocolVersion).toBe(PROTOCOL_VERSION);
 

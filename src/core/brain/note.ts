@@ -14,7 +14,12 @@ import { vaultRelative } from "../path-safety.ts";
 import { sanitiseTextField } from "../redactor.ts";
 
 import { appendLogEvent } from "./log.ts";
-import { mirrorNote, resolveSharedNamespace, type MirrorOutcome } from "./shared-namespace.ts";
+import {
+  mirrorNote,
+  mirrorReportFields,
+  resolveSharedNamespace,
+  type MirrorOutcome,
+} from "./shared-namespace.ts";
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND } from "./types.ts";
 
@@ -46,6 +51,12 @@ export interface AppendBrainNoteResult {
    * keep the previous result shape.
    */
   readonly mirror?: MirrorOutcome;
+  /**
+   * Why the mirror did not succeed. Present exactly when `mirror` is
+   * present and is not `ok`: a fail-soft outcome that carries no diagnosis
+   * is a bit the operator cannot act on.
+   */
+  readonly mirror_reason?: string;
 }
 
 /**
@@ -86,6 +97,6 @@ export function appendBrainNote(input: AppendBrainNoteInput): AppendBrainNoteRes
     log_path: vaultRelative(res.logPath, input.vault),
     absolute_log_path: resolve(res.logPath),
     agent,
-    ...(mirror !== undefined ? { mirror } : {}),
+    ...mirrorReportFields(mirror),
   };
 }

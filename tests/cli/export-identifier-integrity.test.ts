@@ -52,6 +52,8 @@ const DIGEST = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90
 const UUID = "f6f02ff9-6785-4ac9-8e4c-95f95be29cb5";
 /** 25 mixed characters that are NOT a content address: the old false positive. */
 const BUILD_ID = "release2024buildXYZabcdef";
+/** A signal id: 26 characters of the shape every OSB provenance link uses. */
+const SIGNAL_ID = "sig-2026-08-16-secret-leak";
 
 let tmp: string;
 let vault: string;
@@ -160,6 +162,37 @@ describe("the guard never rewrites an identifier", () => {
     expect(verdict.payload.alias).toBe(UUID);
     expect(verdict.payload.digest).toBe(DIGEST);
     expect(verdict.redacted).toBe(false);
+  });
+
+  test("a signal id survives, because a placeholder is a shared target", () => {
+    // `sig-<date>-<slug>` crosses the 24-character entropy gate as soon as
+    // the slug reaches nine characters, which is routine. Replacing it
+    // wrote `[[***REDACTED***]]` into `_evidenced_by`, and the import
+    // reported a full success while landing every preference that lost a
+    // signal id on one dangling wikilink - the merge the identifier rule
+    // exists to prevent, arriving through the payload pass instead.
+    const body = `evidence: [[${SIGNAL_ID}]]`;
+    const verdict = redactForEgress("brain-bank-export", {
+      body,
+      evidenced_by: [`[[${SIGNAL_ID}]]`],
+    });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.body).toBe(body);
+    expect(verdict.payload.evidenced_by[0]).toBe(`[[${SIGNAL_ID}]]`);
+    expect(verdict.redacted).toBe(false);
+  });
+
+  test("a token wearing a signal prefix is still redacted", () => {
+    // The carve-out is the signal-id SHAPE, not the prefix: a date and a
+    // lowercase slug. A vendor token behind `sig-` matches neither.
+    const verdict = redactForEgress("brain-bank-export", {
+      body: `sig-${VENDOR_TOKEN} and sig-2026-08-16-Zq7Xb2Kd9Lm4Np6Rt8Vw1Yc9`,
+    });
+    expect(verdict.outcome).toBe(EGRESS_OUTCOME.released);
+    if (verdict.outcome !== EGRESS_OUTCOME.released) throw new Error("unreachable");
+    expect(verdict.payload.body).not.toContain(VENDOR_TOKEN);
+    expect(verdict.payload.body).not.toContain("Zq7Xb2Kd9Lm4Np6Rt8Vw1Yc9");
   });
 
   test("a URL credential under an identifier key is still scrubbed", () => {

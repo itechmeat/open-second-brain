@@ -7,6 +7,7 @@
  */
 
 import { buildBacklinkIndex } from "../../core/brain/backlinks.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { readPrefAudit } from "../../core/brain/pref-audit.ts";
 import { aggregateSources } from "../../core/brain/portability/sources.ts";
 import { findUnlinkedMentions } from "../../core/brain/link-graph/unlinked-mentions.ts";
@@ -29,8 +30,10 @@ import {
 import type { BrainLogEntry } from "../../core/brain/log.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
+  coerceAgentScope,
   coerceStr,
   coerceStrList,
   coerceBoolOptional,
@@ -139,9 +142,9 @@ async function toolBrainQuery(
   // Owner-scoped fact recall (Knowledge Provenance suite, v1.7). Off by
   // default: when the guardrail flag is off (or no scope is requested) the
   // scope is null and every fact is visible exactly as before.
-  const requestedScope = coerceStr(args, "agent_scope", false);
+  const requestedScope = coerceAgentScope(ctx, args, false);
   const ownerScope = loadGuardrailsConfigSafe(ctx.vault).owner_scoped_facts
-    ? normalizeAgentScope(requestedScope ?? undefined)
+    ? normalizeAgentScope(requestedScope)
     : null;
 
   const startedAtMs = Date.now();
@@ -240,13 +243,13 @@ async function toolBrainAgentQuery(
   // Owner-scope isolation (context-integrity-gates, Unit A): the
   // provenance view reads the same preference and retired pages the
   // delivery surfaces do, so it honours the same ownership rule.
-  const ownerScope = coerceStr(args, "agent_scope", false);
+  const ownerScope = coerceAgentScope(ctx, args, false);
   return queryAgentSources(ctx.vault, {
     agents: coerceStrList(args, "agents"),
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),
     ...(kind !== null ? { kind } : {}),
-    ...(ownerScope !== null ? { ownerScope } : {}),
+    ...(ownerScope !== undefined ? { ownerScope } : {}),
     limit: coerceInt(args, "limit", 50, 1, 500),
   }) as unknown as Record<string, unknown>;
 }
@@ -259,8 +262,16 @@ async function toolBrainAgentDiff(
   const topic = coerceStr(args, "topic", false);
   const query = coerceStr(args, "query", false);
   const kind = coerceAgentContributionKind(args, "kind");
+  // The twin of `brain_agent_query` over the same provenance fold, and
+  // it returns the same contribution rows - ids, topics and the record
+  // text. `brain_agent_query` honours an explicit `agent_scope`; this
+  // tool declares no such argument, so it takes the GATED server
+  // identity, which is `null` unless the operator set
+  // `integrity.owner_scope_delivery: fail` (a-label-is-not-a-boundary, U3).
+  const ownerScope = gatedOwnerScopeView(ctx.vault, ctx.agentName).scope;
   return diffAgentSources(ctx.vault, {
     ...(mode !== null ? { mode } : {}),
+    ...(ownerScope !== null ? { ownerScope } : {}),
     agents: coerceStrList(args, "agents"),
     ...(topic !== null ? { topic } : {}),
     ...(query !== null ? { query } : {}),
@@ -311,7 +322,11 @@ async function toolBrainBacklinks(
   // `[[pref-foo|Alias]]`, and `Brain/preferences/pref-foo.md` all
   // resolve to the same lookup.
   const target = normaliseWikilinkTarget(id);
-  const index = buildBacklinkIndex(ctx.vault);
+  // The refs name the artifacts that WROTE them, so an unscoped index
+  // published another owner's preference and retired ids to any caller
+  // (a-label-is-not-a-boundary, U3). The scope is the gated one: no
+  // argument exists on this tool, and under `off` the view hides nothing.
+  const index = buildBacklinkIndex(ctx.vault, gatedOwnerScopeView(ctx.vault, ctx.agentName).scope);
   const refs = index.get(target) ?? [];
   return {
     id: target,
@@ -322,6 +337,20 @@ async function toolBrainBacklinks(
       field: r.field,
       ...(r.timestamp !== undefined ? { timestamp: r.timestamp } : {}),
     })),
+    // A `count` beside a non-empty `unparsed` is not a measurement: the
+    // walk skipped artifacts whose references it could not read, and a
+    // caller told only the count would read a legacy vault's zero as a
+    // genuine zero. Omitted entirely when the walk was clean, so a
+    // healthy vault's payload is byte-identical.
+    ...(index.unparsed.length > 0
+      ? {
+          unparsed: index.unparsed.map((u) => ({
+            source: u.source,
+            source_kind: u.sourceKind,
+            reason: u.reason,
+          })),
+        }
+      : {}),
   };
 }
 
@@ -414,9 +443,14 @@ async function toolBrainUnlinkedMentions(
       );
     }
   }
-  const mentions = findUnlinkedMentions(ctx.vault, targetId, limit !== undefined ? { limit } : {});
+  // `context` is the source artifact's own line of prose, so an
+  // unscoped scan republished an owner-private body (U3, recon C3).
+  const mentions = findUnlinkedMentions(ctx.vault, targetId, {
+    ...(limit !== undefined ? { limit } : {}),
+    ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+  });
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     target_id: targetId,
     mentions: mentions.map((m) => ({
       source: m.source,

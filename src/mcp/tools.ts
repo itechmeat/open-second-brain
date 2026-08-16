@@ -21,12 +21,7 @@
  * only assembles them in a stable order and applies scope filtering.
  */
 
-import {
-  ConfigReadError,
-  discoverConfig,
-  resolveExposeHostPaths,
-  vaultStoreReference,
-} from "../core/config.ts";
+import { ConfigReadError, discoverConfig } from "../core/config.ts";
 import { redactConfigMapping } from "../core/egress/guard.ts";
 import type { ConfigDiscovery } from "../core/types.ts";
 import { REMOVED_TOOLS } from "../core/removed-surfaces.ts";
@@ -52,11 +47,14 @@ import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceInt } from "./co
 import type { OutputSchema } from "./output-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { CAPABILITY_DIAGNOSTIC_TOOL } from "./capabilities.ts";
-import type {
-  ServerContext,
-  ToolCapabilityReport,
-  ToolDefinition,
-  ToolScope,
+import { unresolvedField, vaultPathField } from "./vault-path-field.ts";
+import {
+  TOOL_SCOPE,
+  TOOL_SCOPES,
+  type ServerContext,
+  type ToolCapabilityReport,
+  type ToolDefinition,
+  type ToolScope,
 } from "./tool-contract.ts";
 
 // PLACEHOLDER_AGENT_VALUES + normalizeAgentArgument live in
@@ -79,44 +77,12 @@ function vaultRelpath(target: string, vault: string): string {
   }
 }
 
-/**
- * A field whose value could not be resolved, carrying the reason. Same
- * shape `toolStatus` already degrades the `vault` block to when the vault
- * scope cannot be resolved, and `buildSearchStatusBlock` its own: the
- * failure is a value the consumer reads, never a key it has to notice is
- * missing.
- */
-
-function unresolved(err: Error): UnresolvedField {
-  return { error: err.message };
-}
-
-/**
- * The `vault_path` field for an MCP response. By default this is the
- * opaque, stable store reference (`vault://<hex>`) rather than the
- * absolute host path, since MCP responses land in model context. The
- * `expose_host_paths` config escape hatch restores the raw path for
- * operators whose tooling depends on it (D2).
- *
- * Both branches read the device-local config - the escape hatch is a
- * config flag and the reference is keyed by a config-held secret - so an
- * unreadable config leaves this field, and ONLY this field, unresolvable.
- * It reports the reason rather than raising, because raising here took
- * down whole diagnostic payloads on their very last field. Degrading to
- * the raw host path instead would breach the redaction contract this
- * function exists to enforce, so there is no value to fall back to.
- */
-function vaultPathField(ctx: ServerContext): string | UnresolvedField {
-  const configPath = ctx.configPath ?? undefined;
-  try {
-    return resolveExposeHostPaths(configPath)
-      ? ctx.vault
-      : vaultStoreReference(ctx.vault, configPath);
-  } catch (err) {
-    if (err instanceof ConfigReadError) return unresolved(err);
-    throw err;
-  }
-}
+// The `vault_path` field and its unresolved-value shape live in
+// `./vault-path-field.ts`: every module that emits the field has to be
+// able to reach the one function that enforces its contract, and this
+// aggregator imports those modules, so it cannot be the one that holds
+// it. `unresolvedField` comes back from there too, so the degraded-value
+// shape has one definition as well.
 
 // ── Tool implementations ────────────────────────────────────────────────────
 
@@ -156,7 +122,8 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
   // did, which is precisely what the probe could not determine. The absent
   // branch keeps omitting them, because there the omission IS the answer.
   const { present: vaultExists, unexaminable } = probeVaultDirectory(ctx.vault);
-  const configKeys = broken === null ? Object.keys(discovery.data).toSorted() : unresolved(broken);
+  const configKeys =
+    broken === null ? Object.keys(discovery.data).toSorted() : unresolvedField(broken);
   // Safe to call on a vault that has no Brain layer yet — returns
   // `present: false` with zero counts.
   const brain = vaultExists ? computeBrainStatus(ctx.vault) : unexaminable;
@@ -204,7 +171,7 @@ async function toolStatus(ctx: ServerContext): Promise<Record<string, unknown>> 
     config_path: String(discovery.path),
     config_exists: discovery.exists,
     config_keys: configKeys,
-    config: broken === null ? redactConfigMapping(discovery.data) : unresolved(broken),
+    config: broken === null ? redactConfigMapping(discovery.data) : unresolvedField(broken),
     vault_path: vaultPathField(ctx),
     // `boolean | { error }`. Both answerable cases keep their exact literal
     // - `true` when the directory is there, `false` when it is genuinely
@@ -375,7 +342,7 @@ const CAPABILITIES_OUTPUT_SCHEMA: OutputSchema = {
     "withheld",
   ],
   properties: {
-    scope: { type: "string", enum: ["full", "writer", "catalog"] },
+    scope: { type: "string", enum: TOOL_SCOPES },
     server_name: { type: "string" },
     static_tool_count: { type: "integer" },
     available_tool_count: { type: "integer" },
@@ -435,7 +402,7 @@ const CATALOG_ADVERTISED_NAMES: ReadonlySet<string> = new Set([
   TOOL_HYDRATE_NAME,
 ]);
 
-export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
+export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefinition[] {
   const all: ToolDefinition[] = [
     {
       name: CAPABILITY_DIAGNOSTIC_TOOL,
@@ -531,12 +498,12 @@ export function buildToolTable(scope: ToolScope = "full"): ToolDefinition[] {
     ...WATCHDOG_TOOLS,
     ...SKILL_TOOLS,
   ];
-  if (scope === "writer") return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
+  if (scope === TOOL_SCOPE.writer) return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
   // The hydrate tool closes over the finished table (itself included)
   // so its catalog and schema lookups always reflect this process's
   // real surface.
   all.push(buildHydrateTool(() => all));
-  if (scope === "full") return all;
+  if (scope === TOOL_SCOPE.full) return all;
   // Catalog scope: the compact first-pass set stays advertised; every
   // other tool keeps `hidden` semantics - callable, not listed.
   return all.map((t) =>

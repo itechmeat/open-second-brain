@@ -34,12 +34,39 @@ export const RECALL_ADEQUACY_ACTIONS = ["proceed", "re_recall", "abstain"] as co
 export type RecallAdequacyAction = (typeof RECALL_ADEQUACY_ACTIONS)[number];
 
 export interface RecallAdequacyThresholds {
-  /** Top score at/above which recall is sufficient. */
+  /** Match quality at/above which recall is sufficient. */
   readonly sufficient: number;
-  /** Top score at/above which recall is at least weak (below => insufficient). */
+  /** Match quality at/above which recall is at least weak (below => insufficient). */
   readonly weak: number;
   /** Minimum usable-result count below which recall cannot be sufficient. */
   readonly minResults: number;
+}
+
+/**
+ * One recall attempt, as the verdict reads it.
+ *
+ * The level is decided by {@link matchQuality} and never by
+ * {@link scores}. It used to be decided by the top score, and that could
+ * not work: the keyword lane is min-max normalised inside the candidate
+ * set, so the top row of any non-empty recall is pinned at the configured
+ * `keywordWeight` - shipped at 0.6, which is exactly
+ * {@link DEFAULT_RECALL_ADEQUACY_THRESHOLDS}.sufficient. Every keyword
+ * recall in the product graded `sufficient / proceed`, `weak` and
+ * `insufficient` were unreachable, and a hundredth of a point on either
+ * constant would have inverted the verdict for every query at once.
+ *
+ * `scores` is still read, for the two things it can honestly answer: how
+ * many usable results there were, and what their spread was.
+ */
+export interface RecallAdequacyInput {
+  /**
+   * Absolute, pool-independent match quality in `[0,1]` - the share of the
+   * query's IDF mass the retrieved material covers
+   * (`SearchOutcome.idfWeightedCoverage`).
+   */
+  readonly matchQuality: number;
+  /** Per-result relevance scores: the count and the mean, never the level. */
+  readonly scores: ReadonlyArray<number>;
 }
 
 export const DEFAULT_RECALL_ADEQUACY_THRESHOLDS: RecallAdequacyThresholds = Object.freeze({
@@ -54,10 +81,16 @@ export interface RecallAdequacyVerdict {
   /** True when the result should be flagged for review / surfaced to an operator. */
   readonly escalate: boolean;
   readonly resultCount: number;
-  /** Highest usable score, or 0 when there are no usable results. */
+  /**
+   * Highest usable score, or 0 when there are no usable results.
+   * Descriptive: it reports where the top row sat in its own pool and
+   * decides nothing.
+   */
   readonly topScore: number;
   /** Mean of usable scores, or 0 when there are no usable results. */
   readonly meanScore: number;
+  /** The quantity the level was decided by; see {@link RecallAdequacyInput}. */
+  readonly matchQuality: number;
   readonly reason: string;
 }
 
@@ -97,16 +130,36 @@ function round4(value: number): number {
 }
 
 /**
- * Classify recall fitness from the relevance scores of a recall attempt
- * and name the explicit action. Non-finite scores are dropped; negative
- * scores clamp to 0 (search scores are normalized to [0,1]).
+ * Reject a match quality that cannot be compared against the thresholds.
+ *
+ * An out-of-range or non-finite quality is a caller defect, not a weak
+ * recall: clamping it would produce a confident `insufficient` from a
+ * broken measurement, which is indistinguishable from a genuine one.
+ */
+function requireMatchQuality(value: number): number {
+  if (!Number.isFinite(value) || value < 0 || value > 1) {
+    throw new Error(`recall adequacy: matchQuality must be in [0,1]; got ${value}`);
+  }
+  return value;
+}
+
+/**
+ * Classify recall fitness from the match quality of a recall attempt and
+ * name the explicit action.
+ *
+ * The level comes from {@link RecallAdequacyInput.matchQuality} alone. The
+ * scores decide only how many usable results there were - which is what
+ * `minResults` gates - and what their spread was. Non-finite scores are
+ * dropped; negative scores clamp to 0 (search scores are normalized to
+ * [0,1]).
  */
 export function assessRecallAdequacy(
-  scores: ReadonlyArray<number>,
+  input: RecallAdequacyInput,
   overrides?: Partial<RecallAdequacyThresholds>,
 ): RecallAdequacyVerdict {
   const thresholds = resolveThresholds(overrides);
-  const usable = scores.filter((s) => Number.isFinite(s)).map((s) => Math.max(0, s));
+  const matchQuality = requireMatchQuality(input.matchQuality);
+  const usable = input.scores.filter((s) => Number.isFinite(s)).map((s) => Math.max(0, s));
   const resultCount = usable.length;
 
   if (resultCount === 0) {
@@ -114,46 +167,43 @@ export function assessRecallAdequacy(
       resultCount: 0,
       topScore: 0,
       meanScore: 0,
+      matchQuality,
       reason: "no recall results — insufficient grounding",
     });
   }
 
-  const topScore = Math.max(...usable);
-  const meanScore = usable.reduce((a, b) => a + b, 0) / resultCount;
+  const parts = {
+    resultCount,
+    topScore: Math.max(...usable),
+    meanScore: usable.reduce((a, b) => a + b, 0) / resultCount,
+    matchQuality,
+  };
 
-  if (topScore >= thresholds.sufficient) {
+  if (matchQuality >= thresholds.sufficient) {
     if (resultCount >= thresholds.minResults) {
       return finalize("sufficient", {
-        resultCount,
-        topScore,
-        meanScore,
-        reason: `top score ${round4(topScore)} >= sufficient ${thresholds.sufficient} across ${resultCount} result(s) — sufficient grounding`,
+        ...parts,
+        reason: `match quality ${round4(matchQuality)} >= sufficient ${thresholds.sufficient} across ${resultCount} result(s) — sufficient grounding`,
       });
     }
-    // Strong single hit but too few corroborating results: re-recall to
+    // Strong coverage from too few corroborating results: re-recall to
     // broaden before answering rather than proceed on a lone signal.
     return finalize("weak", {
-      resultCount,
-      topScore,
-      meanScore,
-      reason: `strong top score ${round4(topScore)} but only ${resultCount} result(s) < min_results ${thresholds.minResults} — re-recall to broaden`,
+      ...parts,
+      reason: `strong match quality ${round4(matchQuality)} but only ${resultCount} result(s) < min_results ${thresholds.minResults} — re-recall to broaden`,
     });
   }
 
-  if (topScore >= thresholds.weak) {
+  if (matchQuality >= thresholds.weak) {
     return finalize("weak", {
-      resultCount,
-      topScore,
-      meanScore,
-      reason: `top score ${round4(topScore)} in [${thresholds.weak}, ${thresholds.sufficient}) — weak grounding, re-recall via alternate strategy`,
+      ...parts,
+      reason: `match quality ${round4(matchQuality)} in [${thresholds.weak}, ${thresholds.sufficient}) — weak grounding, re-recall via alternate strategy`,
     });
   }
 
   return finalize("insufficient", {
-    resultCount,
-    topScore,
-    meanScore,
-    reason: `top score ${round4(topScore)} < weak ${thresholds.weak} — insufficient grounding, abstain`,
+    ...parts,
+    reason: `match quality ${round4(matchQuality)} < weak ${thresholds.weak} — insufficient grounding, abstain`,
   });
 }
 
@@ -163,6 +213,7 @@ function finalize(
     readonly resultCount: number;
     readonly topScore: number;
     readonly meanScore: number;
+    readonly matchQuality: number;
     readonly reason: string;
   },
 ): RecallAdequacyVerdict {
@@ -173,6 +224,7 @@ function finalize(
     resultCount: parts.resultCount,
     topScore: round4(parts.topScore),
     meanScore: round4(parts.meanScore),
+    matchQuality: round4(parts.matchQuality),
     reason: parts.reason,
   });
 }

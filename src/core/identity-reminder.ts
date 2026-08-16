@@ -38,12 +38,27 @@ const TEMPLATE_PATH = resolve(
  * delivered by `hooks/lib/messages.ts:postWriteReminder`, which is
  * a different mechanism.
  */
-export const KNOWN_RUNTIME_TARGETS = ["hermes", "openclaw"] as const;
+export const RUNTIME_TARGET = Object.freeze({
+  /** Hermes, through its Python `pre_llm_call` shim. */
+  hermes: "hermes",
+  /** OpenClaw, through its native `before_prompt_build` hook. */
+  openclaw: "openclaw",
+} as const);
 
-export type RuntimeTarget = (typeof KNOWN_RUNTIME_TARGETS)[number];
+/** Closed union over {@link RUNTIME_TARGET}. */
+export type RuntimeTarget = (typeof RUNTIME_TARGET)[keyof typeof RUNTIME_TARGET];
 
-export function isRuntimeTarget(value: string | undefined): value is RuntimeTarget {
-  return typeof value === "string" && (KNOWN_RUNTIME_TARGETS as readonly string[]).includes(value);
+/** Membership list, in the order the templates were added. */
+export const KNOWN_RUNTIME_TARGETS: ReadonlyArray<RuntimeTarget> = Object.freeze([
+  RUNTIME_TARGET.hermes,
+  RUNTIME_TARGET.openclaw,
+]);
+
+/** Narrow a target name arriving from the environment or a caller. */
+export function isRuntimeTarget(value: unknown): value is RuntimeTarget {
+  return (
+    typeof value === "string" && (KNOWN_RUNTIME_TARGETS as ReadonlyArray<string>).includes(value)
+  );
 }
 
 let commonTemplateCache: string | undefined;

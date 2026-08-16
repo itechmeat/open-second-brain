@@ -87,7 +87,7 @@ const ADEQUACY_BUCKET = normalizeQueryTerms(ADEQUACY_QUERY).join(" ");
 
 /** Seed a recurring weak-recall bucket (signals-that-survive, unit 6). */
 function seedUnmetRecall(times: number): void {
-  const verdict = assessRecallAdequacy([0.4]);
+  const verdict = assessRecallAdequacy({ matchQuality: 0.4, scores: [0.9] });
   for (let i = 0; i < times; i++) {
     recordRecallAdequacyDemand(vault, {
       query: ADEQUACY_QUERY,

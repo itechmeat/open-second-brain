@@ -46,13 +46,18 @@ import {
 } from "../../core/brain/context-presets.ts";
 import { extractPreCompactRecords } from "../../core/brain/pre-compact-extract.ts";
 import { EventTraceSelectorError, resolveLogEventTraces } from "../../core/brain/event-trace.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
+  MATCH_QUALITY_SCHEMA,
+  RECALL_SCORES_SCHEMA,
   coerceAgentScope,
+  coerceRecallAdequacyInput,
   coerceStr,
   coerceStrList,
   coerceBool,
@@ -96,11 +101,11 @@ async function toolBrainContextPack(
   // Adequacy verdict (t_b8f66fec): when the caller passes the recall
   // scores that produced this material, classify grounding fitness and
   // name the action; also persist it in the receipt for the audit trail.
-  const recallScores = parseRecallScores(args["recall_scores"]);
+  const recallAttempt = coerceRecallAdequacyInput("brain_context_pack", args, "recall_scores");
   const adequacy =
-    recallScores !== undefined
+    recallAttempt !== undefined
       ? assessRecallAdequacy(
-          recallScores,
+          recallAttempt,
           resolveRecallAdequacyThresholds(ctx.configPath ?? undefined),
         )
       : undefined;
@@ -175,7 +180,7 @@ async function toolBrainContextPack(
     ...(attentionFlowIds.length > 0 ? { attentionFlowIds } : {}),
   });
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     max_tokens: report.maxTokens,
     tokens_used: report.tokensUsed,
     items: report.items.map((i) => ({
@@ -218,36 +223,6 @@ async function toolBrainContextPack(
   };
 }
 
-/**
- * Parse the optional `recall_scores` argument. Returns `undefined` when
- * absent (verdict skipped) and throws INVALID_PARAMS on a malformed
- * shape. An empty array is a valid "no results" signal.
- */
-function parseRecallScores(raw: unknown): ReadonlyArray<number> | undefined {
-  if (raw === undefined || raw === null) return undefined;
-  if (!Array.isArray(raw)) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_context_pack: recall_scores must be an array of numbers",
-    );
-  }
-  if (raw.length > 200) {
-    throw new MCPError(
-      INVALID_PARAMS,
-      "brain_context_pack: recall_scores must not exceed 200 items",
-    );
-  }
-  for (const item of raw) {
-    if (typeof item !== "number") {
-      throw new MCPError(
-        INVALID_PARAMS,
-        "brain_context_pack: recall_scores must contain only numbers",
-      );
-    }
-  }
-  return raw as ReadonlyArray<number>;
-}
-
 // ----- brain_context_receipts ---------------------------------------------
 
 async function toolBrainContextReceipts(
@@ -274,7 +249,7 @@ async function toolBrainContextReceipts(
     });
     const summaries = receipts.map(summarizeContextReceipt);
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       total: summaries.length,
       receipts: summaries,
     };
@@ -370,7 +345,7 @@ async function summarizeReceipts(
   });
   if (!fold.recorded) {
     return {
-      vault_path: ctx.vault,
+      vault_path: vaultPathField(ctx),
       recorded: false,
       max_receipts: fold.max_receipts,
       note: "no receipts recorded for this filter; receipt emission is opt-in per call",
@@ -387,7 +362,7 @@ async function summarizeReceipts(
   const items = limit === undefined ? fold.items : fold.items.slice(0, limit);
 
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     recorded: true,
     receipt_count: fold.receipt_count,
     item_total: fold.item_total,
@@ -450,6 +425,9 @@ async function toolBrainEventTrace(
       ...(sessionId !== undefined ? { sessionId } : {}),
       ...(limit !== undefined ? { limit } : {}),
       ...(keepPrivate === true ? { keepPrivate: true } : {}),
+      // The event body is echoed verbatim and log payloads carry
+      // artifact paths (a-label-is-not-a-boundary, U3).
+      ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
     });
   } catch (err) {
     // A selector-validation error (bad date/at/kind, checked before any IO) is
@@ -463,7 +441,7 @@ async function toolBrainEventTrace(
   }
 
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     total: events.length,
     trace_total: events.reduce((sum, e) => sum + e.traceCount, 0),
     events,
@@ -577,7 +555,7 @@ async function toolBrainPreCompressPack(
     ...(telemetry !== undefined ? { telemetry } : {}),
   });
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     text: pack.text,
     active_head_included: pack.activeHeadIncluded,
     ...(pack.activeHeadSafety ? { active_head_safety: pack.activeHeadSafety } : {}),
@@ -758,13 +736,8 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
-        recall_scores: {
-          type: "array",
-          maxItems: 200,
-          items: { type: "number" },
-          description:
-            "Optional relevance scores of the recall behind this material. When given, the response adds an adequacy verdict (level + action) and persists it in the receipt.",
-        },
+        recall_scores: RECALL_SCORES_SCHEMA,
+        match_quality: MATCH_QUALITY_SCHEMA,
         telemetry: {
           type: "boolean",
           description:

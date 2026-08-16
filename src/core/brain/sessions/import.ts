@@ -28,6 +28,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, join, resolve } from "node:path";
 
+import { delegatedAgentName } from "../../agent-identity.ts";
 import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
@@ -424,7 +425,7 @@ export async function importSession(
     if (mayWrite && turn.text && turn.role === "user") {
       const routed = routeExtractedFacts(vault, {
         facts: extractFacts(turn.text),
-        agent: agentLabelForTurn(turn, adapter.id, opts.agent),
+        agent: agentLabelForTurn(turn, opts.agent),
         now,
         sessionRef: `${sessionKey}#${turn.turnId}`,
         dedup,
@@ -455,7 +456,7 @@ export async function importSession(
           signal: m.signal,
           principle: m.principle,
           ...(m.scope ? { scope: m.scope } : {}),
-          agent: m.agent ?? agentLabelForTurn(turn, adapter.id, opts.agent),
+          agent: m.agent ?? agentLabelForTurn(turn, opts.agent),
           ...(m.note ? { note: m.note } : {}),
           turnId: turn.turnId,
           eventTimestamp: turn.timestamp,
@@ -487,7 +488,7 @@ export async function importSession(
             sourceRefs: [{ id: `${sessionKey}:${call.id ?? turn.turnId}:${invokedSkill}` }],
             payload: {
               skill: invokedSkill,
-              agent: agentLabelForTurn(turn, adapter.id, opts.agent),
+              agent: agentLabelForTurn(turn, opts.agent),
               tool: call.name,
               runtime: adapter.id,
               ...(citedOffer !== null ? { [SKILL_OFFER_ID_KEY]: citedOffer } : {}),
@@ -517,7 +518,7 @@ export async function importSession(
         signal: v.signal,
         principle: v.principle,
         ...(v.scope ? { scope: v.scope } : {}),
-        agent: v.agent ?? agentLabelForTurn(turn, adapter.id, opts.agent),
+        agent: v.agent ?? agentLabelForTurn(turn, opts.agent),
         ...(v.raw ? { note: v.raw } : {}),
         turnId: call.id ?? turn.turnId,
         eventTimestamp: turn.timestamp,
@@ -594,13 +595,28 @@ export async function importSession(
 
 /**
  * Compose the `agent` field for a session-imported signal. Order of
- * preference: the marker / tool-input's explicit agent (handled by
- * the caller, not here), then a per-adapter default, finally
- * `opts.agent`.
+ * preference, highest first:
+ *
+ *   1. the marker / tool-input's explicit agent (handled by the caller,
+ *      not here);
+ *   2. the DELEGATED identity, when the turn carries the host's sub-agent
+ *      id - a sidechain turn was written by a different agent than the one
+ *      that opened the session, and a sub-agent transcript reuses the
+ *      parent's session id, so this is the only place the boundary
+ *      survives;
+ *   3. `opts.agent` - `--agent` when the operator passed one, otherwise the
+ *      server-resolved identity.
+ *
+ * There is no per-adapter constant below that any more. It sat at the TOP
+ * of this order while being non-empty in every shipped adapter, so
+ * `opts.agent` was unreachable and `--agent` was validated and discarded;
+ * and the three constants it stamped - `claude`, `codex`, `hermes` - are
+ * strings `normalizeAgentArgument` rejects as placeholders on every other
+ * surface, so imported memory was attributed to a name no writer could
+ * have named itself.
  */
-function agentLabelForTurn(turn: SessionTurn, adapter: string, fallback: string): string {
-  void turn; // reserved for future per-turn role-aware fallback
-  return getAdapter(adapter).defaultAgent.trim() || fallback;
+function agentLabelForTurn(turn: SessionTurn, fallback: string): string {
+  return turn.agentId !== undefined ? delegatedAgentName(fallback, turn.agentId) : fallback;
 }
 
 /**

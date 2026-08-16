@@ -13,9 +13,12 @@ import { loadTemporalConfigSafe } from "../../core/brain/policy.ts";
 import { buildIntentReview } from "../../core/brain/intent-review.ts";
 import { buildRetentionReview } from "../../core/brain/retention.ts";
 import { buildReviewCandidates } from "../../core/brain/review-candidates.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { brainArtifactSlug } from "../../core/brain/wikilink.ts";
 import { OPERATION } from "../../core/brain/safeguard.ts";
 import type { ProgressSink } from "../../core/brain/progress.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { vaultPathField } from "../vault-path-field.ts";
 import { coerceIsoDate } from "../coerce.ts";
 import { toolSafeguard } from "./shared.ts";
 
@@ -45,17 +48,22 @@ async function toolBrainRetention(
 ): Promise<Record<string, unknown>> {
   const nowDate = coerceIsoDate(args, "now");
   const report = buildRetentionReview(ctx.vault, nowDate ? { now: nowDate } : {});
+  // Each recommendation names a retired preference or a processed signal
+  // by id and by vault-relative path (a-label-is-not-a-boundary, U3).
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   return {
     schema_version: report.schema_version,
     generated_at: report.generated_at,
     summary: report.summary,
-    recommendations: report.recommendations.map((recommendation) => ({
-      id: recommendation.id,
-      artifact_type: recommendation.artifact_type,
-      action: recommendation.action,
-      reason: recommendation.reason,
-      path: recommendation.path,
-    })),
+    recommendations: view
+      .keep(report.recommendations, (r) => [r.path, r.id])
+      .map((recommendation) => ({
+        id: recommendation.id,
+        artifact_type: recommendation.artifact_type,
+        action: recommendation.action,
+        reason: recommendation.reason,
+        path: recommendation.path,
+      })),
   };
 }
 
@@ -86,18 +94,31 @@ async function toolBrainReviewCandidates(
     ...(nowDate ? { now: nowDate } : {}),
     ...(searchConfig !== undefined ? { searchConfig } : {}),
   });
+  // The projected rows name preferences that EXIST by the id they would
+  // get after the pass, so `ret-<slug>` is resolved back through the
+  // shared slug fold and both spellings are asked about
+  // (a-label-is-not-a-boundary, U3).
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const bothSpellings = (id: string): ReadonlyArray<string> => {
+    const slug = brainArtifactSlug(id);
+    return [`pref-${slug}`, `ret-${slug}`];
+  };
   return {
     ...(report.signal_novelty !== undefined ? { signal_novelty: report.signal_novelty } : {}),
     would_create: [...report.would_create],
     would_promote: [...report.would_promote],
-    would_retire: report.would_retire.map((r) => ({
-      id: r.id,
-      reason: r.reason,
-    })),
-    would_supersede: report.would_supersede.map((r) => ({
-      id: r.id,
-      reason: r.reason,
-    })),
+    would_retire: view
+      .keep(report.would_retire, (r) => bothSpellings(r.id))
+      .map((r) => ({
+        id: r.id,
+        reason: r.reason,
+      })),
+    would_supersede: view
+      .keep(report.would_supersede, (r) => bothSpellings(r.id))
+      .map((r) => ({
+        id: r.id,
+        reason: r.reason,
+      })),
     clusters_below_threshold: report.clusters_below_threshold.map((c) => ({
       topic: c.topic,
       signal_count: c.signal_count,
@@ -105,14 +126,16 @@ async function toolBrainReviewCandidates(
       age_days: c.age_days,
       failed_gates: [...c.failed_gates],
     })),
-    gated_retires: report.gated_retires.map((g) => ({
-      pref_id: g.pref_id,
-      topic: g.topic,
-      applied_count: g.applied_count,
-      violated_count: g.violated_count,
-      threshold: g.threshold,
-      attempted_reason: g.attempted_reason,
-    })),
+    gated_retires: view
+      .keep(report.gated_retires, (g) => bothSpellings(g.pref_id))
+      .map((g) => ({
+        pref_id: g.pref_id,
+        topic: g.topic,
+        applied_count: g.applied_count,
+        violated_count: g.violated_count,
+        threshold: g.threshold,
+        attempted_reason: g.attempted_reason,
+      })),
     intent_reviews: report.intent_reviews.map((review) => ({
       topic: review.topic,
       decision: review.decision,
@@ -139,11 +162,15 @@ async function toolBrainStaleScan(
   const cfg = loadTemporalConfigSafe(ctx.vault);
   const index = buildTimelineIndex(ctx.vault, {});
   const report = findStaleEntries(index, ctx.vault, cfg);
+  // Every stale row names its artifact by id, topic and vault-relative
+  // path (a-label-is-not-a-boundary, U3). Log shards are named by date
+  // and shared by construction, so they carry no ownership to read.
+  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
   return {
-    vault_path: ctx.vault,
+    vault_path: vaultPathField(ctx),
     thresholds: report.thresholds,
-    stale_preferences: report.stalePreferences,
-    stale_signals: report.staleSignals,
+    stale_preferences: view.keep(report.stalePreferences, (r) => [r.path, r.prefId]),
+    stale_signals: view.keep(report.staleSignals, (r) => [r.path, r.signalId]),
     stale_log_files: report.staleLogFiles,
     generated_at: report.generatedAt,
   };

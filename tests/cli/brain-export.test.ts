@@ -96,6 +96,21 @@ describe("brain export", () => {
     expect(payload.preferences.map((p) => p.id).toSorted()).toEqual(["pref-alpha", "pref-beta"]);
   });
 
+  test("a preference that cannot be parsed refuses the export by name", async () => {
+    // An export that omits a rule reads identically to a vault that never
+    // had it, so a row that cannot be read stops the whole export rather
+    // than shrinking the list under a success exit.
+    await bootstrap();
+    await seedPreference("alpha");
+    writeFileSync(join(vault, "Brain", "preferences", "pref-broken.md"), "no frontmatter here\n");
+    const r = await runCli(["brain", "export", "--vault", vault, "--format", "json"], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(r.returncode).toBe(1);
+    expect(r.stderr).toContain("pref-broken.md");
+    expect(r.stdout).toBe("");
+  });
+
   test("--format llms-txt emits H1 + section + bullet", async () => {
     await bootstrap();
     await seedPreference("alpha");

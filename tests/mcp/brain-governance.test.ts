@@ -118,6 +118,45 @@ test("brain_labels assigns within the vocabulary and fails closed outside it", a
   ).rejects.toThrow(/allowed values: low, high/);
 });
 
+/**
+ * a-label-is-not-a-boundary, U12: the argument name in the complaint.
+ *
+ * `brain_labels {operation:"show", id:"…"}` answered "path must be a
+ * vault-relative string" - a sentence about the SHAPE of an argument the
+ * caller never sent, for an argument name (`id`) the tool never declared.
+ * A caller reading it has no way to learn that `path` is the name, or
+ * that `id` is not one.
+ *
+ * The resolution is stated at the handler: the argument is right and the
+ * VALIDATOR's message was wrong. This test pins all three answers - the
+ * documented call, the undeclared name, and the genuinely absent one -
+ * because the first two are what tell those two failures apart.
+ */
+test("brain_labels show names the argument that is actually wrong", async () => {
+  mkdirSync(join(vault, "notes"), { recursive: true });
+  writeFileSync(join(vault, "notes", "rollout.md"), "# Rollout\n\nCanary first.\n");
+
+  const server = new MCPServer({ vault, configPath });
+  await initialize(server);
+
+  // The DOCUMENTED call: `path`, exactly as `inputSchema` declares it.
+  const shown = await call(server, "brain_labels", {
+    operation: "show",
+    path: "notes/rollout.md",
+  });
+  expect(shown).toEqual({ path: "notes/rollout.md", labels: [] });
+
+  // An undeclared name is refused BY NAME, with the declared set in hand.
+  await expect(
+    call(server, "brain_labels", { operation: "show", id: "notes/rollout.md" }),
+  ).rejects.toThrow(/unknown argument 'id'/);
+
+  // An ABSENT required argument is reported as absent, not as malformed.
+  await expect(call(server, "brain_labels", { operation: "show" })).rejects.toThrow(
+    /brain_labels show: path is required/,
+  );
+});
+
 test("brain_tiers check is empty on a fresh vault; restore demands apply", async () => {
   const server = new MCPServer({ vault, configPath });
   await initialize(server);

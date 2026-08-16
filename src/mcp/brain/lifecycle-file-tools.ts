@@ -35,6 +35,7 @@ import {
   ScaffoldStubError,
 } from "../../core/brain/notes/scaffold-stub.ts";
 import { CountGuardError } from "../../core/brain/count-guard.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import {
   CreateNoteError,
   CREATE_NOTE_IF_EXISTS,
@@ -262,7 +263,13 @@ async function toolBrainScaffoldStub(
 
   if (action === STUB_SCAFFOLD_ACTION.list) {
     const limit = coerceNonNegativeInteger(STUB_TOOL, "limit", args["limit"]);
-    const scan = await listDanglingTargets(ctx.vault, limit !== undefined ? { limit } : {});
+    // `sources` are vault-relative document paths and `target` is the
+    // link spelling, so an unscoped listing published both for a note
+    // this caller may not read (a-label-is-not-a-boundary, U3).
+    const scan = await listDanglingTargets(ctx.vault, {
+      ...(limit !== undefined ? { limit } : {}),
+      ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+    });
     return {
       action,
       state: scan.state,
