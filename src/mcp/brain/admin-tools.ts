@@ -530,7 +530,7 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_maintenance",
     description:
-      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges, and clusters stale-first behind the local-time window, busy gate, host-pressure gate, and an expiring lease (force bypasses the soft gates and every failure-streak refusal, never the lease); status renders the lease holder and recent journal.",
+      "Quiet-window, lease-guarded heavy maintenance lane: run executes dream, reindex, bridges and clusters stale-first behind the window, busy, host-pressure and streak gates and an expiring lease (force bypasses all of those but the lease); status renders the lease holder and recent journal.",
     inputSchema: {
       type: "object",
       properties: {
@@ -542,13 +542,13 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           // A caller reaching for the widest escape has to be told what
           // it actually switches off.
           description:
-            "Bypass the window, busy and host-pressure gates AND every failure-streak refusal - never the lease (run). Use retry_tasks to pass one task's streak refusal with every gate still in force.",
+            "Bypass the window, busy and host-pressure gates and every streak refusal - never the lease (run). retry_tasks passes one task's streak with the gates kept.",
         },
         retry_tasks: {
           type: "array",
           items: { type: "string" },
           maxItems: MAX_RETRY_TASKS,
-          description: `Lane tasks to attempt past their failure-streak refusal, this run only; every gate still applies (run). Known tasks: ${LANE_TASKS.join(", ")}. An unknown name is refused by name.`,
+          description: `Tasks to retry past their streak refusal, this run only; gates still apply. Known: ${LANE_TASKS.join(", ")}. An unknown name is refused.`,
         },
         busy_minutes: {
           type: "integer",
