@@ -425,10 +425,10 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                      'required': ['query'],
                      'additionalProperties': False}},
     {'name': 'brain_recall_gate',
-     'description': 'Classify whether an automatic recall/surfacing attempt should run. '
-                    "Diagnostics only; does not search. Pass `scores` (a recall attempt's top-k "
-                    'relevance scores) to also get an adequacy verdict — sufficient (proceed) / '
-                    'weak (re_recall) / insufficient (abstain + escalate).',
+     'description': 'Classify whether an automatic recall attempt should run. Diagnostics only; '
+                    'does not search. Pass `scores` AND `match_quality` TOGETHER for an adequacy '
+                    'verdict — sufficient/proceed, weak/re_recall, insufficient/abstain; either '
+                    'alone is INVALID_PARAMS (see `dependentRequired`).',
      'inputSchema': {'type': 'object',
                      'properties': {'prompt': {'type': 'string',
                                                'minLength': 1,
@@ -460,12 +460,24 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                     'scores': {'type': 'array',
                                                'maxItems': 200,
                                                'items': {'type': 'number'},
-                                               'description': 'Optional top-k recall scores. Adds '
-                                                              'an adequacy verdict: '
+                                               'description': 'Optional top-k recall scores; '
+                                                              'requires `match_quality`. Together '
+                                                              'they add an adequacy verdict: '
                                                               'sufficient/proceed, weak/re_recall, '
-                                                              'insufficient/abstain. An empty '
-                                                              'array adds the negative verdict.'}},
+                                                              'insufficient/abstain.'},
+                                    'match_quality': {'type': 'number',
+                                                      'minimum': 0,
+                                                      'maximum': 1,
+                                                      'description': 'Absolute match quality in '
+                                                                     '[0,1]: the '
+                                                                     '`idf_weighted_coverage` a '
+                                                                     'search outcome reports. '
+                                                                     'Required with scores; the '
+                                                                     'adequacy level reads this, '
+                                                                     'never a score.'}},
                      'required': ['prompt'],
+                     'dependentRequired': {'scores': ['match_quality'],
+                                           'match_quality': ['scores']},
                      'additionalProperties': False}},
     {'name': 'brain_context',
      'description': 'Pull the current Brain/active.md body, pinned current-task context, and '
@@ -541,14 +553,25 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                     'for emitted receipts; '
                                                                     'defaults to `mcp`.'},
                                     'recall_scores': {'type': 'array',
-                                                       'maxItems': 200,
-                                                       'items': {'type': 'number'},
-                                                       'description': 'Optional relevance scores '
-                                                                      'of the recall behind this '
-                                                                      'material. When given, the '
-                                                                      'response adds an adequacy '
-                                                                      'verdict (level + action) and '
-                                                                      'persists it in the receipt.'},
+                                                      'maxItems': 200,
+                                                      'items': {'type': 'number'},
+                                                      'description': 'Optional top-k recall '
+                                                                     'scores; requires '
+                                                                     '`match_quality`. Together '
+                                                                     'they add an adequacy '
+                                                                     'verdict: sufficient/proceed, '
+                                                                     'weak/re_recall, '
+                                                                     'insufficient/abstain.'},
+                                    'match_quality': {'type': 'number',
+                                                      'minimum': 0,
+                                                      'maximum': 1,
+                                                      'description': 'Absolute match quality in '
+                                                                     '[0,1]: the '
+                                                                     '`idf_weighted_coverage` a '
+                                                                     'search outcome reports. '
+                                                                     'Required with scores; the '
+                                                                     'adequacy level reads this, '
+                                                                     'never a score.'},
                                     'telemetry': {'type': 'boolean',
                                                   'description': 'When true, emit an opt-in recall '
                                                                  'telemetry record for this '
@@ -571,6 +594,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'their owner. Absent = no '
                                                                    'ownership filtering.'}},
                      'required': ['max_tokens'],
+                     'dependentRequired': {'recall_scores': ['match_quality'],
+                                           'match_quality': ['recall_scores']},
                      'additionalProperties': False}},
     {'name': 'brain_pre_compact_extract',
      'description': 'Extract typed Decision/Commitment/Outcome/Rule/Open question records from '

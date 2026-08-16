@@ -76,8 +76,32 @@ jobs:
       - name: TypeScript test suite
         run: bun test
 
+      # The anti-drift test compares the vendored Hermes schemas against a
+      # LIVE `tools/list`, and skips itself when `o2b` is not on PATH. It has
+      # been skipping here since it was written - `OK (skipped=1)` - so the
+      # one guard against a vendored copy diverging from the server ran only
+      # on a developer machine that happened to have the symlink. That is how
+      # two tools drifted structurally and nobody was told.
+      - name: Publish o2b on PATH (the anti-drift test needs the live server)
+        run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
+
       - name: Python plugin tests
         run: python -m unittest discover -s tests/python -v
+
+      # A skip is indistinguishable from a pass in the summary line, so the
+      # step above is asserted rather than trusted: if the CLI stops being
+      # reachable, this fails instead of quietly going back to skipping.
+      - name: The anti-drift test actually ran
+        run: |
+          set -euo pipefail
+          python -m unittest test_static_schemas -v 2>&1 \
+            | tee /tmp/anti-drift.log
+          grep -q "test_static_schemas_match_live_tools_list" /tmp/anti-drift.log
+          if grep -q "anti-drift needs the live server" /tmp/anti-drift.log; then
+            echo "anti-drift skipped itself; o2b was not reachable on PATH" >&2
+            exit 1
+          fi
+        working-directory: tests/python
 
       - name: Python package compiles
         run: python -m compileall -q plugins/hermes

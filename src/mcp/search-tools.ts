@@ -60,6 +60,7 @@ import {
   coerceRecallAdequacyInput,
   coerceStr,
   coerceStringOptional,
+  recallAdequacyPairing,
 } from "./coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { explainEnvelope } from "../core/search/explain-envelope.ts";
@@ -517,21 +518,14 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   },
 };
 
-/** The argument name the scores are paired with, as the schema spells it. */
-const RECALL_SCORES_ARG_NAME = "scores";
-
 /**
- * "Both or neither", said in the schema rather than only in the refusal.
+ * The argument name the scores are paired with, as the schema spells it.
  *
- * `coerceRecallAdequacyInput` answers an incomplete pair with
- * INVALID_PARAMS, and until this keyword landed the pairing appeared in no
- * `required` array anywhere, so the only way a client could discover it was
- * to make the call the server refuses.
+ * One constant for the property key, the `dependentRequired` entry, and the
+ * handler's read, so this tool's declaration and its enforcement cannot
+ * drift onto different names.
  */
-const RECALL_ADEQUACY_PAIRING = Object.freeze({
-  [RECALL_SCORES_ARG_NAME]: Object.freeze([MATCH_QUALITY_ARG_NAME]),
-  [MATCH_QUALITY_ARG_NAME]: Object.freeze([RECALL_SCORES_ARG_NAME]),
-});
+const RECALL_SCORES_ARG_NAME = "scores";
 
 const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
   type: "object",
@@ -563,18 +557,14 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
       maxLength: 512,
       description: "Optional session correlation id recorded on the telemetry record.",
     },
-    scores: RECALL_SCORES_SCHEMA,
-    match_quality: MATCH_QUALITY_SCHEMA,
+    [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
+    [MATCH_QUALITY_ARG_NAME]: MATCH_QUALITY_SCHEMA,
   },
   required: ["prompt"],
-  // `scores` and `match_quality` stand or fall together, and neither can
-  // sit in `required` - both are optional on their own. `dependentRequired`
-  // is the one keyword that states "both or neither" declaratively, so a
-  // schema-driven client can discover the pairing instead of learning it
-  // from an INVALID_PARAMS at call time. A client on a draft that predates
-  // the keyword ignores it, which is why the two property descriptions and
-  // the tool description say it in prose as well.
-  dependentRequired: RECALL_ADEQUACY_PAIRING,
+  // Both or neither, stated declaratively so a schema-driven client can
+  // discover the pairing instead of learning it from an INVALID_PARAMS at
+  // call time. Built beside the enforcement; see `recallAdequacyPairing`.
+  dependentRequired: recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
   additionalProperties: false,
 };
 
@@ -1179,7 +1169,7 @@ async function toolBrainRecallGate(
   // Adequacy verdict (t_b8f66fec): thin verdict + action layer over one
   // recall attempt. Only computed when the caller passes the pair,
   // keeping the pure structural-gate contract otherwise.
-  const attempt = coerceRecallAdequacyInput("brain_recall_gate", args, "scores");
+  const attempt = coerceRecallAdequacyInput("brain_recall_gate", args, RECALL_SCORES_ARG_NAME);
   if (attempt === undefined) return { ...decision };
   const thresholds = resolveRecallAdequacyThresholds(ctx.configPath ?? undefined);
   const verdict = assessRecallAdequacy(attempt, thresholds);

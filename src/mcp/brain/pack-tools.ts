@@ -54,6 +54,7 @@ import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
   AGENT_SCOPE_SCHEMA,
+  MATCH_QUALITY_ARG_NAME,
   MATCH_QUALITY_SCHEMA,
   RECALL_SCORES_SCHEMA,
   coerceAgentScope,
@@ -61,6 +62,7 @@ import {
   coerceStr,
   coerceStrList,
   coerceBool,
+  recallAdequacyPairing,
 } from "../coerce.ts";
 import {
   coercePositiveInteger,
@@ -68,6 +70,15 @@ import {
   requiredStringArg,
   telemetryOptionsFromArgs,
 } from "./shared.ts";
+
+/**
+ * The argument name this tool spells its recall scores with.
+ *
+ * `brain_recall_gate` calls the same argument `scores`; the pairing keyword
+ * and the handler's read both take the key from here so this tool's
+ * declaration and its enforcement cannot drift onto different names.
+ */
+const RECALL_SCORES_ARG_NAME = "recall_scores";
 
 /**
  * Bounded-token vault slice ordered by importance tier then recency.
@@ -101,7 +112,11 @@ async function toolBrainContextPack(
   // Adequacy verdict (t_b8f66fec): when the caller passes the recall
   // scores that produced this material, classify grounding fitness and
   // name the action; also persist it in the receipt for the audit trail.
-  const recallAttempt = coerceRecallAdequacyInput("brain_context_pack", args, "recall_scores");
+  const recallAttempt = coerceRecallAdequacyInput(
+    "brain_context_pack",
+    args,
+    RECALL_SCORES_ARG_NAME,
+  );
   const adequacy =
     recallAttempt !== undefined
       ? assessRecallAdequacy(
@@ -736,8 +751,8 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description: "Optional host/runtime name for emitted receipts; defaults to `mcp`.",
         },
-        recall_scores: RECALL_SCORES_SCHEMA,
-        match_quality: MATCH_QUALITY_SCHEMA,
+        [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
+        [MATCH_QUALITY_ARG_NAME]: MATCH_QUALITY_SCHEMA,
         telemetry: {
           type: "boolean",
           description:
@@ -758,6 +773,11 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         agent_scope: AGENT_SCOPE_SCHEMA,
       },
       required: ["max_tokens"],
+      // Both or neither, stated declaratively so a schema-driven client can
+      // discover the pairing instead of learning it from an INVALID_PARAMS
+      // at call time. Built beside the enforcement; see
+      // `recallAdequacyPairing`.
+      dependentRequired: recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
       additionalProperties: false,
     },
     handler: toolBrainContextPack,

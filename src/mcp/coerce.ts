@@ -168,6 +168,36 @@ export const MATCH_QUALITY_SCHEMA = Object.freeze({
 });
 
 /**
+ * "Both or neither", said in the schema rather than only in the refusal.
+ *
+ * {@link coerceRecallAdequacyInput} answers an incomplete pair with
+ * INVALID_PARAMS, and until this keyword landed the pairing appeared in no
+ * `required` array anywhere, so the only way a client could discover it was
+ * to make the call the server refuses.
+ *
+ * Parameterised by the scores key, and living beside the enforcement rather
+ * than inside one tool, because the two tools that enforce this spell the
+ * key differently - `scores` on `brain_recall_gate`, `recall_scores` on
+ * `brain_context_pack`. A pairing hard-keyed on one of those names is a
+ * declaration only the first tool can use, which is how the second shipped
+ * enforcing a rule it never declared. The declaration and the refusal now
+ * read the same key from the same place.
+ *
+ * `dependentRequired` is the one keyword that states "both or neither"
+ * declaratively; neither argument can sit in `required`, since both are
+ * optional on their own. A client on a draft that predates the keyword
+ * ignores it, which is why {@link RECALL_SCORES_SCHEMA} says it in prose too.
+ */
+export function recallAdequacyPairing(
+  scoresKey: string,
+): Readonly<Record<string, ReadonlyArray<string>>> {
+  return Object.freeze({
+    [scoresKey]: Object.freeze([MATCH_QUALITY_ARG_NAME]),
+    [MATCH_QUALITY_ARG_NAME]: Object.freeze([scoresKey]),
+  });
+}
+
+/**
  * One recall attempt as {@link assessRecallAdequacy} reads it, or
  * `undefined` when the caller asked for no verdict.
  *
