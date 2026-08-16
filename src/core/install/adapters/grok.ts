@@ -22,12 +22,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import type { InstallTargetId } from "../../runtime/host-facts.ts";
 import { GROK_HOOKS_FILENAME, grokHooksJson, grokMcpServers } from "../grok-asset.ts";
 import { hasMcpServers, removeMcpServers, upsertMcpServers } from "../grok-config.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { readManifest, recordEntry, removeEntry } from "../manifest.ts";
 import { expectedPayloadFromEnv } from "../payload-equals.ts";
 import { defaultRegistry } from "../registry.ts";
+import { installSettingsSource, resolveInstallHookTimeoutSeconds } from "../settings.ts";
 import type {
   ApplyOpts,
   ApplyResult,
@@ -40,7 +42,7 @@ import type {
   VerifyResult,
 } from "../types.ts";
 
-const TARGET = "grok";
+const TARGET: InstallTargetId = "grok";
 const LABEL = "Grok Build";
 const FIX_HINT = "o2b install --target grok --apply";
 const SERVER_NAMES = [OSB_KEY_FULL, OSB_KEY_WRITER] as const;
@@ -73,6 +75,20 @@ interface DesiredState {
   readonly currentHooks: string;
 }
 
+/**
+ * The resolved `install.hook_timeout_seconds` for this env.
+ *
+ * Read on BOTH the apply and the verify path, from the same
+ * `InstallEnv`, because verification here is re-construction: a value
+ * only one of the two could see would make a fresh apply report drift.
+ * An unreadable `<vault>/Brain/_brain.yaml` raises out of here rather
+ * than resolving the default - the refusal this generator owes an
+ * operator whose settings exist and are not in force.
+ */
+function hookTimeoutSeconds(env: InstallEnv): number {
+  return resolveInstallHookTimeoutSeconds(installSettingsSource(env)).value;
+}
+
 /** Compute the target config.toml + hooks content for the current env/payload. */
 function desired(payload: McpPayload, env: InstallEnv): DesiredState {
   const currentToml = readFileOrEmpty(configPath(env));
@@ -80,7 +96,7 @@ function desired(payload: McpPayload, env: InstallEnv): DesiredState {
   return {
     currentToml,
     nextToml: upsertMcpServers(currentToml, grokMcpServers(payload)),
-    hooksContent: grokHooksJson(payload),
+    hooksContent: grokHooksJson(payload, hookTimeoutSeconds(env)),
     currentHooks,
   };
 }
@@ -91,7 +107,7 @@ function syncState(env: InstallEnv): { mcpOk: boolean; hooksOk: boolean; anyPres
   const hooks = readFileOrEmpty(hooksPath(env));
   const payload = expectedPayloadFromEnv(env);
   const mcpOk = hasMcpServers(toml, grokMcpServers(payload));
-  const hooksOk = hooks === grokHooksJson(payload);
+  const hooksOk = hooks === grokHooksJson(payload, hookTimeoutSeconds(env));
   const anyMcp = SERVER_NAMES.some((n) => toml.includes(`[mcp_servers.${n}]`));
   return { mcpOk, hooksOk, anyPresent: anyMcp || hooks.length > 0 };
 }

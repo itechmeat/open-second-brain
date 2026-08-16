@@ -27,6 +27,7 @@ import { parseVaultBlock } from "./blocks/vault-scope.ts";
 import { parseActiveBlock } from "./blocks/active.ts";
 import { parseLessonsBlock } from "./blocks/lessons.ts";
 import { parseMaintenanceBlock } from "./blocks/maintenance.ts";
+import { parseInstallBlock } from "./blocks/install.ts";
 import { parseDisciplineReportBlock } from "./blocks/discipline-report.ts";
 import { parseGuardrailsBlock } from "./blocks/guardrails.ts";
 import { parseRollupBlock } from "./blocks/rollup.ts";
@@ -104,6 +105,7 @@ export function validateBrainConfigDetailed(
   const active = parseActiveBlock(ctx);
   const lessons = parseLessonsBlock(ctx);
   const maintenance = parseMaintenanceBlock(ctx);
+  const install = parseInstallBlock(ctx);
   const disciplineReport = parseDisciplineReportBlock(ctx);
   const guardrails = parseGuardrailsBlock(ctx);
   const rollup = parseRollupBlock(ctx);
@@ -134,6 +136,7 @@ export function validateBrainConfigDetailed(
     ...(active !== undefined ? { active } : {}),
     ...(lessons !== undefined ? { lessons } : {}),
     ...(maintenance !== undefined ? { maintenance } : {}),
+    ...(install !== undefined ? { install } : {}),
     ...(disciplineReport !== undefined ? { discipline_report: disciplineReport } : {}),
     ...(rollup !== undefined ? { rollup } : {}),
     ...(guardrails !== undefined ? { guardrails } : {}),

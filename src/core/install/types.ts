@@ -10,6 +10,8 @@
  * field semantics.
  */
 
+import type { InstallTargetId } from "../runtime/host-facts.ts";
+
 // ---------- Constant sets (runtime checkable) ----------
 
 export const ADAPTER_STATUSES = new Set([
@@ -137,7 +139,18 @@ export interface SessionPathsResult {
 }
 
 export interface InstallAdapter {
-  readonly target: string;
+  /**
+   * Which runtime this adapter installs into.
+   *
+   * A member of the closed {@link InstallTargetId} vocabulary rather than
+   * a bare string: the id is carried through the manifest, the ownership
+   * statement and the `--target` argument, and until this was typed the
+   * only thing standing between a typo and all three was a registry
+   * lookup that misses at the very end of that journey.
+   * `tests/core/architecture/host-facts-census.test.ts` holds the
+   * vocabulary and the registered population equal in both directions.
+   */
+  readonly target: InstallTargetId;
   readonly label: string;
   detect(env: InstallEnv): DetectResult;
   plan(payload: McpPayload, env: InstallEnv): InstallPlan;

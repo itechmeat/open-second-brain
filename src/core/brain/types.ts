@@ -1429,6 +1429,29 @@ export interface ResolvedBrainMaintenanceConfig {
   readonly failure_streak_limit: number;
 }
 
+/**
+ * The `install:` block: the two settings that parameterise GENERATED
+ * install and hook output.
+ *
+ * They live in the committed vault configuration rather than the
+ * machine-local `config.yaml` because generated content is compared by
+ * re-construction, so two machines sharing one vault must reconstruct the
+ * same bytes. A knob that lived only on the machine would make one of
+ * them report drift the other cannot see.
+ */
+export interface BrainInstallConfig {
+  /** Seconds a generated lifecycle hook entry may run before the host kills it. */
+  readonly hook_timeout_seconds?: number;
+  /** Name of the MCP tool-surface profile generated install content selects. */
+  readonly tool_profile?: string;
+}
+
+/** {@link BrainInstallConfig} with every field decided. */
+export interface ResolvedBrainInstallConfig {
+  readonly hook_timeout_seconds: number;
+  readonly tool_profile: string;
+}
+
 export interface BrainLessonsConfig {
   /** Exponential half-life of the recency decay, in days. */
   readonly half_life_days?: number;
@@ -1623,6 +1646,12 @@ export interface BrainConfig {
    * `resolveMaintenance`, which leaves the pressure gate unconfigured.
    */
   readonly maintenance?: BrainMaintenanceConfig;
+  /**
+   * Optional `install:` block. Parameterises generated install and hook
+   * output; absent leaves `BRAIN_INSTALL_DEFAULTS` in force, which is the
+   * output every vault generated before the block existed.
+   */
+  readonly install?: BrainInstallConfig;
   /** Optional daily discipline-report configuration (§D). Absent when not configured. */
   readonly discipline_report?: DisciplineReportConfig;
   /**

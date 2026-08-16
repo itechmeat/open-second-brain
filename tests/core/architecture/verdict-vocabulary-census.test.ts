@@ -367,6 +367,15 @@ import {
   MIRROR_OUTCOME,
   MIRROR_OUTCOMES,
 } from "../../../src/core/brain/shared-namespace.ts";
+import {
+  INSTALL_TARGET_ID,
+  INSTALL_TARGET_IDS,
+  isInstallTargetId,
+  isToolCeilingKind,
+  TOOL_CEILING_KIND,
+  TOOL_CEILING_KINDS,
+} from "../../../src/core/runtime/host-facts.ts";
+import { CONFIG_ORIGIN, CONFIG_ORIGINS, isConfigOrigin } from "../../../src/core/validate.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 
 interface VocabularyUnderCensus {
@@ -1088,6 +1097,40 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: MIRROR_OUTCOMES,
     guard: isMirrorOutcome,
   },
+  {
+    // U9. The runtimes `o2b install --target` can name. They were bare
+    // strings validated only by a registry-lookup miss, which is a check
+    // that runs after the value has already been carried through the
+    // adapter contract, the manifest and the ownership statement - so a
+    // typo was a value the type system had no opinion about anywhere.
+    name: "INSTALL_TARGET_ID",
+    values: INSTALL_TARGET_ID,
+    members: INSTALL_TARGET_IDS,
+    guard: isInstallTargetId,
+  },
+  {
+    // U9. What this build can say about one host's per-workspace MCP tool
+    // limit. `unknown` and `unbounded` are separate members and that
+    // separation IS the unit: collapsing them would let a host nobody
+    // checked be read as one that publishes no limit, one layer above the
+    // fail-open profile selection that made the card true.
+    name: "TOOL_CEILING_KIND",
+    values: TOOL_CEILING_KIND,
+    members: TOOL_CEILING_KINDS,
+    guard: isToolCeilingKind,
+  },
+  {
+    // U9. Which layer produced a resolved configuration value. Four
+    // members rather than three because a vault carries a COMMITTED
+    // configuration that travels with it, next to the machine-local one
+    // that does not - and for generated install content the committed
+    // tier OUTRANKS the machine, so collapsing the two would make the
+    // only interesting provenance question unanswerable.
+    name: "CONFIG_ORIGIN",
+    values: CONFIG_ORIGIN,
+    members: CONFIG_ORIGINS,
+    guard: isConfigOrigin,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1352,7 +1395,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 63;
+const VOCABULARY_POPULATION = 66;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

@@ -14,6 +14,7 @@ import type {
   ApplyResult,
   VerifyResult,
 } from "../../../src/core/install/types.ts";
+import type { InstallTargetId } from "../../../src/core/runtime/host-facts.ts";
 
 let vault: string;
 let home: string;
@@ -39,7 +40,7 @@ function makeEnv(): InstallEnv {
 }
 
 function fakeAdapter(
-  target: string,
+  target: InstallTargetId,
   status: "installed" | "not-installed" = "installed",
 ): InstallAdapter {
   return {
@@ -87,21 +88,21 @@ describe("runUpdate", () => {
 
   test("applies when no previous manifest exists", () => {
     const reg = createRegistry();
-    reg.register(fakeAdapter("claudecode"));
+    reg.register(fakeAdapter("cursor"));
     const result = runUpdate(reg, makeEnv(), { dryRun: false, force: false, target: null });
     expect(result.targets[0]!.status).toBe("applied");
   });
 
   test("dry-run reports would-apply without applying", () => {
     const reg = createRegistry();
-    reg.register(fakeAdapter("claudecode"));
+    reg.register(fakeAdapter("cursor"));
     const result = runUpdate(reg, makeEnv(), { dryRun: true, force: false, target: null });
     expect(result.targets[0]!.status).toBe("would-apply");
   });
 
   test("skips when payload hash is unchanged", () => {
     const reg = createRegistry();
-    reg.register(fakeAdapter("claudecode"));
+    reg.register(fakeAdapter("cursor"));
     const env = makeEnv();
 
     const first = runUpdate(reg, env, { dryRun: false, force: false, target: null });
@@ -114,7 +115,7 @@ describe("runUpdate", () => {
 
   test("--force bypasses hash-skip", () => {
     const reg = createRegistry();
-    reg.register(fakeAdapter("claudecode"));
+    reg.register(fakeAdapter("cursor"));
     const env = makeEnv();
 
     const first = runUpdate(reg, env, { dryRun: false, force: false, target: null });
@@ -126,13 +127,13 @@ describe("runUpdate", () => {
 
   test("payload_hash stored in install.lock.json after apply", () => {
     const reg = createRegistry();
-    reg.register(fakeAdapter("claudecode"));
+    reg.register(fakeAdapter("cursor"));
     const env = makeEnv();
 
     runUpdate(reg, env, { dryRun: false, force: false, target: null });
 
     const manifest = readManifest(env.vault);
-    const entry = manifest.installs["claudecode"];
+    const entry = manifest.installs["cursor"];
     expect(entry).toBeDefined();
     expect(entry!.payload_hash).toBeDefined();
     expect(entry!.payload_hash).toMatch(/^[0-9a-f]{64}$/);

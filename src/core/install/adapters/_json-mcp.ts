@@ -20,6 +20,7 @@ import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import type { InstallTargetId } from "../../runtime/host-facts.ts";
 import { payloadWithRuntimeIdentity } from "../identity.ts";
 import { mergeMcpServers, removeMcpServers, OSB_KEY_FULL, OSB_KEY_WRITER } from "../json-merge.ts";
 import { recordEntry, readManifest, removeEntry } from "../manifest.ts";
@@ -48,7 +49,8 @@ import {
 const NO_HANDSHAKE_NOTE = "configuration comparison; no MCP handshake attempted";
 
 export interface JsonMcpAdapterSpec {
-  readonly target: string;
+  /** The runtime this spec installs into; becomes `InstallAdapter.target`. */
+  readonly target: InstallTargetId;
   readonly label: string;
   /** Top-level key under which MCP servers live. Default `mcpServers`. */
   readonly topLevelKey?: string;

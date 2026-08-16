@@ -37,6 +37,7 @@ import {
   loadActiveMostAppliedSafe,
   loadFeedbackDefaultScopeSafe,
   loadGuardrailsConfigSafe,
+  loadInstallBlockSafe,
   loadIntegrityConfigSafe,
   loadMaintenanceConfigSafe,
   loadNotesConfigSafe,
@@ -93,6 +94,16 @@ const SAFE_LOADERS = [
     name: "loadMaintenanceConfigSafe",
     load: loadMaintenanceConfigSafe as (vault: string) => unknown,
     absentValue: BRAIN_MAINTENANCE_DEFAULTS as unknown,
+  },
+  {
+    // The raw block, not a resolved value: the four-tier install resolver
+    // has to tell "the vault block set this key" apart from "it did not",
+    // and a resolved value cannot express the difference. Serving defaults
+    // from a broken config would generate hooks and an MCP registration
+    // the operator never asked for, on a file nothing could parse.
+    name: "loadInstallBlockSafe",
+    load: loadInstallBlockSafe as (vault: string) => unknown,
+    absentValue: undefined as unknown,
   },
   {
     // Coverage is what an operator turned ON, so answering `false` from

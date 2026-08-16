@@ -46,8 +46,12 @@ function customShape(e: McpServerEntry): Record<string, unknown> {
   };
 }
 
+// A real vocabulary member rather than a synthetic id: `target` is a
+// closed `InstallTargetId` and its only job here is to key the manifest
+// entry. The SHAPE under test is still entirely inline, which is what
+// this file pins - `kiro`'s own adapter is not imported.
 const adapter = createJsonMcpAdapter({
-  target: "custom-shape-test",
+  target: "kiro",
   label: "custom shape (test only)",
   topLevelKey: "mcp",
   resolveConfigPath: (env: InstallEnv) => join(env.home, ".customrt", "config.json"),
@@ -129,7 +133,7 @@ describe("createJsonMcpAdapter with custom entry shape", () => {
     writeFileSync(path, JSON.stringify(parsed, null, 2) + "\n");
 
     adapter.uninstall(env(), applyOpts());
-    expect(readManifest(vault).installs["custom-shape-test"]).toBeUndefined();
+    expect(readManifest(vault).installs["kiro"]).toBeUndefined();
     const after = JSON.parse(readFileSync(path, "utf8"));
     expect(after.mcp["open-second-brain"]).toBeUndefined();
     expect(after.mcp["open-second-brain-writer"]).toBeUndefined();

@@ -19,6 +19,7 @@
 
 import { join } from "node:path";
 
+import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../brain/policy/blocks/install.ts";
 import { payloadWithRuntimeIdentity, runtimeAgentNameFromPayload } from "./identity.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./json-merge.ts";
 import type { GrokMcpEntry } from "./grok-config.ts";
@@ -129,8 +130,17 @@ const HOOK_SPEC: ReadonlyArray<{ event: string; groups: ReadonlyArray<HookGroupS
  * not the shared operator name. Generated at install time (machine-specific
  * paths and identity), so `verify` compares the installed file against this
  * exact output.
+ *
+ * `hookTimeoutSeconds` is the resolved `install.hook_timeout_seconds`
+ * (see `./settings.ts`). It defaults to the compiled default - the
+ * BOTTOM tier of that same ladder, and the literal this generator
+ * carried before the setting existed - so a vault that configures
+ * nothing regenerates byte-identical output.
  */
-export function grokHooksJson(payload: McpPayload): string {
+export function grokHooksJson(
+  payload: McpPayload,
+  hookTimeoutSeconds: number = INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT,
+): string {
   const agentName = runtimeAgentNameFromPayload(payload, GROK_RUNTIME_ID);
   const hooks: Record<string, unknown[]> = {};
   for (const { event, groups } of HOOK_SPEC) {
@@ -140,7 +150,7 @@ export function grokHooksJson(payload: McpPayload): string {
         type: "command",
         command: hookCommand(name),
         env: { VAULT_AGENT_NAME: agentName },
-        timeout: 10,
+        timeout: hookTimeoutSeconds,
       })),
     }));
   }

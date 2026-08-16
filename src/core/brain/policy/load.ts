@@ -20,7 +20,7 @@
  */
 
 import { existsSync, readFileSync } from "node:fs";
-import type { BrainConfig, ResolvedBrainIntegrityConfig } from "../types.ts";
+import type { BrainConfig, BrainInstallConfig, ResolvedBrainIntegrityConfig } from "../types.ts";
 import { parseBrainYaml, type ParsedBlock } from "../yaml-parse.ts";
 import { brainConfigPath } from "../paths.ts";
 import { BrainConfigError, type BrainConfigLoadWarning } from "./errors.ts";
@@ -259,6 +259,32 @@ export const loadSnapshotDerivedStorePolicySafe = makeAbsentTolerantLoader<Brain
 export const loadMaintenanceConfigSafe = makeAbsentTolerantLoader(
   resolveMaintenance,
   BRAIN_MAINTENANCE_DEFAULTS,
+);
+
+/**
+ * Load the RAW `install:` block, or `undefined` when the config file is
+ * absent or declares no block.
+ *
+ * The one loader here that hands back the unresolved block rather than a
+ * resolved value, because its consumer
+ * (`src/core/install/settings.ts`) sits in the middle of a four-tier
+ * ladder: the committed vault tier outranks the machine-local
+ * `config.yaml`, so "the block set this key" and "the block did not" must
+ * stay distinguishable. Resolving here would fold them together and hand
+ * the compiled default a victory over a user-level key that should have
+ * won.
+ *
+ * An unreadable config raises, and for this reader that is the whole
+ * point rather than a side effect: generated install and hook content is
+ * a WRITER, and it cannot infer an operator's intent from a file it could
+ * not parse. Defaulting would silently regenerate the shipped timeout
+ * over a vault whose `_brain.yaml` merely has a typo, and the
+ * re-construction check would then report the operator's own file as
+ * drift on every other machine.
+ */
+export const loadInstallBlockSafe = makeAbsentTolerantLoader(
+  (config: BrainConfig) => config.install,
+  undefined as BrainInstallConfig | undefined,
 );
 
 /**

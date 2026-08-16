@@ -290,6 +290,14 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "backing verdict and the measurements as parameters and returns text",
   ],
   [
+    "src/core/install/settings.ts",
+    "the only out-of-vault path it builds is the machine-local config.yaml already enumerated " +
+      "by the machine_config row, and it builds that path only to READ the third tier of the " +
+      "install-settings ladder. It resolves the location from the adapter's own InstallEnv " +
+      "rather than from process.env so apply and verify reconstruct from the same inputs; it " +
+      "creates no file and removes none",
+  ],
+  [
     "src/cli/install/install.ts",
     "the only out-of-vault path it builds is `InstallEnv.home`, which it hands to the adapters; " +
       "every file written from it belongs to the runtime_config_blocks row, and this verb writes " +
@@ -348,6 +356,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
     "a read-only transcript scanner: it locates the runtime's own session logs and workspace " +
       "state under the home directory and reads them. The runtime wrote those files and owns " +
       "them; this module creates nothing and deletes nothing there",
+  ],
+  [
+    "src/core/runtime/host-facts.ts",
+    "it DECLARES where each agent runtime keeps its own session logs, as pure functions of an " +
+      "injected home and environment. The runtimes wrote those files and own them; this module " +
+      "opens nothing, writes nothing, and resolves no path until a caller hands it a machine",
   ],
   [
     "src/core/brain/gates/durability.ts",

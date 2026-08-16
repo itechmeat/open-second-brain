@@ -94,8 +94,82 @@ export function parseBool(raw: string | null, default_: boolean, fieldName: stri
 }
 
 /**
+ * The configuration layers a resolved value can come from, highest
+ * precedence first.
+ *
+ * Four members rather than three because a vault carries a COMMITTED
+ * configuration of its own (`<vault>/Brain/_brain.yaml`) that travels
+ * with the vault, next to the machine-local `config.yaml` that does not.
+ * Collapsing the two into one "config" answer would make the only
+ * interesting provenance question - "did this value come from something
+ * my teammate also has?" - unanswerable.
+ *
+ * `default` is a layer, not the absence of one: a caller that reports
+ * where a value came from must be able to say "nothing configured it"
+ * without inventing a null case at every call site.
+ */
+export const CONFIG_ORIGIN = Object.freeze({
+  env: "env",
+  userConfig: "user-config",
+  vaultConfig: "vault-config",
+  default: "default",
+} as const);
+
+export type ConfigOrigin = (typeof CONFIG_ORIGIN)[keyof typeof CONFIG_ORIGIN];
+
+/** The layers, in precedence order (highest first). */
+export const CONFIG_ORIGINS: ReadonlyArray<ConfigOrigin> = Object.freeze([
+  CONFIG_ORIGIN.env,
+  CONFIG_ORIGIN.vaultConfig,
+  CONFIG_ORIGIN.userConfig,
+  CONFIG_ORIGIN.default,
+]);
+
+export function isConfigOrigin(value: unknown): value is ConfigOrigin {
+  return typeof value === "string" && (CONFIG_ORIGINS as ReadonlyArray<string>).includes(value);
+}
+
+/** A resolved configuration value together with the layer that produced it. */
+export interface ResolvedConfigValue {
+  /** `null` when no layer supplied a non-empty value. */
+  readonly value: string | null;
+  readonly origin: ConfigOrigin;
+}
+
+/**
+ * {@link envOrConfig} with the layer that produced the value.
+ *
+ * The sibling exists rather than a widened `envOrConfig` because that
+ * function is the choke point for roughly fifty-five keys and only the
+ * install, hook-generation and inventory surfaces need provenance. A
+ * mechanical sweep of every call site would buy those few callers
+ * nothing and put the other fifty at risk.
+ *
+ * Only the two layers this function can see are ever reported; a caller
+ * that also consults `<vault>/Brain/_brain.yaml` layers
+ * {@link CONFIG_ORIGIN.vaultConfig} on top of this result itself (see
+ * `src/core/install/settings.ts`).
+ */
+export function resolveWithOrigin(
+  env: NodeJS.ProcessEnv,
+  config: Readonly<Record<string, string>>,
+  envKey: string,
+  configKey: string,
+): ResolvedConfigValue {
+  const e = env[envKey];
+  if (e !== undefined && e !== "") return { value: e, origin: CONFIG_ORIGIN.env };
+  const c = config[configKey];
+  if (c !== undefined && c !== "") return { value: c, origin: CONFIG_ORIGIN.userConfig };
+  return { value: null, origin: CONFIG_ORIGIN.default };
+}
+
+/**
  * Resolve a value from an environment variable or config map, preferring
  * the environment. Returns `null` when neither source has a non-empty value.
+ *
+ * A thin delegation to {@link resolveWithOrigin} so the two can never
+ * disagree about which source wins - `tests/core/config-origin.test.ts`
+ * drives every branch through both and requires the same value.
  */
 export function envOrConfig(
   env: NodeJS.ProcessEnv,
@@ -103,9 +177,5 @@ export function envOrConfig(
   envKey: string,
   configKey: string,
 ): string | null {
-  const e = env[envKey];
-  if (e !== undefined && e !== "") return e;
-  const c = config[configKey];
-  if (c !== undefined && c !== "") return c;
-  return null;
+  return resolveWithOrigin(env, config, envKey, configKey).value;
 }

@@ -57,6 +57,7 @@ export {
   loadGuardrailsConfigSafe,
   loadIntegrityConfigForWrite,
   loadIntegrityConfigSafe,
+  loadInstallBlockSafe,
   loadMaintenanceConfigSafe,
   loadNotesConfigSafe,
   loadSnapshotDerivedStorePolicySafe,
@@ -109,6 +110,14 @@ export {
   MAINTENANCE_HOST_PRESSURE_PERCENT_MIN,
   resolveMaintenance,
 } from "./policy/blocks/maintenance.ts";
+export {
+  BRAIN_INSTALL_DEFAULTS,
+  INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT,
+  INSTALL_HOOK_TIMEOUT_SECONDS_MAX,
+  INSTALL_HOOK_TIMEOUT_SECONDS_MIN,
+  INSTALL_TOOL_PROFILE_DEFAULT,
+  INSTALL_TOOL_PROFILE_NAMES,
+} from "./policy/blocks/install.ts";
 export {
   BRAIN_GUARDRAIL_DEFAULTS,
   INSTRUCTION_FILE_MAX_LINES_CEILING,
