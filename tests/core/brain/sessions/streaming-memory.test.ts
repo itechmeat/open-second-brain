@@ -1,12 +1,31 @@
 /**
- * `adapter.iterate` must not hold the file it is reading.
+ * Every adapter reads its session through the shared line reader, and that
+ * reader's window stays bounded while the adapter iterates.
  *
  * The five adapters used to `readFileSync(path, "utf8")` and then `split("\n")`,
  * so peak retained memory was roughly twice the file size BEFORE the first turn
  * was yielded, and the `async *` generator bought nothing - it iterated an array
  * that was already fully materialised. This suite drives each adapter over a
  * synthetic session an order of magnitude larger than the largest fixture in the
- * tree (2 KB) and asserts the retained window stays a small fraction of the file.
+ * tree (2 KB) and asserts that the reader's window over that file stays inside
+ * the invariant `read-lines.ts` states: one chunk plus the partial line carried
+ * into it.
+ *
+ * ## What this suite does NOT claim
+ *
+ * It does not claim `iterate` holds no copy of the file ANYWHERE. The header
+ * used to say exactly that, and the accounting cannot support it: an adapter
+ * that streamed through `readLines` and ALSO did `readFileSync(path, "utf8")`,
+ * keeping the string alive for the whole iteration, was measured reporting the
+ * same 262,144-byte high-water mark and passing every assertion below while
+ * 9.84 MB stayed resident. The narrower claim - the one asserted here - is
+ * still the regression that mattered: the old path went through no reader at
+ * all, so it recorded ZERO, and a bound with a `> 0` floor rejects it.
+ *
+ * A residency assertion is what would close the gap, and the next section is
+ * the measurement record explaining why there is not one: the numbers do not
+ * discriminate. A flaky 60 MB bound would be a worse test than an exact bound
+ * with a stated blind spot, so the claim is narrowed rather than faked.
  *
  * ## Why the reader's own accounting and not `process.memoryUsage()`
  *
@@ -48,18 +67,56 @@ const TURNS = 12_000;
 /** Padding that makes each line realistically large without being pathological. */
 const BODY = "the quick brown fox jumps over the lazy dog. ".repeat(16);
 
-function write(name: string, lines: readonly string[]): string {
+/**
+ * A synthetic session, with the one number a bound on the reader needs
+ * besides the file itself: the longest line in it, which is the largest
+ * partial line the reader can carry across a chunk boundary.
+ */
+interface Fixture {
+  readonly path: string;
+  readonly longestLineBytes: number;
+}
+
+function write(name: string, lines: readonly string[]): Fixture {
   const dir = mkdtempSync(join(tmpdir(), "osb-streaming-"));
   const path = join(dir, name);
   writeFileSync(path, `${lines.join("\n")}\n`);
-  return path;
+  return {
+    path,
+    longestLineBytes: lines.reduce((max, l) => Math.max(max, Buffer.byteLength(l, "utf8")), 0),
+  };
+}
+
+/**
+ * The largest chunk this runtime's file stream hands out for `path`, read
+ * exactly the way `readLines` reads it.
+ *
+ * Measured rather than assumed, because the bound below is the module's
+ * invariant and not a round number: `size / 8` on an 8 MB file leaves room
+ * for four chunks, so a reader that buffered four before yielding would
+ * have passed it.
+ */
+async function largestStreamChunkBytes(path: string): Promise<number> {
+  const reader = Bun.file(path).stream().getReader();
+  let max = 0;
+  try {
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop
+      const chunk = await reader.read();
+      if (chunk.done === true || chunk.value === undefined) break;
+      if (chunk.value.byteLength > max) max = chunk.value.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return max;
 }
 
 function isoAt(i: number): string {
   return new Date(Date.UTC(2026, 0, 1) + i * 1000).toISOString();
 }
 
-function claudeFile(): string {
+function claudeFile(): Fixture {
   const lines: string[] = [];
   for (let i = 0; i < TURNS; i++) {
     lines.push(
@@ -77,7 +134,7 @@ function claudeFile(): string {
   return write("claude.jsonl", lines);
 }
 
-function codexFile(): string {
+function codexFile(): Fixture {
   const lines: string[] = [
     JSON.stringify({
       timestamp: isoAt(0),
@@ -101,7 +158,7 @@ function codexFile(): string {
   return write("codex.jsonl", lines);
 }
 
-function hermesFile(): string {
+function hermesFile(): Fixture {
   const lines: string[] = [JSON.stringify({ role: "session_meta", tools: [] })];
   for (let i = 0; i < TURNS; i++) {
     lines.push(
@@ -115,7 +172,7 @@ function hermesFile(): string {
   return write("hermes.jsonl", lines);
 }
 
-function opencodeFile(): string {
+function opencodeFile(): Fixture {
   const lines: string[] = [
     JSON.stringify({
       type: "session_meta",
@@ -138,7 +195,7 @@ function opencodeFile(): string {
   return write("opencode.jsonl", lines);
 }
 
-function grokFile(): string {
+function grokFile(): Fixture {
   const lines: string[] = [];
   for (let i = 0; i < TURNS; i++) {
     lines.push(
@@ -162,7 +219,7 @@ function grokFile(): string {
 
 const CASES: ReadonlyArray<{
   readonly adapter: SessionAdapter;
-  readonly build: () => string;
+  readonly build: () => Fixture;
   readonly expectedTurns: number;
 }> = [
   { adapter: claudeAdapter, build: claudeFile, expectedTurns: TURNS },
@@ -172,12 +229,17 @@ const CASES: ReadonlyArray<{
   { adapter: grokAdapter, build: grokFile, expectedTurns: TURNS },
 ];
 
-describe("adapter.iterate holds a bounded window, not the file", () => {
+describe("the line reader holds a bounded window while each adapter iterates", () => {
   for (const { adapter, build, expectedTurns } of CASES) {
-    test(`${adapter.id} streams an 8 MB+ session without retaining it`, async () => {
-      const path = build();
+    test(`${adapter.id} streams an 8 MB+ session within one chunk plus a line`, async () => {
+      const { path, longestLineBytes } = build();
       const size = Bun.file(path).size;
       expect(size).toBeGreaterThan(8_000_000);
+      const largestChunk = await largestStreamChunkBytes(path);
+      // The invariant, as a number: one chunk, plus the partial line
+      // carried into it.
+      const bound = largestChunk + longestLineBytes;
+      expect(bound).toBeLessThan(size / 8);
 
       resetLineReaderRetainedBytes();
       let turns = 0;
@@ -189,11 +251,14 @@ describe("adapter.iterate holds a bounded window, not the file", () => {
       }
 
       expect(turns).toBe(expectedTurns);
-      // The whole-file path could satisfy neither of these: it retained the
-      // entire file before yielding turn one.
+      // The whole-file path could satisfy none of these: it went through no
+      // reader at all, so it recorded zero and fails the floor - and it had
+      // the entire file in hand before turn one, so had it been accounted
+      // for it would have failed the ceiling.
       expect(firstTurnRetained).toBeGreaterThan(0);
-      expect(firstTurnRetained).toBeLessThan(size / 8);
-      expect(lineReaderRetainedBytes()).toBeLessThan(size / 8);
+      expect(firstTurnRetained).toBeLessThanOrEqual(bound);
+      expect(lineReaderRetainedBytes()).toBeGreaterThanOrEqual(largestChunk);
+      expect(lineReaderRetainedBytes()).toBeLessThanOrEqual(bound);
     });
   }
 });

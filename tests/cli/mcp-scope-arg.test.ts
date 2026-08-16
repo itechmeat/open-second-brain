@@ -3,6 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { runCli } from "../helpers/run-cli.ts";
+import { INSTALL_TARGET_IDS, RUNTIME_FACTS } from "../../src/core/runtime/host-facts.ts";
+
+/** Whole tokens: `copilot-cli` contains `pi`, so containment over ids lies. */
+function tokensOf(text: string): ReadonlySet<string> {
+  return new Set(text.split(/[^A-Za-z0-9_-]+/).filter((token) => token.length > 0));
+}
 
 describe("o2b mcp --scope arg validation", () => {
   test("invalid scope value exits 2 with a clear error", async () => {
@@ -23,7 +29,12 @@ describe("o2b mcp --host-target arg validation", () => {
     const res = await runCli(["mcp", "--host-target", "nope"], { stdin: "" });
     expect(res.returncode).toBe(2);
     expect(res.stderr).toContain("--host-target");
-    expect(res.stderr).toContain("cursor");
+    // Every known runtime, not just one of them: the refusal exists to
+    // tell the operator what they could have written instead.
+    const offered = tokensOf(res.stderr);
+    for (const target of INSTALL_TARGET_IDS) {
+      expect(`${target} offered: ${offered.has(target)}`).toBe(`${target} offered: true`);
+    }
   });
 
   test("a known runtime is reported back by the capability probe", async () => {
@@ -37,9 +48,15 @@ describe("o2b mcp --host-target arg validation", () => {
       const parsed = JSON.parse(res.stdout) as {
         capabilities: { host_ceiling: { target: string; kind: string; max_tools: number } };
       };
+      // The number comes from the fact row the server reads, not from a
+      // literal copied out of it: the two cannot drift apart here.
+      const ceiling = RUNTIME_FACTS.cursor.toolCeiling;
+      expect(ceiling.kind).toBe("declared");
       expect(parsed.capabilities.host_ceiling.target).toBe("cursor");
-      expect(parsed.capabilities.host_ceiling.kind).toBe("declared");
-      expect(parsed.capabilities.host_ceiling.max_tools).toBe(40);
+      expect(parsed.capabilities.host_ceiling.kind).toBe(ceiling.kind);
+      expect(parsed.capabilities.host_ceiling.max_tools).toBe(
+        (ceiling as { maxTools: number }).maxTools,
+      );
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }

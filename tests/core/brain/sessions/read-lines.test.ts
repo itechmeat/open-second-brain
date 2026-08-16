@@ -37,6 +37,38 @@ async function collect(path: string): Promise<string[]> {
   return out;
 }
 
+/**
+ * The chunk sizes this runtime's file stream actually hands out for
+ * `path`, read the same way {@link readLines} reads it.
+ *
+ * The bounds below used to be hand-picked round numbers with about 3.8x
+ * of slack (a measured 262,144-byte window against a 1,000,000-byte
+ * bound), and a round number cannot tell a reader holding ONE chunk from
+ * one holding four - which is the module's whole invariant. Measuring the
+ * ceiling instead makes that invariant - "never more than one chunk plus
+ * the partial line carried into it" - the thing the test asserts.
+ */
+async function streamChunkBytes(path: string): Promise<ReadonlyArray<number>> {
+  const reader = Bun.file(path).stream().getReader();
+  const sizes: number[] = [];
+  try {
+    for (;;) {
+      // oxlint-disable-next-line no-await-in-loop
+      const chunk = await reader.read();
+      if (chunk.done === true || chunk.value === undefined) break;
+      sizes.push(chunk.value.byteLength);
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return sizes;
+}
+
+/** Longest line of `lines` in bytes - the largest carry the reader can hold. */
+function longestLineBytes(lines: ReadonlyArray<string>): number {
+  return lines.reduce((max, line) => Math.max(max, Buffer.byteLength(line, "utf8")), 0);
+}
+
 describe('readLines — the cases split("\\n") handled by accident', () => {
   test("a trailing newline does not produce a phantom final line", async () => {
     expect(await collect(fixture("a\nb\n"))).toEqual(["a", "b"]);
@@ -103,11 +135,22 @@ describe("readFirstLine — stops at the first newline", () => {
     expect(await readFirstLine(fixture("first\r\nsecond\r\n"))).toBe("first");
   });
 
-  test("reads far less than the file when the first line is short", async () => {
+  test("reads exactly one chunk when the first line is short", async () => {
     const path = fixture(`head\n${"x".repeat(4_000_000)}\n`);
+    const size = Bun.file(path).size;
+    const [firstChunk] = await streamChunkBytes(path);
     resetLineReaderRetainedBytes();
     expect(await readFirstLine(path)).toBe("head");
-    expect(lineReaderRetainedBytes()).toBeLessThan(1_000_000);
+    // Equality, not "less than a round number". The eager form this
+    // module exists to remove - `readFileSync` then `indexOf("\n")` -
+    // records ZERO, because it never enters the chunk loop, and a bound
+    // written only as an upper limit is satisfied by zero. A reader that
+    // buffered four chunks before yielding fails the same assertion from
+    // the other side.
+    expect(lineReaderRetainedBytes()).toBe(firstChunk!);
+    // And the chunk really is a small window on this file, rather than
+    // the runtime having handed the whole thing over in one piece.
+    expect(lineReaderRetainedBytes()).toBeLessThan(size / 8);
   });
 });
 
@@ -118,10 +161,14 @@ describe("the reader's retained-bytes accounting", () => {
     expect(lineReaderRetainedBytes()).toBe(0);
   });
 
-  test("the high-water mark stays far below the file size", async () => {
-    const path = fixture(`${`${"y".repeat(200)}\n`.repeat(20_000)}`);
+  test("the window is one chunk plus the partial line, and nothing more", async () => {
+    const line = "y".repeat(200);
+    const path = fixture(`${`${line}\n`.repeat(20_000)}`);
     const size = Bun.file(path).size;
     expect(size).toBeGreaterThan(4_000_000);
+    const chunks = await streamChunkBytes(path);
+    const largestChunk = Math.max(...chunks);
+    expect(chunks.length).toBeGreaterThan(1);
     resetLineReaderRetainedBytes();
     let chars = 0;
     let seen = 0;
@@ -131,7 +178,35 @@ describe("the reader's retained-bytes accounting", () => {
     }
     expect(seen).toBe(20_000);
     expect(chars).toBe(20_000 * 200);
-    expect(lineReaderRetainedBytes()).toBeGreaterThan(0);
-    expect(lineReaderRetainedBytes()).toBeLessThan(size / 4);
+    // The module's stated invariant, asserted from both sides rather than
+    // against a round number: at least one whole chunk was held (a reader
+    // that materialised the file and split it records nothing at all),
+    // and never more than one chunk plus the longest line that can be
+    // carried across a boundary (a reader buffering two chunks doubles
+    // this and fails).
+    expect(lineReaderRetainedBytes()).toBeGreaterThanOrEqual(largestChunk);
+    expect(lineReaderRetainedBytes()).toBeLessThanOrEqual(largestChunk + longestLineBytes([line]));
+  });
+
+  test("a file with no line terminator is reported at its true cost", async () => {
+    // The carry IS the retained window when nothing terminates it, and
+    // the accounting says so rather than reporting the chunk alone. An
+    // accounting that counted only the chunk would report a 4 MB window
+    // as 256 KB, and every bound above it would be measuring nothing.
+    const path = fixture("z".repeat(4_000_000));
+    resetLineReaderRetainedBytes();
+    expect((await collect(path)).length).toBe(1);
+    expect(lineReaderRetainedBytes()).toBeGreaterThanOrEqual(4_000_000);
+  });
+
+  test("the carry does not survive the loop that made it", async () => {
+    const tail = "TAIL-WITH-NO-NEWLINE";
+    expect(await collect(fixture(`a\n${tail}`))).toEqual(["a", tail]);
+    // A carry hoisted to module scope - the obvious way to save an
+    // allocation per call - would prepend the previous file's unterminated
+    // tail to this one, and would keep those bytes retained between runs.
+    resetLineReaderRetainedBytes();
+    expect(await collect(fixture("b\n"))).toEqual(["b"]);
+    expect(lineReaderRetainedBytes()).toBe(2);
   });
 });

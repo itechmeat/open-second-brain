@@ -19,9 +19,13 @@
  *
  * So this census is not a scan. It DRIVES each entry point for real, with
  * progress on, against a fixture, and asserts that records carrying the
- * expected operation and stage actually arrived and that the stream was
- * terminated. Three properties follow, and they are why it is worth the
- * seconds it costs:
+ * expected operation and stage actually arrived, that at least one of them
+ * ADVANCED, and that the stream was terminated. The advance is the part
+ * that took a second pass to get right: a `started`/`finished` pair proves
+ * only that a counter was built, and three of the ten sites here were being
+ * vouched for by exactly that - see {@link EmitterSite.noAdvanceReason}.
+ * Three properties follow, and they are why it is worth the seconds it
+ * costs:
  *
  *   1. **No false positives.** A record either reached stderr or it did
  *      not. There is no pattern to match and therefore nothing to match
@@ -53,6 +57,10 @@
  *     by its enclosing top-level `function`, so a second
  *     `progressCounter(` in the same body would collapse onto the same
  *     key. Also a failure, for the same reason.
+ *   - **The loop behind a site that declares `noAdvanceReason`.** Two do,
+ *     and for both of them what is proven is that the stage opens and
+ *     terminates - the ticking itself needs an embedding layer no test in
+ *     this tree may depend on.
  *   - **An emitter reached only under conditions the fixture does not
  *     create** - a provider-backed embed batch, a lock contended by a
  *     second process. The fixture drives the DEFAULT path of each verb;
@@ -164,6 +172,21 @@ interface EmitterSite {
    * and lends, so `lock` is what proves that counter ran.
    */
   readonly stage: string;
+  /**
+   * Why this site's stream can carry `started` and `finished` but no
+   * `advanced` on the path the fixture drives.
+   *
+   * A `started`/`finished` pair proves the counter was CONSTRUCTED, and
+   * that is a weaker fact than it looks: commenting out the sole
+   * `progress.advance(...)` call in `runHealEnrichment` once left this
+   * census 3 pass / 0 fail, because the dream fixture had no user pages
+   * and the per-page loop never ran. So an `advanced` record is required
+   * by default, and a site that genuinely cannot produce one says so HERE
+   * with a reason rather than passing quietly. The exception is checked
+   * in both directions: a site declaring one that then advances is a
+   * failure too, so a stale reason cannot outlive the condition it names.
+   */
+  readonly noAdvanceReason?: string;
 }
 
 const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
@@ -202,6 +225,14 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     entryPoint: "o2b brain bridges discover --progress",
     operation: OPERATION.bridges,
     stage: "candidates",
+    // The candidate loop - the only thing that ticks - sits behind
+    // `store.vecLoaded() && store.countEmbeddings() > 0`. This fixture
+    // indexes with the lexical lane only, because an embedding layer
+    // means a provider key and a network call, which is the one thing
+    // every test in this tree refuses to depend on. The lane's own
+    // ticking is covered where an embedding store can be faked:
+    // `tests/core/brain/bridge-discovery.test.ts`.
+    noAdvanceReason: "the candidate loop needs an embedding layer this fixture cannot provide",
   },
   "core/brain/link-graph/communities.ts#detectCommunities": {
     entryPoint: "o2b brain clusters run --progress",
@@ -222,6 +253,13 @@ const EMITTERS: Readonly<Record<string, EmitterSite>> = Object.freeze({
     entryPoint: "o2b search vector-backfill --progress",
     operation: OPERATION.reindex,
     stage: "plan",
+    // This counter owns no loop at all: it opens the stage and LENDS
+    // itself to `runEmbeddingPhase`, which is entered only under
+    // `--apply` with a non-empty pending set - so an advance here would
+    // mean a provider call. What the default path proves is that the
+    // stage opens and terminates, which is the whole of what this site
+    // does on its own.
+    noAdvanceReason: "the counter is lent to the embedding phase, which only --apply enters",
   },
   // The machine-wide session sweep. One stage, because the walk is three
   // orders of magnitude cheaper than the hashing (4 ms against 3.0 s over
@@ -312,6 +350,23 @@ beforeAll(async () => {
   dreamConfig = join(tmp, "dream-config.yaml");
   atomicWriteFileSync(dreamConfig, `vault: ${dreamVault}\n`);
   bootstrapBrain(dreamVault, { configPath: dreamConfig });
+  // User pages, because the heal-enrich pass ticks once per page and a
+  // vault with none opens its stage over a denominator of zero: the
+  // counter reports `started` and `finished` and never runs the loop the
+  // stage exists to report on. Two pages, each naming the other's title,
+  // so the pass has work as well as a denominator.
+  for (const [name, other] of [
+    ["canary-rollout", "Blast Radius"],
+    ["blast-radius", "Canary Rollout"],
+  ]) {
+    writeFileSync(
+      join(dreamVault, `${name}.md`),
+      `---\ntitle: ${name!
+        .split("-")
+        .map((w) => w[0]!.toUpperCase() + w.slice(1))
+        .join(" ")}\n---\n\nA note about ${other}.\n`,
+    );
+  }
   for (const [i, date] of ["2026-05-20", "2026-05-21", "2026-05-22"].entries()) {
     writeSignal(dreamVault, {
       topic: "census-progress",
@@ -418,12 +473,29 @@ describe("progress emitter census", () => {
 
     for (const [site, decl] of Object.entries(EMITTERS)) {
       const records = streams.get(decl.entryPoint) ?? [];
-      const witnessed = records.some(
+      const witnessed = records.filter(
         (r) => r["operation"] === decl.operation && r["stage"] === decl.stage,
       );
-      if (!witnessed) {
+      if (witnessed.length === 0) {
         failures.push(
           `${site}: no ${decl.operation}/${decl.stage} record arrived from \`${decl.entryPoint}\``,
+        );
+        continue;
+      }
+      // The unit of work, not just the construction of the counter. See
+      // `noAdvanceReason`.
+      const advanced = witnessed.some((r) => r["kind"] === PROGRESS_KIND.advanced);
+      if (!advanced && decl.noAdvanceReason === undefined) {
+        failures.push(
+          `${site}: \`${decl.entryPoint}\` opened and closed ${decl.operation}/${decl.stage} ` +
+            `without one advanced record - give the fixture something to advance over, ` +
+            `or declare noAdvanceReason`,
+        );
+      }
+      if (advanced && decl.noAdvanceReason !== undefined) {
+        failures.push(
+          `${site}: declared noAdvanceReason (${decl.noAdvanceReason}) but an advanced ` +
+            `record arrived - drop the exception`,
         );
       }
     }

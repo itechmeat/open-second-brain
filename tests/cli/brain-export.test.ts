@@ -177,8 +177,12 @@ describe("brain export", () => {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(r.returncode).toBe(2);
+    // Whole tokens, not substrings: `"transcripts-jsonl".includes("json")`
+    // is true, so plain containment reported `json` as offered by a
+    // message that had stopped naming it.
+    const offered = new Set(r.stderr.split(/[^A-Za-z0-9_-]+/).filter((t) => t.length > 0));
     for (const format of EXPORT_FORMATS) {
-      expect(`${format} offered: ${r.stderr.includes(format)}`).toBe(`${format} offered: true`);
+      expect(`${format} offered: ${offered.has(format)}`).toBe(`${format} offered: true`);
     }
   });
 });

@@ -74,6 +74,30 @@ const TWO: HostContext = Object.freeze({
 
 const ROWS = Object.values(RUNTIME_FACTS);
 
+/**
+ * The bar a citation clears, taken from the sibling census in
+ * `tests/core/architecture/state-surface-census.test.ts`.
+ *
+ * Every check below used to be `.trim() !== ""`, which `reason: "TODO"`
+ * and `source: "for now"` both pass. That is not a pedantic gap here: the
+ * `unknown` reason is the field the fail-open prevention rests on - it is
+ * what `second_brain_capabilities` repeats to say WHY no profile was
+ * selected - and a placeholder in it reaches the operator as the silence
+ * this whole file exists to end.
+ */
+const MIN_CITATION_LENGTH = 80;
+const LAZY_CITATION = /\bTODO\b|\bTBD\b|\bfor now\b|\blater\b|\bn\/a\b/i;
+
+/** Why `text` is not a citation, or `null` when it is one. */
+function citationDefect(text: string): string | null {
+  const trimmed = text.trim();
+  if (trimmed.length < MIN_CITATION_LENGTH) {
+    return `${trimmed.length} chars, under the ${MIN_CITATION_LENGTH} a citation needs`;
+  }
+  if (LAZY_CITATION.test(trimmed)) return "a placeholder, not an argument";
+  return null;
+}
+
 describe("the install-target vocabulary", () => {
   test("the guard accepts every declared member", () => {
     const rejected = INSTALL_TARGET_IDS.filter((id) => !isInstallTargetId(id));
@@ -121,7 +145,8 @@ describe("the tool-ceiling vocabulary", () => {
     const silent: string[] = [];
     for (const row of ROWS) {
       if (row.toolCeiling.kind !== TOOL_CEILING_KIND.unknown) continue;
-      if (row.toolCeiling.reason.trim().length === 0) silent.push(row.target);
+      const defect = citationDefect(row.toolCeiling.reason);
+      if (defect !== null) silent.push(`${row.target}: ${defect}`);
       if ("maxTools" in row.toolCeiling) silent.push(`${row.target} carries maxTools`);
     }
     expect(silent.join("\n")).toBe("");
@@ -135,7 +160,8 @@ describe("the tool-ceiling vocabulary", () => {
       if (!Number.isSafeInteger(maxTools) || maxTools <= 0) {
         defects.push(`${row.target}: maxTools ${maxTools}`);
       }
-      if (source.trim().length === 0) defects.push(`${row.target}: no source`);
+      const defect = citationDefect(source);
+      if (defect !== null) defects.push(`${row.target}: source is ${defect}`);
     }
     expect(defects.join("\n")).toBe("");
   });
@@ -163,7 +189,7 @@ describe("the tool-ceiling vocabulary", () => {
         .filter(
           (row) =>
             row.toolCeiling.kind === TOOL_CEILING_KIND.unbounded &&
-            row.toolCeiling.source.trim() === "",
+            citationDefect(row.toolCeiling.source) !== null,
         )
         .map((row) => row.target);
 
@@ -172,14 +198,28 @@ describe("the tool-ceiling vocabulary", () => {
       ...base,
       toolCeiling: { kind: TOOL_CEILING_KIND.unbounded, source: "  " },
     };
+    // Long enough to be a citation but still a placeholder: the length
+    // floor alone would let this one through.
+    const lazy: RuntimeFacts = {
+      ...base,
+      toolCeiling: {
+        kind: TOOL_CEILING_KIND.unbounded,
+        source:
+          "no limit is documented anywhere this build could find, so treat the surface as " +
+          "unbounded for now",
+      },
+    };
     const sourced: RuntimeFacts = {
       ...base,
       toolCeiling: {
         kind: TOOL_CEILING_KIND.unbounded,
-        source: "the host documents that it applies no per-workspace tool limit",
+        source:
+          "the host's own MCP documentation states that it applies no per-workspace tool limit " +
+          "and forwards every registered server's whole surface to the model",
       },
     };
     expect(sourceless([silent]).join(",")).toBe(base.target);
+    expect(sourceless([lazy]).join(",")).toBe(base.target);
     expect(sourceless([sourced]).join(",")).toBe("");
     expect(sourceless(ROWS).join(",")).toBe("");
   });
@@ -262,11 +302,29 @@ describe("session roots", () => {
   });
 
   test("a row with no session adapter and no non-adapter format declares no roots", () => {
-    // aider, pi and generic store no transcripts at all. An empty list is
-    // the stated answer; a root pointing at a directory that never exists
-    // would make discovery report a miss instead of an absence.
-    const quiet = [INSTALL_TARGET_ID.aider, INSTALL_TARGET_ID.pi, INSTALL_TARGET_ID.generic];
-    const noisy = quiet.filter((target) => runtimeFactsFor(target).sessionRoots.length > 0);
+    // aider, pi, copilot-cli, gemini-cli, kiro and generic store no
+    // transcripts this build can name. An empty list is the stated answer;
+    // a root pointing at a directory that never exists would make
+    // discovery report a miss instead of an absence.
+    //
+    // DERIVED from the predicate the title states, not hand-listed. The
+    // list was `[aider, pi, generic]` while the predicate held for twice
+    // that many rows, so inventing a root for `kiro` changed nothing here
+    // - the very drift this case is the guard against.
+    const quiet = INSTALL_TARGET_IDS.filter(
+      (target) =>
+        runtimeFactsFor(target).sessionAdapter === null &&
+        runtimeFactsFor(target).sessionRuntime === null,
+    );
+    // Both sides non-empty, or the filter is doing the asserting.
+    expect(`quiet ${quiet.length > 0}, loud ${quiet.length < INSTALL_TARGET_IDS.length}`).toBe(
+      "quiet true, loud true",
+    );
+    const noisy = quiet.filter(
+      (target) =>
+        runtimeFactsFor(target).sessionRoots.length > 0 ||
+        resolveSessionRoots(target, ONE).length > 0,
+    );
     expect(noisy.join(",")).toBe("");
   });
 
@@ -350,7 +408,11 @@ describe("host probes", () => {
       if (probe === null) continue;
       if (probe.bin.trim() === "") defects.push(`${row.target}: no binary`);
       if (probe.argv.length === 0) defects.push(`${row.target}: empty argv`);
-      if (probe.answers.trim() === "") defects.push(`${row.target}: says nothing`);
+      // `answers` is what `--friction` prints as the probe's evidence
+      // cell, so a placeholder there is a blank column on the operator's
+      // screen rather than a missing string in a table.
+      const defect = citationDefect(probe.answers);
+      if (defect !== null) defects.push(`${row.target}: answers is ${defect}`);
     }
     expect(defects.join("\n")).toBe("");
   });

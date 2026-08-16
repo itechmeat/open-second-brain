@@ -9,9 +9,14 @@
  * around the functions:
  *
  *   - FAIL BEFORE COMMIT. Every refusal is driven with the source tree
- *     otherwise perfectly movable, and each one asserts that NOTHING
- *     moved - not that the call threw. A plan that reported a refusal and
- *     still copied half a tree would pass a throw-shaped assertion.
+ *     otherwise perfectly movable, and each one drives `applyStateMigration`
+ *     and asserts that NOTHING moved - not that the call threw. A plan
+ *     that reported a refusal and still copied half a tree would pass a
+ *     throw-shaped assertion. Three of the seven used to stop at the
+ *     plan: `reserved_namespace`, the unreadable-lock case and
+ *     `unreadable_surface` never called apply at all, so their
+ *     `expect(existsSync(dest)).toBe(false)` was true of a destination
+ *     nothing had ever been asked to write.
  *   - PUT BACK ONLY WHAT IS STILL THE SAME. The rollback tests change a
  *     migrated file behind the tool's back and assert it is named,
  *     refused, and STILL THERE afterwards. Deleting a file the operator
@@ -124,6 +129,32 @@ function refusalCodes(p: MigrationPlan): string[] {
   return p.refusals.map((r) => r.code).toSorted();
 }
 
+/**
+ * The bar a remedy has to clear.
+ *
+ * It was `remedy.length > 20`, applied to one of the seven refusal codes,
+ * and `"TODO: fix this later!!"` is twenty-two characters. A remedy is
+ * the sentence that turns a refusal into something the operator can act
+ * on; the shortest real one in this module - "name an empty directory, or
+ * a path that does not exist yet" - is fifty-seven.
+ */
+const MIN_REMEDY_LENGTH = 50;
+
+/** Words that mean nobody has decided yet, which is not a remedy. */
+const LAZY_REMEDY_RE = /\bTODO\b|\bfor now\b|\blater\b/i;
+
+/** Every refusal in `refusals` says what to DO, named when one does not. */
+function expectActionableRemedies(
+  refusals: ReadonlyArray<{ readonly code: string; readonly remedy: string }>,
+): void {
+  // Folded into one expectation whose value NAMES the offender: asserting
+  // per refusal would stop at the first and hide the rest.
+  const thin = refusals
+    .filter((r) => r.remedy.trim().length < MIN_REMEDY_LENGTH || LAZY_REMEDY_RE.test(r.remedy))
+    .map((r) => `${r.code}: ${r.remedy.trim()}`);
+  expect(thin.toSorted().join("\n")).toBe("");
+}
+
 describe("state migration plan", () => {
   test("inventories every file under both roots with its byte count and digest", () => {
     const vault = seedVault();
@@ -182,7 +213,7 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.symlink)!;
     expect(refusal.path).toBe(link);
     expect(refusal.found).toContain("/etc/hostname");
-    expect(refusal.remedy.length).toBeGreaterThan(20);
+    expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
@@ -198,6 +229,7 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.specialFile);
     expect(refusal?.path).toBe(fifo);
     expect(refusal?.found).toContain("FIFO");
+    expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
@@ -211,6 +243,7 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.destinationOccupied);
     expect(refusal?.path).toBe(dest);
     expect(refusal?.found).toContain("notes");
+    expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(tree(dest)).toEqual(["notes/keep.md"]);
   });
@@ -223,7 +256,15 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.reservedNamespace);
     expect(refusal?.path).toBe(dest);
     expect(refusal?.found).toContain(vault);
+    expectActionableRemedies(p.refusals);
+    // The apply is the assertion. Without it `existsSync(dest)` was true
+    // of a path nothing had been asked to create, which is a fact about
+    // this test rather than about the module.
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
+    for (const entry of p.manifest.entries) {
+      expect(existsSync(join(vault, entry.relative_path))).toBe(true);
+    }
   });
 
   test("insufficient free space at the destination", () => {
@@ -233,6 +274,7 @@ describe("state migration refuses before it commits", () => {
     const p = plan(vault, dest, { freeBytesAt: () => 1 });
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.insufficientSpace);
     expect(refusal?.found).toContain("1 byte");
+    expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
@@ -245,24 +287,30 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.writerLockHeld);
     expect(refusal?.path).toBe(surfacePath(vault, STATE_SURFACE_ID.searchIndex));
     expect(refusal?.remedy).toContain("reindex");
+    expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
 
   test("a lock whose state could not be determined is refused, not assumed free", () => {
     const vault = seedVault();
-    const p = plan(vault, join(tempDir(), "moved"), {
+    const dest = join(tempDir(), "moved");
+    const p = plan(vault, dest, {
       writerLockHeldAt: () => {
         throw Object.assign(new Error("permission denied"), { code: "EACCES" });
       },
     });
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.writerLockHeld);
     expect(refusal?.found).toContain("EACCES");
+    expectActionableRemedies(p.refusals);
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+    expect(existsSync(dest)).toBe(false);
   });
 
   test("a surface that could not be probed, rather than silently leaving it behind", () => {
     const vault = seedVault();
-    const p = plan(vault, join(tempDir(), "moved"), {
+    const dest = join(tempDir(), "moved");
+    const p = plan(vault, dest, {
       statAt: (path: string) => {
         if (path.endsWith("metrics")) throw Object.assign(new Error("nope"), { code: "EACCES" });
         return undefined;
@@ -271,6 +319,16 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.unreadableSurface);
     expect(refusal?.path).toBe(surfacePath(vault, STATE_SURFACE_ID.metrics));
     expect(refusal?.found).toContain("EACCES");
+    expectActionableRemedies(p.refusals);
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+    expect(existsSync(dest)).toBe(false);
+    // Named rather than looped over `p.manifest.entries`: the stub
+    // reports every OTHER surface absent, so that list is empty here and
+    // a loop over it would assert nothing at all.
+    expect(existsSync(join(surfacePath(vault, STATE_SURFACE_ID.metrics), "recall.jsonl"))).toBe(
+      true,
+    );
+    expect(existsSync(surfacePath(vault, STATE_SURFACE_ID.searchIndex))).toBe(true);
   });
 
   test("a destination that reaches the vault through a symlink, which resolve() cannot see", () => {
@@ -287,6 +345,8 @@ describe("state migration refuses before it commits", () => {
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.reservedNamespace);
     expect(refusal?.path).toBe(dest);
     expect(refusal?.found).toContain(vault);
+    expectActionableRemedies(p.refusals);
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
 
@@ -302,6 +362,7 @@ describe("state migration refuses before it commits", () => {
       expect(refusal?.found).toContain("EACCES");
       // The headline contract: an unreadable directory is one refusal
       // among all of them, not a throw that leaves the rest uncomputed.
+      expectActionableRemedies(p.refusals);
       expect(refusalCodes(p)).toContain(MIGRATION_REFUSAL.writerLockHeld);
       expect(p.manifest.entries.map((e) => e.relative_path)).toContain(
         ".open-second-brain/brain.sqlite",
@@ -327,6 +388,8 @@ describe("state migration refuses before it commits", () => {
       (r) => r.code === MIGRATION_REFUSAL.symlink && r.path === metrics,
     );
     expect(refusal?.found).toContain("nowhere");
+    expectActionableRemedies(p.refusals);
+    expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
   });
 
   test("every refusal is collected, so one run tells the operator all of it", () => {
@@ -486,6 +549,7 @@ describe("state rollback", () => {
     const refusal = p.refusals.find((r) => r.code === ROLLBACK_REFUSAL.digestMismatch);
     expect(refusal?.relative_path).toBe("Brain/log/2026-08-16.md");
     expect(refusal?.remedy).toContain("copy");
+    expectActionableRemedies(p.refusals);
 
     const result = applyStateRollback(p);
     expect(result.refused.map((r) => r.relative_path)).toEqual(["Brain/log/2026-08-16.md"]);
@@ -504,6 +568,7 @@ describe("state rollback", () => {
     const p = planStateRollback({ destination: dest });
     const refusal = p.refusals.find((r) => r.code === ROLLBACK_REFUSAL.missingAtDestination);
     expect(refusal?.relative_path).toBe("Brain/metrics/recall.jsonl");
+    expectActionableRemedies(p.refusals);
   });
 
   test("refuses to clobber a source path that diverged since the migration", () => {
@@ -513,6 +578,7 @@ describe("state rollback", () => {
     const p = planStateRollback({ destination: dest });
     const refusal = p.refusals.find((r) => r.code === ROLLBACK_REFUSAL.sourceDiverged);
     expect(refusal?.relative_path).toBe("Brain/metrics/recall.jsonl");
+    expectActionableRemedies(p.refusals);
 
     applyStateRollback(p);
     expect(readFileSync(join(vault, "Brain/metrics/recall.jsonl"), "utf8")).toBe(
@@ -562,6 +628,7 @@ describe("state rollback", () => {
     const refusal = p.refusals.find((r) => r.code === ROLLBACK_REFUSAL.unreadable);
     expect(refusal?.relative_path).toBe("Brain/metrics/recall.jsonl");
     expect(refusal?.found).toContain("EISDIR");
+    expectActionableRemedies(p.refusals);
     expect(p.restore.map((e) => e.relative_path)).toContain("Brain/log/2026-08-16.md");
 
     const result = applyStateRollback(p);
@@ -635,5 +702,61 @@ describe("state rollback", () => {
     writeFileSync(manifestPath, JSON.stringify(doc));
 
     expect(() => planStateRollback({ destination: dest })).toThrow(StateMigrationError);
+  });
+});
+
+/**
+ * Every declared refusal code is REACHED by something here.
+ *
+ * A code nobody drives is a branch nobody has read: `ROLLBACK_REFUSAL.
+ * unreadable` was declared and produced nowhere for a release, and the
+ * suite was as green then as it is now. This block builds the conditions
+ * itself rather than accumulating codes seen by the tests above, so it
+ * says the same thing when one test is run in isolation as it does when
+ * the file is run whole.
+ */
+describe("every declared refusal code is reachable", () => {
+  test("the migration codes, all seven, with a remedy each", () => {
+    // Six from one plan, because they are independent conditions and a
+    // plan collects all of them; the seventh needs a probe that throws,
+    // which would hide the surfaces the other six are read from.
+    const vault = seedVault();
+    const metrics = surfacePath(vault, STATE_SURFACE_ID.metrics);
+    symlinkSync("/etc/hostname", join(metrics, "link"));
+    expect(Bun.spawnSync(["mkfifo", join(metrics, "pipe")]).exitCode).toBe(0);
+    const occupied = join(vault, "inside");
+    write(join(occupied, "already.md"), "here first\n");
+
+    const many = plan(vault, occupied, { freeBytesAt: () => 0, writerLockHeldAt: () => true });
+    const unreadable = plan(vault, join(tempDir(), "moved"), {
+      statAt: (path: string) => {
+        if (path.endsWith("metrics")) throw Object.assign(new Error("nope"), { code: "EACCES" });
+        return undefined;
+      },
+    });
+
+    const seen = new Set([...refusalCodes(many), ...refusalCodes(unreadable)]);
+    const unreached = Object.values(MIGRATION_REFUSAL).filter((code) => !seen.has(code));
+    expect(unreached.toSorted().join("\n")).toBe("");
+    expectActionableRemedies([...many.refusals, ...unreadable.refusals]);
+  });
+
+  test("the rollback codes, all four, with a remedy each", () => {
+    const vault = seedVault();
+    const dest = join(tempDir(), "moved");
+    applyStateMigration(plan(vault, dest));
+
+    // One condition per bound entry, so no two of them compete for the
+    // same file and the plan has to report all four.
+    writeFileSync(join(dest, ".open-second-brain/brain.sqlite"), "edited at the destination");
+    rmSync(join(dest, ".open-second-brain/ingest-manifest.json"));
+    write(join(vault, "Brain/log/2026-08-16.md"), "# written again since\n");
+    mkdirSync(join(vault, "Brain/log/dream-runs/run-1.jsonl"), { recursive: true });
+
+    const p = planStateRollback({ destination: dest });
+    const seen = new Set(p.refusals.map((r) => r.code));
+    const unreached = Object.values(ROLLBACK_REFUSAL).filter((code) => !seen.has(code));
+    expect(unreached.toSorted().join("\n")).toBe("");
+    expectActionableRemedies(p.refusals);
   });
 });

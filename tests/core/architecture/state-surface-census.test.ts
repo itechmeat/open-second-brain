@@ -31,7 +31,16 @@
  *     `BRAIN_LOG_REL`, `brainDirs(...).log` and a bare `"Brain"` are all
  *     the same root - so it is held true by the resolver-binding block in
  *     the unit test rather than by this sweep. Saying which half is swept
- *     is the difference between a census and a claim about a census.
+ *     is the difference between a census and a claim about a census. That
+ *     delegation is only worth what the block covers: it bound 26 of 40
+ *     rows when this sentence first appeared, and a deliberately wrong
+ *     value in one of the other fourteen changed no test. It now binds
+ *     every row bar a counted, reasoned exception list, and the count is
+ *     itself an assertion there.
+ *   - This sweep NEVER checks that a row's declared path is the path its
+ *     owner builds. `attributed()` asks only whether a module is claimed
+ *     by some row's `sources`, which is a question about attribution and
+ *     not about correctness.
  *   - A path whose root arrives as an argument carries no token to match
  *     on. `writer-lock.ts` and `session-focus.ts` are exactly that shape:
  *     both build under the store directory and neither names it.
@@ -143,11 +152,26 @@ function naivePathBuilders(tree: ReadonlyArray<SourceFile> = TREE): ReadonlyArra
   return tree.filter((file) => NAIVE_RE.test(file.text)).map((file) => file.path);
 }
 
-/** Whether any declared row claims `path` through its `sources`. */
-function attributed(path: string): boolean {
-  return STATE_SURFACES.some((surface) =>
+/**
+ * Whether any declared row claims `path` through its `sources`.
+ *
+ * A trailing-slash source names the files IN that directory and not the
+ * tree beneath it. Unbounded, it was an absolution: a row declaring
+ * `sources: ["src/core/"]` would have answered for most of this
+ * repository, and the "every declared source module exists" check in
+ * `tests/core/state/surfaces.test.ts` would have waved it through
+ * because `src/core` does exist. No row spells one today, which is
+ * exactly when the bound is cheap to put on.
+ */
+function attributed(
+  path: string,
+  surfaces: ReadonlyArray<{ readonly sources: ReadonlyArray<string> }> = STATE_SURFACES,
+): boolean {
+  return surfaces.some((surface) =>
     surface.sources.some((source) =>
-      source.endsWith("/") ? path.startsWith(source) : path === source,
+      source.endsWith("/")
+        ? path.startsWith(source) && !path.slice(source.length).includes("/")
+        : path === source,
     ),
   );
 }
@@ -235,6 +259,17 @@ describe("the census can fail", () => {
       'export const dir = (vault: string): string => join(vault, DERIVED_STORE_DIR, "x");\n';
     expect(unaccountedFrom(path, text)).toEqual([path]);
     expect(naivePathBuilders(intruder(path, text))).toContain(path);
+  });
+
+  test("a directory source answers for its own files and not for the tree below it", () => {
+    // Driven against a synthetic row rather than a real one, because the
+    // point is what the RULE would allow: an unbounded prefix let one
+    // source line absolve every module under it, and the population is
+    // only as honest as the narrowest claim it accepts.
+    const sweeping = [{ sources: ["src/core/"] }];
+    expect(attributed("src/core/doctor.ts", sweeping)).toBe(true);
+    expect(attributed("src/core/state/migrate.ts", sweeping)).toBe(false);
+    expect(attributed("src/core/brain/anticipatory-cache.ts", sweeping)).toBe(false);
   });
 
   test("a docblock that merely names the directory is not a path builder", () => {

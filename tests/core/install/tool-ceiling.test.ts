@@ -26,6 +26,10 @@
  *     capability report says the ceiling is unchecked and repeats the
  *     written reason, because silence is what let the original defect
  *     survive.
+ *   - The flag the payload bakes in is the flag the CLI PARSES. Every
+ *     expectation here spells it with the constant, so the constant alone
+ *     is no evidence: the last block runs `o2b` on the argv the adapter
+ *     writes and reads the surface back off the probe.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -34,6 +38,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 
+import { runCli } from "../../helpers/run-cli.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { cursorAdapter } from "../../../src/core/install/adapters/cursor.ts";
@@ -208,6 +213,54 @@ describe("the profile baked into the generated payload", () => {
     };
     expect(written.mcpServers["open-second-brain"]!.args).toContain("catalog");
     expect(cursorAdapter.verify(env).status).toBe("ok");
+  });
+});
+
+/**
+ * The generated argv, handed to the program that has to read it.
+ *
+ * `payload-host.ts` names the flags and `src/cli/main.ts` parses them, and
+ * until this block nothing held the two together: every expectation above
+ * spells the flag with {@link TOOL_PROFILE_FLAG}, so renaming the constant
+ * renamed the expectation with it and left the suite green while every
+ * Cursor install reverted from the seven-tool surface to the hundred-and-
+ * ten-tool one - the exact defect the file exists to prevent.
+ *
+ * Running the CLI closes it from both sides. An argument the parser does
+ * not know is a usage error, so a renamed flag fails on the exit code; a
+ * flag accepted and then ignored would still start the full surface, so it
+ * fails on the advertised count. The probe is the same code path the
+ * server's `tools/list` runs, which is why the number is comparable to the
+ * pin above.
+ */
+describe("the generated registration is an argv this CLI accepts", () => {
+  interface ProbeJson {
+    readonly server_name: string;
+    readonly capabilities: {
+      readonly advertised_tool_count: number;
+      readonly host_ceiling: { readonly target: string | null };
+    };
+  }
+
+  async function probe(args: ReadonlyArray<string>): Promise<ProbeJson> {
+    const res = await runCli([...args, "--probe", "--json"], { env: { VAULT_DIR: vault } });
+    expect(`exit ${res.returncode}\n${res.stderr}`).toBe("exit 0\n");
+    return JSON.parse(res.stdout) as ProbeJson;
+  }
+
+  test("the full entry's args select the bounded surface the pin names", async () => {
+    const args = payloadForHost("cursor", makePayload(), makeEnv()).full.args;
+    const answered = await probe(args);
+    expect(answered.server_name).toBe("open-second-brain");
+    expect(answered.capabilities.advertised_tool_count).toBe(PINNED_ADVERTISED_TOOLS["cursor"]!);
+    expect(answered.capabilities.host_ceiling.target).toBe("cursor");
+  });
+
+  test("the writer entry's args are accepted too, and name the same host", async () => {
+    const args = payloadForHost("cursor", makePayload(), makeEnv()).writer.args;
+    const answered = await probe(args);
+    expect(answered.server_name).toBe("open-second-brain-writer");
+    expect(answered.capabilities.host_ceiling.target).toBe("cursor");
   });
 });
 

@@ -42,9 +42,17 @@
  * imports its subjects is one edge away from a cycle the architecture
  * ratchet gates. So each row DERIVES its path from the same name
  * constants the resolvers use, and `tests/core/state/surfaces.test.ts`
- * binds every reachable row to its real resolver. A rename in
- * `brain/paths.ts` fails that test rather than printing a path nothing
- * writes.
+ * binds every row to its real location. A rename in `brain/paths.ts`
+ * fails that test rather than printing a path nothing writes.
+ *
+ * Two kinds of binding, because two kinds of resolver: a row whose
+ * resolver is exported is compared against it directly, and a row whose
+ * resolver is private is bound by DRIVING the module's exported writer
+ * against a temporary vault and asking whether the artifact landed at
+ * the row's own path. No row is bound by neither today; the list of
+ * deliberate exceptions is empty and its size is asserted, so a new row
+ * that binds to nothing is a decision somebody typed rather than one
+ * nobody noticed.
  *
  * ## What this module does not claim
  *
@@ -229,10 +237,12 @@ export interface StateSurface {
   /** What it holds, and what its absence or loss costs. */
   readonly reason: string;
   /**
-   * Repo-relative modules that own this path. A trailing `/` matches a
-   * directory prefix. `tests/core/architecture/state-surface-census.test.ts`
-   * attributes swept path builders through this field, so an anchor that
-   * rots fails a test rather than silently orphaning a location.
+   * Repo-relative modules that own this path. A trailing `/` names the
+   * modules DIRECTLY IN that directory and not the tree beneath it -
+   * unbounded, one such entry would answer for every module under it.
+   * `tests/core/architecture/state-surface-census.test.ts` attributes
+   * swept path builders through this field, so an anchor that rots fails
+   * a test rather than silently orphaning a location.
    */
   readonly sources: ReadonlyArray<string>;
 }

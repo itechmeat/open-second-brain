@@ -19,14 +19,32 @@
  *
  * ## The population, defined structurally
  *
- * A module is IN POPULATION when it can address the vault: it lives
- * under one of {@link VAULT_WRITE_ROOTS}, or it is one of
- * {@link VAULT_WRITER_FILES}, or it imports the Brain vault-path
- * vocabulary (`paths.ts`) from anywhere in the tree. The last clause is
- * what stops a new in-vault writer escaping by living somewhere new.
- * Modules that write only outside the vault — the install adapters, the
- * machine-config exporter, the benchmark harness — are out by the rule
- * rather than by twenty hand-written "not a vault" entries.
+ * A module is IN POPULATION when it can address the vault. Four clauses,
+ * and the last three exist because the first two are a list of places:
+ * it lives under one of {@link VAULT_WRITE_ROOTS}, or it is one of
+ * {@link VAULT_WRITER_FILES}, or it imports the vault-location
+ * vocabulary ({@link VAULT_VOCABULARY_IMPORT_RE}), or it NAMES a vault
+ * location itself - a `join(` rooted on a vault argument
+ * ({@link VAULT_ROOT_JOIN_RE}), or the derived-store directory as a bare
+ * literal ({@link DERIVED_STORE_LITERAL_RE}).
+ *
+ * The import clause used to carry that argument alone, and the claim
+ * above it - that it "stops a new in-vault writer escaping by living
+ * somewhere new" - was measured false on this branch. `src/core/state/
+ * migrate.ts` is 960 lines that copy, remove and prune every state
+ * surface under `<vault>/.open-second-brain/` and `<vault>/Brain/`, and
+ * it was outside the population on all three counts: not under a write
+ * root, not a named writer file, and it reaches its paths through
+ * `./surfaces.ts` rather than through `paths.ts`. `src/core/doctor.ts`,
+ * which opens and removes a probe file in the vault ROOT, and
+ * `src/core/install/manifest.ts`, which writes `<vault>/.open-second-
+ * brain/install.lock.json`, escaped the same way. A rule that names only
+ * one spelling of "vault path" is a rule about that spelling.
+ *
+ * Modules that write only outside the vault - the install adapters, the
+ * machine-config exporter - are still out by the rule rather than by
+ * twenty hand-written "not a vault" entries, because none of them roots
+ * a `join(` on a vault or names the store directory.
  *
  * ## What counts as a WRITE
  *
@@ -90,19 +108,50 @@ const VAULT_WRITER_FILES: ReadonlyArray<string> = Object.freeze([
 ]);
 
 /**
- * The vault path vocabulary. Importing it is addressing the vault.
+ * The vault-location vocabulary. Importing it is addressing the vault.
+ *
+ * Three modules, because three modules spell a vault location:
+ * `paths.ts` composes them, `path-constants.ts` DECLARES the names they
+ * are composed from, and `state/surfaces.ts` enumerates the durable ones
+ * as derivations a caller can invoke. `migrate.ts` reaches every state
+ * surface through the third and named neither of the first two.
  *
  * The basename has to be the WHOLE last segment. `\bpaths\.ts` was too
  * loose: `-` is a word boundary, so `./hardcoded-paths.ts`,
- * `../claude-memory-paths.ts` and `../session-paths.ts` all matched, and
- * the last of those pulled four install adapters into a population the
- * docblock above explicitly says they are out of - they write outside
- * the vault, and the rule is what keeps them out rather than twenty
- * hand-written "not a vault" exclusions. Over-inclusion is the safe
- * direction for a gate in general; here it defeats the gate's own stated
- * boundary, so the segment separator is required.
+ * `../claude-memory-paths.ts` and `../session-paths.ts` all matched.
+ * Measured against this branch, the segment separator drops EIGHT
+ * modules that no other clause enrols - seven install adapters reaching
+ * `../session-paths.ts` (`generic.ts`, `codex.ts`, `pi.ts`, `grok.ts`,
+ * `aider.ts`, `_json-mcp.ts`, `copilot-cli.ts`), every one of which
+ * writes, plus `src/core/hygiene/scan-repo.ts` on
+ * `./hardcoded-paths.ts`, which does not. Seven writers leaving a
+ * write-site census sounds like a loss and is not: they write into the
+ * runtimes' own config directories, never into a vault, and the
+ * docblock above says so as the rule that keeps them out. Admitting
+ * them would mean seven hand-written "not a vault" exclusions arguing
+ * against the rule beside them.
+ *
+ * Over-inclusion is the safe direction for a gate in general; here it
+ * defeats the gate's own stated boundary, so the segment separator is
+ * required.
  */
-const VAULT_PATHS_IMPORT_RE = /^[ \t]*import\b[^;]*?\bfrom\s*"\.(?:[^"]*\/)?paths\.ts"/m;
+const VAULT_VOCABULARY_IMPORT_RE =
+  /^[ \t]*import\b[^;]*?\bfrom\s*"\.(?:[^"]*\/)?(?:paths|path-constants|surfaces)\.ts"/m;
+
+/**
+ * A path built from a vault root by hand, which is what `doctor.ts` does
+ * and no import can reveal. Matched on the CODE view, so the receiver has
+ * to be a real identifier rather than a name inside a quoted example.
+ */
+const VAULT_ROOT_JOIN_RE = /\bjoin\s*\(\s*(?:vault|vaultPath|vaultRoot|vaultDir)\b/;
+
+/**
+ * The derived-store directory spelled as a bare literal, which is how
+ * `install/manifest.ts` names `<vault>/.open-second-brain/`. Read off the
+ * comment-stripped view, which keeps string CONTENTS: on the code view a
+ * literal's body is blanked and nothing would ever match.
+ */
+const DERIVED_STORE_LITERAL_RE = /"\.open-second-brain"|'\.open-second-brain'/;
 
 /**
  * Calls that put file bytes on disk, or remove, move, or re-permission a
@@ -229,9 +278,24 @@ const WRITE_CATEGORY = Object.freeze({
   archiveTransfer: "archive-transfer",
   /** Permission or metadata change on an existing file; writes no bytes. */
   metadataOnly: "metadata-only",
+  /** A file written only to find out whether the location accepts writes, then removed. */
+  writeProbe: "write-probe",
+  /** Bytes written into a disposable directory shaped like a vault, never an operator's. */
+  fixtureMaterialisation: "fixture-materialisation",
 } as const);
 
 type WriteCategory = (typeof WRITE_CATEGORY)[keyof typeof WRITE_CATEGORY];
+
+/**
+ * The bar an exclusion reason has to clear, matching the one
+ * `state-surface-census` already applies to its own exclusion map. An
+ * argument for why a write site cannot route through the shared writer
+ * does not fit in eighty characters; a label does.
+ */
+const MIN_REASON_LENGTH = 80;
+
+/** Words that mean "nobody has decided yet", which is not a reason. */
+const LAZY_REASON_RE = /\bTODO\b|\bfor now\b|\blater\b/i;
 
 interface WriteExclusion {
   /** Every category this file's direct calls fall in. Never empty. */
@@ -276,7 +340,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/capture/telegram-capture.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one JSON line per capture-routing decision, appended to the decision log.",
+    reason:
+      "one JSON line per capture-routing decision, appended to the decision log. Every shared " +
+      "writer in the set rewrites a whole file, so routing an append through one would have to " +
+      "read the log back first - and this log is the only record that a rejected capture arrived " +
+      "at all, which is precisely what a read-modify-rewrite race loses.",
   },
   "src/core/brain/continuity/store.ts": {
     categories: [C.appendOnlyLedger],
@@ -289,7 +357,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/decisions/receipts.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one receipt JSON line per decision, appended to a per-config shard.",
+    reason:
+      "one receipt JSON line per decision, appended to a per-device shard so two machines syncing " +
+      "one vault never write the same file. The append is the commit point: the timeline emission " +
+      "after it is fail-soft precisely because the receipt is already durable, and a whole-file " +
+      "rewrite would put that ordering the other way round.",
   },
   "src/core/brain/diagnostics.ts": {
     categories: [C.appendOnlyLedger],
@@ -320,7 +392,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/health/edit-history.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "deduplicated edit-history lines appended to the per-page history log.",
+    reason:
+      "deduplicated edit-history lines appended to the per-page history log, in one call per " +
+      "batch. The dedup runs against what is already on disk, so the file is read before every " +
+      "append - and rewriting it from that read is exactly the operation that would drop a line " +
+      "another process appended in between.",
   },
   "src/core/brain/idempotency-ledger.ts": {
     categories: [C.appendOnlyLedger],
@@ -349,22 +425,38 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/metrics.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one JSON line per surface metrics record.",
+    reason:
+      "one JSON line per surface metrics record, appended to that surface's own JSONL. These are " +
+      "observations of runs that already finished and nothing regenerates them, so the file only " +
+      "ever grows; a shared writer would turn every measurement into a full rewrite of the " +
+      "history it is being added to.",
   },
   "src/core/brain/pref-audit.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one rendered line per preference mutation, appended to that preference's audit.",
+    reason:
+      "one rendered line per preference mutation, appended to that preference's audit. It is the " +
+      "provenance behind a rule the agents follow and cannot be reconstructed from the preference " +
+      "file it describes, so losing an interleaved line to a rewrite would lose the only copy of " +
+      "a promotion, an edit or a retirement.",
   },
   "src/core/brain/query-demand.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one JSON line per query-demand record, appended under the log lock.",
+    reason:
+      "one JSON line per query-demand record, appended under the log lock, with the byte-cap " +
+      "compaction running inside that same lock immediately afterwards. The append and the " +
+      "compaction are deliberately different operations, and the second already goes through " +
+      "`atomicWriteFileSync` - a rewrite is a rewrite and an append is not.",
   },
   "src/core/brain/recurrence.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync"],
-    reason: "one JSON line per recurrence event.",
+    reason:
+      "one JSON line per recurrence event, appended behind `assertVaultIdentityForWrite` and an " +
+      "`ensureInsideVault` on the directory. The support counts a proposal is judged on ARE the " +
+      "accumulated lines, so the file is only ever extended; nothing in it is ever revised, and a " +
+      "rewrite would be a way to lose evidence rather than a way to save it.",
   },
 
   // --- Lifecycle moves: an existing artifact changes location ------------
@@ -384,7 +476,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/dream-apply.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync"],
-    reason: "moves every consumed signal out of `inbox/` into its processed location.",
+    reason:
+      "moves every consumed signal out of `inbox/` into its processed location. A rename authors " +
+      "no content - the signal file's bytes are the same bytes at a new name - and it is " +
+      "deliberately best-effort per signal, because a source already moved by an earlier run is " +
+      "benign on a rerun while a real I/O failure is still surfaced.",
   },
   "src/core/brain/dream-stage.ts": {
     categories: [C.lifecycleMove, C.retentionDelete],
@@ -446,7 +542,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/recompile.ts": {
     categories: [C.lifecycleMove],
     calls: ["renameSync"],
-    reason: "moves an orphaned generated page into the cleanup directory under a free name.",
+    reason:
+      "moves an orphaned generated page into the cleanup directory under a name proven free by " +
+      "the suffix loop immediately above the call, so the move can never overwrite a page already " +
+      "parked there. The bytes are the page's own and are unchanged by the move; there is no " +
+      "content for a writer to render and nothing to make atomic beyond `rename(2)` itself.",
   },
   "src/core/brain/signal-retire.ts": {
     categories: [C.lifecycleMove],
@@ -475,12 +575,20 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/exact-state.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
-    reason: "clears one aspect's exact-state file; the absence IS the cleared state.",
+    reason:
+      "clears one aspect's exact-state file behind `assertVaultIdentityForWrite`, after the " +
+      "aspect name has been validated and the file confirmed to exist. The absence IS the cleared " +
+      "state on this lane - there is no empty-file representation to write instead - so no shared " +
+      "writer has a form for this operation.",
   },
   "src/core/brain/gaps/gap-loop.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
-    reason: "prunes closed gap tasks past their retention window.",
+    reason:
+      "prunes closed gap tasks past their retention window, and only those whose own frontmatter " +
+      "carries a parseable `closed_at` older than the cutoff - a task with an unreadable or " +
+      "missing date is skipped rather than swept. A delete writes no bytes, so there is nothing " +
+      "for a shared writer to make atomic; the frontmatter re-check is the safety here.",
   },
   "src/core/brain/git/ingest.ts": {
     categories: [C.retentionDelete],
@@ -492,7 +600,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/ingest/checkpoint.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
-    reason: "clears one ingest plan's checkpoint; absence is the terminal state.",
+    reason:
+      "clears one ingest plan's checkpoint behind `assertVaultIdentityForWrite`, reporting false " +
+      "rather than throwing when there was nothing to clear. Absence is the terminal state for a " +
+      "resume point: a plan with no checkpoint starts from the beginning, which is the same thing " +
+      "a checkpoint rewritten to empty would have to mean.",
   },
   "src/core/brain/ingest/sources-registry.ts": {
     categories: [C.retentionDelete],
@@ -538,12 +650,20 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/write-session/store.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
-    reason: "deletes write-session files, individually and by sweep. Idempotent by `force`.",
+    reason:
+      "deletes write-session files, individually and by sweep, idempotent by `force` so a " +
+      "concurrent delete of the same session is not an error. A write session is a staging " +
+      "record whose whole content is its existence for the length of the session, so removal is " +
+      "the operation and there are no bytes for a shared writer to author.",
   },
   "src/core/search/tuning-store.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
-    reason: "deletes the persisted tuning state; absence is the reset state.",
+    reason:
+      "deletes the persisted tuning state, which returns search to the shipped defaults until the " +
+      "next tuning run. Absence is the reset state by design: the reader re-validates whatever it " +
+      "finds against the parameter grid, so writing a neutral document instead would be a claim " +
+      "that a tuning run had happened and chosen it.",
   },
   "src/mcp/artifact-store.ts": {
     categories: [C.retentionDelete],
@@ -590,7 +710,11 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/brain/link-graph/co-occurrence.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
-    reason: "regenerates the co-occurrence JSON artifact in full from the current graph.",
+    reason:
+      "regenerates the co-occurrence JSON artifact in full from the current link graph on every " +
+      "run, so there is no prior content a torn write could destroy - the next pass recomputes " +
+      "the whole document from the pages, which are the source of truth. No note is involved and " +
+      "no Markdown parser ever reads it.",
   },
   "src/core/brain/portability/pointer.ts": {
     categories: [C.machineArtifact],
@@ -669,12 +793,20 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   "src/core/search/session-focus.ts": {
     categories: [C.machineArtifact, C.retentionDelete],
     calls: ["rmSync", "writeFileSync"],
-    reason: "the per-session focus JSON and the call that clears it.",
+    reason:
+      "the per-session focus JSON, one small document per session scope, and the call that clears " +
+      "it. Each entry expires on its own and is rewritten whole by the next `focus` call, so a " +
+      "torn file costs one session's standing query and is replaced rather than repaired; the " +
+      "clear removes the file because an empty focus and no focus are the same state.",
   },
   "src/core/search/tuning.ts": {
     categories: [C.machineArtifact],
     calls: ["writeFileSync"],
-    reason: "persists the tuning result JSON, keyed by a hash of the dataset it came from.",
+    reason:
+      "persists the tuning result JSON, keyed by a hash of the dataset it came from, so a result " +
+      "is only ever read back against the same inputs that produced it. A partial file fails that " +
+      "key check and is treated as no result at all, which is the same outcome as never having " +
+      "run the tuning pass - the cost of a torn write is one re-run.",
   },
 
   // --- Bulk subtree transfer ---------------------------------------------
@@ -702,6 +834,23 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "store. The unlink removes a partial store archive whose snapshot was refused.",
   },
 
+  "src/core/state/migrate.ts": {
+    categories: [C.archiveTransfer, C.lifecycleMove, C.retentionDelete],
+    calls: ["copyFileSync", "rmSync", "rmdirSync"],
+    reason:
+      "`o2b state migrate` moves the whole declared state tree to another filesystem, which is " +
+      "the one operation here that a shared writer would make WORSE rather than safer. Each file " +
+      "is copied byte-for-byte and re-digested at the destination against the digest the plan " +
+      "bound, so a torn copy is caught by the hash and unwound; `atomicWriteFileSync` takes a " +
+      "complete string, which for a multi-gigabyte SQLite index is the materialisation being " +
+      "avoided, and it would re-encode bytes this pass must not touch. The `rmSync` removes each " +
+      "source only after every copy landed AND verified, and removes the destination copies again " +
+      "on the unwind - the same file list, in reverse. `rmdirSync` prunes only directories " +
+      "`pruneIfEmpty` proved empty, so nothing that arrived beside the migration is ever removed. " +
+      "The manifest that binds all of it DOES go through `atomicWriteFileSync`, because that one " +
+      "is a rewrite of a small document and is the record a rollback reads.",
+  },
+
   // --- Concurrency primitives --------------------------------------------
   "src/core/brain/sync-lockfile.ts": {
     categories: [C.lockPrimitive],
@@ -719,6 +868,32 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "narrows non-owner permission bits on an existing file or directory. No bytes " +
       "are written, so there is nothing for a writer to make atomic.",
+  },
+
+  // --- Write probes: bytes written to learn whether writing works --------
+  "src/core/doctor.ts": {
+    categories: [C.writeProbe],
+    calls: ["rmSync", "writeSync"],
+    reason:
+      "`checkVaultWriteable` opens `<vault>/.open-second-brain-doctor-test` and removes it again, " +
+      "and `checkConfigWriteable` does the same to the config path, creating it only if it was " +
+      "absent. The QUESTION is whether the open and the write succeed, so routing them through a " +
+      "helper that reports success or throws would answer a different question - and the answer " +
+      "the doctor gives is the raw errno, which is what the fix line it prints is derived from. " +
+      "Zero bytes are written and the probe never outlives the check.",
+  },
+
+  // --- Fixture materialisation: a vault-shaped disposable directory ------
+  "src/core/bench/fixture.ts": {
+    categories: [C.fixtureMaterialisation],
+    calls: ["writeFileSync"],
+    reason:
+      "materialises a repo-local benchmark fixture into the caller-supplied disposable directory, " +
+      "whose note paths were checked against traversal and absolute forms at parse time. It is in " +
+      "population because it joins `Brain/` onto a directory it calls a vault, which is exactly " +
+      "the shape the widened rule is meant to catch; what it writes is fixture text into a tree " +
+      "the bench harness creates and deletes, never an operator's vault, so there is no " +
+      "durability guarantee for an atomic writer to add.",
   },
 
   // --- Mixed: an accept protocol that moves, appends and rolls back ------
@@ -768,14 +943,19 @@ function readSourceTree(): CensusFile[] {
 /**
  * Whether this module can address the vault - see the docblock.
  *
- * `withoutComments` rather than `code`, because the clause that matters
- * reads an import SPECIFIER, which is a string: the other view blanks it
- * and no module would ever be found to import `paths.ts` again.
+ * Both views, and which clause reads which is not interchangeable. The
+ * import specifier and the store-directory literal ARE strings, so they
+ * are read off `withoutComments`; the other view blanks a literal's body
+ * and no module would ever be found to import `paths.ts` again. The
+ * `join(vault` clause is read off `code`, because a name inside a quoted
+ * example builds no path.
  */
-function addressesVault(path: string, withoutComments: string): boolean {
+function addressesVault(path: string, views: LexedSource): boolean {
   if (VAULT_WRITE_ROOTS.some((root) => path.startsWith(root))) return true;
   if (VAULT_WRITER_FILES.includes(path)) return true;
-  return VAULT_PATHS_IMPORT_RE.test(withoutComments);
+  if (VAULT_VOCABULARY_IMPORT_RE.test(views.withoutComments)) return true;
+  if (DERIVED_STORE_LITERAL_RE.test(views.withoutComments)) return true;
+  return VAULT_ROOT_JOIN_RE.test(views.code);
 }
 
 interface FsImports {
@@ -863,7 +1043,7 @@ function lexedViews(file: CensusFile): LexedSource {
  */
 function classify(file: CensusFile): CensusRow | null {
   const views = lexedViews(file);
-  if (!addressesVault(file.path, views.withoutComments)) return null;
+  if (!addressesVault(file.path, views)) return null;
   const direct = directWriteCalls(views.code, fsImports(views.withoutComments));
   const shared = [...views.code.matchAll(SHARED_WRITE_RE)].length;
   if (direct.size === 0 && shared === 0) return null;
@@ -886,21 +1066,28 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
 /**
  * Measured modules calling a filesystem write directly. An equality.
  *
- * 64 -> 65: `src/cli/brain/verbs/export.ts` now spools the transcript
- * corpus record by record and renames the spool into `--out`, instead of
- * joining the whole corpus into one string for `atomicWriteFileSync`.
+ * 65 -> 68, and every one of the three is a module the old population
+ * rule could not see rather than a write site that appeared: the widened
+ * rule enrolled `src/core/state/migrate.ts` (the state-tree move),
+ * `src/core/doctor.ts` (the vault and config write probes) and
+ * `src/core/bench/fixture.ts` (fixture materialisation into a
+ * vault-shaped disposable directory). Each is now carrying a written
+ * exclusion above.
  */
-const DIRECT_WRITE_ROWS = 65;
+const DIRECT_WRITE_ROWS = 68;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
  *
- * 94 -> 95: `src/core/brain/sessions/discover.ts` writes the session
- * import ledger through `atomicWriteFileSync`. The regex tightening
- * above moved no row - `hardcoded-paths.ts` and `claude-memory-paths.ts`
- * were the only other loose matches and neither writes.
+ * 95 -> 97, from the same widening and nothing else:
+ * `src/core/install/manifest.ts` writes `<vault>/.open-second-brain/
+ * install.lock.json` through `atomicWriteFileSync` and was out of
+ * population entirely, and `src/core/state/migrate.ts` writes the
+ * migration manifest through the same helper. The shared class is the
+ * half of this census that needs no exclusion, so a module arriving here
+ * is the outcome the record wants.
  */
-const SHARED_HELPER_ROWS = 95;
+const SHARED_HELPER_ROWS = 97;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
@@ -933,12 +1120,26 @@ describe("in-vault write-site census", () => {
     expect(drifted).toEqual([]);
   });
 
-  test("every exclusion carries a non-empty reason", () => {
+  test("every exclusion carries a reason that is an argument, not a label", () => {
+    // `length > 0` was the whole bar here, which "x" cleared. The sibling
+    // censuses - `state-surface-census` and `forward-pointer-rail` - both
+    // require a real minimum and reject the words that mean "not yet",
+    // and there is no reading on which THIS record deserves a lower one:
+    // it is the list of write sites the shared binding cannot cover, and
+    // a one-word entry in it is an unexamined site wearing an exclusion.
+    const thin: string[] = [];
+    const lazy: string[] = [];
+    const uncategorised: string[] = [];
     for (const [path, entry] of Object.entries(DIRECT_WRITE_EXCLUSIONS)) {
-      expect(`${path}: ${entry.reason.trim().length > 0} ${entry.categories.length > 0}`).toBe(
-        `${path}: true true`,
-      );
+      if (entry.reason.trim().length < MIN_REASON_LENGTH) {
+        thin.push(`${path} (${entry.reason.trim().length})`);
+      }
+      if (LAZY_REASON_RE.test(entry.reason)) lazy.push(path);
+      if (entry.categories.length === 0) uncategorised.push(path);
     }
+    expect(thin.toSorted().join("\n")).toBe("");
+    expect(lazy.toSorted().join("\n")).toBe("");
+    expect(uncategorised.toSorted().join("\n")).toBe("");
   });
 
   test("the two writers this unit routed through a shared helper are gone from the record", () => {
@@ -1026,6 +1227,49 @@ describe("the census can fail", () => {
       text: 'import { writeFileSync } from "node:fs";\nwriteFileSync("x", "y");\n',
     };
     expect(classify(outsider)).toBeNull();
+  });
+
+  test("a writer in a brand-new directory that joins onto a vault is in population", () => {
+    // The hole the widened rule closes, driven as a shape rather than as
+    // the three real modules that fell through it: living somewhere no
+    // list mentions, and importing no path vocabulary, used to be enough.
+    const path = "src/core/somewhere-new/synthetic-vault-writer.ts";
+    const text =
+      'import { writeFileSync } from "node:fs";\n' +
+      'import { join } from "node:path";\n' +
+      "export function stamp(vault: string): void {\n" +
+      '  writeFileSync(join(vault, "marker"), "x");\n' +
+      "}\n";
+    expect(unlistedWith({ path, text })).toEqual([path]);
+  });
+
+  test("a writer naming the derived store as a bare literal is in population too", () => {
+    // The second half of the widening: `install/manifest.ts` never says
+    // `join(vault` and never imports the vocabulary - it spells the
+    // directory name itself.
+    const path = "src/core/somewhere-new/synthetic-store-writer.ts";
+    const text =
+      'import { writeFileSync } from "node:fs";\n' +
+      'import { join } from "node:path";\n' +
+      "export function stamp(root: string): void {\n" +
+      '  writeFileSync(join(root, ".open-second-brain", "marker.json"), "{}");\n' +
+      "}\n";
+    expect(unlistedWith({ path, text })).toEqual([path]);
+  });
+
+  test("the derived-store name in prose alone does not enrol a module", () => {
+    // The complement, and the reason the literal clause reads the
+    // comment-stripped view: a docblock that mentions the directory
+    // builds no path into it.
+    expect(
+      classify({
+        path: "src/core/somewhere-new/synthetic-prose.ts",
+        text:
+          "/** Never writes to .open-second-brain, and says so here. */\n" +
+          'import { writeFileSync } from "node:fs";\n' +
+          'writeFileSync("x", "y");\n',
+      }),
+    ).toBeNull();
   });
 
   test("the detectors still match the shapes they measure", () => {

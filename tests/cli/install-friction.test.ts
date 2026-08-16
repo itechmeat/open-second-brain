@@ -60,6 +60,19 @@ function envBase(extra: Record<string, string> = {}) {
   };
 }
 
+/**
+ * The identifier tokens of `text`, split on everything an id cannot hold.
+ *
+ * Plain containment let a SHORTER id ride on a longer one:
+ * `"copilot-cli".includes("pi")` is true, so "every registered target is
+ * listed" held for a table that had dropped the `pi` row entirely, and the
+ * refusal message satisfied all ten names while offering nine. A token set
+ * answers the question the assertion means to ask.
+ */
+function tokensOf(text: string): ReadonlySet<string> {
+  return new Set(text.split(/[^A-Za-z0-9_-]+/).filter((token) => token.length > 0));
+}
+
 interface FrictionCellJson {
   readonly dimension: string;
   readonly value: string;
@@ -104,13 +117,12 @@ describe("o2b install --friction — the matrix", () => {
   test("the human table carries every registered target and every dimension", async () => {
     const r = await runCli(["install", "--friction"], { env: envBase() });
     expect(r.returncode).toBe(INSTALL_EXIT.ok);
+    const printed = tokensOf(r.stdout);
     for (const target of INSTALL_TARGET_IDS) {
-      expect(`${target} listed: ${r.stdout.includes(target)}`).toBe(`${target} listed: true`);
+      expect(`${target} listed: ${printed.has(target)}`).toBe(`${target} listed: true`);
     }
     for (const dimension of FRICTION_DIMENSIONS) {
-      expect(`${dimension} listed: ${r.stdout.includes(dimension)}`).toBe(
-        `${dimension} listed: true`,
-      );
+      expect(`${dimension} listed: ${printed.has(dimension)}`).toBe(`${dimension} listed: true`);
     }
   });
 
@@ -137,8 +149,9 @@ describe("o2b install --friction — the matrix", () => {
     });
     expect(r.returncode).toBe(INSTALL_EXIT.usage);
     expect(r.stderr).toContain("claude-code");
+    const offered = tokensOf(r.stderr);
     for (const target of INSTALL_TARGET_IDS) {
-      expect(`${target} offered: ${r.stderr.includes(target)}`).toBe(`${target} offered: true`);
+      expect(`${target} offered: ${offered.has(target)}`).toBe(`${target} offered: true`);
     }
   });
 });
@@ -171,8 +184,12 @@ describe("o2b install --friction --base <a> --compare <b> — the diff", () => {
       env: envBase(),
     });
     expect(r.returncode).toBe(INSTALL_EXIT.ok);
-    expect(r.stdout).toContain("cursor");
-    expect(r.stdout).toContain("pi");
+    // `pi` as a whole token: `copilot-cli` contains it as a substring, so
+    // plain containment would have accepted a diff that never named it.
+    const printed = tokensOf(r.stdout);
+    expect(`cursor: ${printed.has("cursor")}, pi: ${printed.has("pi")}`).toBe(
+      "cursor: true, pi: true",
+    );
     expect(r.stdout).toContain("differ");
   });
 

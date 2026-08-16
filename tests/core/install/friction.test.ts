@@ -230,8 +230,28 @@ describe("the friction matrix is derived, not written", () => {
           expect(roots.detail ?? "").toContain(root.resolve({ home, env: {} }));
         }
       }
+      // The parser cell, on EVERY row. Guarding it behind
+      // `sessionAdapter !== null` ran it for three of the ten and left
+      // nothing pinning what the other seven say - the rows where the
+      // answer is "none ships", which is the answer an operator reads to
+      // decide whether importing this host's transcripts is possible at
+      // all. The expected value is derived from the row's own roots, the
+      // same input the cell is built from.
       const parser = cell(row, FRICTION_DIMENSION.sessionParser);
-      if (facts.sessionAdapter !== null) expect(parser.value).toContain(facts.sessionAdapter);
+      const parsers = [
+        ...new Set(facts.sessionRoots.map((root) => root.adapter).filter((a) => a !== null)),
+      ].toSorted();
+      expect(`${row.target}: ${parser.value}`).toBe(
+        `${row.target}: ${parsers.length > 0 ? parsers.join(", ") : "none ships"}`,
+      );
+      if (parsers.length === 0) {
+        // Roots in a format nothing reads are named, so "none ships" is a
+        // measured answer rather than a shrug; no roots at all is silence.
+        for (const format of new Set(facts.sessionRoots.map((root) => root.format))) {
+          expect(`${row.target}: ${parser.detail ?? ""}`).toContain(format);
+        }
+        if (facts.sessionRoots.length === 0) expect(parser.detail).toBeNull();
+      }
     }
   });
 
