@@ -23,7 +23,7 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface AtomicWriteOptions {
   /**
@@ -202,13 +202,63 @@ function fileAlreadyExistsMessage(displayPath: string, kind: string | undefined)
  * for why it shares the kernel's code.
  */
 export function isFileAlreadyExists(err: unknown): boolean {
+  return findFileAlreadyExists(err, () => true) !== null;
+}
+
+/**
+ * Is `err` a collision on THIS path specifically?
+ *
+ * The errno alone answers "something already existed", which is a weaker
+ * question than most callers are actually asking. A caller that resolves a
+ * collision by trying a different NAME - the snapshot run-id ladder in
+ * `brain/snapshot-gate.ts` - needs the collision to be about the name it is
+ * laddering, because every other EEXIST on the way to that write is a
+ * different failure with a different remedy. It read the errno alone until
+ * GitHub #167, where `mkdir Brain/.snapshots` failing with EEXIST - the
+ * archive DIRECTORY, before any archive was touched - was resolved as
+ * "a peer took this run id", laddered through every candidate, and reported
+ * as an id exhaustion that had not happened.
+ *
+ * Kept beside {@link isFileAlreadyExists} rather than in the one module that
+ * needs it today, because the two share the whole of their difficulty: the
+ * errno constant, the bounded `cause` walk, and the fact that a collision can
+ * arrive as the typed class, as the raw errno, or nested under a wrapper.
+ * A private copy elsewhere would be a second answer to the same question and
+ * would drift from this one.
+ *
+ * A node in the chain that carries the errno but no `path` does not match:
+ * it cannot be shown to be about `path`, and treating "unknown" as "yours"
+ * is exactly the assumption that produced the fictional error above. Paths
+ * are compared after `resolve`, so a relative and an absolute spelling of
+ * the same file agree.
+ */
+export function isFileAlreadyExistsAt(err: unknown, path: string): boolean {
+  const target = resolve(path);
+  return (
+    findFileAlreadyExists(err, (node) => {
+      const found = (node as { readonly path?: unknown }).path;
+      return typeof found === "string" && resolve(found) === target;
+    }) !== null
+  );
+}
+
+/**
+ * The shared bounded walk behind both predicates: the first node in the
+ * `cause` chain that carries the EEXIST errno AND satisfies `accept`, or
+ * `null`. Bounded rather than recursive-until-null because a `cause` chain
+ * can be made cyclic by a caller, and a hang inside an error handler is a
+ * worse failure than a missed match.
+ */
+function findFileAlreadyExists(err: unknown, accept: (node: object) => boolean): object | null {
   let current: unknown = err;
   for (let depth = 0; depth < CAUSE_WALK_LIMIT; depth += 1) {
-    if (typeof current !== "object" || current === null) return false;
-    if ((current as NodeJS.ErrnoException).code === FILE_EXISTS_CODE) return true;
+    if (typeof current !== "object" || current === null) return null;
+    if ((current as NodeJS.ErrnoException).code === FILE_EXISTS_CODE && accept(current)) {
+      return current;
+    }
     current = (current as { readonly cause?: unknown }).cause;
   }
-  return false;
+  return null;
 }
 
 /**

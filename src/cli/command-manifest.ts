@@ -667,7 +667,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command(
           "status",
           "Report every state surface in the vault with its path, reachability, and the override that placed it",
-          [flag("vault", "string"), flag("config", "string")],
+          [flag("vault", "string"), flag("config", "string"), flag("json", "boolean")],
         ),
         command(
           "migrate",
@@ -679,6 +679,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("dry-run", "boolean"),
             flag("apply", "boolean"),
             flag("yes", "boolean"),
+            flag("json", "boolean"),
           ],
         ),
         command(
@@ -686,9 +687,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Restore a migration's manifest-bound files whose digests still match, refusing anything changed since",
           [
             flag("from", "string"),
+            // `--to` rescues a vault that moved after the migration, which
+            // is the one case the rollback plan refuses by name. Leaving it
+            // undeclared hid the remedy from `o2b help --json` and from
+            // shell completions - the two places an operator looks when the
+            // refusal tells them a flag exists.
+            flag("to", "string"),
             flag("dry-run", "boolean"),
             flag("apply", "boolean"),
             flag("yes", "boolean"),
+            flag("json", "boolean"),
           ],
         ),
       ],

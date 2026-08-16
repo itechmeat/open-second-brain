@@ -6,6 +6,7 @@ import {
 } from "../../../core/brain/upgrade.ts";
 import {
   brainVerbContext,
+  describeErrorChain,
   fail,
   ok,
   okJson,
@@ -96,7 +97,7 @@ export async function cmdBrainUpgrade(argv: string[]): Promise<number> {
       process.stderr.write(`error: ${exc.message}\n`);
       return 1;
     }
-    return fail(`upgrade failed: ${(exc as Error).message ?? exc}`);
+    return fail(`upgrade failed: ${describeErrorChain(exc)}`);
   }
 
   if (flags["json"]) {

@@ -47,6 +47,52 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.50.0
+
+Nothing below needs a migration step. Two of the four change what an
+existing script or supervisor sees, so they are written here rather than
+left to be discovered at the terminal.
+
+**The first `o2b install --check` after upgrading reports `drift` on a
+target installed by an earlier release.** A generated registration now
+carries `--host-target <runtime>` on both server entries, and Cursor's also
+carries `--tool-profile catalog`. Verification works by re-construction, so
+an entry written by 1.49.0 no longer equals what this build would write.
+Seven targets gain the flags — `codex`, `copilot-cli`, `cursor`,
+`gemini-cli`, `grok`, `kiro`, `opencode` — and the ones whose `verify`
+compares the entry byte for byte will say so. (`aider`, `generic` and `pi`
+write no MCP command line and are unaffected; a Codex installed through
+`codex mcp add` is also unaffected, because there `verify` checks only that
+the two tables are still declared, the CLI's own serialisation having no
+published grammar to compare against.) **Fix:** `o2b install --target <name> --apply`, or
+`o2b update`, which now hashes the payload AS WRITTEN and so stops reporting
+"up-to-date, payload unchanged" for a target whose host dimensions moved.
+The Cursor case is not cosmetic: without the profile that host silently
+drops every tool past its 40-tool ceiling.
+
+**`codex` joins `copilot-cli` as a target that can exit `5`.** `o2b install
+--check --target codex` now asks `codex mcp list` what the host has
+registered instead of only reading `$CODEX_HOME/config.toml`, so a Codex
+that has not loaded a correct configuration is reported as
+`mcp-unreachable` and exits `5` rather than `0`. A script that treated a
+zero exit as "everything is fine" for Codex was reading a file comparison
+as a liveness answer. **Fix:** restart Codex when the configuration is
+right (the check says so); `--apply` when it is not.
+
+**A running `o2b mcp` server no longer dies instantly on SIGTERM.** Both
+transports now stop accepting, wait for in-flight requests to a **10 000 ms**
+deadline, close, and exit 130/143. A supervisor with a shorter kill timeout
+than that will escalate to SIGKILL where it previously saw a clean exit; the
+`GET /health` body gains `"status": "draining"` and `in_flight` so the wait
+is observable. **Fix:** raise the supervisor's stop timeout, or lower the
+deadline with `O2B_MCP_DRAIN_MS` (a non-negative number of milliseconds; a
+value that is not one is refused rather than silently defaulted).
+
+**`o2b brain export --format` accepts a third value.** `json` and
+`llms-txt` are unchanged byte for byte. `transcripts-jsonl` is additive and
+requires `--transcripts <file|dir>`; a `--format` typo is still exit `2`,
+now listing three names instead of two.
+
 ## Upgrading to 1.49.0
 
 1.49.0 is a MINOR release that nevertheless changes behaviour for input
@@ -78,7 +124,9 @@ every failure in the directory (one run names them all) and refuses. Three
 verbs that exited 0 on such a vault now exit **1** with
 `N preference file(s) could not be parsed …`:
 
-- `o2b brain export` (both `--format` values, with or without `--out`)
+- `o2b brain export` (the two preference formats, `json` and `llms-txt`,
+  with or without `--out`; the `transcripts-jsonl` format added in 1.50.0
+  reads no vault and so reads no preference file either)
 - `o2b brain bank-export`
 - `o2b brain explorer --export <path>` - and nothing is written
 

@@ -95,7 +95,7 @@ export function parse(
 // ── Re-exports (the barrel that verb handlers import from) ──────────────────
 
 export { CliError } from "../argparse.ts";
-export { fail, failWith, info, ok, okJson } from "../output.ts";
+export { describeErrorChain, fail, failWith, info, ok, okJson } from "../output.ts";
 
 /**
  * Usage / argument error: plain message to stderr, exit code 2. Distinct

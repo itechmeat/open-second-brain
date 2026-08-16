@@ -77,6 +77,7 @@ import {
   closeSync,
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
@@ -111,6 +112,7 @@ import {
 import {
   BRAIN_ROOT_REL,
   BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
+  BRAIN_SNAPSHOTS_REL,
   brainDirs,
   brainDirsForWrite,
   SNAPSHOT_ARCHIVE_SUFFIX,
@@ -147,8 +149,9 @@ export class BrainSnapshotError extends Error {
   /**
    * `cause` is forwarded rather than flattened into the message because the
    * caller that allocates a unique run id retries a lost race and has to
-   * recognise a collision by its errno. `createUniqueSnapshot` keys on
-   * `isFileAlreadyExists`, which walks the cause chain; an error that only
+   * recognise a collision by its errno AND the path it names.
+   * `createUniqueSnapshot` keys on
+   * `isFileAlreadyExistsAt`, which walks the cause chain; an error that only
    * described its errno in prose would turn a retriable collision into a
    * terminal failure, which is the shape this release removes.
    */
@@ -592,6 +595,74 @@ function detectTooling(): ToolAvailability {
 // ----- createSnapshot ------------------------------------------------------
 
 /**
+ * Make `Brain/.snapshots/` exist, or say what is there instead.
+ *
+ * This `mkdir` is the first disk touch of every snapshot, which makes it the
+ * first thing that can fail and the worst place to fail opaquely. It used to
+ * be a bare `mkdirSync`, so its errno left the module naming a syscall and a
+ * path and nothing else - and, worse, reached the run-id allocator in
+ * `snapshot-gate.ts`, which read the EEXIST as a lost race over the run id
+ * and reported an id exhaustion that had never happened (GitHub #167).
+ *
+ * `recursive: true` already tolerates the normal case of the directory
+ * existing, so a throw from here means the path is NOT a usable directory.
+ * Which of the several ways that can be true is the only question the
+ * operator has, and it is answerable on the spot: `lstat` the path and say
+ * what is really there. A regular file, a symlink, a socket left by some
+ * other tool, a parent that is not a directory, a permission fault - each has
+ * a different remedy and the errno alone distinguishes none of them.
+ *
+ * The errno is carried as `cause`, not folded away: the diagnosis explains
+ * the failure, it does not replace the evidence. A {@link BrainSnapshotError}
+ * rather than a bare throw so this leaves the module in the one shape every
+ * caller of {@link createSnapshot} already handles, run id included.
+ */
+function ensureSnapshotsDirectory(path: string, runId: string): void {
+  try {
+    mkdirSync(path, { recursive: true });
+    return;
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `cannot use the archive directory ${BRAIN_SNAPSHOTS_REL} at ${path}: ` +
+        `${describeExistingPath(path)} (${(err as Error).message ?? String(err)}); ` +
+        `no recovery point can be written until ${BRAIN_SNAPSHOTS_REL} is a writable directory`,
+      runId,
+      { cause: err },
+    );
+  }
+}
+
+/**
+ * What is actually at `path`, in one clause an operator can act on.
+ *
+ * `lstat` rather than `stat` because a dangling or looping symlink is one of
+ * the states that produces this failure, and `stat` would report the target's
+ * absence instead of the link's presence. Its own failure is reported rather
+ * than swallowed: "the path cannot even be inspected" is a different remedy
+ * (permissions on the parent) from "the path holds the wrong kind of thing".
+ */
+function describeExistingPath(path: string): string {
+  let info: ReturnType<typeof lstatSync>;
+  try {
+    info = lstatSync(path);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return "nothing is there, so the directory itself could not be created";
+    return `it could not be inspected either (${code ?? (err as Error).message})`;
+  }
+  if (info.isDirectory()) return "it is a directory, but it could not be created or opened as one";
+  if (info.isSymbolicLink()) {
+    return existsSync(path)
+      ? "it is a symbolic link to something that is not a usable directory"
+      : "it is a symbolic link whose target does not exist";
+  }
+  if (info.isFile()) return "it is a regular file";
+  if (info.isSocket()) return "it is a socket";
+  if (info.isFIFO()) return "it is a FIFO";
+  return "it is not a directory";
+}
+
+/**
  * Archive `Brain/` (minus {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}) into
  * `Brain/.snapshots/<run_id>.tar.zst`, optionally beside a compressed
  * copy of the derived store.
@@ -616,7 +687,7 @@ export function createSnapshot(
 ): CreateSnapshotResult {
   validateRunId(runId);
   const dirs = brainDirsForWrite(vault);
-  mkdirSync(dirs.snapshots, { recursive: true });
+  ensureSnapshotsDirectory(dirs.snapshots, runId);
 
   const outPath = snapshotPath(vault, runId);
   const tools = detectTooling();

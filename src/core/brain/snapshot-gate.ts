@@ -42,7 +42,7 @@
 import { existsSync } from "node:fs";
 
 import { loadSnapshotRetentionSafe } from "./policy.ts";
-import { isFileAlreadyExists } from "../fs-atomic.ts";
+import { isFileAlreadyExistsAt } from "../fs-atomic.ts";
 import {
   classifyRecoverability,
   DEFAULT_DESTRUCTIVE_BLAST_RADIUS,
@@ -157,14 +157,14 @@ const MAX_SNAPSHOT_ID_ATTEMPTS = 64;
  * {@link collisionCandidateName}, and retry when the create reports that
  * the name was already taken.
  *
- * The retry is keyed on the TYPED collision predicate. It used to be keyed
- * on re-running `existsSync` after the throw, which answered a different
- * question than the one being asked: any failure that happened to leave
- * bytes at the path - a compressor that died part-way through its output -
- * read as a collision, was retried up to the bound, and was finally
- * reported as an id exhaustion naming neither the real failure nor its
- * cause. Only "the name was taken" retries now; everything else propagates
- * from the attempt that raised it.
+ * The retry is keyed on the TYPED collision predicate, applied to THIS
+ * candidate's archive path. It used to be keyed on re-running `existsSync`
+ * after the throw, which answered a different question than the one being
+ * asked: any failure that happened to leave bytes at the path - a compressor
+ * that died part-way through its output - read as a collision, was retried up
+ * to the bound, and was finally reported as an id exhaustion naming neither
+ * the real failure nor its cause. Only "the name was taken" retries now;
+ * everything else propagates from the attempt that raised it.
  *
  * `create` is injected for the same reason `allocateAndCreate` takes one:
  * it is the seam that makes the lost-race behaviour testable as a
@@ -176,13 +176,26 @@ const MAX_SNAPSHOT_ID_ATTEMPTS = 64;
  * rather than two: the dream pass had its own copy, over the same
  * candidate sequence, with a different bound.
  *
- * Caveat worth stating rather than hiding: `createSnapshot` today flattens
- * its own "refusing to overwrite an existing archive" into an untyped
- * `BrainSnapshotError`, so a genuinely lost race reaches the operator as
- * that loud, accurate error instead of being retried here. Making it
- * retryable is a one-line change in `snapshot.ts` (carry the collision as
- * `cause`), deliberately left outside this unit's file scope. Loud and
- * correct beats silently retried and mislabelled.
+ * Which path the collision names is the whole discriminator, not a detail.
+ * `createSnapshot` wraps its "refusing to overwrite an existing archive" in a
+ * `BrainSnapshotError` carrying a {@link FileAlreadyExistsError} as `cause`,
+ * and the gzip write carries the raw `wx` errno the same way, so a lost race
+ * IS recognised and retried here. But an EEXIST is not self-evidently a lost
+ * race: `createSnapshot`'s first disk touch is `mkdir Brain/.snapshots`, and
+ * on a host where that directory is a regular file the errno it raises is an
+ * EEXIST about the DIRECTORY, before any archive exists to lose a race over.
+ * Keyed on the errno alone (GitHub #167) that laddered through every
+ * candidate and reported an id exhaustion nobody had caused, with the real
+ * failure hidden on `cause`. Keyed on
+ * {@link snapshotPath}`(vault, candidate)` it propagates from attempt 1.
+ *
+ * Not covered, and stated rather than hidden: the derived-store archive's
+ * own "refusing to overwrite an existing archive" (`snapshot.ts`,
+ * `coverDerivedStore`) is an untyped `BrainSnapshotError` with no `cause`,
+ * so a stale `<runId>.store.sqlite.zst` beside a free `<runId>.tar.zst`
+ * aborts here where the tar collision would ladder. That is the loud and
+ * accurate failure, not a silent one, and giving it a cause is a change in
+ * `snapshot.ts` with its own coverage to write.
  */
 export function createUniqueSnapshot(
   vault: string,
@@ -194,12 +207,13 @@ export function createUniqueSnapshot(
   let lostRace: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const candidate = collisionCandidateName(baseRunId, attempt);
-    if (existsSync(snapshotPath(vault, candidate))) continue;
+    const candidatePath = snapshotPath(vault, candidate);
+    if (existsSync(candidatePath)) continue;
     if (!available(candidate)) continue;
     try {
       return { runId: candidate, path: create(candidate), prune: null };
     } catch (err) {
-      if (!isFileAlreadyExists(err)) throw err;
+      if (!isFileAlreadyExistsAt(err, candidatePath)) throw err;
       lostRace = err;
     }
   }

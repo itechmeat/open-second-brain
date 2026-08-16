@@ -61,17 +61,31 @@ The adapter should focus on:
 
 ### Codex adapter
 
-Codex supports plugins as installable distribution units for reusable skills and apps. The Codex adapter should include:
+Codex support has two halves. The distribution half is a plugin:
 
 ```text
-.codex-plugin/plugin.json
+.codex-plugin/plugin.json   # declares "skills": "./skills" and "hooks": "./hooks/hooks.json"
 skills/
-.mcp.json        # later, optional
-hooks/           # later, optional
-assets/          # later, optional
+hooks/hooks.json
 ```
 
-v0 should keep Codex support simple: plugin manifest plus shared skills and scripts.
+The MCP half is a runtime install adapter
+(`src/core/install/adapters/codex.ts`), reached the same way every other
+adapter-backed runtime is: `o2b install --target codex --apply`. It has two
+paths into the same file. With the `codex` binary on PATH it drives
+`codex mcp add`, which persists the servers into `$CODEX_HOME/config.toml`;
+without it, it merges the two `[mcp_servers.*]` tables into that file
+directly, leaving every unrelated table byte-for-byte intact.
+
+`verify` therefore asks two different questions of one file. In fallback
+mode this build serialised the tables, so any edit is drift. In subprocess
+mode the Codex CLI serialised them in a layout this build has no published
+grammar for, so `verify` checks only that the two tables are still DECLARED
+and lets `codex mcp list` answer whether the host is actually serving them.
+Both the file half and the probe half resolve `CODEX_HOME` from the
+adapter's own injected environment, so a relocated Codex home cannot verify
+against the operator's real `~/.codex`. Operator steps:
+[`install/codex.md`](../install/codex.md).
 
 ### OpenClaw adapter
 
@@ -150,6 +164,17 @@ with backup/sync. It describes:
   indexing, not a boundary); an empty `ignore_paths` keeps its meaning of
   "exclude nothing". Both keys share one grammar: no slash is a bare name
   matched at any depth, a slash is a vault-relative path matched exactly;
+- an optional `install:` block with the two settings that parameterise
+  GENERATED install output: `tool_profile` (the MCP tool surface a
+  generated registration selects) and `hook_timeout_seconds` (1–600, the
+  cap on a generated lifecycle hook entry). They live here rather than in
+  the machine-local config because install verification works by
+  RE-CONSTRUCTION rather than a stored hash: a knob only one machine could
+  see would make the other report drift it cannot explain and re-apply a
+  file that was already correct. This block therefore OUTRANKS the
+  machine-local `mcp_tool_profile` / `install_hook_timeout_seconds` keys,
+  and an unreadable `_brain.yaml` refuses the resolution rather than
+  falling back to a default the operator never chose;
 - optional `write_binding.path_prefixes` (where a CALLER-NAMED write may
   land: `brain_create_note`, `brain_update_note`, `brain_append_note`,
   `brain_write_batch`). This is a write boundary over caller-named paths,
@@ -170,6 +195,19 @@ Recommended behavior:
 - machine-local config can be regenerated with `o2b init --adopt-vault`;
 - `o2b export-config` writes a redacted machine snapshot into the vault;
 - secrets are excluded and represented as `***REDACTED***` only when needed.
+
+What "the vault" contains is enumerated rather than assumed.
+`src/core/state/surfaces.ts` declares every durable location this build
+keeps INSIDE a vault — 40 of them — each with the layer that can move it
+and what its loss costs, split into `derived` (rebuildable, so deleting it
+costs time) and `vault-content` (the memory itself, permanent without a
+backup). `o2b state status` measures that catalogue against one vault and
+the `vault_health` MCP tool carries the same value; `o2b state migrate`
+is the one operation that changes where a surface lives, and it binds every
+byte it moves with a digest manifest so the move is reversible. The sibling
+population — what this build can leave OUTSIDE a vault — is
+`src/core/install/ownership.ts`, reported by the ownership statement
+`o2b install --target <t> --apply` prints.
 
 ## Vault layout
 

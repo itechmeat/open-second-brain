@@ -52,7 +52,15 @@ import {
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
-import { brainVerbContext, fail, ok, okJson, parse, parseOptionalIsoDate } from "../helpers.ts";
+import {
+  brainVerbContext,
+  describeErrorChain,
+  fail,
+  ok,
+  okJson,
+  parse,
+  parseOptionalIsoDate,
+} from "../helpers.ts";
 
 // The runnable set is read from the step registry, never retyped: a
 // usage line that advertises a step the pass refuses is its own dead end.
@@ -465,7 +473,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       okJson({ ok: false, timed_out: true, message: exc.message });
       return 1;
     }
-    return fail(`dream failed: ${(exc as Error).message ?? exc}`);
+    return fail(`dream failed: ${describeErrorChain(exc)}`);
   }
   for (const w of summary.warnings ?? []) {
     process.stderr.write(`warning: ${w.code}: ${w.message}\n`);

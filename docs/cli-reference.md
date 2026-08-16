@@ -10,14 +10,16 @@ Most verbs accept `--vault <path>` and `--config <path>`; the values default to 
 o2b status                    Show config / vault status
 o2b init                      Bootstrap the vault profile (idempotent)
 o2b init --interactive        Guided first-time setup wizard
-o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes, --check verifies (see "Exit codes" below)
+o2b install                   Runtime installer: bare form detects, --target <name> plans, --target <name> --apply writes, --check verifies (see "Exit codes" below); --friction reports what each host costs instead of acting on one
 o2b install-cli               Symlink o2b and vault-log into ~/.local/bin
 o2b-mcp                       Console-script alias for `o2b mcp`, forwards all flags
 o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
 o2b secrets list|status       Inspect $secret:NAME references without printing values
-o2b mcp                       Run the MCP tool server (stdio by default; --transport http requires --api-key); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --probe, --allow-tool, --disable-tool, --max-tools
+o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and --api-key is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --host-target <runtime>, --probe, --allow-tool, --disable-tool, --max-tools
+o2b state status|migrate|rollback
+                              Inventory the state this vault holds, move it to another directory, or put it back (see "State surfaces" below)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
 o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
@@ -53,10 +55,15 @@ unreachable BECAUSE its config drifted, so `--apply` is the first move
 and a liveness verdict taken over a wrong config means nothing.
 
 `mcp-unreachable` is reachable only from an adapter that asks a runtime CLI
-whether the servers are registered. Today `copilot-cli` is the one target
-that can produce it - see [`install/copilot-cli.md`](../install/copilot-cli.md).
-Every other adapter verifies off disk, so it can report `ok`, `drift`, or
-`not-installed` but never `mcp-unreachable`.
+whether the servers are registered. Two targets can produce it: `copilot-cli`
+(`copilot mcp list`) and, since v1.50.0, `codex` (`codex mcp list`) - see
+[`install/copilot-cli.md`](../install/copilot-cli.md) and
+[`install/codex.md`](../install/codex.md). Those are exactly the two rows of
+`src/core/runtime/host-facts.ts` that declare a `hostProbe`; every other
+adapter verifies off disk, so it can report `ok`, `drift`, or
+`not-installed` but never `mcp-unreachable`. What a refuting probe MEANS
+differs between the two install modes - see "Host probes and what a verify
+proves" below.
 
 ### `o2b doctor` exit codes
 
@@ -108,6 +115,191 @@ from one that ran and passed. A machine with no codegraph CLI, and a
 directory that is not a code project, still both print nothing at all -
 those two remain indistinguishable from each other in the doctor's output.
 
+### `o2b install --friction` (since v1.50.0)
+
+```text
+o2b install --friction                       Every registered runtime, one row per capability dimension
+o2b install --friction --target <t>          One runtime
+o2b install --friction --base <a> --compare <b>
+                                             Only the dimensions the two answer differently
+```
+
+A REPORT, and it exits `0` whatever it finds: the matrix has no notion of
+a bad answer, only of an honest one. The only non-zero exits are usage
+refusals - an unknown runtime name (the message lists the registered
+ones), `--target` combined with the diff pair, or a diff missing half of
+its pair. `--json` emits the same values under a `friction` key, and the
+diff under `friction_diff`.
+
+Six dimensions, computed from `src/core/runtime/host-facts.ts` and from
+the live adapter rather than from a table maintained beside this page:
+
+| Dimension | What the cell answers |
+| --- | --- |
+| `install-mechanism` | the step kinds the adapter's own plan uses - `json-merge`, `managed-block`, `subprocess`, `file-copy`, `symlink`, `print` - with the artifact paths it writes on the citation line |
+| `tool-ceiling` | the host's published per-workspace tool limit: `declared: N tools` with its source, `unbounded` with its source, or `unknown` with the reason nobody has one |
+| `tool-profile` | the profile the generated registration will actually carry, and which tier of the ladder produced it; `not carried` for a target that writes no MCP command line at all |
+| `verify-evidence` | what a `--check` on this target is evidence OF: `host probe: <command>` for a runtime that can be asked, `configuration comparison only` for one that cannot |
+| `session-transcripts` | the transcript roots this adapter DECLARES, resolved against the machine, with each root's glob and on-disk format. Declared, not measured - whether the directory exists here is a discovery question |
+| `session-parser` | which adapter in this build reads those roots, or `none ships` naming the format nothing parses |
+
+A diff prints only the differing dimensions and COUNTS the rest, because a
+diff that reprints everything is the table the reader already asked to
+skip; the count is what stops the silence reading as "there was nothing
+else to compare".
+
+Three dimensions were considered and deliberately left out rather than
+guessed at, and `src/core/install/friction.ts` records why: whether the
+host takes MCP at all (no structural fact distinguishes a managed block
+that registers servers from one that does not), whether lifecycle hooks
+are wired (one adapter knows, privately), and whether runtime identity is
+stamped (applied at apply time, and no read-only adapter surface carries
+it). Each becomes derivable the day the adapter contract states it.
+
+A cell whose input cannot be resolved reads `unresolved` and carries the
+obstacle. That is how a `Brain/_brain.yaml` this run cannot parse arrives:
+the ladder below refuses rather than defaulting, and a report that turned
+that refusal into a stack trace would stop being total.
+
+### Host probes and what a `verify` proves (since v1.50.0)
+
+An adapter whose runtime publishes a way to ask it now asks. The two
+declared probes are `codex mcp list` and `copilot mcp list`; both are
+keyless, start no model turn, and write nothing. A clean `--check` on
+those targets prints what the host said - beside what the config file
+declares where an artifact backs the registration, and instead of it where
+the host's own registry is the only record.
+
+The blanket note `configuration comparison; no MCP handshake attempted`
+survives only where no probe is declared. Where one IS declared and could
+not run, the check says which obstacle it hit - so a skip is never
+rendered as a handshake:
+
+```text
+host probe skipped: `codex` is not on PATH
+host probe skipped: `codex mcp list` exited 1: <the command's first line of stderr>
+```
+
+The wait is capped at **10 seconds**. A host CLI that blocks on a network
+call or an interactive authentication prompt would otherwise hang a
+synchronous `--check` with no message; past the cap the child is killed
+and the kill becomes one more named skip.
+
+The probe runs under the adapter's own injected `HOME` and environment,
+not the ambient process environment, so a relocated `CODEX_HOME` cannot
+verify `ok` against the operator's real `~/.codex`.
+
+**A refuting probe means two different things**, and which one it means
+depends on whether an artifact backs the registration:
+
+| The host answered "not registered", and | Verdict | Repair |
+| --- | --- | --- |
+| this build wrote an artifact and that artifact still matches the canonical payload | `mcp-unreachable` | restart the runtime so it reloads its MCP configuration; re-applying would rewrite bytes that are already correct |
+| the host's own registry IS the record (`copilot mcp add` leaves no file; a Codex `config.toml` that declares no tables has no artifact to be right) | `drift` | `o2b install --target <t> --apply` |
+
+A probe that could not RUN refutes nothing. Demoting a correct install
+because a binary was absent would be the same over-claim as a blanket
+`ok`, pointed the other way.
+
+### Tool ceilings, `--host-target`, and the tool-profile ladder (since v1.50.0)
+
+**The ceiling vocabulary has three states and `unknown` is never read as
+`unbounded`.** `declared` carries a number and the place it is published;
+`unbounded` carries the place the ABSENCE of a limit is published;
+`unknown` carries the reason nobody has established one. Collapsing the
+third into the second is the misleading default the whole substrate exists
+to remove, because the layer above it selects a tool surface fail-open.
+Today exactly one row is `declared` - Cursor, at 40 tools across every
+enabled MCP server - and no row is `unbounded`; the member exists so a host
+that documents "no limit" is not recorded as unchecked.
+
+**`o2b mcp --host-target <runtime>`** tells a running server which runtime
+launched it. Install adapters write it into the registration they generate;
+an unrecognised value is refused with exit `2` naming the known ids, rather
+than dropped - silently ignoring it would report the ceiling as unchecked on
+a host that publishes one. It carries no other behaviour.
+
+`second_brain_capabilities` reads it back and reports a `host_ceiling`
+object beside the tool counts: `target`, `kind`, `max_tools`, `source`,
+`reason`, and `within_ceiling` (the ADVERTISED count against the limit,
+which is what `tools/list` hands the host). A server nobody told - started
+by hand, or by a payload written before the flag existed - reports
+`kind: "unknown"` with a reason naming the flag and the command that
+regenerates the registration. An unchecked ceiling is never an absent one.
+
+**The tool-profile ladder has three tiers, highest first**, and the
+generated registration is what it parameterises:
+
+| Tier | Source |
+| --- | --- |
+| 1 | `install.tool_profile` in `<vault>/Brain/_brain.yaml` - the COMMITTED tier |
+| 2 | `mcp_tool_profile` in the machine-local `config.yaml` |
+| 3 | the host's own `RUNTIME_FACTS` row - `catalog` for Cursor, nothing for every other target |
+
+Tier 1 above tier 2 is the reverse of the guess, and it is the point.
+Install verification works by RE-CONSTRUCTION rather than a stored hash, so
+two machines cloning one vault must rebuild the same bytes; a stale key in
+one operator's `~/.config/open-second-brain/config.yaml` outranking the file
+their teammate committed would make each machine report the other's correct
+install as drift.
+
+**There is no environment tier, and its removal is the reason to state the
+rule.** `OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE` used to sit above all three. It
+cannot: `verify()` rebuilds the expected artifact from the `InstallEnv`, so
+an input present on the apply invocation and absent on the next one makes a
+CORRECT install report drift - and the fix it offers would silently
+downgrade the profile the operator asked for. Every surviving tier is a
+file, and a file is still there tomorrow. The variable still selects the
+surface of the RUNNING server, which is the per-process act it is good for;
+it does not reach a generated registration.
+
+The bottom tier resolving to nothing is not the same answer as `full`: it
+leaves the surface unnamed, which is the flag-free registration every host
+had before the ladder existed. An unknown profile NAME in either file tier
+is a hard refusal listing the valid names - the opposite of the running
+server, which fails open to the full surface rather than locking an agent
+out mid-session. Nothing is locked out here; an artifact is being generated,
+and generating one for a profile that does not exist installs a surface the
+operator never named.
+
+Three of the ten targets carry neither dimension, because they write no MCP
+command line for a flag to land on: `generic` prints a payload for a host it
+was never told the name of, `aider` is wired through a managed YAML block
+and a sidecar context file, and `pi` is a skill symlink.
+
+### The committed `install:` block (since v1.50.0)
+
+An optional `install:` block in `<vault>/Brain/_brain.yaml` carries the two
+settings that parameterise GENERATED output:
+
+```yaml
+install:
+  tool_profile: catalog        # full | writer | catalog | recall | minimal
+  hook_timeout_seconds: 10     # 1..600; the generated Grok hook entry's cap
+```
+
+Both live in the vault rather than in the machine-local config for the
+reason the ladder above gives: verification is re-construction, so a knob
+only one machine can see makes the other report drift it cannot explain and
+re-apply a file that was already correct. `hook_timeout_seconds` bounds a
+generated lifecycle hook entry: `0` is not "no timeout" in any host that
+reads these entries - it is a hook killed before it can run - and ten
+minutes is the ceiling, past which the value is a unit error rather than an
+intent. Both bounds are hard errors at load, never clamped, because a
+clamped timeout is indistinguishable from one nobody set. Each key has a
+machine-local counterpart one tier down - `mcp_tool_profile` and
+`install_hook_timeout_seconds` in `config.yaml` - which the block outranks.
+
+An **unreadable** `_brain.yaml` REFUSES rather than defaulting. An absent
+config is a vault with no settings to contradict; a malformed one is
+settings that exist and are not in force, and a writer cannot infer intent
+from bytes it could not parse. With the environment tier gone the vault tier
+is read on every resolution, so the refusal is unconditional - before, an
+environment variable short-circuited the ladder above it and a broken vault
+config went unnoticed for exactly those runs. `o2b install --friction` is
+the one surface that reports the refusal in a cell instead of raising,
+because it is a report and generates nothing.
+
 ## Brain (observing memory)
 
 ```text
@@ -133,7 +325,7 @@ o2b brain snapshot log        (CLI-only) Newest-first listing of every recovery 
 o2b brain snapshot diff       (CLI-only) Read-only diff between two snapshots, or snapshot vs live Brain/
 o2b brain rollback            (CLI-only) Restore Brain/ from a snapshot (--dry-run previews; drift abort vs --force-rollback); --list, the prompt and --json name the snapshot reason ('unknown' when the sidecar records none)
 o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
-o2b brain export              Read-only dump of active preferences (--format json|llms-txt [--out <path>] [--force]). Since v1.49.0 the bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
+o2b brain export              Read-only dump of active preferences, or (since v1.50.0) a session-transcript dataset: --format json|llms-txt|transcripts-jsonl [--out <path>] [--force]; the transcript form takes --transcripts <file|dir> and reads no vault at all (see "The transcript corpus" below). Since v1.49.0 the preference bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
 o2b brain bank-export         (CLI-only) One-file backup bundle: preferences, the page graph, page contracts, the sources dashboard. Redacted on the way out; refuses with exit 1 on an unreadable `pref-*.md` (since v1.49.0)
 o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge). A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)
 o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode). Since v1.49.0 BOTH modes refuse a Brain file they cannot parse - `--export` writes nothing and exits 1, and live mode does not start, because a browser showing a silently smaller graph is the same lie as a written file - and `--export` runs the shared redactor over the graph, so its output differs from a pre-v1.49.0 export on any vault holding a credential-shaped value
@@ -156,7 +348,7 @@ o2b brain backlinks           List inbound references to a Brain artifact id
 o2b brain semantics-backfill  Dry-run typed preference-edge backfill preview (since v0.24.0): --json returns missing inverse superseded_by proposals; no writes
 o2b brain mcp-landscape       List MCP servers configured across the vault (since v0.19.0): name, source file, packages, required env-var names (values never read)
 o2b brain scan-inline         Capture `@osb` markers from folders listed under `notes.read_paths` in _brain.yaml
-o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG
+o2b brain import-session      Replay signals from a registered agent session .jsonl (or directory); --recall also stores turns in the session recall DAG. Since v1.50.0 the path argument has a machine-wide sibling: --status reports per-runtime coverage, --discover lists what has never been imported, --discover --all imports it (see "Session logs this machine already has" below)
 o2b brain session-hook        Internal hook bridge: read one lifecycle payload from stdin, capture prompt markers / brain_feedback, append lifecycle audit/log rows
 o2b brain context-receipts    List/show opt-in prompt context receipt continuity records (since v0.29.0)
 o2b brain recall-telemetry    List/summarise opt-in recall telemetry continuity records (since v0.29.0)
@@ -699,6 +891,143 @@ An installed channel that delivered at least once reports nothing, and a
 channel nothing asked to run reports nothing. The check is fail-soft: it
 can never fail the doctor pass it rides on.
 
+### Session logs this machine already has (since v1.50.0)
+
+`o2b brain import-session <path>` needs a path, which made cross-agent
+recall worth nothing for any session nobody knew to import: an operator had
+to already know that Claude Code writes under `~/.claude/projects`, that
+Codex has moved its rollouts between four subdirectories of `$CODEX_HOME`,
+that Grok encodes the working directory into a path component - and then run
+the verb once per file. Three flags are the machine-wide half, sweeping the
+roots `src/core/runtime/host-facts.ts` declares:
+
+```text
+o2b brain import-session --status              Per-runtime found / imported / gap counts, and the roots each was looked for under
+o2b brain import-session --discover            The same report, plus the absolute path of every log that has never been imported
+o2b brain import-session --discover --all      Import that gap, one file at a time, through the same importSession the path form calls
+o2b brain import-session --status|--discover --progress
+                                               Newline-delimited progress on stderr under the `sessions` operation, one `hash` stage
+```
+
+The modes never blend, and a conflicting combination is refused by name
+rather than ranked: a path with `--discover` or `--status`, `--discover`
+with `--status`, or `--all` without `--discover`. Either ranking would be a
+guess about which one the operator meant.
+
+`--discover --all` writes through the same `importSession` the path form
+calls rather than a second copy of it, so redaction, the tool-payload
+exclusion and the dedup index are the ones that were already there. One
+unreadable log does not lose the rest of the sweep: the failure is named on
+stderr, the run carries on, and the exit is `1` if anything failed.
+
+**The ledger is keyed by content, and lives with the other derived state**
+at `<vault>/.open-second-brain/session-import-ledger.json` - the
+`session_import_ledger` row of `o2b state status`. Each entry records the
+SHA-256 of the file's bytes at the moment it was imported, so a log whose
+bytes have not changed is reported as imported without anything opening it
+again; re-importing an unchanged log used to re-parse every byte to discover
+it had nothing to write, because dedup suppresses the WRITES and not the
+read. Content and not mtime: an rsync, a Syncthing round trip or a
+`git checkout` moves the clock and not a byte, and a ledger that believed
+the clock would re-import the whole machine after any of them. A named-path
+import records its file too, when that file sits under a declared root, so a
+later `--status` does not offer back what the operator already imported by
+hand. A corrupt or unknown-schema ledger is a hard error rather than a
+silent reset, which would report an operator's entire imported machine as
+outstanding.
+
+**A Cursor database is counted as `unparsable`, not as a gap.** Cursor keeps
+per-workspace chat state in `state.vscdb`, a SQLite file this build can
+LOCATE and no adapter it ships can read. A gap is work an operator can close;
+an unreadable format is not, and folding the two would put a permanent
+number in a column an operator is trying to drive to zero. So the identity
+the report prints is `found = imported + gap + unparsable`, and the third
+term is visible in both the human lines and `--json`. Roots that exist and
+could not be listed, and files that could not be hashed, are carried
+separately again as `unreadable`, because a partial sweep found less than it
+should have and the counts alone cannot say so.
+
+The sweep reads only to hash and writes nothing - not even the ledger, which
+records imports and would be lying if a report updated it. It runs under the
+`sessions` cooperative deadline (`safeguard_timeout_sessions_seconds`); see
+"Forward pointers" below for why that operation has a budget of its own.
+
+### The transcript corpus (since v1.50.0)
+
+```text
+o2b brain export --format transcripts-jsonl --transcripts <file|dir>
+                 [--runtime <adapter-id>] [--since <iso>] [--until <iso>]
+                 [--out <path>] [--force]
+```
+
+One JSON object per line, **one object per CONVERSATION**: `schema`,
+`runtime` (the adapter the file was detected as), `session_id` (the
+transcript's basename, never its absolute path), `started_at`, `ended_at`,
+`message_count`, and the ordered `messages`.
+
+The alternative - one instruction/response PAIR per line, the shape a
+supervised fine-tuning harness eats directly - was considered and rejected,
+and the reason is worth stating because picking either silently is how a
+guess becomes an authoritative fact downstream. A pair set is a lossy
+projection: producing it means deciding which turn is the instruction, what
+to do with system and tool turns, and where a multi-turn exchange breaks
+into pairs - three judgements the runtime never recorded and this exporter
+cannot recover. A harness that wants pairs can derive them from a
+conversation; nothing derives the conversation back from the pairs.
+
+A message carries `turn_id`, `role`, `timestamp`, `text`, and the NAMES of
+the tools that turn called. **Tool names travel and tool inputs never do**:
+inputs are host paths, command lines and pasted payloads, and this is a
+conversation dataset rather than a tool-trace one. A turn with neither text
+nor a tool call - a runtime queue event, a payload-less meta line - is not a
+message and is counted rather than emitted.
+
+`--transcripts` names a file or a directory; a directory is walked for
+`*.jsonl` with symlinks skipped rather than followed, and a tree nesting
+deeper than 32 directories is refused by name rather than overflowing the
+stack. A path naming a FILE is taken whatever its extension, because the
+operator named that file, and a level of the walk that cannot be listed
+refuses too - an unreadable source is not an empty one.
+`--runtime` keeps one adapter's transcripts and is resolved for its
+refusal, so an unknown id lists the registered set instead of reporting an
+empty corpus.
+
+**`--since` / `--until` select whole conversations by their START**, so a
+kept conversation is never sliced at the window edge and the rest of a
+rejected file is never read. `--until` is exclusive. A first turn whose
+timestamp cannot be read refuses the export rather than guessing which side
+of the window it falls on - including the case that actually happens, where
+the runtime recorded no clock and the adapter reports the epoch, which sorts
+before any window an operator would type.
+
+The corpus never exists whole in memory. Records are guarded and written one
+at a time to a spool file the operator never named, then `rename(2)`-d into
+`--out` or streamed to stdout a chunk at a time; peak memory is one
+conversation plus one chunk.
+
+**Refusals.** A `*.jsonl` under the named source that no adapter recognises
+stops the export, naming the file: a corpus that quietly omits a transcript
+reads exactly like a machine that never recorded it. A ZERO-BYTE file is the
+one exception and is counted (`empty`) instead - it carries nothing to omit,
+Claude Code leaves them behind whenever a session is killed before its first
+turn flushes, and refusing on them made the export unusable against a real
+store. And a **secret-shaped identifier refuses the whole export and writes
+nothing**: the spool is deleted and no file the operator can see was ever
+touched. The refusal names the conversation by its basename - except when
+the basename IS the secret-shaped identifier, where it is named by runtime
+and start instant instead, because printing it is the one thing that code
+path exists to prevent.
+
+An export that matched nothing says which filter emptied it, on stderr, with
+every scanned file on exactly one counter:
+
+```text
+note: no conversation matched; <scanned> transcript file(s) scanned, <n> from another runtime, <n> outside the window, <n> with no exportable turn, <n> empty
+```
+
+The four reasons sum to `scanned` minus the exported records, so an empty
+file under exit `0` can never be read as a machine that recorded nothing.
+
 ## Stability and trust (since v1.0.0)
 
 ```text
@@ -723,7 +1052,7 @@ Verbs that carry it today: `o2b status`, `o2b brain init`, `bridges list|discove
 
 Long-running operations (dream, `o2b search index | reindex | vector-backfill`, bridges discover, clusters run, architect, the machine-wide session sweep, the maintenance lane) run under a cooperative safeguard deadline: `safeguard_timeout_seconds` (default 600, `0` disables, env `OPEN_SECOND_BRAIN_SAFEGUARD_TIMEOUT`) with per-operation overrides like `safeguard_timeout_dream_seconds`. The session sweep's key is `safeguard_timeout_sessions_seconds`: it is the one operation whose cost is dominated by bytes rather than by candidates - hashing transcripts that live on somebody else's disk - so its budget is worth setting separately from the passes that walk the vault. A tripped deadline aborts at the next checkpoint - between atomic writes - and reports `{ok:false, timed_out:true}` on exit 1; maintenance-lane task results carry `timed_out` per task. The frozen-surface policy lives in `docs/stability.md`; the 0.x to 1.0.0 migration table in `docs/updating.md`.
 
-**Watching one.** The same verbs take `--progress`, which writes one newline-delimited JSON record per checkpoint to **stderr** - `{"schema":"o2b.progress.v1","operation":…,"kind":…,"stage":…,"completed":N}`, where `kind` is `started`, `advanced`, `finished` or `stopped`, and `total` is present only where a denominator is known before the loop starts (the embedding phase knows its pending count; the index walk consumes a generator and cannot). A CLI progress stream never carries `refused` - no counter emits it; it is an MCP-only shape on a different transport, so a CLI reader that handles it writes dead code. `stage` is an identifier from the operation's own phase vocabulary, never a sentence. Stdout is untouched, so a `--json` payload is byte-identical with and without the flag, and `o2b search index --verbose` keeps its separate per-file stream unchanged - the two answer different questions. Progress is opt-in for the same reason `--verbose` is; when a stream cannot carry it the verb says `progress: not emitted (<reason>)` rather than writing into a buffer nobody will read in time. `o2b brain maintenance run --progress` forwards the stream of whichever task is running rather than counting its own four steps, so every record names the operation that emitted it. `o2b brain dream --step <s> --progress` reports under `dream` with the step's own name as the stage (`scan`, `heal-enrich`) rather than the five stages of a full pass, and runs under the same `dream` deadline: a step asked for on its own IS the run. Under `--json` a tripped deadline comes back as `{ok:false, step, timed_out:true, message}`, the same marker the staged actions and the inline pass carry. The deadline is checked per file (`scan`) and per page (`heal-enrich`), and on both sides of the two phases that cross no boundary of their own - `heal-enrich`'s vault listing and its one-shot title/alias phrase build - so a step already inside one of those runs it to the end before it can stop. `o2b search reindex --progress` opens a `lock` stage before it waits for the writer lock (that wait can be the length of a competing rebuild) and does not report `finished` until after the `swap` stage that renames the staging build over the live index - the run is not over when the build is. `o2b search vector-backfill --progress` reports under `reindex` too, because the pass IS that run's embedding phase on its own: a `plan` stage while it counts, then the shared `embed` stage with the pending count as its denominator.
+**Watching one.** The same verbs take `--progress`, which writes one newline-delimited JSON record per checkpoint to **stderr** - `{"schema":"o2b.progress.v1","operation":…,"kind":…,"stage":…,"completed":N}`, where `kind` is `started`, `advanced`, `finished` or `stopped`, and `total` is present only where a denominator is known before the loop starts (the embedding phase knows its pending count; the index walk consumes a generator and cannot). A CLI progress stream never carries `refused` - no counter emits it; it is an MCP-only shape on a different transport, so a CLI reader that handles it writes dead code. `stage` is an identifier from the operation's own phase vocabulary, never a sentence. Stdout is untouched, so a `--json` payload is byte-identical with and without the flag, and `o2b search index --verbose` keeps its separate per-file stream unchanged - the two answer different questions. Progress is opt-in for the same reason `--verbose` is; when a stream cannot carry it the verb says `progress: not emitted (<reason>)` rather than writing into a buffer nobody will read in time. `o2b brain maintenance run --progress` forwards the stream of whichever task is running rather than counting its own four steps, so every record names the operation that emitted it. `o2b brain dream --step <s> --progress` reports under `dream` with the step's own name as the stage (`scan`, `heal-enrich`) rather than the five stages of a full pass, and runs under the same `dream` deadline: a step asked for on its own IS the run. Under `--json` a tripped deadline comes back as `{ok:false, step, timed_out:true, message}`, the same marker the staged actions and the inline pass carry. The deadline is checked per file and per directory in `scan`, and per page in each of `heal-enrich`'s two loops. Two phases of `heal-enrich` cross no boundary of their own and are therefore not interruptible at all: the vault listing, which walks every page and parses its frontmatter in one call, and the one-shot title/alias phrase build. The listing is the first thing the step does, so the only checkpoint it has is the one immediately AFTER it; the phrase build is bracketed on both sides, so an already-elapsed budget refuses to pay for it. Either way a step already inside one of them runs it to the end before it can stop. `o2b search reindex --progress` opens a `lock` stage before it waits for the writer lock (that wait can be the length of a competing rebuild) and does not report `finished` until after the `swap` stage that renames the staging build over the live index - the run is not over when the build is. `o2b search vector-backfill --progress` reports under `reindex` too, because the pass IS that run's embedding phase on its own: a `plan` stage while it counts, then the shared `embed` stage with the pending count as its denominator.
 
 Which emitters those verbs actually have is not taken on trust. `tests/cli/progress-emitter-census.test.ts` enumerates every `progressCounter(` call site in `src/` from the source, maps each to the entry point that reaches it, then RUNS each entry point against a fixture and requires records carrying that site's operation and stage to arrive with a terminator. A call site no entry point reaches is a failure, which is how `vector-backfill` - which had grown the whole spine in core with no flag to reach it - was found.
 
@@ -734,8 +1063,9 @@ Which emitters those verbs actually have is not taken on trust. `tests/cli/progr
 | `o2b search index`, `o2b search reindex` | Stops the run at the next checkpoint - between files, between embed batches, never mid-write - and exits **130** (SIGINT) or **143** (SIGTERM). A stopped rebuild leaves the live index exactly as it found it, because the staging build is abandoned before the swap. |
 | `o2b search vector-backfill` | Stops **between embed batches** and exits **130** / **143**; vectors already written stay written, because each chunk commits as it is computed. The dry run and the planning query are synchronous SQLite between two awaits, so a keystroke landing there is not observed at a checkpoint - it ends the process on release instead, which is the same outcome the un-suppressed keystroke would have had. |
 | `o2b brain maintenance run` | Stops the lane at a task boundary and exits **130** / **143**. The lane journals the stop and releases its lease, so the vault is never left leased. |
-| `o2b brain dream` (including `stage`/`validate`/`apply`), `o2b brain bridges discover`, `o2b brain clusters run`, `o2b brain architect` | **Terminates the process immediately**, the ordinary shell behaviour. These four passes are synchronous end to end, so no cooperative stop is possible and none is claimed. Every artifact they write is written atomically, so a killed pass leaves no half-written note - it leaves the vault as it was before the pass, or after the last completed write. Their deadline (`safeguard_timeout_*_seconds`, above) is the only cooperative stop they have. |
+| `o2b brain dream` (including `stage`/`validate`/`apply`), `o2b brain bridges discover`, `o2b brain clusters run`, `o2b brain architect`, `o2b brain import-session --status \| --discover` | **Terminates the process immediately**, the ordinary shell behaviour. These passes are synchronous end to end, so no cooperative stop is possible and none is claimed. Every artifact they write is written atomically, so a killed pass leaves no half-written note - it leaves the vault as it was before the pass, or after the last completed write. Their deadline (`safeguard_timeout_*_seconds`, above) is the only cooperative stop they have. |
 | `o2b search watch` | Exits **0**, unchanged: stopping is how that command ends. |
+| `o2b mcp` (both transports, since v1.50.0) | Stops accepting new requests, waits for the in-flight ones to a bounded deadline, closes, and exits **130** / **143**. It is the one verb here that calls `process.exit` rather than re-raising, because two `exit` hooks - the search-store WAL checkpoint and the lock release - do not run when a process dies by signal. See "Shutdown and draining" in [`mcp.md`](mcp.md). |
 
 For the two verbs that do hold a handle, a second interrupt is not intercepted and falls through to the default handler, so a wedged run is always killable by pressing the key twice. And an interrupt that arrives while such a verb is in a region with no checkpoint - opening a store, writing a report - is not swallowed: the verb prints `interrupted: SIGINT arrived while … stopping now` and ends with the signal's code rather than returning 0. A run the operator stopped never exits 0.
 
@@ -791,6 +1121,176 @@ the admission verdict (`exact-state-lane`, or `null` when the path is
 admitted). The human transcript prints an `index: not indexed (<reason>)`
 line under an included path whose admission was refused, and prints
 nothing there when the path is admitted.
+
+## State surfaces (since v1.50.0)
+
+```text
+o2b state status              One row per declared state surface: where it resolved, whether it is reachable, which layer put it there
+o2b state migrate --to <dir>  Plan the move of every in-vault state surface to <dir>; --apply --yes performs it, --dry-run is the explicit form of the plan
+o2b state rollback --from <dir>
+                              Put back what the migration's manifest binds and whose digest still matches; --to <vault> names a vault that has moved since
+```
+
+All three take `--json`; `status` and `migrate` also take `--vault` and
+`--config`.
+
+Three questions an operator asks before they copy, migrate or delete a
+vault had no surface that answered them: where each surface lives on this
+machine, whether it is reachable, and which layer put it there. `o2b state
+status` is that surface, and the `vault_health` MCP tool carries the same
+value under `state_surfaces` - one report rendered two ways rather than two
+hand-written copies.
+
+### The catalogue and the two tiers
+
+**40 declared surfaces**, printed whole. A row says what this build CAN keep
+at that location, never that this machine has it; presence is the measured
+half. They are grouped by what losing one costs, which is the first thing a
+migration needs:
+
+| Tier | Meaning |
+| --- | --- |
+| `derived` | rebuildable from the vault, so deleting it costs time and not memory |
+| `vault-content` | the memory itself, so a loss here is permanent without a backup |
+
+The tier is a RECOVERY story, not a location: `Brain/.state/anticipatory/`
+sits inside the Markdown tree and is `derived` because deleting it costs one
+recomputation, and the search index sits outside it and is `derived` for the
+same reason. Whether a surface can hold memory CONTENT is a separate axis,
+reported per row and counted in the summary line - 15 of the 40 can.
+
+Only two overrides move anything: `OPEN_SECOND_BRAIN_SEARCH_DB` /
+`search_db_path` relocate the search store and everything that follows it,
+and `O2B_DEVICE_ID` / `device_id` select which shard of the log and the
+truth ledger this machine writes. The second is reported as provenance and
+not substituted into the path, because it names a file inside a directory
+the inventory reports at directory granularity. Every other row prints `at
+its only location - nothing can move it`.
+
+### Reachability is a tri-state, and it carries its reason
+
+An unreadable surface is not an absent one. A boolean would have to spell "I
+could not look" as `false`, which reads as "it is not there" at every call
+site and sends an operator to recreate something that already exists under a
+mode they cannot read.
+
+| `state` | Rendered as | Meaning |
+| --- | --- | --- |
+| `present` | `present` | the probe found something at the resolved path |
+| `absent` | `absent - nothing has created it in this vault yet` | absence is a state, not a failure |
+| `unchecked` | `NOT CHECKED - could not be probed (<errno>): <message>` | an `EACCES` on the parent, an `ELOOP`, an `EIO` from a dying disk |
+
+`o2b state status` exits `0` whenever the inventory COMPLETED, including
+over an `unchecked` row: turning a reporting verb into a gate would
+duplicate `o2b doctor`. The probe falls back to `lstat` after `stat`, so a
+surface whose root is a dangling symlink answers `present` rather than
+`absent` - something IS at that path, and saying so is what carries it to
+the migration check that knows how to explain a link.
+
+### Migration refuses before it commits, and returns every reason at once
+
+`o2b state migrate` runs every check and returns ALL of them; it never
+short-circuits on the first refusal and never touches the filesystem while
+planning. An operator who fixes a symlink only to be told about a held
+writer lock, then about a full disk, learns their vault's problems one
+interrupted migration at a time.
+
+Seven refusal classes, each a distinct repair:
+
+| Code | Refused because |
+| --- | --- |
+| `symlink` | a bound path is a symbolic link. A migration copies bytes, so the link would arrive pointing at the OLD location and its target would silently stay behind |
+| `special_file` | a FIFO, socket or device node, which has no bytes to copy; copying it would produce a plain file that only looks like the original |
+| `destination_occupied` | the destination exists and is not an empty directory, or could not be examined or listed. Merging would make the manifest unable to say which files this migration put there |
+| `insufficient_space` | the destination filesystem has less free space than the plan needs, or its free space could not be measured at all |
+| `reserved_namespace` | the destination is inside the vault, an ancestor of it, the filesystem root, or the home directory itself. Every comparison is made over the REALPATH, so a symlink cannot smuggle the state tree back into the vault it is leaving |
+| `writer_lock_held` | the search index writer lock is held by a live writer, or its state could not be determined. Bytes appended after this run hashed the index would land in neither copy - the one loss a digest cannot detect afterwards |
+| `unreadable_surface` | a declared surface, a directory in the tree, or a file in it could not be probed, listed or read. A tree this run cannot enumerate cannot be bound by a manifest, and an unbound file is not restorable |
+
+Every refusal names what was found AND the remedy. A surface an override put
+outside the vault is not a refusal: it is reported separately as left where
+it is, because migrating the vault does not move it.
+
+**The dry-run ladder is `o2b brain upgrade`'s, verb for verb**, copied
+rather than reinvented because an operator who has learned one destructive
+verb in this CLI has learned all of them:
+
+| Form | Behaviour |
+| --- | --- |
+| bare `--to <dir>` | plans and prints; writes nothing |
+| `--dry-run` | the same plan, said explicitly. Mutually exclusive with `--apply` |
+| `--apply --yes` | performs it |
+| `--apply` on a TTY | prints the plan, states how many files and bytes are about to MOVE and where the rollback manifest will be, and prompts; only `y` or `yes` proceeds |
+| `--apply` under `--json` or a non-TTY stdin | refused - nobody can answer the prompt |
+
+Within the apply the same rule holds one level down. Every file is COPIED
+and its landed bytes re-digested BEFORE any source byte is removed. A copy
+that fails half way unwinds what it wrote - including the empty directory
+skeleton, so the identical retry is not blocked by the abort - and leaves
+the source exactly as it found it. Only once the whole tree has landed and
+verified does the removal pass run, and it prunes only directories that are
+now empty, so an operator's own file inside a state root keeps its parent
+alive.
+
+The destination gets `state-migration.json`: a schema version, the digest
+algorithm, the source type, the absolute source and destination roots, the
+minimal set of vault-relative directories covering every moved file
+(`canonical_roots` - a declared surface nested inside another is absorbed by
+the one that contains it, so no byte is bound twice), a byte count and a
+SHA-256 per file, and one digest over all of it.
+
+### Rollback needs `--from`, and takes `--to`
+
+`--from <dir>` is the directory a migration was moved TO - the directory
+holding its manifest - and it is required. `--to <vault>` is optional and
+answers a vault that has MOVED since: the manifest records an absolute
+source root, and a rollback into a dead path recreated the directory, copied
+into it, removed the destination copies and exited `0`, leaving the live
+vault with nothing. A recorded root that is no longer a directory is
+therefore refused BY NAME before a single entry is classified, and the plan
+prints the recorded root beside the override either way, so restoring
+somewhere else is something the operator reads rather than remembers typing.
+
+The ladder is the migration's: a bare invocation (or `--dry-run`) plans and
+prints, `--apply --yes` performs it, and `--apply` without `--yes` prompts
+on a TTY and is refused under `--json` or a non-TTY stdin.
+
+Only what the manifest binds AND whose digest still matches goes back.
+Everything else is refused by name and left exactly where it is: nothing
+this verb can do makes an operator's later edit recoverable, so the one
+thing it must never do is delete it.
+
+| Code | Left alone because |
+| --- | --- |
+| `digest_mismatch` | the destination copy has changed since the migration |
+| `missing_at_destination` | the manifest binds it and nothing is there now |
+| `source_diverged` | something has written the source path since the migration |
+| `unreadable` | this run could not read one end of it, so it cannot be shown to be the file the manifest binds |
+
+Every entry is measured AGAIN at apply time, because a plan is a statement
+about the moment it was made. The manifest is removed only when there is
+nothing left to refuse from either half - an incomplete rollback keeps it,
+since the refused entries are the only record of where those bytes came
+from.
+
+A manifest that does not verify against its own digest, declares a schema
+version this build does not read, or is not parseable JSON is refused rather
+than repaired: a rollback driven by an edited manifest is a restore of
+something nobody measured.
+
+### Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | the inventory completed, the plan was printed with no refusals, or the operation did what it was asked |
+| `1` | a REFUSAL: a migration that will not run, a rollback that left files behind, or a plan that could not be built |
+| `2` | a usage error: a missing `--to` or `--from`, `--dry-run` with `--apply`, an unknown subcommand, or `--apply` without `--yes` where nobody can answer a prompt |
+
+The split is the point. A refusal is an ANSWER - the command did what it was
+asked and the answer is no - and a supervisor that cannot tell it from a
+broken invocation retries the wrong one. A rollback that restored four of
+five files exits `1` even though everything it DID do succeeded, because
+"restored 4 of 5" is not a success.
 
 ## Discipline (daily logging cron)
 
@@ -1110,6 +1610,27 @@ Every export that writes a FILE - `brain export`, `brain explorer --export`,
 `brain bank-export`, `brain graph-export`, `brain okf-export`,
 `export-config`, `install --out` - runs the shared redactor over its bytes
 before they land, and prints a notice on stderr when it removed something.
+
+**The widest of them is `brain export --format transcripts-jsonl`** (since
+v1.50.0), and it is worth naming apart from the other six. The rest carry
+vault artifacts an agent composed; this one carries whole recorded
+conversations from whichever runtimes wrote them, which is where a key
+pasted into a prompt actually lives. Three properties follow from that:
+
+- its records are guarded **one at a time**, so a single oversized turn
+  cannot push a machine's whole corpus past the redactor's scan window;
+- it is the one call site that judges identifiers as FOREIGN. `session_id`
+  and `turn_id` were named by the harness that wrote the transcript, so the
+  guard's default narrowing - an argument about ids this vault constructs -
+  does not cover them, and the full bare-token detector is used instead;
+- a secret-shaped identifier refuses the whole export and **writes nothing**
+  the operator can see, because the only file that exists at that point is
+  an unnamed spool and it is deleted.
+
+The registry entry is `brain-export` (renamed from
+`brain-preference-export` when the third format joined), and it covers all
+three of the verb's formats: the JSON and transcript forms are redacted as
+TREES and serialised afterwards, llms-txt as text.
 
 Five paths send vault-derived bytes to a NETWORK destination and are
 **not** scanned. That is a stated exposure, not an oversight: redacting an

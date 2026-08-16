@@ -39,8 +39,13 @@ import {
   takeSnapshot,
   withDestructiveSnapshot,
 } from "../../../src/core/brain/snapshot-gate.ts";
-import { BrainSnapshotStoreError, listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import {
+  BrainSnapshotError,
+  BrainSnapshotStoreError,
+  listSnapshots,
+} from "../../../src/core/brain/snapshot.ts";
 import { createSnapshot } from "../../../src/core/brain/snapshot.ts";
+import { dream } from "../../../src/core/brain/dream.ts";
 import { isFileAlreadyExists } from "../../../src/core/fs-atomic.ts";
 import { brainDirs, snapshotPath, validateRunId } from "../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
@@ -407,5 +412,73 @@ describe("createUniqueSnapshot - the retry discriminator", () => {
     expect((thrown as Error).message).toMatch(/could not reserve a unique snapshot run id/);
     expect((thrown as Error).message).toMatch(/after 3 attempts/);
     expect((thrown as Error).cause).toBeInstanceOf(FileAlreadyExistsError);
+  });
+
+  test("an EEXIST naming some other path propagates on the first attempt", () => {
+    // GitHub #167. The discriminator used to be the errno alone, so ANY
+    // EEXIST anywhere in the cause chain read as "a peer took this run id" -
+    // including the one `createSnapshot` raises before it has touched a
+    // single archive, when `mkdir Brain/.snapshots` fails. The ladder then
+    // burned all 64 candidates and reported an id exhaustion that had never
+    // happened, with the real errno buried on `cause`. A collision that does
+    // not name THIS candidate's archive is not this loop's business.
+    const calls: string[] = [];
+    const unrelated = new Error(
+      "EEXIST: file already exists, mkdir '/somewhere/entirely/else'",
+    ) as NodeJS.ErrnoException;
+    unrelated.code = "EEXIST";
+    unrelated.path = "/somewhere/entirely/else";
+
+    expect(() =>
+      createUniqueSnapshot(vault, "dream-2026-06-01-000000", (runId) => {
+        calls.push(runId);
+        throw unrelated;
+      }),
+    ).toThrow(unrelated);
+    expect(calls).toEqual(["dream-2026-06-01-000000"]);
+  });
+});
+
+describe("an unusable Brain/.snapshots is diagnosed, not laddered past", () => {
+  /**
+   * The reproduction from GitHub #167, driven end to end on the two layers
+   * that both got it wrong: `createSnapshot`, which raised a bare errno from
+   * its very first `mkdir` and named nothing an operator could act on, and
+   * the gate above it, which read that errno as a lost race.
+   */
+  const replaceSnapshotsDirWithFile = (): string => {
+    const path = brainDirs(vault).snapshots;
+    rmSync(path, { recursive: true, force: true });
+    writeFileSync(path, "not a directory\n");
+    return path;
+  };
+
+  test("createSnapshot names the archive directory and what is really there", () => {
+    const path = replaceSnapshotsDirWithFile();
+    let thrown: unknown;
+    try {
+      createSnapshot(vault, "dream-2026-06-01-000000", { reason: "dream" });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(BrainSnapshotError);
+    expect((thrown as Error).message).toContain(path);
+    expect((thrown as Error).message).toContain("regular file");
+    // The errno is kept, not replaced: the diagnosis explains it, and a
+    // reader who wants the syscall still has it.
+    expect(((thrown as Error).cause as NodeJS.ErrnoException).code).toBe("EEXIST");
+  });
+
+  test("dream reports the archive directory, not a fictional id exhaustion", () => {
+    const path = replaceSnapshotsDirWithFile();
+    let thrown: unknown;
+    try {
+      dream(vault, { now: new Date("2026-05-27T12:00:00Z") });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as Error).message).toContain(path);
+    expect((thrown as Error).message).not.toMatch(/could not reserve a unique snapshot run id/);
   });
 });

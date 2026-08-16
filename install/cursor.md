@@ -34,10 +34,17 @@ advertised count fits inside it.
 ceiling; it carries no other behaviour.
 
 To choose a different profile, set `install.tool_profile` in
-`<vault>/Brain/_brain.yaml` (travels with the vault) or
-`OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE` in the environment (wins over
-everything), then re-apply. Raising it back to `full` re-exposes the
-110-tool surface **and the silent 40-tool cut** that goes with it.
+`<vault>/Brain/_brain.yaml` (travels with the vault, and outranks the
+machine-local `mcp_tool_profile` key), then re-apply. Raising it back to
+`full` re-exposes the 110-tool surface **and the silent 40-tool cut**
+that goes with it.
+
+`OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE` deliberately does not reach the
+written registration. What `--apply` writes is verified by
+re-construction, so every input has to survive to the next invocation:
+a committed file and a machine-local file do, a shell variable does not,
+and a registration fed by one would report drift against itself. The
+variable still selects the surface of a server you start yourself.
 
 ## Prerequisites
 

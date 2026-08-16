@@ -139,7 +139,7 @@ release because nothing checked it; its replacement is checked.
 | --- | --- | --- | --- |
 | `brain_dream` (`run`) | `dream`, twice when `expect`/`strict` asks for a guard preview | `dream` — one budget for the whole call, preview included | yes |
 | `brain_dream` (`stage`/`validate`/`apply`) | `dream`, through the staged bundle | `dream` | yes |
-| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file (`scan`) and per page (`heal-enrich`), plus once on each side of the two phases that cross no boundary of their own: `heal-enrich`'s vault listing and its one-shot title/alias phrase build. So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
+| `brain_dream` (`step`) | one step (`scan` or `heal-enrich`), not a pass | `dream` — a step is part of a dream pass, so it draws on that budget. Checked per file and per directory in `scan`, and per page in each of `heal-enrich`'s two loops, plus around the two phases that cross no boundary of their own — the vault listing (checkpoint after it only) and the one-shot title/alias phrase build (before and after). So it stops within one page **plus** whichever of those two is running, not within one page flat | yes, under the step's own stage (`scan` / `heal-enrich`) |
 | `brain_bridges` (`discover`) | `bridges` | `bridges` | yes |
 | `brain_clusters` (`run`) | `clusters` | `clusters` | yes |
 | `brain_maintenance` (`run`) | all four, sequentially | one fresh guard per task; a tripped task is a `timed_out` row, not an aborted call | yes, in its tasks' voices |
@@ -155,12 +155,20 @@ disables the deadline for every row above whose budget is `dream`.
 Cooperative also means the guarantee is "stops at the next boundary", and
 a phase that crosses no boundary is therefore not interruptible however
 long the budget has been gone. Two such phases exist and both are in
-`heal-enrich`: the vault listing, which walks every page and parses its
-frontmatter in one call, and the phrase build, which sorts and
-regex-escapes the whole title/alias set in one. The deadline is honoured
-immediately before and immediately after each, so an elapsed budget never
-pays for one it has not started — but a call that has already entered one
-runs it to the end. `src/core/brain/heal-run.ts` names the same two.
+`heal-enrich`. They are NOT bracketed alike, and the difference is worth
+stating rather than rounding to "both sides":
+
+- the **vault listing**, which walks every page and parses its frontmatter
+  in one call, is the first thing the step does. Its only checkpoint is the
+  one immediately AFTER it — there is nothing before it to check — so a
+  budget that has already elapsed still pays for the listing once.
+- the **phrase build**, which sorts and regex-escapes the whole title/alias
+  set in one, is bracketed on both sides: the checkpoint immediately before
+  it means an elapsed budget refuses to pay for it, and the first page of
+  the rewrite loop honours it again on the far side.
+
+Either way a call that has already entered one of them runs it to the end.
+`src/core/brain/heal-run.ts` names the same two and the same asymmetry.
 
 ## Tool Highlights
 
@@ -180,7 +188,7 @@ flags for a narrower per-process full server.
 | `second_brain_capabilities` | Report the tools available to this MCP process and the withheld-tool reasons after runtime capability filtering.                               | —                                              |
 | `second_brain_status`       | Report config and vault status, with secrets redacted.                                                                                         | —                                              |
 | `second_brain_query`        | List vault pages with an optional case-insensitive title substring.                                                                            | —                                              |
-| `vault_health`              | Run vault, config, and plugin manifest health checks.                                                                                          | —                                              |
+| `vault_health`              | Run vault, config, and plugin manifest health checks. Since v1.50.0 the response also carries `state_surfaces`: the same inventory `o2b state status` renders (every declared in-vault state surface with its resolved path, tier, reachability verdict and the configuration layer that placed it), as a sibling FIELD rather than a contribution to `ok` — an absent surface is normal on a young vault and an unchecked one carries its own reason. An unreadable machine config resolves to no overrides here rather than failing the report; the `checks` array already names that fault. | —                                              |
 | `brain_health`              | Run semantic Brain Health checks and return the health verdict/domains.                                                                        | —                                              |
 | `brain_mcp_landscape`       | List the MCP servers configured across the vault: name, source config file, packages, and required env-var names. Env values never read.       | —                                              |
 | `brain_codegraph_report`    | Read-only codegraph partner report: in-scope code project, index state (`no_project`/`absent`/`not_indexed`/`indexed` with counts/`error`), and structural `Cargo.toml` workspace members. When indexed, attaches a non-blocking `index.health` graph-health gate (`empty-graph`, `collapsed-edges`, `dangling-references`, `self-loops`, `cache-root-mismatch`) surfaced before labeling/import/recall trust the graph. Never installs, extracts, or mutates; non-Rust projects report `cargo_workspace: null` with a reason. | —                                              |
@@ -386,11 +394,13 @@ Optional flags:
 - `--repo PATH` — repository root used for plugin manifest checks.
 - `--scope full|writer` — choose the full server or the always-loaded writer subset.
 - `--writer-only` — alias for `--scope writer`.
+- `--tool-profile full|writer|catalog|recall|minimal` — a named scope-plus-window bundle (see "Tool-surface profiles" below).
+- `--host-target <runtime>` — name the runtime that launched this server, so the capability report can cite that host's published tool ceiling. Install adapters write it into the registration they generate; an unrecognised value exits `2` naming the known ids. It changes nothing else.
 - `--probe` — start an in-process handshake and print whether the server can advertise tools, then exit.
 - `--transport stdio|http` — choose stdio (default) or Streamable HTTP.
 - `--host HOST` — HTTP bind host (default `127.0.0.1`).
 - `--port PORT` — HTTP bind port (default `0`, choose an available port).
-- `--api-key KEY` — required for `--transport http`; accepted as `Authorization: Bearer KEY` or `X-API-Key: KEY` on every request.
+- `--api-key KEY` — optional on the loopback default, REQUIRED when `--host` names a non-loopback interface; accepted as `Authorization: Bearer KEY` or `X-API-Key: KEY` on every request.
 - `--json` — with `--probe`, print a machine-readable capability report.
 - `--allow-tool NAME` — expose only named tools from the static scope. Repeatable.
 - `--disable-tool NAME` — withhold named tools from the static scope. Repeatable.
@@ -398,13 +408,82 @@ Optional flags:
 
 The stdio server logs its banner to `stderr` and only writes JSON-RPC frames to
 `stdout`, so it is safe to use as a subprocess in any MCP client. HTTP refuses
-to start without `--api-key`, checks the key on every request using a generic
-constant-time comparison, and returns the same `401 Unauthorized` body for a
+to start when `--host` is not loopback and no `--api-key` was given; with a key
+configured it checks that key on every request using a generic constant-time
+comparison, and returns the same `401 Unauthorized` body for a
 missing or wrong key. JSON responses are the default; clients that send
 `Accept: text/event-stream` receive a single SSE `message` event for the same
 JSON-RPC response — one event, then the connection closes, which is why a
 progress token sent over HTTP is refused by name rather than honoured (see
 "Progress notifications" above).
+
+## Shutdown and draining (since v1.50.0)
+
+Neither transport could stop without cutting a request in half. The HTTP
+handle's `close` was `server.close()` and nothing else — it stops the
+listener and returns, while the promise the request callback returns was
+floated, so a `tools/call` in flight was answered with a dead socket. The
+stdio loop had no shutdown path at all: a SIGTERM took the default
+disposition and killed the process mid-dispatch with no frame written.
+
+`SIGINT` and `SIGTERM` now drain. The sequence is the same on both
+transports:
+
+1. stop accepting NEW work;
+2. wait for the requests already begun, to a bounded deadline;
+3. close the transport;
+4. exit **130** (SIGINT) or **143** (SIGTERM).
+
+**The deadline is 10 000 ms**, overridable with `O2B_MCP_DRAIN_MS` (a
+non-negative number of milliseconds). A value that is not one THROWS rather
+than falling back: an operator who set the variable did so to change the
+behaviour, and quietly using ten seconds because they typed `10s` is the
+misleading quiet the drain exists to remove.
+
+A drain that hits its deadline still exits, and the requests it gave up on
+are NAMED on stderr first, each with how long it had been open, plus the
+variable that lengthens the wait — a shutdown that silently truncates a tool
+call is indistinguishable from a crash to whoever was waiting on it.
+
+**The `exit` hooks still run.** This is why the signal handler calls
+`process.exit(128 + signo)` instead of re-raising, which is what every
+foreground CLI verb does. Two `process.on("exit")` hooks have to run after
+the transport closes — the search store synchronously checkpoints the WAL of
+every open writer, and the sync lockfile unlinks every held lock — and the
+default disposition for a terminating signal runs neither, because the
+process dies by signal and no `exit` event is emitted. Exiting reports the
+same thing to the shell AND emits `exit`, which is why the drain has to
+complete before the exit rather than beside it.
+
+A SECOND signal is not intercepted and falls through to the default
+handler, so an operator who decides the drain is taking too long is never
+trapped by it.
+
+**What each transport does while draining:**
+
+| | HTTP | stdio |
+| --- | --- | --- |
+| new work | answered `503` with `Retry-After: 1` and `Connection: close` — a code a client retries, not a protocol error | the next line is left unread; the loop stops cleanly at a request boundary rather than half-serving the shutdown |
+| the listener | deliberately stays up until the drain finishes, so a supervisor can watch | — |
+| in-flight | tracked from the first header to the response's `close` event, so a request is not counted as finished while its bytes are still queued | tracked across the dispatch AND the response write |
+
+`GET /health` gains a third field and is **never refused during a drain** — a
+shutdown a supervisor cannot observe is a shutdown it will report as a
+crash:
+
+```json
+{ "status": "draining", "transport": "http", "in_flight": 2 }
+```
+
+`status` is `ok` while serving and `draining` once a drain has started;
+`in_flight` says how much of the wait is left. The probe is not counted as
+in-flight work itself: counting it would make the number a supervisor reads
+include the act of reading it, and a probe arriving as the last request
+finishes would restart the wait it was checking on. A request that arrives
+after the drain started is not counted either — it is refused, never
+dispatched, and counting it would let a client retrying in a tight loop hold
+the shutdown open for its whole deadline over work the server had already
+declined.
 
 ## Runtime capability window
 
@@ -422,10 +501,48 @@ o2b mcp --vault /path/to/vault --allow-tool brain_context --allow-tool brain_fee
 o2b mcp --vault /path/to/vault --max-tools 12
 ```
 
-`second_brain_capabilities` returns `scope`, `server_name`, static and available
-tool counts, an `available[]` list, and a `withheld[]` list. Withheld reasons
-are stable strings such as `disabled by runtime capability window`, `not allowed
-by runtime capability window`, and `outside runtime capability max tool window`.
+`second_brain_capabilities` returns `scope`, `server_name`,
+`static_tool_count`, `available_tool_count`, `advertised_tool_count`,
+`host_ceiling`, an `available[]` list, and a `withheld[]` list. Withheld
+reasons are stable strings such as `disabled by runtime capability window`,
+`not allowed by runtime capability window`, and `outside runtime capability
+max tool window`.
+
+`advertised_tool_count` is the number a host actually LISTS: available minus
+the tools marked hidden, which `tools/list` filters out. Under the `catalog`
+surface the two numbers are a hundred and three apart, and it is the
+advertised one a host's ceiling applies to.
+
+### The host ceiling (since v1.50.0)
+
+`host_ceiling` reports what this build can say about the per-workspace tool
+limit of the runtime that launched the server, and it is present on every
+report — especially when the answer is "nobody has established one". A host
+that caps a workspace at forty tools and is handed a hundred and ten drops
+the excess in silence, so omitting the field where no limit is known would
+be indistinguishable from a host with no limit at all.
+
+| Field | Meaning |
+| --- | --- |
+| `target` | the install target from `--host-target`; `null` when the server was never told |
+| `kind` | `declared`, `unbounded`, or `unknown` — three states, and `unknown` is never read as `unbounded` |
+| `max_tools` | the published limit; `null` unless `kind` is `declared` |
+| `source` | where the limit, or the published absence of one, is stated; `null` when `kind` is `unknown` |
+| `reason` | why there is no answer; `null` unless `kind` is `unknown` |
+| `within_ceiling` | `advertised_tool_count` against `max_tools`; `null` when there is no number to compare |
+
+A server started by hand, or by a registration written before
+`--host-target` existed, reports `kind: "unknown"` with a reason naming the
+flag and the `o2b install --target <runtime> --apply` that regenerates a
+registration carrying it. That is an UNCHECKED ceiling, not an absent one.
+
+Today exactly one runtime declares a limit — Cursor, 40 tools across every
+enabled MCP server — which is why the generated Cursor registration selects
+the `catalog` profile. No runtime is `unbounded`; the member exists so a
+host that publishes "no limit" is not recorded as unchecked. The full
+resolution ladder for the profile that ends up in a registration is
+documented under "Tool ceilings, `--host-target`, and the tool-profile
+ladder" in [`cli-reference.md`](cli-reference.md).
 
 ## Tool-surface profiles and the two-pass catalog (since v0.37.0)
 
