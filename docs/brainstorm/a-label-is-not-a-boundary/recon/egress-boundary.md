@@ -280,7 +280,7 @@ exported 1 nodes to …/explorer.html
 $ grep -o '"nodes":\[[^]]*\]' explorer.html
 "nodes":[{"id":"pref-secret-leak","kind":"preference","topic":"secret-leak",
 "principle":"Always deploy with OPENAI_API_KEY=sk-proj-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234
- set from /home/developer/private-client-work", …}]
+ set from <operator-home>/private-client-work", …}]
 ```
 
 The identical principle through `bank-export` comes out as

@@ -284,3 +284,44 @@ and is declared in `src/core/egress/registry.ts`, with
 source so a new export path cannot ship undeclared. A payload the redactor
 could only partially scan refuses the write rather than producing a file that
 claims to be clean.
+
+The census derives that population under TWO rules, because a registry whose
+membership check is narrower than what it claims to enforce is a label with
+nothing behind it. The first rule finds FILE destinations - a destination
+parameter plus a raw file write - and it is how `o2b brain explorer --export`
+went undeclared: its destination flag was not in the list the rule keys on, so
+the site wrote an unredacted vault export past a registry built to prevent
+exactly that. The second rule finds NETWORK destinations - a module POSTing
+vault-derived bytes to an operator-configured URL - which the first rule
+cannot express at all. Under it the embedding endpoint
+(`src/core/search/embeddings/openai-compat.ts`) is declared with a reason
+stating plainly that chunk bodies leave unscanned. Both rules are proved by
+synthetic modules, so each fails the build until the site it finds is
+declared.
+
+Ownership is a boundary only where something writes it. With
+`integrity.owner_scope_delivery` on, every production preference writer stamps
+the server-resolved agent identity onto a NEW record; a rewrite never re-owns,
+so a page created before the gate stays shared rather than being retro-owned
+by whoever rewrote it first. With the gate off nothing is stamped and a vault
+that never opted in is byte-identical. On the read side a caller-supplied
+`agent_scope` naming another owner is REFUSED by name under the gate, never
+silently narrowed to the caller's own - a narrowing would leave the caller
+believing it had read what it asked for.
+
+The surfaces that take no `agent_scope` argument honour the same gate through
+the server-resolved identity. Fourteen of them - the backlink index, unlinked
+mentions, the MOC audit, the hygiene scan, the dangling-target listing, the
+doctor, the claim graph, idea discovery, the stale scan, the event trace, the
+agent diff, the timeline, the semantic-health report and the retention and
+review-candidate previews - aggregated their own rows and asked nothing, so
+under `fail` they returned another owner's artifact ids, paths, titles and body
+prose. Each now filters through `ownerScopeView`, which is an adapter over the
+one ownership rule rather than a second one. A withheld row is dropped and
+nothing counts it: `brain_hygiene`'s per-detector counts, `brain_claims`'
+`count` and the timeline's `total` are recomputed over the visible rows, so a
+filtered report is indistinguishable from a report over a vault that never held
+them. With the gate off every one of these is byte-identical, because the view
+short-circuits before it reads a file. The enforcement lives in
+`tests/mcp/agent-scope-matrix.test.ts`, where the unasserted buckets carry
+`{name, args, reason}` and every entry is driven against one two-owner fixture.

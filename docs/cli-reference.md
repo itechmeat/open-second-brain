@@ -1086,7 +1086,7 @@ Recall and ranking quality (v0.20.0), each tunable and bounded:
 | `search_cache_enabled`     | `OPEN_SECOND_BRAIN_SEARCH_CACHE_ENABLED`     | `false` | Opt-in persistent query cache, gated by corpus generation        |
 | `search_cache_ttl_seconds` | `OPEN_SECOND_BRAIN_SEARCH_CACHE_TTL`         | `300`   | Cache row time-to-live in seconds                                |
 | `search_chain_stop_enabled`| `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP`        | `false` | Opt-in cross-vault early termination once an origin answers confidently |
-| `search_chain_stop_score`  | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE`  | `0.8`   | Normalized `[0,1]` top-score threshold that triggers the chain-stop |
+| `search_chain_stop_score`  | `OPEN_SECOND_BRAIN_SEARCH_CHAIN_STOP_SCORE`  | `0.8`   | Match-quality `[0,1]` threshold that triggers the chain-stop: the share of the query's IDF mass an origin covered, not its top result score |
 
 `brain_context_pack` also accepts `max_chars_per_memory` and
 `max_total_chars` (code-point caps). Pass `--lanes` to keep the legacy flat

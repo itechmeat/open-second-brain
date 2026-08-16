@@ -171,7 +171,7 @@ flags for a narrower per-process full server.
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
 | `brain_search`              | Read-only vault search with optional structured query lanes, explicit focus hints, time ranges, evidence-pack diagnostics, and a selectable recall `profile` (`fast \| balanced \| thorough`). | `query`                                        |
 | `brain_recall_feedback`     | Record explicit up/down recall feedback for one search result; feeds the deterministic learned-weight fold.                                     | `query`, `result_path`, `verdict`              |
-| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores`, also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag over the gate-telemetry relevance scores plus the epistemic mix; thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
+| `brain_recall_gate`         | Read-only classifier for whether an automatic recall attempt should run; returns `retrieve` plus a stable reason. When the caller passes `scores` AND `match_quality` (the `idf_weighted_coverage` a search outcome reports - the two stand or fall together, and an incomplete pair is refused), also attaches an adequacy verdict (`sufficient` \| `weak` \| `insufficient`), a recommended action (`proceed` \| `re_recall` \| `abstain`), and an optional `escalate` flag. The LEVEL is decided by `match_quality` alone; the scores decide only the usable-result count. Thresholds via `recall_adequacy_sufficient` / `recall_adequacy_weak` / `recall_adequacy_min_results`.                              | `prompt`                                       |
 | `brain_context_pack`        | Budgeted context slice; pass `lanes: true` to return directives, constraints, and consider lanes. Filtered items include `safety.reasons`. Each item carries a structural `epistemic` status (`observed` \| `derived` \| `hypothesis` \| `plan` \| `unknown`) plus `evidence_refs` derived from existing graph metadata; fields are absent when the status is `unknown`.     | `max_tokens`                                   |
 | `brain_context_receipts`    | List or show opt-in prompt context receipt continuity records with budgets, hashes, source refs, safety/redaction metadata, and item IDs.      | `operation`                                    |
 | `brain_recall_telemetry`    | List or summarise opt-in recall telemetry records for search, context-pack, and pre-compress calls.                                            | `operation`                                    |
@@ -781,7 +781,14 @@ log line is machine-composed rather than authored.
   stable opaque store reference (`vault://<hash>`) instead of the absolute
   host path, because tool responses land in model context. Set
   `expose_host_paths: true` (or `OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS=true`)
-  to restore the raw path.
+  to restore the raw path. Until v1.49.0 only three sites honoured that
+  rule and every other `vault_path` returned the raw host path; the field
+  now comes from one function (`src/mcp/vault-path-field.ts`) at every
+  emitting site, and `tests/core/architecture/vault-path-census.test.ts`
+  enumerates those sites from the source so a new one cannot opt out. On
+  a device config that cannot be read the field carries
+  `{ "error": "..." }` naming the file, rather than falling back to the
+  path it exists to redact.
 - Since v1.32.0 `brain_feedback` responses include a conflict advisory when
   the incoming principle closely resembles a confirmed same-scope preference
   (the write still proceeds); the advisory names the preference id and the
@@ -870,6 +877,20 @@ log line is machine-composed rather than authored.
   `operator`, `today`) reject an explicit `agent_scope` with
   `INVALID_PARAMS` naming the view rather than accepting and ignoring it.
   The tool count is unchanged at 108 and no output schema changed.
+- Since v1.49.0 the fourteen no-argument surfaces that reach owner-taggable
+  artifacts (`brain_backlinks`, `brain_unlinked_mentions`, `brain_moc_audit`,
+  `brain_hygiene`, `brain_scaffold_stub`, `brain_doctor`, `brain_claims`,
+  `brain_idea_discovery`, `brain_stale_scan`, `brain_event_trace`,
+  `brain_agent_diff`, `brain_analytics view=timeline`, `brain_health`,
+  `brain_retention`, `brain_review_candidates`) apply the ownership rule using
+  the server-resolved agent identity, and only under
+  `integrity.owner_scope_delivery: fail`. A withheld row is dropped and no
+  count reports it, so a filtered report reads exactly like a report over a
+  vault that never held the rows. With the gate `off` or `warn` these surfaces
+  are byte-identical. `brain_backlinks` additionally gains an `unparsed` key,
+  present only when the walk skipped an artifact it could not parse: a `count`
+  of 0 beside a non-empty `unparsed` is not a measurement, which is the
+  distinction a legacy-frontmatter vault previously could not make.
 - Since v1.39.0 `brain_context_receipts` accepts a third `summary`
   operation, plus `since`, `until`, and `max_receipts`. The summary folds
   existing receipt records for one session into counts, distinct items,
