@@ -1560,7 +1560,7 @@ var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
 import { homedir } from "node:os";
-import { dirname as dirname2, isAbsolute, join as join2, resolve } from "node:path";
+import { dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
 
 // src/core/fs-atomic.ts
 import {
@@ -1575,7 +1575,7 @@ import {
   unlinkSync,
   writeSync
 } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 function atomicWriteFileSync(target, contents, opts = {}) {
   if (opts.skipIfUnchanged && isUnchanged(target, contents))
     return false;
@@ -1833,7 +1833,7 @@ var VAULT_STORE_REF_PREFIX = "vault://";
 var VAULT_STORE_REF_HEX_LEN = 32;
 function vaultStoreReference(vaultPath, configPath) {
   const key = resolveInstallationSecret(configPath);
-  const digest = createHmac("sha256", key).update(resolve(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
+  const digest = createHmac("sha256", key).update(resolve2(vaultPath)).digest("hex").slice(0, VAULT_STORE_REF_HEX_LEN);
   return `${VAULT_STORE_REF_PREFIX}${digest}`;
 }
 function resolveConfigFlag(envKey, configKey, configPath) {
@@ -1889,7 +1889,7 @@ var SECRET_KEY_NAME_RE = new RegExp(`(?:${KEY_PATTERN}|${SECRET_KEY_NAME_FRAGMEN
 function isSecretKeyName(name) {
   return typeof name === "string" && SECRET_KEY_NAME_RE.test(name);
 }
-var ENV_RE = new RegExp(`\\b(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
+var ENV_RE = new RegExp(`(?<![A-Za-z0-9])(${KEY_PATTERN})(\\s*=\\s*)([^\\s\\r\\n]+)`, "gi");
 var COLON_VALUE_RE = new RegExp(`(?<!")\\b(${KEY_PATTERN})([ \\t]*:[ \\t]*)("[^"]*"|'[^']*'|[^\\r\\n]+)`, "gi");
 var YAML_SECRET_BLOCK_RE = new RegExp(`^([ \\t]*)(${KEY_PATTERN})[ \\t]*:[ \\t]*(?:[|>][+-]?\\d{0,2})?[ \\t]*\\r?\\n` + "(?:\\1[ \\t]+[^\\r\\n]*\\r?\\n?)+", "gim");
 var JSON_ENTRY_RE = new RegExp(`("(?:${KEY_PATTERN})"\\s*:\\s*)("(?:[^"\\\\]|\\\\.)*"|true|false|null|-?\\d+(?:\\.\\d+)?)`, "gi");
@@ -2081,14 +2081,20 @@ var VENDOR_TOKEN_TEST_RE = new RegExp(VENDOR_TOKEN_RE.source);
 function identifierCarriesSecret(value) {
   return VENDOR_TOKEN_TEST_RE.test(value);
 }
-function keyNameCarriesSecret(name) {
-  if (identifierCarriesSecret(name))
+function carriesBareCredential(value) {
+  if (identifierCarriesSecret(value))
     return true;
-  for (const match of name.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
+  for (const match of value.matchAll(HIGH_ENTROPY_TOKEN_RE)) {
     if (!isPreservedIdentifier(match[0]))
       return true;
   }
   return false;
+}
+function keyNameCarriesSecret(name) {
+  return carriesBareCredential(name);
+}
+function foreignIdentifierCarriesSecret(value) {
+  return carriesBareCredential(value);
 }
 var MAX_REPORTED_IDENTIFIERS = 12;
 function isPlainContainer(value) {
@@ -2111,7 +2117,8 @@ function redactStructured(input, opts = {}) {
       return PLACEHOLDER;
     }
     if (typeof value === "string" && (underIdentifierKey || isPathLikeValue(value))) {
-      if (identifierCarriesSecret(value))
+      const secretShaped = opts.foreignIdentifiers === true && underIdentifierKey ? foreignIdentifierCarriesSecret(value) : identifierCarriesSecret(value);
+      if (secretShaped)
         record(location);
       const cleaned = opts.redactInfra === true || opts.redactUrlCredentials === true ? redactUrlCredentials(value) : value;
       if (cleaned !== value)
@@ -2187,12 +2194,12 @@ var EGRESS_SITES = Object.freeze({
     redaction: R.sharedRedactor,
     reason: "the only export that carries page bodies VERBATIM, which is its interchange " + "contract and also why it is the widest leak by volume. The manifest is redacted " + "as a tree and `okf.json` re-serialised from it; the markdown files are redacted " + "as text. A bundle whose secrets were removed is no longer a lossless round-trip " + "of the vault, and the verb says so rather than implying otherwise. What it does NOT " + "do is filter by label: a page carrying `private: true` in its frontmatter exports in " + "full, because the `<private>` region marker is this product's only content-derived " + "privacy primitive and these composers are content composers, not visibility filters."
   },
-  "brain-preference-export": {
-    id: "brain-preference-export",
+  "brain-export": {
+    id: "brain-export",
     verb: "o2b brain export",
     module: "src/cli/brain/verbs/export.ts",
     redaction: R.sharedRedactor,
-    reason: "preference principles are free text an agent wrote, and the llms-txt form is " + "meant to be pasted into a foreign prompt - the destination least likely to be " + "read before it is shared."
+    reason: "preference principles are free text an agent wrote, and the llms-txt form is " + "meant to be pasted into a foreign prompt - the destination least likely to be " + "read before it is shared. One entry covers all three of the verb's formats " + "because the census keys on the MODULE and the destination is declared once, in " + "the verb: the JSON and transcript forms are redacted as TREES and serialised " + "afterwards, llms-txt as text. What proves each branch scans is a per-handler " + "check in the census, not the guard-call count - counting guards against " + "DESTINATIONS is an inequality, and this module declares one destination against " + "three guards, so a fourth handler that scanned nothing would satisfy it. The " + "transcript form is the widest of the three by far - whole recorded " + "conversations with whichever runtime wrote them, which is where a key pasted " + "into a prompt actually lives. Its records are guarded ONE AT A TIME, so a " + "single oversized turn cannot put a machine's whole corpus past the scan window, " + "and a refusal names the conversation rather than the run - by its basename, " + "except when the basename is itself the secret-shaped identifier, where it is " + "named by runtime and start instant instead. The transcript branch is also the " + "one caller that passes `foreignIdentifiers`, because its `session_id` and " + "`turn_id` were named by the harness that wrote the transcript rather than by " + "this vault, so the guard's vendor-prefix-only rule for identifiers - an " + "argument about ids this build constructs - does not cover them."
   },
   "config-export": {
     id: "config-export",
@@ -2308,7 +2315,7 @@ import { dirname as dirname4, join as join4 } from "node:path";
 
 // src/core/partner/codegraph.ts
 import { existsSync as existsSync2, readdirSync, realpathSync } from "node:fs";
-import { dirname as dirname3, join as join3, resolve as resolve2 } from "node:path";
+import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
 
 // src/core/partner/codegraph-health.ts
 var GRAPH_HEALTH_CODES = Object.freeze({
@@ -2408,7 +2415,7 @@ function findCodeProjects(opts) {
   const consider = (raw) => {
     if (scanned >= limit)
       return;
-    const path = resolve2(raw);
+    const path = resolve3(raw);
     if (seen.has(path))
       return;
     seen.add(path);
@@ -2419,7 +2426,7 @@ function findCodeProjects(opts) {
       found.push(path);
   };
   consider(opts.cwd);
-  const vaultParent = dirname3(resolve2(opts.vault));
+  const vaultParent = dirname3(resolve3(opts.vault));
   if (isDir(vaultParent)) {
     let entries = [];
     try {
@@ -2982,9 +2989,9 @@ function doctor(opts) {
 
 // src/core/identity-reminder.ts
 import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname5, resolve as resolve3 } from "node:path";
+import { dirname as dirname5, resolve as resolve4 } from "node:path";
 import { fileURLToPath } from "node:url";
-var TEMPLATE_PATH = resolve3(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
+var TEMPLATE_PATH = resolve4(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates", "identity-reminder.txt");
 var RUNTIME_TARGET = Object.freeze({
   hermes: "hermes",
   openclaw: "openclaw"
@@ -3010,8 +3017,8 @@ function loadReminderTemplate() {
     });
   }
 }
-var TEMPLATES_DIR = resolve3(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates");
-var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve3(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
+var TEMPLATES_DIR = resolve4(dirname5(fileURLToPath(import.meta.url)), "..", "..", "templates");
+var PER_TARGET_PATHS = Object.freeze(Object.fromEntries(KNOWN_RUNTIME_TARGETS.map((t) => [t, resolve4(TEMPLATES_DIR, `identity-reminder.${t}.txt`)])));
 var TEMPLATE_CACHE = new Map;
 function tryReadTargetTemplate(target) {
   const cached = TEMPLATE_CACHE.get(target);
@@ -3100,9 +3107,9 @@ function emitDegradationNotice(sink, input) {
 }
 
 // src/core/path-safety.ts
-import { dirname as dirname6, posix, relative, resolve as resolve4, sep } from "node:path";
+import { dirname as dirname6, posix, relative, resolve as resolve5, sep } from "node:path";
 function vaultRelative(target, vault) {
-  const rel = relative(resolve4(vault), resolve4(target));
+  const rel = relative(resolve5(vault), resolve5(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
