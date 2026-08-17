@@ -49,6 +49,27 @@ function defaultHandler(req: FakeRequest): FakeResponseSpec {
   return { status: 404, body: { error: "not_found" } };
 }
 
+/**
+ * Distinguishes one fake server from every other one this process starts.
+ *
+ * The port cannot do it. It is ephemeral, the operating system hands the
+ * same number back once a server closes, and a process-scoped registry
+ * keyed by endpoint URL then reads two unrelated test files as one
+ * endpoint - the embedding concurrency ceiling
+ * (`embeddings/provider-semaphore.ts`) is exactly that, and refuses by
+ * design when two configurations disagree about the limit for one
+ * endpoint. So a file embedding at concurrency 2 failed inside another
+ * file's ceiling of 1, at whatever rate the port came back around: green
+ * on nineteen runs and red on the twentieth, in a file that had nothing
+ * to do with the one that set the limit.
+ *
+ * A path segment costs nothing and makes each server what it already is -
+ * a distinct endpoint. Providers append their own suffix to this base
+ * (`/embeddings`, `/models/embed`), so handlers that match on the tail of
+ * the path are unaffected.
+ */
+let instances = 0;
+
 export async function startFakeHttp(): Promise<FakeHttp> {
   let handler: Handler = defaultHandler;
   let count = 0;
@@ -81,7 +102,7 @@ export async function startFakeHttp(): Promise<FakeHttp> {
     },
   });
 
-  const url = `http://127.0.0.1:${server.port}/v1`;
+  const url = `http://127.0.0.1:${server.port}/i${++instances}/v1`;
   return {
     url,
     close: () => server.stop(true) as unknown as Promise<void>,

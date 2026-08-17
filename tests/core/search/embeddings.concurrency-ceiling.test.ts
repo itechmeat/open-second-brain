@@ -375,3 +375,23 @@ describe("the ceiling spans the process", () => {
     expect(server.callCount()).toBe(FOUR_TEXTS.length * 2);
   });
 });
+
+test("a fake server that closed and one that replaced it are two endpoints", async () => {
+  // The registry above is process-scoped and keyed by endpoint URL, and an
+  // ephemeral port comes back around: the server that closes hands its
+  // number to the next one to ask. Two unrelated test files then meet
+  // inside one ceiling, and whichever configures `embedding_concurrency`
+  // second fails on a limit the other one set - which is how a run that
+  // touched neither embeddings nor this file went red in continuous
+  // integration, on a file whose subject is a text prefix.
+  //
+  // Sequential on purpose: two servers alive at once cannot share a port,
+  // so only start-close-start can catch the reuse.
+  const paths: string[] = [];
+  for (let i = 0; i < 3; i++) {
+    const server = await startFakeHttp();
+    paths.push(new URL(server.url).pathname);
+    await server.close();
+  }
+  expect(new Set(paths).size).toBe(paths.length);
+});
