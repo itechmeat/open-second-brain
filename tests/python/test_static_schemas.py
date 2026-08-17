@@ -65,15 +65,30 @@ class StaticSchemaIntegrityTests(unittest.TestCase):
         self.assertNotIn("__mutated__", second[0]["parameters"]["properties"])
 
 
-def _live_memory_tool_projection() -> list[dict]:
-    """Fetch tools/list from a live ``o2b mcp`` and project the curated subset."""
+def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
+    """Fetch tools/list from a live ``o2b mcp`` and project the curated subset.
+
+    The server is given ``vault`` explicitly. It refuses to start with no
+    vault configured - "no vault configured. Pass --vault ..." - so on a
+    machine with no Open Second Brain config the handshake sees EOF and the
+    caller skips. That is every continuous-integration runner, and it is why
+    this test has never actually run there: it passed on a developer machine
+    because that machine happened to have a vault, and skipped everywhere
+    else. A throwaway directory is enough - ``tools/list`` reads nothing.
+
+    ``diagnostics`` is an open file the server's standard error is written
+    to, so a skip can name why the server went away instead of discarding
+    it. A file rather than a pipe: nothing reads the pipe during the
+    handshake, and a server that filled it would block on the write.
+    """
     proc = subprocess.Popen(  # noqa: S603 - fixed argv, test-only
         ["o2b", "mcp"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=diagnostics,
         text=True,
         bufsize=1,
+        env={**os.environ, "VAULT_DIR": vault},
     )
     # Deadline for the whole handshake: if the server stays alive but never
     # answers, the timer kills it, readline() sees EOF, and the caller skips.
@@ -135,10 +150,20 @@ class AntiDriftTests(unittest.TestCase):
     def test_static_schemas_match_live_tools_list(self):
         if shutil.which("o2b") is None:
             self.skipTest("o2b CLI not on PATH; anti-drift needs the live server")
-        try:
-            live = _live_memory_tool_projection()
-        except (OSError, RuntimeError) as exc:
-            self.skipTest(f"live o2b mcp unavailable: {exc}")
+        with tempfile.TemporaryDirectory() as work:
+            vault = Path(work) / "vault"
+            vault.mkdir()
+            log = Path(work) / "mcp-stderr.log"
+            try:
+                with log.open("w", encoding="utf-8") as diagnostics:
+                    live = _live_memory_tool_projection(str(vault), diagnostics)
+            except (OSError, RuntimeError) as exc:
+                # The server's own last words, not just "EOF". A skip that
+                # cannot say why is what let this test sit out every CI run
+                # while reporting OK.
+                said = log.read_text(encoding="utf-8").strip().splitlines()
+                tail = said[-1] if said else "the server said nothing"
+                self.skipTest(f"live o2b mcp unavailable: {exc}: {tail}")
         live_by_name = {t["name"]: t for t in live}
         self.assertEqual(set(live_by_name), set(MEMORY_TOOLS), "curated tool missing from live tools/list")
         for schema in STATIC_TOOL_SCHEMAS:
