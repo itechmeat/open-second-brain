@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.1] - 2026-08-17
+
+The Hermes dashboard could not save this provider's configuration, and reported the failure in the one way an operator cannot act on: a provider that was fully configured showed as needing setup, and every attempt to configure it from the panel returned HTTP 400. Reported as [#170](https://github.com/itechmeat/open-second-brain/issues/170) with the root cause already traced to where the two sides look for the same values. Two unrelated repairs ride along, both surfaced by running the suite on a later day than the one it was written on: a test pinned to a date literal, and the build step that was meant to notice the vendored-schema test skipping.
+
+### Fixed
+
+- **A configured Hermes memory provider is no longer reported as needing setup.** This provider keeps its configuration in the canonical Open Second Brain file, outside `$HERMES_HOME`, because the bridge spawns `o2b mcp` and that is where `o2b` reads it. The host looks for provider state in three locations it owns, finds nothing for this provider, and concludes it is unconfigured - permanently, since a save writes the file the host still cannot read and the save handler then re-derives readiness through the same blind path and refuses its own write. The two readback hooks the host does consult now report the resolved values: the schema field's `default`, which is the documented way a provider reports a value it holds, and `get_status_config`, which is what `hermes memory status` prints. Measured against a live hermes-agent with nothing written under `$HERMES_HOME`: `configured: false, status: needs_config` before, `configured: true, status: ready` after, with the vault, agent name and timezone rendered in the panel.
+- **`hermes memory status` prints the configuration that is in force.** It was passing the provider its own `memory.<name>` block, which nothing writes for this provider by design, and printing the empty result.
+- **A test that could only pass on the day it was written.** The session-discovery byte-identity test pinned the signal filename and the two daily log names to a date literal, and all three are stamped from the wall clock, so the suite went red the next morning - on the one test whose job is to catch a redaction difference between the discovered and the explicit import path. The date is derived from the clock now.
+- **The anti-drift guard caught one of its two skips.** The build step added in 1.50.0 to stop the vendored-schema test from silently skipping matched one skip message. That test also skips when the command-line entry point is on PATH but its server does not come up, and that skip read as a pass. Any skip of it fails the build now, verified against all three states: running, skipped for a missing CLI, and skipped for a server that would not start.
+
+### Notes
+
+- No copy of the configuration is written anywhere. Mirroring the values into the host's own store is the workaround in the report and it works, but it leaves two stores that can disagree about which vault is in force, and only one of them is the one `o2b` reads.
+- The value reported is the effective one, not the config file's line, because readiness has to mean what the bridge will actually use: a vault supplied by `VAULT_DIR`, a project pointer or an active profile is a configured provider.
+- One thing the fix does not buy: clearing a field from the dashboard. The host coerces an empty submission back to the reported default before the provider sees it, so a cleared field keeps its value. `hermes memory setup` and editing the config file still unset one.
+
 ## [1.50.0] - 2026-08-16
 
 Nine tracker items, picked off the board by priority and read against the real source before anything was designed, turned out to be one question seen from nine sides: what does Open Second Brain know about the machine it is installed on, where is that knowledge declared, and what proves it is true. Three of the nine were not missing features. They were contracts already written into the type system with nothing behind them - `InstallAdapter.sessionPaths` with ten declarations and no caller, `ExportFormat` imported nowhere while the command inlined its two literals, and four maintenance task names that were not a vocabulary at all but two independent lists in two files, which is why the command line and the tool surface had drifted apart two releases running.
@@ -7259,6 +7276,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.50.1]: https://github.com/itechmeat/open-second-brain/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/itechmeat/open-second-brain/compare/v1.49.0...v1.50.0
 [1.49.0]: https://github.com/itechmeat/open-second-brain/compare/v1.48.0...v1.49.0
 [1.48.0]: https://github.com/itechmeat/open-second-brain/compare/v1.47.0...v1.48.0
