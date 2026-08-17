@@ -7,7 +7,7 @@ existing ``brain_*`` MCP tools. No deterministic memory logic lives here.
 Required surface (this module): ``name``, ``is_available``, ``initialize``,
 ``get_tool_schemas``, ``handle_tool_call``, ``get_config_schema``,
 ``save_config``. Lifecycle hooks (prefetch, sync_turn, on_pre_compress, ...)
-are added alongside.
+and the optional readback hook ``get_status_config`` are added alongside.
 """
 
 from __future__ import annotations
@@ -97,6 +97,46 @@ _CONFIG_FIELDS: tuple[_ConfigField, ...] = (
 )
 
 _CONFIG_KEYS: tuple[str, ...] = tuple(field.key for field in _CONFIG_FIELDS)
+
+
+def _resolved_config_values() -> dict[str, str]:
+    """Every config field's effective value, keyed as the wizard names it.
+
+    This provider stores its config in the canonical Open Second Brain file
+    (see :meth:`OpenSecondBrainMemoryProvider.save_config`), which is outside
+    ``hermes_home``. The host cannot read that file: it looks for provider
+    state in ``$HERMES_HOME/<name>.json``, ``$HERMES_HOME/<name>/config.json``
+    and the ``memory.<name>`` block of its own config, finds nothing for this
+    provider, and concludes the provider is unconfigured - permanently, since
+    a save writes the native file the host still cannot read. The dashboard
+    then refuses its own save with "not ready (needs config)".
+
+    The host's documented way for a provider to report a value it holds is the
+    schema field's ``default``, so this is what the two readback hooks -
+    :meth:`OpenSecondBrainMemoryProvider.get_config_schema` and
+    :meth:`OpenSecondBrainMemoryProvider.get_status_config` - report. No copy
+    of the config is written anywhere: one store stays the truth, and the host
+    is told what is in it rather than being asked to find it.
+
+    The EFFECTIVE value is reported, not the config file's line, because that
+    is what readiness means here - ``o2b mcp`` runs against the same
+    resolution chain, so a vault supplied by ``VAULT_DIR`` or a project
+    pointer is a configured provider.
+
+    A field whose config cannot be read contributes nothing: it renders as
+    unset, and the unreadable file is named by :meth:`is_available`, which
+    refuses instead of reporting the provider as merely unconfigured.
+    """
+    resolved: dict[str, str] = {}
+    for field in _CONFIG_FIELDS:
+        try:
+            value = field.resolve()
+        except config.ConfigReadError:
+            continue
+        if value:
+            resolved[field.key] = value
+    return resolved
+
 
 # Durable per-session transcript written under ``hermes_home``.
 SESSION_TRANSCRIPT_FILENAME = "session-transcript.jsonl"
@@ -403,18 +443,50 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         return self._as_tool_content(self._bridge.call_tool(tool_name, args or {}))
 
     def get_config_schema(self) -> list[dict[str, Any]]:
-        """The wizard's field list, derived from :data:`_CONFIG_FIELDS`."""
+        """The wizard's field list, derived from :data:`_CONFIG_FIELDS`.
+
+        Each field carries the value this provider currently resolves as its
+        ``default``, which is how a host that cannot read the native store
+        learns the provider is configured; :func:`_resolved_config_values`
+        explains what that closes. The wizard and the dashboard both render a
+        default as the field's current value, so a re-run pre-fills what is in
+        force rather than asking for it again.
+        """
+        current = _resolved_config_values()
         return [
-            {"key": field.key, "description": field.description, "required": field.required}
+            {
+                "key": field.key,
+                "description": field.description,
+                "required": field.required,
+                "default": current.get(field.key, ""),
+            }
             for field in _CONFIG_FIELDS
         ]
+
+    def get_status_config(self, provider_config: dict[str, Any]) -> dict[str, Any]:
+        """What ``hermes memory status`` prints under ``<name> config:``.
+
+        The host passes its own ``memory.<name>`` block, which is empty for
+        this provider by design - nothing writes it, and duplicating the vault
+        path there is exactly what step 4 of ``install/hermes.md`` promises not
+        to do. Reporting it verbatim printed an empty block for a provider that
+        was fully configured, so the resolved values are reported instead,
+        alongside the file they come from: the confusion this closes is an
+        operator looking for provider state in the Hermes config.
+        """
+        del provider_config  # the host's own store holds nothing for us
+        status: dict[str, Any] = dict(_resolved_config_values())
+        status["config_file"] = str(config.config_path())
+        return status
 
     def save_config(self, values: dict[str, Any], hermes_home: str) -> None:
         """Persist non-secret config to the canonical Open Second Brain config.
 
         The bridge spawns ``o2b mcp``, which resolves the vault from this same
         file, so the provider's config must land here rather than under
-        ``hermes_home`` (which scopes only provider-local state).
+        ``hermes_home`` (which scopes only provider-local state). The host
+        reads none of it back; :func:`_resolved_config_values` is how it is
+        told what this file holds.
 
         Three rules, each replacing a way this used to lie about what it did:
 

@@ -71,6 +71,14 @@ the vault, agent name, and timezone from the Open Second Brain config
 written in step 3 (`~/.config/open-second-brain/config.yaml`), so no
 vault path is duplicated in the Hermes config.
 
+The dashboard's Memory Provider panel reads those same three values
+back from the provider, so a vault configured in step 3 shows there as
+already set and the panel reports the provider as ready. Saving from
+the panel writes the Open Second Brain config, not the Hermes one.
+Clearing a field is the one edit the panel cannot make - the host
+resubmits the current value in place of an empty one - so unset a key
+with `hermes memory setup` or by editing the config file.
+
 ### Activation lifecycle
 
 Hermes activates memory providers through the `memory.provider` config

@@ -50,9 +50,21 @@ from plugins.hermes.provider import (  # noqa: E402
 )
 from plugins.hermes.cli import register_cli  # noqa: E402
 
+# Every environment variable that can shadow a config field, named by the
+# module that reads it. A test class that clears one of these and not the
+# others passes or fails on the developer's shell; the tuple was copied into
+# five classes and had already drifted from the resolvers - `VAULT_TIMEZONE`
+# was in none of them.
+_CONFIG_ENV_KEYS = (
+    cfg.AGENT_NAME_ENV,
+    cfg.VAULT_DIR_ENV,
+    cfg.TIMEZONE_ENV,
+    cfg.CONFIG_PATH_ENV,
+)
+
 
 class ConfigHelperTests(unittest.TestCase):
-    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+    _ENV_KEYS = _CONFIG_ENV_KEYS
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
@@ -162,7 +174,7 @@ class FallbackBaseTests(unittest.TestCase):
 
 
 class ProviderRequiredSurfaceTests(unittest.TestCase):
-    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+    _ENV_KEYS = _CONFIG_ENV_KEYS
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
@@ -346,6 +358,86 @@ class ProviderRequiredSurfaceTests(unittest.TestCase):
         schema_keys = tuple(field["key"] for field in provider.get_config_schema())
         self.assertEqual(schema_keys, provider_module._CONFIG_KEYS)
 
+    @staticmethod
+    def _host_reads_as_configured(schema):
+        """The host's readiness rule, transcribed from hermes-agent.
+
+        ``_memory_provider_is_configured`` -> ``_field_is_set`` ->
+        ``_field_value`` in ``hermes_cli/web_server.py``: the host has no store
+        of its own for this provider, so the ``data`` it consults is empty and
+        every value it sees is the schema field's ``default``. Transcribed
+        rather than imported because hermes-agent is not a dependency of this
+        repository and CI has no Hermes install.
+        """
+        required = [field for field in schema if field.get("required")]
+        return all(str(field.get("default", "")) != "" for field in required)
+
+    def test_get_config_schema_reports_the_resolved_values_as_defaults(self):
+        # The host renders a field's `default` as its current value AND keys
+        # "is this provider configured" on the same value. With no default, a
+        # provider configured entirely in its own store read as needing setup,
+        # and the dashboard refused its own save with HTTP 400 forever.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text(
+                'vault: "/v"\nagent_name: "a"\ntimezone: "Etc/UTC"\n', encoding="utf-8"
+            )
+            os.environ[cfg.CONFIG_PATH_ENV] = str(cfg_path)
+            schema = self._provider(FakeBrainBridge()).get_config_schema()
+        defaults = {field["key"]: field["default"] for field in schema}
+        self.assertEqual(
+            defaults, {"vault": "/v", "agent_name": "a", "timezone": "Etc/UTC"}
+        )
+        self.assertTrue(self._host_reads_as_configured(schema))
+
+    def test_get_config_schema_default_is_the_effective_value_not_the_file_line(self):
+        # Readiness must mean what `o2b mcp` will actually use: the bridge
+        # resolves through the same chain, so a vault supplied by the
+        # environment is a configured provider and the file's line is not.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/from-file"\n', encoding="utf-8")
+            os.environ[cfg.CONFIG_PATH_ENV] = str(cfg_path)
+            os.environ[cfg.VAULT_DIR_ENV] = "/from-env"
+            schema = self._provider(FakeBrainBridge()).get_config_schema()
+        defaults = {field["key"]: field["default"] for field in schema}
+        self.assertEqual(defaults["vault"], "/from-env")
+
+    def test_get_config_schema_reports_no_default_when_the_config_is_unreadable(self):
+        # Two ways this could lie, both refused: inventing a value for a file
+        # nothing could read, and raising - the host catches a failing schema
+        # call, renders NO fields, and a provider with no required field reads
+        # as configured. `is_available()` is what names the broken file.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_dir = Path(tmp) / "config.yaml"
+            cfg_dir.mkdir()
+            os.environ[cfg.CONFIG_PATH_ENV] = str(cfg_dir)
+            schema = self._provider(FakeBrainBridge()).get_config_schema()
+        self.assertEqual(
+            tuple(field["key"] for field in schema), provider_module._CONFIG_KEYS
+        )
+        self.assertEqual([field["default"] for field in schema], ["", "", ""])
+        self.assertFalse(self._host_reads_as_configured(schema))
+
+    def test_get_status_config_reports_the_native_store_not_the_hermes_block(self):
+        # `hermes memory status` passes its own `memory.<name>` block, which
+        # nothing writes for this provider. Printing it verbatim showed an
+        # empty config block for a fully configured provider - and a stale one
+        # for anybody who had pasted the values in there by hand.
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg_path = Path(tmp) / "config.yaml"
+            cfg_path.write_text('vault: "/v"\nagent_name: "a"\n', encoding="utf-8")
+            os.environ[cfg.CONFIG_PATH_ENV] = str(cfg_path)
+            status = self._provider(FakeBrainBridge()).get_status_config(
+                {"vault": "/stale"}
+            )
+            self.assertEqual(status["config_file"], str(cfg_path))
+        self.assertEqual(status["vault"], "/v")
+        self.assertEqual(status["agent_name"], "a")
+        # An unset optional key is absent, not an empty string that reads as
+        # a configured-and-blank timezone.
+        self.assertNotIn("timezone", status)
+
     def test_is_available_refuses_rather_than_reporting_unconfigured(self):
         # The reported symptom: a config that cannot be read looked exactly
         # like a plugin nobody had set up.
@@ -491,7 +583,7 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
 
 
 class CliTests(unittest.TestCase):
-    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+    _ENV_KEYS = _CONFIG_ENV_KEYS
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
@@ -578,7 +670,7 @@ class _RaisingBridge(FakeBrainBridge):
 
 
 class ProviderLifecycleTests(unittest.TestCase):
-    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+    _ENV_KEYS = _CONFIG_ENV_KEYS
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
@@ -827,7 +919,7 @@ class InPlaceCompactionLifecycleTests(unittest.TestCase):
     clobber), and make no assumption that the session id rotates.
     """
 
-    _ENV_KEYS = ("VAULT_AGENT_NAME", "VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG")
+    _ENV_KEYS = _CONFIG_ENV_KEYS
 
     def setUp(self):
         self._saved = {k: os.environ.pop(k, None) for k in self._ENV_KEYS}
