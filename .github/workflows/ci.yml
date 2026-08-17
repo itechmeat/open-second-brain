@@ -97,8 +97,14 @@ jobs:
           python -m unittest test_static_schemas -v 2>&1 \
             | tee /tmp/anti-drift.log
           grep -q "test_static_schemas_match_live_tools_list" /tmp/anti-drift.log
-          if grep -q "anti-drift needs the live server" /tmp/anti-drift.log; then
-            echo "anti-drift skipped itself; o2b was not reachable on PATH" >&2
+          # ANY skip of that test, not one message. It skips for two reasons -
+          # no CLI on PATH, and a CLI that is there but whose server does not
+          # come up - and matching the first message alone left the second
+          # reading as a pass, which is the hole this step exists to close.
+          if grep -qE 'test_static_schemas_match_live_tools_list.* \.\.\. skipped' \
+            /tmp/anti-drift.log; then
+            grep -E ' \.\.\. skipped' /tmp/anti-drift.log >&2
+            echo "anti-drift skipped itself; the live server was not reachable" >&2
             exit 1
           fi
         working-directory: tests/python
