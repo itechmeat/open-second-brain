@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.2] - 2026-08-20
+
+Hermes asked Open Second Brain for a token-bounded context pack before each substantive turn, then read only the MCP transport text. The transport deliberately replaces a large result with a 2,000-character preview envelope, even though the complete structured context pack is present beside it, so the provider injected transport metadata instead of the recalled memory bodies.
+
+### Fixed
+
+- **Hermes per-turn recall now uses the structured, token-budgeted context pack.** The provider joins non-empty `structuredContent.items[*].body` values and bypasses the `preview_truncated` transport envelope. The existing 1,024-token context-pack ceiling is unchanged, and text-only older servers retain their existing fallback.
+- **The transport-boundary regression has a test that fails on the old path.** The fixture returns both structured memory bodies and the exact preview-envelope shape; it requires both bodies to reach the prompt and every envelope marker to stay out.
+
 ## [1.50.1] - 2026-08-17
 
 The Hermes dashboard could not save this provider's configuration, and reported the failure in the one way an operator cannot act on: a provider that was fully configured showed as needing setup, and every attempt to configure it from the panel returned HTTP 400. Reported as [#170](https://github.com/itechmeat/open-second-brain/issues/170) with the root cause already traced to where the two sides look for the same values. Two unrelated repairs ride along, both surfaced by running the suite on a later day than the one it was written on: a test pinned to a date literal, and the build step that was meant to notice the vendored-schema test skipping.
@@ -7277,6 +7286,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.50.2]: https://github.com/itechmeat/open-second-brain/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/itechmeat/open-second-brain/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/itechmeat/open-second-brain/compare/v1.49.0...v1.50.0
 [1.49.0]: https://github.com/itechmeat/open-second-brain/compare/v1.48.0...v1.49.0

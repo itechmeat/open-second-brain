@@ -561,7 +561,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
         if gate.get("retrieve"):
             pack = self._safe_call("brain_context_pack", {"max_tokens": _PREFETCH_MAX_TOKENS})
-            recalled = self._text(pack)
+            recalled = self._context_pack_text(pack)
             if recalled:
                 parts.append(recalled)
         # Skill auto-attach (Agent Surface Suite): the TS side gates on the
@@ -716,6 +716,24 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             if isinstance(first, dict) and isinstance(first.get("text"), str):
                 return first["text"]
         return ""
+
+    @staticmethod
+    def _context_pack_text(result: Any) -> str:
+        """Recall text from ``brain_context_pack``: prefer structured bodies.
+
+        Structured item bodies are the budgeted recall payload; using them also
+        bypasses the MCP transport's preview envelope. Fall back to
+        ``content[0].text`` for older servers that only expose legacy text.
+        """
+        structured = OpenSecondBrainMemoryProvider._structured(result)
+        bodies = [
+            str(item.get("body"))
+            for item in (structured.get("items") or [])
+            if isinstance(item, dict) and str(item.get("body") or "").strip()
+        ]
+        if bodies:
+            return "\n\n".join(bodies)
+        return OpenSecondBrainMemoryProvider._text(result)
 
     def _append_turn(self, user: str, assistant: str, session_id: str) -> None:
         with self._lock:

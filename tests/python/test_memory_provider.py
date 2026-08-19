@@ -706,6 +706,47 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
+    def test_prefetch_uses_structured_items_bodies_and_skips_preview_envelope(self):
+        # Regression: when brain_context_pack returns both structuredContent
+        # items[*].body AND a content[0].text envelope carrying the
+        # preview-truncation marker (preview_truncated + artifact_id +
+        # bytes_preview), prefetch must assemble recall from the structured
+        # bodies — the envelope is a transport artefact, not recall text.
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        preview_text = json.dumps(
+            {
+                "preview_truncated": True,
+                "artifact_id": "art-deadbeef",
+                "full_chars": 44261,
+                "bytes_preview": "...truncated...",
+            }
+        )
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "items": [
+                            {"title": "note-a", "body": "BODY ALPHA from item A"},
+                            {"title": "note-b", "body": "BODY BETA from item B"},
+                        ]
+                    },
+                    "content": [{"type": "text", "text": preview_text}],
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("any query", session_id="sess-1")
+
+        # Both structured bodies must reach the prefetch output.
+        self.assertIn("BODY ALPHA from item A", out)
+        self.assertIn("BODY BETA from item B", out)
+        # The MCP preview envelope must NOT leak into the prompt.
+        self.assertNotIn("preview_truncated", out)
+        self.assertNotIn("artifact_id", out)
+        self.assertNotIn("bytes_preview", out)
+        self.assertNotIn("art-deadbeef", out)
+
     def test_prefetch_appends_skills_attach_block_when_enabled(self):
         os.environ["VAULT_AGENT_NAME"] = "pf-agent"
         bridge = FakeBrainBridge(
