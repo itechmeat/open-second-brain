@@ -464,6 +464,15 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         # path must fail here rather than read as a clean run.
         self.assertEqual(exercised, self._PROVIDER_BUILT)
 
+    def test_prefetch_passes_query_to_context_pack(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            calls = self._drive_lifecycle(tmp)
+        packs = [args for name, args in calls if name == "brain_context_pack"]
+        self.assertEqual(
+            packs,
+            [{"max_tokens": 1024, "query": "what did we decide"}],
+        )
+
     def test_the_flush_payload_carries_both_turn_bounds_as_strings(self):
         with tempfile.TemporaryDirectory() as tmp:
             calls = self._drive_lifecycle(tmp)

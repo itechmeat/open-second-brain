@@ -560,7 +560,10 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         parts: list[str] = []
         gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
         if gate.get("retrieve"):
-            pack = self._safe_call("brain_context_pack", {"max_tokens": _PREFETCH_MAX_TOKENS})
+            pack = self._safe_call(
+                "brain_context_pack",
+                {"max_tokens": _PREFETCH_MAX_TOKENS, "query": query},
+            )
             recalled = self._text(pack)
             if recalled:
                 parts.append(recalled)
