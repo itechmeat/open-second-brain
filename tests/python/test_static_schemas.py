@@ -405,7 +405,7 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         {
             "brain_context",
             "brain_recall_gate",
-            "brain_context_pack",
+            "brain_search",
             "brain_pre_compact_extract",
         }
     )
@@ -426,7 +426,11 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
             results={
                 "brain_context": {"structuredContent": {"content": "ACTIVE PREFS"}},
                 "brain_recall_gate": {"structuredContent": {"retrieve": True}},
-                "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+                "brain_search": {
+                    "structuredContent": {
+                        "cards": [{"path": "Brain/preferences/pref-test.md", "snippet": "RECALLED"}]
+                    }
+                },
                 "brain_pre_compact_extract": {"structuredContent": {}},
             }
         )
@@ -464,13 +468,21 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
         # path must fail here rather than read as a clean run.
         self.assertEqual(exercised, self._PROVIDER_BUILT)
 
-    def test_prefetch_passes_query_to_context_pack(self):
+    def test_prefetch_passes_query_to_semantic_search(self):
         with tempfile.TemporaryDirectory() as tmp:
             calls = self._drive_lifecycle(tmp)
-        packs = [args for name, args in calls if name == "brain_context_pack"]
+        searches = [args for name, args in calls if name == "brain_search"]
         self.assertEqual(
-            packs,
-            [{"max_tokens": 1024, "query": "what did we decide"}],
+            searches,
+            [
+                {
+                    "query": "what did we decide",
+                    "limit": 5,
+                    "disclosure": "cards",
+                    "profile": "thorough",
+                    "record_access": False,
+                }
+            ],
         )
 
     def test_the_flush_payload_carries_both_turn_bounds_as_strings(self):

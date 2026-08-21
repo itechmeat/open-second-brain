@@ -698,7 +698,11 @@ class ProviderLifecycleTests(unittest.TestCase):
         bridge = FakeBrainBridge(
             results={
                 "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
-                "brain_context_pack": {"content": [{"type": "text", "text": "RECALLED"}]},
+                "brain_search": {
+                    "structuredContent": {
+                        "cards": [{"path": "Brain/preferences/pref-test.md", "snippet": "RECALLED"}]
+                    }
+                },
             }
         )
         provider = self._init(bridge, hermes_home="/tmp/hh")
