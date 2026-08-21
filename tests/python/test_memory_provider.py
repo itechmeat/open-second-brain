@@ -708,6 +708,7 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider = self._init(bridge, hermes_home="/tmp/hh")
         out = provider.prefetch("what did we decide", session_id="sess-1")
         self.assertIn("RECALLED", out)
+        self.assertEqual(out.count("Brain/preferences/pref-test.md"), 1)
         self.assertIn("@pf-agent", out)
 
     def test_prefetch_appends_skills_attach_block_when_enabled(self):

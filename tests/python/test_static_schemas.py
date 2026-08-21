@@ -477,11 +477,19 @@ class ProviderPayloadConformanceTests(unittest.TestCase):
             [
                 {
                     "query": "what did we decide",
+                    "limit": 3,
+                    "disclosure": "cards",
+                    "profile": "thorough",
+                    "properties": {"kind": ["brain-preference"]},
+                    "record_access": False,
+                },
+                {
+                    "query": "what did we decide",
                     "limit": 5,
                     "disclosure": "cards",
                     "profile": "thorough",
                     "record_access": False,
-                }
+                },
             ],
         )
 

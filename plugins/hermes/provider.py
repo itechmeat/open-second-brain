@@ -560,19 +560,34 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         parts: list[str] = []
         gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
         if gate.get("retrieve"):
-            search = self._structured(
-                self._safe_call(
-                    "brain_search",
-                    {
-                        "query": query,
-                        "limit": 5,
-                        "disclosure": "cards",
-                        "profile": "thorough",
-                        "record_access": False,
-                    },
-                )
-            )
-            recalled = self._search_text(search)
+            search_results = [
+                self._structured(
+                    self._safe_call(
+                        "brain_search",
+                        {
+                            "query": query,
+                            "limit": 3,
+                            "disclosure": "cards",
+                            "profile": "thorough",
+                            "properties": {"kind": ["brain-preference"]},
+                            "record_access": False,
+                        },
+                    )
+                ),
+                self._structured(
+                    self._safe_call(
+                        "brain_search",
+                        {
+                            "query": query,
+                            "limit": 5,
+                            "disclosure": "cards",
+                            "profile": "thorough",
+                            "record_access": False,
+                        },
+                    )
+                ),
+            ]
+            recalled = self._search_text(search_results)
             if recalled:
                 parts.append(recalled)
         # Skill auto-attach (Agent Surface Suite): the TS side gates on the
@@ -729,27 +744,36 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         return ""
 
     @staticmethod
-    def _search_text(result: dict[str, Any]) -> str:
-        """Format semantic search cards without expanding the prefetch budget.
+    def _search_text(results: Iterable[dict[str, Any]]) -> str:
+        """Format two semantic search lanes without expanding the prefetch budget.
 
         ``brain_context_pack.query`` is a literal substring filter on topic and
         principle, while Hermes supplies a natural-language turn prompt. Use
-        O2B's semantic ``brain_search`` surface instead and keep only bounded
-        cards so the recall block remains a hint, not a second prompt.
+        O2B's semantic ``brain_search`` surface instead. The preference-filtered
+        lane comes first because active rules are the highest-value recall for
+        the provider; paths are deduplicated before the bounded output is built.
         """
-        rows = result.get("results") or result.get("cards")
-        if not isinstance(rows, list):
-            return ""
         blocks: list[str] = []
-        for row in rows:
-            if not isinstance(row, dict):
+        seen_paths: set[str] = set()
+        for result in results:
+            rows = result.get("results") or result.get("cards")
+            if not isinstance(rows, list):
                 continue
-            path = row.get("path")
-            text = row.get("content") or row.get("snippet")
-            if not isinstance(text, str) or not text.strip():
-                continue
-            prefix = f"[{path}]\n" if isinstance(path, str) and path else ""
-            blocks.append(prefix + text.strip())
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                path = row.get("path")
+                text = row.get("content") or row.get("snippet")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if isinstance(path, str) and path:
+                    if path in seen_paths:
+                        continue
+                    seen_paths.add(path)
+                    prefix = f"[{path}]\n"
+                else:
+                    prefix = ""
+                blocks.append(prefix + text.strip())
         # Cards are already bounded by the server; this final cap preserves the
         # provider's historical ~1024-token prefetch ceiling if that envelope
         # grows in a future O2B release.
