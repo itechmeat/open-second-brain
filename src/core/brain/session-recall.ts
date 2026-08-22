@@ -307,6 +307,27 @@ function lineageDescription(
   return { lineage_root: rootId, segments: Object.freeze(segments) };
 }
 
+/**
+ * Every raw turn one imported session holds, in record order.
+ *
+ * `describeSessionRecall` counts them and `expandSessionRecall` pages
+ * them from one node outward; neither hands a caller the turns of a
+ * session as a list, which is what a batch lane reading an
+ * already-imported transcript needs. An unknown session id returns an
+ * empty array - "this session has no imported turns" is a fact about the
+ * vault, and the caller decides whether it is a refusal.
+ */
+export function listSessionRawTurns(
+  vault: string,
+  sessionId: string,
+): ReadonlyArray<ExpandedRawTurn> {
+  return Object.freeze(
+    sessionRecallRecords(vault, sessionId)
+      .filter((record) => record.kind === "session_turn")
+      .map(expandedRawTurn),
+  );
+}
+
 export function expandSessionRecall(
   vault: string,
   input: ExpandSessionRecallInput,

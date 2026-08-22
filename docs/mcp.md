@@ -1189,3 +1189,16 @@ log line is machine-composed rather than authored.
   value is `INVALID_PARAMS` naming the accepted set. Records predating the
   field carry no channel and fall into no bucket - see
   [`observability.md`](observability.md).
+- Since v1.51.0 `brain_extract_signals` joins the surface (111 total): the
+  batch counterpart to the regex fact extractor. Called with a `session`
+  alone it is read-only and returns that session's imported USER turns plus
+  exactly one needs-llm-step envelope; called with `items` it validates the
+  mined signals - structurally, then against a per-session cap and a
+  per-item confidence floor - and writes the accepted ones into
+  `Brain/inbox/` as `source_type: auto_extract` signals, subject to the
+  durability denylist and to `Brain/pending/` staging when write approval is
+  on. `auto_extract` is a new member of the closed `source_type` vocabulary,
+  distinct from `extracted` (regex) forever, because their trust profiles
+  differ; a reader from an older build refuses a file carrying it rather
+  than misreading it. A payload over the cap or below the floor is refused
+  whole, naming the limit and the offending value - nothing partial lands.

@@ -453,6 +453,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "diarize",
           "Subject profile: document set, stated-versus-evidenced gap, needs-LLM skeleton",
         ),
+        command(
+          "extract-signals",
+          "Mine taste signals from an imported session's user turns (two-phase, needs-LLM)",
+          [
+            flag("vault", "string"),
+            flag("agent", "string"),
+            flag("payload", "string"),
+            flag("payload-file", "string"),
+          ],
+        ),
         command("okf-export", "Write a portable Open Knowledge Format bundle"),
         command(
           "okf-import",

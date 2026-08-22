@@ -162,6 +162,7 @@ Brain verbs (observing memory):
   trigger             Proactive trigger queue with anti-nag lifecycle (scan/list/ack/dismiss/act/suppress/unsuppress/history)
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
+  extract-signals     Mine taste signals from an imported session's user turns (two-phase, needs-llm-step)
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault
@@ -692,6 +693,20 @@ export const VERB_HELP: Record<string, string> = {
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
     "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
     "malformed nodes and their edges. Denylist: entities.label_denylist config key.",
+  "extract-signals":
+    "usage: o2b brain extract-signals <session-ref> [--vault <vault>] [--agent <name>]\n" +
+    "                                  [--payload <json> | --payload-file <path>] [--json]\n" +
+    "Mine durable taste signals out of an ALREADY-IMPORTED session's user\n" +
+    "turns. Without a payload the verb is read-only: it prints the turns it\n" +
+    "would mine and the single needs-llm-step envelope the calling agent\n" +
+    "answers. With --payload / --payload-file it validates that answer and\n" +
+    "writes the accepted items into Brain/inbox/ as speculative signals with\n" +
+    "source_type: auto_extract, subject to the durability denylist and to\n" +
+    "Brain/pending/ staging when write approval is enabled.\n" +
+    "Refusals are named: a payload over the per-session cap, or an item below\n" +
+    "the confidence floor, rejects the whole payload and writes nothing.\n" +
+    "Import the session with `o2b brain import-session --recall` first; a\n" +
+    "session with no imported turns is refused, never reported as empty.\n",
   "import-session":
     "usage: o2b brain import-session <path> [--vault <vault>]\n" +
     "                                [--format auto|<registered-adapter>]\n" +

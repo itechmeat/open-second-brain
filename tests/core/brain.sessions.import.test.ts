@@ -365,3 +365,41 @@ describe("per-skill invocation telemetry", () => {
     expect(usage.find((u) => u.skill === "release")!.invocationCount).toBe(2);
   });
 });
+
+/**
+ * The new model-mining lane (salience-lifecycle-enrichment, unit 2) added a
+ * `source_type` member and a second way to turn a session into signals.
+ * `import-session` is not that lane and must not have moved: it still
+ * stamps `session`, and re-running it over the same log produces the same
+ * bytes on disk, which is what "byte-identical" has to mean for a test that
+ * cannot reach the previous release.
+ */
+describe("import-session is untouched by the model-mining lane", () => {
+  function inboxBytes(): ReadonlyArray<readonly [string, string]> {
+    const dir = brainDirs(tmp).inbox;
+    return readdirSync(dir)
+      .filter((name) => name.endsWith(".md"))
+      .toSorted()
+      .map((name) => [name, readFileSync(join(dir, name), "utf8")] as const);
+  }
+
+  test("every imported signal is stamped `session`, never `auto_extract`", async () => {
+    await importSession(tmp, CLAUDE, { agent: "test" });
+    const files = inboxBytes();
+    expect(files.length).toBeGreaterThan(0);
+    for (const [name, body] of files) {
+      expect(`${name} stamps session: ${body.includes("source_type: session")}`).toBe(
+        `${name} stamps session: true`,
+      );
+      expect(body).not.toContain("auto_extract");
+    }
+  });
+
+  test("a second import over the same log leaves the inbox bytes unchanged", async () => {
+    const now = new Date("2026-08-22T10:00:00Z");
+    await importSession(tmp, CLAUDE, { agent: "test", now });
+    const before = inboxBytes();
+    await importSession(tmp, CLAUDE, { agent: "test", now });
+    expect(inboxBytes()).toEqual(before);
+  });
+});

@@ -108,6 +108,7 @@ import {
   cmdBrainTrigger,
   cmdBrainDeepSynthesis,
   cmdBrainDiarize,
+  cmdBrainExtractSignals,
   cmdBrainIdeas,
   cmdBrainSessionHook,
   cmdBrainImportClaudeMemory,
@@ -360,6 +361,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainDeepSynthesis(rest);
       case "diarize":
         return await cmdBrainDiarize(rest);
+      case "extract-signals":
+        return await cmdBrainExtractSignals(rest);
       case "ideas":
         return await cmdBrainIdeas(rest);
       case "entity":

@@ -290,6 +290,8 @@ describe("tool listing", () => {
         "brain_deep_synthesis",
         // Subject diarization (knowledge-intake-and-consolidation, t_28ba3fc4).
         "brain_diarize",
+        // Model-mined session signals (salience-lifecycle-enrichment, t_1dace26d).
+        "brain_extract_signals",
         "brain_idea_discovery",
         // Entity Truth & Self-Improving Dream Suite.
         "brain_truth",
@@ -715,7 +717,9 @@ describe("stdio loop", () => {
     // + brain_expire (set / change / clear a signal's or preference's
     //   expiration_date by id, salience-lifecycle-enrichment unit 3c
     //   t_5e338af1) = 111.
-    expect(list.result.tools.length).toBe(111);
+    // + brain_extract_signals (model-mined session signals,
+    //   salience-lifecycle-enrichment t_1dace26d) = 112.
+    expect(list.result.tools.length).toBe(112);
   });
 
   test("returns parse error for invalid JSON", async () => {

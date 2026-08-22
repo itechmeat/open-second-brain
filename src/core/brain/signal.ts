@@ -47,11 +47,21 @@ import {
 import {
   BRAIN_SIGNAL_SIGN,
   BRAIN_SIGNAL_SOURCE_TYPE,
+  BRAIN_SIGNAL_SOURCE_TYPES,
   isBrainSignalSourceType,
   type BrainSignal,
   type BrainSignalSign,
   type BrainSignalSourceType,
 } from "./types.ts";
+
+/**
+ * The legal `source_type` values, rendered for a refusal message. Derived
+ * from the vocabulary rather than restated, so a new member cannot leave a
+ * refusal naming a set the guard no longer enforces.
+ */
+function renderSourceTypes(): string {
+  return BRAIN_SIGNAL_SOURCE_TYPES.map((v) => `'${v}'`).join(", ");
+}
 
 /** Filename prefix without the trailing dash, e.g. `sig-2026-05-14`. */
 function signalPrefix(date: string): string {
@@ -270,7 +280,7 @@ export function writeSignal(
   }
   if (sanitised.source_type !== undefined && !isBrainSignalSourceType(sanitised.source_type)) {
     throw new Error(
-      `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(sanitised.source_type)}`,
+      `signal field 'source_type' must be one of ${renderSourceTypes()}; got ${JSON.stringify(sanitised.source_type)}`,
     );
   }
 
@@ -577,7 +587,7 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     if (trimmed) {
       if (!isBrainSignalSourceType(trimmed)) {
         throw new Error(
-          `signal field 'source_type' must be 'live', 'inline', or 'session'; got ${JSON.stringify(trimmed)} (${path})`,
+          `signal field 'source_type' must be one of ${renderSourceTypes()}; got ${JSON.stringify(trimmed)} (${path})`,
         );
       }
       source_type = trimmed;

@@ -42,6 +42,12 @@ export type BrainSignalSign = (typeof BRAIN_SIGNAL_SIGN)[keyof typeof BRAIN_SIGN
  *                 `@osb` marker in a vault file.
  *   - `session` — replayed from a session JSONL by
  *                 `o2b brain import-session`.
+ *
+ * `extracted` and `auto_extract` are deliberately separate members:
+ * both mine a session, but one is a regex over structure and the other
+ * is a model reading prose, and their trust profiles differ forever.
+ * Folding the second into the first would make a model-authored signal
+ * indistinguishable from a deterministic one the day after it is written.
  */
 export const BRAIN_SIGNAL_SOURCE_TYPE = {
   live: "live",
@@ -49,18 +55,31 @@ export const BRAIN_SIGNAL_SOURCE_TYPE = {
   session: "session",
   /** Regex fact extraction (Memory Integrity Suite). */
   extracted: "extracted",
+  /**
+   * Model-mined from an imported session by `o2b brain extract-signals`
+   * (salience-lifecycle-enrichment). Speculative by construction: the
+   * inbox trial lane plus the dream pass is the only route to a
+   * confirmed preference.
+   */
+  autoExtract: "auto_extract",
 } as const;
 export type BrainSignalSourceType =
   (typeof BRAIN_SIGNAL_SOURCE_TYPE)[keyof typeof BRAIN_SIGNAL_SOURCE_TYPE];
 
-const BRAIN_SIGNAL_SOURCE_TYPE_VALUES: ReadonlyArray<BrainSignalSourceType> =
-  Object.values(BRAIN_SIGNAL_SOURCE_TYPE);
+/**
+ * The membership list, exported so a refusal can NAME the vocabulary
+ * instead of restating it. Both refusal sites in `signal.ts` used to
+ * carry a hand-written "'live', 'inline', or 'session'" that had already
+ * gone stale on `extracted`; a message that omits a legal value teaches
+ * the reader the wrong contract.
+ */
+export const BRAIN_SIGNAL_SOURCE_TYPES: ReadonlyArray<BrainSignalSourceType> = Object.freeze(
+  Object.values(BRAIN_SIGNAL_SOURCE_TYPE),
+);
 
 /** Type-guard for the enum union — used by writer + parser. */
 export function isBrainSignalSourceType(v: unknown): v is BrainSignalSourceType {
-  return (
-    typeof v === "string" && (BRAIN_SIGNAL_SOURCE_TYPE_VALUES as ReadonlyArray<string>).includes(v)
-  );
+  return typeof v === "string" && (BRAIN_SIGNAL_SOURCE_TYPES as ReadonlyArray<string>).includes(v);
 }
 
 export const BRAIN_PREFERENCE_STATUS = {

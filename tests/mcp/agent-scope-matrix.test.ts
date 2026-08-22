@@ -324,8 +324,8 @@ const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REASON.owne
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-const PROBE_ENTRY_COUNT = 97;
-const PROBE_RECIPE_COUNT = 222;
+const PROBE_ENTRY_COUNT = 98;
+const PROBE_RECIPE_COUNT = 224;
 const PROBE_TWO_SIDED_COUNT = 31;
 
 /**
@@ -644,6 +644,27 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { id: `sig-2026-05-01-${NEUTRAL_SIGNAL_SLUG}`, expires: "2030-01-01" },
       REASON.callerNamedArtifact,
     ),
+  },
+  {
+    name: "brain_extract_signals",
+    calls: [
+      { args: { session: "sess-probe" }, reason: REASON.sessionLane },
+      {
+        args: {
+          session: "sess-probe",
+          items: [
+            {
+              topic: "probe",
+              signal: "positive",
+              principle: "probe principle",
+              confidence: 0.9,
+            },
+          ],
+        },
+        reason: REASON.writerEcho,
+        label: "commit",
+      },
+    ],
   },
   {
     name: "brain_feedback",

@@ -253,6 +253,8 @@ export const DISTILL_CLAIMS_SURFACE = "distill_claims";
 export const DERIVED_FACT_SURFACE = "derived_fact";
 /** Surface label of the research-report synthesis payload. */
 export const RESEARCH_REPORT_SURFACE = "research_report";
+/** Surface label of the model-mined session-signal payload. */
+export const EXTRACTED_SIGNALS_SURFACE = "extracted_signals";
 
 const STRING_SHAPE: ShapeDescriptor = { type: "string" };
 const STRING_LIST_SHAPE: ShapeDescriptor = { type: "array", items: STRING_SHAPE };
@@ -321,6 +323,37 @@ export const RESEARCH_REPORT_SHAPE: ShapeDescriptor = freezeDescriptor({
 });
 
 /**
+ * Taste signals a model mined from one imported session's user turns.
+ *
+ * Structure only. The two rules that actually protect the inbox - at most
+ * N items per session, and a floor under each item's confidence - read the
+ * whole list or compare a number against a limit, so they live in the
+ * semantic-check registry beside this descriptor rather than inside it.
+ * `sign` is checked against the two-member sign vocabulary here because a
+ * third value is a structural defect, not a judgement call.
+ */
+export const EXTRACTED_SIGNALS_SHAPE: ShapeDescriptor = freezeDescriptor({
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["topic", "signal", "principle", "confidence"],
+        properties: {
+          topic: FILLED_STRING_SHAPE,
+          signal: { enum: ["positive", "negative"] },
+          principle: FILLED_STRING_SHAPE,
+          confidence: { type: "number" },
+          scope: STRING_SHAPE,
+        },
+      },
+    },
+  },
+});
+
+/**
  * Every declared descriptor, by surface. The registry exists so the shallow-
  * and-expressible discipline can be asserted over the whole set at once
  * rather than one descriptor at a time.
@@ -329,6 +362,7 @@ export const MODEL_AUTHORED_SHAPES: Readonly<Record<string, ShapeDescriptor>> = 
   [DISTILL_CLAIMS_SURFACE]: DISTILL_CLAIMS_SHAPE,
   [DERIVED_FACT_SURFACE]: DERIVED_FACT_SHAPE,
   [RESEARCH_REPORT_SURFACE]: RESEARCH_REPORT_SHAPE,
+  [EXTRACTED_SIGNALS_SURFACE]: EXTRACTED_SIGNALS_SHAPE,
 });
 
 // ----- Internals ----------------------------------------------------------

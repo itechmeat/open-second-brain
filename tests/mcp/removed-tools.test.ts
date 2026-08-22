@@ -186,5 +186,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_expire (set / change / clear a signal's or preference's
   //   expiration_date by id, salience-lifecycle-enrichment unit 3c
   //   t_5e338af1) = 111.
-  expect(list.result.tools.length).toBe(111);
+  // + brain_extract_signals (model-mined session signals,
+  //   salience-lifecycle-enrichment t_1dace26d) = 112.
+  expect(list.result.tools.length).toBe(112);
 });

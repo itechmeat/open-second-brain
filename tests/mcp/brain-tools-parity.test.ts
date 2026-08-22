@@ -58,6 +58,11 @@
  * creation, kept off `brain_lifecycle` because every action there
  * addresses its subject by a note PATH and the path envelope refuses the
  * `Brain/` root these artifacts live under).
+ * salience-lifecycle-enrichment release added `brain_extract_signals` (the
+ * batch counterpart to regex fact extraction: hands the calling agent one
+ * session's user turns inside a needs-llm-step envelope and writes the
+ * validated answer as speculative `source_type: auto_extract` inbox
+ * signals).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -98,6 +103,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_entity",
   "brain_event_trace",
   "brain_expire",
+  "brain_extract_signals",
   "brain_feedback",
   "brain_foresight",
   "brain_generation_reports",

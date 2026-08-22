@@ -138,8 +138,9 @@ function collapse(span: string): string {
 }
 
 /**
- * Extract every fact the seven families recognise, in (line, family
- * table) order. Deterministic: same input, same output.
+ * Extract every fact the {@link FAMILY_PATTERNS} families recognise -
+ * url, email, quantity - in (line, family table) order. Deterministic:
+ * same input, same output.
  */
 export function extractFacts(text: string): ExtractedFact[] {
   if (!text || text.trim().length === 0) return [];
