@@ -78,7 +78,13 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                        'dedupes retried calls: same '
                                                                        'key + same payload is a '
                                                                        'no-op; same key + different '
-                                                                       'payload is rejected.'}},
+                                                                       'payload is rejected.'},
+                                    'expires': {'type': 'string',
+                                                'description': 'Optional YYYY-MM-DD or ISO-8601 '
+                                                               'lifetime. Past it the signal (and '
+                                                               'any force-confirmed preference) '
+                                                               'drops out of default reads; the '
+                                                               'file is never deleted.'}},
                      'required': ['topic', 'signal', 'principle'],
                      'additionalProperties': False}},
     {'name': 'brain_apply_evidence',
