@@ -532,28 +532,124 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(json.loads(result), {"ok": True})
         self.assertEqual(bridge.calls, [("brain_note", {"text": "hi"})])
 
+    @staticmethod
+    def _fake_bin(home, relative, name):
+        """Create an executable stub at ``<home>/<relative>/<name>``."""
+        directory = Path(home).joinpath(*relative)
+        directory.mkdir(parents=True, exist_ok=True)
+        exe = directory / name
+        exe.write_text("#!/bin/sh\n")
+        os.chmod(exe, 0o755)
+        return exe
+
+    @staticmethod
+    def _sandboxed_scan(home, *dirs):
+        """Patches that confine executable discovery to ``home``.
+
+        Both the PATH lookup and the fallback scan are pinned: leaving the scan
+        on its real directory list would let a Bun installed on the machine
+        running the tests decide the outcome.
+        """
+        return (
+            patch.dict(os.environ, {"PATH": ""}),
+            patch.object(Path, "home", return_value=Path(home)),
+            patch("shutil.which", return_value=None),
+            patch.object(
+                provider_module,
+                "_fallback_exe_dirs",
+                return_value=tuple(Path(home).joinpath(*d) for d in dirs),
+            ),
+        )
+
     @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
     def test_resolve_command_uses_user_local_o2b_when_path_is_tiny(self):
         # A tiny inherited PATH hides o2b from shutil.which; the fallback scan
-        # must still find a real user-local o2b. Hermetic: a fake ~/.local/bin
-        # under a temp HOME, so the assertion never depends on what the test
-        # machine happens to have installed.
+        # must still find a real user-local o2b. The wrapper is only preferred
+        # when a Bun exists for it to run, so the sandbox carries one too.
+        # Hermetic: fake bins under a temp HOME and a scan list confined to it,
+        # so the assertion never depends on what this machine has installed.
         with tempfile.TemporaryDirectory() as home:
-            local_bin = Path(home) / ".local" / "bin"
-            local_bin.mkdir(parents=True)
-            fake_o2b = local_bin / "o2b"
-            fake_o2b.write_text("#!/bin/sh\n")
-            os.chmod(fake_o2b, 0o755)
+            fake_o2b = self._fake_bin(home, (".local", "bin"), "o2b")
+            self._fake_bin(home, (".bun", "bin"), "bun")
 
-            with (
-                patch.dict(os.environ, {"PATH": ""}),
-                patch.object(Path, "home", return_value=Path(home)),
-                patch("shutil.which", return_value=None),
-            ):
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".local", "bin"), (".bun", "bin")):
+                    stack.enter_context(ctx)
                 command = OpenSecondBrainMemoryProvider._resolve_command()
 
         self.assertEqual(command, (str(fake_o2b), "mcp"))
         self.assertTrue(Path(command[0]).is_absolute())
+
+    @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
+    def test_resolve_command_skips_o2b_wrapper_when_no_bun_is_discoverable(self):
+        # The wrapper is a bash script that exits 127 when its own PATH has no
+        # bun. Preferring it with no bun anywhere yields a command that can only
+        # fail, so resolution must fall through to the repo-local branch.
+        with tempfile.TemporaryDirectory() as home:
+            self._fake_bin(home, (".local", "bin"), "o2b")
+            entry = Path("/repo/src/cli/main.ts")
+
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".local", "bin")):
+                    stack.enter_context(ctx)
+                stack.enter_context(
+                    patch.object(
+                        OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"
+                    )
+                )
+                stack.enter_context(patch.object(Path, "is_file", return_value=True))
+                command = OpenSecondBrainMemoryProvider._resolve_command()
+
+        # No bun means the bun+entry branch cannot be built either, so the
+        # last-resort bare command is what is left - never the wrapper.
+        self.assertEqual(command, ("o2b", "mcp"))
+        self.assertNotIn(str(entry), command)
+
+    @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
+    def test_resolve_command_uses_bun_entry_when_only_bun_is_discoverable(self):
+        with tempfile.TemporaryDirectory() as home:
+            fake_bun = self._fake_bin(home, (".bun", "bin"), "bun")
+
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".bun", "bin")):
+                    stack.enter_context(ctx)
+                stack.enter_context(
+                    patch.object(
+                        OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"
+                    )
+                )
+                stack.enter_context(patch.object(Path, "is_file", return_value=True))
+                command = OpenSecondBrainMemoryProvider._resolve_command()
+
+        self.assertEqual(command[0], str(fake_bun))
+        self.assertEqual(command[1], "run")
+        self.assertEqual(command[-1], "mcp")
+
+    def test_resolve_env_puts_the_discovered_bun_directory_first_on_path(self):
+        # Issue #173: the o2b wrapper checks `command -v bun` against the PATH
+        # it inherits. Resolving an absolute bun here is useless unless the
+        # child can see it too.
+        with tempfile.TemporaryDirectory() as home:
+            fake_bun = self._fake_bin(home, (".bun", "bin"), "bun")
+
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".bun", "bin")):
+                    stack.enter_context(ctx)
+                env = OpenSecondBrainMemoryProvider._resolve_env()
+
+        self.assertIsNotNone(env)
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], str(fake_bun.parent))
+
+    def test_resolve_env_inherits_when_path_already_resolves_bun(self):
+        with patch("shutil.which", return_value="/usr/bin/bun"):
+            self.assertIsNone(OpenSecondBrainMemoryProvider._resolve_env())
+
+    def test_resolve_env_inherits_when_no_bun_exists_anywhere(self):
+        with tempfile.TemporaryDirectory() as home:
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".bun", "bin")):
+                    stack.enter_context(ctx)
+                self.assertIsNone(OpenSecondBrainMemoryProvider._resolve_env())
 
     def test_find_executable_prefers_which(self):
         with patch("shutil.which", return_value="/somewhere/on/path/o2b"):
@@ -1249,6 +1345,89 @@ class McpBrainBridgeTests(unittest.TestCase):
         self.assertEqual(result, {"ok": True})
         self.assertEqual(spawn.state["n"], 3)
         self.assertTrue(broken.terminated)
+
+
+class BridgeChildEnvironmentTests(unittest.TestCase):
+    """Issue #173: what the MCP child inherits decides whether it can run.
+
+    The o2b wrapper resolves its own runtime with ``command -v bun``, so a
+    gateway PATH without Bun turns a perfectly good wrapper into exit 127 - and
+    the JSON-RPC channel only ever reported the consequence.
+    """
+
+    def _handshake_frames(self):
+        return [
+            {"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2025-06-18"}},
+            {"jsonrpc": "2.0", "id": 2, "result": {"tools": []}},
+        ]
+
+    def test_default_spawn_passes_the_env_overlay_to_popen(self):
+        proc = _FakeProcess(self._handshake_frames())
+        overlay = {"PATH": "/opt/bun/bin:/usr/bin", "HOME": "/home/agent"}
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc) as popen:
+            McpBrainBridge(
+                vault="/v", command=("/home/agent/.local/bin/o2b", "mcp"), env=overlay
+            ).start()
+
+        env = popen.call_args.kwargs["env"]
+        self.assertEqual(env["PATH"].split(os.pathsep)[0], "/opt/bun/bin")
+        # A copy, not the caller's dict: the bridge must not be mutated from
+        # under the child by a later edit of the overlay.
+        self.assertIsNot(env, overlay)
+
+    def test_default_spawn_inherits_when_no_env_overlay_is_given(self):
+        proc = _FakeProcess(self._handshake_frames())
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc) as popen:
+            McpBrainBridge(vault="/v").start()
+
+        self.assertIsNone(popen.call_args.kwargs["env"])
+
+
+class ProviderChildEnvironmentTests(unittest.TestCase):
+    """The overlay the provider computes has to reach the bridge it builds."""
+
+    def tearDown(self):
+        _reset_shared_bridges_for_tests()
+
+    def test_initialize_hands_the_bun_bearing_env_to_the_bridge(self):
+        overlay = {"PATH": "/opt/bun/bin:/usr/bin"}
+        with (
+            patch(
+                "plugins.hermes.provider.McpBrainBridge", return_value=FakeBrainBridge()
+            ) as factory,
+            patch("plugins.hermes.provider.config.resolve_vault", return_value="/vault"),
+            patch.object(OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"),
+            patch.object(
+                OpenSecondBrainMemoryProvider,
+                "_resolve_command",
+                return_value=("/home/agent/.local/bin/o2b", "mcp"),
+            ),
+            patch.object(OpenSecondBrainMemoryProvider, "_resolve_env", return_value=overlay),
+        ):
+            OpenSecondBrainMemoryProvider().initialize("session-1", hermes_home="/hh")
+
+        self.assertEqual(factory.call_args.kwargs["env"], overlay)
+
+    def test_bridges_with_different_search_paths_are_not_shared(self):
+        paths = iter(({"PATH": "/a/bin"}, {"PATH": "/b/bin"}))
+        with (
+            patch(
+                "plugins.hermes.provider.McpBrainBridge",
+                side_effect=lambda **_: FakeBrainBridge(),
+            ) as factory,
+            patch("plugins.hermes.provider.config.resolve_vault", return_value="/vault"),
+            patch.object(OpenSecondBrainMemoryProvider, "_repo_root", return_value="/repo"),
+            patch.object(
+                OpenSecondBrainMemoryProvider, "_resolve_command", return_value=("o2b", "mcp")
+            ),
+            patch.object(
+                OpenSecondBrainMemoryProvider, "_resolve_env", side_effect=lambda: next(paths)
+            ),
+        ):
+            OpenSecondBrainMemoryProvider().initialize("session-1", hermes_home="/hh")
+            OpenSecondBrainMemoryProvider().initialize("session-2", hermes_home="/hh")
+
+        self.assertEqual(factory.call_count, 2)
 
 
 class BridgeRequestDeadlineTests(unittest.TestCase):

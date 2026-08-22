@@ -23,7 +23,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
 
 from . import config
 from ._base import MemoryProvider
@@ -149,7 +149,8 @@ _PREFETCH_MAX_TOKENS = 1024
 # configuration in this Python process. Cache eviction deliberately calls
 # AIAgent.release_clients() without shutting down memory providers, so
 # constructing one Bun child per provider leaks a child for every new session.
-_SHARED_BRIDGES: dict[tuple[str | None, str | None, tuple[str, ...]], BrainBridge] = {}
+_SharedBridgeKey = tuple[str | None, str | None, tuple[str, ...], str | None]
+_SHARED_BRIDGES: dict[_SharedBridgeKey, BrainBridge] = {}
 _SHARED_BRIDGES_LOCK = threading.RLock()
 
 
@@ -157,8 +158,16 @@ def _shared_bridge_key(
     vault: str | None,
     repo_root: str | None,
     command: tuple[str, ...],
-) -> tuple[str | None, str | None, tuple[str, ...]]:
-    return (vault, repo_root, tuple(command))
+    env: Mapping[str, str] | None = None,
+) -> _SharedBridgeKey:
+    """Identity of a bridge: what it runs, where, and the ``PATH`` it runs with.
+
+    ``PATH`` is the only part of the overlay this provider ever rewrites, and
+    two children launched with different search paths are different servers -
+    sharing one bridge between them would hand the second caller a child that
+    resolved its runtime somewhere else.
+    """
+    return (vault, repo_root, tuple(command), None if env is None else env.get("PATH"))
 
 
 def _get_shared_bridge(
@@ -166,9 +175,10 @@ def _get_shared_bridge(
     vault: str | None,
     repo_root: str | None,
     command: tuple[str, ...],
+    env: Mapping[str, str] | None = None,
 ) -> BrainBridge:
     """Return the one bridge for this gateway/configuration key."""
-    key = _shared_bridge_key(vault, repo_root, command)
+    key = _shared_bridge_key(vault, repo_root, command, env)
     with _SHARED_BRIDGES_LOCK:
         bridge = _SHARED_BRIDGES.get(key)
         if bridge is None:
@@ -176,6 +186,7 @@ def _get_shared_bridge(
                 vault=vault,
                 repo_root=repo_root,
                 command=command,
+                env=env,
             )
             _SHARED_BRIDGES[key] = bridge
         return bridge
@@ -215,6 +226,16 @@ def _fallback_exe_dirs() -> tuple[Path, ...]:
         Path("/usr/bin"),
         Path("/bin"),
     )
+
+
+def _path_with_dir_prepended(
+    directory: str, base: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """Copy of ``base`` (default ``os.environ``) with ``directory`` first on ``PATH``."""
+    env = dict(os.environ if base is None else base)
+    current = env.get("PATH", "")
+    env["PATH"] = f"{directory}{os.pathsep}{current}" if current else directory
+    return env
 
 
 def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> str | None:
@@ -328,6 +349,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
                 vault=vault,
                 repo_root=repo_root,
                 command=command,
+                env=self._resolve_env(),
             )
             self._bridge_shared = True
         try:
@@ -351,6 +373,29 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         root = Path(__file__).resolve().parents[2]
         return str(root) if (root / "skills").is_dir() else None
 
+    @staticmethod
+    def _resolve_env() -> dict[str, str] | None:
+        """Environment for the MCP child, or ``None`` to inherit this process's.
+
+        Resolving an absolute ``o2b`` is only half the job: the wrapper is a
+        bash script that runs ``command -v bun`` against its own ``PATH``, and
+        a Hermes gateway can hand the provider a ``PATH`` with no Bun on it -
+        so the wrapper exits 127 and the handshake dies at EOF. When Bun was
+        found only by the fallback scan, put its directory on the child's
+        ``PATH`` so every branch of :meth:`_resolve_command` launches into an
+        environment where Bun resolves.
+
+        ``None`` when ``PATH`` already resolves Bun (nothing to add) or when no
+        Bun exists to point at, which keeps the common case inheriting exactly
+        what it inherits today.
+        """
+        if shutil.which("bun"):
+            return None
+        bun = _find_executable("bun")
+        if not bun:
+            return None
+        return _path_with_dir_prepended(str(Path(bun).parent))
+
     @classmethod
     def _resolve_command(cls) -> tuple[str, ...]:
         """Determine the right argv prefix for the ``o2b mcp`` subprocess.
@@ -365,20 +410,25 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         cross-platform path is the repo-local TypeScript entry point via
         ``bun run``.
         """
-        # On non-Windows, a globally installed or user-local o2b works directly.
-        if os.name != "nt":
+        # The o2b wrapper is preferred - it also sources the macOS sqlite-vec
+        # shim, which the bare entry point does not - but it is a bash script
+        # whose first act is to check its own PATH for Bun. Preferring it when
+        # no Bun exists anywhere buys a command that can only exit 127, so the
+        # branch is gated on a Bun the child will be able to see: found here,
+        # and put on the child's PATH by :meth:`_resolve_env`.
+        bun = _find_executable("bun")
+        if os.name != "nt" and bun:
             o2b = _find_executable("o2b")
             if o2b:
                 return (o2b, "mcp")
 
         # Resolve via repo-local TypeScript entry point + bun.
         root = cls._repo_root()
-        if root:
+        if root and bun:
             entry = Path(root) / "src" / "cli" / "main.ts"
             if entry.is_file():
-                bun = _find_executable("bun")
-                if bun:
-                    return (bun, "run", str(entry), "mcp")
+                return (bun, "run", str(entry), "mcp")
+
 
         # Last resort: hope o2b is reachable (e.g. npm global install on
         # Windows created an o2b.cmd shim, or the user's shell can run it).

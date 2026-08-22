@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
 PROTOCOL_VERSION = "2025-06-18"
@@ -209,6 +210,12 @@ class McpBrainBridge:
 
     ``spawn`` is injectable so tests substitute a fake process and never need a
     live Bun runtime. A crashed channel is restarted once on the next call.
+
+    ``env`` is the complete environment the child runs with; ``None`` means
+    inherit this process's. A Hermes gateway can start the provider with a
+    ``PATH`` too small to contain Bun, and the ``o2b`` wrapper refuses to run
+    when its own ``command -v bun`` misses - so the caller that resolved an
+    absolute Bun passes an environment carrying that Bun's directory.
     """
 
     def __init__(
@@ -219,12 +226,14 @@ class McpBrainBridge:
         command: tuple[str, ...] = ("o2b", "mcp"),
         spawn: Any = None,
         cwd: str | None = None,
+        env: Mapping[str, str] | None = None,
     ) -> None:
         self._vault = vault
         self._repo_root = repo_root
         self._command = command
         self._spawn = spawn or self._default_spawn
         self._cwd = cwd
+        self._env = dict(env) if env is not None else None
         # A gateway may serve several AIAgents concurrently, but one shared
         # bridge has one request/response stream. Serialise lifecycle and RPC
         # operations so request ids and stdout frames cannot interleave.
@@ -303,6 +312,7 @@ class McpBrainBridge:
             stderr=subprocess.PIPE,
             bufsize=0,
             cwd=self._cwd,
+            env=self._env,
         )
         stderr_thread = threading.Thread(
             target=self._drain_stderr,
