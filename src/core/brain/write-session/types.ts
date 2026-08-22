@@ -14,6 +14,8 @@
  * record; the envelope grammar below is shared and stable.
  */
 
+import type { LlmStepFields } from "../llm-step.ts";
+
 /** Session kinds. `artifact` writes one note; `panel` deliberates. */
 export type WriteSessionKind = "artifact" | "panel";
 
@@ -112,18 +114,21 @@ export interface WriteSessionProbe {
  * The JSON envelope every operation returns. Stable grammar shared by
  * the CLI verb and the MCP tool; `existing` is populated only when the
  * target path already holds content the caller must decide about.
+ *
+ * This is the DURABLE superset of the shared envelope spine
+ * ({@link LlmStepFields} in `../llm-step.ts`): the generation fields are
+ * inherited from it so the three lanes speaking this grammar cannot drift
+ * apart, while the session-backed fields below - and a `status` that
+ * widens past `needs-llm-step` to the whole lifecycle - stay here, where
+ * the session record backs them.
  */
-export interface WriteSessionEnvelope {
+export interface WriteSessionEnvelope extends LlmStepFields {
   readonly status: WriteSessionStatus;
   readonly session_id: string;
   readonly kind: WriteSessionKind;
-  readonly step: string;
-  readonly prompt: string;
-  readonly schema_hints: ReadonlyArray<string>;
   readonly errors: ReadonlyArray<WriteSessionError>;
   readonly attempts_left: number;
   readonly expires_at: string;
-  readonly target_path: string;
   readonly existing: ExistingTargetInfo | null;
 }
 

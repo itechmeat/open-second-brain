@@ -27,6 +27,7 @@ import { hasEvidenceIdentity, type EvidenceIdentity } from "./deep-synthesis.ts"
 import { getEntity } from "./entities/registry.ts";
 import type { EntityRef } from "./entities/types.ts";
 import { getIngestedSource, listIngestedSources } from "./ingest/sources-registry.ts";
+import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
 
 /** Vault-relative directory a fleshed profile note lands in. */
 export const PROFILE_DIR_REL = "Brain/profiles";
@@ -74,18 +75,11 @@ export interface DiarizationGapLine {
 }
 
 /**
- * The single deferred generation step. Shape mirrors the write-session
- * `needs-llm-step` envelope grammar (status, step, prompt, schema hints,
- * target path) but stays plain data: diarization is read-only and opens
- * no durable session.
+ * The single deferred generation step: the shared envelope spine, exactly.
+ * It stays plain data - diarization is read-only and opens no durable
+ * session - so it carries the spine and nothing beyond it.
  */
-export interface DiarizationLlmStep {
-  readonly status: "needs-llm-step";
-  readonly step: string;
-  readonly prompt: string;
-  readonly schema_hints: ReadonlyArray<string>;
-  readonly target_path: string;
-}
+export type DiarizationLlmStep = NeedsLlmStep;
 
 export interface DiarizationReport {
   readonly entityId: string;
@@ -233,17 +227,16 @@ export function diarize(
     lines,
     documentSet,
   });
-  const llmStep: DiarizationLlmStep = Object.freeze({
-    status: "needs-llm-step" as const,
+  const llmStep: DiarizationLlmStep = buildNeedsLlmStep({
     step: PROFILE_PROSE_STEP,
     prompt:
       `Write the summary prose for the profile of ${entity.name} (${entity.id}). ` +
       "Ground every statement in the stated-vs-evidenced section and the document set below; " +
       `replace the ${PROSE_MARKER} marker with the prose and submit the full note.`,
-    schema_hints: Object.freeze([
+    schema_hints: [
       "frontmatter: preserve the skeleton block verbatim",
       "body: replace only the prose marker; keep the structured sections intact",
-    ]),
+    ],
     target_path: targetPath,
   });
 

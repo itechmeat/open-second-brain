@@ -22,6 +22,7 @@
 import { existsSync, readFileSync } from "node:fs";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
 import type { BrainConfig } from "./types.ts";
 import { rollupLedgerPath } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -60,15 +61,14 @@ export interface RollupLedger {
   readonly produced: Readonly<Record<string, number>>;
 }
 
-/** The needs-llm-step envelope emitted for one fired rung. */
-export interface RollupEnvelope {
-  readonly status: "needs-llm-step";
-  readonly step: string;
+/**
+ * The needs-llm-step envelope emitted for one fired rung: the shared
+ * envelope spine plus the two fields only a ladder rung has - which rung
+ * fired and which tier its summary note becomes.
+ */
+export interface RollupEnvelope extends NeedsLlmStep {
   readonly tier: string;
   readonly produces: string;
-  readonly prompt: string;
-  readonly schema_hints: ReadonlyArray<string>;
-  readonly target_path: string;
 }
 
 /** One fired rung: the counter reset plus its emitted envelope. */
@@ -192,18 +192,17 @@ export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
 
 function buildEnvelope(rung: Rung, newSinceLast: number, runId: string): RollupEnvelope {
   const targetPath = `Brain/rollups/rollup-${rung.produces}-${runId}.md`;
-  return Object.freeze({
-    status: "needs-llm-step" as const,
+  return buildNeedsLlmStep({
     step: `rollup:${rung.tier}`,
     tier: rung.tier,
     produces: rung.produces,
     prompt:
       `Consolidate the ${newSinceLast} new ${rung.tier} items since the last rollup into one ` +
       `${rung.produces}-tier summary note. Cite the items you fold in; submit the full note.`,
-    schema_hints: Object.freeze([
+    schema_hints: [
       "frontmatter: required YAML block with at least a `kind` key",
       `tier: ${rung.produces} (the rollup's tier weight)`,
-    ]),
+    ],
     target_path: targetPath,
   });
 }
