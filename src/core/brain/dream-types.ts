@@ -15,6 +15,7 @@ import type { DreamQuarantinedEntry } from "./dream-plan.ts";
 import type { DreamOutcomeRegression } from "./dream-refresh.ts";
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import type { RollupLadderEntry } from "./rollup-ladder.ts";
+import type { SalienceGateVerdict } from "./salience-gate.ts";
 import type { BrainRetiredReason, DreamOpenQuestion } from "./types.ts";
 
 /**
@@ -141,6 +142,15 @@ export interface DreamRunSummary {
    * crossed its threshold, keeping a below-threshold run byte-identical.
    */
   readonly rollups: ReadonlyArray<RollupLadderEntry>;
+  /**
+   * Deterministic salience gate over the fold set the rollup ladder
+   * counts (salience-lifecycle-enrichment, unit 1). Always present:
+   * `threshold: null` says the gate was ABSENT, which a missing field
+   * could not distinguish from a gate that excluded nothing. Every
+   * excluded fact is named here with its score - the gate never drops
+   * anything silently.
+   */
+  readonly salience_gate: SalienceGateVerdict;
   /**
    * Reconcile-phase domain classification (Brain lifecycle suite,
    * Feature 3). Contradictions that stayed unresolved, each tagged with

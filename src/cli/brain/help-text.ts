@@ -33,7 +33,7 @@ export const BRAIN_HELP = `usage: o2b brain <verb> [args...]
 Brain verbs (observing memory):
   init             Bootstrap <vault>/Brain/ (idempotent; --force overwrites)
   feedback         Record a taste signal (--topic, --signal, --principle)
-  dream            Deterministic dreaming pass; stage/validate/apply staged bundles
+  dream            Deterministic dreaming pass; stage/validate/apply/retriage bundles
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
@@ -195,11 +195,14 @@ export const VERB_HELP: Record<string, string> = {
     "Creates a `sig-*.md` in Brain/inbox/. With --force-confirmed also creates a `pref-*.md`.\n",
   dream:
     "usage: o2b brain dream [run] [--dry-run] | stage | validate <run-id> | apply <run-id> |\n" +
-    "  discard <run-id> | list  [--now <ISO-8601>] [--agent <name>] [--vault <path>] [--json]\n" +
+    "  retriage <run-id> | discard <run-id> | list  [--now <ISO-8601>] [--agent <name>]\n" +
+    "  [--vault <path>] [--json]\n" +
     "Runs the deterministic dreaming algorithm (idempotent), or manages the staged\n" +
     "lifecycle: stage persists a reviewable proposal bundle under Brain/dream/staged/,\n" +
     "validate proves the vault has not drifted, apply re-validates then runs the same\n" +
-    "engine live, discard drops the bundle.\n",
+    "engine live, discard drops the bundle. retriage re-runs the salience gate\n" +
+    "(dream.salience_threshold) against the bundle and names the facts that would move\n" +
+    "into or out of the rollup fold set; it changes nothing, so re-stage to adopt it.\n",
   "apply-evidence":
     "usage: o2b brain apply-evidence --pref <id> --artifact <wikilink> --result applied|violated|outdated\n" +
     "  [--agent <name>] [--note <text>] [--vault <path>] [--json]\n" +

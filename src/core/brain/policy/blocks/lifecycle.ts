@@ -31,6 +31,9 @@ import { DEFAULT_BRAIN_CONFIG } from "../defaults.ts";
  */
 const RETIRE_OPTIONAL_KEYS = ["confirmed_evidence_min_threshold"] as const;
 
+/** Optional `dream:` sub-key with no default, for the same reason. */
+const DREAM_OPTIONAL_KEYS = ["salience_threshold"] as const;
+
 /**
  * Merge one lifecycle block onto its slice of {@link DEFAULT_BRAIN_CONFIG}.
  * The cast is the one `mergeBlock` already documents: the merged values
@@ -54,7 +57,7 @@ function merge(
 }
 
 export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
-  const dream = merge(ctx, "dream", DEFAULT_BRAIN_CONFIG.dream);
+  const dream = merge(ctx, "dream", DEFAULT_BRAIN_CONFIG.dream, DREAM_OPTIONAL_KEYS);
   requirePositiveInteger("dream.candidate_threshold", dream.candidate_threshold, ctx.source);
   requirePositiveInteger(
     "dream.unconfirmed_window_days",
@@ -66,6 +69,12 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
     dream.contradiction_window_days,
     ctx.source,
   );
+  // Optional salience gate over the rollup fold set (unit 1). Out of
+  // range is a hard error rather than a silently ignored knob - the same
+  // rule the destructive-from-confirmed gate below follows.
+  if (dream.salience_threshold !== undefined) {
+    requireUnitInterval("dream.salience_threshold", dream.salience_threshold, ctx.source);
+  }
   return {
     candidate_threshold: dream.candidate_threshold as number,
     unconfirmed_window_days: dream.unconfirmed_window_days as number,
@@ -74,6 +83,13 @@ export function parseDreamBlock(ctx: BlockParseContext): BrainDreamConfig {
     // or non-boolean coerces to false so the default install stays
     // byte-identical (the heal phase becomes a checkpoint-only no-op).
     heal_enrich_enabled: dream.heal_enrich_enabled === true,
+    // Absent stays absent: `undefined` is the documented open-gate
+    // state `salience-gate.ts` branches on, so spreading the key in
+    // unconditionally would change `dream` from omitting it to carrying
+    // an explicit undefined.
+    ...(dream.salience_threshold !== undefined
+      ? { salience_threshold: dream.salience_threshold as number }
+      : {}),
   };
 }
 

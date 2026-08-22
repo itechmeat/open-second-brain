@@ -29,6 +29,7 @@ import type {
 import type { BrainIntentReviewEntry } from "./intent-review.ts";
 import type { ReconcileOutcomes } from "./reconcile-outcomes.ts";
 import type { RollupLadderEntry, RollupLadderPlan } from "./rollup-ladder.ts";
+import type { SalienceGateVerdict } from "./salience-gate.ts";
 
 /** Empty, frozen views for the fields a no-op run cannot populate. */
 const NO_UNCERTAIN = Object.freeze([] as ReadonlyArray<DreamUncertainEntry>);
@@ -44,6 +45,8 @@ export interface DreamNoOpSummaryInput {
   readonly reconcile: ReconcileOutcomes;
   readonly intentReviews: ReadonlyArray<BrainIntentReviewEntry>;
   readonly warnings: ReadonlyArray<DreamWarning>;
+  /** The gate's verdict over the fold set the ladder would have counted. */
+  readonly salienceGate: SalienceGateVerdict;
 }
 
 export function buildNoOpSummary(input: DreamNoOpSummaryInput): DreamRunSummary {
@@ -65,6 +68,7 @@ export function buildNoOpSummary(input: DreamNoOpSummaryInput): DreamRunSummary 
     outcome_regressions: Object.freeze([...refresh.outcomeRegressions]),
     phases: NO_PHASES,
     rollups: NO_ROLLUPS,
+    salience_gate: input.salienceGate,
     open_questions: Object.freeze([...reconcile.openQuestions]),
     ...(input.dryRun ? { dry_run: true } : {}),
   } satisfies DreamRunSummary);
@@ -85,6 +89,8 @@ export interface DreamChangedSummaryInput {
   readonly refresh: RefreshResult;
   readonly reconcile: ReconcileOutcomes;
   readonly rollupPlan: RollupLadderPlan;
+  /** The gate's verdict over the fold set `rollupPlan` counted. */
+  readonly salienceGate: SalienceGateVerdict;
   readonly intentReviews: ReadonlyArray<BrainIntentReviewEntry>;
   readonly warnings: ReadonlyArray<DreamWarning>;
   readonly gatedRetires: ReadonlyArray<DreamGatedRetireEntry>;
@@ -103,6 +109,7 @@ export function buildChangedSummary(input: DreamChangedSummaryInput): DreamRunSu
     changed: true,
     phases: buildPhaseSummaries(input),
     rollups: Object.freeze([...input.rollupPlan.entries]),
+    salience_gate: input.salienceGate,
     open_questions: Object.freeze([...reconcile.openQuestions]),
     new_unconfirmed: plan.newUnconfirmed.map((p) => `pref-${p.slug}`),
     confirmed: Array.from(refresh.confirmed.values()).map((s) => `pref-${s}`),

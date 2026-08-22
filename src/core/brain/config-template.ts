@@ -187,6 +187,13 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
         "Opt-in heal-phase enrichment. Left off, the heal phase is a",
         "checkpoint-only no-op.",
       ]),
+      example("salience_threshold", 0.2, [
+        "Unset by default, which leaves the salience gate open: every fact",
+        "enters the rollup ladder's fold set. Set a number in [0, 1] to fold",
+        "only facts whose combined salience score (decayed outcome mass,",
+        "Wilson-bound confidence, observed reuse) reaches it. Excluded facts",
+        "are always named in the dream summary, never silently dropped.",
+      ]),
     ],
   },
   {

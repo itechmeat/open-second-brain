@@ -1,11 +1,13 @@
 /**
  * `o2b brain dream [run] [--dry-run] [--step S] [--gate N=V] | stage |
- * validate <run-id> | apply <run-id> | discard <run-id> | list` - the
- * learning pass plus the staged lifecycle (t_ae8a8ec0). `run` (the
- * default, kept positional-free for back-compat) promotes inline;
- * `stage` persists a reviewable proposal bundle; `validate` proves the
- * vault has not drifted; `apply` re-validates and runs the same engine
- * live; `discard` drops the bundle.
+ * validate <run-id> | apply <run-id> | retriage <run-id> | discard
+ * <run-id> | list` - the learning pass plus the staged lifecycle
+ * (t_ae8a8ec0). `run` (the default, kept positional-free for back-compat)
+ * promotes inline; `stage` persists a reviewable proposal bundle;
+ * `validate` proves the vault has not drifted; `apply` re-validates and
+ * runs the same engine live; `retriage` re-runs the salience gate against
+ * the current threshold and reports what would move; `discard` drops the
+ * bundle.
  *
  * `--step` and `--gate` (no-dead-ends, Unit E - operator surface) are
  * the shell reach for the two capabilities that previously existed only
@@ -39,9 +41,12 @@ import {
 import {
   applyDreamBundle,
   discardDreamBundle,
+  DreamRetriageError,
   listDreamBundles,
+  retriageDreamBundle,
   stageDream,
   validateDreamBundle,
+  type DreamRetriageEntry,
 } from "../../../core/brain/dream-stage.ts";
 import {
   createSafeguard,
@@ -67,10 +72,13 @@ import {
 const USAGE =
   `usage: o2b brain dream [run] [--dry-run] [--step <${DREAM_STEP_RUNNABLE.join("|")}>] ` +
   `[--gate <${DREAM_GATE_NAMES.join("|")}>=<true|false>] | ` +
-  "stage | validate <run-id> | apply <run-id> | discard <run-id> | list  " +
+  "stage | validate <run-id> | apply <run-id> | retriage <run-id> | discard <run-id> | list  " +
   "[--now ISO] [--agent A] [--vault <path>] [--json]";
 
-const ACTIONS = new Set(["run", "stage", "validate", "apply", "discard", "list"]);
+const ACTIONS = new Set(["run", "stage", "validate", "apply", "retriage", "discard", "list"]);
+
+/** Staged actions that name one bundle. */
+const RUN_ID_ACTIONS = new Set(["validate", "apply", "retriage", "discard"]);
 
 /**
  * Refuse a request this verb understood and declined. Exit 2, with the
@@ -84,6 +92,30 @@ function refuse(message: string, asJson: boolean, payload: Record<string, unknow
   }
   process.stderr.write(`error: ${message}\n`);
   return 2;
+}
+
+/** `--json` row for one fact the gate would move. */
+function retriageRow(entry: DreamRetriageEntry): Record<string, unknown> {
+  return {
+    pref_id: entry.pref_id,
+    path: entry.path,
+    score: entry.score,
+    staged_score: entry.staged_score,
+  };
+}
+
+/** An absent threshold reads as a word, never as a number the operator did not set. */
+function describeThreshold(threshold: number | null): string {
+  return threshold === null ? "absent" : String(threshold);
+}
+
+/** Print one side of a retriage delta, naming every fact in it. */
+function printRetriageDelta(label: string, entries: ReadonlyArray<DreamRetriageEntry>): void {
+  ok(`${label}: ${entries.length}`);
+  for (const entry of entries) {
+    const staged = entry.staged_score === null ? "not scored" : String(entry.staged_score);
+    ok(`  ${entry.pref_id}  ${entry.score} (staged ${staged})`);
+  }
 }
 
 /** Render one partial step result as the verb's human line format. */
@@ -121,7 +153,7 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
     process.stderr.write(`${USAGE}\n`);
     return 2;
   }
-  const needsRunId = action === "validate" || action === "apply" || action === "discard";
+  const needsRunId = RUN_ID_ACTIONS.has(action);
   if (needsRunId ? positional.length !== 2 : positional.length > 1) {
     process.stderr.write(`${USAGE}\n`);
     return 2;
@@ -364,6 +396,39 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return outcome.applied ? 0 : 1;
     }
 
+    if (action === "retriage") {
+      const runId = positional[1]!;
+      const outcome = retriageDreamBundle(vault, runId, {
+        now: now ?? new Date(),
+        safeguard: guard(),
+        ...(agent ? { agentName: agent } : {}),
+      });
+      if (asJson) {
+        okJson({
+          run_id: outcome.runId,
+          staged_threshold: outcome.stagedThreshold,
+          current_threshold: outcome.currentThreshold,
+          changed: outcome.changed,
+          considered: outcome.considered,
+          admitted: outcome.admitted,
+          newly_admitted: outcome.newlyAdmitted.map(retriageRow),
+          newly_excluded: outcome.newlyExcluded.map(retriageRow),
+          notes: [...outcome.notes],
+        });
+        return 0;
+      }
+      ok(
+        `retriage ${runId}: threshold staged=${describeThreshold(outcome.stagedThreshold)} ` +
+          `current=${describeThreshold(outcome.currentThreshold)}`,
+      );
+      ok(`fold set: ${outcome.admitted} of ${outcome.considered} admitted now`);
+      printRetriageDelta("newly admitted", outcome.newlyAdmitted);
+      printRetriageDelta("newly excluded", outcome.newlyExcluded);
+      for (const note of outcome.notes) ok(`note: ${note}`);
+      if (outcome.changed) ok("re-stage the bundle to adopt this partition");
+      return 0;
+    }
+
     if (action === "discard") {
       const runId = positional[1]!;
       const removed = discardDreamBundle(vault, runId);
@@ -398,6 +463,12 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
       return 0;
     }
   } catch (exc) {
+    // A bundle this verb understood and declined is a refusal, not an
+    // operational failure: exit 2, with the bare reason beside the
+    // sentence so a machine caller can branch on it.
+    if (exc instanceof DreamRetriageError) {
+      return refuse(exc.message, asJson, { action, run_id: exc.runId, reason: exc.reason });
+    }
     const timedOut = exc instanceof SafeguardTimeoutError;
     if (asJson) {
       okJson({

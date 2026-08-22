@@ -332,6 +332,14 @@ confirm) -> **heal** (auto-retire stale, optional enrichment) -> **log**
   off). The heal phase links exact title/alias mentions across user vault
   pages outside the Brain root. Disabled by default so the install stays
   byte-identical.
+- **Salience gate** (opt-in via `dream.salience_threshold`, unset by
+  default). The pass's only model delegation is the count-triggered
+  rollup ladder, so the gate governs exactly one thing: which facts are
+  counted into the ladder's fold set. The score is a deterministic
+  weighted sum of the decayed outcome mass, the Wilson-bound confidence
+  and the observed-reuse rate - no model, no cache. Unset, the gate is
+  open, scores nothing, reads nothing, and the run is what it always was;
+  set, every held-back fact is named with its score in the run summary.
 
 ### Vault portability + session economy (v0.22.0)
 

@@ -325,7 +325,7 @@ const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REASON.owne
  * test that reads them.
  */
 const PROBE_ENTRY_COUNT = 96;
-const PROBE_RECIPE_COUNT = 220;
+const PROBE_RECIPE_COUNT = 221;
 const PROBE_TWO_SIDED_COUNT = 31;
 
 /**
@@ -623,6 +623,7 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { action: "validate", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
       { args: { action: "apply", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
       { args: { action: "discard", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
+      { args: { action: "retriage", run_id: "run-probe-absent" }, reason: REASON.aggregateOnly },
     ],
   },
   {

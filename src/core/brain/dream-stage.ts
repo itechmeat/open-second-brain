@@ -22,6 +22,10 @@
  *     with, then executes `dream()` live; determinism guarantees the
  *     live run performs exactly the staged plan. Drift at any point
  *     aborts before a single write.
+ *   - `retriageDreamBundle` re-runs the salience gate against the
+ *     CURRENT threshold and reports the admitted/excluded delta against
+ *     the partition the bundle recorded. It mutates nothing: re-staging
+ *     to adopt the new partition stays the operator's decision.
  *
  * The projection deliberately drops run ids, timestamps, and any
  * field that legitimately varies with the wall clock without changing
@@ -37,6 +41,15 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
 import { dream, type DreamOptions, type DreamRunSummary } from "./dream.ts";
+import { scanBrain } from "./dream-scan.ts";
+import { loadBrainConfig } from "./policy.ts";
+import {
+  collectSalienceFoldSet,
+  gateFoldSet,
+  openSalienceGate,
+  resolveSalienceThreshold,
+  type SalienceGateVerdict,
+} from "./salience-gate.ts";
 import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -56,6 +69,37 @@ export interface DreamStagePlan {
   readonly suppressed: ReadonlyArray<string>;
   readonly quarantined: ReadonlyArray<{ topic: string; failed_gates: ReadonlyArray<string> }>;
   readonly gated_retires: ReadonlyArray<{ pref_id: string; attempted_reason: string }>;
+}
+
+/**
+ * The salience partition the bundle was staged with (salience-lifecycle-
+ * enrichment, unit 1).
+ *
+ * Deliberately NOT part of {@link DreamStagePlan}: the plan projection is
+ * what `validate` diffs to prove the vault has not drifted, and it covers
+ * what the pass WRITES. The gate changes which facts the rollup ladder
+ * folds, and the ladder's envelopes are not in the projection either, so
+ * folding this in would report drift for something the projection does
+ * not otherwise model. It rides beside the plan in the manifest, and
+ * {@link retriageDreamBundle} is what reads it back.
+ */
+export interface DreamStageSalience {
+  readonly threshold: number | null;
+  readonly considered: number;
+  readonly admitted: number;
+  readonly excluded: ReadonlyArray<{ readonly pref_id: string; readonly score: number }>;
+}
+
+/** The manifest-side projection of one gate verdict. */
+export function projectSalienceGate(verdict: SalienceGateVerdict): DreamStageSalience {
+  return Object.freeze({
+    threshold: verdict.threshold,
+    considered: verdict.considered,
+    admitted: verdict.admitted,
+    excluded: Object.freeze(
+      verdict.excluded.map((e) => Object.freeze({ pref_id: e.pref_id, score: e.score })),
+    ),
+  });
 }
 
 export interface DreamStageSource {
@@ -208,7 +252,12 @@ function planToProposals(plan: DreamStagePlan): Array<Record<string, unknown>> {
 const section = (title: string, lines: ReadonlyArray<string>): string[] =>
   lines.length === 0 ? [] : [`## ${title}`, "", ...lines.map((l) => `- ${l}`), ""];
 
-function renderReport(runId: string, stagedAt: string, plan: DreamStagePlan): string {
+function renderReport(
+  runId: string,
+  stagedAt: string,
+  plan: DreamStagePlan,
+  salience: DreamStageSalience,
+): string {
   return [
     `# Dream stage ${runId}`,
     "",
@@ -217,6 +266,14 @@ function renderReport(runId: string, stagedAt: string, plan: DreamStagePlan): st
     "",
     `Staged at: ${stagedAt}`,
     `Planned changes: ${plan.changed ? "yes" : "none"}`,
+    // Silent when no gate is configured, so an un-opted-in vault's report
+    // is byte-identical to the one it has always rendered.
+    ...(salience.threshold === null
+      ? []
+      : [
+          `Salience threshold: ${salience.threshold} ` +
+            `(${salience.admitted} of ${salience.considered} facts folded)`,
+        ]),
     "",
     ...section("Would create (unconfirmed)", plan.new_unconfirmed),
     ...section("Would confirm", plan.confirmed),
@@ -235,6 +292,10 @@ function renderReport(runId: string, stagedAt: string, plan: DreamStagePlan): st
       plan.gated_retires.map((g) => `${g.pref_id} (${g.attempted_reason})`),
     ),
     ...section("Open contradictions", plan.contradictions),
+    ...section(
+      "Held out of the rollup fold set",
+      salience.excluded.map((e) => `${e.pref_id} (salience ${e.score})`),
+    ),
   ].join("\n");
 }
 
@@ -253,6 +314,7 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
     ...(opts.agentName !== undefined ? { agentName: opts.agentName } : {}),
   });
   const plan = projectDreamPlan(summary);
+  const salience = projectSalienceGate(summary.salience_gate);
   const sources = scanSources(vault);
   const stagedAt = isoSecond(opts.now);
   // Second-resolution ids can collide (same --now, same second): take
@@ -272,7 +334,7 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
 
   atomicWriteFileSync(join(dir, "proposals.jsonl"), proposalsBody);
   atomicWriteFileSync(join(dir, "sources.jsonl"), sourcesBody);
-  atomicWriteFileSync(join(dir, "REPORT.md"), renderReport(runId, stagedAt, plan) + "\n");
+  atomicWriteFileSync(join(dir, "REPORT.md"), renderReport(runId, stagedAt, plan, salience) + "\n");
   atomicWriteFileSync(
     join(dir, "manifest.json"),
     JSON.stringify(
@@ -285,6 +347,7 @@ export function stageDream(vault: string, opts: DreamStageOptions): DreamStageBu
         plan,
         plan_hash: sha256Hex(JSON.stringify(plan)),
         sources_hash: sha256Hex(sourcesBody),
+        salience,
       },
       null,
       2,
@@ -438,6 +501,195 @@ export function applyDreamBundle(
   }
 
   return Object.freeze({ applied: true, validation, summary });
+}
+
+// ----- retriage ------------------------------------------------------------
+
+/**
+ * Raised when a bundle cannot be retriaged. Carries the id and the bare
+ * reason so a caller reading only the error knows whether to re-stage,
+ * fix the id, or look somewhere else.
+ */
+export class DreamRetriageError extends Error {
+  readonly runId: string;
+  /** The reason alone, without the sentence wrapped around it. */
+  readonly reason: string;
+
+  constructor(runId: string, reason: string) {
+    super(`dream bundle ${runId} cannot be retriaged: ${reason}`);
+    this.name = "DreamRetriageError";
+    this.runId = runId;
+    this.reason = reason;
+  }
+}
+
+/** One fact that crosses the gate differently than the bundle recorded. */
+export interface DreamRetriageEntry {
+  readonly pref_id: string;
+  readonly path: string;
+  /** Score under the current scoring pass. */
+  readonly score: number;
+  /**
+   * Score the bundle recorded, or `null` when it recorded none - the
+   * bundle only stores scores for the facts it EXCLUDED, and an open
+   * gate scores nothing at all.
+   */
+  readonly staged_score: number | null;
+}
+
+export interface DreamRetriageOutcome {
+  readonly runId: string;
+  readonly stagedThreshold: number | null;
+  readonly currentThreshold: number | null;
+  /** True when the threshold moved or either delta is non-empty. */
+  readonly changed: boolean;
+  /** Fold-set size now. */
+  readonly considered: number;
+  /** Facts the current threshold would fold. */
+  readonly admitted: number;
+  /** Excluded when staged, admitted now. */
+  readonly newlyAdmitted: ReadonlyArray<DreamRetriageEntry>;
+  /** Admitted when staged, excluded now. */
+  readonly newlyExcluded: ReadonlyArray<DreamRetriageEntry>;
+  /** Named observations the two deltas alone cannot carry. */
+  readonly notes: ReadonlyArray<string>;
+}
+
+/** Read the manifest's salience block, refusing anything it cannot trust. */
+function readStagedSalience(runId: string, raw: unknown): DreamStageSalience {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new DreamRetriageError(
+      runId,
+      "it records no salience partition - it was staged before the gate shipped, so re-stage it " +
+        "to get a partition worth comparing",
+    );
+  }
+  const block = raw as Record<string, unknown>;
+  const threshold = block["threshold"];
+  if (threshold !== null && typeof threshold !== "number") {
+    throw new DreamRetriageError(runId, "its recorded salience threshold is not a number or null");
+  }
+  const excludedRaw = block["excluded"];
+  if (!Array.isArray(excludedRaw)) {
+    throw new DreamRetriageError(runId, "its recorded salience exclusions are not a list");
+  }
+  const excluded = excludedRaw.map((entry) => {
+    const row = entry as Record<string, unknown>;
+    if (typeof row?.["pref_id"] !== "string" || typeof row["score"] !== "number") {
+      throw new DreamRetriageError(
+        runId,
+        "one recorded salience exclusion carries no pref_id and score pair",
+      );
+    }
+    return Object.freeze({ pref_id: row["pref_id"], score: row["score"] });
+  });
+  return Object.freeze({
+    threshold,
+    considered: Number(block["considered"] ?? excluded.length),
+    admitted: Number(block["admitted"] ?? 0),
+    excluded: Object.freeze(excluded),
+  });
+}
+
+/**
+ * Re-run the gate against the CURRENT threshold and report what would
+ * move. Read-only in both directions: the bundle is never rewritten and
+ * the vault is never touched, so an operator who wants the new partition
+ * re-stages deliberately.
+ *
+ * Unlike a pass, this always scores the fold set - even with the gate
+ * open - because the delta has to name a score for every fact it moves,
+ * and "the gate is open so nothing was measured" is an answer that
+ * cannot be compared against the bundle.
+ */
+export function retriageDreamBundle(
+  vault: string,
+  runId: string,
+  opts: DreamStageOptions,
+): DreamRetriageOutcome {
+  if (!isValidRunId(runId)) {
+    throw new DreamRetriageError(runId, "that is not an id this staging surface issues");
+  }
+  const manifest = readManifest(join(stagedRoot(vault), runId));
+  if (manifest === null) {
+    throw new DreamRetriageError(
+      runId,
+      "there is no staged bundle by that name, or its manifest is unreadable",
+    );
+  }
+  const staged = readStagedSalience(runId, manifest["salience"]);
+
+  const cfg = loadBrainConfig(vault);
+  const currentThreshold = resolveSalienceThreshold(cfg);
+  const items = collectSalienceFoldSet({
+    vault,
+    preferences: scanBrain(vault).preferences,
+    cfg,
+    now: opts.now,
+  });
+  const verdict =
+    currentThreshold === null
+      ? openSalienceGate(items.length)
+      : gateFoldSet(items, currentThreshold);
+
+  const stagedScores = new Map(staged.excluded.map((e) => [e.pref_id, e.score]));
+  const currentExcluded = new Set(verdict.excluded.map((e) => e.pref_id));
+  const scoreById = new Map(items.map((i) => [i.pref_id, i]));
+
+  const newlyExcluded: DreamRetriageEntry[] = [];
+  for (const entry of verdict.excluded) {
+    if (stagedScores.has(entry.pref_id)) continue;
+    newlyExcluded.push(
+      Object.freeze({
+        pref_id: entry.pref_id,
+        path: entry.path,
+        score: entry.score,
+        staged_score: null,
+      }),
+    );
+  }
+
+  const newlyAdmitted: DreamRetriageEntry[] = [];
+  const notes: string[] = [];
+  for (const [prefId, stagedScore] of [...stagedScores].toSorted((a, b) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0,
+  )) {
+    if (currentExcluded.has(prefId)) continue;
+    const item = scoreById.get(prefId);
+    if (item === undefined) {
+      // Gone from the fold set entirely: reporting it as "newly
+      // admitted" would claim the ladder will now fold a fact that no
+      // longer exists.
+      notes.push(`${prefId} was excluded at stage time and is no longer in the fold set`);
+      continue;
+    }
+    newlyAdmitted.push(
+      Object.freeze({
+        pref_id: prefId,
+        path: item.path,
+        score: item.score.score,
+        staged_score: stagedScore,
+      }),
+    );
+  }
+  if (staged.considered !== verdict.considered) {
+    notes.push(
+      `the fold set changed size: ${staged.considered} fact(s) at stage time, ${verdict.considered} now`,
+    );
+  }
+
+  return Object.freeze({
+    runId,
+    stagedThreshold: staged.threshold,
+    currentThreshold,
+    changed:
+      staged.threshold !== currentThreshold || newlyAdmitted.length > 0 || newlyExcluded.length > 0,
+    considered: verdict.considered,
+    admitted: verdict.admitted,
+    newlyAdmitted: Object.freeze(newlyAdmitted),
+    newlyExcluded: Object.freeze(newlyExcluded),
+    notes: Object.freeze(notes),
+  });
 }
 
 /** Remove one staged bundle. True when it existed. */

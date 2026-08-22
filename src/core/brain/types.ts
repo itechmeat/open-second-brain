@@ -1269,6 +1269,16 @@ export interface BrainDreamConfig {
    * byte-identical. Absent is treated as `false`.
    */
   readonly heal_enrich_enabled?: boolean;
+  /**
+   * Salience-lifecycle-enrichment (unit 1). Minimum combined salience
+   * score, in `[0, 1]`, a fact must reach to enter the rollup ladder's
+   * fold set. See `salience-gate.ts` for the formula. Absent (the
+   * default) leaves the gate OPEN: nothing is scored, every fact is
+   * counted, and the run behaves exactly as it did before the gate
+   * existed. Excluded facts are always named in the dream summary, so
+   * raising this never drops anything silently.
+   */
+  readonly salience_threshold?: number;
 }
 
 export interface BrainRetireConfig {

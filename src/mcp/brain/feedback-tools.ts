@@ -28,9 +28,12 @@ import {
 import {
   applyDreamBundle,
   discardDreamBundle,
+  DreamRetriageError,
   listDreamBundles,
+  retriageDreamBundle,
   stageDream,
   validateDreamBundle,
+  type DreamRetriageEntry,
 } from "../../core/brain/dream-stage.ts";
 import { BRAIN_ROLES } from "../../core/brain/trust/role.ts";
 import { resolveEffectiveScope, writeSignal } from "../../core/brain/signal.ts";
@@ -414,12 +417,13 @@ async function toolBrainDream(
     action !== "stage" &&
     action !== "validate" &&
     action !== "apply" &&
+    action !== "retriage" &&
     action !== "discard" &&
     action !== "list"
   ) {
     throw new MCPError(
       INVALID_PARAMS,
-      "brain_dream: action must be run|stage|validate|apply|discard|list",
+      "brain_dream: action must be run|stage|validate|apply|retriage|discard|list",
     );
   }
   const dryRun = coerceBool(args, "dry_run");
@@ -488,7 +492,7 @@ async function toolBrainDream(
     // Staged lifecycle (t_ae8a8ec0): stage -> validate -> apply over a
     // persisted bundle; dream() stays the only promotion engine.
     const runIdArg = coerceStr(args, "run_id", false);
-    if ((action === "validate" || action === "apply" || action === "discard") && !runIdArg) {
+    if (action !== "list" && action !== "stage" && !runIdArg) {
       throw new MCPError(INVALID_PARAMS, `brain_dream action=${action}: run_id is required`);
     }
     const now = nowDate ?? new Date();
@@ -528,6 +532,48 @@ async function toolBrainDream(
           ...(outcome.summary !== undefined
             ? { changed: outcome.summary.changed, ...scopedDreamRows(dreamView, outcome.summary) }
             : {}),
+        };
+      }
+      case "retriage": {
+        // Read-only: it re-runs the salience gate against the current
+        // threshold and reports what would move. The bundle is not
+        // rewritten, so a caller that likes the new partition re-stages.
+        let outcome;
+        try {
+          outcome = retriageDreamBundle(ctx.vault, runIdArg!, stageOpts);
+        } catch (exc) {
+          if (exc instanceof DreamRetriageError) {
+            throw new MCPError(INVALID_PARAMS, `brain_dream: ${exc.message}`);
+          }
+          throw exc;
+        }
+        const scopedDelta = (
+          entries: ReadonlyArray<DreamRetriageEntry>,
+        ): Array<Record<string, unknown>> =>
+          dreamView
+            .keep(entries, (entry) => [entry.pref_id, entry.path])
+            .map((entry) => ({
+              pref_id: entry.pref_id,
+              path: entry.path,
+              score: entry.score,
+              staged_score: entry.staged_score,
+            }));
+        return {
+          action,
+          run_id: runIdArg,
+          staged_threshold: outcome.stagedThreshold,
+          current_threshold: outcome.currentThreshold,
+          changed: outcome.changed,
+          considered: outcome.considered,
+          admitted: outcome.admitted,
+          // Counts before the owner filter, names after it: a scoped
+          // caller is still told HOW MANY facts moved, and only the
+          // identities it may not see are withheld.
+          newly_admitted_count: outcome.newlyAdmitted.length,
+          newly_excluded_count: outcome.newlyExcluded.length,
+          newly_admitted: scopedDelta(outcome.newlyAdmitted),
+          newly_excluded: scopedDelta(outcome.newlyExcluded),
+          notes: [...outcome.notes],
         };
       }
       case "discard": {
@@ -622,6 +668,26 @@ async function toolBrainDream(
       age_days: q.age_days,
       failed_gates: [...q.failed_gates],
     })),
+    // The salience gate over the rollup fold set. `threshold: null` says
+    // the gate was absent, and the two counts are reported before the
+    // owner filter so a scoped caller still learns how many facts were
+    // held back even where it may not see their names.
+    salience_gate: {
+      threshold: summary.salience_gate.threshold,
+      considered: summary.salience_gate.considered,
+      admitted: summary.salience_gate.admitted,
+      excluded_count: summary.salience_gate.excluded.length,
+      excluded: dreamView
+        .keep(summary.salience_gate.excluded, (entry) => [entry.pref_id, entry.path])
+        .map((entry) => ({
+          pref_id: entry.pref_id,
+          path: entry.path,
+          score: entry.score,
+          mass: entry.mass,
+          confidence: entry.confidence,
+          reuse: entry.reuse,
+        })),
+    },
     snapshot_path: summary.snapshot_path
       ? vaultRelativeSafe(ctx.vault, summary.snapshot_path)
       : null,
@@ -859,19 +925,19 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_dream",
     description:
-      "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list. Typically scheduled via cron.",
+      "Deterministic learning pass over `Brain/inbox/`. action=run (default) promotes inline; the staged lifecycle persists a reviewable bundle: stage -> validate -> apply (or discard), plus list and retriage. Typically scheduled via cron.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["run", "stage", "validate", "apply", "discard", "list"],
+          enum: ["run", "stage", "validate", "apply", "retriage", "discard", "list"],
           description:
-            "run executes inline; stage persists a proposal bundle; validate/apply/discard manage one bundle by run_id; list shows bundles.",
+            "run executes inline; stage persists a bundle; validate/apply/discard manage one by run_id; retriage re-scores a bundle's salience gate; list shows bundles.",
         },
         run_id: {
           type: "string",
-          description: "Bundle id for validate/apply/discard (from action=stage or list).",
+          description: "Bundle id for validate/apply/retriage/discard (from action=stage or list).",
         },
         dry_run: {
           type: "boolean",

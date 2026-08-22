@@ -84,6 +84,7 @@ import {
   resolveRollupThresholds,
   type RollupLadderPlan,
 } from "./rollup-ladder.ts";
+import { applySalienceGate } from "./salience-gate.ts";
 import { withDestructiveSnapshot } from "./snapshot-gate.ts";
 import { compactRunStamp, isoDate } from "./time.ts";
 import { BRAIN_SNAPSHOT_REASON } from "./types.ts";
@@ -262,13 +263,21 @@ function dreamRun(
   // the `reconcile` log events below are emitted only on a changed run.
   const reconcile = buildReconcileOutcomes(scan, plan, cfg, now);
 
+  // Deterministic salience gate over the ladder's fold set
+  // (salience-lifecycle-enrichment, unit 1). The ladder counts facts and
+  // nothing else, so this is the only seam where a salience judgement can
+  // change what the pass asks a model to fold. With
+  // `dream.salience_threshold` unset the gate is open and reads nothing,
+  // which is why an un-opted-in vault pays no I/O here.
+  const salienceGate = applySalienceGate({ vault, preferences: scan.preferences, cfg, now });
+
   // Count-triggered fact rollup ladder (S3): pure counters over the
-  // current fact artifacts (preferences) against the persisted per-tier
+  // ADMITTED fact artifacts (preferences) against the persisted per-tier
   // baselines. Computed before the `changed` gate so a run whose ONLY
   // effect is a rollup still counts as changed; below threshold it fires
   // nothing and the ledger is never written, so the run stays
   // byte-identical.
-  let rollupPlan = buildRollupPlan(vault, cfg, scan.preferences.length, runId);
+  let rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId);
 
   if (!hasStateChange(plan, refresh, scan.corrupted.length, rollupPlan)) {
     if (!dryRun) {
@@ -288,6 +297,7 @@ function dreamRun(
       reconcile,
       intentReviews: intentReview.reviews,
       warnings,
+      salienceGate,
     });
   }
 
@@ -328,7 +338,7 @@ function dreamRun(
         // the pre-collision runId; if the ladder corrected it, rebuild the
         // plan so every target_path embeds the final run_id.
         if (rollupPlan.fired && runId !== baseRunId) {
-          rollupPlan = buildRollupPlan(vault, cfg, scan.preferences.length, runId);
+          rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId);
         }
         opts.safeguard?.checkpoint();
         const handle = openWorkrun(vault, runId);
@@ -444,6 +454,7 @@ function dreamRun(
     refresh,
     reconcile,
     rollupPlan,
+    salienceGate,
     intentReviews: intentReview.reviews,
     warnings,
     gatedRetires: exec.gatedRetires,
