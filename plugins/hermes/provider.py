@@ -429,7 +429,6 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             if entry.is_file():
                 return (bun, "run", str(entry), "mcp")
 
-
         # Last resort: hope o2b is reachable (e.g. npm global install on
         # Windows created an o2b.cmd shim, or the user's shell can run it).
         return ("o2b", "mcp")
@@ -772,17 +771,23 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """Recall text from ``brain_context_pack``: prefer structured bodies.
 
         Structured item bodies are the budgeted recall payload; using them also
-        bypasses the MCP transport's preview envelope. Fall back to
-        ``content[0].text`` for older servers that only expose legacy text.
+        bypasses the MCP transport's preview envelope. ``content[0].text`` is
+        the fallback for older servers that only expose legacy text.
+
+        A server that answered with an ``items`` key has spoken the structured
+        contract, so its answer stands even when it is empty: an empty pack
+        means there was nothing to recall, and dropping to the text channel
+        there would inject the raw pack JSON - vault paths and all - or the
+        preview envelope into the prompt. Only a result with no ``items`` key
+        at all is treated as legacy.
         """
         structured = OpenSecondBrainMemoryProvider._structured(result)
-        bodies = [
-            str(item.get("body"))
-            for item in (structured.get("items") or [])
-            if isinstance(item, dict) and str(item.get("body") or "").strip()
-        ]
-        if bodies:
-            return "\n\n".join(bodies)
+        if "items" in structured:
+            return "\n\n".join(
+                str(item.get("body"))
+                for item in (structured.get("items") or [])
+                if isinstance(item, dict) and str(item.get("body") or "").strip()
+            )
         return OpenSecondBrainMemoryProvider._text(result)
 
     def _append_turn(self, user: str, assistant: str, session_id: str) -> None:

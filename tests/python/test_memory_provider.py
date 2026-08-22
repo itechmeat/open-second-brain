@@ -843,6 +843,66 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertNotIn("bytes_preview", out)
         self.assertNotIn("art-deadbeef", out)
 
+    def test_prefetch_drops_an_empty_structured_pack_instead_of_its_json(self):
+        # A server that answered with an `items` key has spoken the structured
+        # contract; an empty pack means nothing to recall. Falling back to the
+        # text channel there would inject the raw pack JSON - local vault path
+        # included - into the prompt.
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        raw_pack = json.dumps({"items": [], "vault": "/home/agent/private-vault"})
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {
+                    "structuredContent": {"items": []},
+                    "content": [{"type": "text", "text": raw_pack}],
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("any query", session_id="sess-1")
+
+        self.assertNotIn("private-vault", out)
+        self.assertNotIn("items", out)
+        self.assertIn("@pf-agent", out)  # the identity reminder still lands
+
+    def test_prefetch_drops_a_pack_whose_item_bodies_are_all_blank(self):
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        raw_pack = json.dumps({"vault": "/home/agent/private-vault"})
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "items": [{"title": "a", "body": "   "}, {"title": "b", "body": ""}]
+                    },
+                    "content": [{"type": "text", "text": raw_pack}],
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("any query", session_id="sess-1")
+
+        self.assertNotIn("private-vault", out)
+
+    def test_prefetch_falls_back_to_text_when_the_server_omits_items(self):
+        # A genuinely legacy server exposes no `items` key at all; its text
+        # payload is still the only recall it can offer.
+        os.environ["VAULT_AGENT_NAME"] = "pf-agent"
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True, "reason": "hit"}},
+                "brain_context_pack": {
+                    "structuredContent": {"generated_at": "2026-08-22"},
+                    "content": [{"type": "text", "text": "LEGACY RECALL TEXT"}],
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("any query", session_id="sess-1")
+
+        self.assertIn("LEGACY RECALL TEXT", out)
+
     def test_prefetch_appends_skills_attach_block_when_enabled(self):
         os.environ["VAULT_AGENT_NAME"] = "pf-agent"
         bridge = FakeBrainBridge(
