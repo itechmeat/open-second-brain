@@ -1158,12 +1158,40 @@ class _ScriptedReader:
         return line
 
 
+class _ScriptedStderr:
+    """Stderr stand-in that survives the close() the bridge performs.
+
+    A real pipe is closed by ``stop()`` while the drain thread may still be
+    reading it; a closed ``BytesIO`` would make the excerpt race with teardown.
+    This one keeps serving its scripted lines and then reports EOF, so the
+    drain thread always terminates on its own and the assertion is about the
+    buffer rather than about thread timing.
+    """
+
+    def __init__(self, lines):
+        self._lines = [line.encode("utf-8") if isinstance(line, str) else line for line in lines]
+        self._i = 0
+        self.closed = False
+
+    def readline(self):
+        if self._i >= len(self._lines):
+            return b""
+        line = self._lines[self._i]
+        self._i += 1
+        return line
+
+    def close(self):
+        self.closed = True
+
+
 class _FakeProcess:
     """Minimal Popen stand-in: captures stdin writes, scripts stdout reads."""
 
-    def __init__(self, responses):
+    def __init__(self, responses, stderr_lines=None):
         self.stdin = io.BytesIO()
         self.stdout = _ScriptedReader(responses)
+        self.stderr = _ScriptedStderr(stderr_lines or [])
+        self.pid = 4242
         self.terminated = False
         self._returncode = None
 
@@ -1381,6 +1409,59 @@ class BridgeChildEnvironmentTests(unittest.TestCase):
             McpBrainBridge(vault="/v").start()
 
         self.assertIsNone(popen.call_args.kwargs["env"])
+
+
+class BridgeStderrDiagnosticTests(unittest.TestCase):
+    """Issue #173: the reason a child refused to start is on its stderr.
+
+    The JSON-RPC channel can only report the consequence ("unexpected EOF"),
+    which is a true statement about the transport and a useless one about the
+    cause. Draining stderr into a bounded tail lets the failure carry it.
+    """
+
+    def test_handshake_failure_carries_the_child_stderr_excerpt(self):
+        # The child dies before its first stdout frame, so the transport sees
+        # EOF. The reason it died is on stderr and must reach the message.
+        proc = _FakeProcess(
+            [],
+            stderr_lines=[
+                b"error: 'bun' is not on PATH.\n",
+                b"Install it with: curl -fsSL https://bun.sh/install | bash\n",
+            ],
+        )
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc):
+            bridge = McpBrainBridge(vault="/v")
+            with self.assertRaises(BridgeTransportError) as ctx:
+                bridge.start()
+
+        message = str(ctx.exception)
+        self.assertIn("unexpected EOF from MCP server", message)
+        self.assertIn("error: 'bun' is not on PATH.", message)
+        self.assertIn("https://bun.sh/install", message)
+
+    def test_handshake_failure_without_stderr_keeps_the_bare_message(self):
+        proc = _FakeProcess([])
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc):
+            bridge = McpBrainBridge(vault="/v")
+            with self.assertRaises(BridgeTransportError) as ctx:
+                bridge.start()
+
+        self.assertEqual(str(ctx.exception), "unexpected EOF from MCP server")
+
+    def test_stderr_tail_is_bounded_to_the_last_lines(self):
+        noisy = [f"line-{i}\n".encode("utf-8") for i in range(500)]
+        proc = _FakeProcess([], stderr_lines=noisy)
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc):
+            bridge = McpBrainBridge(vault="/v")
+            with self.assertRaises(BridgeTransportError) as ctx:
+                bridge.start()
+
+        message = str(ctx.exception)
+        self.assertIn("line-499", message)
+        self.assertNotIn("line-0\n", message)
+        excerpt = message.split("--- child stderr (last lines) ---\n", 1)[1]
+        self.assertLessEqual(len(excerpt.splitlines()), bridge_module.STDERR_TAIL_LINES)
+        self.assertLessEqual(len(excerpt), bridge_module.STDERR_TAIL_MAX_BYTES)
 
 
 class ProviderChildEnvironmentTests(unittest.TestCase):

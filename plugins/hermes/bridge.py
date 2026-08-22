@@ -20,6 +20,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
@@ -36,6 +37,17 @@ logger = logging.getLogger(__name__)
 # it opens the store for writing and the integrity scan runs.
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 120.0
 REQUEST_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_MCP_TIMEOUT"
+
+# The child's stderr is where the runtime says why it refused to start ("error:
+# 'bun' is not on PATH."), and the JSON-RPC channel only ever reports the
+# consequence ("unexpected EOF"). Keep the tail of it so the exception can
+# carry the cause. Bounded twice over - by line count and by total bytes - so a
+# child that floods stderr cannot grow the parent's memory.
+STDERR_TAIL_LINES = 20
+STDERR_TAIL_MAX_BYTES = 8 * 1024
+# Time allowed for the drain thread to finish after the child is torn down,
+# so the excerpt includes the last thing the child managed to write.
+_STDERR_DRAIN_JOIN_SECONDS = 1.0
 
 
 def resolve_request_timeout() -> float | None:
@@ -234,6 +246,10 @@ class McpBrainBridge:
         self._spawn = spawn or self._default_spawn
         self._cwd = cwd
         self._env = dict(env) if env is not None else None
+        # deque append/clear are atomic under the GIL, so the drain thread
+        # writes it and start() reads it with no extra lock.
+        self._stderr_tail: deque[str] = deque(maxlen=STDERR_TAIL_LINES)
+        self._stderr_thread: threading.Thread | None = None
         # A gateway may serve several AIAgents concurrently, but one shared
         # bridge has one request/response stream. Serialise lifecycle and RPC
         # operations so request ids and stdout frames cannot interleave.
@@ -320,34 +336,72 @@ class McpBrainBridge:
             daemon=True,
             name="o2b-mcp-stderr-drain",
         )
+        self._stderr_thread = stderr_thread
         stderr_thread.start()
         return process
 
-    @staticmethod
-    def _drain_stderr(process: Any) -> None:
-        """Read stderr line-by-line until the child exits; discard contents.
+    def _drain_stderr(self, process: Any) -> None:
+        """Read stderr line-by-line until the child exits, keeping the tail.
 
         Runs in a daemon thread so a misbehaving child (one that floods
         stderr) cannot wedge the parent. Without this, a `stderr=PIPE` child
         that writes more than the kernel pipe buffer (~64 KiB on Linux) will
         block on its next stderr write, which surfaces in the parent as a
         silent death of the JSON-RPC channel.
+
+        Only the last :data:`STDERR_TAIL_LINES` lines are retained, each
+        truncated to the byte budget, so the buffer stays bounded no matter how
+        much the child writes.
         """
         try:
             stream = getattr(process, "stderr", None)
             if stream is None:
                 return
-            for _line in iter(stream.readline, b""):
-                # Drain and discard; we do not currently surface stderr to
-                # the agent, but a future diagnostic flag could log it.
-                pass
+            for line in iter(stream.readline, b""):
+                if not line:
+                    break
+                if isinstance(line, bytes):
+                    line = line.decode("utf-8", errors="replace")
+                line = line.rstrip("\r\n")
+                if line:
+                    self._stderr_tail.append(line[:STDERR_TAIL_MAX_BYTES])
         except Exception:  # noqa: BLE001 - drain must never raise
             pass
+
+    def _stderr_excerpt(self) -> str:
+        """Buffered child stderr, newest lines last, capped at the byte budget."""
+        lines = list(self._stderr_tail)
+        excerpt = "\n".join(lines)
+        if len(excerpt) > STDERR_TAIL_MAX_BYTES:
+            excerpt = excerpt[-STDERR_TAIL_MAX_BYTES:]
+        return excerpt.strip()
+
+    def _with_stderr_excerpt(self, exc: BaseException) -> BaseException:
+        """The handshake failure, re-stated with what the child said on stderr.
+
+        ``stop()`` has already torn the child down, so the drain thread is
+        about to see EOF; give it a bounded moment to land its last lines
+        rather than reporting a truncated cause. Only transport failures are
+        rewritten - a JSON-RPC rejection came from a server that is talking,
+        and its stderr is noise - and the original exception is returned
+        untouched when the child said nothing.
+        """
+        if not isinstance(exc, BridgeTransportError):
+            return exc
+        thread = self._stderr_thread
+        if thread is not None and thread.is_alive():
+            thread.join(_STDERR_DRAIN_JOIN_SECONDS)
+        excerpt = self._stderr_excerpt()
+        if not excerpt:
+            return exc
+        return type(exc)(f"{exc}\n--- child stderr (last lines) ---\n{excerpt}")
 
     def start(self) -> None:
         with self._lock:
             if self._started:
                 return
+            self._stderr_tail.clear()
+            self._stderr_thread = None
             self._proc = self._spawn(self._argv())
             self._client = JsonRpcStdioClient(
                 self._proc.stdin, self._proc.stdout, timeout=resolve_request_timeout()
@@ -365,11 +419,14 @@ class McpBrainBridge:
                 )
                 self._client.notify("notifications/initialized")
                 result = self._client.request("tools/list", {})
-            except BaseException:
+            except BaseException as exc:
                 # A failed handshake must not leak the spawned process.
                 logger.warning("open-second-brain MCP handshake failed pid=%s", pid)
                 self.stop()
-                raise
+                explained = self._with_stderr_excerpt(exc)
+                if explained is exc:
+                    raise
+                raise explained from exc
             self._tools = list((result or {}).get("tools", []))
             self._started = True
             logger.debug("open-second-brain MCP child ready pid=%s", pid)
