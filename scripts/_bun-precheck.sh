@@ -14,6 +14,14 @@ MIN_BUN_MAJOR=1
 MIN_BUN_MINOR=1
 MIN_BUN_PATCH=0
 
+# A caller launched with a minimal inherited PATH (a Hermes gateway spawns
+# its plugins that way) can miss a Bun that is installed and one directory
+# away. Adopt the standard install location before deciding it is absent.
+if ! command -v bun >/dev/null 2>&1 && [[ -x "${HOME:-}/.bun/bin/bun" ]]; then
+  PATH="${HOME}/.bun/bin${PATH:+:${PATH}}"
+  export PATH
+fi
+
 if ! command -v bun >/dev/null 2>&1; then
   cat >&2 <<EOS
 error: 'bun' is not on PATH.

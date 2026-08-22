@@ -62,6 +62,14 @@ ROOT=$(resolve_root) || {
   exit 0
 }
 
+# This wrapper does not source scripts/_bun-precheck.sh, so it repeats that
+# script's PATH repair: a minimal inherited PATH can hide an installed Bun,
+# and skipping the hook over that is a silent loss of behaviour.
+if ! command -v bun >/dev/null 2>&1 && [[ -x "${HOME:-}/.bun/bin/bun" ]]; then
+  PATH="${HOME}/.bun/bin${PATH:+:${PATH}}"
+  export PATH
+fi
+
 if ! command -v bun >/dev/null 2>&1; then
   warn "bun not on PATH; skipping ${HOOK_NAME}"
   exit 0

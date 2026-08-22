@@ -10,7 +10,15 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync, cpSync } from "node:fs";
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,6 +82,28 @@ describe("o2b-hook resilience", () => {
     const r = runHook(WRAPPER, ["boom"], { CLAUDE_PLUGIN_ROOT: root });
     expect(r.status).toBe(0);
     expect(r.status).not.toBe(2);
+  });
+
+  test("adopts ~/.bun/bin when a minimal PATH hides an installed Bun", () => {
+    // The wrapper does not source scripts/_bun-precheck.sh, so it carries its
+    // own copy of that PATH repair. Without it a gateway-spawned hook skips
+    // over a Bun sitting one directory away (issue #173).
+    const root = freshRoot("probe");
+    const home = mkdtempSync(join(tmpdir(), "o2bhome-"));
+    tmps.push(home);
+    const bunBin = join(home, ".bun", "bin");
+    mkdirSync(bunBin, { recursive: true });
+    const realBun = process.execPath;
+    symlinkSync(realBun, join(bunBin, "bun"));
+    chmodSync(bunBin, 0o755);
+
+    const r = spawnSync("bash", [WRAPPER, "probe"], {
+      env: { HOME: home, PATH: "/usr/bin:/bin", CLAUDE_PLUGIN_ROOT: root },
+      encoding: "utf8",
+    });
+    expect(r.status).toBe(0);
+    expect(r.stderr).not.toContain("bun not on PATH");
+    expect(r.stdout).toContain("PROBE_OK:probe");
   });
 
   test("CLAUDE_PLUGIN_ROOT wins over a stale wrapper location (heals broken install)", () => {
