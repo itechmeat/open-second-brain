@@ -18,6 +18,7 @@ import { parseDeriveFactInput } from "../../../src/core/brain/derived-fact.ts";
 import { parseResearchReportInput } from "../../../src/core/brain/research/research.ts";
 import {
   DERIVED_FACT_SHAPE,
+  DESIGN_NOTE_SHAPE,
   DISTILL_CLAIMS_SHAPE,
   EXTRACTED_SIGNALS_SHAPE,
   MODEL_AUTHORED_SHAPES,
@@ -145,6 +146,7 @@ describe("model-authored descriptors", () => {
         RESEARCH_REPORT_SHAPE,
         EXTRACTED_SIGNALS_SHAPE,
         SKILL_PAGE_DRAFT_SHAPE,
+        DESIGN_NOTE_SHAPE,
       ]),
     );
   });

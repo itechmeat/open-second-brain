@@ -62,7 +62,9 @@
  * batch counterpart to regex fact extraction: hands the calling agent one
  * session's user turns inside a needs-llm-step envelope and writes the
  * validated answer as speculative `source_type: auto_extract` inbox
- * signals).
+ * signals) and `brain_design_note` (the one-shot sibling of the panel
+ * lane: a read-only grounding pass over tension, decision and truth
+ * records, one envelope, and a committed note under `Brain/decisions/`).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -96,6 +98,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_deep_synthesis",
   "brain_delete_by_source",
   "brain_derive_fact",
+  "brain_design_note",
   "brain_diarize",
   "brain_distill_source",
   "brain_doctor",

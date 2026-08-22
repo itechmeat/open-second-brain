@@ -454,6 +454,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "Subject profile: document set, stated-versus-evidenced gap, needs-LLM skeleton",
         ),
         command(
+          "design-note",
+          "One-shot design note grounded in tension, decision, and truth records",
+          [
+            flag("vault", "string"),
+            flag("agent", "string"),
+            flag("payload", "string"),
+            flag("payload-file", "string"),
+          ],
+        ),
+        command(
           "extract-signals",
           "Mine taste signals from an imported session's user turns (two-phase, needs-LLM)",
           [

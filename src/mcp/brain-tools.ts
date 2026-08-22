@@ -30,6 +30,7 @@ import { NER_TOOLS } from "./brain/ner-tools.ts";
 import { INGEST_TOOLS } from "./brain/ingest-tools.ts";
 import { DISTILL_TOOLS } from "./brain/distill-tools.ts";
 import { EXTRACT_TOOLS } from "./brain/extract-tools.ts";
+import { DESIGN_NOTE_TOOLS } from "./brain/design-note-tools.ts";
 import { RESEARCH_TOOLS } from "./brain/research-tools.ts";
 import { DERIVE_TOOLS } from "./brain/derive-tools.ts";
 import { NOTES_TOOLS } from "./brain/notes-tools.ts";
@@ -67,6 +68,7 @@ export const BRAIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   ...INGEST_TOOLS,
   ...DISTILL_TOOLS,
   ...EXTRACT_TOOLS,
+  ...DESIGN_NOTE_TOOLS,
   ...RESEARCH_TOOLS,
   ...DERIVE_TOOLS,
   ...NOTES_TOOLS,

@@ -163,6 +163,7 @@ Brain verbs (observing memory):
   deep-synthesis      Topic dossier: notes, agreements, contradictions, stale claims, gaps
   diarize             Subject profile: document set, stated-vs-evidenced gap, needs-llm-step skeleton
   extract-signals     Mine taste signals from an imported session's user turns (two-phase, needs-llm-step)
+  design-note         One-shot design note grounded in tensions, decisions and truth records
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
   bench               Memory quality benchmark over a disposable fixture vault
@@ -693,6 +694,19 @@ export const VERB_HELP: Record<string, string> = {
     "One canonical entity per (category, name); aliases resolve to the canonical record.\n" +
     "Labels are decoration-stripped and quality-gated on set; prune removes historical\n" +
     "malformed nodes and their edges. Denylist: entities.label_denylist config key.",
+  "design-note":
+    "usage: o2b brain design-note <topic> [--vault <vault>] [--agent <name>]\n" +
+    "                              [--payload <json> | --payload-file <path>] [--json]\n" +
+    "The one-shot sibling of `o2b brain panel`. Without a payload it is\n" +
+    "read-only: it grounds the topic in the vault's tension records, decision\n" +
+    "records and truth projections - naming any store the vault holds nothing\n" +
+    "in, which is not the same as a store that matched nothing - and prints\n" +
+    "the single needs-llm-step envelope the calling agent answers.\n" +
+    "With --payload / --payload-file it validates the written note and commits\n" +
+    "it as Brain/decisions/design-<date>-<topic>.md, beside the panel outputs.\n" +
+    "The note must weigh named alternatives and mark EXACTLY ONE recommended:\n" +
+    "zero and two-plus are both refused, and the refusal states the count.\n" +
+    "A note for the same topic on the same day is refused, never overwritten.\n",
   "extract-signals":
     "usage: o2b brain extract-signals <session-ref> [--vault <vault>] [--agent <name>]\n" +
     "                                  [--payload <json> | --payload-file <path>] [--json]\n" +

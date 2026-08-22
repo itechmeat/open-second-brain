@@ -257,6 +257,8 @@ export const RESEARCH_REPORT_SURFACE = "research_report";
 export const EXTRACTED_SIGNALS_SURFACE = "extracted_signals";
 /** Surface label of the skill draft written from a mature vault page. */
 export const SKILL_PAGE_DRAFT_SURFACE = "skill_page_draft";
+/** Surface label of the one-shot design note. */
+export const DESIGN_NOTE_SURFACE = "design_note";
 
 const STRING_SHAPE: ShapeDescriptor = { type: "string" };
 const STRING_LIST_SHAPE: ShapeDescriptor = { type: "array", items: STRING_SHAPE };
@@ -377,6 +379,36 @@ export const SKILL_PAGE_DRAFT_SHAPE: ShapeDescriptor = freezeDescriptor({
 });
 
 /**
+ * A design note: named alternatives, one of them recommended.
+ *
+ * `recommended` is checked here only as a BOOLEAN. The rule that matters -
+ * exactly one alternative carries `true` - reads the whole array at once,
+ * which the descriptor language cannot express and is not being widened
+ * to; it lives in the semantic-check registry beside this descriptor.
+ */
+export const DESIGN_NOTE_SHAPE: ShapeDescriptor = freezeDescriptor({
+  type: "object",
+  required: ["title", "alternatives"],
+  properties: {
+    title: FILLED_STRING_SHAPE,
+    summary: FILLED_STRING_SHAPE,
+    alternatives: {
+      type: "array",
+      items: {
+        type: "object",
+        required: ["name", "approach", "tradeoffs", "recommended"],
+        properties: {
+          name: FILLED_STRING_SHAPE,
+          approach: FILLED_STRING_SHAPE,
+          tradeoffs: FILLED_STRING_SHAPE,
+          recommended: { type: "boolean" },
+        },
+      },
+    },
+  },
+});
+
+/**
  * Every declared descriptor, by surface. The registry exists so the shallow-
  * and-expressible discipline can be asserted over the whole set at once
  * rather than one descriptor at a time.
@@ -387,6 +419,7 @@ export const MODEL_AUTHORED_SHAPES: Readonly<Record<string, ShapeDescriptor>> = 
   [RESEARCH_REPORT_SURFACE]: RESEARCH_REPORT_SHAPE,
   [EXTRACTED_SIGNALS_SURFACE]: EXTRACTED_SIGNALS_SHAPE,
   [SKILL_PAGE_DRAFT_SURFACE]: SKILL_PAGE_DRAFT_SHAPE,
+  [DESIGN_NOTE_SURFACE]: DESIGN_NOTE_SHAPE,
 });
 
 // ----- Internals ----------------------------------------------------------

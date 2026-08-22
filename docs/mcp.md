@@ -1217,3 +1217,18 @@ log line is machine-composed rather than authored.
   the absolute path it is about to write, so a rollback removes exactly
   that file (and the directory it created for it, only while empty).
   Sticky rejection applies as it does to every other pattern kind.
+- Since v1.51.0 `brain_design_note` joins the surface (112 total): the
+  one-shot sibling of the panel lane. Called with a `topic` alone it is
+  read-only - it grounds the topic in the vault's tension records, decision
+  records and truth projections using the same deterministic token overlap
+  `brain_decision`'s similar-decision lookup ranks with, and returns one
+  needs-llm-step envelope. A store this vault holds NOTHING in is named in
+  `empty_stores`; a store that holds records and matched none of them is
+  not, because those are different facts and lead to different next moves.
+  An empty vault is a grounded report, never a refusal. Called with a
+  `note` it validates the written note - structurally, then against the
+  rule that EXACTLY ONE alternative sets `recommended: true` - and commits
+  it as `Brain/decisions/design-<date>-<topic>.md`, beside the panel
+  outputs. Zero and two-plus recommendations are both refused and the
+  refusal states the count found; a note for the same topic on the same day
+  is refused rather than overwriting the first.

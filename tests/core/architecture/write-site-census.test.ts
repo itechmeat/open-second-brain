@@ -1095,8 +1095,12 @@ const DIRECT_WRITE_ROWS = 68;
  * expiration mutation, rewrites a signal's or preference's frontmatter
  * through `writeFrontmatterAtomic` - a new module in the shared class,
  * which is where a new writer belongs.
+ *
+ * 98 -> 99: `src/core/brain/design-note.ts` commits its note through
+ * `writeFrontmatterAtomic`, exclusively, so it needs no exclusion either -
+ * it arrives in the class the record wants modules to arrive in.
  */
-const SHARED_HELPER_ROWS = 98;
+const SHARED_HELPER_ROWS = 99;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

@@ -67,7 +67,7 @@ const AGENT_ARG_NAME = "agent";
  * pinned so a tool joining or leaving the set is a decision somebody
  * makes on purpose.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 22;
+const AGENT_ARGUMENT_TOOL_COUNT = 23;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;

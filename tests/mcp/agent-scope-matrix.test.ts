@@ -324,8 +324,8 @@ const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REASON.owne
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-const PROBE_ENTRY_COUNT = 98;
-const PROBE_RECIPE_COUNT = 224;
+const PROBE_ENTRY_COUNT = 99;
+const PROBE_RECIPE_COUNT = 226;
 const PROBE_TWO_SIDED_COUNT = 31;
 
 /**
@@ -638,6 +638,30 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     calls: one({ dataset: "datasets/probe-absent.jsonl" }, REASON.configuredCorpus),
   },
   { name: "brain_event_trace", calls: one({ date: LOG_EVENT_DATE }, REASON.ownerFiltered) },
+  {
+    name: "brain_design_note",
+    calls: [
+      { args: { topic: "probe topic" }, reason: REASON.ownerlessLane },
+      {
+        args: {
+          topic: "probe topic",
+          note: {
+            title: "Probe",
+            alternatives: [
+              {
+                name: "only",
+                approach: "probe approach",
+                tradeoffs: "probe tradeoffs",
+                recommended: true,
+              },
+            ],
+          },
+        },
+        reason: REASON.writerEcho,
+        label: "commit",
+      },
+    ],
+  },
   {
     name: "brain_expire",
     calls: one(
@@ -1189,7 +1213,7 @@ test("the matrix classifies every tool exactly once", () => {
 });
 
 test("the tool count is unchanged: an argument was added, never a tool", () => {
-  expect(TOOLS.length).toBe(111);
+  expect(TOOLS.length).toBe(113);
 });
 
 test("every argument-scoped surface declares agent_scope in its input schema", () => {
