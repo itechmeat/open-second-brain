@@ -131,6 +131,9 @@ describe("BRAIN_* const enums", () => {
       // silence-is-not-an-answer U7 (t_9d2a5f11) recovery point created —
       // the counterpart `rollback` has had since it shipped
       "snapshot",
+      // salience-lifecycle-enrichment unit 3c (t_5e338af1) expiration set,
+      // changed or explicitly cleared after the artifact was written
+      "expiration-set",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

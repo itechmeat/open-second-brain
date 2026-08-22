@@ -379,7 +379,7 @@ disclosure, so `warn`'s observability here is the `owner:` stamp appearing on
 new files, not a count in any response.
 
 The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
-is the point rather than its size. Ninety-six classified tools carry 221 call
+is the point rather than its size. Ninety-seven classified tools carry 222 call
 recipes - one per mode, view or operation, because one executed view is not an
 executed classification. Every recipe runs TWICE against the same two-owner
 fixture, once with the gate closed and once with it open, and the classification

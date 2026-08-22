@@ -132,6 +132,7 @@ import {
   cmdBrainApplyMarkers,
   cmdBrainPending,
   cmdBrainCapture,
+  cmdBrainExpire,
   cmdBrainTelegramCapture,
   cmdBrainInboxDrain,
   cmdBrainRepairLane,
@@ -181,6 +182,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainNote(rest);
       case "lifecycle":
         return await cmdBrainLifecycle(rest);
+      case "expire":
+        return await cmdBrainExpire(rest);
       case "note-lifecycle":
         return await cmdBrainNoteLifecycle(rest);
       case "scaffold-stub":

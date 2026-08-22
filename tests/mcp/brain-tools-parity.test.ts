@@ -51,7 +51,13 @@
  * archive it took does not cover a note living outside `Brain/`) and
  * `brain_scaffold_stub` (the unresolved wikilink targets the search index
  * holds, and the verb that materialises a note for one - the list REFUSES
- * a missing or partially-resolved index rather than reporting zero).
+ * a missing or partially-resolved index rather than reporting zero); the
+ * salience-lifecycle-enrichment release added `brain_expire` (set, change
+ * or clear the `expiration_date` of one signal or preference by id - the
+ * mutation half of a field that until now could only be declared at
+ * creation, kept off `brain_lifecycle` because every action there
+ * addresses its subject by a note PATH and the path envelope refuses the
+ * `Brain/` root these artifacts live under).
  */
 
 import { describe, expect, test } from "bun:test";
@@ -91,6 +97,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_dream",
   "brain_entity",
   "brain_event_trace",
+  "brain_expire",
   "brain_feedback",
   "brain_foresight",
   "brain_generation_reports",

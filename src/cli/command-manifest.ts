@@ -135,7 +135,21 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       [],
       [
         command("init", "Bootstrap Brain skeleton"),
-        command("feedback", "Record a taste signal"),
+        command("feedback", "Record a taste signal", [
+          flag("vault", "string"),
+          flag("topic", "string"),
+          flag("signal", "string"),
+          flag("principle", "string"),
+          flag("scope", "string"),
+          flag("source", "string-array"),
+          flag("agent", "string"),
+          flag("raw", "string"),
+          flag("raw-file", "string"),
+          flag("force-confirmed", "boolean"),
+          flag("date", "string"),
+          flag("slug", "string"),
+          flag("expires", "string"),
+        ]),
         command(
           "dream",
           "Run deterministic consolidation; staged lifecycle via stage/validate/apply, " +
@@ -364,6 +378,11 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           "lifecycle",
           "Tombstone or supersede a memory, resolve chain tips, list curator slices",
         ),
+        command("expire", "Set, change or clear a signal's or preference's expiration date", [
+          flag("vault", "string"),
+          flag("expires", "string"),
+          flag("agent", "string"),
+        ]),
         command(
           "note-lifecycle",
           "Note FILES: rename, move, archive or delete one, rewriting inbound wikilinks",

@@ -67,7 +67,7 @@ const AGENT_ARG_NAME = "agent";
  * pinned so a tool joining or leaving the set is a decision somebody
  * makes on purpose.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 21;
+const AGENT_ARGUMENT_TOOL_COUNT = 22;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;
@@ -310,7 +310,7 @@ test("every tool declaring agent_scope is covered by that one seam", () => {
 });
 
 /**
- * The write side of the same echo: 21 tools accept a caller-supplied
+ * The write side of the same echo: 22 tools accept a caller-supplied
  * `agent` and stamp it verbatim. That is `passthrough`, shipped and
  * ungated, and this unit does not gate it - `brain_generation_reports`
  * uses the same argument as a LIST FILTER, so a blanket refusal at the

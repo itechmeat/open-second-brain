@@ -46,6 +46,14 @@ import {
 } from "../../core/brain/write-advisory.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../core/brain/policy.ts";
 import { writePreference } from "../../core/brain/preference.ts";
+import { normalizeExpirationDate } from "../../core/brain/expiration.ts";
+import {
+  EXPIRATION_CLEAR,
+  ExpirationTargetNotFoundError,
+  ExpirationValueError,
+  InvalidExpirationTargetError,
+  setExpiration,
+} from "../../core/brain/expiration-set.ts";
 import { gatedOwnerScopeView, type OwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { brainArtifactSlug } from "../../core/brain/wikilink.ts";
 import { validateBrainFeedbackInput } from "../../core/brain/sessions/validate-feedback.ts";
@@ -67,6 +75,7 @@ import {
   resolveSharedNamespace,
 } from "../../core/brain/shared-namespace.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import {
   emitObservedUse,
@@ -135,6 +144,19 @@ async function toolBrainFeedback(
   // signal writer so a retried / double-delivered feedback call dedupes
   // instead of appending a second signal. Absent → historical behaviour.
   const idempotencyKey = coerceStr(args, "idempotency_key", false);
+  // Creation-time expiration (unit 3c). Validated through the one
+  // chokepoint BEFORE the signal write, so an unparseable date refuses
+  // the whole call rather than landing a signal and then failing on the
+  // preference beside it.
+  const expiresRaw = coerceStr(args, "expires", false);
+  let expires: string | undefined;
+  if (expiresRaw !== null && expiresRaw !== undefined) {
+    try {
+      expires = normalizeExpirationDate(expiresRaw);
+    } catch (err) {
+      throw new MCPError(INVALID_PARAMS, `brain_feedback: expires: ${(err as Error).message}`);
+    }
+  }
   const now = new Date();
   const createdAt = isoSecond(now);
   const signalStamp = eventTime ?? now;
@@ -169,6 +191,7 @@ async function toolBrainFeedback(
     // supplied, so a live "remember" stays byte-identical.
     ...(eventTime ? { valid_from: signalCreatedAt, recorded_at: signalCreatedAt } : {}),
     ...(idempotencyKey ? { idempotency_key: idempotencyKey } : {}),
+    ...(expires !== undefined ? { expiration_date: expires } : {}),
   };
   const sigResult = writeSignal(ctx.vault, signalInput, writeOpts);
   // A deduped signal means this whole feedback call is a retry of one
@@ -259,6 +282,9 @@ async function toolBrainFeedback(
         // preferences. This writer now matches it.
         confidence_value: 0,
         ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+        // The same lifetime the signal carries: a rule confirmed from an
+        // observation that expires on a date does not outlive it.
+        ...(expires !== undefined ? { expiration_date: expires } : {}),
       },
       // Ownership is resolved by the writer, never echoed from `agent`:
       // that argument is caller-supplied, and a caller must not be able to
@@ -861,6 +887,56 @@ async function toolBrainNote(
 
 // ----- brain_write_session (Agent Write Contract Suite, v0.41.0) ------------
 
+/**
+ * Post-creation expiration mutation (unit 3c).
+ *
+ * A tool of its own rather than an action on `brain_lifecycle`, and the
+ * reason is how each addresses its subject: every `brain_lifecycle`
+ * action takes a vault-relative PATH and runs it through a note-path
+ * envelope, while a signal or preference is addressed by id and lives
+ * under the `Brain/` root that envelope exists to refuse. Folding them
+ * together would mean carving an exception into that refusal.
+ */
+const EXPIRE_TOOL = "brain_expire";
+
+async function toolBrainExpire(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const id = coerceStr(args, "id", true)!;
+  const expires = coerceStr(args, "expires", true)!;
+  const agent = coerceStr(args, "agent", false);
+  try {
+    const res = setExpiration(ctx.vault, id, expires, {
+      ...(agent ? { agent } : {}),
+    });
+    return {
+      id: res.id,
+      kind: res.kind,
+      path: res.path,
+      expiration: res.expiration,
+      previous: res.previous,
+      changed: res.changed,
+    };
+  } catch (err) {
+    // Each of the three is the caller's fault and each has a different
+    // next move: fix the date, fix the id, or use a surface that takes a
+    // path. They keep their own class name as the reported code.
+    if (
+      err instanceof ExpirationValueError ||
+      err instanceof ExpirationTargetNotFoundError ||
+      err instanceof InvalidExpirationTargetError
+    ) {
+      throw new MCPError(INVALID_PARAMS, `${EXPIRE_TOOL}: ${err.message}`, { code: err.name });
+    }
+    if (err instanceof MCPError) throw err;
+    throw new MCPError(
+      INTERNAL_ERROR,
+      `${EXPIRE_TOOL}: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
 export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_feedback",
@@ -915,6 +991,11 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "string",
           description:
             "Optional client key that dedupes retried calls: same key + same payload is a no-op; same key + different payload is rejected.",
+        },
+        expires: {
+          type: "string",
+          description:
+            "Optional YYYY-MM-DD or ISO-8601 lifetime. Past it the signal (and any force-confirmed preference) drops out of default reads; the file is never deleted.",
         },
       },
       required: ["topic", "signal", "principle"],
@@ -1089,5 +1170,32 @@ export const FEEDBACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainObservedUse,
+  },
+  {
+    name: EXPIRE_TOOL,
+    description:
+      "Set, change or clear the expiration_date of one signal or preference, by id. An expired memory is filtered out of default reads and never deleted or moved. Clearing is the explicit word 'none'.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description:
+            "Artifact id: sig-<date>-<slug>, pref-<slug> or ret-<slug>. Never a path - this surface does not accept one.",
+        },
+        expires: {
+          type: "string",
+          description: `YYYY-MM-DD, an ISO-8601 timestamp, or '${EXPIRATION_CLEAR}' to clear. An unparseable value is refused before any write.`,
+        },
+        agent: {
+          type: "string",
+          description: "Optional agent identity stamped on the audit event.",
+        },
+      },
+      required: ["id", "expires"],
+      additionalProperties: false,
+    },
+    previewBudget: MCP_PREVIEW_BUDGET,
+    handler: toolBrainExpire,
   },
 ]);

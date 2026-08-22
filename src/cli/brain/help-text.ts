@@ -37,6 +37,7 @@ Brain verbs (observing memory):
   apply-evidence   Log a real-work application of a preference
   note             Append a one-line narrative milestone to Brain/log/today
   lifecycle        Tombstone/supersede a memory, resolve chain tips, curator slices
+  expire           Set, change or clear a signal's or preference's expiration date
   note-lifecycle   Note FILES: rename/move/archive/delete one, rewriting inbound links
   scaffold-stub    Unresolved wikilink targets: list them, or materialise a stub
   claims           Claim-graph query: current truth, truth-at-T, replaced-by, contested-by
@@ -224,6 +225,16 @@ export const VERB_HELP: Record<string, string> = {
     "[--high-use-min <n>] lists injected-never-used, contradicted, and high-used\n" +
     "memories from observed-use verdicts. Tombstoned entries stay on disk for audit\n" +
     "but are excluded from recall, inject, and active.md.\n",
+  expire:
+    "usage: o2b brain expire <id> --expires <YYYY-MM-DD|ISO-8601|none>\n" +
+    "  [--agent <name>] [--vault <path>] [--json]\n" +
+    "Set, change or clear the expiration_date of one signal or preference,\n" +
+    "addressed by id (sig-<date>-<slug>, pref-<slug> or ret-<slug>). An expired\n" +
+    "memory is FILTERED on read, never deleted or moved - `o2b brain query\n" +
+    "--show-expired` still shows it. --expires none clears the date; it is a word\n" +
+    "rather than an empty string so a broken shell expansion cannot un-expire a\n" +
+    "memory. An unparseable date, or an id naming no artifact, exits 2 by name.\n" +
+    "Create-time expirations come from `o2b brain feedback --expires` instead.\n",
   "note-lifecycle":
     "usage: o2b brain note-lifecycle <rename|move|archive|delete> <path> [<to>]\n" +
     "  [--apply] [--confirm] [--delete-linked] [--expect <n>] [--strict] [--vault <path>]\n" +

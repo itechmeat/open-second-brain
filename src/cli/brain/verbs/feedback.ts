@@ -14,6 +14,7 @@ import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { loadFeedbackDefaultScopeSafe } from "../../../core/brain/policy.ts";
 import { appendLogEvent } from "../../../core/brain/log.ts";
 import { writePreference } from "../../../core/brain/preference.ts";
+import { normalizeExpirationDate } from "../../../core/brain/expiration.ts";
 import { isoDate, isoSecond } from "../../../core/brain/time.ts";
 import {
   BRAIN_LOG_EVENT_KIND,
@@ -37,6 +38,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     "force-confirmed": { type: "boolean" },
     date: { type: "string" },
     slug: { type: "string" },
+    expires: { type: "string" },
     json: { type: "boolean" },
   });
 
@@ -74,6 +76,21 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     raw = String(flags["raw"]);
   }
 
+  // Creation-time expiration (unit 3c). Validated HERE, before the
+  // signal write, so an unparseable date refuses the whole call by name
+  // instead of landing a signal and then failing on the preference.
+  // `normalizeExpirationDate` is the one door: the writers call it too,
+  // and this pre-check exists so the refusal reaches the operator as a
+  // usage error rather than as a write failure halfway through.
+  let expires: string | undefined;
+  if (flags["expires"] !== undefined) {
+    try {
+      expires = normalizeExpirationDate(String(flags["expires"]));
+    } catch (exc) {
+      return fail(`brain feedback --expires: ${(exc as Error).message ?? exc}`);
+    }
+  }
+
   const now = new Date();
   const date = (flags["date"] as string | undefined) ?? isoDate(now);
   const slug = (flags["slug"] as string | undefined) ?? String(flags["topic"]);
@@ -89,6 +106,7 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
     ...(flags["scope"] ? { scope: String(flags["scope"]) } : {}),
     ...(flags["source"] ? { source: flags["source"] as string[] } : {}),
     ...(raw !== undefined ? { raw } : {}),
+    ...(expires !== undefined ? { expiration_date: expires } : {}),
   };
   let sigResult;
   try {
@@ -162,6 +180,9 @@ export async function cmdBrainFeedback(argv: string[]): Promise<number> {
           // preferences. This writer now matches it.
           confidence_value: 0,
           ...(effectiveScope !== undefined ? { scope: effectiveScope } : {}),
+          // The same lifetime the signal carries: a rule confirmed from
+          // an observation that expires on a date does not outlive it.
+          ...(expires !== undefined ? { expiration_date: expires } : {}),
         },
         // Ownership is resolved by the writer from the CLI's own config,
         // never echoed from `--agent`: the flag is caller-supplied, and a

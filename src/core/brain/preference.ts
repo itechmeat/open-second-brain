@@ -81,7 +81,7 @@ import { readCommitmentTier, validateCommitmentTier } from "./commitment.ts";
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
-import { normalizeExpirationDate } from "./expiration.ts";
+import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import {
   computePayloadHash,
   IdempotencyPayloadMismatchError,
@@ -773,7 +773,7 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   // supplied so legacy callers stay byte-identical. Reader-side support
   // is via parsePreference's optional-scalar read + the expiration filter.
   if (input.expiration_date?.trim()) {
-    metadata["expiration_date"] = normalizeExpirationDate(input.expiration_date);
+    metadata[EXPIRATION_DATE_FIELD] = normalizeExpirationDate(input.expiration_date);
   }
   // Freshness trend (t_ee09a6ce): stamped by the dream refresh pass;
   // emitted only when supplied so legacy callers stay byte-identical.

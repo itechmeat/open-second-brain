@@ -35,7 +35,7 @@ import {
   rememberKey,
 } from "./idempotency-ledger.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
-import { normalizeExpirationDate } from "./expiration.ts";
+import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
 import { allocateAndCreate, brainDirsForWrite, validateIsoDate } from "./paths.ts";
@@ -421,7 +421,7 @@ function renderSignalDocument(
   // supplied so legacy / live writes stay byte-identical. Reader-side
   // support is via parseSignal's optional read + the expiration filter.
   if (sanitised.expiration_date && sanitised.expiration_date.trim()) {
-    metadata["expiration_date"] = normalizeExpirationDate(sanitised.expiration_date);
+    metadata[EXPIRATION_DATE_FIELD] = normalizeExpirationDate(sanitised.expiration_date);
   }
 
   // Opt-in codec (v0.22.0): store the raw body compressed and stamp a

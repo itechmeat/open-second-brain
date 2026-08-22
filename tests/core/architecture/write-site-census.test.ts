@@ -1086,8 +1086,13 @@ const DIRECT_WRITE_ROWS = 68;
  * migration manifest through the same helper. The shared class is the
  * half of this census that needs no exclusion, so a module arriving here
  * is the outcome the record wants.
+ *
+ * 97 -> 98: `src/core/brain/expiration-set.ts`, the post-creation
+ * expiration mutation, rewrites a signal's or preference's frontmatter
+ * through `writeFrontmatterAtomic` - a new module in the shared class,
+ * which is where a new writer belongs.
  */
-const SHARED_HELPER_ROWS = 97;
+const SHARED_HELPER_ROWS = 98;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

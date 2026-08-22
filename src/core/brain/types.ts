@@ -459,6 +459,17 @@ export const BRAIN_LOG_EVENT_KIND = {
    * records only runs that actually examined documents.
    */
   eventAnchorBackfill: "event-anchor-backfill",
+  /**
+   * `expiration-set` (unit 3c) - a signal's or preference's
+   * `expiration_date` was set, changed, or explicitly cleared after the
+   * artifact was written. Payload carries the `target` wikilink, its
+   * `kind`, the new `expiration` and the `previous` one (both spelled
+   * `none` when absent), and the `agent`. Both sides are recorded because
+   * "cleared" and "moved to a later date" are different decisions and the
+   * frontmatter afterwards cannot tell them apart. A no-op re-set writes
+   * no event, so the log records changes and not calls.
+   */
+  expirationSet: "expiration-set",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
