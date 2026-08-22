@@ -19,12 +19,14 @@ var __toESM = (mod, isNodeMode, target) => {
   }
   target = mod != null ? __create(__getProtoOf(mod)) : {};
   const to = isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target;
-  for (let key of __getOwnPropNames(mod))
-    if (!__hasOwnProp.call(to, key))
-      __defProp(to, key, {
-        get: __accessProp.bind(mod, key),
-        enumerable: true
-      });
+  if (mod && typeof mod === "object" || typeof mod === "function") {
+    for (let key of __getOwnPropNames(mod))
+      if (!__hasOwnProp.call(to, key))
+        __defProp(to, key, {
+          get: __accessProp.bind(mod, key),
+          enumerable: true
+        });
+  }
   if (canCache)
     cache.set(mod, to);
   return to;
@@ -33,7 +35,7 @@ var __commonJS = (cb, mod) => () => (mod || cb((mod = { exports: {} }).exports, 
 var __require = /* @__PURE__ */ createRequire(import.meta.url);
 
 // node_modules/graceful-fs/polyfills.js
-var require_polyfills = __commonJS((exports, module) => {
+var require_polyfills = __commonJS(function(exports, module) {
   var constants = __require("constants");
   var origCwd = process.cwd;
   var cwd = null;
@@ -336,7 +338,7 @@ var require_polyfills = __commonJS((exports, module) => {
 });
 
 // node_modules/graceful-fs/legacy-streams.js
-var require_legacy_streams = __commonJS((exports, module) => {
+var require_legacy_streams = __commonJS(function(exports, module) {
   var Stream = __require("stream").Stream;
   module.exports = legacy;
   function legacy(fs) {
@@ -433,7 +435,7 @@ var require_legacy_streams = __commonJS((exports, module) => {
 });
 
 // node_modules/graceful-fs/clone.js
-var require_clone = __commonJS((exports, module) => {
+var require_clone = __commonJS(function(exports, module) {
   module.exports = clone;
   var getPrototypeOf = Object.getPrototypeOf || function(obj) {
     return obj.__proto__;
@@ -453,7 +455,7 @@ var require_clone = __commonJS((exports, module) => {
 });
 
 // node_modules/graceful-fs/graceful-fs.js
-var require_graceful_fs = __commonJS((exports, module) => {
+var require_graceful_fs = __commonJS(function(exports, module) {
   var fs = __require("fs");
   var polyfills = require_polyfills();
   var legacy = require_legacy_streams();
@@ -811,7 +813,7 @@ GFS4: `);
 });
 
 // node_modules/retry/lib/retry_operation.js
-var require_retry_operation = __commonJS((exports, module) => {
+var require_retry_operation = __commonJS(function(exports, module) {
   function RetryOperation(timeouts, options) {
     if (typeof options === "boolean") {
       options = { forever: options };
@@ -940,7 +942,7 @@ var require_retry_operation = __commonJS((exports, module) => {
 });
 
 // node_modules/retry/lib/retry.js
-var require_retry = __commonJS((exports) => {
+var require_retry = __commonJS(function(exports) {
   var RetryOperation = require_retry_operation();
   exports.operation = function(options) {
     var timeouts = exports.timeouts(options);
@@ -1024,7 +1026,7 @@ var require_retry = __commonJS((exports) => {
 });
 
 // node_modules/signal-exit/signals.js
-var require_signals = __commonJS((exports, module) => {
+var require_signals = __commonJS(function(exports, module) {
   module.exports = [
     "SIGABRT",
     "SIGALRM",
@@ -1041,7 +1043,7 @@ var require_signals = __commonJS((exports, module) => {
 });
 
 // node_modules/signal-exit/index.js
-var require_signal_exit = __commonJS((exports, module) => {
+var require_signal_exit = __commonJS(function(exports, module) {
   var process2 = global.process;
   var processOk = function(process3) {
     return process3 && typeof process3 === "object" && typeof process3.removeListener === "function" && typeof process3.emit === "function" && typeof process3.reallyExit === "function" && typeof process3.listeners === "function" && typeof process3.kill === "function" && typeof process3.pid === "number" && typeof process3.on === "function";
@@ -1194,7 +1196,7 @@ var require_signal_exit = __commonJS((exports, module) => {
 });
 
 // node_modules/proper-lockfile/lib/mtime-precision.js
-var require_mtime_precision = __commonJS((exports, module) => {
+var require_mtime_precision = __commonJS(function(exports, module) {
   var cacheSymbol = Symbol();
   function probe(file, fs, callback) {
     const cachedPrecision = fs[cacheSymbol];
@@ -1233,7 +1235,7 @@ var require_mtime_precision = __commonJS((exports, module) => {
 });
 
 // node_modules/proper-lockfile/lib/lockfile.js
-var require_lockfile = __commonJS((exports, module) => {
+var require_lockfile = __commonJS(function(exports, module) {
   var path = __require("path");
   var fs = require_graceful_fs();
   var retry = require_retry();
@@ -1458,7 +1460,7 @@ var require_lockfile = __commonJS((exports, module) => {
 });
 
 // node_modules/proper-lockfile/lib/adapter.js
-var require_adapter = __commonJS((exports, module) => {
+var require_adapter = __commonJS(function(exports, module) {
   var fs = require_graceful_fs();
   function createSyncFs(fs2) {
     const methods = ["mkdir", "realpath", "stat", "rmdir", "utimes"];
@@ -1520,7 +1522,7 @@ var require_adapter = __commonJS((exports, module) => {
 });
 
 // node_modules/proper-lockfile/index.js
-var require_proper_lockfile = __commonJS((exports, module) => {
+var require_proper_lockfile = __commonJS(function(exports, module) {
   var lockfile = require_lockfile();
   var { toPromise, toSync, toSyncOptions } = require_adapter();
   async function lock(file, options) {
