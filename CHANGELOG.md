@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.50.3] - 2026-08-22
+
+Reported as [#173](https://github.com/itechmeat/open-second-brain/issues/173): in a Hermes deployment the memory tools were advertised and every call to them was refused, with nothing anywhere naming a cause. The gateway starts its providers with a minimal inherited `PATH`, and Open Second Brain already knew how to work around that for itself - the fallback scan finds an absolute `o2b` that `PATH` cannot see. What it did not do was carry that knowledge into the process it launched, so the wrapper checked its own `PATH` for the Bun runtime, missed, and exited before writing a byte. The transport reported the consequence. The reason was on the child's standard error, which this bridge read and discarded by design.
+
+### Fixed
+
+- **The MCP child is launched with a `PATH` that contains Bun.** Resolving an absolute `o2b` was only half the job: the wrapper is a shell script whose first act is `command -v bun`, run against whatever environment it inherits. When `PATH` cannot see Bun and the fallback scan can, the child now starts with that Bun's directory first on its `PATH`. The `o2b` wrapper remains the preferred command - it is what sources the macOS sqlite-vec shim - and is skipped only when no Bun exists anywhere for its precheck to find, which is the one case where preferring it buys a command guaranteed to exit 127.
+- **A failed handshake carries what the child said.** The stderr drain existed to stop a chatty child from blocking on a full pipe, and read every line into the void, so `error: 'bun' is not on PATH.` was discarded one buffer away from an operator who saw only "unexpected EOF from MCP server". The last twenty lines are kept, capped at 8 KiB, and appended to the transport error. The drain is still a daemon thread that never blocks and never grows without bound.
+- **The Bun precheck looks before it advises.** `command -v bun` missing means "not on this `PATH`", not "not installed", and the script answered the second question with install instructions for a runtime already present. Both the precheck and the `o2b-hook` wrapper, which does not source it, now adopt the standard install location before deciding Bun is absent. The version gate still runs against whatever was adopted, and a machine with no Bun anywhere still gets the instructions and exit 127.
+- **An empty context pack no longer leaks its own JSON into the prompt.** Per-turn recall read the structured item bodies and dropped to the legacy text channel whenever it assembled nothing - but an empty pack is an ordinary answer, and that text channel carries the raw pack JSON, local vault path included, or the transport's preview envelope. A result carrying an `items` key is now taken at its word; the text fallback is reserved for a result that omits it, which is the only shape that really is an older server.
+
+### Notes
+
+- Two children launched with different search paths are now distinct entries in the gateway's shared-bridge registry. One bridge per server configuration is still the rule; the environment is part of that configuration.
+- The end-to-end repair was measured against the reported shape: a minimal `PATH`, Bun installed at `~/.bun/bin`, `o2b` symlinked into `~/.local/bin`. Before, the handshake failed at EOF; after, the bridge starts and lists the full live tool surface.
+
 ## [1.50.2] - 2026-08-20
 
 Hermes asked Open Second Brain for a token-bounded context pack before each substantive turn, then read only the MCP transport text. The transport deliberately replaces a large result with a 2,000-character preview envelope, even though the complete structured context pack is present beside it, so the provider injected transport metadata instead of the recalled memory bodies.
@@ -7286,6 +7302,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.50.3]: https://github.com/itechmeat/open-second-brain/compare/v1.50.2...v1.50.3
 [1.50.2]: https://github.com/itechmeat/open-second-brain/compare/v1.50.1...v1.50.2
 [1.50.1]: https://github.com/itechmeat/open-second-brain/compare/v1.50.0...v1.50.1
 [1.50.0]: https://github.com/itechmeat/open-second-brain/compare/v1.49.0...v1.50.0
