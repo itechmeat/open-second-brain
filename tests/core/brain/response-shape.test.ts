@@ -21,6 +21,7 @@ import {
   DISTILL_CLAIMS_SHAPE,
   EXTRACTED_SIGNALS_SHAPE,
   MODEL_AUTHORED_SHAPES,
+  SKILL_PAGE_DRAFT_SHAPE,
   RESEARCH_REPORT_SHAPE,
   ResponseShapeError,
   SHAPE_DESCRIPTOR_KEYS,
@@ -143,6 +144,7 @@ describe("model-authored descriptors", () => {
         DERIVED_FACT_SHAPE,
         RESEARCH_REPORT_SHAPE,
         EXTRACTED_SIGNALS_SHAPE,
+        SKILL_PAGE_DRAFT_SHAPE,
       ]),
     );
   });

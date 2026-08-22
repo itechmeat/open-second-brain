@@ -137,7 +137,7 @@ describe("an unreadable accept journal names the command that clears it", () => 
       phase: "archive",
       startedAt: ACCEPTED_AT.toISOString(),
       acceptedExisted: false,
-      procedureExisted: false,
+      materializedExisted: false,
     });
     const corrupt = corruptJournal("ghost");
 

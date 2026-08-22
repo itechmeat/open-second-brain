@@ -17,7 +17,9 @@ import {
   resolveSkillProposalEvidence,
   type SkillContractInput,
 } from "../../core/brain/skill-proposals.ts";
+import { commitSkillPageDraft, planSkillPageDrafts } from "../../core/brain/skill-page-drafts.ts";
 import { deriveSkillUsage } from "../../core/brain/skill-usage.ts";
+import { resolveSkillsDir } from "../../core/config.ts";
 import {
   listProceduralMemory,
   markProceduralMemoryUsed,
@@ -63,11 +65,52 @@ async function toolBrainSkillProposals(
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
     const note = optionalStringArg("brain_skill_proposals", args, "note");
     const contract = readSkillContract(args);
+    // Resolved from THIS server's config chain: a `mature_page` accept
+    // materializes a SKILL.md into whichever skills root it names, and the
+    // core cannot know which chain the server was started with.
+    const skillsRoot = resolveSkillsDir(ctx.configPath ?? undefined);
     const reviewed = acceptSkillProposal(ctx.vault, slug, {
       ...(note ? { note } : {}),
       ...(contract ? { contract } : {}),
+      ...(skillsRoot !== null ? { skillsRoot } : {}),
     });
     return { ...reviewed };
+  }
+  if (operation === "page_candidates") {
+    // Read-only: which mature vault pages deserve a skill, each with its
+    // own needs-llm-step envelope, plus every page the gate turned down
+    // with the reason it did.
+    const skillsDir = resolveSkillsDir(ctx.configPath ?? undefined);
+    const report = planSkillPageDrafts(ctx.vault, {
+      now: new Date(),
+      ...(ctx.repoRoot ? { repoRoot: ctx.repoRoot } : {}),
+      ...(skillsDir !== null ? { skillsDir } : {}),
+    });
+    return {
+      generated_at: report.generatedAt,
+      pages_scanned: report.pagesScanned,
+      admitted: report.admitted.map((c) => ({
+        path: c.path,
+        title: c.title,
+        tier: c.tier,
+        lifecycle: c.lifecycle,
+        confidence: c.confidence,
+        reuse_score: c.reuseScore,
+        reuse_observations: c.reuseObservations,
+        llm_step: c.llmStep,
+      })),
+      skipped: report.skipped.map((s) => ({
+        path: s.path,
+        title: s.title,
+        reason: s.reason,
+        detail: s.detail,
+      })),
+    };
+  }
+  if (operation === "page_draft") {
+    const page = requiredStringArg("brain_skill_proposals", args, "page");
+    const result = commitSkillPageDraft(ctx.vault, page, args["draft"], { now: new Date() });
+    return { ...result };
   }
   if (operation === "evidence") {
     const slug = requiredStringArg("brain_skill_proposals", args, "slug");
@@ -104,7 +147,8 @@ async function toolBrainSkillProposals(
   }
   throw new MCPError(
     INVALID_PARAMS,
-    "brain_skill_proposals: operation must be one of learn|list|accept|reject|recover|usage|evidence",
+    "brain_skill_proposals: operation must be one of " +
+      "learn|list|accept|reject|recover|usage|evidence|page_candidates|page_draft",
   );
 }
 
@@ -268,13 +312,23 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_skill_proposals",
     description:
-      "Deterministic skill proposals from continuity records: learn, list, accept, reject; resolve abandoned accept sequences (recover); read per-skill invocation and offer-attribution counts (usage); resolve a proposal's self-reported support against the recorded procedural outcome ledger (evidence).",
+      "Skill proposals: learn, list, accept, reject; recover abandoned accepts; usage counts; evidence against the outcome ledger. page_candidates gates mature vault pages (tier, lifecycle, confidence, reuse; skips ones a skill covers), one envelope each; page_draft stages the returned draft.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["learn", "list", "accept", "reject", "recover", "usage", "evidence"],
+          enum: [
+            "learn",
+            "list",
+            "accept",
+            "reject",
+            "recover",
+            "usage",
+            "evidence",
+            "page_candidates",
+            "page_draft",
+          ],
           description: "Tool operation.",
         },
         discard_unreadable: {
@@ -314,6 +368,35 @@ export const PROCEDURE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
           type: "array",
           items: { type: "string" },
           description: "accept only: checks that confirm the procedure worked.",
+        },
+        page: {
+          type: "string",
+          description: "page_draft only: vault-relative path of the page the draft came from.",
+        },
+        draft: {
+          type: "object",
+          description: "page_draft only: the SKILL.md draft written for that page.",
+          properties: {
+            name: {
+              type: "string",
+              description: "Skill directory name: lowercase letters, digits, single hyphens.",
+            },
+            description: {
+              type: "string",
+              description: "One line naming when an agent should reach for this skill.",
+            },
+            triggers: {
+              type: "array",
+              items: { type: "string" },
+              description: "Keywords a matcher scores the skill on; each must be non-empty.",
+            },
+            body: {
+              type: "string",
+              description: "The SKILL.md body: imperative and self-contained.",
+            },
+          },
+          required: ["name", "description", "triggers", "body"],
+          additionalProperties: false,
         },
       },
       required: ["operation"],

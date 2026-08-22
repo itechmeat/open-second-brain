@@ -21,8 +21,20 @@
  *   - `materialize` - about to write the procedure
  *   - `commit`      - about to remove the pending copy, then reproject
  *
- * `acceptedExisted` / `procedureExisted` are captured before the sequence
- * starts so a rollback never deletes a file the sequence did not create.
+ * `acceptedExisted` / `materializedExisted` are captured before the
+ * sequence starts so a rollback never deletes a file the sequence did not
+ * create.
+ *
+ * The materialize step writes ONE artifact, but not always the same kind
+ * of one: a mined or declared proposal materializes a procedure inside the
+ * vault, and a `mature_page` proposal materializes a `SKILL.md` under the
+ * configured skills root, which may sit OUTSIDE the vault. So the journal
+ * records the absolute path the step is about to write
+ * ({@link SkillAcceptJournalEntry.materializedPath}) rather than leaving
+ * the resolver to re-derive it from the slug - a rollback that guessed the
+ * wrong tree would leave the real artifact behind and claim it had not.
+ * The field is optional: a marker written before it existed names the
+ * procedure path implicitly, and the resolver falls back to that.
  *
  * The journal is a repair marker, not history: it is removed as soon as
  * the sequence completes or is resolved. A journal left on disk means a
@@ -56,8 +68,14 @@ export interface SkillAcceptJournalEntry {
   readonly startedAt: string;
   /** The accepted archive was already on disk before the sequence started. */
   readonly acceptedExisted: boolean;
-  /** The procedure file was already on disk before the sequence started. */
-  readonly procedureExisted: boolean;
+  /** The materialize target was already on disk before the sequence started. */
+  readonly materializedExisted: boolean;
+  /**
+   * Absolute path the materialize step writes. Absent on a marker written
+   * before this field existed, where the target is the procedure path the
+   * slug derives.
+   */
+  readonly materializedPath?: string;
 }
 
 const JOURNAL_SCHEMA_VERSION = 1;
@@ -77,7 +95,10 @@ export function writeSkillAcceptJournal(vault: string, entry: SkillAcceptJournal
     phase: entry.phase,
     started_at: entry.startedAt,
     accepted_existed: entry.acceptedExisted,
-    procedure_existed: entry.procedureExisted,
+    // Written under the historical key so a marker this build leaves behind
+    // is still readable by the build that shipped the key.
+    procedure_existed: entry.materializedExisted,
+    ...(entry.materializedPath !== undefined ? { materialized_path: entry.materializedPath } : {}),
   };
   atomicWriteFileSync(path, `${JSON.stringify(payload, null, 2)}\n`);
 }
@@ -207,12 +228,16 @@ function parseJournal(path: string): SkillAcceptJournalEntry | UnreadableSkillAc
   ) {
     return Object.freeze({ path, detail: "a required field is missing or of the wrong type" });
   }
+  const materializedPath = raw["materialized_path"];
   return Object.freeze({
     slug,
     id,
     phase: phase as SkillAcceptPhase,
     startedAt,
     acceptedExisted: raw["accepted_existed"] === true,
-    procedureExisted: raw["procedure_existed"] === true,
+    materializedExisted: raw["procedure_existed"] === true,
+    ...(typeof materializedPath === "string" && materializedPath.length > 0
+      ? { materializedPath }
+      : {}),
   });
 }

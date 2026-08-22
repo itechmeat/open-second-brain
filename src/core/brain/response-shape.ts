@@ -255,6 +255,8 @@ export const DERIVED_FACT_SURFACE = "derived_fact";
 export const RESEARCH_REPORT_SURFACE = "research_report";
 /** Surface label of the model-mined session-signal payload. */
 export const EXTRACTED_SIGNALS_SURFACE = "extracted_signals";
+/** Surface label of the skill draft written from a mature vault page. */
+export const SKILL_PAGE_DRAFT_SURFACE = "skill_page_draft";
 
 const STRING_SHAPE: ShapeDescriptor = { type: "string" };
 const STRING_LIST_SHAPE: ShapeDescriptor = { type: "array", items: STRING_SHAPE };
@@ -354,6 +356,27 @@ export const EXTRACTED_SIGNALS_SHAPE: ShapeDescriptor = freezeDescriptor({
 });
 
 /**
+ * A SKILL.md draft written from one mature vault page.
+ *
+ * Every field must carry content: a skill with a blank description is a
+ * skill no lexical matcher can ever surface, and a blank body is an
+ * installed file that teaches nothing. What is NOT here is the charset
+ * rule on `name` - the descriptor language has no pattern key, and the
+ * name becomes a DIRECTORY under the skills root, so the constraint is a
+ * semantic check beside this descriptor rather than a widening of it.
+ */
+export const SKILL_PAGE_DRAFT_SHAPE: ShapeDescriptor = freezeDescriptor({
+  type: "object",
+  required: ["name", "description", "triggers", "body"],
+  properties: {
+    name: FILLED_STRING_SHAPE,
+    description: FILLED_STRING_SHAPE,
+    triggers: FILLED_STRING_LIST_SHAPE,
+    body: FILLED_STRING_SHAPE,
+  },
+});
+
+/**
  * Every declared descriptor, by surface. The registry exists so the shallow-
  * and-expressible discipline can be asserted over the whole set at once
  * rather than one descriptor at a time.
@@ -363,6 +386,7 @@ export const MODEL_AUTHORED_SHAPES: Readonly<Record<string, ShapeDescriptor>> = 
   [DERIVED_FACT_SURFACE]: DERIVED_FACT_SHAPE,
   [RESEARCH_REPORT_SURFACE]: RESEARCH_REPORT_SHAPE,
   [EXTRACTED_SIGNALS_SURFACE]: EXTRACTED_SIGNALS_SHAPE,
+  [SKILL_PAGE_DRAFT_SURFACE]: SKILL_PAGE_DRAFT_SHAPE,
 });
 
 // ----- Internals ----------------------------------------------------------

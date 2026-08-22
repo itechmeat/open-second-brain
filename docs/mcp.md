@@ -1202,3 +1202,18 @@ log line is machine-composed rather than authored.
   differ; a reader from an older build refuses a file carrying it rather
   than misreading it. A payload over the cap or below the floor is refused
   whole, naming the limit and the offending value - nothing partial lands.
+- Since v1.51.0 `brain_skill_proposals` accepts two further operations and
+  no new tool. `page_candidates` is read-only: it gates the vault's user
+  pages on the page-meta trio (`tier: core`, a non-stale lifecycle,
+  `_confidence: high`) and an observed-reuse floor, skips any page an
+  installed skill already covers, and returns one needs-llm-step envelope
+  per admitted page plus every skipped page with the reason and the
+  measured value behind it. `page_draft` validates the returned SKILL.md
+  draft - structurally, then against the rule that its `name` is a legal
+  skill directory name - and STAGES it as a pending proposal under the new
+  `mature_page` pattern kind, inside the vault. Nothing reaches the skills
+  root until `accept`, which materializes a `SKILL.md` there through the
+  same write-ahead journal the procedure branch uses; the journal records
+  the absolute path it is about to write, so a rollback removes exactly
+  that file (and the directory it created for it, only while empty).
+  Sticky rejection applies as it does to every other pattern kind.

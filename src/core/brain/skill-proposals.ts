@@ -5,12 +5,15 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmdirSync,
   rmSync,
   unlinkSync,
 } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 
 import { parseFrontmatter, slugify, writeFrontmatterAtomic } from "../vault.ts";
+import { resolveSkillsDir } from "../config.ts";
+import { SKILL_FILE_NAME } from "../surface/skills.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { ensureInsideVault } from "../path-safety.ts";
 import { verifySkillProposalCandidate } from "./skill-proposal-verifier.ts";
@@ -62,12 +65,34 @@ import { listContinuityRecords, type ContinuityRecord } from "./continuity/store
  */
 export const DECLARED_MARKER_PATTERN_KIND = "declared_marker";
 
+/**
+ * Pattern kind stamped on a proposal drafted from a MATURE VAULT PAGE
+ * (salience-lifecycle-enrichment, unit 4) rather than from continuity
+ * telemetry or an author's marker.
+ *
+ * It sits outside the mining verifier for the same reason
+ * {@link DECLARED_MARKER_PATTERN_KIND} does, and for one more of its own.
+ * The verifier scores a candidate against the continuity records that
+ * produced it; a page candidate has no such records - its evidence is the
+ * page-meta trio plus the observed reuse of the page itself, gated in
+ * `skill-page-drafts.ts` before a draft is ever requested. Running a
+ * record-counting gate over it would reject every page and make the
+ * feature a silent no-op.
+ *
+ * This is also the one pattern kind whose acceptance writes OUTSIDE the
+ * vault: it materializes a `SKILL.md` under the configured skills root
+ * instead of a procedure page. Everything before accept stays in
+ * `Brain/skill-proposals/pending/`.
+ */
+export const MATURE_PAGE_PATTERN_KIND = "mature_page";
+
 export type SkillProposalPatternKind =
   | "repeated_action"
   | "structural_similarity"
   | "co_occurrence"
   | "temporal_routine"
-  | typeof DECLARED_MARKER_PATTERN_KIND;
+  | typeof DECLARED_MARKER_PATTERN_KIND
+  | typeof MATURE_PAGE_PATTERN_KIND;
 
 /** The three phases a proposal file can live in, most terminal first. */
 const PROPOSAL_PHASES = ["accepted", "rejected", "pending"] as const;
@@ -96,7 +121,16 @@ export interface SkillProposalReviewResult {
   readonly slug: string;
   readonly status: "accepted" | "rejected";
   readonly proposalPath: string;
+  /** Set when acceptance materialized a procedure inside the vault. */
   readonly procedurePath?: string;
+  /**
+   * Set when acceptance materialized a `SKILL.md` under the skills root -
+   * the one artifact this module writes outside the vault, and only on an
+   * explicit accept. The two keys are separate rather than one
+   * `materializedPath` so a caller reads WHICH kind of artifact landed
+   * without re-deriving it from the proposal's pattern kind.
+   */
+  readonly skillPath?: string;
 }
 
 /**
@@ -115,6 +149,13 @@ export interface SkillProposalAcceptOptions {
   readonly now?: Date;
   readonly note?: string;
   readonly contract?: SkillContractInput;
+  /**
+   * Where a `mature_page` proposal materializes its `SKILL.md`. Absent
+   * resolves the configured `skills_dir`, falling back to the vault's own
+   * `Brain/skills`. Every other pattern kind ignores it - they materialize
+   * a procedure INSIDE the vault and never touch this tree.
+   */
+  readonly skillsRoot?: string;
 }
 
 /** Contract field name -> frontmatter key, in the order they are written. */
@@ -499,6 +540,99 @@ export function draftDeclaredSkillProposal(
 }
 
 /**
+ * Frontmatter keys carrying the SKILL.md contract a `mature_page`
+ * proposal will materialize on accept. Declared here because the writer
+ * below and the materializer in {@link acceptSkillProposal} are the only
+ * two readers, and a second spelling of any of them would produce a
+ * SKILL.md missing the field a reviewer approved.
+ */
+const SKILL_DRAFT_NAME_KEY = "skill_name";
+const SKILL_DRAFT_DESCRIPTION_KEY = "skill_description";
+const SKILL_DRAFT_TRIGGERS_KEY = "skill_triggers";
+
+/** One drafted skill, as the calling agent returned it for a mature page. */
+export interface MaturePageSkillProposalInput {
+  /** Skill directory name; validated as such before it reaches here. */
+  readonly name: string;
+  /** One-line description, carried verbatim into the SKILL.md frontmatter. */
+  readonly description: string;
+  /** Trigger keywords, carried verbatim into the SKILL.md frontmatter. */
+  readonly triggers: ReadonlyArray<string>;
+  /** The SKILL.md body. */
+  readonly body: string;
+  /** Where the draft came from, as wikilinks - the mature page itself. */
+  readonly sourceRefs: ReadonlyArray<string>;
+  readonly now?: Date;
+}
+
+/**
+ * Stage a PENDING proposal drafted from a mature vault page.
+ *
+ * The write lands in `pending` and nowhere else. That is the whole point
+ * of the two-step: the skills root may sit OUTSIDE the vault, and nothing
+ * automatic may write there - only {@link acceptSkillProposal}, on an
+ * explicit human accept, through the write-ahead journal.
+ *
+ * Identity, dedup and sticky rejection are the declared path's, unchanged:
+ * one name, one proposal, and a name a human already rejected is
+ * suppressed rather than resurfaced.
+ */
+export function draftMaturePageSkillProposal(
+  vault: string,
+  input: MaturePageSkillProposalInput,
+): DeclaredSkillProposalResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J).
+  assertVaultIdentityForWrite(vault);
+  const planned = planDeclaredSkillProposal(
+    vault,
+    { name: input.name, body: input.body, sourceRefs: input.sourceRefs },
+    MATURE_PAGE_PATTERN_KIND,
+  );
+  if ("declined" in planned) return planned.declined;
+  const plan = planned.plan;
+
+  const now = (input.now ?? new Date()).toISOString();
+  const sourceRefs = [...input.sourceRefs];
+  const triggers = input.triggers.map((t) => t.trim()).filter((t) => t.length > 0);
+
+  writeFrontmatterAtomic(
+    plan.path,
+    {
+      schema_version: 1,
+      kind: "brain-skill-proposal",
+      id: plan.id,
+      slug: plan.slug,
+      status: "pending",
+      pattern_kind: MATURE_PAGE_PATTERN_KIND,
+      name_key: plan.nameKey,
+      version: SKILL_PROPOSAL_INITIAL_VERSION,
+      payload_hash: plan.payloadHash,
+      created_at: now,
+      updated_at: now,
+      evidence_count: String(sourceRefs.length),
+      [SKILL_DRAFT_NAME_KEY]: plan.name,
+      [SKILL_DRAFT_DESCRIPTION_KEY]: input.description.trim(),
+      [SKILL_DRAFT_TRIGGERS_KEY]: triggers,
+      source_refs: sourceRefs,
+    },
+    renderProposalDocument({
+      title: plan.name,
+      patternKind: MATURE_PAGE_PATTERN_KIND,
+      key: plan.key,
+      suggestedBody: plan.body.split("\n"),
+      evidence: sourceRefs.map((ref) => `- drafted from ${ref}`),
+    }),
+    {
+      overwrite: false,
+      existsErrorKind: "skill proposal",
+      vaultForRelativePath: vault,
+    },
+  );
+
+  return { id: plan.id, slug: plan.slug, path: plan.path, outcome: "created" };
+}
+
+/**
  * What {@link draftDeclaredSkillProposal} would do, without writing.
  *
  * Same validation, same identity derivation, same decline reasons - the
@@ -540,6 +674,7 @@ interface DeclaredSkillProposalPlan {
 function planDeclaredSkillProposal(
   vault: string,
   input: DeclaredSkillProposalInput,
+  patternKind: SkillProposalPatternKind = DECLARED_MARKER_PATTERN_KIND,
 ):
   | { readonly plan: DeclaredSkillProposalPlan }
   | { readonly declined: DeclaredSkillProposalResult } {
@@ -549,7 +684,7 @@ function planDeclaredSkillProposal(
   if (!body) throw new DeclaredSkillProposalError(`declared skill proposal '${name}' has no body`);
 
   const key = slugify(name);
-  const nameKey = nameKeyFor(DECLARED_MARKER_PATTERN_KIND, key);
+  const nameKey = nameKeyFor(patternKind, key);
   for (const phase of PROPOSAL_PHASES) {
     const existing = findProposalByNameKey(vault, phase, nameKey);
     if (existing === null) continue;
@@ -567,9 +702,9 @@ function planDeclaredSkillProposal(
   }
 
   const payloadHash = createHash("sha256")
-    .update(JSON.stringify({ patternKind: DECLARED_MARKER_PATTERN_KIND, key, body }), "utf8")
+    .update(JSON.stringify({ patternKind, key, body }), "utf8")
     .digest("hex");
-  const slug = composeProposalSlug(DECLARED_MARKER_PATTERN_KIND, key, payloadHash);
+  const slug = composeProposalSlug(patternKind, key, payloadHash);
   const id = `prop-${slug}`;
 
   for (const phase of PROPOSAL_PHASES) {
@@ -646,7 +781,14 @@ export function acceptSkillProposal(
     const id = typeof fm["id"] === "string" ? fm["id"] : `prop-${slug}`;
     const version = parseVersion(fm["version"]);
     const acceptedPath = skillProposalAcceptedPath(vault, slug);
-    const procPath = procedurePath(vault, slug);
+    // Which tree the materialize step writes into is decided by the
+    // proposal's pattern kind, once, here - so the journal, the write and
+    // the returned result all name the same file.
+    const skillDraft = readSkillDraft(fm);
+    const materializedPath =
+      skillDraft === null
+        ? procedurePath(vault, slug)
+        : join(resolveSkillsRoot(vault, opts.skillsRoot), skillDraft.name, SKILL_FILE_NAME);
 
     let journal: SkillAcceptJournalEntry = {
       slug,
@@ -656,7 +798,8 @@ export function acceptSkillProposal(
       // Captured up front so a rollback never deletes a file this
       // sequence did not create.
       acceptedExisted: existsSync(acceptedPath),
-      procedureExisted: existsSync(procPath),
+      materializedExisted: existsSync(materializedPath),
+      materializedPath,
     };
     writeSkillAcceptJournal(vault, journal);
 
@@ -682,27 +825,52 @@ export function acceptSkillProposal(
 
       journal = { ...journal, phase: "materialize" };
       writeSkillAcceptJournal(vault, journal);
-      writeFrontmatterAtomic(
-        procPath,
-        {
-          schema_version: 1,
-          kind: "brain-procedure",
-          id: `proc-${slug}`,
-          slug,
-          source_proposal: id,
-          version,
-          created_at: now,
-          updated_at: now,
-          status: "active",
-          ...contract,
-        },
-        renderAcceptedProcedureBody(id, body),
-        {
-          overwrite: false,
-          existsErrorKind: "procedure",
-          vaultForRelativePath: vault,
-        },
-      );
+      if (skillDraft === null) {
+        writeFrontmatterAtomic(
+          materializedPath,
+          {
+            schema_version: 1,
+            kind: "brain-procedure",
+            id: `proc-${slug}`,
+            slug,
+            source_proposal: id,
+            version,
+            created_at: now,
+            updated_at: now,
+            status: "active",
+            ...contract,
+          },
+          renderAcceptedProcedureBody(id, body),
+          {
+            overwrite: false,
+            existsErrorKind: "procedure",
+            vaultForRelativePath: vault,
+          },
+        );
+      } else {
+        // The skills root may live outside the vault, so this write passes
+        // no `vaultForRelativePath` - the confinement check that key drives
+        // would refuse the very path the operator configured. The path is
+        // still not free-form: `skillDraft.name` was validated as a skill
+        // directory name before the proposal was staged, and the root comes
+        // from config, never from the payload.
+        mkdirSync(dirname(materializedPath), { recursive: true });
+        writeFrontmatterAtomic(
+          materializedPath,
+          {
+            name: skillDraft.name,
+            description: skillDraft.description,
+            ...(skillDraft.triggers.length > 0 ? { triggers: skillDraft.triggers } : {}),
+            source_proposal: id,
+            version,
+            created_at: now,
+            updated_at: now,
+            ...contract,
+          },
+          renderAcceptedSkillBody(id, skillDraft.name, body),
+          { overwrite: false, existsErrorKind: "skill" },
+        );
+      }
 
       journal = { ...journal, phase: "commit" };
       writeSkillAcceptJournal(vault, journal);
@@ -718,7 +886,9 @@ export function acceptSkillProposal(
       slug,
       status: "accepted",
       proposalPath: acceptedPath,
-      procedurePath: procPath,
+      ...(skillDraft === null
+        ? { procedurePath: materializedPath }
+        : { skillPath: materializedPath }),
     };
   } finally {
     lock.release();
@@ -858,8 +1028,22 @@ function resolveSkillAccept(
     if (!journal.acceptedExisted) {
       rmSync(skillProposalAcceptedPath(vault, journal.slug), { force: true });
     }
-    if (!journal.procedureExisted) {
-      rmSync(procedurePath(vault, journal.slug), { force: true });
+    if (!journal.materializedExisted) {
+      // The recorded path, never a re-derived one: a `mature_page` accept
+      // materializes under the skills root, which the slug does not name.
+      const target = journal.materializedPath ?? procedurePath(vault, journal.slug);
+      rmSync(target, { force: true });
+      // A skill directory this sequence created is now empty; leaving it
+      // would make `discoverSkills` report a root with a nameless hole in
+      // it. `rmdirSync` refuses a non-empty directory, which is exactly the
+      // guard wanted - a pre-existing sibling file keeps the directory.
+      if (target !== procedurePath(vault, journal.slug)) {
+        try {
+          rmdirSync(dirname(target));
+        } catch {
+          // Non-empty or already gone; either way nothing more to undo.
+        }
+      }
     }
     clearSkillAcceptJournal(vault, journal.slug);
     return "rolled_back";
@@ -1451,6 +1635,60 @@ function candidateHash(candidate: ProposalCandidate): string {
       "utf8",
     )
     .digest("hex");
+}
+
+/**
+ * The SKILL.md contract a `mature_page` proposal carries, or null when the
+ * proposal is not one - which is how the accept path chooses its
+ * materializer. A proposal stamped `mature_page` but missing either
+ * required field is a corrupted draft, not a procedure: it is refused by
+ * name rather than materialized into the wrong tree.
+ */
+function readSkillDraft(
+  fm: Readonly<Record<string, unknown>>,
+): { name: string; description: string; triggers: string[] } | null {
+  if (fm["pattern_kind"] !== MATURE_PAGE_PATTERN_KIND) return null;
+  const name = fm[SKILL_DRAFT_NAME_KEY];
+  const description = fm[SKILL_DRAFT_DESCRIPTION_KEY];
+  if (typeof name !== "string" || name.trim().length === 0) {
+    throw new Error(`skill proposal is missing '${SKILL_DRAFT_NAME_KEY}'`);
+  }
+  if (typeof description !== "string" || description.trim().length === 0) {
+    throw new Error(`skill proposal is missing '${SKILL_DRAFT_DESCRIPTION_KEY}'`);
+  }
+  const raw = fm[SKILL_DRAFT_TRIGGERS_KEY];
+  const triggers = Array.isArray(raw)
+    ? raw.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
+    : typeof raw === "string" && raw.trim().length > 0
+      ? [raw.trim()]
+      : [];
+  return { name: name.trim(), description: description.trim(), triggers };
+}
+
+/**
+ * Where an accepted `mature_page` skill is materialized: the caller's
+ * override, else the configured `skills_dir`, else the vault's own
+ * `Brain/skills`. `skillRoots()` is not used here because it filters to
+ * roots that already EXIST, and the first accepted skill is exactly the
+ * case where the root does not.
+ */
+function resolveSkillsRoot(vault: string, override: string | undefined): string {
+  const explicit = override?.trim();
+  if (explicit) return explicit;
+  return resolveSkillsDir() ?? join(vault, "Brain", "skills");
+}
+
+function renderAcceptedSkillBody(proposalId: string, name: string, proposalBody: string): string {
+  const idx = proposalBody.indexOf(SUGGESTED_BODY_HEADING);
+  const suggested =
+    idx >= 0 ? proposalBody.slice(idx + SUGGESTED_BODY_HEADING.length).trim() : proposalBody.trim();
+  return [
+    `# ${name}`,
+    "",
+    `Accepted from proposal: [[${proposalId}]]`,
+    "",
+    suggested || "No suggested body was captured.",
+  ].join("\n");
 }
 
 function renderAcceptedProcedureBody(proposalId: string, proposalBody: string): string {

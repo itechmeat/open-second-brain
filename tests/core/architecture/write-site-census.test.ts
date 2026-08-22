@@ -899,11 +899,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   // --- Mixed: an accept protocol that moves, appends and rolls back ------
   "src/core/brain/skill-proposals.ts": {
     categories: [C.appendOnlyLedger, C.lifecycleMove, C.retentionDelete],
-    calls: ["appendFileSync", "rmSync", "unlinkSync"],
+    calls: ["appendFileSync", "rmSync", "rmdirSync", "unlinkSync"],
     reason:
       "appends one JSON line per verifier rejection; unlinks the pending proposal only " +
       "after the accepted copy landed through `writeFrontmatterAtomic`; and removes " +
-      "the accepted copy and its procedure when a journalled accept is rolled back.",
+      "the accepted copy and the artifact it materialised when a journalled accept is " +
+      "rolled back. The `rmdirSync` is part of that rollback: a `mature_page` accept " +
+      "creates a skill directory to hold its SKILL.md, and `rmdirSync` refuses a " +
+      "non-empty directory, so the empty shell goes and a directory holding anything " +
+      "else stays.",
   },
 });
 

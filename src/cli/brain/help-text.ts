@@ -124,7 +124,7 @@ Brain verbs (observing memory):
   recall-telemetry    List/summarize opt-in recall telemetry records
   knowledge-gaps      Rank recurring queries the vault answers poorly (unmet demand)
   generation-reports  Record/list/summarize opt-in LLM generation traces
-  skill-proposals     Learn/list/review deterministic skill proposals
+  skill-proposals     Learn/list/review skill proposals, from telemetry and from mature vault pages
   procedural-memory   Reconcile/list procedural memory index and usage
   procedural-graph    Rebuild/show procedural graph and hint projections
   recurrence          Inspect and update recurrence/support diagnostics
@@ -859,14 +859,17 @@ export const VERB_HELP: Record<string, string> = {
     "       o2b brain generation-reports show <report-id> [--vault <path>] [--json]\n" +
     "Inbound, opt-in LLM generation tracing. record is gated (default off) by --enable or generation_trace_enabled; only prompt_hash + counts are stored, never the prompt.\n",
   "skill-proposals":
-    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage> [args]\n" +
-    "Deterministic proposal queue lifecycle.\n" +
+    "usage: o2b brain skill-proposals <learn|list|accept|reject|recover|usage|page-candidates|page-draft> [args]\n" +
+    "Proposal queue lifecycle, from continuity telemetry and from mature vault pages.\n" +
     "  learn [--min-support <n>] [--vault <path>] [--json]\n" +
     "  list [--vault <path>] [--json]\n" +
     "  accept <slug> [--note <text>] [--vault <path>] [--json]\n" +
     "  reject <slug> --note <text> [--vault <path>] [--json]\n" +
     "  recover [--discard-unreadable] [--vault <path>] [--json]\n" +
     "  usage [--vault <path>] [--json]\n" +
+    "  page-candidates [--vault <path>] [--json]\n" +
+    "  page-draft <page> (--payload <json> | --payload-file <path>) [--vault <path>] [--json]\n" +
+    "page-candidates is read-only: it gates the vault's user pages on the page-meta trio (core tier, non-stale lifecycle, high confidence) and an observed-reuse floor, skips any page an installed skill already covers, and returns one needs-llm-step envelope per admitted page plus every skip with its reason. page-draft validates the returned draft and STAGES it as a pending mature_page proposal inside the vault; accept is what materializes the SKILL.md under the configured skills root.\n" +
     "recover resolves accept sequences a crash abandoned. It refuses, naming the file, on a held accept lock and on an unreadable journal marker; --discard-unreadable removes those markers.\n",
   "procedural-memory":
     "usage: o2b brain procedural-memory <reconcile|list|mark-used> [args]\n" +

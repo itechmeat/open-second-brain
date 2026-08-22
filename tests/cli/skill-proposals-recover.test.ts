@@ -75,7 +75,7 @@ describe("o2b brain skill-proposals recover", () => {
       phase: "archive",
       startedAt: LEARNED_AT.toISOString(),
       acceptedExisted: false,
-      procedureExisted: false,
+      materializedExisted: false,
     });
 
     const r = await runCli(["brain", "skill-proposals", "recover", "--vault", vault]);

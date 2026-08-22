@@ -489,7 +489,8 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("knowledge-gaps", "Rank recurring queries the vault answers poorly"),
         command(
           "skill-proposals",
-          "Learn, list, review, and recover deterministic skill proposals",
+          "Learn, list, review, and recover skill proposals, including drafts from mature pages",
+          [flag("vault", "string"), flag("payload", "string"), flag("payload-file", "string")],
         ),
         command("procedural-memory", "Reconcile or list the procedural memory index and its usage"),
         command("procedural-graph", "Rebuild or show the procedural graph and hint projections"),

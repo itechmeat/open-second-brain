@@ -247,7 +247,7 @@ describe("the accept sequence survives a crash at each of its three gaps", () =>
       phase,
       startedAt: ACCEPTED_AT.toISOString(),
       acceptedExisted: false,
-      procedureExisted: false,
+      materializedExisted: false,
     });
   }
 

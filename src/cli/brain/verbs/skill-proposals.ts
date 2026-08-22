@@ -1,3 +1,10 @@
+import { readFileSync } from "node:fs";
+
+import { resolveSkillsDir } from "../../../core/config.ts";
+import {
+  commitSkillPageDraft,
+  planSkillPageDrafts,
+} from "../../../core/brain/skill-page-drafts.ts";
 import {
   acceptSkillProposal,
   discardUnreadableSkillAcceptJournals,
@@ -18,9 +25,115 @@ export async function cmdBrainSkillProposals(argv: string[]): Promise<number> {
   if (sub === "reject") return reject(rest);
   if (sub === "recover") return recover(rest);
   if (sub === "usage") return usage(rest);
+  if (sub === "page-candidates") return pageCandidates(rest);
+  if (sub === "page-draft") return pageDraft(rest);
   throw new CliError(
-    "brain skill-proposals: expected learn, list, accept, reject, recover, or usage",
+    "brain skill-proposals: expected learn, list, accept, reject, recover, usage, " +
+      "page-candidates, or page-draft",
   );
+}
+
+/**
+ * Which mature vault pages deserve a skill, and the envelope for each.
+ *
+ * Read-only. Every page the walk turned down is listed with the reason -
+ * a report that showed only the winners could not be told apart from a
+ * vault nobody has tagged.
+ */
+function pageCandidates(argv: string[]): number {
+  const { flags } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+  });
+  const { config, vault } = brainVerbContext(flags);
+  const skillsDir = resolveSkillsDir(config);
+  const report = planSkillPageDrafts(vault, {
+    now: new Date(),
+    ...(skillsDir !== null ? { skillsDir } : {}),
+  });
+
+  if (flags["json"]) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          generated_at: report.generatedAt,
+          pages_scanned: report.pagesScanned,
+          admitted: report.admitted.map((c) => ({
+            path: c.path,
+            title: c.title,
+            tier: c.tier,
+            lifecycle: c.lifecycle,
+            confidence: c.confidence,
+            reuse_score: c.reuseScore,
+            reuse_observations: c.reuseObservations,
+            llm_step: c.llmStep,
+          })),
+          skipped: report.skipped.map((s) => ({
+            path: s.path,
+            title: s.title,
+            reason: s.reason,
+            detail: s.detail,
+          })),
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return 0;
+  }
+
+  process.stdout.write(
+    `skill-proposals page-candidates: scanned=${report.pagesScanned} ` +
+      `admitted=${report.admitted.length} skipped=${report.skipped.length}\n`,
+  );
+  for (const c of report.admitted) {
+    process.stdout.write(`  admit ${c.path}  needs-llm-step: ${c.llmStep.step}\n`);
+  }
+  for (const s of report.skipped) {
+    process.stdout.write(`  skip  ${s.path}  ${s.reason}: ${s.detail}\n`);
+  }
+  return 0;
+}
+
+/**
+ * Stage one returned draft as a pending proposal. Writes inside the vault
+ * only - the SKILL.md is materialized by `accept`, never here.
+ */
+function pageDraft(argv: string[]): number {
+  const { flags, positional } = parse(argv, {
+    vault: { type: "string" },
+    json: { type: "boolean" },
+    payload: { type: "string" },
+    "payload-file": { type: "string" },
+  });
+  const page = trim(positional[0]);
+  if (!page) throw new CliError("brain skill-proposals page-draft: page path is required");
+  const raw =
+    typeof flags["payload"] === "string"
+      ? (flags["payload"] as string)
+      : typeof flags["payload-file"] === "string"
+        ? readFileSync(flags["payload-file"] as string, "utf8")
+        : null;
+  if (raw === null) {
+    throw new CliError("brain skill-proposals page-draft: --payload or --payload-file is required");
+  }
+  let payload: unknown;
+  try {
+    payload = JSON.parse(raw);
+  } catch {
+    throw new CliError("brain skill-proposals page-draft: payload must be valid JSON");
+  }
+  const vault = brainVerbContext(flags).vault;
+  const result = commitSkillPageDraft(vault, page, payload, { now: new Date() });
+
+  if (flags["json"]) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return 0;
+  }
+  process.stdout.write(
+    `${result.outcome} ${result.id}` + ("reason" in result ? ` (${result.reason})` : "") + `\n`,
+  );
+  return 0;
 }
 
 /**
@@ -151,11 +264,16 @@ function accept(argv: string[]): number {
   });
   const slug = trim(positional[0]);
   if (!slug) throw new CliError("brain skill-proposals accept: slug is required");
-  const vault = brainVerbContext(flags).vault;
+  const { config, vault } = brainVerbContext(flags);
   const note = trim(flags["note"]);
-  const result = note
-    ? acceptSkillProposal(vault, slug, { note })
-    : acceptSkillProposal(vault, slug);
+  // Resolved HERE rather than inside the core: the surface knows which
+  // config chain this invocation is running against, and a `mature_page`
+  // accept materializes into whichever skills root that chain names.
+  const skillsRoot = resolveSkillsDir(config);
+  const result = acceptSkillProposal(vault, slug, {
+    ...(note ? { note } : {}),
+    ...(skillsRoot !== null ? { skillsRoot } : {}),
+  });
 
   if (flags["json"]) {
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");
