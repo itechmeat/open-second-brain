@@ -16,7 +16,12 @@
  *   - `--gate <name>=<true|false>` steers one run and leaves
  *     `Brain/_brain.yaml` byte-identical;
  *   - the same two capabilities exist on MCP `brain_dream`;
- *   - with neither flag present the verb is byte-identical to today.
+ *   - with neither flag present the verb is byte-identical to today;
+ *   - a CONFIGURED salience threshold is named on the human stream -
+ *     admitted of considered, and the threshold - so an exclusion is not
+ *     invisible to an operator who never passes `--json`. An open gate
+ *     adds nothing, which is what keeps the byte-identical claim above
+ *     true.
  */
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
@@ -25,8 +30,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
+import { BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { DREAM_PHASE } from "../../src/core/brain/dream-phases.ts";
+import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { cmdBrainDream } from "../../src/cli/brain/verbs/dream.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -378,6 +386,54 @@ describe("byte-identical when absent", () => {
     expect(payload).not.toHaveProperty("step");
     expect(payload).not.toHaveProperty("gates");
     expect(payload).toHaveProperty("run_id");
+  });
+});
+
+describe("the salience gate on the human stream", () => {
+  test("a configured threshold is reported; --json is unchanged", async () => {
+    writePreference(vault, {
+      slug: "quiet",
+      topic: "quiet",
+      principle: "Nothing has ever applied this.",
+      created_at: "2026-01-01T00:00:00Z",
+      unconfirmed_until: "2026-01-08T00:00:00Z",
+      confirmed_at: "2026-01-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.confirmed,
+      evidenced_by: [],
+      last_evidence_at: "2026-05-29T00:00:00Z",
+    });
+    atomicWriteFileSync(
+      brainConfigPath(),
+      "schema_version: 1\ndream:\n  salience_threshold: 0.2\n",
+    );
+
+    const human = await runCli([
+      "brain",
+      "dream",
+      "--dry-run",
+      "--now",
+      "2026-05-30T10:00:00Z",
+      "--vault",
+      vault,
+    ]);
+    expect(human.returncode).toBe(0);
+    // Without this line an exclusion is invisible on this stream: the
+    // ladder simply folds fewer facts and never says why.
+    expect(human.stdout).toContain("salience_gate: 0 of 1 fact(s) admitted (threshold 0.2)");
+
+    const asJson = await runCli([
+      "brain",
+      "dream",
+      "--dry-run",
+      "--now",
+      "2026-05-30T10:00:00Z",
+      "--vault",
+      vault,
+      "--json",
+    ]);
+    const payload = JSON.parse(asJson.stdout) as { salience_gate: { threshold: number } };
+    // The machine stream carried the gate all along and is untouched.
+    expect(payload.salience_gate.threshold).toBe(0.2);
   });
 });
 

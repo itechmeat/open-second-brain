@@ -550,6 +550,15 @@ const SKILL_DRAFT_NAME_KEY = "skill_name";
 const SKILL_DRAFT_DESCRIPTION_KEY = "skill_description";
 const SKILL_DRAFT_TRIGGERS_KEY = "skill_triggers";
 
+/**
+ * A skill's `name` becomes a DIRECTORY under the skills root, so it is
+ * not free text. Declared here rather than beside the drafting check in
+ * `skill-page-drafts.ts` because BOTH ends need it and this module is the
+ * one they can share: the draft-time semantic check imports it from here,
+ * and {@link readSkillDraft} re-applies it at materialize time.
+ */
+export const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
 /** One drafted skill, as the calling agent returned it for a mature page. */
 export interface MaturePageSkillProposalInput {
   /** Skill directory name; validated as such before it reaches here. */
@@ -1643,6 +1652,14 @@ function candidateHash(candidate: ProposalCandidate): string {
  * materializer. A proposal stamped `mature_page` but missing either
  * required field is a corrupted draft, not a procedure: it is refused by
  * name rather than materialized into the wrong tree.
+ *
+ * The name's charset is re-checked here even though the draft path
+ * already refused anything else. This is the one write in the accept
+ * sequence that passes no `vaultForRelativePath` - the skills root may
+ * legitimately sit outside the vault - so the confinement check every
+ * other write leans on is absent, and the only thing standing between a
+ * hand-edited `skill_name` in a pending proposal's frontmatter and a
+ * `join()` into an arbitrary directory is this test.
  */
 function readSkillDraft(
   fm: Readonly<Record<string, unknown>>,
@@ -1656,13 +1673,20 @@ function readSkillDraft(
   if (typeof description !== "string" || description.trim().length === 0) {
     throw new Error(`skill proposal is missing '${SKILL_DRAFT_DESCRIPTION_KEY}'`);
   }
+  const trimmedName = name.trim();
+  if (!SKILL_NAME_RE.test(trimmedName)) {
+    throw new Error(
+      `skill proposal '${SKILL_DRAFT_NAME_KEY}' is not a skill directory name ` +
+        `(lowercase letters, digits and single hyphens): ${JSON.stringify(trimmedName)}`,
+    );
+  }
   const raw = fm[SKILL_DRAFT_TRIGGERS_KEY];
   const triggers = Array.isArray(raw)
     ? raw.filter((t): t is string => typeof t === "string" && t.trim().length > 0)
     : typeof raw === "string" && raw.trim().length > 0
       ? [raw.trim()]
       : [];
-  return { name: name.trim(), description: description.trim(), triggers };
+  return { name: trimmedName, description: description.trim(), triggers };
 }
 
 /**

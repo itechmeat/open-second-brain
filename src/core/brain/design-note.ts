@@ -67,6 +67,7 @@ import { isoDate } from "./time.ts";
 import { listTensions, TENSION_UNRESOLVED_STATUSES, type TensionRecord } from "./tensions.ts";
 import { readTruthState } from "./truth/store.ts";
 import type { ClaimSlot, TruthConflict } from "./truth/types.ts";
+import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Vault-relative directory a committed design note lands in. */
 export const DESIGN_NOTE_DIR_REL = "Brain/decisions";
@@ -393,6 +394,10 @@ export function commitDesignNote(
   payload: unknown,
   opts: CommitDesignNoteOptions,
 ): CommitDesignNoteResult {
+  // Vault-identity write guard (context-integrity-gates, Unit J): this is
+  // the module's only write, and `tests/core/brain/vault-guard-census.test.ts`
+  // counts every write-capable module in this tree.
+  assertVaultIdentityForWrite(vault);
   const trimmed = requireTopic(topic);
   // Structure first, then the cardinality rule. Nothing is written until
   // both pass.

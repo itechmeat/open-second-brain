@@ -17,9 +17,11 @@
  * the deletion set under `--delete-linked`, the inbound references
  * otherwise.
  *
- * `--delete-linked` widens a delete to the Brain files derived solely
- * from the note. The receipt then prints two lists rather than a count:
- * what will go, and what is reported and stays.
+ * `--delete-linked` widens a delete to the Brain files that declare the
+ * note as their provenance and derive solely from it; a page that only
+ * mentions it in prose is reported, never deleted. The receipt then
+ * prints two lists rather than a count: what will go, and what is
+ * reported and stays.
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";

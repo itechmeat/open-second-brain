@@ -38,6 +38,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { posix, relative } from "node:path";
 
 import { resolveSkillsDir } from "../config.ts";
+import { ensureInsideVault } from "../path-safety.ts";
 import { discoverSkills, skillRoots } from "../surface/skills.ts";
 import { EXCLUDED_DIRS, listVaultPages, slugify } from "../vault.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
@@ -66,6 +67,7 @@ import {
 } from "./response-shape.ts";
 import {
   draftMaturePageSkillProposal,
+  SKILL_NAME_RE,
   type DeclaredSkillProposalResult,
 } from "./skill-proposals.ts";
 import { BRAIN_CONFIDENCE } from "./types.ts";
@@ -170,14 +172,13 @@ export interface CommitSkillPageDraftOptions {
 }
 
 // ----- The semantic rule the descriptor language cannot express -------------
-
-/**
- * A skill's `name` becomes a DIRECTORY under the skills root and the key
- * `discoverSkills` collapses collisions on, so it is not free text. The
- * descriptor language has no pattern key and deliberately stays that way,
- * so the charset rule lives here.
- */
-const SKILL_NAME_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+//
+// The descriptor language has no pattern key and deliberately stays that
+// way, so the `name` charset rule is a semantic check. The pattern itself
+// is `SKILL_NAME_RE`, declared in `skill-proposals.ts` and imported here:
+// the accept path re-applies it at materialize time, and one pattern in
+// two spellings would let the two ends disagree about what a skill
+// directory may be called.
 
 /** Longest legal skill name; a directory name, not a sentence. */
 const SKILL_NAME_MAX_LEN = 64;
@@ -336,9 +337,11 @@ function buildDraftStep(
 /**
  * Validate a returned draft and STAGE it as a pending proposal.
  *
- * The page path is validated against the vault before anything else: a
- * draft citing a page that is not there has no provenance, and a proposal
- * whose only evidence is a broken wikilink is worse than no proposal.
+ * The page path is validated against the vault before anything else -
+ * confined to it, then required to exist: a draft citing a page that is
+ * not there has no provenance, one citing a path outside the vault has
+ * provenance this surface cannot vouch for, and a proposal whose only
+ * evidence is a broken wikilink is worse than no proposal.
  */
 export function commitSkillPageDraft(
   vault: string,
@@ -350,7 +353,20 @@ export function commitSkillPageDraft(
   if (rel.length === 0) {
     throw new SkillPageDraftError("a skill page draft needs the page it was drafted from");
   }
-  if (!existsSync(posix.join(vault, rel))) {
+  // Confinement before existence: `rel` is caller-supplied, and a path
+  // climbing out of the vault with `..` (or through a symlinked directory
+  // inside it) could otherwise be confirmed to exist and then cited as
+  // this proposal's provenance. The refusal is by name, like every other
+  // one on this surface.
+  let abs: string;
+  try {
+    abs = ensureInsideVault(posix.join(vault, rel), vault);
+  } catch (err) {
+    throw new SkillPageDraftError(
+      `page path is not inside the vault: ${rel} (${(err as Error).message})`,
+    );
+  }
+  if (!existsSync(abs)) {
     throw new SkillPageDraftError(`no such vault page: ${rel}`);
   }
   // Structure first, then the rules a descriptor cannot state. Nothing is

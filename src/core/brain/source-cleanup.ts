@@ -103,6 +103,31 @@ export interface SourceCleanupEntry {
   readonly deletable: boolean;
 }
 
+/**
+ * A traced entry plus the one thing a NOTE delete needs and a source
+ * delete does not.
+ *
+ * The extra field is on this type rather than on
+ * {@link SourceCleanupEntry} deliberately: `deleteBySource`'s payload is
+ * pinned byte-for-byte by
+ * `tests/core/brain/gates/recoverability.test.ts`, and its rule is
+ * long-settled. Only {@link traceNoteDerivations} reports it.
+ */
+export interface NoteDerivationEntry extends SourceCleanupEntry {
+  /**
+   * True when the page names the subject in STRUCTURED provenance - a
+   * `source_path`, a `session_ref`, a `source:` link, or the
+   * `evidenced_by` fold - rather than only mentioning it in prose.
+   *
+   * {@link tracesSolelyToSource} is vacuously true for a page carrying no
+   * `source:` array at all, so `deletable` alone cannot tell a derivation
+   * from a paragraph that happens to write `[[Note]]`. The
+   * `--delete-linked` cascade requires this as well before it will put a
+   * Brain page in a deletion set.
+   */
+  readonly structuredProvenance: boolean;
+}
+
 export interface SourceCleanupPlan {
   /** Canonical form of the queried source. */
   readonly source: string;
@@ -388,9 +413,33 @@ function tracesSolelyToSource(raw: RawMatch, identity: SourceIdentity): boolean 
   return true;
 }
 
+/**
+ * Does the page declare the subject as its PROVENANCE, or does it merely
+ * mention it?
+ *
+ * Every match except `wikilink` is structured by construction: a
+ * `source_path`, a `session_ref` and the `evidenced_by` fold are all
+ * frontmatter this project writes. A wikilink match is structured only
+ * when one of the page's own `source:` links names the subject - the same
+ * spelling in a paragraph of prose is a reference, not a derivation, and
+ * {@link tracesSolelyToSource} cannot tell the two apart because a page
+ * with no `source:` array satisfies it vacuously.
+ */
+function hasStructuredProvenance(raw: RawMatch, identity: SourceIdentity): boolean {
+  if (raw.match !== "wikilink") return true;
+  return raw.sourceLinks.some((link) => namesSubject(identity, wikilinkTarget(link)));
+}
+
 interface Traced {
   readonly derived: ReadonlyArray<SourceCleanupEntry>;
   readonly mentions: ReadonlyArray<SourceCleanupEntry>;
+  /**
+   * Vault-relative paths of the pages that named the subject in
+   * structured provenance. Carried beside the two lists rather than on
+   * the entries so `deleteBySource`'s payload keeps the exact shape it
+   * shipped with; {@link traceNoteDerivations} is the one reader.
+   */
+  readonly structured: ReadonlySet<string>;
 }
 
 /**
@@ -442,6 +491,7 @@ function traceReferences(vault: string, identity: SourceIdentity): Traced {
 
   const derived: SourceCleanupEntry[] = [];
   const mentions: SourceCleanupEntry[] = [];
+  const structured = new Set<string>();
   for (const raw of rawMatches) {
     const deletable = computeDeletable(vault, raw, identity, derivedSignalIds);
     const entry: SourceCleanupEntry = {
@@ -452,9 +502,14 @@ function traceReferences(vault: string, identity: SourceIdentity): Traced {
       isIndexArtifact: raw.isIndexArtifact,
       deletable,
     };
+    if (hasStructuredProvenance(raw, identity)) structured.add(entry.path);
     (deletable ? derived : mentions).push(entry);
   }
-  return { derived: derived.toSorted(byPath), mentions: mentions.toSorted(byPath) };
+  return {
+    derived: derived.toSorted(byPath),
+    mentions: mentions.toSorted(byPath),
+    structured,
+  };
 }
 
 function byPath(a: SourceCleanupEntry, b: SourceCleanupEntry): number {
@@ -550,13 +605,25 @@ export const DERIVATION_SCAN_SCOPE = "Brain/";
  * page lands in is the SAME function in both cases, so a note delete and
  * a source delete cannot come to disagree about what "derived solely
  * from" means.
+ *
+ * Each entry additionally carries
+ * {@link NoteDerivationEntry.structuredProvenance}, which the shared rule
+ * does not read: a note, unlike an imported source, is something ordinary
+ * prose links to, and the cascade needs to tell a declared derivation
+ * from a sentence.
  */
 export function traceNoteDerivations(
   vault: string,
   notePath: string,
-): ReadonlyArray<SourceCleanupEntry> {
-  const { derived, mentions } = traceReferences(vault, noteIdentity(notePath));
-  return Object.freeze([...derived, ...mentions].toSorted(byPath));
+): ReadonlyArray<NoteDerivationEntry> {
+  const { derived, mentions, structured } = traceReferences(vault, noteIdentity(notePath));
+  return Object.freeze(
+    [...derived, ...mentions]
+      .toSorted(byPath)
+      .map((entry) =>
+        Object.freeze({ ...entry, structuredProvenance: structured.has(entry.path) }),
+      ),
+  );
 }
 
 /**

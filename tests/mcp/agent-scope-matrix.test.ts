@@ -601,6 +601,30 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       REASON.writerEcho,
     ),
   },
+  {
+    name: "brain_design_note",
+    calls: [
+      { args: { topic: "probe topic" }, reason: REASON.ownerlessLane },
+      {
+        args: {
+          topic: "probe topic",
+          note: {
+            title: "Probe",
+            alternatives: [
+              {
+                name: "only",
+                approach: "probe approach",
+                tradeoffs: "probe tradeoffs",
+                recommended: true,
+              },
+            ],
+          },
+        },
+        reason: REASON.writerEcho,
+        label: "commit",
+      },
+    ],
+  },
   { name: "brain_diarize", calls: one({ entity: "probe-entity" }, REASON.ownerlessLane) },
   {
     name: "brain_distill_source",
@@ -638,30 +662,6 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
     calls: one({ dataset: "datasets/probe-absent.jsonl" }, REASON.configuredCorpus),
   },
   { name: "brain_event_trace", calls: one({ date: LOG_EVENT_DATE }, REASON.ownerFiltered) },
-  {
-    name: "brain_design_note",
-    calls: [
-      { args: { topic: "probe topic" }, reason: REASON.ownerlessLane },
-      {
-        args: {
-          topic: "probe topic",
-          note: {
-            title: "Probe",
-            alternatives: [
-              {
-                name: "only",
-                approach: "probe approach",
-                tradeoffs: "probe tradeoffs",
-                recommended: true,
-              },
-            ],
-          },
-        },
-        reason: REASON.writerEcho,
-        label: "commit",
-      },
-    ],
-  },
   {
     name: "brain_expire",
     calls: one(

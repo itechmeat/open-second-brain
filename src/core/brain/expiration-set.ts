@@ -140,6 +140,32 @@ export interface SetExpirationOptions {
 /** Agent recorded when the caller names none. */
 const DEFAULT_AGENT = "set_expiration";
 
+/**
+ * Sentinel for a stored value the validator cannot parse. It is equal to
+ * nothing, so the rewrite that repairs a corrupted date always happens -
+ * a `null` there would collide with the clear-what-is-already-clear case
+ * and leave the junk on disk.
+ */
+const UNPARSEABLE_EXPIRATION = Symbol("unparseable-expiration");
+
+/**
+ * The stored value in the form the new one is compared against.
+ *
+ * Both sides have to come through {@link normalizeExpirationDate} for
+ * "already says exactly this" to be a statement about the LIFETIME rather
+ * than about the spelling: `2026-07-15` and `2026-07-15T00:00:00Z` are
+ * one date, and re-setting one over the other used to rewrite the file
+ * and append an audit event describing no change at all.
+ */
+function comparableExpiration(previous: string | null): string | null | symbol {
+  if (previous === null) return null;
+  try {
+    return normalizeExpirationDate(previous);
+  } catch {
+    return UNPARSEABLE_EXPIRATION;
+  }
+}
+
 /** Where an id of each shape can live, in search order. */
 function candidatePaths(vault: string, id: string): { kind: ExpirationTargetKind; dirs: string[] } {
   const dirs = brainDirsForWrite(vault);
@@ -217,7 +243,7 @@ export function setExpiration(
   const [meta, body] = parseFrontmatter(abs);
   const priorRaw = meta[EXPIRATION_DATE_FIELD];
   const previous = typeof priorRaw === "string" && priorRaw.length > 0 ? priorRaw : null;
-  if (previous === normalized) {
+  if (comparableExpiration(previous) === normalized) {
     // Byte-identical no-op, including the clear-what-is-already-clear
     // case. Reporting `changed: false` rather than rewriting keeps a
     // re-run out of the audit log and off the disk.

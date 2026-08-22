@@ -17,6 +17,10 @@
  *  9. Write approval on stages every accepted item into `Brain/pending/`
  *     instead, and writes nothing to the inbox.
  * 10. A repeated payload dedups against the signals already on disk.
+ * 11. A write that fails PART WAY through the items is reported as the
+ *     partial write it is: the error names the items already on disk and
+ *     the one that failed, rather than leaving the caller to discover
+ *     them.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -29,6 +33,7 @@ import {
   AUTO_EXTRACT_PER_SESSION_CAP,
   commitExtractedSignals,
   ExtractSignalsError,
+  ExtractSignalsWriteError,
   planExtractSignals,
 } from "../../../src/core/brain/extract-signals.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
@@ -249,6 +254,29 @@ test("a repeated payload dedups against the signals already on disk", () => {
   const second = commitExtractedSignals(vault, SESSION, payload, { agent: "tester", now: NOW });
   expect(second.written.length).toBe(0);
   expect(second.deduped).toBe(1);
+  expect(inboxFiles().length).toBe(1);
+});
+
+test("a mid-loop write failure names what is already on disk and what failed", () => {
+  // The failing write is a real one, not a stub: `topic` becomes the
+  // signal's slug and a colon is not a legal filename character, so the
+  // second item cannot be written after the first already has been.
+  const items = [item(), item({ topic: "module:names", principle: "Never abbreviate a module." })];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW });
+  } catch (err) {
+    caught = err;
+  }
+  expect(caught).toBeInstanceOf(ExtractSignalsWriteError);
+  const err = caught as ExtractSignalsWriteError;
+  expect(err.topic).toBe("module:names");
+  expect(err.written.map((w) => w.topic)).toEqual(["release-notes-style"]);
+  expect(err.remaining).toBe(1);
+  // The accounting is in the message too, for a caller that only logs it.
+  expect(err.message).toContain(err.written[0]!.id);
+  // The first item stayed on disk: this is a partial write, and saying so
+  // is the whole point.
   expect(inboxFiles().length).toBe(1);
 });
 

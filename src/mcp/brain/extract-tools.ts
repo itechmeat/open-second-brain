@@ -20,7 +20,7 @@ import { resolveAgentName } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { wrapToolErrors } from "./shared.ts";
+import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_extract_signals";
 
@@ -65,7 +65,14 @@ async function toolBrainExtractSignals(
     return {
       phase: "commit",
       session_id: res.sessionId,
-      written: res.written.map((w) => ({ id: w.id, path: w.path, topic: w.topic })),
+      // Vault-relative, like every other path this server emits: an MCP
+      // response lands in model context, and the absolute host path is
+      // not this surface's to hand out.
+      written: res.written.map((w) => ({
+        id: w.id,
+        path: vaultRelativeSafe(ctx.vault, w.path),
+        topic: w.topic,
+      })),
       staged: res.staged,
       deduped: res.deduped,
       durability_rejected: res.durabilityRejected,

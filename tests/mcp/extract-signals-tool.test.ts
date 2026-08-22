@@ -9,6 +9,8 @@
  *  3. An over-cap payload is refused as a caller error, not a server
  *     fault, and nothing is written.
  *  4. The tool is full-tier, absent from the writer surface.
+ *  5. A committed signal's path is vault-relative: no MCP response of
+ *     this tool carries the absolute host path.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -90,6 +92,14 @@ test("with items it commits them as auto_extract signals", async () => {
   expect(res.phase).toBe("commit");
   expect(res.written.map((w) => w.topic)).toEqual(["heading-style"]);
   expect(inboxCount()).toBe(1);
+});
+
+test("the committed path is vault-relative, never the host path", async () => {
+  const res = (await tool().handler(ctx, { session: SESSION, items: [ITEM] })) as {
+    written: ReadonlyArray<{ path: string }>;
+  };
+  expect(res.written[0]!.path).toMatch(/^Brain[/\\]inbox[/\\]sig-/);
+  expect(JSON.stringify(res)).not.toContain(vault);
 });
 
 test("an over-cap payload is refused and writes nothing", async () => {

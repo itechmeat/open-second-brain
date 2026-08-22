@@ -86,11 +86,21 @@ export function buildNeedsLlmStep<T extends LlmStepFields>(fields: T): NeedsLlmS
   requireContent("step", fields.step);
   requireContent("prompt", fields.prompt);
   requireContent("target_path", fields.target_path);
-  return Object.freeze({
-    status: NEEDS_LLM_STEP,
-    ...fields,
-    schema_hints: Object.freeze([...fields.schema_hints]),
-  });
+  // A spread would not honour the sentence above: `LlmStepFields` declares
+  // no `status`, so the type system never sees one coming, and a runtime
+  // key of that name would land AFTER the literal and replace it. It is
+  // dropped rather than re-positioned last, because the serialized key
+  // order is part of this contract (see NEEDS_LLM_STEP_KEYS).
+  const envelope: Record<string, unknown> = { status: NEEDS_LLM_STEP };
+  for (const [key, value] of Object.entries(fields)) {
+    if (key === "status") continue;
+    envelope[key] = value;
+  }
+  envelope["schema_hints"] = Object.freeze([...fields.schema_hints]);
+  // The loop above copies every field of `T` and the line before it
+  // stamps the status, so the result satisfies `NeedsLlmStep & T` - a
+  // fact the compiler cannot derive from a keyed record.
+  return Object.freeze(envelope) as unknown as NeedsLlmStep & T;
 }
 
 function requireContent(field: keyof LlmStepFields, value: string): void {

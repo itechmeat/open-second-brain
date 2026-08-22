@@ -91,8 +91,16 @@
  * `source-cleanup.ts`'s, called through {@link traceNoteDerivations}, so
  * "derived solely from" means one thing in this project rather than two.
  *
- * Three consequences follow and each is on the response:
+ * Membership additionally requires DECLARED provenance, and only on this
+ * path: the page's own frontmatter has to name the note as what it was
+ * derived from. See {@link planCascade} for why the shared rule is not
+ * sufficient here.
  *
+ * Four consequences follow and each is on the response:
+ *
+ *   - a page that only MENTIONS the note - a `[[Note]]` in prose, with no
+ *     `source:` array naming it - is reported and left alone, however
+ *     derived-looking the page's directory is;
  *   - a page citing a SECOND source - a signal naming another note, a
  *     preference folded from a foreign signal - is reported and left
  *     alone, exactly as it is by `deleteBySource`;
@@ -1059,11 +1067,24 @@ export async function noteLifecycle(
  * Split everything that references the note into the two lists
  * {@link NoteDeleteCascade} promises.
  *
- * The classification is not made here. {@link traceNoteDerivations} runs
- * `source-cleanup.ts`'s rule - a single-purpose derived page in a
- * derivation directory, citing no second source, folded from no foreign
- * signal - and this function only sorts its verdict into the two lists
- * and unions the mentions with the vault-wide inbound probe.
+ * The classification is `source-cleanup.ts`'s: {@link traceNoteDerivations}
+ * runs it - a single-purpose derived page in a derivation directory,
+ * citing no second source, folded from no foreign signal - and this
+ * function sorts the verdict into the two lists and unions the mentions
+ * with the vault-wide inbound probe.
+ *
+ * One condition is added on top of it, and only on this path. That rule
+ * was written for an IMPORTED source, where "cites no second source" is
+ * decisive because the pages in range are ones the import generated. A
+ * note is different: any Brain page may write `[[Note]]` in prose, and
+ * such a page carries no `source:` array to contradict - so the
+ * solely-derived test passes vacuously and somebody's paragraph enters a
+ * deletion set. The cascade therefore requires explicit structured
+ * provenance (`structuredProvenance`) as well: a page is deletable only
+ * when its frontmatter NAMES the note as what it was derived from. A
+ * prose mention is always reported and never deleted. `deleteBySource`
+ * is untouched - its subject brings index artifacts of its own and its
+ * rule is long-settled.
  *
  * Two populations meet here and the union is the point. The probe reads
  * `[[...]]` spellings anywhere in the vault, which is where user notes
@@ -1078,7 +1099,7 @@ function planCascade(
 ): NoteDeleteCascade {
   const traced = traceNoteDerivations(vault, sourceRel);
   const derived = traced
-    .filter((entry) => entry.deletable)
+    .filter((entry) => entry.deletable && entry.structuredProvenance)
     .map((entry) => entry.path)
     // The note itself is never a Brain page, but a fold that ever
     // returned it would otherwise put it in the set twice.

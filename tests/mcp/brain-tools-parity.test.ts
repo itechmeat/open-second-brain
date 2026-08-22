@@ -52,17 +52,16 @@
  * `brain_scaffold_stub` (the unresolved wikilink targets the search index
  * holds, and the verb that materialises a note for one - the list REFUSES
  * a missing or partially-resolved index rather than reporting zero); the
- * salience-lifecycle-enrichment release added `brain_expire` (set, change
- * or clear the `expiration_date` of one signal or preference by id - the
- * mutation half of a field that until now could only be declared at
+ * salience-lifecycle-enrichment release added three: `brain_expire` (set,
+ * change or clear the `expiration_date` of one signal or preference by id
+ * - the mutation half of a field that until now could only be declared at
  * creation, kept off `brain_lifecycle` because every action there
  * addresses its subject by a note PATH and the path envelope refuses the
- * `Brain/` root these artifacts live under).
- * salience-lifecycle-enrichment release added `brain_extract_signals` (the
+ * `Brain/` root these artifacts live under), `brain_extract_signals` (the
  * batch counterpart to regex fact extraction: hands the calling agent one
  * session's user turns inside a needs-llm-step envelope and writes the
  * validated answer as speculative `source_type: auto_extract` inbox
- * signals) and `brain_design_note` (the one-shot sibling of the panel
+ * signals), and `brain_design_note` (the one-shot sibling of the panel
  * lane: a read-only grounding pass over tension, decision and truth
  * records, one envelope, and a committed note under `Brain/decisions/`).
  */

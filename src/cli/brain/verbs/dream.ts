@@ -556,6 +556,17 @@ export async function cmdBrainDream(argv: string[]): Promise<number> {
   }
   ok(`run_id: ${summary.run_id}`);
   ok(`changed: ${summary.changed}`);
+  // Only when a threshold is configured: with the gate open every fact is
+  // admitted, and a line saying so on every run would be noise. With it
+  // closed the exclusions are otherwise invisible on this stream - the
+  // ladder just folds fewer facts and says nothing about why.
+  const gate = summary.salience_gate;
+  if (gate.threshold !== null) {
+    ok(
+      `salience_gate: ${gate.admitted} of ${gate.considered} fact(s) admitted ` +
+        `(threshold ${gate.threshold})`,
+    );
+  }
   if (summary.new_unconfirmed.length > 0)
     ok(`new_unconfirmed: ${summary.new_unconfirmed.join(", ")}`);
   if (summary.confirmed.length > 0) ok(`confirmed: ${summary.confirmed.join(", ")}`);

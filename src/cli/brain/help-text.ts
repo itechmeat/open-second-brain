@@ -247,11 +247,13 @@ export const VERB_HELP: Record<string, string> = {
     "performs it; delete additionally requires --confirm, because no archive covers a\n" +
     "note outside Brain/. --expect <n> asserts the count before any write and --strict\n" +
     "refuses a mutation carrying no such guard.\n" +
-    "--delete-linked (delete only) widens the removal to the Brain files that trace\n" +
-    "SOLELY to the note - a per-item summary, signal, preference or entity page whose\n" +
-    "whole content restates it. A page citing a second source is reported and kept, as\n" +
-    "is every user note; the receipt prints the deletion set and the reported set\n" +
-    "separately, names the scope it scanned, and --expect then counts the deletion set.\n" +
+    "--delete-linked (delete only) widens the removal to the Brain files that DECLARE\n" +
+    "the note as their provenance and trace SOLELY to it - a per-item summary, signal,\n" +
+    "preference or entity page whose frontmatter names it and whose whole content\n" +
+    "restates it. A page that merely mentions the note in prose is reported and kept,\n" +
+    "as is a page citing a second source, as is every user note; the receipt prints\n" +
+    "the deletion set and the reported set separately, names the scope it scanned,\n" +
+    "and --expect then counts the deletion set.\n" +
     "Inbound [[wikilinks]] are rewritten across the vault, minus what vault scope\n" +
     "excludes, minus code fences, and minus Brain/log, which is append-only. The\n" +
     "receipt names how stale the search index now is and the command that fixes it.\n" +

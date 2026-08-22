@@ -17,7 +17,7 @@ import { resolveAgentName } from "../../core/config.ts";
 import { coerceStr } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
-import { wrapToolErrors } from "./shared.ts";
+import { vaultRelativeSafe, wrapToolErrors } from "./shared.ts";
 
 const TOOL = "brain_design_note";
 
@@ -63,7 +63,10 @@ async function toolBrainDesignNote(
       phase: "commit",
       topic: res.topic,
       slug: res.slug,
-      path: res.path,
+      // Vault-relative, like every other path this server emits: an MCP
+      // response lands in model context, and the absolute host path is
+      // not this surface's to hand out.
+      path: vaultRelativeSafe(ctx.vault, res.path),
       recommended: res.recommended,
       alternative_count: res.alternativeCount,
     };

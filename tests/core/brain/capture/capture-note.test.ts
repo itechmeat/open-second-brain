@@ -164,7 +164,9 @@ test("writeCaptureNote retries a name lost between the probe and the create", ()
  *     byte - the field is additive and the hash segment is conditional.
  *  4. A body that itself ends in a `## Guidance` heading is still read back
  *     as body, because the split is gated on the frontmatter marker rather
- *     than on finding the heading.
+ *     than on finding the heading - and when the capture DOES carry
+ *     guidance, the split takes the last separator, so the quoted section
+ *     stays in the body and the writer's own guidance comes back whole.
  *  5. Empty or whitespace-only guidance is refused by name, never stored as
  *     an empty section.
  */
@@ -218,6 +220,23 @@ test("a body that ends in its own Guidance heading is still all body", () => {
   const written = writeCaptureNote(vault, { body, provenance: prov() });
   const read = readCaptureNote(vault, written.id)!;
   expect(read.guidance).toBeNull();
+  expect(read.body).toBe(body);
+});
+
+test("a quoted Guidance section inside the body does not steal the real guidance", () => {
+  // Both halves are present here: the body quotes a document that has its
+  // own `## Guidance` heading, AND the capture carries guidance of its
+  // own. The split has to take the LAST separator - the one the writer
+  // appended - or the quotation's head becomes the instruction and the
+  // rest of the quotation is lost from the body.
+  const body = "notes\n\n## Guidance\n\nquoted from somewhere else";
+  const written = writeCaptureNote(vault, {
+    body,
+    provenance: prov(),
+    guidance: "file this under research",
+  });
+  const read = readCaptureNote(vault, written.id)!;
+  expect(read.guidance).toBe("file this under research");
   expect(read.body).toBe(body);
 });
 

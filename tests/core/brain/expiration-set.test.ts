@@ -23,10 +23,13 @@
  *  5. An artifact mutated to expire drops out of the DEFAULT query after
  *     its date and comes back under `showExpired`, which is the whole
  *     point of setting one.
+ *  6. `changed: false` means what it says: the stored value is compared
+ *     through the same chokepoint the incoming one goes through, so an
+ *     equivalent spelling writes no bytes and logs no event.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -67,6 +70,16 @@ function frontmatterLines(text: string): string[] {
     .split("\n---")[0]!
     .split("\n")
     .filter((l) => l.length > 0 && !l.startsWith("expiration_date:"));
+}
+
+/** Every byte of the observation log, so a no-op can be shown to append none. */
+function logSnapshot(): string {
+  const dir = join(vault, "Brain", "log");
+  if (!existsSync(dir)) return "";
+  return readdirSync(dir)
+    .toSorted()
+    .map((name) => `${name}\n${readFileSync(join(dir, name), "utf8")}`)
+    .join("");
 }
 
 function seedSignal(): string {
@@ -148,6 +161,47 @@ describe("changing and clearing", () => {
     expect(res.previous).toBe("2026-07-15");
     const after = readFileSync(join(vault, res.path), "utf8");
     expect(after).not.toContain("expiration_date");
+  });
+
+  test("re-setting the same lifetime writes nothing and logs nothing", () => {
+    const id = seedSignal();
+    const first = setExpiration(vault, id, "2026-07-15");
+    expect(first.changed).toBe(true);
+
+    // The two spellings of one lifetime: what is on disk carries padding
+    // - a hand edit, or a writer that quoted the scalar - and the caller
+    // sends the plain date. Comparing the raw stored value against the
+    // normalised new one made this a rewrite plus an audit event
+    // describing a change that did not happen.
+    const file = join(vault, first.path);
+    atomicWriteFileSync(
+      file,
+      readFileSync(file, "utf8").replace(
+        "expiration_date: 2026-07-15",
+        'expiration_date: "2026-07-15 "',
+      ),
+    );
+    const bytesBefore = readFileSync(file, "utf8");
+    const logBefore = logSnapshot();
+
+    const res = setExpiration(vault, id, "  2026-07-15  ");
+    expect(res.changed).toBe(false);
+    expect(res.expiration).toBe("2026-07-15");
+    expect(readFileSync(file, "utf8")).toBe(bytesBefore);
+    expect(logSnapshot()).toBe(logBefore);
+  });
+
+  test("a stored value the validator cannot parse is never equal, so the set repairs it", () => {
+    const id = seedSignal();
+    const first = setExpiration(vault, id, "2026-07-15");
+    const file = join(vault, first.path);
+    atomicWriteFileSync(
+      file,
+      readFileSync(file, "utf8").replace("expiration_date: 2026-07-15", "expiration_date: junk"),
+    );
+    const res = setExpiration(vault, id, "2026-07-15");
+    expect(res.changed).toBe(true);
+    expect(readFileSync(file, "utf8")).toContain("expiration_date: 2026-07-15");
   });
 
   test("clearing an artifact that has none is reported, not invented", () => {

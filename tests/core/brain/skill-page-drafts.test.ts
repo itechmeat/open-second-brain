@@ -18,6 +18,13 @@
  *  7. Accept materializes a well-formed SKILL.md under the configured
  *     skills root through the WAL-protected accept path.
  *  8. Rejection is sticky: a rejected page does not resurface as a draft.
+ *  9. A page path that climbs out of the vault is refused by name before
+ *     anything is staged - the draft's provenance is confined like every
+ *     other vault write.
+ * 10. The name charset is re-applied at MATERIALIZE time: a pending
+ *     proposal whose `skill_name` was edited to something that is not a
+ *     directory name is refused on accept, and nothing lands under the
+ *     skills root.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -31,7 +38,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
 import { writeSkillAcceptJournal } from "../../../src/core/brain/skill-accept-journal.ts";
@@ -43,6 +50,7 @@ import {
   MATURE_PAGE_REUSE_FLOOR,
   planSkillPageDrafts,
   SKILL_PAGE_SKIP_REASON,
+  SkillPageDraftError,
 } from "../../../src/core/brain/skill-page-drafts.ts";
 import {
   acceptSkillProposal,
@@ -186,6 +194,56 @@ test("a name that is not a valid skill directory name is refused by the semantic
   expect(caught).toBeInstanceOf(ResponseCheckError);
   expect((caught as Error).message).toContain("Release Ritual!");
   expect(listPendingSkillProposals(vault)).toEqual([]);
+});
+
+test("a page path escaping the vault is refused by name and stages nothing", () => {
+  // The escape target exists, so only the confinement check can refuse it:
+  // an existence probe alone would confirm it and stage the proposal.
+  const outside = join(vault, "..", "outside-page.md");
+  writeFileSync(outside, "# Not this vault's page\n");
+  try {
+    let caught: unknown;
+    try {
+      commitSkillPageDraft(vault, "../outside-page.md", DRAFT, { now: NOW });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(SkillPageDraftError);
+    expect((caught as Error).message).toContain("outside-page.md");
+    expect(listPendingSkillProposals(vault)).toEqual([]);
+  } finally {
+    rmSync(outside, { force: true });
+  }
+});
+
+test("an edited skill_name is refused at materialize time and nothing reaches the skills root", () => {
+  const res = commitSkillPageDraft(vault, MATURE_PAGE, DRAFT, { now: NOW });
+  // What a hand edit of the pending proposal can do that the draft-time
+  // check cannot see: the accept write passes no vault confinement,
+  // because the skills root may legitimately sit outside the vault.
+  const pendingFile = readFileSync(res.path, "utf8");
+  // Unique per run, so the assertion below cannot be satisfied - or
+  // defeated - by a directory some other run left behind.
+  const escapeName = `${basename(skillsRoot)}-escaped`;
+  writeFileSync(
+    res.path,
+    pendingFile.replace(`skill_name: ${DRAFT.name}`, `skill_name: ../${escapeName}`),
+  );
+  const before = readdirSync(skillsRoot);
+  const escapeTarget = join(skillsRoot, "..", escapeName);
+
+  try {
+    expect(() => acceptSkillProposal(vault, res.slug, { now: NOW, skillsRoot })).toThrow(
+      "skill directory name",
+    );
+    expect(readdirSync(skillsRoot)).toEqual(before);
+    // Not merely "outside the root the operator configured": before the
+    // charset was re-applied here, this wrote a SKILL.md into the skills
+    // root's PARENT directory.
+    expect(existsSync(escapeTarget)).toBe(false);
+  } finally {
+    rmSync(escapeTarget, { recursive: true, force: true });
+  }
 });
 
 test("a validated draft stages a pending mature_page proposal inside the vault", () => {

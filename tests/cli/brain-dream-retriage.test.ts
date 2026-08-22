@@ -23,6 +23,9 @@
  *      than compared against an assumed-open partition.
  *   7. The action requires a run id, like its validate/apply/discard
  *      siblings.
+ *   8. A manifest whose recorded counts are not numbers is refused by
+ *      name, like its threshold and its exclusion list - never coerced
+ *      into a NaN that reports a phantom fold-set change.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -229,6 +232,23 @@ test("a bundle staged before the gate existed is refused, never assumed open", a
   const payload = JSON.parse(r.stdout) as Record<string, unknown>;
   expect(payload["ok"]).toBe(false);
   expect(String(payload["message"])).toMatch(/re-stage/);
+});
+
+test("a non-numeric recorded count is refused by name, never coerced to NaN", async () => {
+  const runId = await stageBundle();
+  const raw = manifest(runId);
+  const salience = raw["salience"] as Record<string, unknown>;
+  salience["considered"] = "four";
+  writeFileSync(manifestPath(runId), JSON.stringify(raw, null, 2) + "\n", "utf8");
+
+  const r = await cli(["brain", "dream", "retriage", runId, "--now", NOW, "--json"]);
+  expect(r.returncode).toBe(2);
+  const payload = JSON.parse(r.stdout) as Record<string, unknown>;
+  expect(payload["ok"]).toBe(false);
+  // Named, and named as the count it is: `Number("four")` is NaN, which
+  // would have passed silently and then reported a fold-set size change
+  // on every retriage of this bundle.
+  expect(String(payload["message"])).toContain("considered");
 });
 
 test("retriage requires a run id, like its validate and apply siblings", async () => {

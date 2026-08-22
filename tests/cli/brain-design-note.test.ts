@@ -10,7 +10,9 @@
  *     with the refusal in `--json`, and writes nothing.
  *  4. A missing topic is a usage error (exit 2), and the verb has its own
  *     `--help`.
- *  5. The MCP tool answers over the same core, both phases.
+ *  5. The MCP tool answers over the same core, both phases, and the path
+ *     it reports is vault-relative - no MCP response carries the
+ *     absolute host path.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -153,7 +155,12 @@ test("the MCP tool answers both phases over the same core", async () => {
   };
   expect(committed.phase).toBe("commit");
   expect(committed.recommended).toBe("option-0");
-  expect(existsSync(committed.path)).toBe(true);
+  // Vault-relative on the MCP surface, and the response carries the host
+  // path nowhere - an MCP payload lands in model context. The CLI keeps
+  // the absolute path it has always printed; that one runs on the host.
+  expect(committed.path).toMatch(/^Brain[/\\]decisions[/\\]/);
+  expect(existsSync(join(vault, committed.path))).toBe(true);
+  expect(JSON.stringify(committed)).not.toContain(vault);
 
   await expect(
     Promise.resolve(tool.handler(ctx, { topic: "another topic", note: note(true, true) })),

@@ -33,6 +33,11 @@
  *     inbound-reference count), and a mismatch aborts before any unlink.
  *  7. The flag belongs to delete alone; on any other action it is refused
  *     by name rather than ignored.
+ *  8. A Brain page that only MENTIONS the note - a `[[wikilink]]` in prose
+ *     and no `source:` array - is reported and never deleted, however
+ *     derived-looking the directory it sits in. The solely-derived test is
+ *     vacuously true for a page declaring no provenance at all, so the
+ *     cascade demands declared provenance on top of it.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -201,6 +206,62 @@ describe("the dry run", () => {
     expect(res.cascade!.scannedScope).toBe(DERIVED_SET_SCOPE);
     // A user note outside that scope is reported rather than folded in.
     expect(res.cascade!.reportedFiles).toContain("Projects/Reader.md");
+  });
+});
+
+describe("a prose mention is not a derivation", () => {
+  /**
+   * A Brain page inside a derivation directory whose only tie to the note
+   * is a `[[wikilink]]` in its body: no `source:` array, no `source_path`,
+   * nothing declaring where it came from.
+   */
+  const PROSE_ONLY = "Brain/inbox/sig-2026-06-01-prose-mention.md";
+
+  function seedProseMention(): void {
+    note(
+      PROSE_ONLY,
+      [
+        "---",
+        "id: sig-2026-06-01-prose-mention",
+        "topic: bench",
+        "signal: positive",
+        "---",
+        "",
+        "The operator compared this against [[Imports/Benchmark]] once.",
+        "",
+      ].join("\n"),
+    );
+  }
+
+  test("the dry run reports it and leaves it out of the deletion set", async () => {
+    seed();
+    seedProseMention();
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.delete,
+      path: TARGET,
+      deleteLinked: true,
+      now: NOW,
+    });
+    expect(res.cascade!.deletionSet).not.toContain(PROSE_ONLY);
+    expect(res.cascade!.reportedFiles).toContain(PROSE_ONLY);
+  });
+
+  test("confirm leaves it on disk", async () => {
+    const { solelyDerived } = seed();
+    seedProseMention();
+    const res = await noteLifecycle(vault, {
+      action: NOTE_LIFECYCLE_ACTION.delete,
+      path: TARGET,
+      deleteLinked: true,
+      apply: true,
+      confirm: true,
+      now: NOW,
+    });
+    expect(res.applied).toBe(true);
+    // The page that DECLARED the note as its source is gone; the one that
+    // only wrote its name in a sentence is not.
+    expect(existsSync(solelyDerived)).toBe(false);
+    expect(existsSync(join(vault, PROSE_ONLY))).toBe(true);
   });
 });
 

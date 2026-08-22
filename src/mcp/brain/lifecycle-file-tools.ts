@@ -342,7 +342,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
   {
     name: TOOL,
     description:
-      "Note-file lifecycle. action: rename changes the filename in place; move changes the directory; archive displaces the note under Archive/; delete removes it, and delete_linked extends that to files derived solely from it. Dry-run unless apply; delete also needs confirm. Rewrites inbound [[links]].",
+      "Note-file lifecycle. action: rename renames in place; move changes the directory; archive displaces the note under Archive/; delete removes it, and delete_linked extends that to files whose frontmatter derives them from it alone. Dry-run unless apply; delete needs confirm. Rewrites [[links]].",
     inputSchema: {
       type: "object",
       properties: {
@@ -374,7 +374,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
         delete_linked: {
           type: "boolean",
           description:
-            "delete only: also remove Brain files tracing SOLELY to this note. A page citing a second source is reported, never deleted. Refused on other actions.",
+            "delete only: also remove Brain files whose frontmatter names this note as their source and traces SOLELY to it. A prose mention is reported, never deleted.",
         },
         expect: {
           type: "integer",

@@ -67,7 +67,7 @@ const AGENT_ARG_NAME = "agent";
  * pinned so a tool joining or leaving the set is a decision somebody
  * makes on purpose.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 23;
+const AGENT_ARGUMENT_TOOL_COUNT = 24;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;
@@ -310,8 +310,11 @@ test("every tool declaring agent_scope is covered by that one seam", () => {
 });
 
 /**
- * The write side of the same echo: 22 tools accept a caller-supplied
- * `agent` and stamp it verbatim. That is `passthrough`, shipped and
+ * The write side of the same echo: the {@link AGENT_ARGUMENT_TOOL_COUNT}
+ * tools of that population accept a caller-supplied `agent` and stamp it
+ * verbatim. The size is stated in the constant and nowhere else, so a
+ * tool joining the set cannot leave a stale number behind in this
+ * paragraph. That is `passthrough`, shipped and
  * ungated, and this unit does not gate it - `brain_generation_reports`
  * uses the same argument as a LIST FILTER, so a blanket refusal at the
  * seam would change a read as well as a write. What this pins is the

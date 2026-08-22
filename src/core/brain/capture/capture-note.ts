@@ -184,8 +184,10 @@ function renderCaptureBody(body: string, guidance: string | null): string {
 /**
  * Split a marked body back into its two halves.
  *
- * Greedy on the left, so the LAST heading wins - which is the one the
- * writer appended, whatever the captured text contains. A marked body with
+ * The leading `[\s\S]*` is greedy, so it takes as much of the body as it
+ * can and the separator matches at its LAST occurrence - which is the one
+ * {@link renderCaptureBody} appended, whatever the captured text itself
+ * quotes. A marked body with
  * no such section is a corrupted page rather than a guidance-less one, and
  * it is refused: reporting `guidance: null` there would silently return
  * the marker's own text as part of the capture.

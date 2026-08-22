@@ -585,10 +585,34 @@ function readStagedSalience(runId: string, raw: unknown): DreamStageSalience {
   });
   return Object.freeze({
     threshold,
-    considered: Number(block["considered"] ?? excluded.length),
-    admitted: Number(block["admitted"] ?? 0),
+    considered: readStagedCount(runId, block, "considered", excluded.length),
+    admitted: readStagedCount(runId, block, "admitted", 0),
     excluded: Object.freeze(excluded),
   });
+}
+
+/**
+ * One recorded count, or the fallback for a bundle staged before the
+ * field existed.
+ *
+ * Validated like the threshold and the exclusion list above rather than
+ * coerced: `Number("many")` is NaN, NaN equals nothing, and the retriage
+ * would then report "the fold set changed size" on every run over the
+ * same corrupted manifest - a note naming a delta that never happened,
+ * instead of the refusal a corrupted bundle deserves.
+ */
+function readStagedCount(
+  runId: string,
+  block: Record<string, unknown>,
+  key: string,
+  fallback: number,
+): number {
+  const raw = block[key];
+  if (raw === undefined || raw === null) return fallback;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    throw new DreamRetriageError(runId, `its recorded salience '${key}' count is not a number`);
+  }
+  return raw;
 }
 
 /**

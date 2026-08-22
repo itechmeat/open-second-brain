@@ -9,7 +9,8 @@
  *     `schema_hints`, `target_path`: the intersection of the three, and
  *     nothing beyond it. A field only two of them carry is not spine.
  *  2. `buildNeedsLlmStep` stamps the status literal itself, so no
- *     construction site can spell it a fourth way.
+ *     construction site can spell it a fourth way - including a fields
+ *     object that carries a `status` of its own at runtime.
  *  3. The built envelope is frozen and owns its hint list: the array the
  *     caller passed cannot mutate the envelope afterwards.
  *  4. Key order of the built object is `status` first, then the caller's
@@ -135,6 +136,22 @@ test("status leads the key order and the caller's extra fields keep their place"
     "schema_hints",
     "target_path",
   ]);
+});
+
+test("a runtime status on the caller's fields cannot displace the stamped literal", () => {
+  // The type forbids this; a payload assembled at runtime - a spread of a
+  // wider record, a parsed object - does not go through the type.
+  const hostile = {
+    status: "done",
+    step: "profile-prose",
+    prompt: "Write the prose.",
+    schema_hints: ["a hint"],
+    target_path: "Brain/profiles/p.md",
+  } as unknown as LlmStepFields;
+  const built = buildNeedsLlmStep(hostile);
+  expect(built.status).toBe(NEEDS_LLM_STEP);
+  // And it does not reappear later in the object either.
+  expect(Object.keys(built)).toEqual([...NEEDS_LLM_STEP_KEYS]);
 });
 
 test("a blank step, prompt, or target path is refused by name", () => {

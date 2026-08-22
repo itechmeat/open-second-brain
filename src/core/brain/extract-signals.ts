@@ -97,6 +97,51 @@ export class ExtractSignalsError extends Error {
   }
 }
 
+/**
+ * A write failed PART WAY through the accepted items.
+ *
+ * The commit writes one file per item, so a failure on the fourth leaves
+ * three signals on disk. The house precedent for that state is
+ * `ArchWriteError` (`architect/generate.ts`): a partial write reports how
+ * far it got rather than throwing a bare cause and leaving the caller to
+ * guess. This is that error for this lane - the ids already written are
+ * ON it, so an operator can find them, and re-running the same payload is
+ * safe because the dedup index recognises every one of them.
+ *
+ * Not an {@link ExtractSignalsError}: that class is the caller's fault
+ * and the surfaces report it as such. A filesystem that refused a write
+ * is not.
+ */
+export class ExtractSignalsWriteError extends Error {
+  /** The item whose write failed. */
+  readonly topic: string;
+  /** Signals whose bytes are already on disk, in write order. */
+  readonly written: ReadonlyArray<ExtractedSignalWrite>;
+  /** Payload items this call never reached, the failing one included. */
+  readonly remaining: number;
+
+  constructor(
+    topic: string,
+    written: ReadonlyArray<ExtractedSignalWrite>,
+    remaining: number,
+    cause: unknown,
+  ) {
+    super(
+      `failed to write extracted signal ${JSON.stringify(topic)}: ` +
+        `${cause instanceof Error ? cause.message : String(cause)} - ` +
+        `${written.length} signal(s) are already on disk ` +
+        `(${written.length === 0 ? "none" : written.map((w) => w.id).join(", ")}) and ` +
+        `${remaining} payload item(s) were not reached; fix the cause and re-run the ` +
+        "same payload, which dedups what is already there",
+      { cause },
+    );
+    this.name = "ExtractSignalsWriteError";
+    this.topic = topic;
+    this.written = Object.freeze([...written]);
+    this.remaining = remaining;
+  }
+}
+
 /** One user turn offered to the caller as mining material. */
 export interface MinedTurn {
   readonly turnId: string;
@@ -363,7 +408,7 @@ export function commitExtractedSignals(
   const rejected: ExtractedSignalRejection[] = [];
   let deduped = 0;
 
-  for (const item of items) {
+  for (const [index, item] of items.entries()) {
     const scope = item.scope?.trim();
     const hash = computeDedupHash({
       topic: item.topic,
@@ -380,28 +425,37 @@ export function commitExtractedSignals(
       rejected.push(Object.freeze({ topic: item.topic, reason: verdict.reason! }));
       continue;
     }
-    const res = writeSignal(
-      vault,
-      {
-        topic: item.topic,
-        signal: item.signal,
-        agent: opts.agent,
-        principle: item.principle,
-        created_at: isoSecond(opts.now),
-        date: isoDate(opts.now),
-        slug: item.topic,
-        ...(scope ? { scope } : {}),
-        source: [`[[${trimmed}]]`],
-        source_type: BRAIN_SIGNAL_SOURCE_TYPE.autoExtract,
-        dedup_hash: hash,
-        session_ref: trimmed,
-        // The confidence the caller claimed rides onto the file: it is the
-        // one thing separating two auto-extracted signals whose text reads
-        // equally plausible, and the dream pass has no other way to see it.
-        raw: `confidence: ${item.confidence}`,
-      },
-      targetDir !== undefined ? { targetDir } : {},
-    );
+    // Per-item writes, so a failure here is a PARTIAL write: everything
+    // before this item is on disk and stays there. It is reported as such
+    // rather than propagating a bare cause with no accounting - the same
+    // choice `ArchWriteError` makes for the architect tree.
+    let res;
+    try {
+      res = writeSignal(
+        vault,
+        {
+          topic: item.topic,
+          signal: item.signal,
+          agent: opts.agent,
+          principle: item.principle,
+          created_at: isoSecond(opts.now),
+          date: isoDate(opts.now),
+          slug: item.topic,
+          ...(scope ? { scope } : {}),
+          source: [`[[${trimmed}]]`],
+          source_type: BRAIN_SIGNAL_SOURCE_TYPE.autoExtract,
+          dedup_hash: hash,
+          session_ref: trimmed,
+          // The confidence the caller claimed rides onto the file: it is the
+          // one thing separating two auto-extracted signals whose text reads
+          // equally plausible, and the dream pass has no other way to see it.
+          raw: `confidence: ${item.confidence}`,
+        },
+        targetDir !== undefined ? { targetDir } : {},
+      );
+    } catch (err) {
+      throw new ExtractSignalsWriteError(item.topic, written, items.length - index, err);
+    }
     dedup.set(hash, { id: res.id, path: res.path });
     written.push(Object.freeze({ id: res.id, path: res.path, topic: item.topic }));
   }
