@@ -157,3 +157,58 @@ describe("dispatch", () => {
     expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
   });
 });
+
+/**
+ * `delete_linked` on the tool surface (unit 3a / t_5e338af1). The fold and
+ * the ladder are the core's; what belongs here is that the boolean reaches
+ * it, that the two lists and the scanned scope are rendered, and that a
+ * response without the flag says `null` rather than an empty cascade.
+ */
+describe("delete_linked", () => {
+  test("renders the deletion set, the reported set and the scanned scope", async () => {
+    note("Imports/Bench.md", "rows\n");
+    note("Projects/Reader.md", "[[Imports/Bench]]\n");
+    mkdirSync(join(vault, "Brain", "inbox"), { recursive: true });
+    writeFileSync(
+      join(vault, "Brain", "inbox", "sig-derived.md"),
+      '---\nid: sig-derived\nkind: brain-signal\nsource:\n  - "[[Imports/Bench]]"\n---\n\nbody\n',
+    );
+
+    const res = await call({ action: "delete", path: "Imports/Bench.md", delete_linked: true });
+    const cascade = res["cascade"] as {
+      deletion_set: string[];
+      reported_files: string[];
+      scanned_scope: string;
+    };
+    expect(cascade.deletion_set).toEqual(["Imports/Bench.md", "Brain/inbox/sig-derived.md"]);
+    expect(cascade.reported_files).toContain("Projects/Reader.md");
+    expect(cascade.scanned_scope).toBe("Brain/");
+    // A dry run: nothing went.
+    expect(existsSync(join(vault, "Brain", "inbox", "sig-derived.md"))).toBe(true);
+  });
+
+  test("a response without the flag carries cascade: null, not an empty one", async () => {
+    note("Projects/Gone.md", "x\n");
+    const res = await call({ action: "delete", path: "Projects/Gone.md" });
+    expect(res["cascade"]).toBeNull();
+  });
+
+  test("the flag is refused on an action that removes nothing", async () => {
+    note("Projects/Old.md", "x\n");
+    let caught: unknown;
+    try {
+      await call({
+        action: "rename",
+        path: "Projects/Old.md",
+        to: "Projects/New.md",
+        apply: true,
+        delete_linked: true,
+      });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(MCPError);
+    expect((caught as MCPError).data).toMatchObject({ code: "cascade_forbidden" });
+    expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
+  });
+});

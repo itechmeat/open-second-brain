@@ -89,6 +89,18 @@ function renderResult(res: NoteLifecycleResult): Record<string, unknown> {
         next_command: res.references.index.nextCommand,
       },
     },
+    // `null` when no cascade was asked for, which is a different answer
+    // from a cascade that found nothing. Rendered on every response so a
+    // caller reads the distinction rather than inferring it from an
+    // absent key.
+    cascade:
+      res.cascade === null
+        ? null
+        : {
+            deletion_set: [...res.cascade.deletionSet],
+            reported_files: [...res.cascade.reportedFiles],
+            scanned_scope: res.cascade.scannedScope,
+          },
   };
 }
 
@@ -110,6 +122,7 @@ async function toolBrainNoteLifecycle(
   const to = coerceStr(args, "to", false) ?? undefined;
   const apply = coerceBoolOptional(args, "apply");
   const confirm = coerceBoolOptional(args, "confirm");
+  const deleteLinked = coerceBoolOptional(args, "delete_linked");
   const { expect, strict } = readCountGuardArgs(args);
 
   try {
@@ -119,6 +132,7 @@ async function toolBrainNoteLifecycle(
       ...(to !== undefined ? { to } : {}),
       ...(apply !== undefined ? { apply } : {}),
       ...(confirm !== undefined ? { confirm } : {}),
+      ...(deleteLinked !== undefined ? { deleteLinked } : {}),
       expect,
       strict,
     });
@@ -328,7 +342,7 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
   {
     name: TOOL,
     description:
-      "Note-file lifecycle. action: rename changes the filename in place; move changes the directory; archive displaces the note under Archive/ mirroring its path; delete removes it. Dry-run unless apply; delete also needs confirm. Rewrites inbound [[links]] and reports how stale the index is.",
+      "Note-file lifecycle. action: rename changes the filename in place; move changes the directory; archive displaces the note under Archive/; delete removes it, and delete_linked extends that to files derived solely from it. Dry-run unless apply; delete also needs confirm. Rewrites inbound [[links]].",
     inputSchema: {
       type: "object",
       properties: {
@@ -357,11 +371,16 @@ export const LIFECYCLE_FILE_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze
           description:
             "delete: explicit confirmation. Without it an applied delete is refused, because no archive covers a note outside Brain/.",
         },
+        delete_linked: {
+          type: "boolean",
+          description:
+            "delete only: also remove Brain files tracing SOLELY to this note. A page citing a second source is reported, never deleted. Refused on other actions.",
+        },
         expect: {
           type: "integer",
           minimum: 0,
           description:
-            "Assert the number of files holding an inbound reference; a mismatch aborts before any write.",
+            "Assert the count before any write: the deletion set under delete_linked, otherwise the files holding an inbound reference. A mismatch aborts.",
         },
         strict: {
           type: "boolean",

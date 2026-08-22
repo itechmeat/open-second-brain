@@ -401,7 +401,9 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "every other. The case-only rename cannot use that order - unlinking the source would " +
         "remove the destination with it - so it stages a third private name for the same inode " +
         "first. A note lives outside `Brain/` by construction, which is why no archive covers " +
-        "it and why the DELETE arm of the same module is behind the gate instead.",
+        "it and why the DELETE arm of the same module is behind the gate instead - including " +
+        "the `--delete-linked` cascade, whose extra unlinks all sit inside that one gate call " +
+        "and whose Brain-resident half the archive therefore does hold.",
     },
 
     // --- Outside the vault entirely --------------------------------------

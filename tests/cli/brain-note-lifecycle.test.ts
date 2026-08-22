@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -180,5 +180,72 @@ test("--expect aborts before writing when the inbound count disagrees", async ()
   ]);
   expect(res.returncode).not.toBe(0);
   expect(res.stderr).toContain("matched 1");
+  expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
+});
+
+test("--delete-linked prints the deletion set and the reported set separately", async () => {
+  note("Imports/Bench.md", "rows\n");
+  note("Projects/Reader.md", "[[Imports/Bench]]\n");
+  mkdirSync(join(vault, "Brain", "inbox"), { recursive: true });
+  writeFileSync(
+    join(vault, "Brain", "inbox", "sig-derived.md"),
+    '---\nid: sig-derived\nkind: brain-signal\nsource:\n  - "[[Imports/Bench]]"\n---\n\nbody\n',
+  );
+
+  const dry = await runCli([
+    "brain",
+    "note-lifecycle",
+    "delete",
+    "Imports/Bench.md",
+    "--delete-linked",
+    "--vault",
+    vault,
+  ]);
+  expect(dry.returncode).toBe(0);
+  expect(dry.stdout).toContain("deletion set (2, scope Brain/)");
+  expect(dry.stdout).toContain("Brain/inbox/sig-derived.md");
+  expect(dry.stdout).toContain("reported, not deleted (1)");
+  expect(dry.stdout).toContain("Projects/Reader.md");
+  expect(existsSync(join(vault, "Imports/Bench.md"))).toBe(true);
+
+  const applied = await runCli([
+    "brain",
+    "note-lifecycle",
+    "delete",
+    "Imports/Bench.md",
+    "--delete-linked",
+    "--vault",
+    vault,
+    "--apply",
+    "--confirm",
+    "--expect",
+    "2",
+    "--json",
+  ]);
+  expect(applied.returncode).toBe(0);
+  const body = JSON.parse(applied.stdout) as {
+    cascade: { deletion_set: string[]; reported_files: string[]; scanned_scope: string };
+  };
+  expect(body.cascade.deletion_set).toEqual(["Imports/Bench.md", "Brain/inbox/sig-derived.md"]);
+  expect(existsSync(join(vault, "Brain", "inbox", "sig-derived.md"))).toBe(false);
+  // Reported, therefore untouched - and still naming the note it lost.
+  expect(readFileSync(join(vault, "Projects/Reader.md"), "utf8")).toContain("[[Imports/Bench]]");
+});
+
+test("--delete-linked on a rename is a refusal, not a silently ignored flag", async () => {
+  note("Projects/Old.md", "x\n");
+  const res = await runCli([
+    "brain",
+    "note-lifecycle",
+    "rename",
+    "Projects/Old.md",
+    "Projects/New.md",
+    "--delete-linked",
+    "--vault",
+    vault,
+    "--apply",
+  ]);
+  expect(res.returncode).not.toBe(0);
+  expect(res.stderr).toContain("delete-linked");
   expect(existsSync(join(vault, "Projects/Old.md"))).toBe(true);
 });

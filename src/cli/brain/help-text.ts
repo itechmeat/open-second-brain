@@ -225,13 +225,19 @@ export const VERB_HELP: Record<string, string> = {
     "but are excluded from recall, inject, and active.md.\n",
   "note-lifecycle":
     "usage: o2b brain note-lifecycle <rename|move|archive|delete> <path> [<to>]\n" +
-    "  [--apply] [--confirm] [--expect <n>] [--strict] [--vault <path>] [--config <path>] [--json]\n" +
+    "  [--apply] [--confirm] [--delete-linked] [--expect <n>] [--strict] [--vault <path>]\n" +
+    "  [--config <path>] [--json]\n" +
     "Note FILES, not memories: rename changes the filename in place, move changes the\n" +
     "directory, archive displaces the note under Archive/ mirroring its path, delete\n" +
     "removes it. Dry run by default - it walks, counts and writes nothing. --apply\n" +
     "performs it; delete additionally requires --confirm, because no archive covers a\n" +
-    "note outside Brain/. --expect <n> asserts the inbound-reference count before any\n" +
-    "write and --strict refuses a mutation carrying no such guard.\n" +
+    "note outside Brain/. --expect <n> asserts the count before any write and --strict\n" +
+    "refuses a mutation carrying no such guard.\n" +
+    "--delete-linked (delete only) widens the removal to the Brain files that trace\n" +
+    "SOLELY to the note - a per-item summary, signal, preference or entity page whose\n" +
+    "whole content restates it. A page citing a second source is reported and kept, as\n" +
+    "is every user note; the receipt prints the deletion set and the reported set\n" +
+    "separately, names the scope it scanned, and --expect then counts the deletion set.\n" +
     "Inbound [[wikilinks]] are rewritten across the vault, minus what vault scope\n" +
     "excludes, minus code fences, and minus Brain/log, which is append-only. The\n" +
     "receipt names how stale the search index now is and the command that fixes it.\n" +

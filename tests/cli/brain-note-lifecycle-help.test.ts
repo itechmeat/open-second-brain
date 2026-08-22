@@ -53,7 +53,15 @@ describe("verb help", () => {
 describe("the manifest declares the flags the verbs actually accept", () => {
   test("note-lifecycle", () => {
     const declared = (brainVerb("note-lifecycle")?.flags ?? []).map((f) => f.name).toSorted();
-    expect(declared).toEqual(["apply", "config", "confirm", "expect", "strict", "vault"]);
+    expect(declared).toEqual([
+      "apply",
+      "config",
+      "confirm",
+      "delete-linked",
+      "expect",
+      "strict",
+      "vault",
+    ]);
   });
 
   test("scaffold-stub", () => {

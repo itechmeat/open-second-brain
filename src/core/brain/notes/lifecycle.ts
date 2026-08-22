@@ -49,7 +49,10 @@
  *     command that makes it agree with the vault again.
  *   - a delete rewrites NOTHING and reports the inbound references it is
  *     about to strand, because a delete that silently repaired its own
- *     inbound links would be erasing the evidence that it happened.
+ *     inbound links would be erasing the evidence that it happened. This
+ *     holds under `--delete-linked` too, and the flag is narrower than
+ *     its name suggests for exactly that reason - see "What
+ *     --delete-linked may remove" below.
  *   - a rewrite that could not be written is NAMED. The operation is not
  *     rolled back, and the result says where it split - see
  *     {@link noteLifecycle} for why one half-state is preferable to the
@@ -76,6 +79,32 @@
  * The rest of `Brain/` stays in range on purpose: an artifact citing a
  * note by path holds an ordinary reference, and it dangles exactly like a
  * user note's would.
+ *
+ * ## What `--delete-linked` may remove, and what it may not
+ *
+ * The commitment above - a delete repairs nothing and reports what it
+ * strands - is not weakened by the cascade, because the cascade never
+ * REPAIRS anything either. It removes a second class of file: the
+ * single-purpose derived artifact whose entire content is a restatement
+ * of the note, and which therefore has no meaning once the note is gone.
+ * The rule deciding membership is not this module's; it is
+ * `source-cleanup.ts`'s, called through {@link traceNoteDerivations}, so
+ * "derived solely from" means one thing in this project rather than two.
+ *
+ * Three consequences follow and each is on the response:
+ *
+ *   - a page citing a SECOND source - a signal naming another note, a
+ *     preference folded from a foreign signal - is reported and left
+ *     alone, exactly as it is by `deleteBySource`;
+ *   - everything the inbound probe found that is not in the deletion set
+ *     is reported and left alone, including every user note. The two
+ *     lists are disjoint and both are returned, so a caller never has to
+ *     subtract one from the other to find out what survives;
+ *   - the fold walks {@link DERIVED_SET_SCOPE} and the response says so.
+ *     A user note is outside it by construction and no scan widening
+ *     would change that - nothing outside `Brain/` is a derivation this
+ *     project generated - but an empty derived set must be legible as a
+ *     measurement rather than as an unstated scope limit.
  *
  * ## Where an archived note goes, and why
  *
@@ -110,11 +139,13 @@ import {
   unlinkSync,
   type Stats,
 } from "node:fs";
-import { dirname, posix } from "node:path";
+import { dirname, join, posix } from "node:path";
 
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
+import { ensureInsideVault } from "../../path-safety.ts";
 import { pathCovers } from "../../vault-scope/defaults.ts";
 import { assertExpectedCount } from "../count-guard.ts";
+import { DERIVATION_SCAN_SCOPE, traceNoteDerivations } from "../source-cleanup.ts";
 import { BRAIN_LOG_REL, BRAIN_ROOT_REL } from "../path-constants.ts";
 import { requireNextStep } from "../next-step.ts";
 import { SEARCH_INDEX_MISSING_CODE } from "../diagnostics.ts";
@@ -297,6 +328,48 @@ export interface NoteReferenceReport {
   readonly index: IndexEvidence;
 }
 
+/**
+ * The subtree {@link NoteLifecycleInput.deleteLinked}'s fold walks.
+ *
+ * Re-exported from the module that owns the fold rather than spelled
+ * again here: the response promises a caller which scope was scanned, and
+ * a second copy of that string is a promise that can go stale.
+ */
+export const DERIVED_SET_SCOPE = DERIVATION_SCAN_SCOPE;
+
+/**
+ * What a `--delete-linked` run found, split into the two lists that
+ * matter: what it will remove, and what it will leave standing.
+ *
+ * Both are returned on the dry run and on the confirmed run, and they are
+ * disjoint. A caller reading only one of them still gets a complete
+ * answer to the question it asked; a caller reading both never has to
+ * compute the difference itself, which is where a report and a deletion
+ * come to disagree.
+ */
+export interface NoteDeleteCascade {
+  /**
+   * Exactly what a confirmed run removes: the note first, then the
+   * solely-derived files, sorted. This is also the list the count guard
+   * asserts over, so `--expect` counts the same things the response
+   * printed.
+   */
+  readonly deletionSet: ReadonlyArray<string>;
+  /**
+   * Everything else that references the note: inbound wikilinks from
+   * anywhere in the vault, plus the Brain pages the fold classified as
+   * shared rather than derived. Reported, never deleted, never rewritten.
+   */
+  readonly reportedFiles: ReadonlyArray<string>;
+  /**
+   * The subtree the derived-set fold walked, always
+   * {@link DERIVED_SET_SCOPE}. On the response because an empty
+   * `deletionSet` tail has two readings and only one of them is a
+   * measurement.
+   */
+  readonly scannedScope: string;
+}
+
 /** Machine-readable reason a {@link noteLifecycle} call was refused. */
 export type NoteLifecycleErrorCode =
   /** The source note does not exist. */
@@ -313,7 +386,9 @@ export type NoteLifecycleErrorCode =
   /** A delete reached the mutating path without an explicit confirmation. */
   | "not_confirmed"
   /** The subject already sits under the archive root. */
-  | "already_archived";
+  | "already_archived"
+  /** `deleteLinked` was passed to an action that removes nothing. */
+  | "cascade_forbidden";
 
 export class NoteLifecycleError extends Error {
   readonly code: NoteLifecycleErrorCode;
@@ -334,6 +409,12 @@ export interface NoteLifecycleInput {
   readonly apply?: boolean;
   /** Required by `delete` before it will remove anything. */
   readonly confirm?: boolean;
+  /**
+   * `--delete-linked`: extend a `delete` to the single-purpose derived
+   * files that trace SOLELY to this note. Refused on every other action.
+   * Absent (the default) leaves the delete byte-identical to before.
+   */
+  readonly deleteLinked?: boolean;
   /** `--expect N`: assert the inbound-reference count before any write. */
   readonly expect?: number | null;
   /** `--strict`: refuse a mutation carrying no `--expect` guard. */
@@ -356,6 +437,14 @@ export interface NoteLifecycleResult {
   readonly snapshot: { readonly runId: string; readonly path: string } | null;
   /** What happened to inbound references, and on what evidence. */
   readonly references: NoteReferenceReport;
+  /**
+   * What `--delete-linked` computed, or `null` when the flag was absent.
+   *
+   * `null` and an empty {@link NoteDeleteCascade.deletionSet} are
+   * different answers: the first says no cascade was asked for, the
+   * second says one was and it found nothing beyond the note.
+   */
+  readonly cascade: NoteDeleteCascade | null;
 }
 
 /**
@@ -772,6 +861,16 @@ export async function noteLifecycle(
       `destination already exists: ${destination.relPath}`,
     );
   }
+  const deleteLinked = input.deleteLinked === true;
+  if (deleteLinked && action !== NOTE_LIFECYCLE_ACTION.delete) {
+    // Refused rather than ignored. A relocation has no deletion set to
+    // extend, so honouring the flag silently would tell a caller that
+    // asked for a cascade that it got one.
+    throw new NoteLifecycleError(
+      "cascade_forbidden",
+      `delete-linked extends a delete's blast radius; ${action} removes nothing`,
+    );
+  }
   if (action === NOTE_LIFECYCLE_ACTION.delete && input.confirm !== true && apply) {
     throw new NoteLifecycleError(
       "not_confirmed",
@@ -797,12 +896,23 @@ export async function noteLifecycle(
       ? probe.matched.filter((rel) => rel !== source.relPath)
       : probe.matched;
 
+  const cascade = deleteLinked ? planCascade(vault, source.relPath, inboundFiles) : null;
+
+  // The guard asserts what the operation will REMOVE. Without a cascade
+  // that is one file and the number worth guarding is the collateral -
+  // how many inbound references the delete will strand - which is what
+  // `--expect` has meant here since it shipped. With a cascade the set
+  // itself is variable, so the guard moves onto it: `--expect` counts the
+  // paths the response just listed as the deletion set, and a stale plan
+  // aborts before the first unlink instead of removing a file the
+  // operator never saw.
+  const guarded = cascade === null ? inboundFiles : cascade.deletionSet;
   assertExpectedCount({
-    matched: inboundFiles.length,
+    matched: guarded.length,
     expect: input.expect ?? null,
     strict: input.strict === true,
     willMutate: apply,
-    matchList: inboundFiles,
+    matchList: guarded,
   });
 
   const basename =
@@ -827,14 +937,36 @@ export async function noteLifecycle(
       // point: the previous shape of this problem returned a snapshot
       // path with nothing beside it, which every caller reads as "this is
       // reversible".
+      //
+      // ONE gate over the WHOLE set, not one per file: the set is a
+      // single decision the operator authorised and a per-file recovery
+      // point would leave them choosing which of five archives to roll
+      // back to. The derived half lives under `Brain/` and IS in the
+      // archive, so a cascade's verdict is `partial` where a bare
+      // delete's is `unproven` - the note is still uncovered, and the
+      // blockers say so.
+      const derivedFiles = cascade === null ? [] : cascade.deletionSet.slice(1);
       const gated = withDestructiveSnapshot(
         vault,
         BRAIN_SNAPSHOT_REASON.noteDelete,
         () => {
+          // The note goes FIRST, and the order is the choice between two
+          // half-states. A derived file whose note is already gone is a
+          // dangling derivation - the exact state every delete before
+          // this flag left behind, and one the operator can re-run into.
+          // The reverse - derivations removed while the note they restate
+          // survives - destroys the only copies of material nothing will
+          // regenerate.
           unlinkSync(source.abs);
+          for (const rel of derivedFiles) {
+            unlinkSync(ensureInsideVault(join(vault, rel), vault));
+          }
         },
         {
-          blastRadius: { outsideBrainRoot: true },
+          blastRadius: {
+            outsideBrainRoot: true,
+            ...(derivedFiles.length > 0 ? { brainTopLevel: true } : {}),
+          },
           ...(input.now !== undefined ? { now: input.now } : {}),
         },
       );
@@ -853,6 +985,7 @@ export async function noteLifecycle(
         [],
         basename,
         await readIndexEvidence(vault, true),
+        cascade,
       );
     }
     relocateBytes(source, destination!, sameEntry);
@@ -918,7 +1051,49 @@ export async function noteLifecycle(
     rewriteFailures,
     basename,
     await readIndexEvidence(vault, apply),
+    cascade,
   );
+}
+
+/**
+ * Split everything that references the note into the two lists
+ * {@link NoteDeleteCascade} promises.
+ *
+ * The classification is not made here. {@link traceNoteDerivations} runs
+ * `source-cleanup.ts`'s rule - a single-purpose derived page in a
+ * derivation directory, citing no second source, folded from no foreign
+ * signal - and this function only sorts its verdict into the two lists
+ * and unions the mentions with the vault-wide inbound probe.
+ *
+ * Two populations meet here and the union is the point. The probe reads
+ * `[[...]]` spellings anywhere in the vault, which is where user notes
+ * live; the fold reads Brain frontmatter provenance, which the probe
+ * cannot see because `source_path: Imports/Note.md` is not a wikilink.
+ * Reporting only one of them would silently drop the other's findings.
+ */
+function planCascade(
+  vault: string,
+  sourceRel: string,
+  inboundFiles: ReadonlyArray<string>,
+): NoteDeleteCascade {
+  const traced = traceNoteDerivations(vault, sourceRel);
+  const derived = traced
+    .filter((entry) => entry.deletable)
+    .map((entry) => entry.path)
+    // The note itself is never a Brain page, but a fold that ever
+    // returned it would otherwise put it in the set twice.
+    .filter((rel) => rel !== sourceRel)
+    .toSorted();
+  const deletionSet = Object.freeze([sourceRel, ...derived]);
+  const deleting = new Set(deletionSet);
+  const reported = new Set<string>();
+  for (const rel of inboundFiles) if (!deleting.has(rel)) reported.add(rel);
+  for (const entry of traced) if (!deleting.has(entry.path)) reported.add(entry.path);
+  return Object.freeze({
+    deletionSet,
+    reportedFiles: Object.freeze([...reported].toSorted()),
+    scannedScope: DERIVED_SET_SCOPE,
+  });
 }
 
 /**
@@ -957,6 +1132,7 @@ function finish(
   rewriteFailures: ReadonlyArray<{ readonly path: string; readonly reason: string }>,
   basename: BasenameRewrite,
   index: IndexEvidence,
+  cascade: NoteDeleteCascade | null,
 ): NoteLifecycleResult {
   return Object.freeze({
     action,
@@ -965,6 +1141,7 @@ function finish(
     applied,
     recoverability,
     snapshot,
+    cascade,
     references: Object.freeze({
       filesScanned,
       inboundFiles: Object.freeze([...inboundFiles]),

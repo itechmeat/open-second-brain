@@ -13,8 +13,13 @@
  *
  * Dry run is the default here as it is in the core. `--apply` performs
  * the operation, `--confirm` is additionally required by `delete`, and
- * `--expect N` / `--strict` assert the inbound-reference count before
- * anything is written.
+ * `--expect N` / `--strict` assert the count before anything is written -
+ * the deletion set under `--delete-linked`, the inbound references
+ * otherwise.
+ *
+ * `--delete-linked` widens a delete to the Brain files derived solely
+ * from the note. The receipt then prints two lists rather than a count:
+ * what will go, and what is reported and stays.
  */
 
 import { defaultConfigPath } from "../../../core/config.ts";
@@ -62,6 +67,14 @@ function renderJson(res: NoteLifecycleResult): Record<string, unknown> {
         next_command: res.references.index.nextCommand,
       },
     },
+    cascade:
+      res.cascade === null
+        ? null
+        : {
+            deletion_set: [...res.cascade.deletionSet],
+            reported_files: [...res.cascade.reportedFiles],
+            scanned_scope: res.cascade.scannedScope,
+          },
   };
 }
 
@@ -83,10 +96,24 @@ function renderText(res: NoteLifecycleResult): string {
       ? ""
       : `  NOT rewritten (still naming ${res.from}):\n` +
         refs.rewriteFailures.map((f) => `    ${f.path}: ${f.reason}\n`).join("");
+  // The cascade's two lists are printed IN FULL and separately, not
+  // counted. An operator authorising a multi-file delete has to be able
+  // to read every path that will go and every path that will not, and a
+  // count is precisely the summary that hides the one wrong entry.
+  const cascade =
+    res.cascade === null
+      ? ""
+      : `  deletion set (${res.cascade.deletionSet.length}, scope ${res.cascade.scannedScope}):\n` +
+        res.cascade.deletionSet.map((p) => `    ${p}\n`).join("") +
+        `  reported, not deleted (${res.cascade.reportedFiles.length}):\n` +
+        (res.cascade.reportedFiles.length === 0
+          ? "    (none)\n"
+          : res.cascade.reportedFiles.map((p) => `    ${p}\n`).join(""));
   return (
     `${mode}: ${where}\n` +
     `  inbound references: ${refs.inboundFiles.length} file(s) of ${refs.filesScanned} scanned, ` +
     `${refs.filesRewritten} rewritten (basename: ${refs.basename})\n` +
+    cascade +
     split +
     `  recoverability: ${res.recoverability.state}` +
     (res.recoverability.blockers.length > 0 ? ` (${res.recoverability.blockers.join(", ")})` : "") +
@@ -103,6 +130,7 @@ export async function cmdBrainNoteLifecycle(argv: string[]): Promise<number> {
     config: { type: "string" },
     apply: { type: "boolean" },
     confirm: { type: "boolean" },
+    "delete-linked": { type: "boolean" },
     expect: { type: "string" },
     strict: { type: "boolean" },
     json: { type: "boolean" },
@@ -136,6 +164,7 @@ export async function cmdBrainNoteLifecycle(argv: string[]): Promise<number> {
       ...(to !== undefined ? { to } : {}),
       apply: flags["apply"] === true,
       confirm: flags["confirm"] === true,
+      deleteLinked: flags["delete-linked"] === true,
       expect: expectCount,
       strict: flags["strict"] === true,
     });

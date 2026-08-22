@@ -372,6 +372,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("config", "string"),
             flag("apply", "boolean"),
             flag("confirm", "boolean"),
+            flag("delete-linked", "boolean"),
             flag("expect", "string"),
             flag("strict", "boolean"),
           ],
