@@ -9,7 +9,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,24 @@ function freshHome(): string {
   return home;
 }
 
+// Everything `_bun-precheck.sh` reaches for that is not a shell builtin. The
+// child's PATH is built from exactly these, so a Bun installed anywhere on this
+// machine cannot satisfy the check the test is about.
+const REQUIRED_UTILITIES = ["bash", "cat", "tr", "head"];
+
+/** A PATH holding the script's utilities and provably no `bun`. */
+function isolatedPath(): string {
+  const bin = mkdtempSync(join(tmpdir(), "o2b-precheck-bin-"));
+  tmps.push(bin);
+  for (const name of REQUIRED_UTILITIES) {
+    const resolved = Bun.which(name);
+    if (!resolved) throw new Error(`test prerequisite missing from this machine: ${name}`);
+    symlinkSync(resolved, join(bin, name));
+  }
+  if (Bun.which("bun", { PATH: bin })) throw new Error("isolated PATH leaked a bun");
+  return bin;
+}
+
 /** Plant an executable `bun` stub reporting `version` at `<home>/.bun/bin`. */
 function plantBun(home: string, version: string): void {
   const bin = join(home, ".bun", "bin");
@@ -41,7 +59,7 @@ function plantBun(home: string, version: string): void {
 async function runPrecheck(home: string): Promise<{ code: number; stderr: string }> {
   // PATH deliberately excludes every directory a Bun install could live in.
   const proc = Bun.spawn(["bash", "-c", `. "${PRECHECK}"; echo PRECHECK_PASSED`], {
-    env: { HOME: home, PATH: "/usr/bin:/bin" },
+    env: { HOME: home, PATH: isolatedPath() },
     stdout: "pipe",
     stderr: "pipe",
   });

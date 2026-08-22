@@ -93,12 +93,22 @@ describe("o2b-hook resilience", () => {
     tmps.push(home);
     const bunBin = join(home, ".bun", "bin");
     mkdirSync(bunBin, { recursive: true });
-    const realBun = process.execPath;
-    symlinkSync(realBun, join(bunBin, "bun"));
+    symlinkSync(process.execPath, join(bunBin, "bun"));
     chmodSync(bunBin, 0o755);
 
+    // The wrapper's own utilities and provably no bun, so the only Bun the
+    // child can reach is the one the repair is supposed to find.
+    const bin = mkdtempSync(join(tmpdir(), "o2bbin-iso-"));
+    tmps.push(bin);
+    for (const name of ["bash", "realpath", "dirname", "cat", "tr", "head"]) {
+      const resolved = Bun.which(name);
+      if (!resolved) throw new Error(`test prerequisite missing from this machine: ${name}`);
+      symlinkSync(resolved, join(bin, name));
+    }
+    expect(Bun.which("bun", { PATH: bin })).toBeNull();
+
     const r = spawnSync("bash", [WRAPPER, "probe"], {
-      env: { HOME: home, PATH: "/usr/bin:/bin", CLAUDE_PLUGIN_ROOT: root },
+      env: { HOME: home, PATH: bin, CLAUDE_PLUGIN_ROOT: root },
       encoding: "utf8",
     });
     expect(r.status).toBe(0);

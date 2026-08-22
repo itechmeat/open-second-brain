@@ -45,6 +45,11 @@ REQUEST_TIMEOUT_ENV = "OPEN_SECOND_BRAIN_MCP_TIMEOUT"
 # child that floods stderr cannot grow the parent's memory.
 STDERR_TAIL_LINES = 20
 STDERR_TAIL_MAX_BYTES = 8 * 1024
+# Stderr is read in fixed-size chunks rather than by line. `readline` returns
+# only at a newline or at EOF, so a child emitting one enormous unterminated
+# record would be held whole in the parent before any truncation could apply -
+# which is the exact failure this buffer exists to rule out.
+STDERR_CHUNK_BYTES = 4096
 # Time allowed for the drain thread to finish after the child is torn down,
 # so the excerpt includes the last thing the child managed to write.
 _STDERR_DRAIN_JOIN_SECONDS = 1.0
@@ -340,8 +345,14 @@ class McpBrainBridge:
         stderr_thread.start()
         return process
 
+    def _append_stderr_line(self, raw: bytes) -> None:
+        """Record one child stderr line, decoded and clipped to the budget."""
+        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        if line:
+            self._stderr_tail.append(line[:STDERR_TAIL_MAX_BYTES])
+
     def _drain_stderr(self, process: Any) -> None:
-        """Read stderr line-by-line until the child exits, keeping the tail.
+        """Read stderr until the child exits, keeping a bounded tail of it.
 
         Runs in a daemon thread so a misbehaving child (one that floods
         stderr) cannot wedge the parent. Without this, a `stderr=PIPE` child
@@ -349,22 +360,37 @@ class McpBrainBridge:
         block on its next stderr write, which surfaces in the parent as a
         silent death of the JSON-RPC channel.
 
-        Only the last :data:`STDERR_TAIL_LINES` lines are retained, each
-        truncated to the byte budget, so the buffer stays bounded no matter how
-        much the child writes.
+        Chunked rather than line-oriented, and the in-progress line is clipped
+        as it grows, so nothing here is proportional to what the child writes:
+        at most :data:`STDERR_TAIL_LINES` lines are kept and each is capped at
+        the byte budget, including a record that never sends a newline at all.
+        `read1` is preferred where the stream offers it, because a buffered
+        `read` waits for the full chunk and would hold the excerpt back until
+        the child had said that much more.
         """
         try:
             stream = getattr(process, "stderr", None)
             if stream is None:
                 return
-            for line in iter(stream.readline, b""):
-                if not line:
+            read = getattr(stream, "read1", None) or getattr(stream, "read", None)
+            if not callable(read):
+                return
+            partial = b""
+            while True:
+                chunk = read(STDERR_CHUNK_BYTES)
+                if not chunk:
                     break
-                if isinstance(line, bytes):
-                    line = line.decode("utf-8", errors="replace")
-                line = line.rstrip("\r\n")
-                if line:
-                    self._stderr_tail.append(line[:STDERR_TAIL_MAX_BYTES])
+                if isinstance(chunk, str):
+                    chunk = chunk.encode("utf-8", errors="replace")
+                *complete, partial = (partial + chunk).split(b"\n")
+                for raw in complete:
+                    self._append_stderr_line(raw)
+                # Keep the head of an over-long record: it is where a runtime
+                # puts the message, and clipping here is what keeps a child
+                # that never emits a newline from growing the parent.
+                if len(partial) > STDERR_TAIL_MAX_BYTES:
+                    partial = partial[:STDERR_TAIL_MAX_BYTES]
+            self._append_stderr_line(partial)
         except Exception:  # noqa: BLE001 - drain must never raise
             pass
 

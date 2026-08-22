@@ -1223,22 +1223,31 @@ class _ScriptedStderr:
 
     A real pipe is closed by ``stop()`` while the drain thread may still be
     reading it; a closed ``BytesIO`` would make the excerpt race with teardown.
-    This one keeps serving its scripted lines and then reports EOF, so the
+    This one keeps serving its scripted payload and then reports EOF, so the
     drain thread always terminates on its own and the assertion is about the
     buffer rather than about thread timing.
+
+    Reads are served in whatever size is asked for, like the raw pipe the
+    bridge gets from ``Popen(bufsize=0)`` - never rounded up to a line, since
+    the drain must not depend on the child having sent one.
     """
 
     def __init__(self, lines):
-        self._lines = [line.encode("utf-8") if isinstance(line, str) else line for line in lines]
+        self._payload = b"".join(
+            line.encode("utf-8") if isinstance(line, str) else line for line in lines
+        )
         self._i = 0
         self.closed = False
+        self.max_read_size = 0
 
-    def readline(self):
-        if self._i >= len(self._lines):
+    def read(self, size=-1):
+        if self._i >= len(self._payload):
             return b""
-        line = self._lines[self._i]
-        self._i += 1
-        return line
+        end = len(self._payload) if size is None or size < 0 else self._i + size
+        chunk = self._payload[self._i : end]
+        self._i = end
+        self.max_read_size = max(self.max_read_size, len(chunk))
+        return chunk
 
     def close(self):
         self.closed = True
@@ -1507,6 +1516,24 @@ class BridgeStderrDiagnosticTests(unittest.TestCase):
                 bridge.start()
 
         self.assertEqual(str(ctx.exception), "unexpected EOF from MCP server")
+
+    def test_an_unterminated_flood_is_clipped_as_it_arrives(self):
+        # `readline` returns only at a newline or at EOF, so a child that emits
+        # one enormous record with no newline would be held whole in the parent
+        # before any truncation could apply. The drain reads fixed-size chunks
+        # and clips the in-progress line instead.
+        flood = b"E" * (bridge_module.STDERR_TAIL_MAX_BYTES * 40)
+        proc = _FakeProcess([], stderr_lines=[flood])
+        with patch.object(bridge_module.subprocess, "Popen", return_value=proc):
+            bridge = McpBrainBridge(vault="/v")
+            with self.assertRaises(BridgeTransportError) as ctx:
+                bridge.start()
+
+        # Nothing the parent held was proportional to what the child wrote.
+        self.assertLessEqual(proc.stderr.max_read_size, bridge_module.STDERR_CHUNK_BYTES)
+        excerpt = str(ctx.exception).split("--- child stderr (last lines) ---\n", 1)[1]
+        self.assertLessEqual(len(excerpt), bridge_module.STDERR_TAIL_MAX_BYTES)
+        self.assertEqual(len(bridge._stderr_tail), 1)
 
     def test_stderr_tail_is_bounded_to_the_last_lines(self):
         noisy = [f"line-{i}\n".encode("utf-8") for i in range(500)]
