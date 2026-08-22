@@ -2,22 +2,33 @@
  * Architecture docs generator (Project History Suite, t_929da8a2).
  *
  * Renders scanProject facts into vault notes under
- * `Brain/projects/arch/<repo-key>/`: one overview plus one note per
- * detected module, all generated content inside sentinel regions.
- * Regeneration goes through mergeRegions, so operator prose outside
- * regions survives byte-for-byte, and an unchanged project regenerates
- * byte-identically (the scanner is deterministic and the renderer adds
- * no timestamps).
+ * `Brain/projects/arch/<repo-key>/`: one overview, one key-decisions
+ * note, and one note per detected module, all generated content inside
+ * sentinel regions. Regeneration goes through mergeRegions, so operator
+ * prose outside regions survives byte-for-byte, and an unchanged project
+ * regenerates byte-identically (the scanner is deterministic and the
+ * renderer adds no timestamps).
  *
- * DECLARED EXCEPTION to that byte-identity guarantee: the `codegraph`
- * region. Its body states the codegraph partner's verdict, which is a
- * fact about the machine and the partner index, not about the project
- * tree - an index built, deleted, or gone stale moves those bytes while
- * the repository stands still. The exception is scoped to the region and
- * to nothing else: every other region, and every byte of operator prose,
- * still regenerates identically. The region carries its whole provenance
- * (state, counts, health) so a stale stamp says what it was stamped
- * from rather than being mistaken for a current reading.
+ * DECLARED EXCEPTIONS to that byte-identity guarantee - two of them, and
+ * no others. Both are scoped to their own region: every other region, and
+ * every byte of operator prose, still regenerates identically, and each
+ * exception carries the whole provenance of what it was stamped from, so
+ * a stale stamp describes its own reading rather than passing for a
+ * current one.
+ *
+ *   - the overview's `codegraph` region states the codegraph partner's
+ *     verdict, which is a fact about the machine and the partner index,
+ *     not about the project tree; an index built, deleted, or gone stale
+ *     moves those bytes while the repository stands still. Stamped with
+ *     state, counts and health;
+ *   - the key-decisions note lists the repo's ADR candidates, which the
+ *     commit miner writes into the VAULT; mining new commits moves those
+ *     bytes with no change to the repository at all. Stamped with each
+ *     candidate's sha and matched signals.
+ *
+ * The overview's `module-map` diagram is NOT an exception: it renders the
+ * same scanned facts as every other region and moves only when the tree
+ * does.
  *
  * Frontmatter is written ONCE at file creation and never rewritten -
  * it carries static identity (kind, repo key, path), while every fact
@@ -60,7 +71,9 @@ import { buildRegionDocument, mergeRegions } from "../regions.ts";
 import type { Region } from "../regions.ts";
 import type { Safeguard } from "../safeguard.ts";
 import { acquireLockSyncWithRetry, LOCK_WAIT_INTERACTIVE_MS } from "../sync-lockfile.ts";
-import { ARCHITECT_STAGE, scanProject } from "./scan.ts";
+import { listRepoDecisionCandidates } from "./decisions.ts";
+import type { DecisionCandidateFact } from "./decisions.ts";
+import { ARCHITECT_STAGE, compareStable, scanProject } from "./scan.ts";
 import type { ModuleFact, ProjectFacts } from "./scan.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
@@ -88,11 +101,14 @@ export interface GenerateArchDocsResult {
   readonly repoKey: string;
   readonly dir: string;
   readonly overviewPath: string;
+  /** The key-decisions note, one per repo, beside the overview. */
+  readonly decisionsPath: string;
   readonly modulePaths: ReadonlyArray<string>;
   /**
    * What this run did to the notes: how many it wrote for the first time,
    * how many it rewrote, and how many it found already correct. They sum
-   * to `1 + modulePaths.length` and go out on the CLI's JSON envelope.
+   * to `2 + modulePaths.length` - the overview, the key-decisions note,
+   * and one per module - and go out on the CLI's JSON envelope.
    *
    * Each one is the verdict of a READ - `planNote` compares what is on
    * disk against what the facts say - so the three are only true of the
@@ -120,26 +136,29 @@ export interface GenerateArchDocsResult {
 }
 
 /**
- * Codepoint order, not `localeCompare`: ICU collation varies with the
- * runtime locale, so a collator-based tie-break renders different bytes
- * for the same tree on two hosts - and byte-identical regeneration is
- * this module's whole contract. Every other ordering in the scanner
- * already uses plain `toSorted()`; this is the one that did not.
+ * Extensions by descending file count, ties broken in codepoint order.
+ * One definition: the summary line and the diagram's dominant-language
+ * label must agree about which language leads a module.
  */
-function compareStable(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
+function sortedLanguages(
+  languages: Readonly<Record<string, number>>,
+): ReadonlyArray<readonly [string, number]> {
+  return Object.entries(languages).toSorted(
+    (a, b) => b[1] - a[1] || compareStable(a[0], b[0]),
+  ) as ReadonlyArray<readonly [string, number]>;
 }
 
 function languagesLine(languages: Readonly<Record<string, number>>): string {
-  const entries = Object.entries(languages).toSorted(
-    (a, b) => b[1] - a[1] || compareStable(a[0], b[0]),
-  );
+  const entries = sortedLanguages(languages);
   if (entries.length === 0) return "none detected";
   return entries
-    .slice(0, 8)
+    .slice(0, LANGUAGES_LINE_CAP)
     .map(([ext, count]) => `${ext} (${count})`)
     .join(", ");
 }
+
+/** How many extensions the summary line names before it stops. */
+const LANGUAGES_LINE_CAP = 8;
 
 /**
  * The two verdicts the codegraph region can state, in the words an
@@ -199,6 +218,65 @@ function codegraphRegionBody(report: CodegraphReport): string {
   ].join("\n");
 }
 
+/**
+ * Escape a name that came from a DIRECTORY for a quoted Mermaid label.
+ *
+ * Mermaid's own escape mechanism is the `#nnn;`/`#name;` entity, so `#`
+ * is rewritten FIRST - doing it last would rewrite the escapes this
+ * function just produced. `<` and `>` matter because flowchart labels
+ * render as HTML by default, so an unescaped angle bracket in a directory
+ * name is markup, and `"` would end the label early.
+ *
+ * Line breaks are folded to a space rather than escaped: a directory name
+ * may legally contain one, and `<br/>` is the label's own field
+ * separator here.
+ */
+function mermaidLabel(text: string): string {
+  return text
+    .replaceAll("#", "#35;")
+    .replaceAll('"', "#quot;")
+    .replaceAll("<", "#lt;")
+    .replaceAll(">", "#gt;")
+    .replaceAll(/[\r\n]+/g, " ");
+}
+
+/** What a module node says when nothing in it carries an extension. */
+const NO_LANGUAGE = "no language detected";
+
+/**
+ * The module containment diagram, as a Mermaid flowchart.
+ *
+ * CONTAINMENT ONLY, and the region says so in prose above the block. The
+ * scanner records no import graph at all (`scan.ts`: "Import-graph
+ * analysis is explicitly out of scope"), so every edge here runs from the
+ * project root to a module it contains; a module-to-module edge would be
+ * a relation nothing measured.
+ *
+ * Node ids are positional (`mod0`, `mod1`, ...), never derived from the
+ * module name. A directory name is arbitrary bytes and a Mermaid node id
+ * is an identifier, so deriving one from the other needs a mangling that
+ * must also stay collision-free - an index needs neither.
+ */
+function moduleMapBody(facts: ProjectFacts): string {
+  const modules = facts.modules.toSorted((a, b) => compareStable(a.name, b.name));
+  const lines = [
+    "Containment only: the scan records no import edges, so this diagram claims none.",
+    "",
+    "```mermaid",
+    "graph TD",
+    `  root["${mermaidLabel(facts.name)}<br/>${modules.length} module(s)"]`,
+  ];
+  for (const [index, module] of modules.entries()) {
+    const language = sortedLanguages(module.languages)[0]?.[0] ?? NO_LANGUAGE;
+    lines.push(
+      `  root --> mod${index}["${mermaidLabel(module.name)}<br/>` +
+        `${module.files} file(s)<br/>${mermaidLabel(language)}"]`,
+    );
+  }
+  lines.push("```");
+  return lines.join("\n");
+}
+
 function overviewRegions(
   facts: ProjectFacts,
   key: string,
@@ -234,10 +312,54 @@ function overviewRegions(
   return [
     { id: "summary", body: summary },
     { id: "modules", body: modules },
+    { id: "module-map", body: moduleMapBody(facts) },
     { id: "entry-points", body: entryPoints },
     { id: "dependencies", body: dependencies },
     { id: "codegraph", body: codegraphRegionBody(codegraph) },
   ];
+}
+
+/** What the key-decisions note says when the repo has no candidates. */
+const NO_DECISION_CANDIDATES = "No decision candidates recorded for this repository.";
+
+/** What one entry says instead of a sha the candidate never recorded. */
+const NO_CANDIDATE_SHA = "sha unrecorded";
+
+/** What one entry says instead of the signals a candidate never recorded. */
+const NO_CANDIDATE_SIGNALS = "no signals recorded";
+
+/**
+ * Keep a wikilink's display text from ending the link early.
+ *
+ * The text is a commit subject by way of the candidate's heading, so it
+ * can hold anything a committer typed. `|` would open a second alias
+ * field and `]]` would close the link mid-title; both are folded to
+ * characters that read the same way in prose and mean nothing here.
+ */
+function wikilinkText(text: string): string {
+  return text.replaceAll("|", "/").replaceAll("]", ")");
+}
+
+/**
+ * The repo's ADR candidates, one entry each: title, sha, matched signals.
+ *
+ * The empty case is an explicit sentence rather than an empty region. A
+ * blank region is indistinguishable from a generator that failed to run,
+ * and "this repository has no mined decisions yet" is a real answer that
+ * points at `o2b brain git mine`.
+ */
+function decisionsRegionBody(candidates: ReadonlyArray<DecisionCandidateFact>): string {
+  if (candidates.length === 0) return NO_DECISION_CANDIDATES;
+  return candidates
+    .map((candidate) => {
+      const signals =
+        candidate.signals.length === 0
+          ? NO_CANDIDATE_SIGNALS
+          : `signals: ${candidate.signals.join(", ")}`;
+      const sha = candidate.sha === null ? NO_CANDIDATE_SHA : `sha \`${candidate.sha}\``;
+      return `- [[${candidate.link}|${wikilinkText(candidate.title)}]] (${sha}, ${signals})`;
+    })
+    .join("\n");
 }
 
 function moduleRegions(module: ModuleFact): ReadonlyArray<Region> {
@@ -351,6 +473,11 @@ function modulePath(dir: string, module: ModuleFact): string {
   return join(dir, "modules", `${module.name}.md`);
 }
 
+/** Where the key-decisions note lives. Beside the overview, one per repo. */
+function decisionsPath(dir: string): string {
+  return join(dir, "decisions.md");
+}
+
 /**
  * Plan every note, then write them - in that order, and never
  * interleaved.
@@ -369,6 +496,7 @@ function renderNotes(
   key: string,
   facts: ProjectFacts,
   codegraph: CodegraphReport,
+  candidates: ReadonlyArray<DecisionCandidateFact>,
   opts: GenerateArchDocsOptions,
   progress: ProgressCounter,
 ): ReadonlyArray<PlannedNote> {
@@ -380,6 +508,12 @@ function renderNotes(
       frontmatter("arch-overview", key, [`repo_path: ${facts.root}`]),
       overviewRegions(facts, key, codegraph),
     ),
+  );
+  opts.safeguard?.checkpoint();
+  plans.push(
+    planNote(decisionsPath(dir), frontmatter("arch-decisions", key, [`repo_path: ${facts.root}`]), [
+      { id: "decisions", body: decisionsRegionBody(candidates) },
+    ]),
   );
   for (const module of facts.modules) {
     opts.safeguard?.checkpoint();
@@ -503,10 +637,15 @@ function generateRun(
   const overviewPath = join(dir, "overview.md");
   const modulePaths = facts.modules.map((module) => modulePath(dir, module));
 
-  // The note count is known only now, and it is known exactly: one
-  // overview plus one note per detected module. Unlike the walk, this
-  // stage has a denominator.
-  progress.start(ARCHITECT_STAGE.render, 1 + facts.modules.length);
+  // The repo's slice of the vault-global candidate store, read outside
+  // the lock for the same reason the partner verdict is: it is a read of
+  // `Brain/decisions/`, which this run never writes.
+  const candidates = listRepoDecisionCandidates(vault, key);
+
+  // The note count is known only now, and it is known exactly: the
+  // overview, the key-decisions note, and one note per detected module.
+  // Unlike the walk, this stage has a denominator.
+  progress.start(ARCHITECT_STAGE.render, 2 + facts.modules.length);
 
   // One critical section over every note, held across the reads AND the
   // writes. Atomicity is not exclusivity: a whole file is renamed into
@@ -538,7 +677,7 @@ function generateRun(
   const handle = acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS);
   let plans: ReadonlyArray<PlannedNote>;
   try {
-    plans = renderNotes(dir, key, facts, codegraph, opts, progress);
+    plans = renderNotes(dir, key, facts, codegraph, candidates, opts, progress);
   } finally {
     handle.release();
   }
@@ -548,6 +687,7 @@ function generateRun(
     repoKey: key,
     dir,
     overviewPath,
+    decisionsPath: decisionsPath(dir),
     modulePaths: Object.freeze(modulePaths),
     created: countOf(plans, NOTE_DISPOSITION.created),
     updated: countOf(plans, NOTE_DISPOSITION.updated),

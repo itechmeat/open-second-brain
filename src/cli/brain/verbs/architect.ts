@@ -61,6 +61,7 @@ export async function cmdBrainArchitect(argv: string[]): Promise<number> {
         repo_key: res.repoKey,
         dir: res.dir,
         overview_path: res.overviewPath,
+        decisions_path: res.decisionsPath,
         module_paths: res.modulePaths,
         created: res.created,
         updated: res.updated,

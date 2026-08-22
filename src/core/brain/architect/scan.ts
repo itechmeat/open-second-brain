@@ -159,6 +159,22 @@ interface WalkStats {
   dirs: string[];
 }
 
+/**
+ * Codepoint order, not `localeCompare`: ICU collation varies with the
+ * runtime locale, so a collator-based tie-break renders different bytes
+ * for the same tree on two hosts - and byte-identical regeneration is the
+ * generator's whole contract. Plain `toSorted()` on strings already does
+ * this; the comparator exists for the orderings that need a tie-break
+ * (language counts) or sort objects rather than strings.
+ *
+ * It lives here, in the leaf of the scan/render pair, because both the
+ * renderer and the decision-candidate reader order their output with it
+ * and neither may import the other.
+ */
+export function compareStable(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
 /** Count one file's extension, the single place the mapping is defined. */
 function tallyExtension(languages: Record<string, number>, path: string): void {
   const ext = extname(path).toLowerCase();

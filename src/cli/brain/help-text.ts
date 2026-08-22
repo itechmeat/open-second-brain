@@ -1094,7 +1094,9 @@ export const VERB_HELP: Record<string, string> = {
   architect:
     "usage: o2b brain architect <project-path> [--vault V] [--json]\n" +
     "Scan a project tree deterministically (stdlib-only, no LLM) and\n" +
-    "write architecture notes under Brain/projects/arch/<repo-key>/.\n" +
+    "write architecture notes under Brain/projects/arch/<repo-key>/:\n" +
+    "an overview, a key-decisions note listing this repo's ADR\n" +
+    "candidates, and one note per detected module.\n" +
     "Generated content lives in sentinel regions; operator prose\n" +
     "outside regions survives every re-scan byte-for-byte.",
   git:

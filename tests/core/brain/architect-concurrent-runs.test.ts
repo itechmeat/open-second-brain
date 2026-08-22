@@ -40,8 +40,8 @@ import { repoKey } from "../../../src/core/brain/git/identity.ts";
 /** Enough notes that one run's write loop outlasts another run's plan. */
 const MODULES = 40;
 const FILES_PER_MODULE = 3;
-/** One overview plus one note per module. */
-const NOTE_COUNT = MODULES + 1;
+/** The overview, the key-decisions note, and one note per module. */
+const NOTE_COUNT = MODULES + 2;
 
 const RUNNERS = 3;
 const SPAWN_TIMEOUT_MS = 60_000;
@@ -176,7 +176,9 @@ describe("concurrent architect runs on one repo", () => {
       expect(first.created).toBe(NOTE_COUNT);
 
       // One module gains a file and a new module appears: overview.md and
-      // m00.md change, znew.md is new, the other 39 notes are already right.
+      // m00.md change, znew.md is new, and the other 40 notes - the 39
+      // untouched modules plus the key-decisions note, whose candidate set
+      // did not move - are already right.
       writeFileSync(join(project, "src", "m00", "extra.ts"), "// extra\n", "utf8");
       mkdirSync(join(project, "src", "znew"), { recursive: true });
       writeFileSync(join(project, "src", "znew", "a.ts"), "// new\n", "utf8");

@@ -86,15 +86,16 @@ describe("architect progress", () => {
   test("the walk counts without a denominator, the render stage has one", () => {
     const { events, sink } = record();
 
-    // src/cli, src/core and one nested module: 3 notes, 2 of them modules.
+    // src/cli and src/core are the two modules; the overview and the
+    // key-decisions note bring the render stage to 4 notes.
     generateArchDocs(freshVault("vault"), project, { onProgress: sink });
 
     const walk = events.filter((e) => e.stage === ARCHITECT_STAGE.walk);
     const render = events.filter((e) => e.stage === ARCHITECT_STAGE.render);
     expect(walk.every((e) => e.total === undefined)).toBe(true);
     expect(walk.at(-1)?.completed).toBeGreaterThan(0);
-    expect(render.every((e) => e.total === 3)).toBe(true);
-    expect(render.at(-1)?.completed).toBe(3);
+    expect(render.every((e) => e.total === 4)).toBe(true);
+    expect(render.at(-1)?.completed).toBe(4);
   });
 
   test("the scan stops at a boundary when the deadline has passed", () => {
