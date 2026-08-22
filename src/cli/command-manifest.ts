@@ -487,6 +487,14 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           ],
         ),
         command("signal", "Fact signal lifecycle: retire a signal with a reason"),
+        command("capture", "Stage one capture from the terminal: body, source, sender, guidance", [
+          flag("vault", "string"),
+          flag("source", "string"),
+          flag("sender", "string"),
+          flag("guidance", "string"),
+          flag("agent", "string"),
+          flag("at", "string"),
+        ]),
         command("telegram-capture", "Inbound Telegram capture bot: long-poll run or catchup"),
         command("inbox-drain", "Classify and route staged captures (dry-run by default)"),
         command(

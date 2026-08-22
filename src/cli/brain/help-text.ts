@@ -134,6 +134,7 @@ Brain verbs (observing memory):
   apply-markers       Apply @osb set frontmatter write-backs (report by default; --apply writes)
   pending             Review the write-approval queue: list | apply <id> | reject <id>
   signal              Fact signal lifecycle: retire <id> --reason <text>
+  capture             Stage one capture from the terminal: body, source, sender, guidance
   telegram-capture    Inbound Telegram capture bot: run (long-poll) | catchup
   inbox-drain         Classify and route staged captures (dry-run; --apply to route)
   repair-lane         Propose memory-graph edges (dry-run; --apply --confirm to write, holdout-gated)
@@ -912,6 +913,18 @@ export const VERB_HELP: Record<string, string> = {
     "excludes it from the dream pass while it stays readable in Brain/retired/.\n" +
     "Retiring a missing, already-retired, or non-signal id exits 2 (never a\n" +
     "silent no-op).\n",
+  capture:
+    "usage: o2b brain capture [<body>] [--source <channel>] [--sender <who>]\n" +
+    "  [--guidance <text>] [--at <ISO>] [--vault <path>] [--json]\n" +
+    "Stage one capture through the capture-note contract - the same writer the\n" +
+    "Telegram bot uses, so the id, the frontmatter and the staging path are\n" +
+    "identical. The body is the argument, or stdin when no argument is given.\n" +
+    "--source names the channel (default cli) and --sender who is capturing\n" +
+    "(default the configured agent); --at backdates a replayed capture to its\n" +
+    "own instant. --guidance records what should be DONE with the capture as a\n" +
+    "## Guidance body section, kept apart from the captured text and part of\n" +
+    "the id hash, so two captures differing only in guidance stay distinct.\n" +
+    "An empty body or a blank --guidance is refused by name and exits 2.\n",
   "telegram-capture":
     "usage: o2b brain telegram-capture <run|catchup> [--vault <path>]\n" +
     "Inbound Telegram capture bot. run long-polls getUpdates via fetch (needs\n" +

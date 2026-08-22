@@ -18,6 +18,7 @@ import {
   archiveCapture,
   capturesSince,
   listStagedCaptures,
+  readCaptureNote,
   readCatchupWatermark,
   writeCaptureNote,
   writeCatchupWatermark,
@@ -148,4 +149,80 @@ test("writeCaptureNote retries a name lost between the probe and the create", ()
 
   expect(second.id).toBe(`${first.id}-2`);
   expect(existsSync(join(vault, second.path))).toBe(true);
+});
+
+/**
+ * Per-capture guidance (unit 3b / t_5e338af1).
+ *
+ * Claims pinned below:
+ *
+ *  1. Guidance round-trips verbatim through the `## Guidance` body section
+ *     without leaking into the captured body.
+ *  2. Two captures differing ONLY in guidance are two captures: the id hash
+ *     reads the field, so they do not collapse into the `-2` allocator.
+ *  3. A capture written without guidance keeps the historical id, byte for
+ *     byte - the field is additive and the hash segment is conditional.
+ *  4. A body that itself ends in a `## Guidance` heading is still read back
+ *     as body, because the split is gated on the frontmatter marker rather
+ *     than on finding the heading.
+ *  5. Empty or whitespace-only guidance is refused by name, never stored as
+ *     an empty section.
+ */
+
+test("guidance round-trips verbatim and stays out of the body", () => {
+  const written = writeCaptureNote(vault, {
+    body: "capture a thought",
+    provenance: prov(),
+    guidance: "file this under research, not tasks",
+  });
+  expect(written.guidance).toBe("file this under research, not tasks");
+  expect(written.body).toBe("capture a thought");
+
+  const read = readCaptureNote(vault, written.id);
+  expect(read).not.toBeNull();
+  expect(read!.guidance).toBe("file this under research, not tasks");
+  expect(read!.body).toBe("capture a thought");
+});
+
+test("a capture with no guidance reads back with none", () => {
+  const written = writeCaptureNote(vault, { body: "plain", provenance: prov() });
+  expect(written.guidance).toBeNull();
+  expect(readCaptureNote(vault, written.id)!.guidance).toBeNull();
+});
+
+test("two captures differing only in guidance get distinct ids", () => {
+  const a = writeCaptureNote(vault, {
+    body: "same text",
+    provenance: prov(),
+    guidance: "route to inbox",
+  });
+  const b = writeCaptureNote(vault, {
+    body: "same text",
+    provenance: prov(),
+    guidance: "route to archive",
+  });
+  expect(a.id).not.toBe(b.id);
+  // Distinct by HASH, not by the collision allocator's numeric suffix.
+  expect(b.id.endsWith("-2")).toBe(false);
+});
+
+test("adding guidance does not move the id of a capture that has none", () => {
+  const plain = writeCaptureNote(vault, { body: "same text", provenance: prov() });
+  rmSync(join(vault, plain.path));
+  const again = writeCaptureNote(vault, { body: "same text", provenance: prov() });
+  expect(again.id).toBe(plain.id);
+});
+
+test("a body that ends in its own Guidance heading is still all body", () => {
+  const body = "notes\n\n## Guidance\n\nquoted from somewhere else";
+  const written = writeCaptureNote(vault, { body, provenance: prov() });
+  const read = readCaptureNote(vault, written.id)!;
+  expect(read.guidance).toBeNull();
+  expect(read.body).toBe(body);
+});
+
+test("empty guidance is refused by name rather than stored as an empty section", () => {
+  expect(() =>
+    writeCaptureNote(vault, { body: "text", provenance: prov(), guidance: "   " }),
+  ).toThrow(CaptureContractError);
 });

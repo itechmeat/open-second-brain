@@ -287,6 +287,12 @@ export function handleCaptureUpdate(
     });
   }
 
+  // No `guidance` here, and that is a reading of the payload rather than
+  // an omission: a Telegram update carries a chat id and one text body,
+  // and nothing in it distinguishes what was captured from what should be
+  // done with it. Splitting a message on a convention this bot invented
+  // would put words in the sender's mouth. Guidance reaches the contract
+  // from surfaces that have a field for it - see `o2b brain capture`.
   const note = writeCaptureNote(vault, {
     body: trimmed,
     provenance: { source, sender: chatId, capturedAt: at },

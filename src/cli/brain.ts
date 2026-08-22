@@ -131,6 +131,7 @@ import {
   cmdBrainToday,
   cmdBrainApplyMarkers,
   cmdBrainPending,
+  cmdBrainCapture,
   cmdBrainTelegramCapture,
   cmdBrainInboxDrain,
   cmdBrainRepairLane,
@@ -420,6 +421,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainPending(rest);
       case "signal":
         return await cmdBrainSignal(rest);
+      case "capture":
+        return await cmdBrainCapture(rest);
       case "telegram-capture":
         return await cmdBrainTelegramCapture(rest);
       case "inbox-drain":
