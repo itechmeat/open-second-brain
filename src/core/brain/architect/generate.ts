@@ -9,6 +9,16 @@
  * byte-identically (the scanner is deterministic and the renderer adds
  * no timestamps).
  *
+ * DECLARED EXCEPTION to that byte-identity guarantee: the `codegraph`
+ * region. Its body states the codegraph partner's verdict, which is a
+ * fact about the machine and the partner index, not about the project
+ * tree - an index built, deleted, or gone stale moves those bytes while
+ * the repository stands still. The exception is scoped to the region and
+ * to nothing else: every other region, and every byte of operator prose,
+ * still regenerates identically. The region carries its whole provenance
+ * (state, counts, health) so a stale stamp says what it was stamped
+ * from rather than being mistaken for a current reading.
+ *
  * Frontmatter is written ONCE at file creation and never rewritten -
  * it carries static identity (kind, repo key, path), while every fact
  * that can change between scans lives inside a region.
@@ -40,6 +50,9 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { summarizeGraphHealth } from "../../partner/codegraph-health.ts";
+import { buildCodegraphReport } from "../../partner/codegraph-report.ts";
+import type { CodegraphReport, CodegraphReportOptions } from "../../partner/codegraph-report.ts";
 import { repoKey as deriveRepoKey } from "../git/identity.ts";
 import { OPERATION, progressCounter, progressReasonForError } from "../progress.ts";
 import type { ProgressCounter, ProgressSink } from "../progress.ts";
@@ -59,6 +72,16 @@ export interface GenerateArchDocsOptions {
    * per note while planning - never between two writes.
    */
   readonly safeguard?: Safeguard;
+  /**
+   * How the run learns the codegraph partner's verdict. Defaults to the
+   * real {@link buildCodegraphReport}.
+   *
+   * A seam rather than a setting: nothing in the product produces a
+   * different reader, but the verdict is the one input to this module
+   * that is neither the project tree nor the vault, so a test of the
+   * region cannot construct it by arranging files.
+   */
+  readonly codegraphReport?: (options: CodegraphReportOptions) => CodegraphReport;
 }
 
 export interface GenerateArchDocsResult {
@@ -118,7 +141,69 @@ function languagesLine(languages: Readonly<Record<string, number>>): string {
     .join(", ");
 }
 
-function overviewRegions(facts: ProjectFacts, key: string): ReadonlyArray<Region> {
+/**
+ * The two verdicts the codegraph region can state, in the words an
+ * operator reads. `graph-present` means a structural index exists for
+ * this tree; `graph-absent, lexical-only` means everything in these notes
+ * came from the deterministic file scan and nothing from a code graph.
+ * Both are values, never errors - the partner report already settled that
+ * (`partner/codegraph-report.ts`).
+ */
+const GRAPH_VERDICT = Object.freeze({
+  present: "graph-present",
+  absent: "graph-absent, lexical-only",
+} as const);
+
+/** How the region names a partner CLI that is not on PATH. */
+const NO_PARTNER_CLI = "not on PATH";
+
+/**
+ * The codegraph verdict, as the region body an operator reads.
+ *
+ * Every one of the five {@link CodegraphReport} index states renders
+ * distinctly. The four non-`indexed` states share the `graph-absent`
+ * verdict but keep their own name and their own reason, because their
+ * remediations differ and one of them is actively wrong for the others:
+ * `not_indexed` asks for `codegraph init`, which is the last thing to run
+ * at a partner that timed out (`error`).
+ *
+ * The body is also the provenance stamp for the declared byte-identity
+ * exception in this module's docblock - state, counts and health are all
+ * in it, so a region left behind by an index that has since changed
+ * describes the reading it was made from.
+ */
+function codegraphRegionBody(report: CodegraphReport): string {
+  const index = report.index;
+  const head = [
+    `Project: ${report.project ?? "none in scope"}`,
+    `Partner CLI: ${report.cli.path ?? NO_PARTNER_CLI}`,
+  ];
+  if (index.state !== "indexed") {
+    return [
+      `${GRAPH_VERDICT.absent}: this overview rests on the file scan alone`,
+      `State: ${index.state}`,
+      ...head,
+      `Reason: ${index.reason ?? "none reported"}`,
+    ].join("\n");
+  }
+  const health = index.health;
+  return [
+    `${GRAPH_VERDICT.present}: codegraph holds an index for this project`,
+    `State: ${index.state}`,
+    ...head,
+    `Nodes: ${index.node_count ?? 0}`,
+    `Files: ${index.file_count ?? 0}`,
+    `Edges: ${index.edge_count ?? 0}`,
+    `Health: ${health === undefined ? "not assessed" : summarizeGraphHealth(health)}`,
+    ...(health?.warnings ?? []).map((warning) => `- ${warning.code}: ${warning.message}`),
+  ].join("\n");
+}
+
+function overviewRegions(
+  facts: ProjectFacts,
+  key: string,
+  codegraph: CodegraphReport,
+): ReadonlyArray<Region> {
   const summary = [
     `Project: ${facts.name}`,
     ...(facts.manifest?.version != null ? [`Version: ${facts.manifest.version}`] : []),
@@ -151,6 +236,7 @@ function overviewRegions(facts: ProjectFacts, key: string): ReadonlyArray<Region
     { id: "modules", body: modules },
     { id: "entry-points", body: entryPoints },
     { id: "dependencies", body: dependencies },
+    { id: "codegraph", body: codegraphRegionBody(codegraph) },
   ];
 }
 
@@ -282,6 +368,7 @@ function renderNotes(
   dir: string,
   key: string,
   facts: ProjectFacts,
+  codegraph: CodegraphReport,
   opts: GenerateArchDocsOptions,
   progress: ProgressCounter,
 ): ReadonlyArray<PlannedNote> {
@@ -291,7 +378,7 @@ function renderNotes(
     planNote(
       join(dir, "overview.md"),
       frontmatter("arch-overview", key, [`repo_path: ${facts.root}`]),
-      overviewRegions(facts, key),
+      overviewRegions(facts, key, codegraph),
     ),
   );
   for (const module of facts.modules) {
@@ -393,6 +480,20 @@ function generateRun(
     ...(opts.safeguard === undefined ? {} : { safeguard: opts.safeguard }),
   });
   const key = deriveRepoKey(facts.root);
+
+  // The partner verdict, read BEFORE the lock: it touches neither the
+  // vault nor this repo's notes, so holding the critical section across
+  // it would only lengthen the window another architect run waits on.
+  //
+  // `limit: 1` scopes the question to the project this overview is about.
+  // `findCodeProjects` otherwise widens to the vault parent's siblings and
+  // would answer about whichever of them it reached first - a verdict for
+  // a different repository, stamped into this repository's overview. A
+  // project root that is not a code project (no `.git`, no manifest) is
+  // then reported as `no_project`, which is exactly true of it.
+  const readReport = opts.codegraphReport ?? buildCodegraphReport;
+  const codegraph = readReport({ cwd: facts.root, vault, limit: 1 });
+
   const dir = join(vault, "Brain", "projects", "arch", key);
   mkdirSync(join(dir, "modules"), { recursive: true });
 
@@ -437,7 +538,7 @@ function generateRun(
   const handle = acquireLockSyncWithRetry(dir, LOCK_WAIT_INTERACTIVE_MS);
   let plans: ReadonlyArray<PlannedNote>;
   try {
-    plans = renderNotes(dir, key, facts, opts, progress);
+    plans = renderNotes(dir, key, facts, codegraph, opts, progress);
   } finally {
     handle.release();
   }
