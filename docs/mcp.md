@@ -1232,7 +1232,7 @@ log line is machine-composed rather than authored.
   outputs. Zero and two-plus recommendations are both refused and the
   refusal states the count found; a note for the same topic on the same day
   is refused rather than overwriting the first.
-- The three needs-llm-step lanes whose artifact is a wikilinked note -
+- Since v1.52.0 the three needs-llm-step lanes whose artifact is a wikilinked note -
   `brain_diarize`, `brain_design_note`, and the dream pass's rollup rungs -
   additively carry `link_candidates` on their envelope: the note basenames a
   `[[wikilink]]` in the answer can actually resolve to, with the `total` the
@@ -1242,7 +1242,7 @@ log line is machine-composed rather than authored.
   rather than reading as the whole vault. The envelope spine is unchanged
   and the three lanes that produce no wikilinked note (`brain_extract_signals`,
   `brain_skill_proposals` page drafts, `brain_write_session`) carry nothing new.
-- `brain_extract_signals` is the one lane that commits SEVERAL artifacts from
+- Since v1.52.0 `brain_extract_signals` is the one lane that commits SEVERAL artifacts from
   one validated payload - a file per mined item - so its result additively
   carries `reconciliation` (`attempted` / `found` / `missing`, the missing
   keys named, in the wave's shared vocabulary; a deduped or gate-rejected
