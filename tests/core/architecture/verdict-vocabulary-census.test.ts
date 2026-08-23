@@ -391,6 +391,11 @@ import {
   STATE_TIER,
   STATE_TIERS,
 } from "../../../src/core/state/surfaces.ts";
+import {
+  isReconciliationOutcome,
+  RECONCILIATION_OUTCOME,
+  RECONCILIATION_OUTCOMES,
+} from "../../../src/core/reconciliation-report.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 
 interface VocabularyUnderCensus {
@@ -1202,6 +1207,19 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: EXPORT_FORMATS,
     guard: isExportFormat,
   },
+  {
+    // nothing-writes-silently, shared substrate. The wave's one
+    // reconciliation report shape (attempted/found/missing) is consumed
+    // by three unrelated lanes - import read-back, envelope write
+    // accounting, embedder record-vs-data audit - and `contradicted` is
+    // the third state none of the pair-of-booleans vocabularies it
+    // replaces could name: a recorded claim that disagrees with what the
+    // report itself measured, not merely a shortfall against it.
+    name: "RECONCILIATION_OUTCOME",
+    values: RECONCILIATION_OUTCOME,
+    members: RECONCILIATION_OUTCOMES,
+    guard: isReconciliationOutcome,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1466,7 +1484,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 71;
+const VOCABULARY_POPULATION = 72;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
