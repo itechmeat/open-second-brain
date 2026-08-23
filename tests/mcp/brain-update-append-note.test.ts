@@ -4,6 +4,14 @@
  * atomic write-batch core (kernel 2). They reuse the create-note safety
  * envelope and refuse a missing target with a typed error mapped to
  * INVALID_PARAMS.
+ *
+ * The nothing-writes-silently wave (unit B) adds the `allow_empty`
+ * argument to `brain_update_note` and three refusals pinned here: a
+ * blank body over a note that has one (INVALID_PARAMS,
+ * `blank_overwrite_refused`, naming the note), an existing note the host
+ * cannot read (INTERNAL_ERROR, `target_unreadable` - the caller's
+ * request is right and the host is not), and an explicit empty `content`
+ * read as a clear request rather than as an absent argument.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -96,6 +104,82 @@ describe("brain_update_note", () => {
     expect(err.code).toBe(INVALID_PARAMS);
   });
 
+  test("declares the optional allow_empty boolean with a description", () => {
+    const schema = updateTool.inputSchema as {
+      properties: Record<string, { type?: string; description?: string }>;
+      required: ReadonlyArray<string>;
+    };
+    expect(schema.properties["allow_empty"]?.type).toBe("boolean");
+    expect((schema.properties["allow_empty"]?.description ?? "").length).toBeGreaterThan(0);
+    expect(schema.required).not.toContain("allow_empty");
+  });
+
+  test("a blank body over a note that has one is refused, naming the note", async () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const err = await rejectedMcpError(
+      updateTool.handler(ctx, { path: "Notes/Doc.md", content: "   " }),
+    );
+    expect(err.code).toBe(INVALID_PARAMS);
+    expect(err.data).toMatchObject({ code: "blank_overwrite_refused", path: "Notes/Doc.md" });
+    expect(err.message).toContain("Notes/Doc.md");
+    expect(readFileSync(join(vault, "Notes/Doc.md"), "utf8")).toContain("worth keeping");
+  });
+
+  test("allow_empty clears the body deliberately", async () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const res = await updateTool.handler(ctx, {
+      path: "Notes/Doc.md",
+      content: "",
+      allow_empty: true,
+    });
+    expect(res).toMatchObject({ updated: true, path: "Notes/Doc.md" });
+    const md = readFileSync(join(vault, "Notes/Doc.md"), "utf8");
+    expect(md).toContain("title: Doc");
+    expect(md).not.toContain("worth keeping");
+  });
+
+  test("an explicit empty content beside frontmatter is a clear request, not an absent one", async () => {
+    // It used to collapse to "argument not sent": the frontmatter merge
+    // landed, the body the caller asked to clear stayed, and the receipt
+    // said updated: true.
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const err = await rejectedMcpError(
+      updateTool.handler(ctx, {
+        path: "Notes/Doc.md",
+        frontmatter: { status: "final" },
+        content: "",
+      }),
+    );
+    expect(err.data).toMatchObject({ code: "blank_overwrite_refused", path: "Notes/Doc.md" });
+    const md = readFileSync(join(vault, "Notes/Doc.md"), "utf8");
+    expect(md).toContain("worth keeping");
+    expect(md).not.toContain("status: final");
+  });
+
+  test("allow_empty clears the body while merging frontmatter", async () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    await updateTool.handler(ctx, {
+      path: "Notes/Doc.md",
+      frontmatter: { status: "final" },
+      content: "",
+      allow_empty: true,
+    });
+    const md = readFileSync(join(vault, "Notes/Doc.md"), "utf8");
+    expect(md).toContain("status: final");
+    expect(md).not.toContain("worth keeping");
+  });
+
+  test("an existing note the host cannot read is refused, not blanked", async () => {
+    // A directory where the note should be: it exists, and reading it
+    // raises EISDIR regardless of the running user.
+    mkdirSync(join(vault, "Notes/Doc.md"), { recursive: true });
+    const err = await rejectedMcpError(
+      updateTool.handler(ctx, { path: "Notes/Doc.md", content: "replacement" }),
+    );
+    expect(err.code).toBe(INTERNAL_ERROR);
+    expect(err.data).toMatchObject({ code: "target_unreadable", path: "Notes/Doc.md" });
+  });
+
   test("path traversal is refused with INVALID_PARAMS", async () => {
     const err = await rejectedMcpError(
       updateTool.handler(ctx, { path: "../escape.md", content: "x" }),
@@ -129,6 +213,20 @@ describe("brain_append_note", () => {
     );
     expect(err.code).toBe(INVALID_PARAMS);
     expect(err.data).toMatchObject({ code: "target_missing", index: 0, path: "Notes/Ghost.md" });
+  });
+
+  test("an existing note the host cannot read is refused, not overwritten", async () => {
+    mkdirSync(join(vault, "Notes/Doc.md"), { recursive: true });
+    const err = await rejectedMcpError(
+      appendTool.handler(ctx, { path: "Notes/Doc.md", content: "more" }),
+    );
+    expect(err.code).toBe(INTERNAL_ERROR);
+    expect(err.data).toMatchObject({ code: "target_unreadable", path: "Notes/Doc.md" });
+  });
+
+  test("declares no allow_empty: an append never replaces a body", () => {
+    const schema = appendTool.inputSchema as { properties: Record<string, unknown> };
+    expect("allow_empty" in schema.properties).toBe(false);
   });
 
   test("refuses to author into the Brain machinery root", async () => {

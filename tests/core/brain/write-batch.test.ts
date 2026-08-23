@@ -8,6 +8,17 @@
  * and no disk write happens. Note operations reuse the exact
  * create-note safety envelope (path traversal, Brain machinery root,
  * vault-scope exclusions) and atomic-write semantics.
+ *
+ * The nothing-writes-silently wave (unit B) adds two refusals to that
+ * vocabulary, pinned below:
+ *
+ *   1. `target_unreadable` - a note that exists and cannot be read is no
+ *      longer projected as an empty note, for update and for append. The
+ *      refusal names the path and the reason, and the file is untouched.
+ *   2. `blank_overwrite_refused` - an update may not replace a body that
+ *      carries text with a blank one unless `allowEmpty` says so.
+ *      Whitespace-only is blank; a create of a genuinely new empty note
+ *      is not an update and is unaffected.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -18,6 +29,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -208,6 +220,124 @@ describe("applyWriteBatch note operations", () => {
       expect((err as WriteBatchError).code).toBe("duplicate_target");
       expect((err as WriteBatchError).index).toBe(1);
     }
+  });
+
+  test("update_note refuses a blank body over a note that has one", () => {
+    const abs = seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const before = readFileSync(abs, "utf8");
+    try {
+      applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "" }]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("blank_overwrite_refused");
+      expect((err as WriteBatchError).index).toBe(0);
+      // The refusal names the note, not just the operation index.
+      expect((err as WriteBatchError).message).toContain("Notes/Doc.md");
+      expect((err as WriteBatchError).details).toMatchObject({ path: "Notes/Doc.md" });
+    }
+    expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+
+  test("a whitespace-only body is a blank one: the parser would trim it away", () => {
+    const abs = seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const before = readFileSync(abs, "utf8");
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "  \n\t\n" }]),
+    ).toThrow(WriteBatchError);
+    expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+
+  test("allowEmpty clears the body deliberately, keeping the frontmatter", () => {
+    const abs = seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Doc.md", body: "", allowEmpty: true },
+    ]);
+    const md = readFileSync(abs, "utf8");
+    expect(md).toContain("title: Doc");
+    expect(md).not.toContain("worth keeping");
+  });
+
+  test("a frontmatter-only update never trips the blank guard", () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Doc.md", frontmatter: { status: "final" } },
+    ]);
+    const md = readFileSync(join(vault, "Notes/Doc.md"), "utf8");
+    expect(md).toContain("worth keeping");
+    expect(md).toContain("status: final");
+  });
+
+  test("creating a genuinely new empty note is untouched by the guard", () => {
+    const res = applyWriteBatch(vault, [
+      { kind: "create_note", path: "Notes/Empty.md", frontmatter: { title: "Empty" } },
+    ]);
+    expect(res.applied).toBe(1);
+    const md = readFileSync(join(vault, "Notes/Empty.md"), "utf8");
+    expect(md).toContain("title: Empty");
+  });
+
+  test("an update on a note that cannot be read is refused, and nothing is written", () => {
+    // A directory standing where a note should be: `existsSync` says
+    // yes and `readFileSync` raises EISDIR - an existing target the
+    // process cannot read, without depending on permission bits.
+    const abs = join(vault, "Notes/Doc.md");
+    mkdirSync(abs, { recursive: true });
+    try {
+      applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "replacement" }]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("target_unreadable");
+      expect((err as WriteBatchError).message).toContain("Notes/Doc.md");
+      // The reason travels with the refusal; a bare "could not read"
+      // would leave the operator guessing between a permission bit and
+      // a missing mount.
+      expect(String((err as WriteBatchError).details["reason"])).toContain("EISDIR");
+    }
+    expect(statSync(abs).isDirectory()).toBe(true);
+  });
+
+  test("an append onto a note that cannot be read is refused, and nothing is written", () => {
+    const abs = join(vault, "Notes/Doc.md");
+    mkdirSync(abs, { recursive: true });
+    try {
+      applyWriteBatch(vault, [{ kind: "append_note", path: "Notes/Doc.md", content: "more" }]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("target_unreadable");
+    }
+    expect(statSync(abs).isDirectory()).toBe(true);
+  });
+
+  test("an unreadable-by-permission note is refused rather than blanked", () => {
+    // Running as root bypasses the permission bits this case needs.
+    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+    const abs = seedNote("Notes/Secret.md", "the body that must survive", "title: Secret");
+    const before = readFileSync(abs, "utf8");
+    chmodSync(abs, 0o000);
+    try {
+      expect(() =>
+        applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Secret.md", body: "new" }]),
+      ).toThrow(WriteBatchError);
+    } finally {
+      chmodSync(abs, 0o600);
+    }
+    expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+
+  test("an unreadable target at op 1 aborts the batch before op 0 lands", () => {
+    const kept = seedNote("Notes/A.md", "unchanged", "title: A");
+    const before = readFileSync(kept, "utf8");
+    mkdirSync(join(vault, "Notes/B.md"), { recursive: true });
+    expect(() =>
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/A.md", body: "would change" },
+        { kind: "update_note", path: "Notes/B.md", body: "y" },
+      ]),
+    ).toThrow(WriteBatchError);
+    expect(readFileSync(kept, "utf8")).toBe(before);
   });
 
   test("a mid-write failure leaves the target byte-identical", () => {

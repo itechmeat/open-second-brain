@@ -90,11 +90,13 @@ export function advisoryFields(code: string): Readonly<Record<string, unknown>> 
 /**
  * Surface codes that are NOT the caller's fault. A malformed
  * `Brain/_brain.yaml` refuses every write on this surface no matter what
- * arguments arrive, so reporting it as INVALID_PARAMS would send the
- * agent looking at its own request forever. It is reported as an
- * INTERNAL_ERROR that is nonetheless typed and carries its exit.
+ * arguments arrive, and a target the process cannot read refuses this
+ * one no matter how the request is rephrased - the path is right and the
+ * host is what is broken. Reporting either as INVALID_PARAMS would send
+ * the agent looking at its own request forever. Both are reported as an
+ * INTERNAL_ERROR that is nonetheless typed and carries its details.
  */
-const OPERATOR_FAULT_CODES: ReadonlySet<string> = new Set(["config_invalid"]);
+const OPERATOR_FAULT_CODES: ReadonlySet<string> = new Set(["config_invalid", "target_unreadable"]);
 
 /** JSON-RPC code for a refusal, split on whose fault the refusal is. */
 function rpcCodeFor(surfaceCode: string): number {
@@ -278,6 +280,29 @@ async function toolBrainCreateNote(
 }
 
 /**
+ * The `content` an update carries, distinguishing ABSENT from EMPTY.
+ *
+ * {@link coerceStr} collapses `""` and a whitespace-only string to
+ * `null`, which every other surface reads as "the caller did not send
+ * this argument". On an update that reading is wrong in a way that loses
+ * the caller's intent: `{path, frontmatter, content: ""}` asked for the
+ * body to be cleared and was answered with `updated: true` over a body
+ * left exactly as it was, and `{path, content: ""}` was refused as if no
+ * argument had arrived at all. Both are silent about what happened to
+ * the request. Reading presence directly lets the empty body reach the
+ * kernel, where it is either refused by name or - with `allow_empty` -
+ * honoured.
+ */
+function updateBodyArgument(args: Record<string, unknown>): string | undefined {
+  const raw = args["content"];
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "string") {
+    throw new MCPError(INVALID_PARAMS, "brain_update_note: argument 'content' must be a string");
+  }
+  return raw;
+}
+
+/**
  * Update an existing note: merge frontmatter keys and/or replace the
  * body. A single-operation batch over kernel 2 so a mid-write failure
  * leaves the target byte-identical. Requires at least one of frontmatter
@@ -289,8 +314,9 @@ async function toolBrainUpdateNote(
 ): Promise<Record<string, unknown>> {
   const path = coerceStr(args, "path", true)!;
   const frontmatter = parseFrontmatterArg(args["frontmatter"], "brain_update_note");
-  const content = coerceStr(args, "content", false);
-  if (frontmatter === undefined && content === null) {
+  const content = updateBodyArgument(args);
+  const allowEmpty = coerceBoolOptional(args, "allow_empty");
+  if (frontmatter === undefined && content === undefined) {
     throw new MCPError(
       INVALID_PARAMS,
       "brain_update_note: provide 'frontmatter', 'content', or both",
@@ -300,7 +326,8 @@ async function toolBrainUpdateNote(
     kind: "update_note",
     path,
     ...(frontmatter !== undefined ? { frontmatter } : {}),
-    ...(content !== null ? { body: content } : {}),
+    ...(content !== undefined ? { body: content } : {}),
+    ...(allowEmpty !== undefined ? { allowEmpty } : {}),
   };
   const result = runSingleWrite(ctx, op, "brain_update_note");
   // The flag comes off the kernel result rather than being restated here:
@@ -459,6 +486,11 @@ export const NOTES_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         content: {
           type: "string",
           description: "Replacement Markdown body. Omit to keep the existing body.",
+        },
+        allow_empty: {
+          type: "boolean",
+          description:
+            "Allow empty or whitespace-only content to clear the note. Default false: a blank body over a note that has text is refused as an accidental clear.",
         },
       },
       required: ["path"],

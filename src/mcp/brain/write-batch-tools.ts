@@ -56,6 +56,15 @@ function optionalStr(raw: Record<string, unknown>, key: string): string | undefi
   return value;
 }
 
+function optionalBool(raw: Record<string, unknown>, key: string): boolean | undefined {
+  const value = raw[key];
+  if (value === undefined || value === null) return undefined;
+  if (typeof value !== "boolean") {
+    throw new MCPError(INVALID_PARAMS, `brain_write_batch: '${key}' must be a boolean`);
+  }
+  return value;
+}
+
 /**
  * Map one untrusted request operation object onto a typed
  * {@link WriteOperation}. `resolveAgent` supplies the caller identity for
@@ -86,6 +95,7 @@ function mapOperation(
     case "update_note": {
       const frontmatter = parseFrontmatterArg(obj["frontmatter"], "brain_write_batch");
       const content = optionalStr(obj, "content");
+      const allowEmpty = optionalBool(obj, "allow_empty");
       if (frontmatter === undefined && content === undefined) {
         throw new MCPError(
           INVALID_PARAMS,
@@ -97,6 +107,7 @@ function mapOperation(
         path: requireStr(obj, "path", "update_note"),
         ...(frontmatter !== undefined ? { frontmatter } : {}),
         ...(content !== undefined ? { body: content } : {}),
+        ...(allowEmpty !== undefined ? { allowEmpty } : {}),
       };
     }
     case "append_note":
@@ -220,6 +231,11 @@ export const WRITE_BATCH_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
                 type: "string",
                 description:
                   "Note body: create_note/update_note replacement, or append_note appended text.",
+              },
+              allow_empty: {
+                type: "boolean",
+                description:
+                  "update_note only: allow empty or whitespace-only content to clear the note. Default false; a blank body over a note that has text is refused.",
               },
               pref_id: { type: "string", description: "Preference id for apply_evidence." },
               artifact: { type: "string", description: "Artifact wikilink for apply_evidence." },

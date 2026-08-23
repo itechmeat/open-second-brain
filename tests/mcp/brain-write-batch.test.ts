@@ -7,6 +7,12 @@
  * happens. Single-operation batches produce results equal to the
  * dedicated brain_create_note / brain_update_note / brain_append_note
  * tools.
+ *
+ * The nothing-writes-silently wave (unit B) adds `allow_empty` to the
+ * `update_note` op object and pins the two refusals the batch inherits
+ * from the shared projection: a blank body over a note that has one, and
+ * a target the host cannot read - each aborting the whole batch before
+ * any operation commits.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -176,6 +182,63 @@ describe("brain_write_batch", () => {
       properties: { operations: { maxItems?: number } };
     };
     expect(schema.properties.operations.maxItems).toBe(MAX_BATCH_OPERATIONS);
+  });
+
+  test("the operation object declares allow_empty with a description", () => {
+    const schema = tool.inputSchema as {
+      properties: {
+        operations: {
+          items: { properties: Record<string, { type?: string; description?: string }> };
+        };
+      };
+    };
+    const allowEmpty = schema.properties.operations.items.properties["allow_empty"];
+    expect(allowEmpty?.type).toBe("boolean");
+    expect((allowEmpty?.description ?? "").length).toBeGreaterThan(0);
+  });
+
+  test("an update_note op refuses to blank a note that has a body", async () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    let thrown: unknown;
+    try {
+      await runBatch([{ op: "update_note", path: "Notes/Doc.md", content: "" }]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    expect((thrown as MCPError).data).toMatchObject({
+      code: "blank_overwrite_refused",
+      index: 0,
+      path: "Notes/Doc.md",
+    });
+    expect(readFileSync(join(vault, "Notes/Doc.md"), "utf8")).toContain("worth keeping");
+  });
+
+  test("allow_empty on the op clears the body deliberately", async () => {
+    seedNote("Notes/Doc.md", "worth keeping", "title: Doc");
+    const res = await runBatch([
+      { op: "update_note", path: "Notes/Doc.md", content: "", allow_empty: true },
+    ]);
+    expect(res.applied).toBe(1);
+    const md = readFileSync(join(vault, "Notes/Doc.md"), "utf8");
+    expect(md).toContain("title: Doc");
+    expect(md).not.toContain("worth keeping");
+  });
+
+  test("an unreadable note aborts the batch before any op lands", async () => {
+    mkdirSync(join(vault, "Notes/Unreadable.md"), { recursive: true });
+    let thrown: unknown;
+    try {
+      await runBatch([
+        { op: "create_note", path: "Notes/First.md", content: "one" },
+        { op: "update_note", path: "Notes/Unreadable.md", content: "two" },
+      ]);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    expect((thrown as MCPError).data).toMatchObject({ code: "target_unreadable", index: 1 });
+    expect(existsSync(join(vault, "Notes/First.md"))).toBe(false);
   });
 
   test("single-op create parity with brain_create_note", async () => {

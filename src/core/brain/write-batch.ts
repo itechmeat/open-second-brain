@@ -32,7 +32,9 @@ import { dirname } from "node:path";
 import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { CreateNoteError, createNote, resolveNoteTarget } from "./notes/create-note.ts";
-import { formatFrontmatter, parseFrontmatter } from "../vault.ts";
+import { refuseBlankOverwrite } from "./notes/blank-overwrite-guard.ts";
+import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
+import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import {
   appendApplyEvidence,
   type AppendApplyEvidenceInput,
@@ -76,6 +78,12 @@ export interface UpdateNoteOperation {
   readonly path: string;
   readonly frontmatter?: FrontmatterMap;
   readonly body?: string;
+  /**
+   * Permit `body` to be blank, clearing the note's contents. Default
+   * false: see {@link refuseBlankOverwrite}, which exists because an
+   * accidentally-empty body is byte-identical to a deliberate clear.
+   */
+  readonly allowEmpty?: boolean;
 }
 
 /** Append `content` to the body of an EXISTING note. */
@@ -121,6 +129,19 @@ export type WriteBatchErrorCode =
   | "outside_vault"
   | "exists"
   | "target_missing"
+  // nothing-writes-silently, unit B. The target exists and the process
+  // could not read it (a permission bit, a directory in its place, a
+  // transient I/O fault, a file mid-sync). Until this code existed the
+  // parser resolved that to `[{}, ""]` and the projection believed it:
+  // an update then wrote the caller's body over an empty frontmatter
+  // map and reported `updated: true`, and an append wrote just the
+  // appended text over a body it never saw. Read failure is now a
+  // refusal that names the path and the reason.
+  | "target_unreadable"
+  // nothing-writes-silently, unit B. The update would replace a body
+  // that carries text with a blank one. See
+  // {@link refuseBlankOverwrite}; `allowEmpty` is the way through.
+  | "blank_overwrite_refused"
   | "duplicate_target"
   | "too_many_operations"
   | "preference_not_found"
@@ -352,6 +373,25 @@ function projectUpdateNote(
   }
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
   const state = readExistingNote(target.abs, target.relPath, index);
+  // The one seam the blank-overwrite guard is wired at - it covers both
+  // callers, `brain_update_note` and `brain_write_batch`'s update op,
+  // because both project through here.
+  if (
+    op.body !== undefined &&
+    refuseBlankOverwrite({
+      existingBody: state.body,
+      nextBody: op.body,
+      allowEmpty: op.allowEmpty === true,
+    })
+  ) {
+    throw new WriteBatchError(
+      "blank_overwrite_refused",
+      index,
+      `operation ${index}: refusing to replace the body of ${target.relPath} with an empty ` +
+        "one; pass allow_empty to clear the note deliberately",
+      { path: target.relPath },
+    );
+  }
   const frontmatter =
     op.frontmatter !== undefined ? { ...state.frontmatter, ...op.frontmatter } : state.frontmatter;
   const body = op.body !== undefined ? op.body : state.body;
@@ -512,9 +552,22 @@ interface ExistingNote {
   readonly body: string;
 }
 
+/** Attribution for the frontmatter notices this reader inspects. */
+const READ_EXISTING_NOTE_SITE = "brain.write-batch.read-existing-note";
+
 /**
- * Read and parse an existing note, or throw a typed `target_missing`
- * error. update and append only touch notes that already exist.
+ * Read and parse an existing note, or throw a typed error naming which
+ * of the two ways it was unavailable. update and append only touch
+ * notes that already exist.
+ *
+ * An UNREADABLE file raises rather than resolving to an empty note. The
+ * two-tuple `parseFrontmatter` reports a read failure as `[{}, ""]` -
+ * correct for the fail-soft walkers it was written for, and fatal here,
+ * because this result is the base of a read-modify-write: an update
+ * would write the caller's body under an empty frontmatter map and an
+ * append would write its text over a body nobody read, both reporting
+ * success. The projection runs before any commit, so raising leaves the
+ * file byte-identical.
  */
 function readExistingNote(abs: string, relPath: string, index: number): ExistingNote {
   if (!existsSync(abs)) {
@@ -525,6 +578,18 @@ function readExistingNote(abs: string, relPath: string, index: number): Existing
       { path: relPath },
     );
   }
-  const [frontmatter, body] = parseFrontmatter(abs);
+  const [frontmatter, body, notices] = parseFrontmatterWithNotices(abs, {
+    site: READ_EXISTING_NOTE_SITE,
+  });
+  const unreadable = notices.find((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable);
+  if (unreadable !== undefined) {
+    throw new WriteBatchError(
+      "target_unreadable",
+      index,
+      `operation ${index}: note ${relPath} exists but could not be read ` +
+        `(${unreadable.detail}), so the content this write would replace is unknown`,
+      { path: relPath, reason: unreadable.detail },
+    );
+  }
   return { frontmatter: { ...frontmatter }, body };
 }
