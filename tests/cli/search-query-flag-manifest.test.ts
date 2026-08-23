@@ -77,6 +77,16 @@ const COVERED: ReadonlyArray<CoveredVerb> = Object.freeze([
     witness: ["no-probe", "boolean"],
   },
   {
+    // Added with the verb itself (nothing-writes-silently, unit G): a
+    // repair verb whose `--apply` gate is not modelled advertises a
+    // dry run with no way to reach the write it exists for.
+    verb: "restamp",
+    source: "restamp.ts",
+    marker: "export async function cmdSearchRestamp",
+    minFlags: 4,
+    witness: ["apply", "boolean"],
+  },
+  {
     // Added with `--progress` (nothing-runs-unwatched, U1): this verb
     // grew the whole progress spine in core - an options field, a
     // counter, a terminator - with no flag to reach it, so the wiring

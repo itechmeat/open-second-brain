@@ -49,6 +49,7 @@ export type {
   ExpandHitInput,
   ExpandHitResult,
   IndexCheckReport,
+  EmbedderRecordCensus,
   IndexStats,
   IndexStatusSnapshot,
   PendingVectorCensus,
@@ -87,6 +88,7 @@ export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-g
 export { buildEvidencePack, serializeEvidencePack } from "./evidence-pack.ts";
 export {
   serializeChunkWindowCensus,
+  serializeEmbedderRecordCensus,
   serializePendingVectorCensus,
   serializeSearchCard,
   serializeIndexStatus,

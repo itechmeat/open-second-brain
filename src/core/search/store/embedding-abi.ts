@@ -15,7 +15,8 @@ import {
   EMBEDDING_DIMENSION_STATE_KEY,
   EMBEDDING_MODEL_STATE_KEY,
   EMBEDDING_VEC_VERSION_STATE_KEY,
-  withReadonlyIndex,
+  peekReadonlyIndex,
+  type IndexPeek,
 } from "./state.ts";
 
 /**
@@ -24,6 +25,32 @@ import {
  * recommendation cannot grow three spellings of the same instruction.
  */
 export const EMBEDDING_ABI_FIX_COMMAND = "o2b search reindex --embeddings";
+
+/**
+ * The remediation for a drift confined to the sqlite-vec version
+ * (nothing-writes-silently, unit G).
+ *
+ * That token is an ABI marker, not a property of any vector: two peers
+ * on different sqlite-vec builds each read the other's store as
+ * drifted, which is why the gate defaults to `warn`. Sending them to
+ * the full reindex charges provider prices to correct a version string
+ * no stored vector depends on, so this drift - and only this one -
+ * names the restamp verb instead.
+ */
+export const EMBEDDING_VEC_VERSION_FIX_COMMAND = "o2b search restamp";
+
+/**
+ * Which remediation a given drift earns. The full rebuild, unless every
+ * drifted field is the sqlite-vec version, in which case restamping is
+ * the whole repair. Shared by the refusal, the warning and the
+ * recommendation so no surface can name a different command for the
+ * same drift.
+ */
+export function embeddingAbiFixCommand(mismatches: ReadonlyArray<StampMismatch>): string {
+  const vecVersionOnly =
+    mismatches.length > 0 && mismatches.every((m) => m.field === EMBEDDING_VEC_VERSION_STATE_KEY);
+  return vecVersionOnly ? EMBEDDING_VEC_VERSION_FIX_COMMAND : EMBEDDING_ABI_FIX_COMMAND;
+}
 
 /** The ABI tokens an index recorded, read through any state accessor. */
 export function recordedEmbeddingAbi(state: (key: string) => string | null): StampTokens {
@@ -63,7 +90,17 @@ export function runtimeEmbeddingAbi(
  * matches.
  */
 export function readEmbeddingAbiSync(dbPath: string): StampTokens | null {
-  return withReadonlyIndex(dbPath, (read) => recordedEmbeddingAbi(read));
+  const peek = peekEmbeddingAbiSync(dbPath);
+  return peek.kind === "read" ? peek.value : null;
+}
+
+/**
+ * {@link readEmbeddingAbiSync} with the three outcomes kept apart, for
+ * a caller that must tell an index it could not open from one that is
+ * not there - a repair verb refusing by name is exactly that caller.
+ */
+export function peekEmbeddingAbiSync(dbPath: string): IndexPeek<StampTokens> {
+  return peekReadonlyIndex(dbPath, (read) => recordedEmbeddingAbi(read));
 }
 
 /**
@@ -94,6 +131,6 @@ export function formatEmbeddingAbiDrift(mismatches: ReadonlyArray<StampMismatch>
   return (
     `embedding ABI drift between the stored index and this build ` +
     `(${mismatches.map(formatStampMismatch).join("; ")}); stored vectors are not ` +
-    `comparable to queries embedded now. Run: ${EMBEDDING_ABI_FIX_COMMAND}`
+    `comparable to queries embedded now. Run: ${embeddingAbiFixCommand(mismatches)}`
   );
 }

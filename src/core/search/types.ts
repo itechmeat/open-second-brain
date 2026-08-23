@@ -15,6 +15,7 @@
 
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
+import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
 import type { VaultPathRule, VaultScopeRules } from "../vault-scope/defaults.ts";
 import type { DegreePredicate } from "./property-filter.ts";
 import type { TemporalIntent } from "./temporal-intent.ts";
@@ -435,6 +436,42 @@ export type PendingVectorCensus =
       readonly reason: string;
     };
 
+/**
+ * What the index's own record of its embedder says, measured against
+ * the vectors it holds (nothing-writes-silently, unit G).
+ *
+ * The `audited` arm's `outcome` is the wave's shared reconciliation
+ * vocabulary, and `contradicted` is the state this census exists for: a
+ * recorded dimension the stored data itself disproves. That is a
+ * different finding from the two that already had names - `embeddingAbi`
+ * drift, where the record disagrees with THIS BUILD, and an unrecorded
+ * token, where the index never made the claim at all - and folding it
+ * into either would report a wrong record as a stale one.
+ *
+ * `unrecorded` is every state with nothing to compare: no index, an
+ * index that would not open, no recorded dimension, or no stored vector
+ * to check it against. None of them is a clean audit.
+ */
+export type EmbedderRecordCensus =
+  | {
+      readonly verdict: "audited";
+      /** The dimension `index_state` claims. */
+      readonly recordedDimension: number;
+      /** Distinct widths the `embeddings` rows carry, ascending. */
+      readonly storedDimensions: ReadonlyArray<number>;
+      /** The width `chunk_vec` declares, or null when there is no such table. */
+      readonly vecDeclaredWidth: number | null;
+      /** Observations attempted, matched, and - by name - not matched. */
+      readonly reconciliation: ReconciliationReport;
+      /** `complete` or `contradicted`; see the note above. */
+      readonly outcome: ReconciliationOutcome;
+    }
+  | {
+      /** Nothing was compared, and why. */
+      readonly verdict: "unrecorded";
+      readonly reason: string;
+    };
+
 export interface IndexCheckReport {
   readonly vaultReadable: boolean;
   readonly indexDirWritable: boolean;
@@ -474,6 +511,13 @@ export interface IndexCheckReport {
    * recommendation below now gates on.
    */
   readonly pendingVectors: PendingVectorCensus;
+  /**
+   * The index's recorded embedder identity measured against the vectors
+   * it holds. See {@link EmbedderRecordCensus}; its `contradicted`
+   * outcome is a statement neither {@link embeddingAbi} nor
+   * {@link pendingVectors} can make.
+   */
+  readonly embedderRecord: EmbedderRecordCensus;
   readonly warnings: ReadonlyArray<string>;
   readonly fatal: ReadonlyArray<string>;
   /**

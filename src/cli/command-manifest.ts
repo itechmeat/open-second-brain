@@ -675,6 +675,19 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("rerank-provider", "Manage reranker provider profiles"),
         command("rerank-fit", "Diagnose whether the configured reranker fits this vault's queries"),
         command("plan", "Preview the should-read shortlist for a query without reading the notes"),
+        // The whole schema, for the reason the neighbours give: this
+        // family has no per-verb `--help`, so an unmodelled flag is
+        // unreachable from help and from completions alike.
+        command(
+          "restamp",
+          "Record this build's sqlite-vec version as the one the stored vectors are accepted under (dry-run unless --apply; refuses a model or dimension disagreement)",
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("db", "string"),
+            flag("apply", "boolean"),
+          ],
+        ),
         // The whole `parseFlags` schema, for the reason the two builders
         // above give: there is no per-verb `--help` on this family, so a
         // flag the manifest does not model is a flag neither help nor

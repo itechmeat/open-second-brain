@@ -77,9 +77,11 @@ import { pathCovers } from "../vault-scope/defaults.ts";
 
 import {
   acquireWriterLock,
-  EMBEDDING_ABI_FIX_COMMAND,
+  embeddingAbiFixCommand,
+  formatEmbedderRecordContradiction,
   formatEmbeddingAbiDrift,
   peekPendingVectorsSync,
+  readEmbedderRecordCensusSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
   Store,
@@ -94,6 +96,7 @@ import { walkVault } from "./walker.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
 import type {
   ChunkWindowCensus,
+  EmbedderRecordCensus,
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
@@ -1569,6 +1572,14 @@ export async function indexCheck(
   // diagnostic an operator ran, never the query path.
   const pendingVectors = readPendingVectorCensus(config.dbPath);
 
+  // The record-vs-data embedder audit (nothing-writes-silently, unit G).
+  // Ungated by the semantic switch on purpose: it compares the index's
+  // record against the index's own data, so what this build is
+  // configured to do next cannot change the answer.
+  const embedderRecord = readEmbedderRecordCensusSync(config.dbPath);
+  const contradiction = formatEmbedderRecordContradiction(embedderRecord);
+  if (contradiction !== null) warnings.push(contradiction);
+
   // §E.2 — Actionable hints derived from the check state.
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
@@ -1580,6 +1591,7 @@ export async function indexCheck(
     providerProbe,
     embeddingAbi,
     pendingVectors,
+    embedderRecord,
   });
 
   return Object.freeze({
@@ -1589,6 +1601,7 @@ export async function indexCheck(
     fts5Ok,
     embeddingAbi,
     pendingVectors,
+    embedderRecord,
     vecExtension,
     embeddingKeyResolved,
     providerProbe,
@@ -1630,6 +1643,7 @@ interface BuildRecommendationsInput {
   readonly providerProbe: ProviderProbeState;
   readonly embeddingAbi: ReadonlyArray<StampMismatch>;
   readonly pendingVectors: PendingVectorCensus;
+  readonly embedderRecord: EmbedderRecordCensus;
 }
 
 /**
@@ -1653,13 +1667,20 @@ const VECTOR_BACKFILL_COMMAND = "o2b search vector-backfill";
 function buildRecommendations(input: BuildRecommendationsInput): string[] {
   const recs: string[] = [];
 
+  // A record the data itself disproves comes first: every other hint
+  // below reasons from what the index claims about itself, and this is
+  // the one finding that says those claims cannot be trusted. Same
+  // sentence as the warning - one finding, one wording.
+  const contradiction = formatEmbedderRecordContradiction(input.embedderRecord);
+  if (contradiction !== null) recs.push(contradiction);
+
   // Embedding-ABI drift is the one condition here whose remediation is a
   // single command, so it is named verbatim and copy-pasteable.
   if (input.embeddingAbi.length > 0) {
     recs.push(
       `Stored vectors were written under a different embedding ABI ` +
         `(${input.embeddingAbi.map(formatStampMismatch).join("; ")}). Run: ` +
-        `${EMBEDDING_ABI_FIX_COMMAND}`,
+        `${embeddingAbiFixCommand(input.embeddingAbi)}`,
     );
   }
 

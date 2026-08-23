@@ -1421,6 +1421,34 @@ o2b search check              Pre-flight diagnostics: vault, index directory, SQ
                               not-configured, reachable, unreachable, timed-out, skipped. The boolean
                               had to answer four questions with two values, so a provider that refused
                               and one that never answered were the same `false`.
+
+                              Two censuses ride the report in EVERY state, because a check that could
+                              not measure something must not answer with silence. `pending_vectors` is
+                              the measured count of chunks with no vector - `{verdict: measured,
+                              pending, chunks}`, or `{verdict: unrecorded, reason}` when the index is
+                              absent or will not open, which is never reported as a count of zero. It
+                              is what the reindex recommendation now gates on: a fully embedded vault
+                              is told nothing, an index with no vectors at all is told to compute its
+                              first ones, and a partially embedded index is pointed at
+                              `o2b search vector-backfill`, whose dry run prices the work.
+                              `embedder_record` is the record-vs-data audit: the dimension
+                              `index_state` claims against the widths the `embeddings` rows carry and
+                              the width `chunk_vec` declares. Its outcome is `complete` or
+                              `contradicted` - a record the data itself disproves, which is a
+                              different finding from ABI drift (the record disagrees with this build)
+                              and from an unrecorded token (no claim was ever made).
+o2b search restamp            Record this build's sqlite-vec version as the one the stored vectors are
+                              accepted under - the repair for a drift confined to
+                              embedding_vec_version, which is an ABI marker rather than a property of
+                              any vector (two peers on different sqlite-vec builds each read the
+                              other's index as drifted). Dry-run by DEFAULT: it prints the change it
+                              would make and writes nothing. --apply writes that one index_state cell
+                              and nothing else. It REFUSES by name when the recorded model or
+                              dimension disagrees with this build - those describe the vectors
+                              themselves, and repairing them needs re-embedding under a verified
+                              identity, which is deferred by design; the refusal names
+                              `o2b search reindex --embeddings` instead. No path contacts a provider.
+                              --json emits dry_run, field, recorded, runtime, changed, applied
 o2b search provider add NAME  Register an OpenAI-compatible embedding endpoint (since v0.36.0)
                               --base-url U --model M --env-key K (K is the env var NAME holding the key);
                               persisted to Brain/search/embedding-providers.json, resolved after built-ins

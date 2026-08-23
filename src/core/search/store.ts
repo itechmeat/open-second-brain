@@ -71,7 +71,10 @@ export type { IndexPeek } from "./store/state.ts";
 export {
   contradictedAbiFields,
   EMBEDDING_ABI_FIX_COMMAND,
+  EMBEDDING_VEC_VERSION_FIX_COMMAND,
+  embeddingAbiFixCommand,
   formatEmbeddingAbiDrift,
+  peekEmbeddingAbiSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
 } from "./store/embedding-abi.ts";
@@ -83,6 +86,12 @@ export {
 } from "./store/writer-lock.ts";
 
 export { peekPendingVectorsSync } from "./store/counts.ts";
+
+export {
+  auditEmbedderRecord,
+  formatEmbedderRecordContradiction,
+  readEmbedderRecordCensusSync,
+} from "./store/embedder-audit.ts";
 
 export { normalizeAlias } from "./store/aliases.ts";
 

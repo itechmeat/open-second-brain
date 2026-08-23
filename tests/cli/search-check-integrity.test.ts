@@ -339,6 +339,10 @@ test("without --integrity the verb spends nothing and emits the bytes it always 
     // present in every state - including the one where no count could
     // be taken, which is the state it exists to report.
     "pending_vectors",
+    // The record-vs-data embedder audit (unit G) rides beside it on the
+    // same terms: present in every state, including the one where
+    // nothing could be compared.
+    "embedder_record",
     "warnings",
     "fatal",
     "recommendations",

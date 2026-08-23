@@ -24,6 +24,7 @@ import { cmdSearchPlan } from "./search/verbs/plan.ts";
 import { cmdSearchProvider, cmdSearchRerankProvider } from "./search/verbs/provider-registry.ts";
 import { cmdSearchQuery } from "./search/verbs/query.ts";
 import { cmdSearchRerankFit } from "./search/verbs/rerank-fit.ts";
+import { cmdSearchRestamp } from "./search/verbs/restamp.ts";
 import { cmdSearchStatus } from "./search/verbs/status.ts";
 import { cmdSearchVectorBackfill } from "./search/verbs/vector-backfill.ts";
 import { cmdSearchWatch } from "./search/verbs/watch.ts";
@@ -42,6 +43,7 @@ const KNOWN_VERBS = new Set([
   "rerank-provider",
   "rerank-fit",
   "plan",
+  "restamp",
   "watch",
   "vector-backfill",
   "event-anchor-backfill",
@@ -87,6 +89,8 @@ export async function handleSearchSubcommand(argv: ReadonlyArray<string>): Promi
         return await cmdSearchRerankFit(rest);
       case "plan":
         return await cmdSearchPlan(rest);
+      case "restamp":
+        return await cmdSearchRestamp(rest);
       case "vector-backfill":
         return await cmdSearchVectorBackfill(rest);
       case "event-anchor-backfill":

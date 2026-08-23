@@ -7,6 +7,7 @@
 import type { StampMismatch } from "../integrity/stamp.ts";
 import type {
   ChunkWindowCensus,
+  EmbedderRecordCensus,
   IndexStatusSnapshot,
   PendingVectorCensus,
   SearchCard,
@@ -62,6 +63,37 @@ export function serializePendingVectorCensus(census: PendingVectorCensus): Recor
     return { verdict: census.verdict, reason: census.reason };
   }
   return { verdict: census.verdict, pending: census.pending, chunks: census.chunks };
+}
+
+/**
+ * Wire shape of the record-vs-data embedder audit
+ * (nothing-writes-silently, unit G). Emitted in every state on the same
+ * terms as the pending-vector census beside it, and the `unrecorded`
+ * arm carries no numbers at all - there is no dimension to report when
+ * nothing was compared.
+ *
+ * `reconciliation` keeps the shared vocabulary's own field names, so a
+ * consumer reading this audit and one reading the import census read
+ * the same three words for the same three quantities.
+ */
+export function serializeEmbedderRecordCensus(
+  census: EmbedderRecordCensus,
+): Record<string, unknown> {
+  if (census.verdict === "unrecorded") {
+    return { verdict: census.verdict, reason: census.reason };
+  }
+  return {
+    verdict: census.verdict,
+    outcome: census.outcome,
+    recorded_dimension: census.recordedDimension,
+    stored_dimensions: census.storedDimensions,
+    vec_declared_width: census.vecDeclaredWidth,
+    reconciliation: {
+      attempted: census.reconciliation.attempted,
+      found: census.reconciliation.found,
+      missing: census.reconciliation.missing,
+    },
+  };
 }
 
 /**

@@ -77,10 +77,12 @@ import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
 import {
   indexCheck,
+  serializeEmbedderRecordCensus,
   serializePendingVectorCensus,
   serializeStampMismatches,
 } from "../../../core/search/index.ts";
 import type {
+  EmbedderRecordCensus,
   IndexCheckReport,
   PendingVectorCensus,
   ResolvedSearchConfig,
@@ -403,6 +405,9 @@ function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
     // this key exists to report, and an absent key would be read as a
     // count of zero (nothing-writes-silently, unit A).
     pending_vectors: serializePendingVectorCensus(r.pendingVectors),
+    // Same terms again: the audit says what it compared, or that it
+    // compared nothing (nothing-writes-silently, unit G).
+    embedder_record: serializeEmbedderRecordCensus(r.embedderRecord),
     // Emitted only on drift, so a matching store's JSON is byte-identical
     // to the pre-gate output (context-integrity-gates, Unit E).
     ...(r.embeddingAbi.length > 0
@@ -438,6 +443,17 @@ function jsonForIntegrity(r: IntegrityReport): Record<string, unknown> {
   };
 }
 
+/** The record-vs-data audit as one operator-facing value. */
+function describeEmbedderRecord(census: EmbedderRecordCensus): string {
+  if (census.verdict === "unrecorded") return `${census.verdict} (${census.reason})`;
+  const stored = census.storedDimensions.join(", ");
+  return (
+    `${census.outcome} (records ${census.recordedDimension}; ` +
+    `stored ${stored === "" ? "none" : stored}; ` +
+    `chunk_vec declares ${census.vecDeclaredWidth ?? "nothing"})`
+  );
+}
+
 /** The pending-vector census as one operator-facing value. */
 function describePendingVectors(census: PendingVectorCensus): string {
   if (census.verdict === "unrecorded") return `${census.verdict} (${census.reason})`;
@@ -465,6 +481,7 @@ function renderCheckHuman(r: IndexCheckReport): string {
   // Always emitted, on the same terms and for the same reason: a count
   // nobody could take is reported as unrecorded, never as zero.
   lines.push(`pending_vectors:       ${describePendingVectors(r.pendingVectors)}`);
+  lines.push(`embedder_record:       ${describeEmbedderRecord(r.embedderRecord)}`);
   for (const w of r.warnings) lines.push(`warning: ${w}`);
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
   if (r.recommendations.length > 0) {
