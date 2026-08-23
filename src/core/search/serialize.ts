@@ -5,7 +5,12 @@
  */
 
 import type { StampMismatch } from "../integrity/stamp.ts";
-import type { ChunkWindowCensus, IndexStatusSnapshot, SearchCard } from "./types.ts";
+import type {
+  ChunkWindowCensus,
+  IndexStatusSnapshot,
+  PendingVectorCensus,
+  SearchCard,
+} from "./types.ts";
 
 /**
  * Wire shape for a stamp comparison. `recorded` is what the index
@@ -41,6 +46,22 @@ export function serializeSearchCard(c: SearchCard): Record<string, unknown> {
     // was merged - the card carries the key only in that case.
     ...(c.duplicatePointers !== undefined ? { duplicate_pointers: c.duplicatePointers } : {}),
   };
+}
+
+/**
+ * Wire shape of the pending-vector census (nothing-writes-silently,
+ * unit A). Emitted in EVERY state, which is what separates it from the
+ * drift fields on the same report: those say nothing when there is
+ * nothing to say, while a census whose count could not be taken has
+ * something to say precisely then. The unrecorded arm carries no
+ * `pending` key at all, so a consumer cannot read a default zero out of
+ * a state that measured nothing.
+ */
+export function serializePendingVectorCensus(census: PendingVectorCensus): Record<string, unknown> {
+  if (census.verdict === "unrecorded") {
+    return { verdict: census.verdict, reason: census.reason };
+  }
+  return { verdict: census.verdict, pending: census.pending, chunks: census.chunks };
 }
 
 /**

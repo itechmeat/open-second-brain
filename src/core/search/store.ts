@@ -82,6 +82,8 @@ export {
   WRITER_LOCK_STALE_MS,
 } from "./store/writer-lock.ts";
 
+export { peekPendingVectorsSync } from "./store/counts.ts";
+
 export { normalizeAlias } from "./store/aliases.ts";
 
 export type { DocumentInput, DocumentSummary } from "./store/documents.ts";
@@ -90,7 +92,7 @@ export type { ChunkInput, ChunkRow, HydratedChunk } from "./store/chunks.ts";
 export type { KeywordHit } from "./store/keyword.ts";
 export type { DanglingLinkTarget, LinkInput, LinkResolutionCounts } from "./store/links.ts";
 export type { EmbeddingPrefixPair, ModelChangeOutcome, SemanticHit } from "./store/vectors.ts";
-export type { StoreCounts } from "./store/counts.ts";
+export type { PendingVectorTally, StoreCounts } from "./store/counts.ts";
 
 export interface StoreOpenOptions {
   /** "read" never locks; "write" acquires an exclusive proper-lockfile. */

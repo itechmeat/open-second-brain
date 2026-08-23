@@ -7,8 +7,9 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "../search-error.ts";
-import { countChunks } from "./chunks.ts";
+import { countChunks, countChunksWithoutEmbeddings } from "./chunks.ts";
 import { countDocuments } from "./documents.ts";
+import { peekReadonlyIndex, type IndexPeek } from "./state.ts";
 import { countEmbeddings, staleEmbeddings } from "./vectors.ts";
 import {
   charLengthOverTokenBudget,
@@ -36,6 +37,37 @@ export function counts(
     embeddings: countEmbeddings(db),
     staleEmbeddings: staleEmbeddings(db, configuredModel, configuredDimension),
   });
+}
+
+/** Chunks that carry no vector, against the chunks there are. */
+export interface PendingVectorTally {
+  /** Chunks with no row in `embeddings`. */
+  readonly pending: number;
+  /** Chunks in the index at all, so the pending count has a denominator. */
+  readonly chunks: number;
+}
+
+/** Both counts from one connection, so they describe one instant. */
+export function pendingVectorTally(db: Database): PendingVectorTally {
+  return Object.freeze({
+    pending: countChunksWithoutEmbeddings(db),
+    chunks: countChunks(db),
+  });
+}
+
+/**
+ * {@link pendingVectorTally} taken WITHOUT opening a `Store`, for
+ * `indexCheck` - which deliberately probes an in-memory database and
+ * never touches the real index, so anything it reports about stored
+ * state has to be read explicitly.
+ *
+ * The peek keeps its three outcomes rather than collapsing to a number:
+ * "no index here" and "an index that will not open" are not a pending
+ * count of zero, and zero is exactly what a caller would read as a
+ * fully-embedded vault.
+ */
+export function peekPendingVectorsSync(dbPath: string): IndexPeek<PendingVectorTally> {
+  return peekReadonlyIndex(dbPath, (_read, db) => pendingVectorTally(db));
 }
 
 /** Split of the chunk table by what the census can decide about it. */

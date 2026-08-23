@@ -404,6 +404,37 @@ export interface IndexStatusSnapshot {
   readonly warnings: ReadonlyArray<string>;
 }
 
+/**
+ * What `search check` could establish about chunks that carry no vector
+ * (nothing-writes-silently, unit A).
+ *
+ * Two states, and the second is the point. The recommendation this
+ * census feeds used to be derived from a proxy - a reachable provider
+ * plus a loaded extension - which has no term for whether any vector
+ * exists, so a fully embedded vault was told to compute its first ones.
+ * A measured count replaces the proxy, and a count that could not be
+ * taken is reported as UNRECORDED rather than as zero: an absent or
+ * unreadable index proves nothing about how many chunks are waiting,
+ * and zero is precisely the answer that reads as "nothing is waiting".
+ *
+ * Emitted in every state, unlike the drift fields beside it. A report
+ * about what could not be checked must not answer with silence.
+ */
+export type PendingVectorCensus =
+  | {
+      readonly verdict: "measured";
+      /** Chunks with no row in `embeddings`. */
+      readonly pending: number;
+      /** Chunks the index holds at all. */
+      readonly chunks: number;
+    }
+  | {
+      /** No count was taken; the index was absent or would not open. */
+      readonly verdict: "unrecorded";
+      /** Which of those it was, in the words the open used. */
+      readonly reason: string;
+    };
+
 export interface IndexCheckReport {
   readonly vaultReadable: boolean;
   readonly indexDirWritable: boolean;
@@ -436,6 +467,13 @@ export interface IndexCheckReport {
    * field was stamped, which is reported and never treated as wrong.
    */
   readonly embeddingAbi: ReadonlyArray<StampMismatch>;
+  /**
+   * Chunks awaiting a vector, measured rather than inferred - or the
+   * statement that no count could be taken. See
+   * {@link PendingVectorCensus}; it is the term the reindex
+   * recommendation below now gates on.
+   */
+  readonly pendingVectors: PendingVectorCensus;
   readonly warnings: ReadonlyArray<string>;
   readonly fatal: ReadonlyArray<string>;
   /**

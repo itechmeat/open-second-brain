@@ -224,6 +224,29 @@ export function findChunksWithoutEmbeddings(
   return rows.map((r) => ({ chunkId: r.id, content: r.content }));
 }
 
+/**
+ * How MANY chunks have no row in `embeddings`, without materialising a
+ * single one of their bodies.
+ *
+ * The same anti-join {@link findChunksWithoutEmbeddings} walks, as a
+ * `COUNT(*)`. The row-returning form is the indexer's work queue and
+ * loads every pending chunk's full `content` into JS memory to hand it
+ * to a provider; a diagnostic that only wants the number must not pay
+ * that, which is the whole reason this second query exists rather than
+ * a `.length` on the first.
+ */
+export function countChunksWithoutEmbeddings(db: Database): number {
+  return (
+    db
+      .query<{ n: number }, []>(
+        "SELECT COUNT(*) AS n FROM chunks c " +
+          "LEFT JOIN embeddings e ON e.chunk_id = c.id " +
+          "WHERE e.chunk_id IS NULL",
+      )
+      .get()?.n ?? 0
+  );
+}
+
 export function hydrateChunks(
   db: Database,
   chunkIds: ReadonlyArray<number>,

@@ -79,6 +79,7 @@ import {
   acquireWriterLock,
   EMBEDDING_ABI_FIX_COMMAND,
   formatEmbeddingAbiDrift,
+  peekPendingVectorsSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
   Store,
@@ -96,6 +97,7 @@ import type {
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
+  PendingVectorCensus,
   ResolvedSearchConfig,
 } from "./types.ts";
 
@@ -1561,6 +1563,12 @@ export async function indexCheck(
       : compareStamps(recordedAbi, runtimeEmbeddingAbi(config, vecVersion));
   if (embeddingAbi.length > 0) warnings.push(formatEmbeddingAbiDrift(embeddingAbi));
 
+  // The measured pending-vector count (nothing-writes-silently, unit A),
+  // read through the same explicit peek the ABI tokens use and for the
+  // same reason. Two `COUNT(*)`s on a read-only handle; the report is a
+  // diagnostic an operator ran, never the query path.
+  const pendingVectors = readPendingVectorCensus(config.dbPath);
+
   // §E.2 — Actionable hints derived from the check state.
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
@@ -1571,6 +1579,7 @@ export async function indexCheck(
     vecExtension,
     providerProbe,
     embeddingAbi,
+    pendingVectors,
   });
 
   return Object.freeze({
@@ -1579,6 +1588,7 @@ export async function indexCheck(
     sqliteOk,
     fts5Ok,
     embeddingAbi,
+    pendingVectors,
     vecExtension,
     embeddingKeyResolved,
     providerProbe,
@@ -1589,13 +1599,56 @@ export async function indexCheck(
   });
 }
 
+/**
+ * The pending-vector census for one index path, with the peek's three
+ * outcomes folded into the report's two. Both non-`read` outcomes are
+ * UNRECORDED - they differ in their reason, not in what they prove -
+ * and neither is a count of zero.
+ */
+function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
+  const peek = peekPendingVectorsSync(dbPath);
+  if (peek.kind === "read") {
+    return Object.freeze({
+      verdict: "measured" as const,
+      pending: peek.value.pending,
+      chunks: peek.value.chunks,
+    });
+  }
+  return Object.freeze({
+    verdict: "unrecorded" as const,
+    reason:
+      peek.kind === "absent"
+        ? `no search index at ${dbPath}`
+        : `${dbPath} did not open: ${peek.detail}`,
+  });
+}
+
 interface BuildRecommendationsInput {
   readonly config: ResolvedSearchConfig;
   readonly embeddingKeyResolved: boolean;
   readonly vecExtension: "loaded" | "unavailable" | "not-attempted";
   readonly providerProbe: ProviderProbeState;
   readonly embeddingAbi: ReadonlyArray<StampMismatch>;
+  readonly pendingVectors: PendingVectorCensus;
 }
+
+/**
+ * The first-vectors recipe, unchanged from the release that wrote it -
+ * what changed is WHEN it fires. It is now reached only by an index
+ * that holds chunks and no vectors for them, which is the state the
+ * sentence has always described.
+ */
+const FIRST_VECTORS_RECOMMENDATION =
+  "Run `o2b search reindex --embeddings` to compute the first vectors, then optionally " +
+  "`o2b search reindex --cron-template` for periodic refresh.";
+
+/**
+ * The verb that prices a partial backfill. Named here rather than
+ * priced here: `planVectorBackfill`'s dry run already counts the tokens
+ * and applies the model's rate, and a second estimator on this surface
+ * could quote a different number for the same work.
+ */
+const VECTOR_BACKFILL_COMMAND = "o2b search vector-backfill";
 
 function buildRecommendations(input: BuildRecommendationsInput): string[] {
   const recs: string[] = [];
@@ -1631,16 +1684,36 @@ function buildRecommendations(input: BuildRecommendationsInput): string[] {
     }
   }
 
-  // "Everything wired, no embeddings yet" → suggest the first
-  // reindex plus the optional cron template. The probe reports
-  // `reachable` only after both key and vec are present, so it is the
-  // tightest proxy for "ready to compute but never did" - and a probe
-  // that was skipped or timed out proves no such thing, which is why the
-  // comparison is against that one state rather than "not a failure".
+  // Everything wired: what to do next is decided by the MEASURED
+  // pending-vector count (nothing-writes-silently, unit A).
+  //
+  // The gate on a reachable provider and a loaded extension is the same
+  // one this branch has always carried - a probe that was skipped or
+  // timed out proves nothing, and advising a command that cannot
+  // succeed is worse than saying nothing. What it no longer does is
+  // stand IN for the count: those two facts say the machine is ready to
+  // embed, never that anything is waiting to be embedded, and a fully
+  // embedded vault was told to compute its first vectors for as long as
+  // they were the whole test. A vault with every chunk vectorised now
+  // gets no recommendation at all.
   if (input.providerProbe === PROVIDER_PROBE.reachable && input.vecExtension === "loaded") {
-    recs.push(
-      "Run `o2b search reindex --embeddings` to compute the first vectors, then optionally `o2b search reindex --cron-template` for periodic refresh.",
-    );
+    const census = input.pendingVectors;
+    if (census.verdict === "unrecorded") {
+      recs.push(
+        `The pending-vector count is unrecorded, not zero (${census.reason}). ` +
+          FIRST_VECTORS_RECOMMENDATION,
+      );
+    } else if (census.pending === census.chunks) {
+      // Every chunk there is - including none at all, on an index that
+      // holds no chunks yet - is waiting for its first vector.
+      recs.push(FIRST_VECTORS_RECOMMENDATION);
+    } else if (census.pending > 0) {
+      recs.push(
+        `${census.pending} of ${census.chunks} indexed chunk(s) have no vector. ` +
+          `Run \`${VECTOR_BACKFILL_COMMAND}\` to see what embedding them would cost - it is a ` +
+          `dry run unless \`--apply\` is passed - and \`${VECTOR_BACKFILL_COMMAND} --apply\` to compute them.`,
+      );
+    }
   }
 
   return recs;

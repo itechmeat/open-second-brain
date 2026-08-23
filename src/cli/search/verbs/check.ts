@@ -75,8 +75,16 @@ import {
 } from "../../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { formatStampMismatch } from "../../../core/integrity/stamp.ts";
-import { indexCheck, serializeStampMismatches } from "../../../core/search/index.ts";
-import type { IndexCheckReport, ResolvedSearchConfig } from "../../../core/search/index.ts";
+import {
+  indexCheck,
+  serializePendingVectorCensus,
+  serializeStampMismatches,
+} from "../../../core/search/index.ts";
+import type {
+  IndexCheckReport,
+  PendingVectorCensus,
+  ResolvedSearchConfig,
+} from "../../../core/search/index.ts";
 import { PROVIDER_PROBE } from "../../../core/search/provider-probe.ts";
 import { acquireWriterLock } from "../../../core/search/store.ts";
 import { runIntegrityCheck } from "../../../core/search/store/lifecycle.ts";
@@ -390,6 +398,11 @@ function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
     // the failure mode worth having.
     provider_probe: r.providerProbe,
     provider_reason: r.providerReason,
+    // Emitted in every state, unlike the drift block below: an index
+    // whose pending-vector count could not be taken is the one state
+    // this key exists to report, and an absent key would be read as a
+    // count of zero (nothing-writes-silently, unit A).
+    pending_vectors: serializePendingVectorCensus(r.pendingVectors),
     // Emitted only on drift, so a matching store's JSON is byte-identical
     // to the pre-gate output (context-integrity-gates, Unit E).
     ...(r.embeddingAbi.length > 0
@@ -425,6 +438,12 @@ function jsonForIntegrity(r: IntegrityReport): Record<string, unknown> {
   };
 }
 
+/** The pending-vector census as one operator-facing value. */
+function describePendingVectors(census: PendingVectorCensus): string {
+  if (census.verdict === "unrecorded") return `${census.verdict} (${census.reason})`;
+  return `${census.pending} of ${census.chunks} chunk(s) have no vector`;
+}
+
 function renderCheckHuman(r: IndexCheckReport): string {
   const lines: string[] = [];
   lines.push(`vault_readable:        ${ok(r.vaultReadable)}`);
@@ -443,6 +462,9 @@ function renderCheckHuman(r: IndexCheckReport): string {
   // about what could not be checked must not say.
   lines.push(`provider_probe:        ${r.providerProbe}`);
   if (r.providerReason) lines.push(`provider_reason:       ${r.providerReason}`);
+  // Always emitted, on the same terms and for the same reason: a count
+  // nobody could take is reported as unrecorded, never as zero.
+  lines.push(`pending_vectors:       ${describePendingVectors(r.pendingVectors)}`);
   for (const w of r.warnings) lines.push(`warning: ${w}`);
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
   if (r.recommendations.length > 0) {

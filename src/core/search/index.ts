@@ -51,6 +51,7 @@ export type {
   IndexCheckReport,
   IndexStats,
   IndexStatusSnapshot,
+  PendingVectorCensus,
   ResolvedEmbeddingConfig,
   ResolvedRecallConfig,
   ResolvedRerankConfig,
@@ -86,6 +87,7 @@ export { evaluateSurfacingGate, type SurfacingGateDecision } from "./surfacing-g
 export { buildEvidencePack, serializeEvidencePack } from "./evidence-pack.ts";
 export {
   serializeChunkWindowCensus,
+  serializePendingVectorCensus,
   serializeSearchCard,
   serializeIndexStatus,
   serializeStampMismatches,
