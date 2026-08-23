@@ -15,6 +15,9 @@ import {
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
+import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -423,6 +426,41 @@ describe("tool calls", () => {
     expect(s.brain.counts.preferences).toBe(0);
     expect(s.brain.last_dream_at).toBeNull();
     expect(s.brain.sanity.signals_awaiting_dream).toBe(0);
+    // Brain absent -> the same honest never_dreamed/zero shape as an
+    // empty-but-present Brain, not an error (nothing-writes-silently, D).
+    expect(s.brain.maintenance_debt).toEqual({
+      status: "never_dreamed",
+      log_events_since_dream: 0,
+    });
+  });
+
+  test("second_brain_status `brain.maintenance_debt` derives from the log shards", async () => {
+    const vault = join(tmp, "vault");
+    mkdirSync(vault);
+    const config = join(tmp, "config.yaml");
+    writeFileSync(config, `vault_path: ${vault}\n`);
+    bootstrapBrain(vault, { configPath: config });
+    appendLogEvent(vault, {
+      timestamp: "2026-05-10T09:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+    appendLogEvent(vault, {
+      timestamp: "2026-05-11T09:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+
+    const server = new MCPServer({ vault, configPath: config });
+    await initialize(server);
+    const r = (await callTool(server, "second_brain_status"))! as any;
+    const s = r.result.structuredContent;
+    expect(s.brain.maintenance_debt).toEqual({
+      status: "never_dreamed",
+      log_events_since_dream: 2,
+    });
   });
 
   test("second_brain_status includes a `vault` block (v0.10.9)", async () => {

@@ -22,6 +22,8 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
 import { regenerateActive } from "../../src/core/brain/active.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 
 let tmp: string;
 let vault: string;
@@ -380,6 +382,46 @@ describe("MCP resources — read osb://status", () => {
     expect(text).toContain("preferences: 1");
     expect(text).toContain("confirmed: 1");
     expect(text).toContain("## Activity");
+  });
+
+  test("reports never_dreamed maintenance debt when no dream has run", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-05-10T09:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+
+    const server = makeServer();
+    await initialize(server);
+    const r = await read(server, "osb://status");
+    const text = r.result.contents[0].text as string;
+    expect(text).toContain("## Maintenance debt");
+    expect(text).toContain("never dreamed");
+    expect(text).toContain("1 log event");
+  });
+
+  test("reports the counted debt since the last dream", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-05-10T09:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "tester",
+      body: {},
+    });
+    appendLogEvent(vault, {
+      timestamp: "2026-05-11T09:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+
+    const server = makeServer();
+    await initialize(server);
+    const r = await read(server, "osb://status");
+    const text = r.result.contents[0].text as string;
+    expect(text).toContain("## Maintenance debt");
+    expect(text).toContain("1 log event");
+    expect(text).not.toContain("never dreamed");
   });
 });
 

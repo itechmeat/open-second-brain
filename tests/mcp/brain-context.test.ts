@@ -21,6 +21,8 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainActivePath } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { appendLogEvent } from "../../src/core/brain/log.ts";
+import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 
 let tmp: string;
 let vault: string;
@@ -193,5 +195,68 @@ describe("brain_context tool — Brain present", () => {
     const second = await callContext(server);
     expect(second["content"]).toBe(first["content"]);
     expect(second["generated_at"]).toBe(first["generated_at"]);
+  });
+});
+
+/**
+ * `maintenance_overdue` (nothing-writes-silently, Unit D / t_6285e06f):
+ * a cheap proxy bounded to the single newest `Brain/log/` day, never a
+ * full history scan, since `brain_context` is always-loaded.
+ */
+describe("brain_context tool — maintenance_overdue (bounded, newest shard only)", () => {
+  beforeEach(() => {
+    bootstrapBrain(vault, { configPath });
+  });
+
+  test("no log history yet -> null (nothing to be overdue about)", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callContext(server);
+    expect(out["maintenance_overdue"]).toBeNull();
+  });
+
+  test("newest day holds events but no dream -> true", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-06-01T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callContext(server);
+    expect(out["maintenance_overdue"]).toBe(true);
+  });
+
+  test("newest day holds a dream event -> false", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-06-01T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "tester",
+      body: {},
+    });
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callContext(server);
+    expect(out["maintenance_overdue"]).toBe(false);
+  });
+
+  test("an older day's dream does not clear a newer day with no dream (bounded to newest only)", async () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-06-01T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "tester",
+      body: {},
+    });
+    appendLogEvent(vault, {
+      timestamp: "2026-06-02T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.note,
+      agent: "tester",
+      body: { text: "note" },
+    });
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callContext(server);
+    expect(out["maintenance_overdue"]).toBe(true);
   });
 });

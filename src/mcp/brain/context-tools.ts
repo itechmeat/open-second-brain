@@ -23,6 +23,7 @@ import {
   type RegenerateActiveResult,
 } from "../../core/brain/active.ts";
 import { resolveOwnerScopeDelivery } from "../../core/brain/preferences-collect.ts";
+import { computeMaintenanceOverdueFlag } from "../../core/brain/status.ts";
 import { parseFrontmatter } from "../../core/vault.ts";
 import { readVaultInstructionFile } from "../../core/brain/vault-instruction-file.ts";
 import { normalizeAgentArgument } from "../../core/agent-identity.ts";
@@ -323,6 +324,11 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
   const dirs = brainDirs(ctx.vault);
   const activePath = brainActivePath(ctx.vault);
   const pinned = readPinnedContext(ctx.vault);
+  // Bounded to the single newest `Brain/log/` day - see
+  // `computeMaintenanceOverdueFlag`'s docblock for the cost bound. This
+  // is the always-loaded path, so the full `maintenance_debt` derivation
+  // on `computeBrainStatus` never runs here.
+  const maintenanceOverdue = computeMaintenanceOverdueFlag(ctx.vault);
 
   // The operator's standing rules, resolved before anything else this
   // surface assembles - INCLUDING the no-Brain return below. `brain_context`
@@ -347,6 +353,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
       counts: EMPTY_CONTEXT_COUNTS,
       generated_at: null,
       pinned: serializePinnedContext(ctx, pinned),
+      maintenance_overdue: maintenanceOverdue,
       ...standingRulesField(ctx, standing),
     };
   }
@@ -435,6 +442,7 @@ async function toolBrainContext(ctx: ServerContext): Promise<Record<string, unkn
     counts,
     generated_at: generatedAt,
     pinned: serializePinnedContext(ctx, pinned),
+    maintenance_overdue: maintenanceOverdue,
     ...(error ? { error } : {}),
     ...standingRulesField(ctx, standing),
     ...(vaultInstruction
@@ -534,7 +542,16 @@ const PINNED_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> 
 
 const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
   type: "object",
-  required: ["vault_path", "present", "active_path", "content", "counts", "generated_at", "pinned"],
+  required: [
+    "vault_path",
+    "present",
+    "active_path",
+    "content",
+    "counts",
+    "generated_at",
+    "pinned",
+    "maintenance_overdue",
+  ],
   properties: {
     vault_path: VAULT_PATH_OUTPUT_SCHEMA,
     present: { type: "boolean" },
@@ -553,6 +570,14 @@ const BRAIN_CONTEXT_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> =
     },
     generated_at: {},
     pinned: PINNED_CONTEXT_OUTPUT_SCHEMA,
+    // `boolean | null` (empty schema, matching `generated_at` above): a
+    // cheap, bounded proxy over the single newest `Brain/log/` day only -
+    // `null` when there is no log history yet or the newest day could
+    // not be read. See `computeMaintenanceOverdueFlag`'s docblock
+    // (`src/core/brain/status.ts`) for exactly what it measures and its
+    // cost bound; it is NOT the precise `maintenance_debt` figure that
+    // `second_brain_status` / `osb://status` report.
+    maintenance_overdue: {},
     // Declared but deliberately NOT required: a vault whose operator has
     // written no standing rules omits the key entirely, exactly as the
     // vault-instruction field does, so hosts that strip unknown fields

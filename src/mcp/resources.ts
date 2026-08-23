@@ -65,7 +65,11 @@ import { regenerateLessons } from "../core/brain/lessons.ts";
 import { buildBacklinkIndex } from "../core/brain/backlinks.ts";
 import type { BacklinkRef } from "../core/brain/backlinks.ts";
 import { renderDigest } from "../core/brain/digest.ts";
-import { computeBrainStatus, type BrainStatusSnapshot } from "../core/brain/status.ts";
+import {
+  computeBrainStatus,
+  MAINTENANCE_DEBT_STATUS,
+  type BrainStatusSnapshot,
+} from "../core/brain/status.ts";
 import {
   brainActivePath,
   brainLessonsPath,
@@ -583,6 +587,16 @@ function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   lines.push("");
   lines.push(`- last dream: ${s.last_dream_at ?? "_(never)_"}`);
   lines.push(`- last apply-evidence: ${s.last_apply_evidence_at ?? "_(never)_"}`);
+  lines.push("");
+  lines.push("## Maintenance debt");
+  lines.push("");
+  const debtCount = s.maintenance_debt.log_events_since_dream;
+  const debtNoun = debtCount === 1 ? "log event" : "log events";
+  if (s.maintenance_debt.status === MAINTENANCE_DEBT_STATUS.neverDreamed) {
+    lines.push(`- never dreamed — ${debtCount} ${debtNoun} recorded since inception`);
+  } else {
+    lines.push(`- ${debtCount} ${debtNoun} since the last dream`);
+  }
   lines.push("");
   if (s.sanity.signals_awaiting_dream > 0) {
     lines.push("## Sanity");
