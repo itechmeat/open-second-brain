@@ -105,6 +105,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   secretCustody: "secret_custody",
   ingestContentManifest: "ingest_content_manifest",
   ingestCheckpoints: "ingest_checkpoints",
+  sessionImportCheckpoints: "session_import_checkpoints",
   sessionImportLedger: "session_import_ledger",
   installManifest: "install_manifest",
   protectManifest: "protect_manifest",
@@ -255,6 +256,7 @@ const WRITER_LOCK_SUFFIX = ".lock";
 const SECRETS_DIR = "secrets";
 const INGEST_MANIFEST_FILE = "ingest-manifest.json";
 const INGEST_CHECKPOINT_DIR = "ingest-checkpoints";
+const SESSION_CHECKPOINT_DIR = "session-import-checkpoints";
 const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
@@ -417,7 +419,25 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     reason:
       "One resume point per ingest plan, so an interrupted batch continues rather than restarts. " +
       "`OSB_INGEST_NO_CHECKPOINT` suppresses writing them; it does not move them.",
-    sources: ["src/core/brain/ingest/checkpoint.ts"],
+    sources: ["src/core/brain/ingest/checkpoint.ts", "src/core/brain/checkpoint-store.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.sessionImportCheckpoints,
+    label: "session import checkpoints",
+    tier: STATE_TIER.derived,
+    derive: derivedStore(SESSION_CHECKPOINT_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "One resume point per scoped session import, keyed on the transcript's identity and the " +
+      "turn boundary a run reached, so an interrupted import continues instead of re-reading and " +
+      "re-hashing every turn it already finished. Separate from the ingest checkpoints beside it " +
+      "because the key is a turn count in one file, not a set of completed paths in a plan. " +
+      "Deleting it costs re-work on the next interrupted run, never correctness: the dedup index " +
+      "still suppresses the repeated writes. `OSB_INGEST_NO_CHECKPOINT` suppresses writing them; " +
+      "it does not move them.",
+    sources: ["src/core/brain/sessions/checkpoint.ts", "src/core/brain/checkpoint-store.ts"],
   },
   {
     id: STATE_SURFACE_ID.sessionImportLedger,

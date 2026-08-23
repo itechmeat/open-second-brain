@@ -597,14 +597,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "clears the git ingest `state.json` on a rescan that found no head, so the next " +
       "run starts as an initial walk rather than inheriting a stale marker.",
   },
-  "src/core/brain/ingest/checkpoint.ts": {
+  "src/core/brain/checkpoint-store.ts": {
     categories: [C.retentionDelete],
     calls: ["rmSync"],
     reason:
-      "clears one ingest plan's checkpoint behind `assertVaultIdentityForWrite`, reporting false " +
-      "rather than throwing when there was nothing to clear. Absence is the terminal state for a " +
-      "resume point: a plan with no checkpoint starts from the beginning, which is the same thing " +
-      "a checkpoint rewritten to empty would have to mean.",
+      "clears one checkpoint - an ingest plan's or a session import's - behind " +
+      "`assertVaultIdentityForWrite`, reporting false rather than throwing when there was nothing " +
+      "to clear. Absence is the terminal state for a resume point: a lane with no checkpoint " +
+      "starts from the beginning, which is the same thing a checkpoint rewritten to empty would " +
+      "have to mean.",
   },
   "src/core/brain/ingest/sources-registry.ts": {
     categories: [C.retentionDelete],

@@ -486,6 +486,8 @@ function emitImportReport(
         filtered_turns: f.filtered_turns,
         recall_turns_imported: f.recall_turns_imported,
         recall_summary_nodes: f.recall_summary_nodes,
+        turns_resumed: f.turns_resumed,
+        resume_discarded: f.resume_discarded,
         census: serializeImportCensus(f.census),
         errors: f.errors,
       })),
@@ -509,6 +511,15 @@ function emitImportReport(
     ok(`  signals_deduped: ${f.signals_deduped}`);
     ok(`  tool_replays: ${f.tool_replays}`);
     ok(`  filtered_turns: ${f.filtered_turns}`);
+    // Printed only when a checkpoint actually changed what the run did, so a
+    // first import's output is unchanged.
+    if (f.turns_resumed > 0) ok(`  turns_resumed: ${f.turns_resumed}`);
+    if (f.resume_discarded !== null) {
+      info(
+        `  resume checkpoint discarded (${f.resume_discarded}): the session log is not the one ` +
+          "the boundary was taken against, so the file was re-imported from the start.",
+      );
+    }
     emitCensus(f.census);
     if (opts.recall) {
       ok(`  recall_turns_imported: ${f.recall_turns_imported}`);

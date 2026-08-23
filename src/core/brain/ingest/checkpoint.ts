@@ -19,31 +19,41 @@
  * read inert - the deterministic-test escape hatch mirroring upstream graphify's
  * `GRAPHIFY_NO_INCREMENTAL_CACHE`.
  *
+ * The mechanism below the record - the id validation, the location, the
+ * schema-version refusal, the lock / identity / atomic write - lives in
+ * {@link ../checkpoint-store.ts}, shared with the session-import lane. What
+ * stays here is this lane's record: a plan id, a source dir, and a set of
+ * completed paths that no-ops when the SET is unchanged.
+ *
  * Language-agnostic: keys are canonical vault-relative paths and content hashes;
  * no natural-language content is inspected.
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
-import { acquireLockSyncWithRetry } from "../sync-lockfile.ts";
+import {
+  checkpointFilePath,
+  checkpointingEnabled,
+  NO_CHECKPOINT_ENV,
+  readCheckpointObject,
+  removeCheckpointFile,
+  withCheckpointLock,
+  writeCheckpointObject,
+} from "../checkpoint-store.ts";
 import { isoSecond } from "../time.ts";
-import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
 const SCHEMA_VERSION = 1 as const;
 
-/** Vault-relative directory holding OSB machine artifacts (not curated memory). */
-const MACHINE_ARTIFACT_DIR = ".open-second-brain";
-
 /** Subdirectory holding one JSON checkpoint per batch plan. */
 const CHECKPOINT_DIR = "ingest-checkpoints";
 
-/** Env var that, when truthy, disables checkpoint reads and writes. */
-export const NO_CHECKPOINT_ENV = "OSB_INGEST_NO_CHECKPOINT";
+/** How a refusal names this lane's id and its file. */
+const ID_LABEL = "plan";
+const FILE_LABEL = "ingest checkpoint";
+
+export { checkpointingEnabled, NO_CHECKPOINT_ENV };
 
 /** The persisted per-plan checkpoint. */
 export interface IngestCheckpoint {
@@ -55,18 +65,6 @@ export interface IngestCheckpoint {
   /** Canonical vault-relative paths completed so far, sorted. */
   readonly completed: readonly string[];
   readonly updated_at: string;
-}
-
-/**
- * Whether checkpointing is active. Off only when {@link NO_CHECKPOINT_ENV} holds
- * a truthy value; the empty string, `0`, and `false` are all treated as unset so
- * an accidentally-exported empty var does not silently disable resumability.
- */
-export function checkpointingEnabled(): boolean {
-  const raw = process.env[NO_CHECKPOINT_ENV];
-  if (raw === undefined) return true;
-  const v = raw.trim().toLowerCase();
-  return v === "" || v === "0" || v === "false";
 }
 
 /**
@@ -87,16 +85,9 @@ export function computePlanId(sourceDir: string, discoveredPaths: readonly strin
   return hash.digest("hex").slice(0, 16);
 }
 
-function assertPlanId(planId: string): void {
-  if (!/^[0-9a-f]{6,64}$/.test(planId)) {
-    throw new Error(`invalid plan id (expected lowercase hex): ${JSON.stringify(planId)}`);
-  }
-}
-
 /** Absolute path of one plan's checkpoint file. */
 export function checkpointPath(vault: string, planId: string): string {
-  assertPlanId(planId);
-  return join(vault, MACHINE_ARTIFACT_DIR, CHECKPOINT_DIR, `${planId}.json`);
+  return checkpointFilePath(vault, CHECKPOINT_DIR, ID_LABEL, planId);
 }
 
 function serialize(cp: IngestCheckpoint): string {
@@ -123,22 +114,8 @@ function serialize(cp: IngestCheckpoint): string {
 export function readCheckpoint(vault: string, planId: string): IngestCheckpoint | null {
   if (!checkpointingEnabled()) return null;
   const path = checkpointPath(vault, planId);
-  if (!existsSync(path)) return null;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(readFileSync(path, "utf8"));
-  } catch (e) {
-    throw new Error(`ingest checkpoint is corrupted JSON: ${path}`, { cause: e });
-  }
-  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`ingest checkpoint is not an object: ${path}`);
-  }
-  const obj = parsed as Record<string, unknown>;
-  if (obj["schema_version"] !== SCHEMA_VERSION) {
-    throw new Error(
-      `ingest checkpoint schema_version ${String(obj["schema_version"])} not supported (expected ${SCHEMA_VERSION}): ${path}`,
-    );
-  }
+  const obj = readCheckpointObject(path, FILE_LABEL, SCHEMA_VERSION);
+  if (obj === null) return null;
   const rawCompleted = obj["completed"];
   const completed = Array.isArray(rawCompleted)
     ? rawCompleted
@@ -182,11 +159,8 @@ export function recordCompleted(
   now: Date,
 ): boolean {
   if (!checkpointingEnabled()) return false;
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
   const path = checkpointPath(vault, planId);
-  const handle = acquireLockSyncWithRetry(path);
-  try {
+  return withCheckpointLock(path, () => {
     const prev = readCheckpoint(vault, planId);
     const merged = new Set<string>(prev?.completed ?? []);
     for (const p of paths) merged.add(canonicalNotePath(p));
@@ -199,11 +173,8 @@ export function recordCompleted(
       completed,
       updated_at: isoSecond(now),
     };
-    atomicWriteFileSync(path, serialize(next));
-    return true;
-  } finally {
-    handle.release();
-  }
+    return writeCheckpointObject(vault, path, serialize(next));
+  });
 }
 
 /**
@@ -212,10 +183,5 @@ export function recordCompleted(
  * existed.
  */
 export function clearCheckpoint(vault: string, planId: string): boolean {
-  // Vault-identity write guard (context-integrity-gates, Unit J).
-  assertVaultIdentityForWrite(vault);
-  const path = checkpointPath(vault, planId);
-  if (!existsSync(path)) return false;
-  rmSync(path);
-  return true;
+  return removeCheckpointFile(vault, checkpointPath(vault, planId));
 }

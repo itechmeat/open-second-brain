@@ -189,17 +189,19 @@ describe("every module that takes a lock is under a scanned root", () => {
   /**
    * Declared lock sites, each with the vault-relative root
    * {@link lockScanRoots} reaches it through. Verified against the path
-   * builders: every entry resolves under `Brain/` except the two ingest
-   * artefacts, which live in the derived-store directory.
+   * builders: every entry resolves under `Brain/` except the three that
+   * live in the derived-store directory - the shared checkpoint substrate
+   * (both the ingest and the session-import lanes lock through it), the
+   * ingest content manifest, and the session import ledger.
    */
   const DECLARED: ReadonlyMap<string, string> = new Map([
     ["core/brain/architect/generate.ts", "Brain"],
+    ["core/brain/checkpoint-store.ts", ".open-second-brain"],
     ["core/brain/continuity/store.ts", "Brain"],
     ["core/brain/diagnostics.ts", "Brain"],
     ["core/brain/git/store.ts", "Brain"],
     ["core/brain/health/remediation.ts", "Brain"],
     ["core/brain/idempotency-ledger.ts", "Brain"],
-    ["core/brain/ingest/checkpoint.ts", ".open-second-brain"],
     ["core/brain/ingest/content-manifest.ts", ".open-second-brain"],
     ["core/brain/lineage/ledger.ts", "Brain"],
     ["core/brain/preference-txn.ts", "Brain"],

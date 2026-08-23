@@ -51,6 +51,7 @@ import {
   captureWatermarkPath,
 } from "../../../src/core/brain/paths.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
+import { sessionCheckpointPath } from "../../../src/core/brain/sessions/checkpoint.ts";
 import { manifestPath as ingestManifestPath } from "../../../src/core/brain/ingest/content-manifest.ts";
 import { sessionLedgerPath } from "../../../src/core/brain/sessions/discover.ts";
 import { secretsDir } from "../../../src/core/brain/secrets/store.ts";
@@ -232,6 +233,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["secret_custody", (v) => secretsDir(v)],
     ["ingest_content_manifest", (v) => ingestManifestPath(v)],
     ["ingest_checkpoints", (v) => dirname(checkpointPath(v, "0f1e2d3c"))],
+    ["session_import_checkpoints", (v) => dirname(sessionCheckpointPath(v, "0f1e2d3c"))],
     ["session_import_ledger", (v) => sessionLedgerPath(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],

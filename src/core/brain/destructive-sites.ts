@@ -218,13 +218,13 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "clears one aspect's exact-state file. Absence IS the cleared state, so the " +
         "removal is the state transition rather than a loss of one.",
     },
-    "src/core/brain/ingest/checkpoint.ts": {
+    "src/core/brain/checkpoint-store.ts": {
       calls: ["rmSync"],
       recovery: UNARCHIVED_BRAIN,
       reason:
-        "clears one ingest plan's checkpoint once the plan reached its terminal state. " +
-        "The checkpoint exists to let an interrupted plan resume; after the plan is " +
-        "done there is nothing it could resume into.",
+        "clears one checkpoint - an ingest plan's or a session import's - once that run " +
+        "reached its terminal state. A checkpoint exists to let an interrupted run resume; " +
+        "after the run is done there is nothing it could resume into.",
     },
     "src/core/brain/skill-accept-journal.ts": {
       calls: ["rmSync"],

@@ -24,11 +24,22 @@
  * `importSession` run by reading the inbox and processed dirs. A
  * second run on the same file finds every hash already present.
  *
- * Census (nothing-writes-silently, Unit F). After the run, the dedup
- * hashes of the signals it claims to have written are read back from
- * disk, and the result carries `claimed / found / missing` with the
- * missing hashes NAMED. See {@link ../import-census.ts} for what the
- * census does and does not cover.
+ * Resume (nothing-writes-silently, Unit F). Dedup alone is
+ * re-do-and-discard: it makes a second run harmless, not cheap, so an
+ * interrupted 50k-turn import re-read and re-hashed every turn to
+ * conclude it had nothing to write. An applied run now records the turn
+ * boundary it has reached into {@link ./checkpoint.ts} - the sessions
+ * lane's extension of the ingest checkpoint substrate, not a second one
+ * of its own - and the next run over the same file with the same filters
+ * skips straight past those turns. What that saves is the extraction
+ * work: the marker scan, the dedup hashing, the fact pass and the writes.
+ * The lines themselves are still read, because a JSONL transcript has no
+ * index to seek into.
+ *
+ * Census (same unit). After the run, the dedup hashes of the signals it
+ * claims to have written are read back from disk, and the result carries
+ * `claimed / found / missing` with the missing hashes NAMED. See
+ * {@link ../import-census.ts} for what the census does and does not cover.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -36,6 +47,7 @@ import { basename, resolve } from "node:path";
 
 import { delegatedAgentName } from "../../agent-identity.ts";
 import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
+import { checkpointingEnabled } from "../checkpoint-store.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
 import { censusSessionSignals, type ImportCensus } from "../import-census.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
@@ -44,6 +56,15 @@ import { writeSignal } from "../signal.ts";
 import { importSessionRecall } from "../session-recall.ts";
 import { isoDate, isoSecond } from "../time.ts";
 import { BRAIN_SIGNAL_SOURCE_TYPE } from "../types.ts";
+import {
+  clearSessionCheckpoint,
+  computeSessionHeadHash,
+  computeSessionImportId,
+  recordSessionProgress,
+  resolveSessionResume,
+  SESSION_CHECKPOINT_TURN_INTERVAL,
+  type SessionResumeDiscard,
+} from "./checkpoint.ts";
 import { readFirstLine } from "./read-lines.ts";
 import { detectAdapter, getAdapter } from "./registry.ts";
 import { sessionFilesUnder } from "./session-files.ts";
@@ -198,6 +219,19 @@ export interface ImportSessionResult {
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
   /**
+   * Turns a checkpoint from an earlier, interrupted run let this one skip.
+   * Always 0 on a first run, a dry run, and a run with checkpointing opted
+   * out. `turns_scanned` still counts every turn the adapter yielded, so the
+   * pair says how much of the file was re-read and how little was re-worked.
+   */
+  readonly turns_resumed: number;
+  /**
+   * Why a checkpoint that existed was NOT resumed from, or `null` when none
+   * was refused. A boundary silently ignored is a full re-import nobody was
+   * told about, which is the class of quiet this unit removes.
+   */
+  readonly resume_discarded: SessionResumeDiscard | null;
+  /**
    * Read-back census of the signals this run claims to have written:
    * `attempted / found / missing`, with the missing dedup hashes named. A
    * dry run claims nothing and censuses zero.
@@ -233,13 +267,20 @@ export function sessionRefIdentity(absPath: string, recallSessionId?: string): s
  *
  * Autodetect needs exactly one line, and `readFirstLine` stops at the first
  * newline: the file used to be read whole here and then read a second time by
- * `adapter.iterate`. An explicit `--format` reads nothing at all.
+ * `adapter.iterate`. An explicit `--format` reads nothing at all - hence the
+ * lazy `readHead`, shared with the resume checkpoint's file-identity probe so
+ * the head line is read at most once per import and not at all when neither
+ * caller needs it.
  */
-async function chooseAdapter(path: string, format?: SessionAdapterId): Promise<SessionAdapter> {
+async function chooseAdapter(
+  path: string,
+  readHead: () => Promise<string>,
+  format?: SessionAdapterId,
+): Promise<SessionAdapter> {
   if (format !== undefined) {
     return getAdapter(format);
   }
-  const first = await readFirstLine(path);
+  const first = await readHead();
   const a = detectAdapter(first);
   if (!a) {
     throw new SessionImportError(
@@ -258,7 +299,9 @@ export async function importSession(
   if (!existsSync(path)) {
     throw new SessionImportError("IO", `session file does not exist: ${path}`);
   }
-  const adapter = await chooseAdapter(path, opts.format);
+  let headLine: string | null = null;
+  const readHead = async (): Promise<string> => (headLine ??= await readFirstLine(path));
+  const adapter = await chooseAdapter(path, readHead, opts.format);
   // Reuse the caller-supplied index when present (directory walk lifts
   // the build out of the per-file loop). Otherwise build our own.
   const dedup = opts.dedupIndex ?? buildDedupIndex(vault);
@@ -409,13 +452,64 @@ export async function importSession(
       facts_deduped: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
+      turns_resumed: 0,
+      resume_discarded: null,
       census: censusSessionSignals(vault, []),
       errors: Object.freeze([]),
     });
   if (boundaryDecision === "ignore") return emptyResult();
 
+  // Resume (Unit F). Only an APPLIED capture run checkpoints: a dry run
+  // writes nothing to resume, and a stateless/ignored file is scanned
+  // read-only. The id folds the import's filters in, so a differently
+  // filtered run never inherits this one's boundary.
+  const checkpointActive = opts.dryRun !== true && mayWrite && checkpointingEnabled();
+  const importId = computeSessionImportId(absPath, opts);
+  let resumeFrom = 0;
+  let resumeDiscarded: SessionResumeDiscard | null = null;
+  let turnsResumed = 0;
+  let fileIdentity = { headHash: "", bytes: 0 };
+  if (checkpointActive) {
+    fileIdentity = {
+      headHash: computeSessionHeadHash(await readHead()),
+      bytes: statSync(absPath).size,
+    };
+    const decision = resolveSessionResume(vault, importId, fileIdentity);
+    resumeFrom = decision.turns;
+    resumeDiscarded = decision.discarded;
+  }
+
   for await (const turn of adapter.iterate(path)) {
     turnsScanned++;
+    // Past the boundary an earlier run recorded: the extraction, the
+    // hashing and the writes for these turns already happened. The lines
+    // are still read because a JSONL transcript cannot be seeked into.
+    if (turnsScanned <= resumeFrom) {
+      turnsResumed++;
+      continue;
+    }
+    // Everything before THIS turn is done, so the boundary is recorded
+    // here rather than at the foot of the loop - the body has several
+    // early `continue`s, and a turn skipped by a filter needs no re-work
+    // either.
+    const completedTurns = turnsScanned - 1;
+    if (
+      checkpointActive &&
+      completedTurns > resumeFrom &&
+      completedTurns % SESSION_CHECKPOINT_TURN_INTERVAL === 0
+    ) {
+      recordSessionProgress(
+        vault,
+        importId,
+        {
+          sessionFile: absPath,
+          headHash: fileIdentity.headHash,
+          bytes: fileIdentity.bytes,
+          turnsCompleted: completedTurns,
+        },
+        now,
+      );
+    }
     if (sinceMs !== undefined) {
       const t = Date.parse(turn.timestamp);
       if (Number.isFinite(t) && t < sinceMs) continue;
@@ -589,6 +683,11 @@ export async function importSession(
     });
   }
 
+  // The run drained the file, so its resume point has nothing left to say -
+  // the same settle the ingest lane performs on a fully drained plan, after
+  // which the dedup index is the authoritative final state.
+  if (checkpointActive) clearSessionCheckpoint(vault, importId);
+
   return Object.freeze({
     file: absPath,
     format: adapter.id,
@@ -608,6 +707,8 @@ export async function importSession(
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,
+    turns_resumed: turnsResumed,
+    resume_discarded: resumeDiscarded,
     // Read back AFTER every write this run makes, including the recall
     // import above: the point is to ask the disk, not the run's own belief.
     census: censusSessionSignals(vault, createdHashes),
