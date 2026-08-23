@@ -1100,8 +1100,13 @@ const DIRECT_WRITE_ROWS = 68;
  * 98 -> 99: `src/core/brain/design-note.ts` commits its note through
  * `writeFrontmatterAtomic`, exclusively, so it needs no exclusion either -
  * it arrives in the class the record wants modules to arrive in.
+ *
+ * 99 -> 100: `src/core/brain/dead-letter.ts` writes one record per failed
+ * multi-artifact commit through `atomicWriteFileSync`, and removes
+ * nothing - deleting the only evidence of a partial write is exactly what
+ * that module declines to do - so it too arrives with no exclusion owed.
  */
-const SHARED_HELPER_ROWS = 99;
+const SHARED_HELPER_ROWS = 100;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 

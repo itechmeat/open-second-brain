@@ -32,10 +32,12 @@ import {
   AUTO_EXTRACT_CONFIDENCE_FLOOR,
   AUTO_EXTRACT_PER_SESSION_CAP,
   commitExtractedSignals,
+  EXTRACT_SIGNALS_STEP,
   ExtractSignalsError,
   ExtractSignalsWriteError,
   planExtractSignals,
 } from "../../../src/core/brain/extract-signals.ts";
+import { listDeadLetters } from "../../../src/core/brain/dead-letter.ts";
 import { NEEDS_LLM_STEP } from "../../../src/core/brain/llm-step.ts";
 import { ResponseCheckError } from "../../../src/core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../src/core/brain/response-shape.ts";
@@ -298,4 +300,99 @@ test("the new source_type round-trips and an unknown member is still refused", (
   );
   expect(() => parseSignal(path)).toThrow(/auto_extract/);
   expect(() => parseSignal(path)).toThrow(/sideways/);
+});
+
+// ----- Write accounting and the durable dead letter (unit E) ---------------
+//
+// 12. Every commit reports its write accounting in the wave's shared
+//     reconciliation vocabulary - attempted / found / missing, the missing
+//     keys NAMED - on the success path and on the refusal alike.
+// 13. A commit that lands nothing does not read as a success: the accounting
+//     says found 0, names every unwritten item, and carries the first real
+//     error.
+// 14. A partial write leaves a DURABLE dead letter naming the unwritten
+//     items, so a caller that drops the response is not the only record of
+//     it - and the error says where that record landed.
+
+test("a completed commit reports its accounting in the shared vocabulary", () => {
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item(), item({ topic: "no-abbrev", principle: "Never abbreviate a module name." })] },
+    { agent: "tester", now: NOW },
+  );
+  expect(res.reconciliation).toEqual({ attempted: 2, found: 2, missing: [] });
+  expect(listDeadLetters(vault)).toEqual([]);
+});
+
+test("a deduped or gate-rejected item is not counted as an attempted write", () => {
+  // Both are deliberate skips the result already names; folding them into
+  // `missing` would report a refusal the lane made as a loss it suffered.
+  const res = commitExtractedSignals(
+    vault,
+    SESSION,
+    { items: [item(), item({ topic: "noise", principle: "temporary scratch note" })] },
+    { agent: "tester", now: NOW, durabilityDenylist: [/scratch/] },
+  );
+  expect(res.reconciliation).toEqual({ attempted: 1, found: 1, missing: [] });
+  expect(res.durabilityRejected).toBe(1);
+});
+
+test("a mid-loop write failure reports attempted, written and missing plus the first error", () => {
+  const items = [item(), item({ topic: "module:names", principle: "Never abbreviate a module." })];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW });
+  } catch (err) {
+    caught = err;
+  }
+  const err = caught as ExtractSignalsWriteError;
+  expect(err).toBeInstanceOf(ExtractSignalsWriteError);
+  expect(err.reconciliation.attempted).toBe(2);
+  expect(err.reconciliation.found).toBe(1);
+  expect(err.reconciliation.missing).toEqual(["items[1]:module:names"]);
+  expect(err.firstError).toBeDefined();
+});
+
+test("a commit that lands nothing never reads as a success", () => {
+  // The FIRST item fails, so nothing at all reaches disk.
+  const items = [item({ topic: "module:names" }), item({ topic: "no-abbrev" })];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW });
+  } catch (err) {
+    caught = err;
+  }
+  const err = caught as ExtractSignalsWriteError;
+  expect(err).toBeInstanceOf(ExtractSignalsWriteError);
+  expect(err.reconciliation.found).toBe(0);
+  expect(err.reconciliation.attempted).toBe(2);
+  expect(err.reconciliation.missing).toEqual(["items[0]:module:names", "items[1]:no-abbrev"]);
+  expect(inboxFiles()).toEqual([]);
+});
+
+test("a partial write leaves a durable dead letter naming the unwritten items", () => {
+  const items = [item(), item({ topic: "module:names", principle: "Never abbreviate a module." })];
+  let caught: unknown;
+  try {
+    commitExtractedSignals(vault, SESSION, { items }, { agent: "tester", now: NOW });
+  } catch (err) {
+    caught = err;
+  }
+  const err = caught as ExtractSignalsWriteError;
+  const letters = listDeadLetters(vault);
+  expect(letters).toHaveLength(1);
+  const letter = letters[0]!;
+  expect(letter.lane).toBe("extract-signals");
+  expect(letter.step).toBe(EXTRACT_SIGNALS_STEP);
+  expect(letter.reference).toBe(SESSION);
+  expect(letter.attempted).toBe(2);
+  expect(letter.found).toBe(1);
+  expect(letter.missing).toEqual(["items[1]:module:names"]);
+  expect(letter.outcome).toBe("partial");
+  expect(letter.first_error.length).toBeGreaterThan(0);
+  // The response says where the durable record is, so a caller that keeps
+  // the response can go straight to it.
+  expect(err.deadLetter.recorded).toBe(true);
+  if (err.deadLetter.recorded) expect(err.message).toContain(err.deadLetter.id);
 });

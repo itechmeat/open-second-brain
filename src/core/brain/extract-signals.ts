@@ -38,7 +38,9 @@
 
 import { posix } from "node:path";
 
+import { buildReconciliationReport, type ReconciliationReport } from "../reconciliation-report.ts";
 import { buildCaptureBoundary, type SessionCaptureDecision } from "./capture-boundary.ts";
+import { tryRecordDeadLetter, type DeadLetterLane, type DeadLetterOutcome } from "./dead-letter.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "./dedup-hash.ts";
 import { classifyDurability, resolveDurabilityDenylist } from "./gates/durability.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
@@ -67,6 +69,13 @@ export const AUTO_EXTRACT_TARGET_DIR_REL = "Brain/inbox";
 
 /** The needs-llm-step step name for the deferred signal mining. */
 export const EXTRACT_SIGNALS_STEP = "extract-signals";
+
+/**
+ * This lane's dead-letter name. It is the ONE multi-artifact commit lane
+ * in the tree - one file per mined item from one validated payload - and
+ * so the only one that can leave a partial write behind.
+ */
+const EXTRACT_SIGNALS_LANE: DeadLetterLane = "extract-signals";
 
 /**
  * Most signals one session may yield. A transcript that genuinely states
@@ -108,6 +117,16 @@ export class ExtractSignalsError extends Error {
  * ON it, so an operator can find them, and re-running the same payload is
  * safe because the dedup index recognises every one of them.
  *
+ * Since nothing-writes-silently it carries two further things. The first
+ * is {@link reconciliation}: the same `attempted` / `found` / `missing`
+ * report shape the import read-back census and the embedder audit use, so
+ * this lane's accounting is not a fourth dialect of the same three
+ * numbers. The second is {@link deadLetter}: this error's own accounting
+ * lives exactly as long as the response carrying it, and a caller that
+ * drops the response must not be the only record that a partial write
+ * happened - so the accounting is ALSO on disk, and this field says
+ * where, or why it could not be.
+ *
  * Not an {@link ExtractSignalsError}: that class is the caller's fault
  * and the surfaces report it as such. A filesystem that refused a write
  * is not.
@@ -119,27 +138,48 @@ export class ExtractSignalsWriteError extends Error {
   readonly written: ReadonlyArray<ExtractedSignalWrite>;
   /** Payload items this call never reached, the failing one included. */
   readonly remaining: number;
+  /** Attempted / found / missing for this commit, missing keys named. */
+  readonly reconciliation: ReconciliationReport;
+  /** The error that stopped the commit, kept as thrown. */
+  readonly firstError: unknown;
+  /** Where the durable record of this partial write landed, or why not. */
+  readonly deadLetter: DeadLetterOutcome;
 
-  constructor(
-    topic: string,
-    written: ReadonlyArray<ExtractedSignalWrite>,
-    remaining: number,
-    cause: unknown,
-  ) {
+  constructor(params: {
+    readonly topic: string;
+    readonly written: ReadonlyArray<ExtractedSignalWrite>;
+    readonly remaining: number;
+    readonly reconciliation: ReconciliationReport;
+    readonly cause: unknown;
+    readonly deadLetter: DeadLetterOutcome;
+  }) {
+    const { topic, written, remaining, reconciliation, cause, deadLetter } = params;
     super(
       `failed to write extracted signal ${JSON.stringify(topic)}: ` +
         `${cause instanceof Error ? cause.message : String(cause)} - ` +
+        `attempted ${reconciliation.attempted}, written ${reconciliation.found}, ` +
+        `failed ${reconciliation.missing.length} (${reconciliation.missing.join(", ")}); ` +
         `${written.length} signal(s) are already on disk ` +
         `(${written.length === 0 ? "none" : written.map((w) => w.id).join(", ")}) and ` +
-        `${remaining} payload item(s) were not reached; fix the cause and re-run the ` +
-        "same payload, which dedups what is already there",
+        `${remaining} payload item(s) were not reached; ${describeDeadLetter(deadLetter)}; ` +
+        "fix the cause and re-run the same payload, which dedups what is already there",
       { cause },
     );
     this.name = "ExtractSignalsWriteError";
     this.topic = topic;
     this.written = Object.freeze([...written]);
     this.remaining = remaining;
+    this.reconciliation = reconciliation;
+    this.firstError = cause;
+    this.deadLetter = deadLetter;
   }
+}
+
+/** The dead-letter half of the message above, either way it went. */
+function describeDeadLetter(outcome: DeadLetterOutcome): string {
+  return outcome.recorded
+    ? `a dead letter recording this is at ${outcome.path} (${outcome.id})`
+    : `NO dead letter could be recorded for it (${outcome.reason})`;
 }
 
 /** One user turn offered to the caller as mining material. */
@@ -198,6 +238,19 @@ export interface CommitExtractedSignalsResult {
   /** Items the durability gate refused; each is named in {@link rejected}. */
   readonly durabilityRejected: number;
   readonly rejected: ReadonlyArray<ExtractedSignalRejection>;
+  /**
+   * Write accounting in the wave's shared vocabulary: `attempted` is the
+   * items that reached the write call, `found` the ones whose bytes
+   * landed, `missing` the keys of the rest. On this path `missing` is
+   * always empty - a failure throws {@link ExtractSignalsWriteError},
+   * which carries the same shape with the gap named.
+   *
+   * A deduped or durability-rejected item is NOT attempted: both are
+   * deliberate refusals this result already names in {@link deduped} and
+   * {@link rejected}, and counting a refusal the lane made as a write it
+   * lost would misreport the one number an operator reads first.
+   */
+  readonly reconciliation: ReconciliationReport;
 }
 
 export interface PlanExtractSignalsOptions {
@@ -454,7 +507,36 @@ export function commitExtractedSignals(
         targetDir !== undefined ? { targetDir } : {},
       );
     } catch (err) {
-      throw new ExtractSignalsWriteError(item.topic, written, items.length - index, err);
+      // Everything from the failing item onward is unwritten. Some of the
+      // items this call never reached might have deduped away had it got
+      // to them - unknowable from here, and "not written" is true of all
+      // of them either way, so they are NAMED rather than guessed at.
+      const remaining = items.slice(index);
+      const reconciliation = buildReconciliationReport({
+        attempted: written.length + remaining.length,
+        found: written.length,
+        missing: remaining.map((unwritten, offset) =>
+          unwrittenKey(index + offset, unwritten.topic),
+        ),
+      });
+      throw new ExtractSignalsWriteError({
+        topic: item.topic,
+        written,
+        remaining: remaining.length,
+        reconciliation,
+        cause: err,
+        deadLetter: tryRecordDeadLetter(vault, {
+          envelope: {
+            lane: EXTRACT_SIGNALS_LANE,
+            step: EXTRACT_SIGNALS_STEP,
+            reference: trimmed,
+            target: AUTO_EXTRACT_TARGET_DIR_REL,
+          },
+          report: reconciliation,
+          firstError: err,
+          now: opts.now,
+        }),
+      });
     }
     dedup.set(hash, { id: res.id, path: res.path });
     written.push(Object.freeze({ id: res.id, path: res.path, topic: item.topic }));
@@ -467,5 +549,20 @@ export function commitExtractedSignals(
     deduped,
     durabilityRejected: rejected.length,
     rejected: Object.freeze(rejected),
+    reconciliation: buildReconciliationReport({
+      attempted: written.length,
+      found: written.length,
+      missing: [],
+    }),
   });
+}
+
+/**
+ * The key a missing item is NAMED by: its payload index and its topic.
+ * The index carries the uniqueness (two items may share a topic) and the
+ * topic carries the meaning, which is what an operator matches against
+ * the payload they are about to re-run.
+ */
+function unwrittenKey(index: number, topic: string): string {
+  return `items[${index}]:${topic}`;
 }

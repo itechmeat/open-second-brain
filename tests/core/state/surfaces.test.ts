@@ -50,6 +50,7 @@ import {
   captureDecisionLogPath,
   captureWatermarkPath,
 } from "../../../src/core/brain/paths.ts";
+import { deadLetterDir } from "../../../src/core/brain/dead-letter.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
 import { sessionCheckpointPath } from "../../../src/core/brain/sessions/checkpoint.ts";
 import { manifestPath as ingestManifestPath } from "../../../src/core/brain/ingest/content-manifest.ts";
@@ -234,6 +235,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["ingest_content_manifest", (v) => ingestManifestPath(v)],
     ["ingest_checkpoints", (v) => dirname(checkpointPath(v, "0f1e2d3c"))],
     ["session_import_checkpoints", (v) => dirname(sessionCheckpointPath(v, "0f1e2d3c"))],
+    ["write_dead_letters", (v) => deadLetterDir(v)],
     ["session_import_ledger", (v) => sessionLedgerPath(v)],
     ["install_manifest", (v) => installManifestPath(v)],
     ["hook_audit", (v) => hookAuditDir(v)],

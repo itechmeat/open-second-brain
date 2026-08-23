@@ -106,6 +106,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   ingestContentManifest: "ingest_content_manifest",
   ingestCheckpoints: "ingest_checkpoints",
   sessionImportCheckpoints: "session_import_checkpoints",
+  writeDeadLetters: "write_dead_letters",
   sessionImportLedger: "session_import_ledger",
   installManifest: "install_manifest",
   protectManifest: "protect_manifest",
@@ -257,6 +258,7 @@ const SECRETS_DIR = "secrets";
 const INGEST_MANIFEST_FILE = "ingest-manifest.json";
 const INGEST_CHECKPOINT_DIR = "ingest-checkpoints";
 const SESSION_CHECKPOINT_DIR = "session-import-checkpoints";
+const DEAD_LETTER_DIR = "dead-letters";
 const SESSION_LEDGER_FILE = "session-import-ledger.json";
 const INSTALL_MANIFEST_FILE = "install.lock.json";
 const PROTECT_MANIFEST_FILE = "protect.lock.json";
@@ -438,6 +440,22 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "still suppresses the repeated writes. `OSB_INGEST_NO_CHECKPOINT` suppresses writing them; " +
       "it does not move them.",
     sources: ["src/core/brain/sessions/checkpoint.ts", "src/core/brain/checkpoint-store.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.writeDeadLetters,
+    label: "multi-artifact write dead letters",
+    tier: STATE_TIER.vaultContent,
+    derive: derivedStore(DEAD_LETTER_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: true,
+    reason:
+      "One record per multi-artifact commit that failed part way, naming the items that never " +
+      "reached disk, the payload they belonged to, and the first error. Nothing rebuilds it and " +
+      "nothing in this tool removes it: it is the only evidence that a partial write happened " +
+      "once the response carrying the error is gone, so a sweep would delete exactly what an " +
+      "operator has not read yet. Deleting one is a deliberate act after the payload is re-run.",
+    sources: ["src/core/brain/dead-letter.ts"],
   },
   {
     id: STATE_SURFACE_ID.sessionImportLedger,
