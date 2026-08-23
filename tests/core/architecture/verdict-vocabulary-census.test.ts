@@ -396,6 +396,11 @@ import {
   RECONCILIATION_OUTCOME,
   RECONCILIATION_OUTCOMES,
 } from "../../../src/core/reconciliation-report.ts";
+import {
+  isOriginChannel,
+  ORIGIN_CHANNEL,
+  ORIGIN_CHANNELS,
+} from "../../../src/core/origin-channel.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 
 interface VocabularyUnderCensus {
@@ -1220,6 +1225,19 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: RECONCILIATION_OUTCOMES,
     guard: isReconciliationOutcome,
   },
+  {
+    // nothing-writes-silently, unit C. The wave's newest on-disk
+    // vocabulary, and the one that nearly escaped: the trio was complete
+    // from the start, but the object shipped as a bare `as const` rather
+    // than frozen, so the scan below - which enumerates frozen bindings -
+    // could not see it. Its members are load-bearing on-disk strings, and
+    // a rename that missed the guard would have failed the census for
+    // every other vocabulary in the tree and passed for this one.
+    name: "ORIGIN_CHANNEL",
+    values: ORIGIN_CHANNEL,
+    members: ORIGIN_CHANNELS,
+    guard: isOriginChannel,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1484,7 +1502,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 72;
+const VOCABULARY_POPULATION = 73;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

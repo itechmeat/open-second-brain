@@ -97,6 +97,8 @@ export {
   serializeVisibilityHonestyFinding,
 } from "./serialize.ts";
 export {
+  callableVisibilitySurfaces,
+  excludedCallableVisibilitySurfaces,
   excludedVisibilitySurfaces,
   VISIBILITY_SURFACE_CATEGORY,
   VISIBILITY_SURFACE_KIND,

@@ -1160,21 +1160,27 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
 );
 
 /**
- * Direct-`fs` write sites the stamp does not reach. An equality, derived
- * from {@link DIRECT_WRITE_ROWS} minus the one excused site that is also
- * a stamped family: the continuity ledger, which appends its own record
- * shape and so carries the channel on the record rather than in
- * frontmatter.
+ * Direct-`fs` write sites the stamp does not reach - MEASURED off the
+ * sweep, not derived from {@link DIRECT_WRITE_ROWS}.
+ *
+ * It used to be written as `DIRECT_WRITE_ROWS - 1` and asserted against
+ * `DIRECT_ROWS.length - stampedDirect.length`, which is the same
+ * arithmetic on both sides of an `expect`: the assertion restated pins
+ * the file had already made and could not fail on its own. The number
+ * below is what the sweep actually reports, so the assertion measures
+ * the swept tree; the one excused site that IS stamped is the continuity
+ * ledger, which appends its own record shape and carries the channel on
+ * the record rather than in frontmatter.
  */
-const UNSTAMPED_DIRECT_ROWS = DIRECT_WRITE_ROWS - 1;
+const UNSTAMPED_DIRECT_ROWS = 67;
 
 /**
- * Shared-helper write sites the stamp does not reach. The other three
- * stamped writers all route through the shared writers - the log pair
- * through `atomicWriteFileSync`, signals and notes through
- * `writeFrontmatterAtomic` - so they are the three subtracted here.
+ * Shared-helper write sites the stamp does not reach, measured the same
+ * way. The three stamped writers that route through the shared helpers -
+ * the log pair through `atomicWriteFileSync`, signals and notes through
+ * `writeFrontmatterAtomic` - are the ones missing from this count.
  */
-const UNSTAMPED_SHARED_ROWS = SHARED_HELPER_ROWS - 3;
+const UNSTAMPED_SHARED_ROWS = 97;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {
@@ -1251,11 +1257,13 @@ describe("origin-channel coverage boundary", () => {
       (row) => row.path,
     );
     expect(stampedDirect.toSorted()).toEqual(["src/core/brain/continuity/store.ts"]);
-    // The measured remainder. This is the honest sizing of the unit: the
-    // stamp lands on four writers, and this many excused direct-`fs`
+    // The measured remainder, counted off the sweep rather than
+    // subtracted from a pin. This is the honest sizing of the unit: the
+    // stamp lands on four writers, and this many swept direct-`fs`
     // sites - append-only ledgers, lifecycle moves, retention deletes,
     // machine artifacts - put bytes in the vault without one.
-    expect(DIRECT_ROWS.length - stampedDirect.length).toBe(UNSTAMPED_DIRECT_ROWS);
+    const unstampedDirect = DIRECT_ROWS.filter((row) => !STAMPED_PATHS.has(row.path));
+    expect(unstampedDirect.length).toBe(UNSTAMPED_DIRECT_ROWS);
   });
 
   test("the shared-helper class is uncovered but for the log, signal and note writers", () => {
@@ -1268,7 +1276,8 @@ describe("origin-channel coverage boundary", () => {
       "src/core/brain/notes/create-note.ts",
       "src/core/brain/signal.ts",
     ]);
-    expect(sharedRows.length - stampedShared.length).toBe(UNSTAMPED_SHARED_ROWS);
+    const unstampedShared = sharedRows.filter((row) => !STAMPED_PATHS.has(row.path));
+    expect(unstampedShared.length).toBe(UNSTAMPED_SHARED_ROWS);
   });
 
   test("a new stamper anywhere in the tree is reported, not absorbed", () => {

@@ -96,8 +96,8 @@ import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
 import {
-  excludedVisibilitySurfaces,
-  VISIBILITY_SURFACE_REGISTRY,
+  callableVisibilitySurfaces,
+  excludedCallableVisibilitySurfaces,
 } from "./visibility-surface-registry.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
 import type {
@@ -1659,13 +1659,18 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
  * page. Both counts are read off the registry's own exported list at
  * call time, never hand-written, so the finding cannot drift from the
  * census that backs it (nothing-writes-silently, unit H, form B).
+ *
+ * CALLABLE rows only. The registry also carries one `index_store` row -
+ * the fact that `chunks` stores a private page's text whatever a
+ * read-side filter hides - and counting a storage fact as a surface an
+ * operator could call would inflate a number reported to operators.
  */
 function readVisibilityHonestyFinding(dbPath: string): VisibilityHonestyFinding | null {
   const peek = peekVisibilityTagPresence(dbPath);
   if (peek.kind !== "read" || !peek.value) return null;
   return Object.freeze({
-    excludedSurfaceCount: excludedVisibilitySurfaces().length,
-    totalSurfaceCount: VISIBILITY_SURFACE_REGISTRY.length,
+    excludedSurfaceCount: excludedCallableVisibilitySurfaces().length,
+    totalSurfaceCount: callableVisibilitySurfaces().length,
   });
 }
 

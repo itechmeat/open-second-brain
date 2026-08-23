@@ -18,9 +18,10 @@
  *     exception on the CLI side of that filter.
  *  3. The caller-facing input types of the four stamped writers declare
  *     no channel field, so TypeScript cannot be talked past either.
- *  4. The `agent` recount that motivates the rule is still what the
- *     write-binding docblock claims - a floor, so this fails when the
- *     unverifiable surface GROWS and never when it shrinks.
+ *  4. The `agent` recount that motivates the rule is still what this
+ *     wave measured - an equality, so this fails when the unverifiable
+ *     surface grows AND when it shrinks. Growth is the event worth
+ *     learning about, and a floor could not report it.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -184,19 +185,26 @@ describe("no caller can name the origin channel", () => {
 
 describe("the unverifiable surface this rule exists for", () => {
   /**
-   * The caller-supplied `agent` property count. A FLOOR, not an equality:
-   * the write-binding docblock documented 22, the wave recount found 25,
-   * and the number has only ever grown. A floor fails when the surface
-   * grows - which is the event worth learning about - and does not turn
-   * a deletion into a chore.
+   * The caller-supplied `agent` property count, MEASURED and pinned as an
+   * equality - the convention the write-site census states for its own
+   * row counts: a moved number is a finding to name in the commit that
+   * moves it, not a re-measurement chore.
+   *
+   * It was a floor, and a floor could not fail on the event both its
+   * comments said it watched for. `>= 25` passes at 35, so ten new
+   * schemas taking `agent` verbatim would have widened the unverifiable
+   * surface this whole rule is argued from and reported nothing. An
+   * equality fails in both directions; when it does, recount with the
+   * regex below, update this constant, and say in the commit which
+   * schemas moved it.
    */
   const CALLER_SUPPLIED_AGENT_PROPERTIES = 25;
 
-  test("has not shrunk below what the rule was argued from", () => {
+  test("is exactly what the rule was argued from, in both directions", () => {
     let count = 0;
     for (const file of MCP_FILES) {
       count += (file.text.match(/^\s*agent:\s*\{/gm) ?? []).length;
     }
-    expect(count).toBeGreaterThanOrEqual(CALLER_SUPPLIED_AGENT_PROPERTIES);
+    expect(count).toBe(CALLER_SUPPLIED_AGENT_PROPERTIES);
   });
 });

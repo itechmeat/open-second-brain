@@ -83,11 +83,11 @@
  * `mcp-tool` matches the `apply-evidence` shape the log-event vocabulary
  * already uses.
  */
-export const ORIGIN_CHANNEL = {
+export const ORIGIN_CHANNEL = Object.freeze({
   mcpTool: "mcp-tool",
   cli: "cli",
   import: "import",
-} as const;
+} as const);
 
 export type OriginChannel = (typeof ORIGIN_CHANNEL)[keyof typeof ORIGIN_CHANNEL];
 

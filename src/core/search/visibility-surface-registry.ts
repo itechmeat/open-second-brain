@@ -14,8 +14,13 @@
  * {@link tests/core/architecture/visibility-surface-census.test.ts} pins
  * that a mechanical sweep of `src/mcp/` and `src/cli/` finds nothing this
  * list does not already carry, and `search check` derives its honesty
- * finding's count from {@link excludedVisibilitySurfaces} rather than a
- * hand-written number.
+ * finding's count from {@link excludedCallableVisibilitySurfaces} rather
+ * than a hand-written number.
+ *
+ * The list is the census's POPULATION, not a claim to be every surface
+ * there is: the MCP half is swept mechanically with the blind spots that
+ * test's docblock states, and the CLI half is hand-enumerated one row per
+ * MCP mirror. The `search check` line that reports it says so.
  *
  * This module makes NO enforcement change. It does not touch
  * `graph/visibility.ts`, the indexer, `listVaultPages`, or the
@@ -441,6 +446,17 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "content; included for completeness of the file-level sweep only.",
   },
   {
+    surface: "second_brain_capabilities",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "returns the process's own capability report (tool counts, withheld-tool reasons) from " +
+      "ctx.capabilityReport - it never touches the vault, let alone a note path, title or body; " +
+      "included for completeness of the file-level sweep only. Registered as " +
+      "`name: CAPABILITY_DIAGNOSTIC_TOOL` rather than a literal, which is exactly why the sweep " +
+      "resolves constants: this row was missing while the census passed.",
+  },
+  {
     surface: "second_brain_status",
     kind: K.mcpTool,
     category: C.excluded,
@@ -679,4 +695,23 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
 /** {@link VISIBILITY_SURFACE_REGISTRY}, restricted to the excluded rows. */
 export function excludedVisibilitySurfaces(): ReadonlyArray<VisibilitySurfaceEntry> {
   return VISIBILITY_SURFACE_REGISTRY.filter((entry) => entry.category === C.excluded);
+}
+
+/**
+ * The rows that name something a caller can INVOKE - every kind but
+ * `index_store`, whose one row is a structural fact about the index's own
+ * storage and says so in its own vocabulary comment.
+ *
+ * The distinction exists because a count is reported to operators. "N of
+ * M note-returning surfaces" has to be M surfaces somebody could call;
+ * folding the storage fact into that denominator quietly inflates it by
+ * one, which is the kind of arithmetic this wave is about.
+ */
+export function callableVisibilitySurfaces(): ReadonlyArray<VisibilitySurfaceEntry> {
+  return VISIBILITY_SURFACE_REGISTRY.filter((entry) => entry.kind !== K.indexStore);
+}
+
+/** {@link callableVisibilitySurfaces}, restricted to the excluded rows. */
+export function excludedCallableVisibilitySurfaces(): ReadonlyArray<VisibilitySurfaceEntry> {
+  return callableVisibilitySurfaces().filter((entry) => entry.category === C.excluded);
 }

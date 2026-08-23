@@ -43,11 +43,23 @@
  * from a module suffix already verified, by reading the source, to hand
  * back a page's path, title, or body. That is exactly write-site-census's
  * `VAULT_VOCABULARY_IMPORT_RE` shape, aimed at reads instead of writes.
- * Within a candidate FILE, every `name: "…"` tool-registration string is
- * extracted and kept only when it ALSO appears in `buildToolTable("full")`'s
- * real, live tool list - which turns a merely-plausible string match (a
- * `name:` field on some unrelated object) into a real, currently-registered
- * tool, with no hand-picked per-tool filter to go stale.
+ * Within a candidate FILE, every tool-registration `name:` is extracted -
+ * both the string literals and the `name: SOME_CONSTANT` form, resolved
+ * through the constants the file declares and the ones it imports - and
+ * kept only when the resulting name ALSO appears in
+ * `buildToolTable("full")`'s real, live tool list, which turns a
+ * merely-plausible match (a `name:` field on some unrelated object) into a
+ * real, currently-registered tool with no hand-picked per-tool filter to
+ * go stale.
+ *
+ * Constant resolution is not decoration. Roughly a dozen MCP tool files
+ * register their tools through constants, and `src/mcp/tools.ts` - in
+ * population, and swept since this census shipped - registers
+ * `second_brain_capabilities` as `name: CAPABILITY_DIAGNOSTIC_TOOL`. A
+ * literals-only sweep reported a population of 42 that was 43 and left
+ * that tool with no registry row, which is the failure mode the design's
+ * risk section names: a census that quietly omits a surface reproduces
+ * the defect it documents.
  *
  * The population unit is the FILE, not the individual tool: a file that
  * imports one primitive for one of its tools sweeps in every OTHER real
@@ -60,7 +72,12 @@
  * What this cannot see, stated rather than implied: a tool that reads
  * note content through a NEW primitive not yet in the vocabulary (the
  * same blind spot write-site-census states for a new write shape); a
- * tool that reaches a listed primitive only through a transitive import
+ * tool name built at runtime rather than written down - a template
+ * literal, a concatenation, a value read from a table - since constant
+ * resolution reads `const NAME = "literal"` declarations only, and a
+ * constant re-exported through a third module (the resolver follows one
+ * hop, from the registering file to the file it imported the name from);
+ * a tool that reaches a listed primitive only through a transitive import
  * two modules away (the population rule reads the MCP file's own
  * imports, not its whole call graph - deep-synthesis.ts is in
  * population via `deepSynthesis`, not because knowledge-tools.ts itself
@@ -250,25 +267,106 @@ function importsNoteContentPrimitive(text: string): boolean {
 /** Every `name: "…"` tool-registration string literal a file's text contains. */
 const TOOL_NAME_LITERAL_RE = /\bname:\s*"([a-z][a-z0-9_]*)"/g;
 
+/**
+ * Every `name: SOME_CONSTANT` registration. A tool name does not have to
+ * be written at the registration site: `src/mcp/tools.ts` registers
+ * `second_brain_capabilities` as `name: CAPABILITY_DIAGNOSTIC_TOOL`, and
+ * a dozen other MCP files register theirs through constants too. Reading
+ * literals only left those invisible INSIDE an already-swept file, which
+ * is the one blind spot a reader of this census would not expect.
+ */
+const TOOL_NAME_CONST_RE = /\bname:\s*([A-Z][A-Z0-9_]*)\b/g;
+
+/** A `const NAME = "value"` declaration, exported or not. */
+const STRING_CONST_RE =
+  /\b(?:export\s+)?const\s+([A-Z][A-Z0-9_]*)\s*(?::[^=;]+)?=\s*"([a-z][a-z0-9_]*)"/g;
+
+/** Named imports and the specifier they came from, for constant resolution. */
+const NAMED_IMPORT_RE = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*"([^"]+)"/g;
+
 function toolNameLiteralsIn(text: string): string[] {
   return [...text.matchAll(TOOL_NAME_LITERAL_RE)].map((m) => m[1]!);
 }
 
+/** `const NAME = "value"` pairs a file declares, by constant name. */
+function stringConstantsIn(text: string): Map<string, string> {
+  const found = new Map<string, string>();
+  for (const match of text.matchAll(STRING_CONST_RE)) found.set(match[1]!, match[2]!);
+  return found;
+}
+
+/**
+ * Resolve a relative import specifier against the importing file's path,
+ * to the same repo-relative spelling {@link readTree} produces. Only
+ * `./` and `../` specifiers resolve; a bare package specifier has no
+ * file in the tree and returns `null`.
+ */
+function resolveSpecifier(fromPath: string, specifier: string): string | null {
+  if (!specifier.startsWith(".")) return null;
+  const segments = fromPath.split("/").slice(0, -1);
+  for (const part of specifier.split("/")) {
+    if (part === "." || part === "") continue;
+    if (part === "..") segments.pop();
+    else segments.push(part);
+  }
+  return segments.join("/");
+}
+
+/** Which file each named import in `file` was imported from. */
+function importSources(file: CensusFile, text: string): Map<string, string> {
+  const sources = new Map<string, string>();
+  for (const match of text.matchAll(NAMED_IMPORT_RE)) {
+    const resolved = resolveSpecifier(file.path, match[2]!);
+    if (resolved === null) continue;
+    for (const raw of match[1]!.split(",")) {
+      const local = raw
+        .trim()
+        .split(/\s+as\s+/)[0]!
+        .trim();
+      if (local.length > 0) sources.set(local, resolved);
+    }
+  }
+  return sources;
+}
+
 /**
  * The MCP tool population: real, currently-registered tool names defined
- * in a file that imports a note-content primitive. `realToolNames` is
- * passed in rather than read globally so the fixtures below can exercise
- * the same function with a synthetic registry.
+ * in a file that imports a note-content primitive - whether the name is
+ * written at the registration site or reached through a constant the
+ * file declares or imports. `realToolNames` is passed in rather than read
+ * globally so the fixtures below can exercise the same function with a
+ * synthetic registry.
+ *
+ * A constant resolves through the file's own declarations first, then
+ * through the file it was imported from. It resolves to NOTHING when
+ * neither answers - an unresolved identifier contributes no name rather
+ * than a guessed one - and the real-tool filter is the backstop either
+ * way.
  */
 function discoverMcpToolPopulation(
   files: ReadonlyArray<CensusFile>,
   realToolNames: ReadonlySet<string>,
 ): ReadonlySet<string> {
+  const constantsByFile = new Map<string, Map<string, string>>();
+  for (const file of files) {
+    constantsByFile.set(file.path, stringConstantsIn(lexedViews(file).withoutComments));
+  }
   const found = new Set<string>();
   for (const file of files) {
-    if (!importsNoteContentPrimitive(lexedViews(file).withoutComments)) continue;
-    for (const literal of toolNameLiteralsIn(lexedViews(file).withoutComments)) {
+    const text = lexedViews(file).withoutComments;
+    if (!importsNoteContentPrimitive(text)) continue;
+    for (const literal of toolNameLiteralsIn(text)) {
       if (realToolNames.has(literal)) found.add(literal);
+    }
+    const own = constantsByFile.get(file.path)!;
+    const imported = importSources(file, text);
+    for (const match of text.matchAll(TOOL_NAME_CONST_RE)) {
+      const identifier = match[1]!;
+      const source = imported.get(identifier);
+      const value =
+        own.get(identifier) ??
+        (source === undefined ? undefined : constantsByFile.get(source)?.get(identifier));
+      if (value !== undefined && realToolNames.has(value)) found.add(value);
     }
   }
   return found;
@@ -307,7 +405,7 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Measured: MCP tools whose file imports a note-content primitive. */
-const MCP_TOOL_POPULATION_SIZE = 42;
+const MCP_TOOL_POPULATION_SIZE = 43;
 /** Measured: MCP resources + templates, all excluded. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -478,6 +576,53 @@ describe("the census can fail", () => {
         'const unrelatedObject = { name: "not_a_real_tool" };\n',
     };
     const population = discoverMcpToolPopulation([noisy], new Set(["brain_search"]));
+    expect([...population]).toEqual([]);
+  });
+
+  test("a tool registered under a constant declared in the same file is swept in", () => {
+    const named: CensusFile = {
+      path: "src/mcp/brain/synthetic-const-local.ts",
+      text:
+        'import { listVaultPages } from "../../core/vault.ts";\n' +
+        'const MY_TOOL = "brain_synthetic_local_const";\n' +
+        "export const T = [{ name: MY_TOOL, handler: listVaultPages }];\n",
+    };
+    const population = discoverMcpToolPopulation([named], new Set(["brain_synthetic_local_const"]));
+    expect([...population]).toEqual(["brain_synthetic_local_const"]);
+  });
+
+  test("a tool registered under a constant IMPORTED from another swept file is swept in", () => {
+    // The real shape this blind spot had: `src/mcp/tools.ts` registers
+    // `second_brain_capabilities` as `name: CAPABILITY_DIAGNOSTIC_TOOL`,
+    // declared in `src/mcp/capabilities.ts`.
+    const declaring: CensusFile = {
+      path: "src/mcp/synthetic-names.ts",
+      text: 'export const REMOTE_TOOL = "brain_synthetic_remote_const";\n',
+    };
+    const registering: CensusFile = {
+      path: "src/mcp/synthetic-registry.ts",
+      text:
+        'import { listVaultPages } from "../core/vault.ts";\n' +
+        'import { REMOTE_TOOL } from "./synthetic-names.ts";\n' +
+        "export const T = [{ name: REMOTE_TOOL, handler: listVaultPages }];\n",
+    };
+    const population = discoverMcpToolPopulation(
+      [declaring, registering],
+      new Set(["brain_synthetic_remote_const"]),
+    );
+    expect([...population]).toEqual(["brain_synthetic_remote_const"]);
+  });
+
+  test("a constant the file never imports and never declares resolves to nothing", () => {
+    // Over-reach is the failure the resolution has to avoid: an unresolved
+    // identifier contributes no name rather than a guessed one.
+    const dangling: CensusFile = {
+      path: "src/mcp/synthetic-dangling.ts",
+      text:
+        'import { listVaultPages } from "../core/vault.ts";\n' +
+        "export const T = [{ name: UNRESOLVED_TOOL, handler: listVaultPages }];\n",
+    };
+    const population = discoverMcpToolPopulation([dangling], new Set(["brain_search"]));
     expect([...population]).toEqual([]);
   });
 

@@ -476,10 +476,17 @@ export type EmbedderRecordCensus =
  * The visibility honesty finding (nothing-writes-silently, unit H, form
  * B): `visibility:` frontmatter is a caller-supplied view filter, not a
  * privacy boundary, and `excludedSurfaceCount` of `totalSurfaceCount`
- * note-returning surfaces do not honour it. Both counts are read off
- * `visibility-surface-registry.ts`'s own exported list - never
+ * ENUMERATED note-returning surfaces do not honour it. Both counts are
+ * read off `visibility-surface-registry.ts`'s own exported list - never
  * hand-written - so the number this finding names cannot drift from the
  * census that backs it.
+ *
+ * The denominator is the census's population, not the product's whole
+ * surface area, and the surface that renders it says so: the MCP half is
+ * swept mechanically with stated blind spots and the CLI half is
+ * hand-enumerated. It also counts CALLABLE rows only - the registry's one
+ * `index_store` row is a structural fact about the index's storage, not
+ * something a caller invokes.
  *
  * Present on {@link IndexCheckReport} only when the vault/index carries
  * at least one page tagged with the field; a vault that has never used
@@ -488,9 +495,9 @@ export type EmbedderRecordCensus =
  * vault that never triggers it.
  */
 export interface VisibilityHonestyFinding {
-  /** Note-returning surfaces that never consult `visibility:`. */
+  /** Enumerated callable surfaces that never consult `visibility:`. */
   readonly excludedSurfaceCount: number;
-  /** Every surface the registry classifies, covered or excluded. */
+  /** Every callable surface the registry classifies, covered or excluded. */
   readonly totalSurfaceCount: number;
 }
 

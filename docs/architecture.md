@@ -385,7 +385,7 @@ executed classification. Every recipe runs TWICE against the same two-owner
 fixture, once with the gate closed and once with it open, and the classification
 decides what the open run must show: the 32 recipes classified as reaching
 owner-taggable content must surface the marker with the gate off, which is what
-stops the closed run from passing vacuously. The other 193 carry a claim of
+stops the closed run from passing vacuously. The other 194 carry a claim of
 unreachability, and that claim is executed directly - the marker must be absent
 even where nothing is hidden. The first version of this probe asserted only the
 closed half, and 81 of its entries were driven against arguments that named

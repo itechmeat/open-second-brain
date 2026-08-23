@@ -10,11 +10,14 @@
  *
  * There is no credential in this system to key a fence to. Agent
  * identity resolves as `VAULT_AGENT_NAME`, else the config `agent_name`,
- * else the literal `agent`, and twenty-two MCP tool schemas across
- * fifteen modules additionally accept a caller-supplied `agent` string
- * that overrides it, taken verbatim after a placeholder check. (Count it
- * with `grep -rn '^\s*agent:\s*{' src/mcp/`; it has only ever grown, and
- * understating it understates this argument.) A caller who can call the tool can
+ * else the literal `agent`, and twenty-five MCP tool schemas
+ * additionally accept a caller-supplied `agent` string that overrides
+ * it, taken verbatim after a placeholder check. (That count is pinned as
+ * an equality by `tests/core/architecture/origin-channel-census.test.ts`,
+ * which measures it with `grep -rn '^\s*agent:\s*{' src/mcp/` - it used
+ * to be a number kept here by hand, and this docblock still said
+ * twenty-two after it had reached twenty-five. Understating it
+ * understates this argument.) A caller who can call the tool can
  * name itself anything, so a fence keyed to that name is bypassed by
  * passing a different string. The binding therefore reads NO identity at
  * all: its whole authority is `<vault>/Brain/_brain.yaml`, which the

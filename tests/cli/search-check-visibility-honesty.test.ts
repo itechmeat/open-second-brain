@@ -27,8 +27,8 @@ import { runCli } from "../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import {
-  excludedVisibilitySurfaces,
-  VISIBILITY_SURFACE_REGISTRY,
+  callableVisibilitySurfaces,
+  excludedCallableVisibilitySurfaces,
 } from "../../src/core/search/visibility-surface-registry.ts";
 
 test("a vault that never uses visibility: renders neither the JSON key nor the human line", async () => {
@@ -60,14 +60,17 @@ test("a vault with one visibility-tagged page renders the finding in both shapes
     const parsed = JSON.parse(json.stdout) as Record<string, unknown>;
     const finding = parsed["visibility_honesty"] as Record<string, unknown>;
     expect(finding).toBeDefined();
-    expect(finding["excluded_surface_count"]).toBe(excludedVisibilitySurfaces().length);
-    expect(finding["total_surface_count"]).toBe(VISIBILITY_SURFACE_REGISTRY.length);
+    expect(finding["excluded_surface_count"]).toBe(excludedCallableVisibilitySurfaces().length);
+    expect(finding["total_surface_count"]).toBe(callableVisibilitySurfaces().length);
 
     const human = await runCli(["search", "check", "--vault", vault, "--db", dbPath]);
     expect(human.returncode).toBe(0);
     expect(human.stdout).toContain("visibility_honesty:");
     expect(human.stdout).toContain("caller-supplied view filter, not a privacy boundary");
-    expect(human.stdout).toContain(`${excludedVisibilitySurfaces().length} of `);
+    expect(human.stdout).toContain(`${excludedCallableVisibilitySurfaces().length} of the `);
+    // The line names its own scope: the census's population, not the
+    // product's whole surface area.
+    expect(human.stdout).toContain("the visibility census enumerates");
   } finally {
     cleanup();
   }

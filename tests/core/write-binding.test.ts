@@ -20,9 +20,9 @@
  *   3. THE AUTHORITY IS THE CONFIG FILE, NOT THE CALLER'S CLAIM. This
  *      system has no credential: agent identity is an environment
  *      variable, else a config key, else the literal `agent`, and
- *      twenty-two MCP tool schemas across fifteen modules accept a
- *      caller-supplied `agent` string that
- *      overrides it verbatim. A fence keyed to that would be bypassed by
+ *      twenty-five MCP tool schemas accept a caller-supplied `agent`
+ *      string that overrides it verbatim (the count is pinned as an
+ *      equality by `tests/core/architecture/origin-channel-census.test.ts`). A fence keyed to that would be bypassed by
  *      passing a different string, so the binding never reads it - and
  *      that is asserted here by passing a different one and by moving
  *      the environment variable underneath the same call.
