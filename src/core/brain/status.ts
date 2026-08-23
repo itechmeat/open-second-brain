@@ -90,6 +90,13 @@ export interface BrainStatusCounts {
 export const MAINTENANCE_DEBT_STATUS = Object.freeze({
   neverDreamed: "never_dreamed",
   counted: "counted",
+  /**
+   * At least one log shard in the counted window could not be read, or
+   * held lines the reader could not parse, so the figure is a LOWER
+   * BOUND. Distinct from `counted` because the number an operator acts
+   * on is the one place a partial walk must not pass for a total.
+   */
+  undercounted: "undercounted",
 } as const);
 
 export type MaintenanceDebtStatus =
@@ -182,11 +189,14 @@ export function computeBrainStatus(
  * contrast, walks every day at or after `last_dream_at` (all of them,
  * for a never-dreamed vault) and MUST NOT run on this path.
  *
- * Returns `null` when there is no log history yet, or when the newest
- * day's shard(s) exist but could not be read — both are "unknown",
- * never a false `false`. Returns `true` when the newest log day has at
- * least one event and none of them is a `dream` event, `false` when it
- * has a `dream` event. This is a same-day signal only: a vault that
+ * Returns `null` when there is no log history yet, when the newest day's
+ * shard(s) exist but could not be read, and when the newest day holds no
+ * readable event at all — all three are "unknown", never a false
+ * `false` and never a `true` invented out of an empty or unparsable
+ * file. Returns `true` when the newest log day has at least one event
+ * and none of them is a `dream` event, `false` when it has a `dream`
+ * event. A `dream` event is decisive even beside a warning: it was read,
+ * and nothing unread can unsay it. This is a same-day signal only: a vault that
  * dreamed yesterday and logged something unrelated today still reads
  * `true`. Callers that need the precise count read
  * `maintenance_debt.log_events_since_dream` from `computeBrainStatus`
@@ -196,15 +206,22 @@ export function computeMaintenanceOverdueFlag(vault: string): boolean | null {
   const dates = listLogDates(vault);
   const newest = dates.at(-1);
   if (newest === undefined) return null;
-  let entries;
+  let day;
   try {
-    entries = readLogDay(vault, newest).entries;
+    day = readLogDay(vault, newest);
   } catch {
     // Same tolerance as `scanLogTimestamps`: an unreadable day is
     // reported as unknown, not silently folded into a boolean answer.
     return null;
   }
-  return !entries.some((e) => e.eventType === BRAIN_LOG_EVENT_KIND.dream);
+  if (day.entries.some((e) => e.eventType === BRAIN_LOG_EVENT_KIND.dream)) return false;
+  // No dream event among the events that were read. That is only an
+  // answer when the read was whole and had something in it: an empty day
+  // and a day whose bytes did not parse are both "nothing to judge", and
+  // `true` there would report overdue maintenance out of a file nobody
+  // could read.
+  if (day.entries.length === 0 || day.warnings.length > 0) return null;
+  return true;
 }
 
 // ----- Implementation ------------------------------------------------------
@@ -325,6 +342,11 @@ function scanLogTimestamps(vault: string): {
  * `lastDreamAt === null` (never dreamed) counts every event ever
  * logged, because there is no dream boundary to count "since". A real
  * `last_dream_at` counts only events with a strictly later timestamp —
+ * and a shard in that window that could not be read, or a line in it
+ * that could not be parsed, makes the answer `undercounted`: the number
+ * is then a floor, and the sibling flag's discipline (never a confident
+ * answer over an incomplete read) applies to the precise figure too.
+ *
  * the dream event itself is the boundary, not a countable event — and
  * walks days newest-first, stopping as soon as a day predates the
  * dream's own day, so the scan is bounded to "since the last dream",
@@ -339,15 +361,26 @@ function computeMaintenanceDebt(vault: string, lastDreamAt: string | null): Main
   const days = listLogDates(vault).toReversed(); // newest day first
 
   let count = 0;
+  let complete = true;
   for (const date of days) {
     // Every earlier day is entirely pre-dream once we're past the
     // dream's own day — no need to open its shards at all.
     if (cutoffDate !== null && date < cutoffDate) break;
     let entries;
     try {
-      entries = readLogDay(vault, date).entries;
+      const day = readLogDay(vault, date);
+      entries = day.entries;
+      // A shard that would not open, or a line that would not parse:
+      // either way events this window contains are absent from `count`,
+      // and the figure below is a floor rather than the count it looks
+      // like. Recorded, not aborted — the events that WERE read are
+      // still the operator's best available number.
+      if (day.warnings.length > 0) complete = false;
     } catch {
-      continue; // Same tolerance as scanLogTimestamps: skip, don't abort.
+      // Same tolerance as scanLogTimestamps: skip the day rather than
+      // abort the snapshot — but never silently, see above.
+      complete = false;
+      continue;
     }
     for (const e of entries) {
       if (cutoffMs !== null) {
@@ -359,8 +392,11 @@ function computeMaintenanceDebt(vault: string, lastDreamAt: string | null): Main
   }
 
   return Object.freeze({
-    status:
-      lastDreamAt === null ? MAINTENANCE_DEBT_STATUS.neverDreamed : MAINTENANCE_DEBT_STATUS.counted,
+    status: !complete
+      ? MAINTENANCE_DEBT_STATUS.undercounted
+      : lastDreamAt === null
+        ? MAINTENANCE_DEBT_STATUS.neverDreamed
+        : MAINTENANCE_DEBT_STATUS.counted,
     log_events_since_dream: count,
   });
 }

@@ -138,6 +138,15 @@ export type WriteBatchErrorCode =
   // appended text over a body it never saw. Read failure is now a
   // refusal that names the path and the reason.
   | "target_unreadable"
+  // nothing-writes-silently, unit B. The target was read and the
+  // frontmatter scanner reported a line it could not express as a
+  // key/value pair or a list item, so that line is absent from the parsed
+  // map. Both update and append re-serialise that map over the file, so
+  // proceeding would delete the line and answer `updated: true` - the
+  // same loss `target_unreadable` refuses, on the half of the read the
+  // parser DID manage. The operator's way through is to fix the
+  // frontmatter the scanner names.
+  | "target_frontmatter_lossy"
   // nothing-writes-silently, unit B. The update would replace a body
   // that carries text with a blank one. See
   // {@link refuseBlankOverwrite}; `allowEmpty` is the way through.
@@ -568,6 +577,15 @@ const READ_EXISTING_NOTE_SITE = "brain.write-batch.read-existing-note";
  * append would write its text over a body nobody read, both reporting
  * success. The projection runs before any commit, so raising leaves the
  * file byte-identical.
+ *
+ * A DROPPED frontmatter line raises for the same reason. The parse
+ * succeeded, and the scanner reported by name a line it could not
+ * express; the callers below re-serialise the parsed map with
+ * `formatFrontmatter`, so that line would be deleted from disk by a
+ * write the caller never asked to touch it - a frontmatter-only update
+ * that answers `updated: true` while removing a field it never mentioned.
+ * Both notices come off the same parse, and both mean the same thing:
+ * part of the content this write would replace is unknown to it.
  */
 function readExistingNote(abs: string, relPath: string, index: number): ExistingNote {
   if (!existsSync(abs)) {
@@ -589,6 +607,17 @@ function readExistingNote(abs: string, relPath: string, index: number): Existing
       `operation ${index}: note ${relPath} exists but could not be read ` +
         `(${unreadable.detail}), so the content this write would replace is unknown`,
       { path: relPath, reason: unreadable.detail },
+    );
+  }
+  const dropped = notices.filter((n) => n.code === DEGRADATION_CODE.frontmatterLineDropped);
+  if (dropped.length > 0) {
+    const reason = dropped.map((n) => n.detail).join("; ");
+    throw new WriteBatchError(
+      "target_frontmatter_lossy",
+      index,
+      `operation ${index}: note ${relPath} has frontmatter this build cannot round-trip ` +
+        `(${reason}), and rewriting it would delete those lines`,
+      { path: relPath, reason },
     );
   }
   return { frontmatter: { ...frontmatter }, body };

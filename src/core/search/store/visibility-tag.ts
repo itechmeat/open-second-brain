@@ -13,9 +13,9 @@
  * `tests/core/search/visibility-tag-presence.test.ts`.
  *
  * That makes "does any page use `visibility:`" answerable from the
- * ALREADY-BUILT index with one `LIKE` scan over one column at one chunk
- * position - no filesystem walk, no per-page frontmatter parse, and no
- * new table. It is imprecise in the direction that costs nothing: a
+ * ALREADY-BUILT index - no filesystem walk, no per-page frontmatter
+ * parse, and no new table. It is imprecise in the direction that costs
+ * nothing: a
  * frontmatter VALUE that happens to contain the literal substring
  * `visibility:` (a title field quoting the word, say) reads as a tagged
  * vault when none exists. `search check`'s honesty finding this feeds
@@ -24,6 +24,21 @@
  * frontmatter block back out of `chunks` to confirm the key rather than
  * the substring, re-derives the vault-walk cost this module exists to
  * avoid.
+ *
+ * ## What it costs, stated rather than implied
+ *
+ * It is a SCAN of `chunks`, not an index lookup. No index serves it and
+ * none could: the only index on the table is `idx_chunks_document`
+ * (`schema.ts`), and a leading-wildcard `LIKE` is unindexable in any
+ * case, so `chunk_index = ?` is a filter applied per row rather than a
+ * seek. `EXISTS` stops at the first match, which makes a vault that DOES
+ * use the field cheap and the common case - a vault that never has -
+ * the worst one: every chunk body is read to conclude "no".
+ *
+ * What makes that affordable is WHERE it runs, not how small it is: once
+ * per `indexCheck`, an operator-invoked diagnostic, and nowhere on a
+ * query path. A caller wanting this answer per search would need a
+ * recorded flag rather than this scan.
  */
 
 import { Database } from "bun:sqlite";
@@ -38,8 +53,9 @@ const VISIBILITY_KEY_PATTERN = "%visibility:%";
 
 /**
  * True when at least one document's `chunk_index = 0` row contains the
- * literal substring `visibility:`. One indexed `LIKE` scan restricted to
- * one row per document, never the whole `chunks` table.
+ * literal substring `visibility:`. One `LIKE` scan of `chunks`, stopping
+ * at the first hit - see the module docblock for what that costs and why
+ * this is not the indexed lookup its shape suggests.
  */
 export function anyVisibilityTagPresent(db: Database): boolean {
   const row = db

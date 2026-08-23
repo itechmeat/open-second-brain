@@ -76,8 +76,8 @@ const ROLLUP_ENVELOPE_JSON =
   'summary note. Cite the items you fold in; submit the full note.",' +
   '"schema_hints":["frontmatter: required YAML block with at least a `kind` key",' +
   '"tier: rollup (the rollup\'s tier weight)",' +
-  '"wikilinks: link_candidates carries all 1 notes this vault holds; a target it does not ' +
-  'name does not exist and the link will dangle"],' +
+  '"wikilinks: link_candidates carries all 1 note names this vault offers; a name it does ' +
+  'not carry is not one you can cite and the link will dangle"],' +
   '"target_path":"Brain/rollups/rollup-rollup-dream-2026-07-19-100000.md",' +
   '"link_candidates":{"candidates":["analytical-engine"],"total":1,"truncated":false,' +
   '"selection":"all"}}';
@@ -93,7 +93,7 @@ function fired() {
     ledger: null,
     thresholds: { fact: 5, identity: 2 },
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   return plan.entries[0]!.envelope;
 }

@@ -148,6 +148,20 @@ export type IndexPeek<T> =
   | { readonly kind: "unreadable"; readonly detail: string };
 
 /**
+ * How an `unreadable` peek reads in a report.
+ *
+ * "Could not be read", not "did not open": the arm covers a database
+ * that opened and then threw on the read as well as one that never
+ * opened - an older schema with no `embeddings` table is the common
+ * case - and blaming the open misattributes the fault to the file
+ * instead of the query. Shared so the peeks that fold this arm into an
+ * `unrecorded` verdict all word it the same way.
+ */
+export function describeUnreadableIndex(dbPath: string, detail: string): string {
+  return `${dbPath} could not be read: ${detail}`;
+}
+
+/**
  * Run `read` against a read-only handle on the index, naming which of
  * the three outcomes occurred. Shared by the synchronous peeks so the
  * classification lives in one place rather than once per caller.

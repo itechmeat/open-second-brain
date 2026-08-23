@@ -49,8 +49,13 @@ const SCHEMA_VERSION = 1 as const;
 /** Subdirectory holding one JSON checkpoint per batch plan. */
 const CHECKPOINT_DIR = "ingest-checkpoints";
 
-/** How a refusal names this lane's id and its file. */
-const ID_LABEL = "plan";
+/**
+ * How a refusal names this lane's id and its file. Exported because the
+ * boundaries that accept a caller-supplied plan id validate it against the
+ * shared store's grammar and must name the same thing this lane does.
+ */
+export const PLAN_ID_LABEL = "plan";
+const ID_LABEL = PLAN_ID_LABEL;
 const FILE_LABEL = "ingest checkpoint";
 
 export { checkpointingEnabled, NO_CHECKPOINT_ENV };

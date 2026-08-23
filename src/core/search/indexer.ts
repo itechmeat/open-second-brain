@@ -77,6 +77,7 @@ import { pathCovers } from "../vault-scope/defaults.ts";
 
 import {
   acquireWriterLock,
+  describeUnreadableIndex,
   embeddingAbiFixCommand,
   formatEmbedderRecordContradiction,
   formatEmbeddingAbiDrift,
@@ -1647,7 +1648,7 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
     reason:
       peek.kind === "absent"
         ? `no search index at ${dbPath}`
-        : `${dbPath} did not open: ${peek.detail}`,
+        : describeUnreadableIndex(dbPath, peek.detail),
   });
 }
 

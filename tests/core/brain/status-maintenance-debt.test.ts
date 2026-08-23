@@ -21,6 +21,13 @@
  *   5. A vault with no `Brain/` layer at all reports the same honest
  *      `never_dreamed` / zero shape as an empty-but-present Brain, not
  *      an error.
+ *   6. A log shard the process cannot read makes the figure a LOWER
+ *      BOUND, and it says so (`status: "undercounted"`) rather than
+ *      presenting a partial walk as a count.
+ *   7. `computeMaintenanceOverdueFlag` answers `null` for a newest day
+ *      that holds no events at all - the same "unknown" it already gives
+ *      an unreadable day, not `true`, which would report overdue
+ *      maintenance from an empty file.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -28,7 +35,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { computeBrainStatus, MAINTENANCE_DEBT_STATUS } from "../../../src/core/brain/status.ts";
+import {
+  computeBrainStatus,
+  computeMaintenanceOverdueFlag,
+  MAINTENANCE_DEBT_STATUS,
+} from "../../../src/core/brain/status.ts";
+import { brainDirs } from "../../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { dream } from "../../../src/core/brain/dream.ts";
 import { appendLogEvent } from "../../../src/core/brain/log.ts";
@@ -141,6 +153,58 @@ describe("computeBrainStatus — maintenance_debt (Brain absent)", () => {
     } finally {
       rmSync(bareVault, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a log day the reader cannot fully parse is a lower bound, and says so", () => {
+  /** A shard whose lines are not JSON: the reader reports them, and counts none. */
+  function writeUnparsableShard(date: string): void {
+    atomicWriteFileSync(
+      join(brainDirs(vault).log, `${date}.broken.jsonl`),
+      "not json at all\nnor this\n",
+    );
+  }
+
+  test("maintenance_debt reports undercounted rather than presenting a partial walk as a count", () => {
+    logEvent("2026-06-01T10:00:00Z");
+    writeUnparsableShard("2026-06-01");
+
+    const snapshot = computeBrainStatus(vault);
+    expect(snapshot.maintenance_debt.status).toBe(MAINTENANCE_DEBT_STATUS.undercounted);
+    // The events it COULD read are still reported - the number is a floor,
+    // not a refusal to answer.
+    expect(snapshot.maintenance_debt.log_events_since_dream).toBe(1);
+  });
+
+  test("a fully readable log still reports counted", () => {
+    appendLogEvent(vault, {
+      timestamp: "2026-06-01T12:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "tester",
+      body: {},
+    });
+    logEvent("2026-06-01T13:00:00Z");
+    expect(computeBrainStatus(vault).maintenance_debt.status).toBe(MAINTENANCE_DEBT_STATUS.counted);
+  });
+
+  test("the overdue flag answers unknown for a newest day that holds no readable event", () => {
+    writeUnparsableShard("2026-06-03");
+    // `true` here would report overdue maintenance out of a file nobody
+    // could read; `false` would claim a dream that may be in the bytes
+    // that did not parse.
+    expect(computeMaintenanceOverdueFlag(vault)).toBeNull();
+  });
+
+  test("the overdue flag still answers when the newest day is readable", () => {
+    logEvent("2026-06-04T09:00:00Z");
+    expect(computeMaintenanceOverdueFlag(vault)).toBe(true);
+    appendLogEvent(vault, {
+      timestamp: "2026-06-04T10:00:00Z",
+      eventType: BRAIN_LOG_EVENT_KIND.dream,
+      agent: "tester",
+      body: {},
+    });
+    expect(computeMaintenanceOverdueFlag(vault)).toBe(false);
   });
 });
 

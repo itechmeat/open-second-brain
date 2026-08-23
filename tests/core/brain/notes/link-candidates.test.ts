@@ -202,6 +202,6 @@ describe("the schema hint says what the list is", () => {
 
   test("an empty vault says so rather than claiming a complete list of nothing", () => {
     const hint = linkCandidateSchemaHint(buildLinkCandidateManifest(vaultWith([]), ALL_VISIBLE));
-    expect(hint).toMatch(/no notes/);
+    expect(hint).toMatch(/no note in this vault is available to cite/);
   });
 });

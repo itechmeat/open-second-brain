@@ -594,6 +594,14 @@ function renderStatusMarkdown(s: BrainStatusSnapshot): string {
   const debtNoun = debtCount === 1 ? "log event" : "log events";
   if (s.maintenance_debt.status === MAINTENANCE_DEBT_STATUS.neverDreamed) {
     lines.push(`- never dreamed — ${debtCount} ${debtNoun} recorded since inception`);
+  } else if (s.maintenance_debt.status === MAINTENANCE_DEBT_STATUS.undercounted) {
+    // The figure is a floor: at least one shard in the window would not
+    // read or would not parse. Printing it as a count would be the
+    // partial walk presented as a total.
+    lines.push(
+      `- at least ${debtCount} ${debtNoun} since the last dream — a log shard could not be ` +
+        "read in full, so this is a lower bound",
+    );
   } else {
     lines.push(`- ${debtCount} ${debtNoun} since the last dream`);
   }

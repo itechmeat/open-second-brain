@@ -37,7 +37,7 @@ test("below threshold nothing fires and no counters move", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   expect(plan.fired).toBe(false);
   expect(plan.entries).toHaveLength(0);
@@ -50,7 +50,7 @@ test("reaching the fact threshold fires one rollup and resets the counter", () =
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   expect(plan.fired).toBe(true);
   expect(plan.entries).toHaveLength(1);
@@ -73,14 +73,14 @@ test("a fired plan is idempotent: replaying it moves no counter", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   const second = planRollupLadder({
     factCount: 5,
     ledger: first.ledger,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   expect(second.fired).toBe(false);
   expect(second.entries).toHaveLength(0);
@@ -94,7 +94,7 @@ test("the ladder composes: enough fact rollups cascade into an identity rollup",
     ledger: null,
     thresholds: { fact: 5, identity: 1 },
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   expect(plan.entries).toHaveLength(2);
   expect(plan.entries.map((e) => e.tier)).toEqual([ROLLUP_TIER.fact, ROLLUP_TIER.rollup]);
@@ -108,7 +108,7 @@ test("new facts beyond the last rollup re-arm the fact rung", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   // Five more facts since the reset (10 total) crosses the threshold again.
   const second = planRollupLadder({
@@ -116,7 +116,7 @@ test("new facts beyond the last rollup re-arm the fact rung", () => {
     ledger: first.ledger,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
-    linkCandidates: LINK_CANDIDATES,
+    linkCandidates: () => LINK_CANDIDATES,
   });
   expect(second.fired).toBe(true);
   expect(second.entries[0]!.fromCount).toBe(5);
@@ -134,4 +134,42 @@ test("thresholds resolve from config, falling back to the named constants", () =
   });
   expect(overridden.fact).toBe(3);
   expect(overridden.identity).toBe(DEFAULT_ROLLUP_IDENTITY_THRESHOLD);
+});
+
+test("the link-candidate manifest is not built when no rung fires", () => {
+  // The manifest is a whole-vault walk - and, under owner-scope delivery, a
+  // frontmatter read per note. Only a FIRED rung carries one, so a run that
+  // fires nothing (the common case, and every dry run) must not pay for it.
+  let built = 0;
+  const plan = planRollupLadder({
+    factCount: 4,
+    ledger: null,
+    thresholds: THRESHOLDS,
+    runId: RUN_ID,
+    linkCandidates: () => {
+      built += 1;
+      return LINK_CANDIDATES;
+    },
+  });
+  expect(plan.fired).toBe(false);
+  expect(built).toBe(0);
+});
+
+test("two rungs firing in one pass build the manifest once", () => {
+  let built = 0;
+  const plan = planRollupLadder({
+    factCount: 5,
+    ledger: null,
+    thresholds: { fact: 5, identity: 1 },
+    runId: RUN_ID,
+    linkCandidates: () => {
+      built += 1;
+      return LINK_CANDIDATES;
+    },
+  });
+  expect(plan.entries.length).toBeGreaterThan(1);
+  expect(built).toBe(1);
+  for (const entry of plan.entries) {
+    expect(entry.envelope.link_candidates).toEqual(LINK_CANDIDATES);
+  }
 });

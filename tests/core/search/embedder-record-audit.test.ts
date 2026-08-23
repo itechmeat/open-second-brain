@@ -142,10 +142,10 @@ test("the contradiction is a different statement from ABI drift", async () => {
   expect(report.embedderRecord.verdict).toBe("audited");
   if (report.embedderRecord.verdict !== "audited") return;
   expect(report.embedderRecord.outcome).toBe(RECONCILIATION_OUTCOME.contradicted);
-  expect(report.warnings.some((w) => w.includes("contradicts"))).toBe(true);
+  expect(report.warnings.some((w) => w.includes("contradict that record"))).toBe(true);
   expect(
     report.recommendations.some(
-      (r) => r.includes("contradicts") && r.includes(EMBEDDING_ABI_FIX_COMMAND),
+      (r) => r.includes("contradict that record") && r.includes(EMBEDDING_ABI_FIX_COMMAND),
     ),
   ).toBe(true);
 });

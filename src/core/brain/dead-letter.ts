@@ -66,7 +66,7 @@ import {
   type ReconciliationReport,
 } from "../reconciliation-report.ts";
 import { DERIVED_STORE_DIR } from "./path-constants.ts";
-import { compactRunStamp, isoSecond } from "./time.ts";
+import { isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Only schema version currently understood. Unknown versions are refused. */
@@ -78,8 +78,8 @@ const DEAD_LETTER_DIR = "dead-letters";
 /** Hex characters of the content digest that makes an id unique. */
 const ID_DIGEST_CHARS = 12;
 
-/** The `<lane>-<stamp>-<digest>` id shape, as the reader validates it. */
-const ID_RE = /^[a-z][a-z0-9-]*-\d{4}-\d{2}-\d{2}-\d{6}-[0-9a-f]+$/;
+/** The `<lane>-<digest>` id shape, as the reader validates it. */
+const ID_RE = new RegExp(`^[a-z][a-z0-9-]*-[0-9a-f]{${ID_DIGEST_CHARS}}$`);
 
 /**
  * Lanes that commit several artifacts from one validated payload, and so
@@ -157,10 +157,14 @@ export function deadLetterPath(vault: string, id: string): string {
 /**
  * Write one dead letter and return it.
  *
- * The id is derived from the record's own content, so re-recording an
- * identical failure rewrites one file rather than accumulating one per
- * retry, while a different failure - different items missing, different
- * error - gets its own. No lock: each record is a whole file written
+ * The id is derived from the record's own content and NOTHING else - no
+ * clock - so re-recording an identical failure rewrites one file rather
+ * than accumulating one per retry, while a different failure - different
+ * items missing, different error - gets its own. The retry rewrites
+ * `recorded_at`, so the one file names the most recent attempt; a
+ * timestamp in the id instead would have made a deterministically-failing
+ * payload retried twenty times into twenty byte-identical files in a
+ * directory nothing prunes. No lock: each record is a whole file written
  * atomically under a content-derived name, so there is no read-modify-
  * write for two writers to race on.
  */
@@ -192,7 +196,7 @@ export function recordDeadLetter(vault: string, input: RecordDeadLetterInput): D
     outcome: deriveReconciliationOutcome(report),
     first_error: message,
   };
-  const id = `${envelope.lane}-${compactRunStamp(now)}-${sha256Hex(canonicalJson(body)).slice(0, ID_DIGEST_CHARS)}`;
+  const id = `${envelope.lane}-${sha256Hex(canonicalJson(body)).slice(0, ID_DIGEST_CHARS)}`;
   const record: DeadLetterRecord = Object.freeze({
     ...body,
     id,
@@ -237,8 +241,10 @@ export function readDeadLetter(vault: string, id: string): DeadLetterRecord | nu
 }
 
 /**
- * Every record this vault holds, newest id last (the id carries the
- * stamp, so lexical order is chronological within a lane). An absent
+ * Every record this vault holds, newest last. Ordered by `recorded_at`
+ * off the parsed records rather than by filename: the id is a content
+ * digest and carries no clock, so lexical order over the directory would
+ * be arbitrary. The id breaks a tie, so the order is total. An absent
  * directory is an empty list - nothing has ever failed part way - while
  * an unreadable record throws, because a listing that skipped it would
  * under-report the very thing it is for.
@@ -246,10 +252,14 @@ export function readDeadLetter(vault: string, id: string): DeadLetterRecord | nu
 export function listDeadLetters(vault: string): ReadonlyArray<DeadLetterRecord> {
   const dir = deadLetterDir(vault);
   if (!existsSync(dir)) return Object.freeze([]);
-  const names = readdirSync(dir)
+  const records = readdirSync(dir)
     .filter((name) => name.endsWith(".json"))
-    .toSorted((a, b) => a.localeCompare(b));
-  return Object.freeze(names.map((name) => parseRecord(join(dir, name))));
+    .map((name) => parseRecord(join(dir, name)));
+  return Object.freeze(
+    records.toSorted(
+      (a, b) => a.recorded_at.localeCompare(b.recorded_at) || a.id.localeCompare(b.id),
+    ),
+  );
 }
 
 function parseRecord(path: string): DeadLetterRecord {

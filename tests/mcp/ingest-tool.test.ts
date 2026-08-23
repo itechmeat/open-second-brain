@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -15,7 +15,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { listEntities } from "../../src/core/brain/entities/registry.ts";
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
-import { MCPError } from "../../src/mcp/protocol.ts";
+import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
 let vault: string;
@@ -83,6 +83,29 @@ describe("brain_ingest_source", () => {
       }),
     ).rejects.toThrow(MCPError);
     expect(listEntities(vault)).toHaveLength(0);
+  });
+
+  test("a plan_id outside the checkpoint grammar is the caller's fault, and named", async () => {
+    seed("Articles/eth.md");
+    // Swallowed, this took the whole batch: every call succeeded, no
+    // checkpoint was ever written, and reconciliation reported all of it as
+    // never ingested. INVALID_PARAMS, not INTERNAL_ERROR - the argument is
+    // what is wrong and rephrasing it is the fix.
+    let thrown: unknown;
+    try {
+      await handler(ctx, {
+        source_path: "Articles/eth.md",
+        summary: "x",
+        entities: [{ category: "concept", name: "A" }],
+        plan_id: "docs-migration",
+      });
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(MCPError);
+    expect((thrown as MCPError).code).toBe(INVALID_PARAMS);
+    expect((thrown as MCPError).message).toContain("plan id");
+    expect(existsSync(join(vault, "Brain", "sources"))).toBe(false);
   });
 
   test("missing required source_path is rejected", async () => {

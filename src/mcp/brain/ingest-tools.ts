@@ -11,7 +11,8 @@
 
 import { serializeImportCensus } from "../../core/brain/import-census.ts";
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
-import { clearCheckpoint } from "../../core/brain/ingest/checkpoint.ts";
+import { clearCheckpoint, PLAN_ID_LABEL } from "../../core/brain/ingest/checkpoint.ts";
+import { assertCheckpointId } from "../../core/brain/checkpoint-store.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
 import { reconcilePlan } from "../../core/brain/ingest/reconcile.ts";
 import { IntakeValidationError } from "../../core/brain/intake/extract-intake.ts";
@@ -32,6 +33,7 @@ import {
   coerceStrList,
 } from "../coerce.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
+import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { parseExtractionIntakeArgs } from "./intake-args.ts";
 import { enforceCountGuard, readCountGuardArgs, wrapToolErrors } from "./shared.ts";
@@ -52,6 +54,19 @@ async function toolBrainIngestSource(
   const sourcePath = coerceStr(args, "source_path", true)!;
   const summary = coerceStr(args, "summary", true)!;
   const planId = coerceStr(args, "plan_id", false) ?? undefined;
+  // `plan_id` is caller-supplied and becomes a checkpoint filename, so the
+  // store's grammar is enforced HERE, where the caller can be told it is
+  // their argument that is wrong. Left to the ingest it would surface as an
+  // INTERNAL_ERROR, and before that it was swallowed entirely: the ingest
+  // succeeded, resume never engaged, and `--reconcile` reported the whole
+  // batch as never ingested.
+  if (planId !== undefined) {
+    try {
+      assertCheckpointId(PLAN_ID_LABEL, planId);
+    } catch (err) {
+      throw new MCPError(INVALID_PARAMS, `${TOOL}: ${(err as Error).message}`);
+    }
+  }
   const preExtract = coerceBoolOptional(args, "pre_extract") ?? false;
   // This tool names its source as `source_path` and hands it to the pipeline
   // itself, so `source` is not part of its contract. Declaring that stops the

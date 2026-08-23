@@ -24,6 +24,7 @@ import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { canonicalNotePath } from "../../path-safety.ts";
+import { assertCheckpointId } from "../checkpoint-store.ts";
 import {
   formatFrontmatter,
   parseFrontmatter,
@@ -41,7 +42,7 @@ import {
   sourceIdentityHash,
   type Provenance,
 } from "../provenance/provenance.ts";
-import { recordCompleted } from "./checkpoint.ts";
+import { PLAN_ID_LABEL, recordCompleted } from "./checkpoint.ts";
 import { updateManifest } from "./content-manifest.ts";
 import { preExtractCodeStructure, type PreExtractResult } from "./pre-extract.ts";
 
@@ -65,6 +66,13 @@ export interface IngestSourceOptions {
    * source records the source into that plan's resume checkpoint
    * (union-as-you-go). The content manifest stays the authoritative final
    * state; the checkpoint only tracks plan progress. Absent → no checkpoint.
+   *
+   * Held to the checkpoint store's id grammar (lowercase hex - the id becomes
+   * a filename) and REFUSED here, before any write, when it is not. The
+   * checkpoint write below is best-effort, and a caller-supplied id that can
+   * never work is not the transient fault that tolerance is for: swallowed,
+   * it left every source ingested with no plan progress recorded at all and
+   * `--reconcile` reporting the whole batch as never ingested.
    */
   readonly planId?: string;
   /**
@@ -115,6 +123,12 @@ export function ingestSource(
 ): IngestSourceResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // Before anything is written: an id the checkpoint store cannot use is a
+  // resume that will never engage, and the caller has to hear it now rather
+  // than discover it from a reconciliation report.
+  if (opts.planId !== undefined && opts.planId.length > 0) {
+    assertCheckpointId(PLAN_ID_LABEL, opts.planId);
+  }
   // The SAME normaliser the trust classifier uses. This used to be a bare
   // `canonicalNotePath`, which left a caller-supplied `[[Articles/x.md]]`
   // wrapped: the summary page then wrote `[[[[Articles/x.md]]]]` and keyed on
@@ -200,7 +214,11 @@ export function ingestSource(
       try {
         recordCompleted(vault, opts.planId, dirname(canonicalSource), [canonicalSource], opts.now);
       } catch {
-        // Checkpointing is a resumability optimization, not correctness.
+        // Checkpointing is a resumability optimization, not correctness -
+        // and what is tolerated here is now only the TRANSIENT half: a lock
+        // this run could not take, a write that failed. The permanent,
+        // caller-caused half (an id the store cannot use) was refused at the
+        // top of this function, before the ingest wrote anything.
       }
     }
   }

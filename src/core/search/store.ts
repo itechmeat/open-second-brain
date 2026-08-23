@@ -55,6 +55,7 @@ import * as vectors from "./store/vectors.ts";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export {
+  describeUnreadableIndex,
   EMBEDDING_DIMENSION_STATE_KEY,
   EMBEDDING_MODEL_STATE_KEY,
   EMBEDDING_PREFIX_PASSAGE_STATE_KEY,

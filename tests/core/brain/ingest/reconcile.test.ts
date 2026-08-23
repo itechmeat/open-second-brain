@@ -26,6 +26,8 @@ let configHome: string;
 
 const NOW = new Date("2026-06-13T12:00:00Z");
 const CAPS = { maxBatchBytes: 100_000, maxBatchFiles: 100 } as const;
+/** A plan id the checkpoint store accepts, for fixtures that need any id. */
+const SEED_PLAN_ID = "5eed01";
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-reconcile-vault-"));
@@ -110,8 +112,12 @@ describe("reconcilePlan", () => {
     write("Docs/b.md");
     // Ingest both so the content manifest records them; a re-plan then
     // classifies every source `unchanged` (manifest skips), not new work.
-    ingest("Docs/a.md", "seed-plan");
-    ingest("Docs/b.md", "seed-plan");
+    // A valid (hex) plan id that is not the plan under test: the checkpoint
+    // it writes is irrelevant here, and the assertions below are about the
+    // manifest path. The old fixture passed "seed-plan", which the
+    // checkpoint store rejects - the argument did nothing at all.
+    ingest("Docs/a.md", SEED_PLAN_ID);
+    ingest("Docs/b.md", SEED_PLAN_ID);
     const plan = planBatches(vault, "Docs", CAPS);
     expect(plan.batches).toEqual([]); // nothing new to dispatch
 

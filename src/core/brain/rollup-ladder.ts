@@ -108,15 +108,21 @@ export interface RollupLadderInput {
   /**
    * Wikilink targets the emitted envelopes offer the calling agent.
    *
-   * It arrives as a VALUE rather than being walked from a vault inside
-   * {@link planRollupLadder}, because that function is pure and stays
-   * pure: the caller owns the one directory walk, and a ladder that
-   * planned differently depending on what was on disk could not be
-   * replayed. Required rather than optional for the same reason a
-   * fallback is refused everywhere else here - a lane that forgot it
-   * would emit an envelope claiming the vault has nothing to cite.
+   * A SUPPLIER, not a value, and called at most once - only when a rung
+   * actually fires. The manifest is a whole-vault directory walk, and
+   * under owner-scope delivery a frontmatter read per note; only a fired
+   * rung's envelope carries one, and most passes fire nothing (every dry
+   * run among them). Building it up front paid that walk to throw the
+   * result away.
+   *
+   * The caller still owns the walk - this function does no I/O of its
+   * own and plans identically whatever the supplier returns, so the
+   * ladder stays replayable. Required rather than optional for the same
+   * reason a fallback is refused everywhere else here: a lane that
+   * forgot it would emit an envelope claiming the vault has nothing to
+   * cite.
    */
-  readonly linkCandidates: LinkCandidateManifest;
+  readonly linkCandidates: () => LinkCandidateManifest;
 }
 
 /** Resolve the rollup thresholds from config, else the named defaults. */
@@ -158,12 +164,18 @@ interface Rung {
 }
 
 /**
- * Plan the rollup ladder. Pure: no I/O, deterministic in its inputs. The
- * rungs are processed base-to-top so a fact rollup fired this pass counts
- * toward the identity rung in the same pass.
+ * Plan the rollup ladder. Deterministic in its inputs and doing no I/O of
+ * its own; the one thing it may reach for is the link-candidate manifest,
+ * and only for a rung that fires (see {@link RollupLadderInput.linkCandidates}).
+ * The rungs are processed base-to-top so a fact rollup fired this pass
+ * counts toward the identity rung in the same pass.
  */
 export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
   const { factCount, ledger, thresholds, runId, linkCandidates } = input;
+  // At most one call, however many rungs fire: two envelopes in one pass
+  // offer the same targets, and the walk behind them is the expensive part.
+  let manifest: LinkCandidateManifest | null = null;
+  const resolveCandidates = (): LinkCandidateManifest => (manifest ??= linkCandidates());
   const baselines: Record<string, number> = { ...ledger?.baselines };
   const produced: Record<string, number> = { ...ledger?.produced };
 
@@ -192,7 +204,7 @@ export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
         fromCount: baseline,
         toCount: source,
         newSinceLast,
-        envelope: buildEnvelope(rung, newSinceLast, runId, linkCandidates),
+        envelope: buildEnvelope(rung, newSinceLast, runId, resolveCandidates()),
       }),
     );
   }

@@ -122,6 +122,44 @@ describe("a dead letter round-trips", () => {
     expect(listDeadLetters(v)).toHaveLength(2);
   });
 
+  test("a retry minutes later still collapses onto the same file", () => {
+    // The id is derived from the record's CONTENT and nothing else. When
+    // the clock was part of it, a deterministically-failing payload
+    // retried twenty times left twenty byte-identical files in a
+    // directory nothing prunes - and an operator could not tell twenty
+    // partial writes from one repeated one.
+    const v = vault();
+    const input = {
+      envelope: ENVELOPE,
+      report: report(["items[1]:module-names"]),
+      firstError: "disk full",
+      now: NOW,
+    };
+    const first = recordDeadLetter(v, input);
+    const later = recordDeadLetter(v, { ...input, now: new Date("2026-08-23T10:26:00Z") });
+    expect(later.id).toBe(first.id);
+    expect(listDeadLetters(v)).toHaveLength(1);
+    // The one file names the most recent attempt.
+    expect(listDeadLetters(v)[0]!.recorded_at).toBe("2026-08-23T10:26:00Z");
+  });
+
+  test("the listing is chronological across lanes, not lexical by id", () => {
+    const v = vault();
+    const older = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[0]:zulu"]),
+      firstError: "disk full",
+      now: NOW,
+    });
+    const newer = recordDeadLetter(v, {
+      envelope: ENVELOPE,
+      report: report(["items[0]:alpha"]),
+      firstError: "disk full",
+      now: new Date("2026-08-23T11:00:00Z"),
+    });
+    expect(listDeadLetters(v).map((r) => r.id)).toEqual([older.id, newer.id]);
+  });
+
   test("an empty vault lists nothing rather than failing", () => {
     expect(listDeadLetters(vault())).toEqual([]);
   });
@@ -169,7 +207,7 @@ describe("an unreadable record is an error, never a skip", () => {
   });
 
   test("a record that was never written reads as null", () => {
-    expect(readDeadLetter(vault(), "extract-signals-2026-08-23-101500-0011aabb")).toBeNull();
+    expect(readDeadLetter(vault(), "extract-signals-0011aabb2233")).toBeNull();
   });
 });
 

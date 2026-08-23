@@ -81,7 +81,7 @@ describe("the three note-producing lanes carry a manifest", () => {
       ledger: null,
       thresholds: { fact: 5, identity: 2 },
       runId: RUN_ID,
-      linkCandidates,
+      linkCandidates: () => linkCandidates,
     });
     const envelope = plan.entries[0]!.envelope;
     expect(envelope.link_candidates).toEqual(linkCandidates);

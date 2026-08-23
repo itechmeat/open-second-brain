@@ -37,6 +37,10 @@ import {
   type SessionDiscovery,
   type SessionImportRecord,
 } from "../../../core/brain/sessions/discover.ts";
+import {
+  SESSION_RESUME_DISCARD,
+  type SessionResumeDiscard,
+} from "../../../core/brain/sessions/checkpoint.ts";
 import { SessionImportError, type SessionAdapterId } from "../../../core/brain/sessions/types.ts";
 import { serializeImportCensus, type ImportCensus } from "../../../core/brain/import-census.ts";
 import {
@@ -456,6 +460,21 @@ function emitCoverage(
   for (const line of discovery.unreadable) info(`  unreadable: ${line}`);
 }
 
+/**
+ * What each discard reason means, in one clause. Keyed by the vocabulary so
+ * a member added without a sentence fails to compile - the alternative was
+ * one sentence about the session log that was already wrong for a reason
+ * that is about the checkpoint's own bytes.
+ */
+const RESUME_DISCARD_EXPLANATION: Readonly<Record<SessionResumeDiscard, string>> = Object.freeze({
+  [SESSION_RESUME_DISCARD.headChanged]:
+    "the session log is not the one the boundary was taken against",
+  [SESSION_RESUME_DISCARD.fileShrank]:
+    "the session log has shrunk since the boundary was taken, so the boundary is past its end",
+  [SESSION_RESUME_DISCARD.payloadInvalid]:
+    "the checkpoint on disk carries a turn boundary this build could not have written",
+});
+
 /** The per-file import report, shared by the path form and the sweep. */
 function emitImportReport(
   result: {
@@ -516,8 +535,8 @@ function emitImportReport(
     if (f.turns_resumed > 0) ok(`  turns_resumed: ${f.turns_resumed}`);
     if (f.resume_discarded !== null) {
       info(
-        `  resume checkpoint discarded (${f.resume_discarded}): the session log is not the one ` +
-          "the boundary was taken against, so the file was re-imported from the start.",
+        `  resume checkpoint discarded (${f.resume_discarded}): ${RESUME_DISCARD_EXPLANATION[f.resume_discarded]}, ` +
+          "so the file was re-imported from the start.",
       );
     }
     emitCensus(f.census);

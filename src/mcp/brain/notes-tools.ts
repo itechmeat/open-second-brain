@@ -95,8 +95,14 @@ export function advisoryFields(code: string): Readonly<Record<string, unknown>> 
  * host is what is broken. Reporting either as INVALID_PARAMS would send
  * the agent looking at its own request forever. Both are reported as an
  * INTERNAL_ERROR that is nonetheless typed and carries its details.
+ * Frontmatter the scanner cannot round-trip joins them for the same
+ * reason: the note on disk is what needs fixing, not the request.
  */
-const OPERATOR_FAULT_CODES: ReadonlySet<string> = new Set(["config_invalid", "target_unreadable"]);
+const OPERATOR_FAULT_CODES: ReadonlySet<string> = new Set([
+  "config_invalid",
+  "target_unreadable",
+  "target_frontmatter_lossy",
+]);
 
 /** JSON-RPC code for a refusal, split on whose fault the refusal is. */
 function rpcCodeFor(surfaceCode: string): number {

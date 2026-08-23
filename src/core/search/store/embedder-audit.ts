@@ -41,7 +41,11 @@ import {
 } from "../../reconciliation-report.ts";
 import type { EmbedderRecordCensus } from "../types.ts";
 import { EMBEDDING_ABI_FIX_COMMAND } from "./embedding-abi.ts";
-import { EMBEDDING_DIMENSION_STATE_KEY, peekReadonlyIndex } from "./state.ts";
+import {
+  describeUnreadableIndex,
+  EMBEDDING_DIMENSION_STATE_KEY,
+  peekReadonlyIndex,
+} from "./state.ts";
 
 /**
  * `CREATE VIRTUAL TABLE chunk_vec USING vec0(embedding float[N])` - the
@@ -168,7 +172,7 @@ export function readEmbedderRecordCensusSync(dbPath: string): EmbedderRecordCens
     reason:
       peek.kind === "absent"
         ? `no search index at ${dbPath}`
-        : `${dbPath} did not open: ${peek.detail}`,
+        : describeUnreadableIndex(dbPath, peek.detail),
   });
 }
 
@@ -188,7 +192,7 @@ export function formatEmbedderRecordContradiction(census: EmbedderRecordCensus):
   if (census.outcome !== RECONCILIATION_OUTCOME.contradicted) return null;
   return (
     `the index records embedding dimension ${census.recordedDimension}, and the vectors it ` +
-    `holds contradicts that record (${census.reconciliation.missing.join("; ")}); the ` +
+    `holds contradict that record (${census.reconciliation.missing.join("; ")}); the ` +
     `recorded identity is evidence of nothing about the stored vectors. Run: ` +
     `${EMBEDDING_ABI_FIX_COMMAND}`
   );

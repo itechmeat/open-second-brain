@@ -82,7 +82,7 @@ export const LINK_CANDIDATE_LIMIT = 40;
 
 /** How the carried subset was chosen. */
 export type LinkCandidateSelection =
-  /** The vault fits inside the bound; the list is every note there is. */
+  /** The vault fits inside the bound; the list is every name there is. */
   | "all"
   /** Over the bound with a query: the subset is the highest token overlap. */
   | "relevance"
@@ -93,7 +93,11 @@ export type LinkCandidateSelection =
 export interface LinkCandidateManifest {
   /** Note basenames a `[[wikilink]]` resolves to, in selection order. */
   readonly candidates: ReadonlyArray<string>;
-  /** Basenames the walk found in the whole vault, before the bound. */
+  /**
+   * DISTINCT visible basenames the walk found, before the bound - not a
+   * note count: two notes in different folders share one basename, and
+   * one a caller may not see is not in it at all.
+   */
   readonly total: number;
   /** True when {@link candidates} is a subset of what {@link total} counts. */
   readonly truncated: boolean;
@@ -185,18 +189,18 @@ export function buildLinkCandidateManifest(
  */
 export function linkCandidateSchemaHint(manifest: LinkCandidateManifest): string {
   if (manifest.total === 0) {
-    return "wikilinks: this vault holds no notes yet, so link_candidates is empty and any wikilink you write will dangle";
+    return "wikilinks: no note in this vault is available to cite, so link_candidates is empty and any wikilink you write will dangle";
   }
   if (manifest.truncated) {
     return (
       `wikilinks: link_candidates carries ${manifest.candidates.length} of the ${manifest.total} ` +
-      "notes this vault holds; a target it does not name may still exist, so cite one only when " +
-      "the note itself is in your grounding"
+      "note names this vault offers; a target it does not name may still exist, so cite one only " +
+      "when the note itself is in your grounding"
     );
   }
   return (
-    `wikilinks: link_candidates carries all ${manifest.total} notes this vault holds; ` +
-    "a target it does not name does not exist and the link will dangle"
+    `wikilinks: link_candidates carries all ${manifest.total} note names this vault offers; ` +
+    "a name it does not carry is not one you can cite and the link will dangle"
   );
 }
 

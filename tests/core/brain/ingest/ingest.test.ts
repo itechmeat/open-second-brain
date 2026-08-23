@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -134,6 +134,19 @@ describe("ingestSource", () => {
     const planId = computePlanId("Articles", ["Articles/restaking-primer.md"]);
     ingestSource(vault, INPUT, { agent: "claude", now: NOW });
     expect(readCheckpoint(vault, planId)).toBeNull();
+  });
+
+  test("a plan id the checkpoint store cannot use is refused before anything is written", () => {
+    // A plan id becomes a checkpoint filename, so the store refuses
+    // anything but lowercase hex. Swallowed - as it was - the ingest
+    // succeeded, no checkpoint was EVER written for that plan, and
+    // `--reconcile` then reported every source as never ingested.
+    seedSourceFile();
+    expect(() =>
+      ingestSource(vault, INPUT, { agent: "claude", now: NOW, planId: "docs-migration" }),
+    ).toThrow(/plan id/);
+    // Refused at the boundary: the summary page was not written either.
+    expect(existsSync(join(vault, "Brain", "sources"))).toBe(false);
   });
 });
 

@@ -119,6 +119,13 @@ export const SESSION_RESUME_DISCARD = Object.freeze({
   headChanged: "head_changed",
   /** The transcript is smaller than it was, so the boundary is past its end. */
   fileShrank: "file_shrank",
+  /**
+   * The file parsed, and its payload is not one this writer could have
+   * written - a `turns_completed` that is not a whole number, or a negative
+   * one. Coercing it to zero would present finished turns as pending and be
+   * indistinguishable from "there was no checkpoint".
+   */
+  payloadInvalid: "payload_invalid",
 } as const);
 
 export type SessionResumeDiscard =
@@ -207,10 +214,31 @@ function requireHex64(field: string, value: string): void {
 }
 
 /**
+ * A checkpoint file parsed, and carried a payload the writer could not have
+ * produced. Its own class so {@link resolveSessionResume} can turn exactly
+ * this condition into a named discard and let every other read failure -
+ * corrupt bytes, an unknown `schema_version` - keep propagating.
+ */
+export class SessionCheckpointPayloadError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionCheckpointPayloadError";
+  }
+}
+
+/**
  * Read one scoped import's checkpoint. A missing file (or checkpointing
  * disabled) returns `null`. Corrupt bytes and an unknown `schema_version` are
  * hard errors - never a silent reset, which would present finished turns as
  * pending and re-hash every one of them.
+ *
+ * The PAYLOAD is held to the same rule as the envelope, and to exactly the
+ * rule {@link recordSessionProgress} enforces on the way in: a
+ * `turns_completed` or `bytes` that is not a non-negative integer raises
+ * {@link SessionCheckpointPayloadError} rather than being coerced to zero.
+ * The coercion was the silent reset by another route - zero turns completed
+ * reads back as "there was no checkpoint" - and a negative count, which no
+ * writer here can produce, was honoured verbatim.
  */
 export function readSessionCheckpoint(
   vault: string,
@@ -220,17 +248,24 @@ export function readSessionCheckpoint(
   const path = sessionCheckpointPath(vault, importId);
   const obj = readCheckpointObject(path, FILE_LABEL, SCHEMA_VERSION);
   if (obj === null) return null;
-  const turns = obj["turns_completed"];
-  const bytes = obj["bytes"];
   return Object.freeze({
     schema_version: SCHEMA_VERSION,
     import_id: importId,
     session_file: typeof obj["session_file"] === "string" ? obj["session_file"] : "",
     head_hash: typeof obj["head_hash"] === "string" ? obj["head_hash"] : "",
-    bytes: Number.isInteger(bytes) ? (bytes as number) : 0,
-    turns_completed: Number.isInteger(turns) ? (turns as number) : 0,
+    bytes: requireStoredCount(path, "bytes", obj["bytes"]),
+    turns_completed: requireStoredCount(path, "turns_completed", obj["turns_completed"]),
     updated_at: typeof obj["updated_at"] === "string" ? obj["updated_at"] : "",
   });
+}
+
+function requireStoredCount(path: string, field: string, value: unknown): number {
+  if (!Number.isInteger(value) || (value as number) < 0) {
+    throw new SessionCheckpointPayloadError(
+      `${FILE_LABEL}: ${field} must be a non-negative integer, got ${JSON.stringify(value)}: ${path}`,
+    );
+  }
+  return value as number;
 }
 
 /** What {@link recordSessionProgress} is told about the boundary just reached. */
@@ -291,7 +326,21 @@ export function resolveSessionResume(
   importId: string,
   live: SessionFileIdentity,
 ): SessionResumeDecision {
-  const cp = readSessionCheckpoint(vault, importId);
+  let cp: SessionImportCheckpoint | null;
+  try {
+    cp = readSessionCheckpoint(vault, importId);
+  } catch (err) {
+    // A payload the writer could not have produced is a boundary this run
+    // cannot use - reported as a discard, the same as a boundary taken
+    // against another transcript, so the re-import is the operator's to see.
+    // Every other read failure (corrupt bytes, an unknown schema_version)
+    // still propagates: those say the substrate is broken, not that one
+    // boundary is unusable.
+    if (err instanceof SessionCheckpointPayloadError) {
+      return { turns: 0, discarded: SESSION_RESUME_DISCARD.payloadInvalid };
+    }
+    throw err;
+  }
   if (cp === null) return { turns: 0, discarded: null };
   if (cp.head_hash !== live.headHash) {
     return { turns: 0, discarded: SESSION_RESUME_DISCARD.headChanged };

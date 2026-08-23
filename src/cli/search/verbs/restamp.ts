@@ -52,7 +52,7 @@ import {
   peekEmbeddingAbiSync,
   runtimeEmbeddingAbi,
 } from "../../../core/search/store.ts";
-import { setState } from "../../../core/search/store/state.ts";
+import { describeUnreadableIndex, setState } from "../../../core/search/store/state.ts";
 import { loadVecExtension } from "../../../core/search/store/vectors.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { info, ok } from "../../output.ts";
@@ -178,7 +178,7 @@ export async function cmdSearchRestamp(argv: ReadonlyArray<string>): Promise<num
       peek.kind === "absent" ? "INDEX_MISSING" : "INDEX_UNREADABLE",
       peek.kind === "absent"
         ? `no search index at ${cfg.dbPath}; there is nothing to restamp`
-        : `the search index at ${cfg.dbPath} did not open: ${peek.detail}`,
+        : `the search index at ${describeUnreadableIndex(cfg.dbPath, peek.detail)}`,
     );
   }
 

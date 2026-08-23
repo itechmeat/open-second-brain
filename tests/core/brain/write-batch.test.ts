@@ -15,6 +15,10 @@
  *   1. `target_unreadable` - a note that exists and cannot be read is no
  *      longer projected as an empty note, for update and for append. The
  *      refusal names the path and the reason, and the file is untouched.
+ *   1b. `target_frontmatter_lossy` - the same refusal for the other thing
+ *      the parser can report: a frontmatter line it could not express and
+ *      dropped. The read-modify-write re-serialises the parsed map, so
+ *      writing would delete that line and report success.
  *   2. `blank_overwrite_refused` - an update may not replace a body that
  *      carries text with a blank one unless `allowEmpty` says so.
  *      Whitespace-only is blank; a create of a genuinely new empty note
@@ -309,6 +313,47 @@ describe("applyWriteBatch note operations", () => {
       expect((err as WriteBatchError).code).toBe("target_unreadable");
     }
     expect(statSync(abs).isDirectory()).toBe(true);
+  });
+
+  test("an update on a note whose frontmatter the scanner cannot express is refused", () => {
+    // The line scanner has no branch for a continuation line, so it drops
+    // it and says so. A read-modify-write re-serialises the PARSED map, so
+    // proceeding would delete that line from disk and answer updated: true.
+    const abs = seedNote("Notes/Odd.md", "body", "title: Odd\n  continued indent line");
+    const before = readFileSync(abs, "utf8");
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Odd.md", frontmatter: { reviewed: "2026-08-23" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("target_frontmatter_lossy");
+      expect((err as WriteBatchError).message).toContain("Notes/Odd.md");
+      expect(String((err as WriteBatchError).details["reason"])).toContain("continued indent line");
+    }
+    expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+
+  test("an append onto such a note is refused too - it rewrites the same frontmatter", () => {
+    const abs = seedNote("Notes/Odd.md", "body", "title: Odd\n  continued indent line");
+    const before = readFileSync(abs, "utf8");
+    expect(() =>
+      applyWriteBatch(vault, [{ kind: "append_note", path: "Notes/Odd.md", content: "more" }]),
+    ).toThrow(WriteBatchError);
+    expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+
+  test("frontmatter the scanner does express is updated as before", () => {
+    // The refusal is scoped to a line the parser reported dropping: a
+    // comment and a block list are both consumed, not dropped.
+    const abs = seedNote("Notes/Fine.md", "body", "# a comment\ntags:\n  - one\ntitle: Fine");
+    applyWriteBatch(vault, [
+      { kind: "update_note", path: "Notes/Fine.md", frontmatter: { status: "final" } },
+    ]);
+    const md = readFileSync(abs, "utf8");
+    expect(md).toContain("status: final");
+    expect(md).toContain("title: Fine");
   });
 
   test("an unreadable-by-permission note is refused rather than blanked", () => {

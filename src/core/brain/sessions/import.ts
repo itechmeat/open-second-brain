@@ -36,6 +36,15 @@
  * The lines themselves are still read, because a JSONL transcript has no
  * index to seek into.
  *
+ * Recall is the one thing the boundary does not vouch for, and the resumed
+ * run re-collects it. `--recall` accumulates turns in memory and commits
+ * them to the recall DAG AFTER the loop, so a run that stopped at the
+ * boundary committed none of them; skipping those turns on the resumed run
+ * would leave the head of the transcript permanently missing from the DAG
+ * while both runs reported success. Re-collection costs nothing extra (the
+ * lines are read regardless) and is idempotent, because the recall importer
+ * keys every turn on a content dedupe key.
+ *
  * Census (same unit). After the run, the dedup hashes of the signals it
  * claims to have written are read back from disk, and the result carries
  * `claimed / found / missing` with the missing hashes NAMED. See
@@ -479,6 +488,29 @@ export async function importSession(
     resumeDiscarded = decision.discarded;
   }
 
+  /**
+   * Whether a turn belongs to this run's question, and which counter says
+   * so when it does not. One function because the resumed prefix has to ask
+   * the same question the main body does - a filter applied on one path and
+   * not the other would put a turn in the recall DAG that the run's own
+   * filters exclude.
+   */
+  const admitTurn = (turn: SessionTurn): "admit" | "before_since" | "filtered" | "suppressed" => {
+    if (sinceMs !== undefined) {
+      const t = Date.parse(turn.timestamp);
+      if (Number.isFinite(t) && t < sinceMs) return "before_since";
+    }
+    if (filterRoles !== null && !filterRoles.has(turn.role)) return "filtered";
+    if (filterNeedle !== null) {
+      const haystack = turn.text?.toLowerCase() ?? "";
+      if (!haystack.includes(filterNeedle)) return "filtered";
+    }
+    // Message-level boundary: suppressed text never reaches marker or
+    // fact extraction (and is not stored for recall).
+    if (turn.text && boundary.suppressMessage(turn.text)) return "suppressed";
+    return "admit";
+  };
+
   for await (const turn of adapter.iterate(path)) {
     turnsScanned++;
     // Past the boundary an earlier run recorded: the extraction, the
@@ -486,6 +518,14 @@ export async function importSession(
     // are still read because a JSONL transcript cannot be seeked into.
     if (turnsScanned <= resumeFrom) {
       turnsResumed++;
+      // Recall is the one thing the boundary does NOT vouch for. It is
+      // accumulated in memory and committed after this loop, so the run
+      // that stopped at the boundary committed none of it - skipping these
+      // turns would leave the head of the transcript permanently absent
+      // from the recall DAG while the run reported success. Re-collecting
+      // them is cheap (the lines are read either way) and idempotent (the
+      // recall importer keys each turn on a content dedupe key).
+      if (opts.recall === true && mayWrite && admitTurn(turn) === "admit") recallTurns.push(turn);
       continue;
     }
     // Everything before THIS turn is done, so the boundary is recorded
@@ -510,27 +550,16 @@ export async function importSession(
         now,
       );
     }
-    if (sinceMs !== undefined) {
-      const t = Date.parse(turn.timestamp);
-      if (Number.isFinite(t) && t < sinceMs) continue;
-    }
-    if (filterRoles !== null && !filterRoles.has(turn.role)) {
+    const admission = admitTurn(turn);
+    if (admission === "filtered") {
       filteredTurns++;
       continue;
     }
-    if (filterNeedle !== null) {
-      const haystack = turn.text?.toLowerCase() ?? "";
-      if (!haystack.includes(filterNeedle)) {
-        filteredTurns++;
-        continue;
-      }
-    }
-    // Message-level boundary: suppressed text never reaches marker or
-    // fact extraction (and is not stored for recall).
-    if (turn.text && boundary.suppressMessage(turn.text)) {
+    if (admission === "suppressed") {
       suppressedTurns++;
       continue;
     }
+    if (admission === "before_since") continue;
     if (opts.recall === true && mayWrite) recallTurns.push(turn);
 
     // Facts from USER turns only (the HANDOFF carve-out's conservative

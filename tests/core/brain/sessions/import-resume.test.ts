@@ -29,6 +29,15 @@
  *   7. A dry run records nothing, and a checkpoint taken against a session
  *      file that no longer matches is discarded and SAID so rather than
  *      silently resuming at a turn boundary that has moved.
+ *   8. A checkpoint whose payload is not what the writer would ever have
+ *      written - a non-integer or negative `turns_completed` - is discarded
+ *      by name too, rather than coerced to zero and reported as "there was
+ *      no checkpoint".
+ *   9. A resumed run with `recall` re-collects the turns before the boundary.
+ *      Recall is accumulated in memory and committed AFTER the loop, so an
+ *      interrupted run wrote none of it; skipping those turns would leave the
+ *      head of the transcript permanently absent from the recall DAG while
+ *      the run reported success.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -56,15 +65,20 @@ import {
   computeSessionImportId,
   readSessionCheckpoint,
   recordSessionProgress,
+  resolveSessionResume,
   SESSION_CHECKPOINT_TURN_INTERVAL,
+  SESSION_RESUME_DISCARD,
   sessionCheckpointPath,
 } from "../../../../src/core/brain/sessions/checkpoint.ts";
+import { listSessionRawTurns } from "../../../../src/core/brain/session-recall.ts";
 import { RECONCILIATION_OUTCOME } from "../../../../src/core/reconciliation-report.ts";
 
 let vault: string;
 
 const NOW = new Date("2026-08-15T10:00:00Z");
 const AGENT = "@t";
+/** Explicit recall session id, so the DAG can be read back by name. */
+const RECALL_SESSION = "resume-recall-session";
 /** Enough turns to cross the boundary interval more than once. */
 const TURNS = SESSION_CHECKPOINT_TURN_INTERVAL * 2 + 100;
 const EARLY_TURN = Math.floor(SESSION_CHECKPOINT_TURN_INTERVAL / 2);
@@ -138,6 +152,18 @@ function inboxFiles(): string[] {
 
 function headHashOf(path: string): string {
   return computeSessionHeadHash(readFileSync(path, "utf8").split("\n")[0] ?? "");
+}
+
+function identityOf(path: string): { headHash: string; bytes: number } {
+  return { headHash: headHashOf(path), bytes: statSync(path).size };
+}
+
+/** Put arbitrary bytes where a checkpoint lives, bypassing the writer's checks. */
+function writeCheckpointPayload(importId: string, payload: Record<string, unknown>): void {
+  atomicWriteFileSync(
+    sessionCheckpointPath(vault, importId),
+    `${JSON.stringify({ schema_version: 1, import_id: importId, updated_at: NOW.toISOString(), ...payload }, null, 2)}\n`,
+  );
 }
 
 /** The checkpoint an interrupted run would have left at `turnsCompleted`. */
@@ -335,6 +361,46 @@ describe("an interrupted session import resumes at the turn boundary", () => {
     expect(result.resume_discarded).toBe("file_shrank");
   });
 
+  test("a checkpoint payload the writer would never have written is discarded by name", async () => {
+    const path = standardTranscript();
+    const opts = { agent: AGENT, now: NOW };
+    const importId = computeSessionImportId(path, opts);
+    // A partially-flushed or externally-touched file: the count is a string,
+    // which no writer here can produce. Coerced to 0 it is indistinguishable
+    // from "there was no checkpoint" - the module's own stated anti-goal.
+    writeCheckpointPayload(importId, {
+      session_file: path,
+      head_hash: headHashOf(path),
+      bytes: statSync(path).size,
+      turns_completed: "250",
+    });
+
+    expect(resolveSessionResume(vault, importId, identityOf(path))).toEqual({
+      turns: 0,
+      discarded: SESSION_RESUME_DISCARD.payloadInvalid,
+    });
+    const result = await importSession(vault, path, opts);
+    expect(result.turns_resumed).toBe(0);
+    expect(result.resume_discarded).toBe(SESSION_RESUME_DISCARD.payloadInvalid);
+    // Nothing was skipped, so the whole transcript is imported.
+    expect(result.signals_created).toBe(2);
+  });
+
+  test("a negative turn boundary is refused rather than honoured verbatim", () => {
+    const path = standardTranscript();
+    const importId = computeSessionImportId(path, { agent: AGENT });
+    writeCheckpointPayload(importId, {
+      session_file: path,
+      head_hash: headHashOf(path),
+      bytes: statSync(path).size,
+      turns_completed: -5,
+    });
+    expect(resolveSessionResume(vault, importId, identityOf(path))).toEqual({
+      turns: 0,
+      discarded: SESSION_RESUME_DISCARD.payloadInvalid,
+    });
+  });
+
   test("with checkpointing opted out the import neither resumes nor records", async () => {
     const path = standardTranscript();
     const opts = { agent: AGENT, now: NOW };
@@ -348,5 +414,51 @@ describe("an interrupted session import resumes at the turn boundary", () => {
     expect(result.signals_created).toBe(2);
     // The opt-out suppresses writes; it must not delete a checkpoint either.
     expect(existsSync(sessionCheckpointPath(vault, importId))).toBe(true);
+  });
+});
+
+describe("a resumed import with recall keeps the recall DAG whole", () => {
+  test("the turns before the boundary still reach the recall DAG", async () => {
+    const path = standardTranscript();
+    const opts = { agent: AGENT, now: NOW, recall: true, recallSessionId: RECALL_SESSION };
+    const importId = computeSessionImportId(path, opts);
+    seedCheckpoint(path, importId, SESSION_CHECKPOINT_TURN_INTERVAL);
+
+    const resumed = await importSession(vault, path, opts);
+    expect(resumed.turns_resumed).toBe(SESSION_CHECKPOINT_TURN_INTERVAL);
+    expect(resumed.resume_discarded).toBeNull();
+    // `recallTurns` is an in-memory accumulator committed after the loop, so
+    // the interrupted run wrote NONE of it: the resumed run owes the whole
+    // transcript, not the tail past the boundary.
+    expect(resumed.recall_turns_imported).toBe(TURNS);
+
+    const stored = listSessionRawTurns(vault, RECALL_SESSION);
+    expect(stored.length).toBe(TURNS);
+    expect(stored.some((t) => t.text === "turn 1")).toBe(true);
+    expect(stored.some((t) => t.text === `turn ${TURNS}`)).toBe(true);
+  });
+
+  test("a re-collected turn still passes the run's own filters", async () => {
+    const path = standardTranscript();
+    // The fixture is assistant turns only, so a user-role filter admits none
+    // of them. Re-collection must apply that filter, not smuggle the head of
+    // the transcript in behind it.
+    const opts = {
+      agent: AGENT,
+      now: NOW,
+      recall: true,
+      recallSessionId: RECALL_SESSION,
+      filterRoles: ["user"] as const,
+    };
+    const importId = computeSessionImportId(path, opts);
+    seedCheckpoint(path, importId, SESSION_CHECKPOINT_TURN_INTERVAL);
+
+    const resumed = await importSession(vault, path, opts);
+    expect(resumed.turns_resumed).toBe(SESSION_CHECKPOINT_TURN_INTERVAL);
+    expect(resumed.recall_turns_imported).toBe(0);
+    expect(listSessionRawTurns(vault, RECALL_SESSION)).toEqual([]);
+    // The filtered count still describes only the turns this run processed,
+    // so a resumed run's counters keep meaning what they meant before.
+    expect(resumed.filtered_turns).toBe(TURNS - SESSION_CHECKPOINT_TURN_INTERVAL);
   });
 });
