@@ -239,7 +239,7 @@ afterEach(() => {
 });
 
 test("the diarization step is the spine, with the spine's key order unchanged", () => {
-  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
+  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW, ownerScope: null });
   acceptsSpine(report.llmStep);
   // The lane's own `link_candidates` is appended after the spine, in the
   // consumer position the rollup's `tier`/`produces` already occupy: the

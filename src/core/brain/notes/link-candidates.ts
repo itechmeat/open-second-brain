@@ -11,13 +11,14 @@
  *
  * This module is the answer they share: a bounded list of the basenames a
  * `[[wikilink]]` can actually resolve to, built from
- * {@link listVaultBasenames} - the cheap readdir-only walker with
- * Obsidian's own resolution semantics. NOTHING here reads note bytes,
- * parses frontmatter, opens the search index, or contacts an embedding
- * provider: a candidate list is an existence question, and existence is
- * answerable from directory entries alone. `tests/core/brain/notes/
- * link-candidates.test.ts` walks this module's whole import closure to
- * keep that true.
+ * {@link listVaultNotePaths} - the cheap readdir-only walker with
+ * Obsidian's own resolution semantics. NOTHING here opens the search
+ * index or contacts an embedding provider: which notes exist is an
+ * existence question, and existence is answerable from directory entries
+ * alone. `tests/core/brain/notes/link-candidates.test.ts` walks this
+ * module's whole import closure to keep that true. (The visibility
+ * predicate a lane hands in does read page frontmatter - see below - but
+ * it is the LANE's dependency, which is the point of asking for it.)
  *
  * ## The manifest is not the field it carries
  *
@@ -30,6 +31,24 @@
  * the DATA stays in `link_candidates`, because `schema_hints` is the
  * constraint channel and smuggling a payload into it makes both
  * unreadable.
+ *
+ * ## A candidate list is a disclosure, so it is filtered
+ *
+ * The basenames of `Brain/preferences/`, `Brain/retired/`, the inbox and
+ * the entity registry are exactly the ids the ownership rule governs, so
+ * an unfiltered manifest hands one agent the id of another agent's
+ * private memory - the leak `a-label-is-not-a-boundary` closed on
+ * fourteen report surfaces. This module therefore ASKS rather than
+ * deciding: {@link LinkCandidateOptions.visible} is required and has no
+ * default, and each lane binds it to the vault's one ownership rule
+ * through `ownerScopeView`. Keeping the rule out of here is deliberate -
+ * that adapter reaches the search layer, and a manifest that imported it
+ * would no longer be the leaf the zero-embed proof rests on.
+ *
+ * A withheld basename is dropped BEFORE `total` is counted, following the
+ * IDENTICAL TO ABSENT convention every owner-filtered surface obeys: a
+ * total that included hidden pages would tell the caller how many
+ * memories it may not see, which is the existence leak by arithmetic.
  *
  * ## Why the ranking is token overlap and not similarity
  *
@@ -44,8 +63,9 @@
  * are split on the slug separators here, and only here.
  */
 
+import { pathStem } from "../../fs-utils.ts";
 import { jaccard, tokenise } from "../similarity.ts";
-import { listVaultBasenames } from "../../vault.ts";
+import { listVaultNotePaths } from "../../vault.ts";
 
 /**
  * How many candidates an envelope may carry.
@@ -82,6 +102,21 @@ export interface LinkCandidateManifest {
 
 export interface LinkCandidateOptions {
   /**
+   * May the caller see the note at this VAULT-RELATIVE PATH? Required,
+   * with no default: a manifest built without asking would offer another
+   * owner's private artifact as a citation target. Lanes bind it to
+   * `ownerScopeView(vault, scope).visible`, which is a no-op comparison
+   * on every vault that has not enabled owner-scope delivery.
+   *
+   * The path, not the basename: the ownership rule reads a page's own
+   * frontmatter, and a bare basename is only resolvable for the handful
+   * of `Brain/` trees whose files are id-addressable. An owner-tagged
+   * note under `notes/` would pass a basename check that found no
+   * artifact of that id and fail open, which is the leak by a longer
+   * route.
+   */
+  readonly visible: (relPath: string) => boolean;
+  /**
    * What the note is about. Used ONLY to rank an over-bound vault; it
    * never filters, so a query that matches nothing still yields the
    * bound's worth of candidates.
@@ -105,7 +140,7 @@ export class LinkCandidateError extends Error {
  */
 export function buildLinkCandidateManifest(
   vault: string,
-  opts: LinkCandidateOptions = {},
+  opts: LinkCandidateOptions,
 ): LinkCandidateManifest {
   const limit = opts.limit ?? LINK_CANDIDATE_LIMIT;
   if (!Number.isInteger(limit) || limit <= 0) {
@@ -114,7 +149,16 @@ export function buildLinkCandidateManifest(
     );
   }
 
-  const all = [...listVaultBasenames(vault)].toSorted((a, b) => a.localeCompare(b));
+  // Basename, from the path the visibility question was asked about. Two
+  // notes in different folders can share one - and a wikilink cannot tell
+  // them apart either, so the manifest offers the name once.
+  const all = [
+    ...new Set(
+      listVaultNotePaths(vault)
+        .filter((rel) => opts.visible(rel))
+        .map(pathStem),
+    ),
+  ].toSorted((a, b) => a.localeCompare(b));
   const total = all.length;
   if (total <= limit) return freezeManifest(all, total, false, "all");
 

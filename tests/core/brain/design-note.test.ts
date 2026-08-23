@@ -88,7 +88,7 @@ test("an empty vault grounds the note in a NAMED emptiness, not a failure", () =
     [DESIGN_NOTE_STORE.decisions, DESIGN_NOTE_STORE.tensions, DESIGN_NOTE_STORE.truth].toSorted(),
   );
   // The report is still produced, with its envelope.
-  const report = planDesignNote(vault, TOPIC, { now: NOW });
+  const report = planDesignNote(vault, TOPIC, { now: NOW, ownerScope: null });
   expect(report.llmStep.status).toBe(NEEDS_LLM_STEP);
   expect(report.grounding.emptyStores.length).toBe(3);
 });
@@ -143,7 +143,7 @@ test("a populated store that matches nothing grounds nothing but is not reported
 });
 
 test("the report carries exactly one envelope, naming the note it will become", () => {
-  const report = planDesignNote(vault, TOPIC, { now: NOW });
+  const report = planDesignNote(vault, TOPIC, { now: NOW, ownerScope: null });
   expect(report.llmStep.step).toBe("design-note");
   expect(report.llmStep.target_path).toBe(report.targetPath);
   expect(report.targetPath).toBe("Brain/decisions/design-2026-08-22-vector-index-storage.md");

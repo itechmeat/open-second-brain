@@ -440,7 +440,11 @@ async function toolBrainDiarize(
     const report = diarize(
       ctx.vault,
       { query, ...(category ? { category } : {}) },
-      { now: new Date() },
+      // The envelope's candidate list names Brain artifact ids, so it is
+      // filtered through the same gated view every other report surface
+      // here uses - an unscoped list would publish another owner's
+      // preference ids as citation targets.
+      { now: new Date(), ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope },
     );
     return {
       entity_id: report.entityId,

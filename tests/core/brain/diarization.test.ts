@@ -88,7 +88,7 @@ afterEach(() => {
 });
 
 test("stated claims corroborated by evidence carry frequency, recency, and identity", () => {
-  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
+  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW, ownerScope: null });
   expect(report.entityId).toContain("ent-person");
   expect(report.entityName).toBe("Ada Lovelace");
 
@@ -105,7 +105,7 @@ test("stated claims corroborated by evidence carry frequency, recency, and ident
 });
 
 test("stated but unevidenced claims report a zero-frequency gap", () => {
-  const report = diarize(vault, { query: "Grace Hopper" }, { now: NOW });
+  const report = diarize(vault, { query: "Grace Hopper" }, { now: NOW, ownerScope: null });
   const unevidenced = report.statedVsEvidenced.filter((l) => l.kind === "stated_unevidenced");
   expect(unevidenced.length).toBeGreaterThanOrEqual(1);
   expect(unevidenced[0]!.evidenceFrequency).toBe(0);
@@ -113,7 +113,7 @@ test("stated but unevidenced claims report a zero-frequency gap", () => {
 });
 
 test("evidenced but unstated subjects surface the source pages as the gap", () => {
-  const report = diarize(vault, { query: "Alan Turing" }, { now: NOW });
+  const report = diarize(vault, { query: "Alan Turing" }, { now: NOW, ownerScope: null });
   const unstated = report.statedVsEvidenced.filter((l) => l.kind === "evidenced_unstated");
   expect(unstated.length).toBeGreaterThanOrEqual(1);
   expect(unstated[0]!.evidence.kind).toBe("source_page");
@@ -121,7 +121,7 @@ test("evidenced but unstated subjects surface the source pages as the gap", () =
 });
 
 test("the report emits a profile skeleton and exactly one needs-llm-step envelope", () => {
-  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
+  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW, ownerScope: null });
   expect(report.skeleton).toContain("kind: brain-profile");
   expect(report.skeleton).toContain("## Stated vs evidenced");
   // The prose is deferred, never generated inline.
@@ -133,12 +133,14 @@ test("the report emits a profile skeleton and exactly one needs-llm-step envelop
 });
 
 test("the document set includes the entity plus every corroborating source", () => {
-  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
+  const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW, ownerScope: null });
   const kinds = report.documentSet.map((d) => d.kind);
   expect(kinds).toContain("entity");
   expect(report.documentSet.filter((d) => d.kind === "source_page").length).toBe(2);
 });
 
 test("an unknown entity is a typed error", () => {
-  expect(() => diarize(vault, { query: "Nobody At All" }, { now: NOW })).toThrow(DiarizationError);
+  expect(() => diarize(vault, { query: "Nobody At All" }, { now: NOW, ownerScope: null })).toThrow(
+    DiarizationError,
+  );
 });

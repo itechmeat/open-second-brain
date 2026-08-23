@@ -20,6 +20,7 @@ import {
   DesignNoteError,
   planDesignNote,
 } from "../../../core/brain/design-note.ts";
+import { gatedOwnerScopeView } from "../../../core/brain/owner-scope-view.ts";
 import { ResponseCheckError } from "../../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../../core/brain/response-shape.ts";
 import {
@@ -65,7 +66,10 @@ export async function cmdBrainDesignNote(argv: string[]): Promise<number> {
           : null;
 
     if (rawPayload === null) {
-      const report = planDesignNote(vault, topic, { now: new Date() });
+      const report = planDesignNote(vault, topic, {
+        now: new Date(),
+        ownerScope: gatedOwnerScopeView(vault, resolveBrainAgent(flags, config)).scope,
+      });
       const g = report.grounding;
       if (asJson) {
         okJson({

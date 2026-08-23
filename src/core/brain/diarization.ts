@@ -33,6 +33,7 @@ import {
   linkCandidateSchemaHint,
   type LinkCandidateManifest,
 } from "./notes/link-candidates.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
 
 /** Vault-relative directory a fleshed profile note lands in. */
 export const PROFILE_DIR_REL = "Brain/profiles";
@@ -105,6 +106,16 @@ export interface DiarizationReport {
 
 export interface DiarizationOptions {
   readonly now: Date;
+  /**
+   * Enforced owner scope for this caller, or null when none applies. It
+   * filters the envelope's link candidates: the basenames of the
+   * preference, retired, inbox and entity trees are exactly the ids the
+   * ownership rule governs, so an unscoped manifest would offer another
+   * owner's private artifact as a citation target. Required rather than
+   * optional - a surface that forgot it would leak silently, which is
+   * the one failure mode this option exists for.
+   */
+  readonly ownerScope: string | null;
 }
 
 function toPosixRel(vault: string, abs: string): string {
@@ -240,6 +251,7 @@ export function diarize(
   // vault has to keep when the manifest truncates.
   const linkCandidates = buildLinkCandidateManifest(vault, {
     query: [entity.name, ...entity.aliases].join(" "),
+    visible: ownerScopeView(vault, opts.ownerScope).visible,
   });
   const llmStep: DiarizationLlmStep = buildNeedsLlmStep({
     step: PROFILE_PROSE_STEP,

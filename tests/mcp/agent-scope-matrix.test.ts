@@ -326,7 +326,7 @@ const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REASON.owne
  */
 const PROBE_ENTRY_COUNT = 99;
 const PROBE_RECIPE_COUNT = 226;
-const PROBE_TWO_SIDED_COUNT = 31;
+const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
  * `brain_trigger` read arguments, with the queue populated first.
@@ -604,7 +604,11 @@ const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
   {
     name: "brain_design_note",
     calls: [
-      { args: { topic: "probe topic" }, reason: REASON.ownerlessLane },
+      // The grounding stores carry no `owner:`, but the plan envelope's
+      // `link_candidates` names Brain artifact ids - so this recipe DOES
+      // reach owner-taggable content and is filtered, rather than being
+      // unable to name it.
+      { args: { topic: "probe topic" }, reason: REASON.ownerFiltered },
       {
         args: {
           topic: "probe topic",

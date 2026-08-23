@@ -75,7 +75,7 @@ describe("the spine does not move", () => {
 
 describe("the three note-producing lanes carry a manifest", () => {
   test("the rollup envelope carries the manifest it was handed, last in key order", () => {
-    const linkCandidates = buildLinkCandidateManifest(vault);
+    const linkCandidates = buildLinkCandidateManifest(vault, { visible: () => true });
     const plan = planRollupLadder({
       factCount: 5,
       ledger: null,
@@ -106,7 +106,7 @@ describe("the three note-producing lanes carry a manifest", () => {
       now: NOW,
       body: "Ada Lovelace worked on the analytical engine.",
     });
-    const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
+    const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW, ownerScope: null });
     const manifest: LinkCandidateManifest = report.llmStep.link_candidates;
     expect(manifest.candidates).toContain("analytical-engine");
     expect(manifest.total).toBeGreaterThan(0);
@@ -116,7 +116,7 @@ describe("the three note-producing lanes carry a manifest", () => {
   });
 
   test("the design-note envelope carries a manifest ranked on the topic", () => {
-    const report = planDesignNote(vault, "vector index storage", { now: NOW });
+    const report = planDesignNote(vault, "vector index storage", { now: NOW, ownerScope: null });
     expect(report.llmStep.link_candidates.candidates).toContain("vector-index-storage");
     expect(report.llmStep.schema_hints.some((hint) => hint.includes("link_candidates"))).toBe(true);
     expect(Object.keys(report.llmStep).at(-1)).toBe("link_candidates");

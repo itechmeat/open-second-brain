@@ -11,6 +11,7 @@
  */
 
 import { commitDesignNote, DesignNoteError, planDesignNote } from "../../core/brain/design-note.ts";
+import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { ResponseCheckError } from "../../core/brain/response-checks.ts";
 import { ResponseShapeError } from "../../core/brain/response-shape.ts";
 import { resolveAgentName } from "../../core/config.ts";
@@ -37,7 +38,10 @@ async function toolBrainDesignNote(
 
   return wrapToolErrors(TOOL, NAMED_REFUSALS, async () => {
     if (args["note"] === undefined) {
-      const report = planDesignNote(ctx.vault, topic, { now: new Date() });
+      const report = planDesignNote(ctx.vault, topic, {
+        now: new Date(),
+        ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+      });
       const g = report.grounding;
       return {
         phase: "plan",

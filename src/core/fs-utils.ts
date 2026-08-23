@@ -69,3 +69,16 @@ export function stem(filename: string): string {
   const dot = filename.lastIndexOf(".");
   return dot > 0 ? filename.slice(0, dot) : filename;
 }
+
+/**
+ * The {@link stem} of a POSIX vault-relative path's LAST segment.
+ * `pathStem("notes/a/b.md")` -> `"b"`.
+ *
+ * Shared rather than spelled twice: `stem` alone applied to a path keeps
+ * the folder segments (`"notes/a/b"`), which is not a wikilink target and
+ * is not a basename either - it is a value that looks close enough to
+ * both to pass a review and fail a lookup.
+ */
+export function pathStem(relPath: string): string {
+  return stem(relPath.slice(relPath.lastIndexOf("/") + 1));
+}

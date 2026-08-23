@@ -57,7 +57,7 @@ import {
   atomicWriteFileSync,
   isFileAlreadyExists,
 } from "./fs-atomic.ts";
-import { stem } from "./fs-utils.ts";
+import { pathStem, stem } from "./fs-utils.ts";
 import {
   DEGRADATION_CODE,
   type DegradationNotice,
@@ -621,24 +621,47 @@ export function listVaultBasenames(
   vaultDir: string,
   opts: ListVaultPagesOptions = {},
 ): Set<string> {
+  return new Set(
+    listVaultNotePaths(vaultDir, {
+      ...opts,
+      site: opts.site ?? LIST_VAULT_BASENAMES_SITE,
+    }).map(pathStem),
+  );
+}
+
+/**
+ * The same walk as {@link listVaultBasenames}, reported as vault-relative
+ * POSIX paths instead of basenames — no frontmatter parsing here either.
+ *
+ * Two callers need the two shapes for one reason: a basename is what a
+ * wikilink resolves against, and a PATH is what the ownership and
+ * visibility rules take. A caller that must ask "may this caller see it"
+ * before publishing the basename needs both, and deriving the path back
+ * from a basename is exactly the guess this project refuses.
+ */
+export function listVaultNotePaths(
+  vaultDir: string,
+  opts: ListVaultPagesOptions = {},
+): Array<string> {
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
-  const out = new Set<string>();
+  const out: string[] = [];
   walkBasenames(vaultDir, vaultDir, skipDirs, skipFiles, out, {
     sink: opts.notices,
-    site: opts.site ?? LIST_VAULT_BASENAMES_SITE,
+    site: opts.site ?? LIST_VAULT_NOTE_PATHS_SITE,
   });
   return out;
 }
 
 const LIST_VAULT_BASENAMES_SITE = "vault.listVaultBasenames";
+const LIST_VAULT_NOTE_PATHS_SITE = "vault.listVaultNotePaths";
 
 function walkBasenames(
   root: string,
   dir: string,
   skipDirs: Set<string>,
   skipFiles: Set<string>,
-  out: Set<string>,
+  out: string[],
   notices: WalkNoticeSink,
 ): void {
   let entries;
@@ -672,7 +695,7 @@ function walkBasenames(
     const rel = relative(root, full);
     const parts = rel.split(/[\\/]/);
     if (parts.some((p) => skipDirs.has(p))) continue;
-    out.add(stem(entry.name));
+    out.push(parts.join("/"));
   }
 }
 

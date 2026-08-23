@@ -76,6 +76,7 @@ import {
 } from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
 import { buildLinkCandidateManifest } from "./notes/link-candidates.ts";
+import { gatedOwnerScopeView } from "./owner-scope-view.ts";
 import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
@@ -278,7 +279,7 @@ function dreamRun(
   // effect is a rollup still counts as changed; below threshold it fires
   // nothing and the ledger is never written, so the run stays
   // byte-identical.
-  let rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId);
+  let rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId, opts.agentName);
 
   if (!hasStateChange(plan, refresh, scan.corrupted.length, rollupPlan)) {
     if (!dryRun) {
@@ -339,7 +340,7 @@ function dreamRun(
         // the pre-collision runId; if the ladder corrected it, rebuild the
         // plan so every target_path embeds the final run_id.
         if (rollupPlan.fired && runId !== baseRunId) {
-          rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId);
+          rollupPlan = buildRollupPlan(vault, cfg, salienceGate.admitted, runId, opts.agentName);
         }
         opts.safeguard?.checkpoint();
         const handle = openWorkrun(vault, runId);
@@ -529,6 +530,7 @@ function buildRollupPlan(
   cfg: BrainConfig,
   factCount: number,
   runId: string,
+  agentName: string | undefined,
 ): RollupLadderPlan {
   return planRollupLadder({
     factCount,
@@ -539,7 +541,9 @@ function buildRollupPlan(
     // items it is folding, so ranking the candidates would be inventing a
     // relevance nothing measured. The manifest says `alphabetical` and
     // names the total, which is the honest form of that.
-    linkCandidates: buildLinkCandidateManifest(vault),
+    linkCandidates: buildLinkCandidateManifest(vault, {
+      visible: gatedOwnerScopeView(vault, agentName).visible,
+    }),
   });
 }
 

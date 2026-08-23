@@ -53,6 +53,7 @@ import {
   linkCandidateSchemaHint,
   type LinkCandidateManifest,
 } from "./notes/link-candidates.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
 import { decisionsDir } from "./paths.ts";
 import {
   assertResponseCheck,
@@ -197,6 +198,14 @@ export interface DesignNoteReport {
 
 export interface PlanDesignNoteOptions {
   readonly now: Date;
+  /**
+   * Enforced owner scope for this caller, or null when none applies. It
+   * filters the envelope's link candidates - see
+   * {@link DesignNoteLlmStep} and `notes/link-candidates.ts` for why a
+   * candidate list is a disclosure. Required, so a surface cannot forget
+   * it and leak in silence.
+   */
+  readonly ownerScope: string | null;
 }
 
 export interface CommitDesignNoteOptions {
@@ -369,7 +378,10 @@ export function planDesignNote(
   const grounding = designNoteGrounding(vault, trimmed);
   const slug = slugify(trimmed);
   const targetPath = posix.join(DESIGN_NOTE_DIR_REL, noteBasename(slug, opts.now));
-  const linkCandidates = buildLinkCandidateManifest(vault, { query: trimmed });
+  const linkCandidates = buildLinkCandidateManifest(vault, {
+    query: trimmed,
+    visible: ownerScopeView(vault, opts.ownerScope).visible,
+  });
   return Object.freeze({
     topic: trimmed,
     slug,

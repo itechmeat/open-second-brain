@@ -7,6 +7,7 @@
  */
 
 import { diarize, DiarizationError } from "../../../core/brain/diarization.ts";
+import { gatedOwnerScopeView } from "../../../core/brain/owner-scope-view.ts";
 import {
   brainVerbContext,
   fail,
@@ -14,6 +15,7 @@ import {
   okJson,
   normalizeFlagString,
   parse,
+  resolveBrainAgent,
   usageError,
 } from "../helpers.ts";
 
@@ -27,13 +29,18 @@ export async function cmdBrainDiarize(argv: string[]): Promise<number> {
   if (!query || query.trim() === "") {
     return usageError("usage: o2b brain diarize <entity> [--category C] [--vault <path>] [--json]");
   }
-  const { vault } = brainVerbContext(flags);
+  const { config, vault } = brainVerbContext(flags);
   const category = normalizeFlagString(flags["category"]);
   try {
     const report = diarize(
       vault,
       { query, ...(category !== null ? { category } : {}) },
-      { now: new Date() },
+      // Same gated view the MCP tool uses: the candidate list names Brain
+      // artifact ids, and this verb reads the same tree.
+      {
+        now: new Date(),
+        ownerScope: gatedOwnerScopeView(vault, resolveBrainAgent(flags, config)).scope,
+      },
     );
     if (flags["json"] === true) {
       okJson({
