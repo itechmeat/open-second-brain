@@ -13,10 +13,23 @@ import {
   ROLLUP_TIER,
   type RollupThresholds,
 } from "../../../src/core/brain/rollup-ladder.ts";
+import type { LinkCandidateManifest } from "../../../src/core/brain/notes/link-candidates.ts";
 import { DEFAULT_BRAIN_CONFIG } from "../../../src/core/brain/policy.ts";
 
 const THRESHOLDS: RollupThresholds = { fact: 5, identity: 2 };
 const RUN_ID = "dream-2026-07-19-100000";
+
+/**
+ * The wikilink targets a fired rung offers, as a VALUE. The planner is
+ * pure and takes the manifest rather than walking a vault for one, which
+ * is exactly what lets this suite stay a pure-function suite.
+ */
+const LINK_CANDIDATES: LinkCandidateManifest = Object.freeze({
+  candidates: Object.freeze(["analytical-engine", "vector-index-storage"]),
+  total: 2,
+  truncated: false,
+  selection: "all",
+});
 
 test("below threshold nothing fires and no counters move", () => {
   const plan = planRollupLadder({
@@ -24,6 +37,7 @@ test("below threshold nothing fires and no counters move", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   expect(plan.fired).toBe(false);
   expect(plan.entries).toHaveLength(0);
@@ -36,6 +50,7 @@ test("reaching the fact threshold fires one rollup and resets the counter", () =
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   expect(plan.fired).toBe(true);
   expect(plan.entries).toHaveLength(1);
@@ -58,12 +73,14 @@ test("a fired plan is idempotent: replaying it moves no counter", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   const second = planRollupLadder({
     factCount: 5,
     ledger: first.ledger,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   expect(second.fired).toBe(false);
   expect(second.entries).toHaveLength(0);
@@ -77,6 +94,7 @@ test("the ladder composes: enough fact rollups cascade into an identity rollup",
     ledger: null,
     thresholds: { fact: 5, identity: 1 },
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   expect(plan.entries).toHaveLength(2);
   expect(plan.entries.map((e) => e.tier)).toEqual([ROLLUP_TIER.fact, ROLLUP_TIER.rollup]);
@@ -90,6 +108,7 @@ test("new facts beyond the last rollup re-arm the fact rung", () => {
     ledger: null,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   // Five more facts since the reset (10 total) crosses the threshold again.
   const second = planRollupLadder({
@@ -97,6 +116,7 @@ test("new facts beyond the last rollup re-arm the fact rung", () => {
     ledger: first.ledger,
     thresholds: THRESHOLDS,
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   expect(second.fired).toBe(true);
   expect(second.entries[0]!.fromCount).toBe(5);

@@ -28,6 +28,11 @@ import { getEntity } from "./entities/registry.ts";
 import type { EntityRef } from "./entities/types.ts";
 import { getIngestedSource, listIngestedSources } from "./ingest/sources-registry.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
+import {
+  buildLinkCandidateManifest,
+  linkCandidateSchemaHint,
+  type LinkCandidateManifest,
+} from "./notes/link-candidates.ts";
 
 /** Vault-relative directory a fleshed profile note lands in. */
 export const PROFILE_DIR_REL = "Brain/profiles";
@@ -75,11 +80,14 @@ export interface DiarizationGapLine {
 }
 
 /**
- * The single deferred generation step: the shared envelope spine, exactly.
- * It stays plain data - diarization is read-only and opens no durable
- * session - so it carries the spine and nothing beyond it.
+ * The single deferred generation step: the shared envelope spine plus the
+ * one field a profile needs and the spine will not carry - the wikilink
+ * targets the prose may cite. It stays plain data otherwise: diarization
+ * is read-only and opens no durable session.
  */
-export type DiarizationLlmStep = NeedsLlmStep;
+export interface DiarizationLlmStep extends NeedsLlmStep {
+  readonly link_candidates: LinkCandidateManifest;
+}
 
 export interface DiarizationReport {
   readonly entityId: string;
@@ -227,6 +235,12 @@ export function diarize(
     lines,
     documentSet,
   });
+  // The subject and its aliases are the query: a profile cites the notes
+  // that are about its subject, and those are the ones an over-bound
+  // vault has to keep when the manifest truncates.
+  const linkCandidates = buildLinkCandidateManifest(vault, {
+    query: [entity.name, ...entity.aliases].join(" "),
+  });
   const llmStep: DiarizationLlmStep = buildNeedsLlmStep({
     step: PROFILE_PROSE_STEP,
     prompt:
@@ -236,8 +250,10 @@ export function diarize(
     schema_hints: [
       "frontmatter: preserve the skeleton block verbatim",
       "body: replace only the prose marker; keep the structured sections intact",
+      linkCandidateSchemaHint(linkCandidates),
     ],
     target_path: targetPath,
+    link_candidates: linkCandidates,
   });
 
   return Object.freeze({

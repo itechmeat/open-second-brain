@@ -75,6 +75,7 @@ import {
   type ProgressCounter,
 } from "./progress.ts";
 import { regenerateLessonsQuiet } from "./lessons.ts";
+import { buildLinkCandidateManifest } from "./notes/link-candidates.ts";
 import { brainDirsForWrite, dreamWorkrunPath } from "./paths.ts";
 import { loadBrainConfig } from "./policy.ts";
 import { buildReconcileOutcomes } from "./reconcile-outcomes.ts";
@@ -534,6 +535,11 @@ function buildRollupPlan(
     ledger: readRollupLedger(vault),
     thresholds: resolveRollupThresholds(cfg),
     runId,
+    // No query: the ladder is count-only by design and never learns which
+    // items it is folding, so ranking the candidates would be inventing a
+    // relevance nothing measured. The manifest says `alphabetical` and
+    // names the total, which is the honest form of that.
+    linkCandidates: buildLinkCandidateManifest(vault),
   });
 }
 

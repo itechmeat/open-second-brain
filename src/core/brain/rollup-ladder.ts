@@ -23,6 +23,7 @@ import { existsSync, readFileSync } from "node:fs";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
+import { linkCandidateSchemaHint, type LinkCandidateManifest } from "./notes/link-candidates.ts";
 import type { BrainConfig } from "./types.ts";
 import { rollupLedgerPath } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -63,12 +64,17 @@ export interface RollupLedger {
 
 /**
  * The needs-llm-step envelope emitted for one fired rung: the shared
- * envelope spine plus the two fields only a ladder rung has - which rung
- * fired and which tier its summary note becomes.
+ * envelope spine plus the fields only a ladder rung has - which rung
+ * fired, which tier its summary note becomes, and the wikilink targets
+ * the fold may cite. The manifest rides HERE rather than on the spine
+ * for the reason `llm-step.ts` gives: three of the six lanes that speak
+ * the grammar produce a wikilinked note, and a field half the consumers
+ * want is not spine.
  */
 export interface RollupEnvelope extends NeedsLlmStep {
   readonly tier: string;
   readonly produces: string;
+  readonly link_candidates: LinkCandidateManifest;
 }
 
 /** One fired rung: the counter reset plus its emitted envelope. */
@@ -99,6 +105,18 @@ export interface RollupLadderInput {
   readonly thresholds: RollupThresholds;
   /** Run id, for a stable, unique rollup target path. */
   readonly runId: string;
+  /**
+   * Wikilink targets the emitted envelopes offer the calling agent.
+   *
+   * It arrives as a VALUE rather than being walked from a vault inside
+   * {@link planRollupLadder}, because that function is pure and stays
+   * pure: the caller owns the one directory walk, and a ladder that
+   * planned differently depending on what was on disk could not be
+   * replayed. Required rather than optional for the same reason a
+   * fallback is refused everywhere else here - a lane that forgot it
+   * would emit an envelope claiming the vault has nothing to cite.
+   */
+  readonly linkCandidates: LinkCandidateManifest;
 }
 
 /** Resolve the rollup thresholds from config, else the named defaults. */
@@ -145,7 +163,7 @@ interface Rung {
  * toward the identity rung in the same pass.
  */
 export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
-  const { factCount, ledger, thresholds, runId } = input;
+  const { factCount, ledger, thresholds, runId, linkCandidates } = input;
   const baselines: Record<string, number> = { ...ledger?.baselines };
   const produced: Record<string, number> = { ...ledger?.produced };
 
@@ -174,7 +192,7 @@ export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
         fromCount: baseline,
         toCount: source,
         newSinceLast,
-        envelope: buildEnvelope(rung, newSinceLast, runId),
+        envelope: buildEnvelope(rung, newSinceLast, runId, linkCandidates),
       }),
     );
   }
@@ -190,7 +208,12 @@ export function planRollupLadder(input: RollupLadderInput): RollupLadderPlan {
   });
 }
 
-function buildEnvelope(rung: Rung, newSinceLast: number, runId: string): RollupEnvelope {
+function buildEnvelope(
+  rung: Rung,
+  newSinceLast: number,
+  runId: string,
+  linkCandidates: LinkCandidateManifest,
+): RollupEnvelope {
   const targetPath = `Brain/rollups/rollup-${rung.produces}-${runId}.md`;
   return buildNeedsLlmStep({
     step: `rollup:${rung.tier}`,
@@ -202,7 +225,9 @@ function buildEnvelope(rung: Rung, newSinceLast: number, runId: string): RollupE
     schema_hints: [
       "frontmatter: required YAML block with at least a `kind` key",
       `tier: ${rung.produces} (the rollup's tier weight)`,
+      linkCandidateSchemaHint(linkCandidates),
     ],
     target_path: targetPath,
+    link_candidates: linkCandidates,
   });
 }

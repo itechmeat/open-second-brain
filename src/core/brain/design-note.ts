@@ -48,6 +48,11 @@ import {
   listDecisions,
 } from "./decisions/record.ts";
 import { buildNeedsLlmStep, type NeedsLlmStep } from "./llm-step.ts";
+import {
+  buildLinkCandidateManifest,
+  linkCandidateSchemaHint,
+  type LinkCandidateManifest,
+} from "./notes/link-candidates.ts";
 import { decisionsDir } from "./paths.ts";
 import {
   assertResponseCheck,
@@ -169,6 +174,17 @@ export interface DesignNoteGrounding {
   readonly emptyStores: ReadonlyArray<DesignNoteStore>;
 }
 
+/**
+ * The one deferred generation step: the shared spine plus the wikilink
+ * targets the note may cite. A design note grounded in named records is
+ * the case the manifest exists for - the grounding below tells the agent
+ * WHAT the vault already argued, and this tells it which of those records
+ * a link can actually reach.
+ */
+export interface DesignNoteLlmStep extends NeedsLlmStep {
+  readonly link_candidates: LinkCandidateManifest;
+}
+
 export interface DesignNoteReport {
   readonly topic: string;
   readonly slug: string;
@@ -176,7 +192,7 @@ export interface DesignNoteReport {
   readonly grounding: DesignNoteGrounding;
   /** Vault-relative path the committed note will occupy. */
   readonly targetPath: string;
-  readonly llmStep: NeedsLlmStep;
+  readonly llmStep: DesignNoteLlmStep;
 }
 
 export interface PlanDesignNoteOptions {
@@ -353,6 +369,7 @@ export function planDesignNote(
   const grounding = designNoteGrounding(vault, trimmed);
   const slug = slugify(trimmed);
   const targetPath = posix.join(DESIGN_NOTE_DIR_REL, noteBasename(slug, opts.now));
+  const linkCandidates = buildLinkCandidateManifest(vault, { query: trimmed });
   return Object.freeze({
     topic: trimmed,
     slug,
@@ -372,8 +389,10 @@ export function planDesignNote(
         'payload: { "title", "summary"?, "alternatives": [ { "name", "approach", "tradeoffs", "recommended" } ] }',
         "alternatives: at least two, each field non-empty",
         "recommended: boolean; exactly one alternative may set it true",
+        linkCandidateSchemaHint(linkCandidates),
       ],
       target_path: targetPath,
+      link_candidates: linkCandidates,
     }),
   });
 }

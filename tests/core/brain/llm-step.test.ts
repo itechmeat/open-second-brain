@@ -41,6 +41,7 @@ import {
   type LlmStepFields,
   type NeedsLlmStep,
 } from "../../../src/core/brain/llm-step.ts";
+import type { LinkCandidateManifest } from "../../../src/core/brain/notes/link-candidates.ts";
 import { planRollupLadder } from "../../../src/core/brain/rollup-ladder.ts";
 import type { WriteSessionEnvelope } from "../../../src/core/brain/write-session/types.ts";
 
@@ -48,17 +49,38 @@ const RUN_ID = "dream-2026-07-19-100000";
 const NOW = new Date("2026-07-19T10:00:00Z");
 
 /**
- * The rollup envelope exactly as it serialized before the spine existed,
- * captured from the ladder on the parent commit. Byte-for-byte, key order
- * included - this envelope crosses the CLI and MCP boundaries as JSON.
+ * The manifest a fired rung is handed. A value, because the planner is
+ * pure - see `RollupLadderInput.linkCandidates`.
  */
-const ROLLUP_ENVELOPE_JSON_BEFORE_SPINE =
+const LINK_CANDIDATES: LinkCandidateManifest = Object.freeze({
+  candidates: Object.freeze(["analytical-engine"]),
+  total: 1,
+  truncated: false,
+  selection: "all",
+});
+
+/**
+ * The rollup envelope, byte-for-byte and in key order - it crosses the
+ * CLI and MCP boundaries as JSON.
+ *
+ * The spine's own keys are exactly where they were when this pin was
+ * first captured (before the spine existed). What moved in
+ * nothing-writes-silently is that the lane's own `link_candidates` is
+ * appended AFTER `target_path`, with the one constraint line naming it
+ * added to `schema_hints`: a consumer field, in the consumer's position,
+ * leaving every existing position where it was.
+ */
+const ROLLUP_ENVELOPE_JSON =
   '{"status":"needs-llm-step","step":"rollup:fact","tier":"fact","produces":"rollup",' +
   '"prompt":"Consolidate the 5 new fact items since the last rollup into one rollup-tier ' +
   'summary note. Cite the items you fold in; submit the full note.",' +
   '"schema_hints":["frontmatter: required YAML block with at least a `kind` key",' +
-  '"tier: rollup (the rollup\'s tier weight)"],' +
-  '"target_path":"Brain/rollups/rollup-rollup-dream-2026-07-19-100000.md"}';
+  '"tier: rollup (the rollup\'s tier weight)",' +
+  '"wikilinks: link_candidates carries all 1 notes this vault holds; a target it does not ' +
+  'name does not exist and the link will dangle"],' +
+  '"target_path":"Brain/rollups/rollup-rollup-dream-2026-07-19-100000.md",' +
+  '"link_candidates":{"candidates":["analytical-engine"],"total":1,"truncated":false,' +
+  '"selection":"all"}}';
 
 /** Compile-time pin: anything passed here carries the whole spine. */
 function acceptsSpine(_envelope: NeedsLlmStep): void {}
@@ -71,6 +93,7 @@ function fired() {
     ledger: null,
     thresholds: { fact: 5, identity: 2 },
     runId: RUN_ID,
+    linkCandidates: LINK_CANDIDATES,
   });
   return plan.entries[0]!.envelope;
 }
@@ -173,7 +196,7 @@ test("the rollup envelope is the spine, and serializes as it did before adoption
   const envelope = fired();
   acceptsSpine(envelope);
   acceptsSpineFields(envelope);
-  expect(JSON.stringify(envelope)).toBe(ROLLUP_ENVELOPE_JSON_BEFORE_SPINE);
+  expect(JSON.stringify(envelope)).toBe(ROLLUP_ENVELOPE_JSON);
   for (const key of NEEDS_LLM_STEP_KEYS) expect(Object.hasOwn(envelope, key)).toBe(true);
 });
 
@@ -215,15 +238,19 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
-test("the diarization step is the spine, with its key order unchanged", () => {
+test("the diarization step is the spine, with the spine's key order unchanged", () => {
   const report = diarize(vault, { query: "Ada Lovelace" }, { now: NOW });
   acceptsSpine(report.llmStep);
+  // The lane's own `link_candidates` is appended after the spine, in the
+  // consumer position the rollup's `tier`/`produces` already occupy: the
+  // spine's five keys are still the first five, in order.
   expect(Object.keys(report.llmStep)).toEqual([
     "status",
     "step",
     "prompt",
     "schema_hints",
     "target_path",
+    "link_candidates",
   ]);
   expect(report.llmStep.status).toBe(NEEDS_LLM_STEP);
 });
