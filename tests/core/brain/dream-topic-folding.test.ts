@@ -356,6 +356,15 @@ describe("a corpus with no folding variants", () => {
   // `readdirSync`, which yields entries in whatever order the filesystem
   // stores them, and a golden over a larger corpus would be a flake, not a
   // proof.
+  //
+  // They moved once since, and not by the fold: every log event now
+  // carries an `origin_channel` bullet, the server-derived channel of the
+  // writing process (Unit C of the nothing-writes-silently wave). It
+  // reads `unset` because a test harness is not one of the entry points
+  // that claims a channel. What these goldens still prove is unchanged —
+  // the fold authors no byte of a variant-free report — because the new
+  // bullet is on every event of both goldens and of every other log in
+  // the tree.
 
   test("promotion writes a byte-identical dream report", () => {
     const vault = newVault("golden-promote");
@@ -404,6 +413,7 @@ tags: [brain, brain/log]
 - run_id: dream-2026-06-05-120000
 - reason: dream
 - size_bytes: <masked>
+- origin_channel: unset
 
 ## 12:00:00Z — dream
 - run_id: dream-2026-06-05-120000
@@ -411,6 +421,7 @@ tags: [brain, brain/log]
   - [[pref-deploy-cadence|Ship the fold with the rule it folds.]]
 - moved_to_processed:
   - sig-2026-06-01-only
+- origin_channel: unset
 `;
 
 const GOLDEN_REBUT = `---
@@ -425,6 +436,7 @@ tags: [brain, brain/log]
 - run_id: dream-2026-06-05-120000
 - reason: dream
 - size_bytes: <masked>
+- origin_channel: unset
 
 ## 12:00:00Z — dream
 - run_id: dream-2026-06-05-120000
@@ -434,4 +446,5 @@ tags: [brain, brain/log]
   - [[ret-deploy-cadence|Rule of record for deploy-cadence.]] (rebutted)
 - moved_to_processed:
   - sig-2026-06-01-only
+- origin_channel: unset
 `;

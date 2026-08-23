@@ -48,6 +48,11 @@ import { dirname, join, posix, sep, win32 } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
+import {
+  ORIGIN_CHANNEL_FIELD,
+  originChannelStamp,
+  type OriginChannelStamp,
+} from "../../origin-channel.ts";
 import { isFileAlreadyExists } from "../../fs-atomic.ts";
 import { formatFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import {
@@ -173,6 +178,17 @@ export interface ResolvedNoteTarget {
   readonly relPath: string;
   /** Absolute filesystem path, guaranteed inside the vault. */
   readonly abs: string;
+  /**
+   * Server-derived channel of the process resolving this target (Unit C).
+   * Resolved HERE, in the one envelope all four caller-named note tools
+   * share, so no arm can reach a write without having been handed the
+   * channel, and no arm can be given a different one.
+   *
+   * It is a resolution output, not an input: nothing on
+   * {@link CreateNoteInput} names it, and `src/core/origin-channel.ts`
+   * says why a caller-nameable channel would be worthless.
+   */
+  readonly originChannel: OriginChannelStamp;
 }
 
 /**
@@ -371,7 +387,7 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
   } catch (err) {
     throw new CreateNoteError("outside_vault", err instanceof Error ? err.message : String(err));
   }
-  return { relPath, abs };
+  return { relPath, abs, originChannel: originChannelStamp() };
 }
 
 /**
@@ -460,13 +476,33 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
   // backs `brain_create_note`, `brain_append_note`, and
   // `brain_update_note` - the headline note writers.
   assertVaultIdentityForWrite(vault);
-  const { relPath, abs } = resolveNoteTarget(vault, input.path);
-  const frontmatter = input.frontmatter ?? {};
+  const { relPath, abs, originChannel } = resolveNoteTarget(vault, input.path);
+  const callerFrontmatter = input.frontmatter ?? {};
   const body = resolveBody(input);
   // Validation judges the INPUT, so it runs before the target is
   // consulted: a caller must not learn that its document is invalid
   // only on the runs where the path happened to be free.
-  if (input.strict === true) assertValidDocument(vault, frontmatter, body);
+  //
+  // It also runs before the origin-channel stamp is merged, and that
+  // ordering is load-bearing rather than incidental: the validator's
+  // `frontmatter-missing` violation asks whether the CALLER wrote a
+  // frontmatter block, and a server-derived key merged first would
+  // satisfy it on every document, silently retiring a refusal that
+  // exists.
+  if (input.strict === true) assertValidDocument(vault, callerFrontmatter, body);
+
+  // The server-derived stamp (Unit C) goes on LAST, so a caller that
+  // supplied a key of the same name loses to the process that actually
+  // wrote the note.
+  //
+  // Stamped on CREATION only. `update_note` and `append_note` rewrite a
+  // note this call did not author, and re-stamping there would overwrite
+  // the creating channel with the mutating one - the same objection that
+  // refuses backfilling the field onto existing records.
+  const frontmatter: FrontmatterMap = {
+    ...callerFrontmatter,
+    [ORIGIN_CHANNEL_FIELD]: originChannel,
+  };
 
   const skipOccupied = input.ifExists === "skip";
   // Return before mkdirSync so a no-op leaves no parent directories

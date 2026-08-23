@@ -47,10 +47,18 @@ const GOLDEN_CLAIMLESS_PAYLOAD_KEYS: ReadonlyArray<string> = Object.freeze([
  * hash over a wall-clock timestamp - so they are interpolated from the
  * record under test and everything else, envelope key order included, is
  * pinned as a literal.
+ *
+ * `originChannel` is the server-derived channel of the process that
+ * appended the record (Unit C of the nothing-writes-silently wave). It is
+ * `unset` - the explicit literal for "no entry point claimed this
+ * process" - because this suite drives the tool handler directly rather
+ * than through the MCP transport, and the suite preload unclaims the
+ * channel before every test so the value cannot depend on file order.
  */
 function goldenOutcomeLine(id: string, createdAt: string): string {
   return (
-    `{"schema":"o2b.continuity.v1","id":"${id}","kind":"context_pack_outcome",` +
+    `{"schema":"o2b.continuity.v1","id":"${id}","originChannel":"unset",` +
+    `"kind":"context_pack_outcome",` +
     `"createdAt":"${createdAt}","sourceRefs":[],"payload":${GOLDEN_CLAIMLESS_PAYLOAD},` +
     `"private":false,"redacted":false}`
   );

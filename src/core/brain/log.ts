@@ -23,6 +23,11 @@
  *     log is append-only. Atomicity is achieved by reading the
  *     existing contents, appending the new block, and writing the
  *     result back through `fs-atomic` in one shot.
+ *
+ * Every appended event carries an `origin_channel` bullet beside the
+ * `agent` one: the server-derived channel of the process that wrote it
+ * (`src/core/origin-channel.ts`). Events written before that shipped
+ * carry no such bullet and are never rewritten to add one.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -38,6 +43,7 @@ import {
   validateIsoDate,
 } from "./paths.ts";
 import { isValidDeviceId, resolveDeviceId } from "../config.ts";
+import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 // ----- Public types ---------------------------------------------------------
@@ -311,11 +317,24 @@ export function appendLogEvent(
   const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
   const logDir = brainDirsForWrite(vault).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
-  const eventBody =
+  const withAgent =
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"
-      ? Object.freeze({ ...event.body, agent: topLevelAgent })
-      : event.body;
-  const diskEvent: BrainLogEntry = eventBody === event.body ? event : { ...event, body: eventBody };
+      ? { ...event.body, agent: topLevelAgent }
+      : { ...event.body };
+  // The server-derived origin channel (Unit C), folded into the body the
+  // same way `agent` is so both surfaces this appender writes carry it
+  // and `parseLogDay` reads it back with no parser change.
+  //
+  // Assigned LAST and unconditionally: `agent` yields to a body key
+  // because the caller may legitimately name a different agent for the
+  // event than for the call, but the channel is derived from the process
+  // and a body that spells it is a caller naming its own provenance -
+  // the one thing this field exists not to be.
+  const eventBody: BrainLogEntryPayload = Object.freeze({
+    ...withAgent,
+    [ORIGIN_CHANNEL_FIELD]: originChannelStamp(),
+  });
+  const diskEvent: BrainLogEntry = { ...event, body: eventBody };
 
   // §23 (v0.10.8): each event lands in both `<date>.jsonl` (machine
   // surface, primary for `readLogDay`) and `<date>.md` (human-facing

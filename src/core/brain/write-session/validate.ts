@@ -18,6 +18,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join, normalize, sep } from "node:path";
 
+import { ORIGIN_CHANNEL_FIELD } from "../../origin-channel.ts";
 import { parseFrontmatterText } from "../../vault.ts";
 import { isKnownSchemaToken, type BrainSchemaVocabulary } from "../schema-vocab.ts";
 import type { ExistingTargetInfo, WriteSessionError } from "./types.ts";
@@ -96,6 +97,14 @@ export interface ValidateArtifactOptions {
 }
 
 /**
+ * Frontmatter keys the AUTHOR of a document put there — every key except
+ * the server-derived stamps no caller supplies and no caller can remove.
+ */
+function authoredFrontmatterKeyCount(meta: Readonly<Record<string, unknown>>): number {
+  return Object.keys(meta).filter((key) => key !== ORIGIN_CHANNEL_FIELD).length;
+}
+
+/**
  * Validate a submitted artifact body. Order matters: cheap structural
  * checks first so the error list reads top-down like a fix list.
  */
@@ -125,7 +134,12 @@ export function validateArtifact(
     errors.push(err("frontmatter-malformed", "frontmatter", (exc as Error).message));
     return Object.freeze(errors);
   }
-  if (Object.keys(meta).length === 0) {
+  // "No keys" means no AUTHORED keys. The origin channel is stamped by
+  // `createNote` on every note it writes (Unit C), so counting it here
+  // would make this violation unreachable from the surface that produces
+  // most of the documents it judges - a check that cannot fire is worse
+  // than no check, because the receipt still says the lint ran.
+  if (authoredFrontmatterKeyCount(meta) === 0) {
     errors.push(err("frontmatter-missing", "frontmatter", "frontmatter block has no keys"));
     return Object.freeze(errors);
   }

@@ -35,6 +35,12 @@ import {
   rememberKey,
 } from "./idempotency-ledger.ts";
 import { sanitisePrinciple } from "./text/sanitize-principle.ts";
+import {
+  ORIGIN_CHANNEL_FIELD,
+  isOriginChannelStamp,
+  originChannelStamp,
+  type OriginChannelStamp,
+} from "../origin-channel.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
 import { writeFrontmatterAtomic, parseFrontmatter } from "../vault.ts";
 import { compress, expand, CODEC_VERSION } from "./portability/codec.ts";
@@ -61,6 +67,28 @@ import {
  */
 function renderSourceTypes(): string {
   return BRAIN_SIGNAL_SOURCE_TYPES.map((v) => `'${v}'`).join(", ");
+}
+
+/**
+ * Read the `origin_channel` frontmatter key back, refusing a value this
+ * build cannot interpret. `undefined` means the key is absent, which is
+ * what every signal written before Unit C carries.
+ */
+function readOriginChannel(meta: FrontmatterMap, path: string): OriginChannelStamp | undefined {
+  const value = meta[ORIGIN_CHANNEL_FIELD];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") {
+    throw new Error(`signal field '${ORIGIN_CHANNEL_FIELD}' must be a string (${path})`);
+  }
+  const trimmed = value.trim();
+  if (trimmed === "") return undefined;
+  if (!isOriginChannelStamp(trimmed)) {
+    throw new Error(
+      `signal field '${ORIGIN_CHANNEL_FIELD}' is not a channel this build reads: ` +
+        `${JSON.stringify(trimmed)} (${path})`,
+    );
+  }
+  return trimmed;
 }
 
 /** Filename prefix without the trailing dash, e.g. `sig-2026-05-14`. */
@@ -241,6 +269,39 @@ const REQUIRED_INPUT_FIELDS: ReadonlyArray<keyof WriteSignalInput> = [
  * section is rendered with an `_(not provided)_` placeholder so every
  * signal has the same heading structure — consistent with the Pay
  * Memory receipt style.
+ *
+ * ## `origin_channel` is a SIBLING of `source_type`, not a rename
+ *
+ * Every signal written from here carries `origin_channel`: the
+ * server-derived channel of the process that wrote it
+ * ({@link originChannelStamp}). It sits beside `source_type` and neither
+ * field may be folded into the other, because they are different axes
+ * that only look alike:
+ *
+ * | `source_type`  | what it says                                  | axis       |
+ * |----------------|-----------------------------------------------|------------|
+ * | `live`         | written by live `brain_feedback`              | origin     |
+ * | `inline`       | captured from an `@osb` marker in a vault file| origin     |
+ * | `session`      | replayed from a session JSONL                 | origin     |
+ * | `extracted`    | mined by a regex over structure               | extraction |
+ * | `auto_extract` | mined by a model reading prose                | extraction |
+ *
+ * Three of the five name where the content came from and two name how it
+ * was derived, so `source_type` is a MIXED axis and cannot answer "which
+ * transport wrote this". `origin_channel` answers only that:
+ *
+ * | `origin_channel` | who wrote the record                          |
+ * |------------------|-----------------------------------------------|
+ * | `mcp-tool`       | an agent called a tool over the MCP transport |
+ * | `cli`            | an operator or script ran `o2b`               |
+ * | `import`         | a bulk replay of records authored elsewhere   |
+ *
+ * Neither determines the other. A `live` signal is `mcp-tool` when a
+ * tool call wrote it and `cli` when `o2b brain feedback` did, and
+ * `extracted` says nothing about the transport at all. Renaming
+ * `source_type` to the channel spelling was considered and refused: it
+ * would silently reinterpret every signal already on disk and break the
+ * fixtures and read-side parsers that carry its meaning.
  */
 export function writeSignal(
   vault: string,
@@ -401,6 +462,14 @@ function renderSignalDocument(
   ) {
     metadata["source_type"] = sanitised.source_type;
   }
+  // Server-derived origin channel (Unit C), the sibling of `source_type`
+  // the table on `writeSignal` maps. Emitted ALWAYS, including the
+  // `unset` literal: unlike `source_type`, absence here already means
+  // something else - a signal written before the stamp existed - and
+  // overloading it with "no entry point claimed the process" would make
+  // the two indistinguishable. It is read off the module, never off the
+  // input: no caller may name its own channel.
+  metadata[ORIGIN_CHANNEL_FIELD] = originChannelStamp();
   if (sanitised.schema_type?.trim()) {
     metadata["schema_type"] = validateSchemaToken(sanitised.schema_type, "schema_type");
   }
@@ -453,6 +522,11 @@ function renderSignalDocument(
  * that make two signals "the same content". Timestamps, the calendar
  * date, the allocated slug, and portability markers are intentionally
  * excluded so a retry with a later wall-clock still dedupes.
+ *
+ * `origin_channel` is excluded for the stronger version of that reason:
+ * it is provenance, not content, and including it would make the same
+ * signal retried from a different channel collide as an
+ * {@link IdempotencyPayloadMismatchError} instead of deduping.
  */
 function signalPayloadFields(input: WriteSignalInput): Record<string, unknown> {
   return {
@@ -613,6 +687,15 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
   // (a-label-is-not-a-boundary, U5). Absent on every non-mirrored signal,
   // which is every signal a single-vault install writes.
   const origin_vault = readOptionalTrimmedString(meta, "origin_vault", path);
+  // Read back rather than left write-only. `origin_vault` shipped with no
+  // reader at all and had to be given one a release later; a provenance
+  // field nothing can query is a field nothing can act on. Absent on every
+  // signal written before Unit C, and those are never rewritten - the
+  // no-backfill refusal in `src/core/origin-channel.ts`. A value outside
+  // the vocabulary is refused rather than coerced, for the same reason
+  // `source_type` refuses one: a channel this build cannot read is not a
+  // channel it may silently rename.
+  const origin_channel = readOriginChannel(meta, path);
 
   const result: BrainSignal = {
     kind: "brain-signal",
@@ -631,6 +714,7 @@ export function parseSignal(path: string, options: ParseSignalOptions = {}): Bra
     ...(dedup_hash !== undefined ? { dedup_hash } : {}),
     ...(session_ref !== undefined ? { session_ref } : {}),
     ...(origin_vault !== undefined ? { origin_vault } : {}),
+    ...(origin_channel !== undefined ? { origin_channel } : {}),
     ...readBiTemporal(meta, path),
     ...(readOptionalTrimmedString(meta, "expiration_date", path) !== undefined
       ? { expiration_date: readOptionalTrimmedString(meta, "expiration_date", path) }

@@ -16,9 +16,30 @@
  * Tests that need their own vault still set `OPEN_SECOND_BRAIN_CONFIG` /
  * `XDG_CONFIG_HOME` themselves; this only provides a safe default.
  */
+import { beforeEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
+import { clearOriginChannel } from "../src/core/origin-channel.ts";
+
+// The origin channel (`src/core/origin-channel.ts`) is process-scoped by
+// design: an entry point claims it once and every record written under
+// that process carries it. Bun runs many test files in ONE process, so a
+// file that invokes `main()` leaves `cli` claimed for every file that
+// runs after it - and a byte-identity golden over a log line, a signal or
+// a continuity record would then pass or fail on file ORDER.
+//
+// Unclaiming before each test makes the default deterministic (`unset`,
+// the explicit literal for "no entry point claimed this process") without
+// pinning a real channel that would hide the difference. A test that
+// wants a channel claims it, exactly as the entry point does. Registered
+// here rather than in each suite for the same reason `O2B_DEVICE_ID` is
+// pinned above: a hermeticity rule every file needs is not a rule every
+// file should have to remember.
+beforeEach(() => {
+  clearOriginChannel();
+});
 
 // Per-device log sharding (Memory Integrity Suite): pin the device id
 // to the empty string so the suite writes the legacy un-sharded log

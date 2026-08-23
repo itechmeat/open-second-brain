@@ -68,26 +68,41 @@ const BASELINE_INPUT = Object.freeze({
 });
 
 /**
- * The exact bytes {@link BASELINE_INPUT} produced with none of the three
- * authoring options set, captured from the primitive as it stood before
- * they existed. Pinned as a literal rather than recomputed from the
- * implementation, because an expectation derived from the implementation
- * cannot notice the implementation moving: an unconditional spread adding
- * one frontmatter key, or a reordering of the block, changes this string
- * and nothing else in this file.
+ * The exact bytes {@link BASELINE_INPUT} produces with none of the three
+ * authoring options set. Pinned as a literal rather than recomputed from
+ * the implementation, because an expectation derived from the
+ * implementation cannot notice the implementation moving: an
+ * unconditional spread adding one frontmatter key, or a reordering of the
+ * block, changes this string and nothing else in this file.
+ *
+ * It caught exactly that, once, on purpose. The trailing
+ * `origin_channel` line is the server-derived origin channel (Unit C of
+ * the nothing-writes-silently wave): `createNote` now stamps the channel
+ * of the process that wrote the note, merged LAST so a caller cannot
+ * name it. It reads `unset` here because a test harness is not one of
+ * the entry points that claims a channel, and `unset` is the explicit
+ * literal for that rather than a guess. The three authoring options are
+ * still byte-neutral when absent, which is what these tests measure; the
+ * stamp is unconditional by design and is part of the golden now.
  */
 const GOLDEN_BASELINE_NOTE =
-  "---\ntitle: Golden\ntype: note\ntags: [a, b]\n---\n\nBody line one.\n\nBody line two.\n";
+  "---\ntitle: Golden\ntype: note\ntags: [a, b]\norigin_channel: unset\n---\n\n" +
+  "Body line one.\n\nBody line two.\n";
 
-/** Frontmatter key order of the pre-feature note, top to bottom. */
+/** Frontmatter key order of the note, top to bottom, stamp last. */
 const GOLDEN_BASELINE_FRONTMATTER_KEYS: ReadonlyArray<string> = Object.freeze([
   "title",
   "type",
   "tags",
+  "origin_channel",
 ]);
 
-/** The pre-feature bytes for a note with no frontmatter map at all. */
-const GOLDEN_BARE_NOTE = "---\n---\n\njust a body\n";
+/**
+ * The bytes for a note with no frontmatter MAP at all. The block is no
+ * longer empty: the origin-channel stamp is the one key every created
+ * note carries, whatever the caller supplied.
+ */
+const GOLDEN_BARE_NOTE = "---\norigin_channel: unset\n---\n\njust a body\n";
 
 /** Result field order the MCP surface and the SDK both read. */
 const GOLDEN_RESULT_KEYS: ReadonlyArray<string> = Object.freeze(["path", "outcome", "created"]);
@@ -170,7 +185,9 @@ describe("createNote - the new options are byte-identical when absent", () => {
   });
 
   test("a document the strict validator would reject is still written when strict is unset", () => {
-    // No frontmatter at all: `validateArtifact` reports frontmatter-missing.
+    // No CALLER frontmatter at all: `validateArtifact` reports
+    // frontmatter-missing, which it still can because the origin-channel
+    // stamp is merged after validation, not before it.
     const res = createNote(vault, { path: "Notes/Bare.md", content: "just a body" });
     expect(res.created).toBe(true);
     // The whole file, not a substring: an empty frontmatter block is part

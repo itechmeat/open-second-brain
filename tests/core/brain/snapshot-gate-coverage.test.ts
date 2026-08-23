@@ -223,10 +223,18 @@ describe("the dream pass runs behind the gate, not beside it", () => {
     // the same exclusion applied, and this branch reproduces it - so it
     // is still a number from a tree without the units it guards, not a
     // number this branch invented about itself.
+    //
+    // Re-measured a second time, in nothing-writes-silently, and for a
+    // byte the pass DOES author: every log event and every signal now
+    // carries an `origin_channel` stamp, the server-derived channel of
+    // the writing process (Unit C). The digest below is the tree with
+    // that unit and WITHOUT the snapshot gate this file guards, taken
+    // the same way as the two before it, so what it still proves is the
+    // same claim: the gate authors none of these bytes.
     seedSignal("tidy");
     dream(vault, { now: NOW, agentName: "tester" });
     expect(dreamOutputDigest(join(vault, "Brain"))).toBe(
-      "1944a3340e6aee531205e0e3042ca957b23cb67a9254d10b649d49a51e504446",
+      "345b742a592bbfd51305e16fc9e63031f88ba54371ba619e01eecff129f4103a",
     );
   });
 

@@ -31,7 +31,8 @@ import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
 import { handleAiderSubcommand } from "./aider.ts";
-import { handleBrainSubcommand } from "./brain.ts";
+import { handleBrainSubcommand, isBrainImportVerb } from "./brain.ts";
+import { ORIGIN_CHANNEL, setOriginChannel, type OriginChannel } from "../core/origin-channel.ts";
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
@@ -962,6 +963,28 @@ function cmdCompletions(argv: ReadonlyArray<string>): number {
   return 0;
 }
 
+/** The command that hands this process over to the MCP transport. */
+const MCP_COMMAND = "mcp";
+
+/**
+ * Which origin channel this invocation is, derived from the command line
+ * and from nothing else (Unit C, `src/core/origin-channel.ts`).
+ *
+ * Deriving it HERE, in the dispatcher, is the point: there is no flag
+ * that names the channel and no way to reach {@link setOriginChannel}
+ * from a tool argument, so a record's channel is a fact about how the
+ * process was started rather than a claim anyone made.
+ *
+ * `o2b tool-call` stays `cli` deliberately. It invokes an MCP tool
+ * HANDLER, but the channel names the transport that carried the request,
+ * and that transport was a shell.
+ */
+function originChannelForArgv(command: string, rest: ReadonlyArray<string>): OriginChannel {
+  if (command === MCP_COMMAND) return ORIGIN_CHANNEL.mcpTool;
+  if (command === "brain" && isBrainImportVerb(rest)) return ORIGIN_CHANNEL.import;
+  return ORIGIN_CHANNEL.cli;
+}
+
 export async function main(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0) {
     // No command named: the terse banner, not the complete index. The
@@ -976,6 +999,10 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
   }
   const command = argv[0]!;
   const rest = argv.slice(1);
+
+  // Claim the origin channel for this process before anything can write.
+  // The two help arms above return without writing, so they need none.
+  setOriginChannel(originChannelForArgv(command, rest));
 
   // Per-command --help support: print the dedicated help line plus generic.
   // The `brain` subcommand has its own dispatcher with per-verb help, so we

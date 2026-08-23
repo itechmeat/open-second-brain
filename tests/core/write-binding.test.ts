@@ -75,12 +75,24 @@ const PREFIX = "Projects";
  * only show the two agree; a change to the shared write envelope every
  * caller-named write funnels through moves BOTH arms identically and the
  * comparison stays green. Only a fixed pre-feature reference can see it.
+ *
+ * It saw one, on purpose. `origin_channel` is the server-derived channel
+ * of the process that CREATED the note (Unit C of the
+ * nothing-writes-silently wave), stamped by `createNote` and by the batch
+ * `create_note` arm. `unset` is the explicit literal for "no entry point
+ * claimed this process" - a test harness is not one - and the suite
+ * preload unclaims before every test so it cannot depend on file order.
+ *
+ * Its POSITION in the `outside` note is the other half of the record: the
+ * stamp sits where creation put it, ahead of the `tag` a later
+ * `update_note` merged in. Update and append do not re-stamp, so this
+ * golden also pins that a mutation cannot overwrite the creating channel.
  */
 const GOLDEN_ABSENT_BINDING_BYTES: Readonly<Record<string, string>> = Object.freeze({
   /** `createNote`, then the batch `update_note` and `append_note` arms. */
-  outside: "---\ntitle: T\ntag: x\n---\n\nbody\n\nmore\n",
+  outside: "---\ntitle: T\norigin_channel: unset\ntag: x\n---\n\nbody\n\nmore\n",
   /** The batch `create_note` arm. */
-  inside: "---\n---\n\ninside\n",
+  inside: "---\norigin_channel: unset\n---\n\ninside\n",
 });
 
 const AGENT_ENV = "VAULT_AGENT_NAME";

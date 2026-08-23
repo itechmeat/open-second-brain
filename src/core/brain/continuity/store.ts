@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
+import { originChannelStamp } from "../../origin-channel.ts";
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -266,12 +267,18 @@ function buildRecord(
   assertCanonicalCreatedAt(input.createdAt);
   const payloadResult = safeContinuityPayload(input.payload ?? {});
   const sourceRefs = Object.freeze([...(input.sourceRefs ?? [])]);
-  // `schema` stays OUT of recordId(): identical records must keep
-  // identical dedup ids across the version-stamp transition.
+  // `schema` and `originChannel` both stay OUT of recordId(): identical
+  // records must keep identical dedup ids across the version-stamp
+  // transition, and across the channel that happened to append them.
   const id = recordId(input.kind, input.createdAt, sourceRefs, payloadResult.payload);
   return Object.freeze({
     schema: CONTINUITY_SCHEMA_VERSION,
     id,
+    // Server-derived (Unit C), read off the module rather than the input:
+    // AppendContinuityRecordInput has no channel field and must not grow
+    // one. Distinct from the payload's `channel` key, which recall
+    // telemetry uses for the transport a recall was DELIVERED over.
+    originChannel: originChannelStamp(),
     kind: input.kind,
     createdAt: input.createdAt,
     sourceRefs,

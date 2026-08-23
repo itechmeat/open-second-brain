@@ -11,13 +11,17 @@
  * sections 5 (file formats) and 10 (configuration).
  */
 
-// The one import this module carries, and it is TYPE-ONLY: `GateMode`
-// is owned by the integrity seam that acts on it, so the `_brain.yaml`
-// shape cannot drift from the vocabulary the gate actually understands.
-// `verbatimModuleSyntax` erases this entirely, and `stamp.ts` imports
-// nothing itself, so the "plain-data leaf with no runtime dependency"
-// property this module relies on is unchanged.
+// The only imports this module carries, and both are TYPE-ONLY, for the
+// same reason: each vocabulary is owned by the seam that acts on it, so
+// the shapes declared here cannot drift from the values that seam
+// understands. `GateMode` belongs to the integrity stamp; the origin
+// channel belongs to the resolver the entry points claim it through.
+// `verbatimModuleSyntax` erases both entirely, and neither `stamp.ts`
+// nor `origin-channel.ts` imports anything itself, so the "plain-data
+// leaf with no runtime dependency" property this module relies on is
+// unchanged.
 import type { GateMode } from "../integrity/stamp.ts";
+import type { OriginChannelStamp } from "../origin-channel.ts";
 
 // ----- Status & retire-reason enums -----------------------------------------
 //
@@ -776,6 +780,16 @@ export interface BrainSignal {
    * mirrored record from a local one.
    */
   readonly origin_vault?: string;
+  /**
+   * Server-derived channel of the process that wrote this signal (Unit C
+   * of the nothing-writes-silently wave): `mcp-tool`, `cli`, `import`, or
+   * the explicit `unset` when no entry point claimed the process. Never
+   * caller-supplied — see `src/core/origin-channel.ts`. A SIBLING of
+   * {@link BrainSignal.source_type}, not a spelling of it; the mapping
+   * table lives on `writeSignal`. Absent on every signal written before
+   * the stamp shipped, and those are never rewritten to add one.
+   */
+  readonly origin_channel?: OriginChannelStamp;
   /** Bi-temporal event-time start (additive optional, v0.10.18). */
   readonly valid_from?: string;
   /** Bi-temporal event-time end (additive optional, v0.10.18). */

@@ -247,10 +247,21 @@ describe("appendLogEvent — JSONL sidecar (§23, v0.10.8)", () => {
     const lines = jsonl.trim().split("\n");
     expect(lines).toHaveLength(1);
     const parsed = JSON.parse(lines[0]!);
+    // `origin_channel` is the server-derived channel of the writing
+    // process (Unit C of the nothing-writes-silently wave), folded into
+    // the body the same way `agent` is so the markdown block and this row
+    // stay one-to-one. `unset` because a test harness is not one of the
+    // entry points that claims a channel - the explicit literal for that,
+    // never a guessed `cli`.
     expect(parsed).toEqual({
       ts: "2026-05-19T10:00:00Z",
       kind: "feedback",
-      payload: { signal: "[[sig-x]]", topic: "x", sign: "positive" },
+      payload: {
+        signal: "[[sig-x]]",
+        topic: "x",
+        sign: "positive",
+        origin_channel: "unset",
+      },
     });
   });
 

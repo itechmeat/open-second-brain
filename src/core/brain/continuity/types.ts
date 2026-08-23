@@ -1,3 +1,5 @@
+import type { OriginChannelStamp } from "../../origin-channel.ts";
+
 /**
  * Contract-wide continuity schema version (Memory Observability Suite,
  * t_26040ee8), stamped on every new record at `buildRecord()`.
@@ -89,6 +91,20 @@ export interface ContinuityRecord {
    */
   readonly schema?: string;
   readonly id: string;
+  /**
+   * Server-derived channel of the process that appended this record
+   * (Unit C of the nothing-writes-silently wave): `mcp-tool`, `cli`,
+   * `import`, or the explicit `unset` when no entry point claimed the
+   * process. Never caller-supplied — {@link AppendContinuityRecordInput}
+   * has no field for it and `src/core/origin-channel.ts` says why.
+   *
+   * `undefined` on records written before the stamp existed, which are
+   * never rewritten to add one. Deliberately EXCLUDED from `recordId()`,
+   * for the same reason `schema` is: adding provenance must not
+   * re-identify a record, or the same append from two channels would
+   * stop deduping against itself.
+   */
+  readonly originChannel?: OriginChannelStamp;
   readonly kind: ContinuityRecordKind;
   readonly createdAt: string;
   readonly sourceRefs: ReadonlyArray<ContinuitySourceRef>;

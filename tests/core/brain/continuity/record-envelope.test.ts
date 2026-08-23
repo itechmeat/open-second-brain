@@ -10,11 +10,19 @@
  *
  * Two properties carry it:
  *
- *   - the envelope is EIGHT fields in one order. `JSON.stringify` emits
+ *   - the envelope is NINE fields in one order. `JSON.stringify` emits
  *     insertion order, so a field added anywhere - including at the end -
  *     changes the bytes on disk and fails here. That is the point: a new
  *     envelope field is a schema change, and this test is where it has to
- *     be argued for rather than slipped in.
+ *     be argued for rather than slipped in. It was eight, and the ninth
+ *     was argued: `originChannel` is the server-derived origin channel
+ *     (Unit C of the nothing-writes-silently wave), stamped beside `id`
+ *     because it is part of the record's header rather than its content.
+ *     It reads `unset` in this fixture because a test harness is not one
+ *     of the entry points that claims a channel, and `unset` is the
+ *     explicit literal for that rather than a guessed `cli`. Per the
+ *     evolution rule on `CONTINUITY_SCHEMA_VERSION` an additive optional
+ *     field does not bump the version, so `o2b.continuity.v1` stands.
  *   - the dedup id is sha-256 over `kind`, `createdAt`, `sourceRefs` and
  *     `payload`, and NOTHING else. `docs/observability.md` documents that
  *     formula so a reader can reproduce an id; the second assertion below
@@ -68,7 +76,7 @@ const INPUT: AppendContinuityRecordInput = Object.freeze({
  */
 const GOLDEN_LINE =
   '{"schema":"o2b.continuity.v1","id":"ctn_20260614093000_dfa03f037ab006d8",' +
-  '"kind":"recall_telemetry","createdAt":"2026-06-14T09:30:00Z",' +
+  '"originChannel":"unset","kind":"recall_telemetry","createdAt":"2026-06-14T09:30:00Z",' +
   '"sourceRefs":[{"id":"note-a","path":"Brain/notes/a.md"}],' +
   '"payload":{"status":"ok","session_id":"sess-1"},"private":false,"redacted":false}';
 
@@ -79,6 +87,7 @@ const GOLDEN_RECORD = JSON.parse(GOLDEN_LINE) as ContinuityRecord;
 const GOLDEN_KEYS: ReadonlyArray<string> = Object.freeze([
   "schema",
   "id",
+  "originChannel",
   "kind",
   "createdAt",
   "sourceRefs",
@@ -108,7 +117,10 @@ describe("continuity record envelope", () => {
     // + payload, id-stamped with the digits of createdAt. Recomputed from
     // the documented inputs alone - if anything else enters the hash, an
     // operator reproducing an id from the documentation gets a miss and
-    // this assertion is what tells us before they do.
+    // this assertion is what tells us before they do. `schema` and
+    // `originChannel` are both outside it, so neither the version stamp
+    // nor the writing channel can re-identify an otherwise identical
+    // record.
     const digest = createHash("sha256")
       .update(
         JSON.stringify({

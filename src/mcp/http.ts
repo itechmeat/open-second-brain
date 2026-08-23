@@ -28,6 +28,7 @@ import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
 import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
+import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
 
 export interface ServeHttpOptions {
   readonly host?: string;
@@ -62,6 +63,9 @@ export async function startHttp(
   opts: ServeHttpOptions = {},
   runtimeOpts: MCPServerRuntimeOptions = {},
 ): Promise<HttpServerHandle> {
+  // See the same claim in `serveStdio`: the transport is what knows this
+  // process serves MCP tool calls (Unit C).
+  setOriginChannel(ORIGIN_CHANNEL.mcpTool);
   const apiKey = opts.apiKey ?? null;
   const host = opts.host ?? "127.0.0.1";
   // Safe by default: on the loopback default a bearer is optional (the

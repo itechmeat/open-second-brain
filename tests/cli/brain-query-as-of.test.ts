@@ -36,7 +36,18 @@ const AFTER_EXPIRY = "2026-08-01T00:00:00Z";
 const LAPSED_PRINCIPLE = "Principle for lapsed";
 const EVERGREEN_PRINCIPLE = "Principle for evergreen";
 
-/** Exact pre-change stdout for `--topic deploy --json`, no new flags. */
+/**
+ * Exact stdout for `--topic deploy --json`, no new flags.
+ *
+ * `origin_channel` is the server-derived channel of the process that
+ * WROTE the signal (Unit C of the nothing-writes-silently wave), read
+ * back by `parseSignal` and surfaced here because this payload is the
+ * parsed signal. `unset` is the explicit literal for "no entry point
+ * claimed this process": the fixture writes its signals through
+ * `writeSignal` directly rather than through `o2b`, and the suite
+ * preload unclaims the channel before every test so this value cannot
+ * depend on which test file ran first.
+ */
 const PINNED_JSON_STDOUT = `{
   "signals": [
     {
@@ -51,7 +62,8 @@ const PINNED_JSON_STDOUT = `{
       "topic": "deploy",
       "signal": "positive",
       "agent": "tester",
-      "principle": "Principle for evergreen"
+      "principle": "Principle for evergreen",
+      "origin_channel": "unset"
     }
   ],
   "preference": null,

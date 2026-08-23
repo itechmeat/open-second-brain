@@ -22,6 +22,7 @@ import { MCPServer, type MCPServerOptions, type MCPServerRuntimeOptions } from "
 import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protocol.ts";
 import { RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
+import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
 
 /**
  * Any frame this transport writes: a response to a request, or a
@@ -66,6 +67,14 @@ export async function serveStdio(
   ioOpts: ServeStdioOptions = {},
   runtimeOpts: MCPServerRuntimeOptions = {},
 ): Promise<number> {
+  // This process serves MCP tool calls, so it claims the `mcp-tool`
+  // origin channel for every record written under it (Unit C). Claimed at
+  // the TRANSPORT and not in the `MCPServer` constructor: `o2b tool-call`
+  // and the MCP probe build a server to invoke a handler from a shell, and
+  // stamping those `mcp-tool` would name a transport that carried nothing.
+  // Redundant when `o2b mcp` started us - it claimed the same value - and
+  // load-bearing when a host embeds this transport directly.
+  setOriginChannel(ORIGIN_CHANNEL.mcpTool);
   const stdin = ioOpts.stdin ?? process.stdin;
   const stdout = ioOpts.stdout ?? process.stdout;
   // This transport owns a duplex stream, so it CAN write a frame nobody

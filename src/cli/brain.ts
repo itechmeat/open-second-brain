@@ -156,6 +156,42 @@ import {
   cmdBrainWeekly,
 } from "./brain/verbs/index.ts";
 
+/**
+ * Brain verbs whose whole purpose is replaying records authored
+ * somewhere else, spelled as the verb path the caller types. The CLI
+ * entry point reads this to claim the `import` origin channel for the
+ * process (`src/core/origin-channel.ts`) instead of the `cli` every
+ * other verb gets.
+ *
+ * It lives here, beside the `switch` that dispatches these verbs, so a
+ * renamed verb moves both in one edit; a copy of the list in `main.ts`
+ * would be a copy that goes stale the first time one is renamed.
+ *
+ * Membership is "replays records this operator did not author now",
+ * which is why `scan-inline` is absent: it captures `@osb` markers the
+ * operator wrote in their own vault during this session, and that is a
+ * `cli` capture wearing an unusual input format.
+ */
+export const BRAIN_IMPORT_VERB_PATHS: ReadonlyArray<string> = Object.freeze([
+  "bank-import",
+  "git ingest",
+  "graph-import",
+  "import-claude-memory",
+  "import-session",
+]);
+
+/**
+ * Whether `o2b brain <argv…>` names one of {@link BRAIN_IMPORT_VERB_PATHS}.
+ * Matches on the first two words so a nested verb (`git ingest`) is
+ * distinguishable from its read-only siblings (`git status`, `git find`).
+ */
+export function isBrainImportVerb(argv: ReadonlyArray<string>): boolean {
+  if (argv.length === 0) return false;
+  const one = argv[0]!;
+  const two = argv.length > 1 ? `${one} ${argv[1]!}` : one;
+  return BRAIN_IMPORT_VERB_PATHS.includes(one) || BRAIN_IMPORT_VERB_PATHS.includes(two);
+}
+
 export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promise<number> {
   if (argv.length === 0 || argv[0] === "-h" || argv[0] === "--help") {
     process.stdout.write(BRAIN_HELP);
