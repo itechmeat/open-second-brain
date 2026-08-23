@@ -65,6 +65,7 @@ export type {
   StructuredRecallQueryDocument,
   VaultPathRule,
   VaultScopeRules,
+  VisibilityHonestyFinding,
 } from "./types.ts";
 export {
   chunkWindowDiagnosticCode,
@@ -93,7 +94,17 @@ export {
   serializeSearchCard,
   serializeIndexStatus,
   serializeStampMismatches,
+  serializeVisibilityHonestyFinding,
 } from "./serialize.ts";
+export {
+  excludedVisibilitySurfaces,
+  VISIBILITY_SURFACE_CATEGORY,
+  VISIBILITY_SURFACE_KIND,
+  VISIBILITY_SURFACE_REGISTRY,
+  type VisibilitySurfaceCategory,
+  type VisibilitySurfaceEntry,
+  type VisibilitySurfaceKind,
+} from "./visibility-surface-registry.ts";
 export {
   loadProviderRegistry,
   addProviderProfile,

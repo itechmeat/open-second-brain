@@ -80,12 +80,14 @@ import {
   serializeEmbedderRecordCensus,
   serializePendingVectorCensus,
   serializeStampMismatches,
+  serializeVisibilityHonestyFinding,
 } from "../../../core/search/index.ts";
 import type {
   EmbedderRecordCensus,
   IndexCheckReport,
   PendingVectorCensus,
   ResolvedSearchConfig,
+  VisibilityHonestyFinding,
 } from "../../../core/search/index.ts";
 import { PROVIDER_PROBE } from "../../../core/search/provider-probe.ts";
 import { acquireWriterLock } from "../../../core/search/store.ts";
@@ -408,6 +410,12 @@ function jsonForCheck(r: IndexCheckReport): Record<string, unknown> {
     // Same terms again: the audit says what it compared, or that it
     // compared nothing (nothing-writes-silently, unit G).
     embedder_record: serializeEmbedderRecordCensus(r.embedderRecord),
+    // Present only when the vault/index carries at least one
+    // visibility:-tagged page, so a vault that never uses the field
+    // stays byte-identical (nothing-writes-silently, unit H, form B).
+    ...(r.visibilityHonesty !== undefined
+      ? { visibility_honesty: serializeVisibilityHonestyFinding(r.visibilityHonesty) }
+      : {}),
     // Emitted only on drift, so a matching store's JSON is byte-identical
     // to the pre-gate output (context-integrity-gates, Unit E).
     ...(r.embeddingAbi.length > 0
@@ -460,6 +468,19 @@ function describePendingVectors(census: PendingVectorCensus): string {
   return `${census.pending} of ${census.chunks} chunk(s) have no vector`;
 }
 
+/**
+ * The visibility honesty finding as one operator-facing line
+ * (nothing-writes-silently, unit H, form B). Both counts are the
+ * registry's own numbers, read at render time - never hand-written here.
+ */
+function describeVisibilityHonesty(finding: VisibilityHonestyFinding): string {
+  return (
+    "visibility: frontmatter is a caller-supplied view filter, not a privacy boundary; " +
+    `${finding.excludedSurfaceCount} of ${finding.totalSurfaceCount} note-returning surfaces ` +
+    "do not honor it (see tests/core/architecture/visibility-surface-census.test.ts)"
+  );
+}
+
 function renderCheckHuman(r: IndexCheckReport): string {
   const lines: string[] = [];
   lines.push(`vault_readable:        ${ok(r.vaultReadable)}`);
@@ -482,6 +503,12 @@ function renderCheckHuman(r: IndexCheckReport): string {
   // nobody could take is reported as unrecorded, never as zero.
   lines.push(`pending_vectors:       ${describePendingVectors(r.pendingVectors)}`);
   lines.push(`embedder_record:       ${describeEmbedderRecord(r.embedderRecord)}`);
+  // Present only when the vault/index carries at least one
+  // visibility:-tagged page - a vault that never uses the field gets no
+  // line at all, never a zero-count one.
+  if (r.visibilityHonesty !== undefined) {
+    lines.push(`visibility_honesty:    ${describeVisibilityHonesty(r.visibilityHonesty)}`);
+  }
   for (const w of r.warnings) lines.push(`warning: ${w}`);
   for (const f of r.fatal) lines.push(`fatal:   ${f}`);
   if (r.recommendations.length > 0) {

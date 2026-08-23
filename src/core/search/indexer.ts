@@ -81,6 +81,7 @@ import {
   formatEmbedderRecordContradiction,
   formatEmbeddingAbiDrift,
   peekPendingVectorsSync,
+  peekVisibilityTagPresence,
   readEmbedderRecordCensusSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
@@ -93,6 +94,10 @@ import {
 import { LATEST_SCHEMA_VERSION } from "./schema.ts";
 import { chunkWindowDiagnosticCode, SearchError } from "./types.ts";
 import { walkVault } from "./walker.ts";
+import {
+  excludedVisibilitySurfaces,
+  VISIBILITY_SURFACE_REGISTRY,
+} from "./visibility-surface-registry.ts";
 import type { ChunkInput, LinkInput } from "./store.ts";
 import type {
   ChunkWindowCensus,
@@ -102,6 +107,7 @@ import type {
   IndexStatusSnapshot,
   PendingVectorCensus,
   ResolvedSearchConfig,
+  VisibilityHonestyFinding,
 } from "./types.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1580,6 +1586,12 @@ export async function indexCheck(
   const contradiction = formatEmbedderRecordContradiction(embedderRecord);
   if (contradiction !== null) warnings.push(contradiction);
 
+  // The visibility honesty finding (nothing-writes-silently, unit H,
+  // form B). Ungated by the semantic switch, like embedderRecord beside
+  // it: this reads chunk content the indexer already wrote, regardless
+  // of whether embeddings are configured at all.
+  const visibilityHonesty = readVisibilityHonestyFinding(config.dbPath);
+
   // §E.2 — Actionable hints derived from the check state.
   // Rules match the design doc table; agents and operators read the
   // list to know what command to run next without learning the
@@ -1602,6 +1614,9 @@ export async function indexCheck(
     embeddingAbi,
     pendingVectors,
     embedderRecord,
+    // Absent, not null: a vault that has never used the field gets no
+    // key at all, so its JSON stays byte-identical to before this unit.
+    ...(visibilityHonesty === null ? {} : { visibilityHonesty }),
     vecExtension,
     embeddingKeyResolved,
     providerProbe,
@@ -1633,6 +1648,23 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
       peek.kind === "absent"
         ? `no search index at ${dbPath}`
         : `${dbPath} did not open: ${peek.detail}`,
+  });
+}
+
+/**
+ * The visibility honesty finding for an index path, or `null` when there
+ * is nothing to be honest ABOUT: the index does not exist, would not
+ * open, or - the common case - has never carried a `visibility:`-tagged
+ * page. Both counts are read off the registry's own exported list at
+ * call time, never hand-written, so the finding cannot drift from the
+ * census that backs it (nothing-writes-silently, unit H, form B).
+ */
+function readVisibilityHonestyFinding(dbPath: string): VisibilityHonestyFinding | null {
+  const peek = peekVisibilityTagPresence(dbPath);
+  if (peek.kind !== "read" || !peek.value) return null;
+  return Object.freeze({
+    excludedSurfaceCount: excludedVisibilitySurfaces().length,
+    totalSurfaceCount: VISIBILITY_SURFACE_REGISTRY.length,
   });
 }
 

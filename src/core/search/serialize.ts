@@ -11,6 +11,7 @@ import type {
   IndexStatusSnapshot,
   PendingVectorCensus,
   SearchCard,
+  VisibilityHonestyFinding,
 } from "./types.ts";
 
 /**
@@ -93,6 +94,22 @@ export function serializeEmbedderRecordCensus(
       found: census.reconciliation.found,
       missing: census.reconciliation.missing,
     },
+  };
+}
+
+/**
+ * Wire shape of the visibility honesty finding (nothing-writes-silently,
+ * unit H, form B). Present only when the caller already established
+ * there is something to report - `search check` omits the key entirely
+ * rather than serializing a zero-count finding, the same convention
+ * `embeddingAbi` uses for a matching store.
+ */
+export function serializeVisibilityHonestyFinding(
+  finding: VisibilityHonestyFinding,
+): Record<string, unknown> {
+  return {
+    excluded_surface_count: finding.excludedSurfaceCount,
+    total_surface_count: finding.totalSurfaceCount,
   };
 }
 
