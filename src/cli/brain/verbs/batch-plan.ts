@@ -11,6 +11,7 @@
  */
 
 import { planBatches } from "../../../core/brain/ingest/batch-plan.ts";
+import { serializeImportCensus } from "../../../core/brain/import-census.ts";
 import { reconcilePlan } from "../../../core/brain/ingest/reconcile.ts";
 import { formatIgnoreWarning } from "../../../core/fs/git-discovery.ts";
 import { serializeBatchPlan } from "../../../mcp/brain/ingest-tools.ts";
@@ -80,6 +81,7 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
                 ingested: [...report.ingested],
                 missing: [...report.missing],
                 complete: report.complete,
+                census: serializeImportCensus(report.census),
               },
             }
           : {}),
@@ -116,6 +118,16 @@ export async function cmdBrainBatchPlan(argv: string[]): Promise<number> {
       } else {
         info(`  reconcile: ${report.missing.length} dispatched source(s) never ingested:`);
         for (const p of report.missing) info(`    - ${p}`);
+      }
+      // The read-back half: of the sources the checkpoint CLAIMS, which the
+      // content manifest can still confirm. Named, never a bare count.
+      const census = report.census;
+      if (census.attempted > 0) {
+        ok(
+          `  census: ${census.found}/${census.attempted} ingested source(s) read back ` +
+            `(${census.outcome})`,
+        );
+        for (const p of census.missing) info(`    unconfirmed by the manifest: ${p}`);
       }
     }
     return 0;

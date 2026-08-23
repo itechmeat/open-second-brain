@@ -154,3 +154,51 @@ describe("reconcilePlan", () => {
     expect(readFileSync(cpPath, "utf8")).toBe(before);
   });
 });
+
+/**
+ * The gap report above answers "what did the checkpoint never record". The
+ * census answers the question one step further out: of the sources the
+ * checkpoint DOES claim, which can still be read back from the content
+ * manifest? A claim nobody can reproduce is not a completed ingest, and
+ * before this it was reported as one.
+ */
+describe("reconcilePlan - the post-import read-back census", () => {
+  test("a plan whose ingested sources all read back is complete", () => {
+    write("Docs/a.md");
+    write("Docs/b.md");
+    const plan = planBatches(vault, "Docs", CAPS);
+    ingest("Docs/a.md", plan.planId);
+    ingest("Docs/b.md", plan.planId);
+
+    const report = reconcilePlan(vault, plan);
+    expect(report.census.attempted).toBe(2);
+    expect(report.census.found).toBe(2);
+    expect([...report.census.missing]).toEqual([]);
+    expect(report.census.outcome).toBe("complete");
+  });
+
+  test("a source the checkpoint claims but the manifest cannot confirm is named", () => {
+    write("Docs/a.md");
+    write("Docs/b.md");
+    const plan = planBatches(vault, "Docs", CAPS);
+    ingest("Docs/a.md", plan.planId);
+    ingest("Docs/b.md", plan.planId);
+    // The write landed in the checkpoint and then the source vanished: the
+    // gap report still calls the plan complete, the census does not.
+    rmSync(join(vault, "Docs/b.md"));
+
+    const report = reconcilePlan(vault, plan);
+    expect(report.complete).toBe(true);
+    expect(report.census.found).toBe(1);
+    expect([...report.census.missing]).toEqual(["Docs/b.md"]);
+    expect(report.census.outcome).toBe("partial");
+  });
+
+  test("a plan that ingested nothing censuses zero rather than claiming success", () => {
+    write("Docs/a.md");
+    const plan = planBatches(vault, "Docs", CAPS);
+    const report = reconcilePlan(vault, plan);
+    expect(report.census.attempted).toBe(0);
+    expect(report.census.outcome).toBe("complete");
+  });
+});

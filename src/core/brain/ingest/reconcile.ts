@@ -19,8 +19,18 @@
  * `unchanged` (already ingested in a prior run of the same plan). Reconciling
  * that union against the checkpoint means a plan re-run after a partial ingest
  * still names exactly the sources that never landed.
+ *
+ * Read-back census (nothing-writes-silently, Unit F). The gap above is
+ * computed from what the CHECKPOINT says - a record of the run's own claims.
+ * A claim is not evidence: a source recorded as completed whose bytes are no
+ * longer on disk, or whose content hash no longer matches what the manifest
+ * recorded, is a completed ingest nobody can reproduce. The census re-reads
+ * the manifest for exactly the sources this report calls `ingested` and names
+ * the ones that do not read back. Still read-only, still idempotent - it
+ * hashes files it is already reporting on and writes nothing.
  */
 
+import { censusIngestedPaths, type ImportCensus } from "../import-census.ts";
 import type { BatchPlan } from "./batch-plan.ts";
 import { readCheckpoint } from "./checkpoint.ts";
 
@@ -36,6 +46,13 @@ export interface ReconcileReport {
   readonly missing: readonly string[];
   /** True when the gap is empty (every dispatched source ingested). */
   readonly complete: boolean;
+  /**
+   * Read-back census over {@link ReconcileReport.ingested}: of the sources
+   * this report calls ingested, how many the content manifest can still
+   * confirm, and the named paths it cannot. `complete` above answers "did
+   * everything dispatched get claimed"; this answers "is every claim true".
+   */
+  readonly census: ImportCensus;
 }
 
 /**
@@ -75,5 +92,6 @@ export function reconcilePlan(vault: string, plan: BatchPlan): ReconcileReport {
     ingested,
     missing,
     complete: missing.length === 0,
+    census: censusIngestedPaths(vault, ingested),
   };
 }

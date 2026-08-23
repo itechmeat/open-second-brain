@@ -9,6 +9,7 @@
  * Idempotent on the source path.
  */
 
+import { serializeImportCensus } from "../../core/brain/import-census.ts";
 import { planBatches, type BatchPlan } from "../../core/brain/ingest/batch-plan.ts";
 import { clearCheckpoint } from "../../core/brain/ingest/checkpoint.ts";
 import { ingestSource } from "../../core/brain/ingest/ingest.ts";
@@ -292,6 +293,7 @@ async function toolBrainIngestBatchPlan(
           ingested: [...report.ingested],
           missing: [...report.missing],
           complete: report.complete,
+          census: serializeImportCensus(report.census),
         },
       };
 }

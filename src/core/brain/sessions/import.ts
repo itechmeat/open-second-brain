@@ -23,6 +23,12 @@
  * Idempotency: dedup index is built once at the start of each
  * `importSession` run by reading the inbox and processed dirs. A
  * second run on the same file finds every hash already present.
+ *
+ * Census (nothing-writes-silently, Unit F). After the run, the dedup
+ * hashes of the signals it claims to have written are read back from
+ * disk, and the result carries `claimed / found / missing` with the
+ * missing hashes NAMED. See {@link ../import-census.ts} for what the
+ * census does and does not cover.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -31,6 +37,7 @@ import { basename, resolve } from "node:path";
 import { delegatedAgentName } from "../../agent-identity.ts";
 import { readSkillOfferId, SKILL_OFFER_ID_KEY } from "../../surface/skill-offer.ts";
 import { buildDedupIndex, computeDedupHash, type DedupIndexEntry } from "../dedup-hash.ts";
+import { censusSessionSignals, type ImportCensus } from "../import-census.ts";
 import { appendContinuityRecord } from "../continuity/store.ts";
 import { discoverMarkersDetailed, isFeedbackMarker } from "../inline.ts";
 import { writeSignal } from "../signal.ts";
@@ -190,6 +197,12 @@ export interface ImportSessionResult {
   readonly facts_deduped: number;
   readonly recall_turns_imported: number;
   readonly recall_summary_nodes: number;
+  /**
+   * Read-back census of the signals this run claims to have written:
+   * `attempted / found / missing`, with the missing dedup hashes named. A
+   * dry run claims nothing and censuses zero.
+   */
+  readonly census: ImportCensus;
   readonly errors: ReadonlyArray<{ path: string; message: string }>;
 }
 
@@ -278,6 +291,11 @@ export async function importSession(
    * one write and one dedup.
    */
   const withheldHashes = new Set<string>();
+  /**
+   * Dedup hashes of the signals this run actually wrote - the claim the
+   * post-import census reads back against the vault.
+   */
+  const createdHashes: string[] = [];
   const recallTurns: SessionTurn[] = [];
   const filterRoles =
     opts.filterRoles && opts.filterRoles.length > 0 ? new Set(opts.filterRoles) : null;
@@ -355,6 +373,7 @@ export async function importSession(
         ...(opts.rawCodec === true ? { rawCodec: true } : {}),
       });
       dedup.set(input.dedupHash, { id: res.id, path: res.path });
+      createdHashes.push(input.dedupHash);
       signalsCreated++;
     } catch (err) {
       errors.push({
@@ -390,6 +409,7 @@ export async function importSession(
       facts_deduped: 0,
       recall_turns_imported: 0,
       recall_summary_nodes: 0,
+      census: censusSessionSignals(vault, []),
       errors: Object.freeze([]),
     });
   if (boundaryDecision === "ignore") return emptyResult();
@@ -588,6 +608,9 @@ export async function importSession(
     filtered_turns: filteredTurns,
     recall_turns_imported: recallTurnsImported,
     recall_summary_nodes: recallSummaryNodes,
+    // Read back AFTER every write this run makes, including the recall
+    // import above: the point is to ask the disk, not the run's own belief.
+    census: censusSessionSignals(vault, createdHashes),
     errors: Object.freeze(errors),
   });
 }

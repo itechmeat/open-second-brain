@@ -38,6 +38,7 @@ import {
   type SessionImportRecord,
 } from "../../../core/brain/sessions/discover.ts";
 import { SessionImportError, type SessionAdapterId } from "../../../core/brain/sessions/types.ts";
+import { serializeImportCensus, type ImportCensus } from "../../../core/brain/import-census.ts";
 import {
   createSafeguard,
   OPERATION,
@@ -485,6 +486,7 @@ function emitImportReport(
         filtered_turns: f.filtered_turns,
         recall_turns_imported: f.recall_turns_imported,
         recall_summary_nodes: f.recall_summary_nodes,
+        census: serializeImportCensus(f.census),
         errors: f.errors,
       })),
       warnings: result.warnings,
@@ -507,6 +509,7 @@ function emitImportReport(
     ok(`  signals_deduped: ${f.signals_deduped}`);
     ok(`  tool_replays: ${f.tool_replays}`);
     ok(`  filtered_turns: ${f.filtered_turns}`);
+    emitCensus(f.census);
     if (opts.recall) {
       ok(`  recall_turns_imported: ${f.recall_turns_imported}`);
       ok(`  recall_summary_nodes: ${f.recall_summary_nodes}`);
@@ -516,6 +519,18 @@ function emitImportReport(
   }
   for (const w of result.warnings) info(`  warning: ${w.path}: ${w.message}`);
   for (const f of failures) process.stderr.write(`error: ${f.path}: ${f.message}\n`);
+}
+
+/**
+ * The post-import read-back census, printed only when it has something to
+ * say: a run that wrote nothing has nothing to reconcile, and a clean census
+ * is one line rather than a list. A shortfall NAMES its hashes - the count
+ * alone is what this line exists not to be.
+ */
+function emitCensus(census: ImportCensus): void {
+  if (census.attempted === 0) return;
+  ok(`  census: ${census.found}/${census.attempted} written signals read back (${census.outcome})`);
+  for (const hash of census.missing) info(`    not found on disk: ${hash}`);
 }
 
 /** Map a session-import throw onto this verb's exit codes. */
