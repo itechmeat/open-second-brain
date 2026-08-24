@@ -852,6 +852,40 @@ class ProviderLifecycleTests(unittest.TestCase):
             [name for name, _ in bridge.calls if name == "brain_context_pack_outcome"], []
         )
 
+    def test_prefetch_expires_receipt_on_neutral_turn_before_explicit_feedback(self):
+        gate_calls = 0
+
+        def gate(_args):
+            nonlocal gate_calls
+            gate_calls += 1
+            return {"structuredContent": {"retrieve": gate_calls == 1}}
+
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": gate,
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-expired",
+                        "items": [{"title": "decision", "body": "keep RRF"}],
+                    }
+                },
+                "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.prefetch("what did we decide", session_id="sess-1")
+        provider.prefetch("tell me something else", session_id="sess-1")
+        provider.prefetch("我之前说过，不对", session_id="sess-1")
+
+        self.assertEqual(gate_calls, 3)
+        self.assertEqual(
+            [name for name, _ in bridge.calls if name == "brain_context_pack"],
+            ["brain_context_pack"],
+        )
+        self.assertEqual(
+            [name for name, _ in bridge.calls if name == "brain_context_pack_outcome"], []
+        )
+
     def test_prefetch_uses_structured_items_bodies_and_skips_preview_envelope(self):
         # Regression: when brain_context_pack returns both structuredContent
         # items[*].body AND a content[0].text envelope carrying the

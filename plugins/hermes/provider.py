@@ -323,7 +323,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._lock = threading.Lock()
         self._sync_threads: list[threading.Thread] = []
         self._queued_query: str = ""
-        self._pending_receipts: dict[str, list[str]] = {}
+        self._pending_receipts: dict[str, str] = {}
 
     # -- required surface ----------------------------------------------------
 
@@ -636,7 +636,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
     # -- lifecycle hooks -----------------------------------------------------
 
     def _remember_receipt(self, session_id: str, pack: Any) -> None:
-        """Keep one opaque receipt id per session until explicit feedback arrives."""
+        """Keep the latest opaque receipt id per session until the next turn."""
         structured = self._structured(pack)
         receipt_id = structured.get("receipt_id")
         if not receipt_id:
@@ -645,20 +645,15 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         if not sid:
             return
         with self._lock:
-            self._pending_receipts.setdefault(sid, []).append(str(receipt_id))
+            self._pending_receipts[sid] = str(receipt_id)
 
     def _close_explicit_outcome(self, session_id: str, query: str) -> None:
-        """Post only an explicit acknowledgement/correction; neutral stays unknown."""
-        outcome = _explicit_outcome(query)
-        if outcome is None:
-            return
+        """Consume the immediate receipt; post only an explicit outcome."""
         sid = session_id or self._session_id
         with self._lock:
-            receipts = self._pending_receipts.get(sid, [])
-            receipt_id = receipts.pop() if receipts else None
-            if not receipts:
-                self._pending_receipts.pop(sid, None)
-        if receipt_id is None:
+            receipt_id = self._pending_receipts.pop(sid, None) if sid else None
+        outcome = _explicit_outcome(query)
+        if outcome is None or receipt_id is None:
             return
         first_pass_success, repair_required = outcome
         result = self._safe_call(
