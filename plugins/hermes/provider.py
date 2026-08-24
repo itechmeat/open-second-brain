@@ -143,6 +143,44 @@ SESSION_TRANSCRIPT_FILENAME = "session-transcript.jsonl"
 
 # Token budget for the recall slice fetched on each prefetch.
 _PREFETCH_MAX_TOKENS = 1024
+_PREFETCH_RECEIPT_HOST = "hermes"
+
+# Only explicit user acknowledgements/corrections close a quality sample. A
+# neutral next turn is deliberately left unknown; guessing success would turn
+# the outcome ledger into a vanity metric.
+_EXPLICIT_REPAIR_MARKERS = (
+    "我之前说过",
+    "我已经说过",
+    "我提醒过",
+    "你忘了",
+    "又忘了",
+    "没记住",
+    "之前已经定过",
+    "不对",
+    "错了",
+)
+_EXPLICIT_SUCCESS_MARKERS = (
+    "对的",
+    "正确",
+    "这样就行",
+    "没问题",
+    "可以了",
+    "收到，谢谢",
+    "谢谢，正是",
+    "就这样",
+)
+
+
+def _explicit_outcome(query: str) -> tuple[bool, bool] | None:
+    """Return ``(first_pass_success, repair_required)`` only for explicit signals."""
+    text = (query or "").strip()
+    if not text:
+        return None
+    if any(marker in text for marker in _EXPLICIT_REPAIR_MARKERS):
+        return False, True
+    if any(marker in text for marker in _EXPLICIT_SUCCESS_MARKERS):
+        return True, False
+    return None
 
 # A provider instance is created per AIAgent, but the MCP server is a gateway
 # resource rather than a session resource. Keep one bridge per effective server
@@ -285,6 +323,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._lock = threading.Lock()
         self._sync_threads: list[threading.Thread] = []
         self._queued_query: str = ""
+        self._pending_receipts: dict[str, list[str]] = {}
 
     # -- required surface ----------------------------------------------------
 
@@ -325,6 +364,8 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._session_id = session_id or ""
         self._hermes_home = kwargs.get("hermes_home")
         self._bridge_start_error = None
+        with self._lock:
+            self._pending_receipts.clear()
         old_bridge = self._bridge
         old_bridge_shared = self._bridge_shared
         self._bridge = None
@@ -594,6 +635,50 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
 
     # -- lifecycle hooks -----------------------------------------------------
 
+    def _remember_receipt(self, session_id: str, pack: Any) -> None:
+        """Keep one opaque receipt id per session until explicit feedback arrives."""
+        structured = self._structured(pack)
+        receipt_id = structured.get("receipt_id")
+        if not receipt_id:
+            return
+        sid = session_id or self._session_id
+        if not sid:
+            return
+        with self._lock:
+            self._pending_receipts.setdefault(sid, []).append(str(receipt_id))
+
+    def _close_explicit_outcome(self, session_id: str, query: str) -> None:
+        """Post only an explicit acknowledgement/correction; neutral stays unknown."""
+        outcome = _explicit_outcome(query)
+        if outcome is None:
+            return
+        sid = session_id or self._session_id
+        with self._lock:
+            receipts = self._pending_receipts.get(sid, [])
+            receipt_id = receipts.pop() if receipts else None
+            if not receipts:
+                self._pending_receipts.pop(sid, None)
+        if receipt_id is None:
+            return
+        first_pass_success, repair_required = outcome
+        result = self._safe_call(
+            "brain_context_pack_outcome",
+            {
+                "operation": "post",
+                "sample_id": receipt_id,
+                "first_pass_success": first_pass_success,
+                "repair_required": repair_required,
+                "host": _PREFETCH_RECEIPT_HOST,
+                **({"session_id": sid} if sid else {}),
+            },
+        )
+        if self._structured(result).get("recorded") is not True:
+            logger.warning(
+                "%s: explicit context-pack outcome was not recorded for %s",
+                self.PROVIDER_NAME,
+                receipt_id,
+            )
+
     def system_prompt_block(self) -> str:
         """Static provider context: the current active-preferences body."""
         result = self._safe_call("brain_context", {})
@@ -607,9 +692,22 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         always appended when an agent identity is configured.
         """
         parts: list[str] = []
+        sid = session_id or self._session_id
+        self._close_explicit_outcome(sid, query)
         gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
         if gate.get("retrieve"):
-            pack = self._safe_call("brain_context_pack", {"max_tokens": _PREFETCH_MAX_TOKENS})
+            pack = self._safe_call(
+                "brain_context_pack",
+                {
+                    "max_tokens": _PREFETCH_MAX_TOKENS,
+                    "receipt": True,
+                    "receipt_host": _PREFETCH_RECEIPT_HOST,
+                    "telemetry": True,
+                    "telemetry_host": _PREFETCH_RECEIPT_HOST,
+                    **({"session_id": sid} if sid else {}),
+                },
+            )
+            self._remember_receipt(sid, pack)
             recalled = self._context_pack_text(pack)
             if recalled:
                 parts.append(recalled)

@@ -802,6 +802,56 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
+    def test_prefetch_receipt_and_explicit_repair_outcome_share_sample(self):
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-1",
+                        "items": [{"title": "decision", "body": "keep RRF"}],
+                    }
+                },
+                "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.prefetch("what did we decide", session_id="sess-1")
+        provider.prefetch("我之前说过，不对", session_id="sess-1")
+
+        pack_args = next(a for n, a in bridge.calls if n == "brain_context_pack")
+        self.assertIs(pack_args["receipt"], True)
+        self.assertEqual(pack_args["receipt_host"], "hermes")
+        self.assertIs(pack_args["telemetry"], True)
+        self.assertEqual(pack_args["telemetry_host"], "hermes")
+        self.assertEqual(pack_args["session_id"], "sess-1")
+
+        outcome_args = next(a for n, a in bridge.calls if n == "brain_context_pack_outcome")
+        self.assertEqual(outcome_args["operation"], "post")
+        self.assertEqual(outcome_args["sample_id"], "receipt-1")
+        self.assertIs(outcome_args["first_pass_success"], False)
+        self.assertIs(outcome_args["repair_required"], True)
+        self.assertEqual(outcome_args["session_id"], "sess-1")
+
+    def test_prefetch_leaves_neutral_outcome_unknown(self):
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-neutral",
+                        "items": [{"title": "decision", "body": "keep RRF"}],
+                    }
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.prefetch("what did we decide", session_id="sess-1")
+        provider.prefetch("tell me something else", session_id="sess-1")
+        self.assertEqual(
+            [name for name, _ in bridge.calls if name == "brain_context_pack_outcome"], []
+        )
+
     def test_prefetch_uses_structured_items_bodies_and_skips_preview_envelope(self):
         # Regression: when brain_context_pack returns both structuredContent
         # items[*].body AND a content[0].text envelope carrying the
