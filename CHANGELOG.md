@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.52.1] - 2026-08-24
+
+The context-pack outcome ledger shipped with receipts on the read side and nothing on the Hermes side to carry them, so a deployment that injected recall on every turn still recorded zero outcomes. Contributed by [@Yori940619](https://github.com/Yori940619) ([#179](https://github.com/itechmeat/open-second-brain/pull/179)), with one course correction along the way that is worth recording: the first revision inferred success and repair from hardcoded phrase lists in a single language, and the rework removed raw-text inference entirely - the honest shape, and now the pinned one.
+
+### Fixed
+
+- **The Hermes provider closes the context-pack outcome loop - structurally, not linguistically.** `prefetch` now requests a context receipt and opt-in telemetry from the same `brain_context_pack` call and appends a small structured metadata line (sample id, tool name, `outcome: unknown_until_explicit_tool_call`) to the injected recall, so the calling agent - the party that actually understands the user's language - posts `brain_context_pack_outcome` itself when the user explicitly confirms or corrects. The provider infers nothing from raw turn text, in any language, and a regression test pins that; an unsignaled turn stays unknown rather than being guessed into a vanity metric. `brain_context_pack_outcome` joins the curated Hermes tool surface with its schema vendored against the live server.
+
 ## [1.52.0] - 2026-08-23
 
 Nine tracker cards read against the live source before anything was designed, and the reading did most of the work. One card described a feature that already shipped end to end - closed, not built. One asked for privacy by riding a predicate that is inert in every default install - refused as designed, redesigned down to the truth it can tell today. Four more had premises the source contradicted: the "localized" stamp would have touched sixty-eight writers, the counter had no chokepoint to count at, the resume half already existed on the ingest lane, and the raise-on-attach the card wanted was already there behind a documented default. What survived is one rule applied eight ways: nothing writes silently, nothing degrades silently.
@@ -7349,6 +7357,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.52.1]: https://github.com/itechmeat/open-second-brain/compare/v1.52.0...v1.52.1
 [1.52.0]: https://github.com/itechmeat/open-second-brain/compare/v1.51.0...v1.52.0
 [1.51.0]: https://github.com/itechmeat/open-second-brain/compare/v1.50.3...v1.51.0
 [1.50.3]: https://github.com/itechmeat/open-second-brain/compare/v1.50.2...v1.50.3
