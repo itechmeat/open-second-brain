@@ -602,6 +602,114 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                      'dependentRequired': {'recall_scores': ['match_quality'],
                                            'match_quality': ['recall_scores']},
                      'additionalProperties': False}},
+    {
+        "name": "brain_context_pack_outcome",
+        "description": "Context-pack outcome loop. `post` records an outcome row for a carried sample id — first-pass/repair/retry counters plus three SEPARATE token signals (exact, modeled, observed) — calibrates the token-impact ledger, and records the kernel's on-disk evidence. `list`/`summary` read rows. Gated.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "operation": {
+                    "type": "string",
+                    "enum": ["post", "list", "summary"],
+                    "description": "post writes one opt-in outcome row; list/summary read the durable ledger.",
+                },
+                "sample_id": {
+                    "type": "string",
+                    "description": "post: the carried recall/context-pack quality-sample id (a context-receipt id or opaque request hash) — never a raw prompt. Also a list/summary filter.",
+                },
+                "first_pass_success": {
+                    "type": "boolean",
+                    "description": "post: whether the packed context led to a first-pass success.",
+                },
+                "repair_required": {
+                    "type": "boolean",
+                    "description": "post (optional): whether the agent had to repair the first completion.",
+                },
+                "retry_count": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "post (optional): how many retries the completion needed.",
+                },
+                "follow_up_tokens": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "post (optional): tokens spent on follow-up turns after the first pass.",
+                },
+                "exact_prompt_token_savings": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "post (optional): EXACT tokenizer-aware prompt-token savings (a measurement). Kept separate from the modeled and observed signals.",
+                },
+                "modeled_inference_avoidance": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "post (optional): MODELED confidence-banded inference-avoidance estimate (a model). Kept separate from the exact and observed signals.",
+                },
+                "observed_provider_tokens": {
+                    "type": "number",
+                    "minimum": 0,
+                    "description": "post (optional): OBSERVED provider-reported token usage. Kept separate from the exact and modeled signals; also calibrates the token-impact ledger.",
+                },
+                "evidence_claim": {
+                    "type": "object",
+                    "description": "post (optional): what you assert about this sample; kernel reads its receipt off disk, records match|mismatch|unclaimed|unresolved. Malformed = INVALID_PARAMS.",
+                    "properties": {
+                        "final_text_hash": {
+                            "type": "string",
+                            "description": "Claimed SHA-256 of the assembled pack text.",
+                        },
+                        "item_count": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Claimed number of artifacts the pack injected.",
+                        },
+                        "final_text_chars": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Claimed codepoint length of the assembled pack text.",
+                        },
+                    },
+                    "additionalProperties": False,
+                },
+                "host": {
+                    "type": "string",
+                    "description": "Optional host/runtime label; also a filter.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional session id recorded on the row.",
+                },
+                "turn_id": {
+                    "type": "string",
+                    "description": "Optional turn id recorded on the row.",
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "post (optional): the ACTING agent, recorded on all three rows this post lands. Self-asserted, never a verifier; omitted records no actor rather than a guess.",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Optional inclusive lower timestamp bound.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Optional inclusive upper timestamp bound.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional maximum record count for list.",
+                },
+                "max_samples": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Optional cap on the most-recent rows aggregated by summary.",
+                },
+            },
+            "required": ["operation"],
+            "additionalProperties": False,
+        },
+    },
     {'name': 'brain_pre_compact_extract',
      'description': 'Extract typed Decision/Commitment/Outcome/Rule/Open question records from '
                     'bounded text into continuity storage.',

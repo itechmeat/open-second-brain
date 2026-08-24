@@ -802,7 +802,7 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
-    def test_prefetch_receipt_and_explicit_repair_outcome_share_sample(self):
+    def test_prefetch_exposes_receipt_and_agent_posts_structured_outcome(self):
         bridge = FakeBrainBridge(
             results={
                 "brain_recall_gate": {"structuredContent": {"retrieve": True}},
@@ -815,10 +815,22 @@ class ProviderLifecycleTests(unittest.TestCase):
                 "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
             }
         )
-        provider = self._init(bridge, hermes_home="/tmp/hh")
-        provider.prefetch("what did we decide", session_id="sess-1")
-        provider.prefetch("我之前说过，不对", session_id="sess-1")
+        with tempfile.TemporaryDirectory() as hermes_home:
+            provider = self._init(bridge, hermes_home=hermes_home)
+            out = provider.prefetch("what did we decide", session_id="sess-1")
+            provider.handle_tool_call(
+                "brain_context_pack_outcome",
+                {
+                    "operation": "post",
+                    "sample_id": "receipt-1",
+                    "first_pass_success": False,
+                    "repair_required": True,
+                    "host": "hermes",
+                    "session_id": "sess-1",
+                },
+            )
 
+        self.assertIn('"sample_id": "receipt-1"', out)
         pack_args = next(a for n, a in bridge.calls if n == "brain_context_pack")
         self.assertIs(pack_args["receipt"], True)
         self.assertEqual(pack_args["receipt_host"], "hermes")
@@ -852,7 +864,7 @@ class ProviderLifecycleTests(unittest.TestCase):
             [name for name, _ in bridge.calls if name == "brain_context_pack_outcome"], []
         )
 
-    def test_prefetch_expires_receipt_on_neutral_turn_before_explicit_feedback(self):
+    def test_prefetch_never_infers_outcome_from_raw_turn_text(self):
         gate_calls = 0
 
         def gate(_args):
@@ -865,17 +877,17 @@ class ProviderLifecycleTests(unittest.TestCase):
                 "brain_recall_gate": gate,
                 "brain_context_pack": {
                     "structuredContent": {
-                        "receipt_id": "receipt-expired",
+                        "receipt_id": "receipt-unknown",
                         "items": [{"title": "decision", "body": "keep RRF"}],
                     }
                 },
-                "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
             }
         )
-        provider = self._init(bridge, hermes_home="/tmp/hh")
-        provider.prefetch("what did we decide", session_id="sess-1")
-        provider.prefetch("tell me something else", session_id="sess-1")
-        provider.prefetch("我之前说过，不对", session_id="sess-1")
+        with tempfile.TemporaryDirectory() as hermes_home:
+            provider = self._init(bridge, hermes_home=hermes_home)
+            provider.prefetch("what did we decide", session_id="sess-1")
+            provider.prefetch("tell me something else", session_id="sess-1")
+            provider.prefetch("我之前说过，不对", session_id="sess-1")
 
         self.assertEqual(gate_calls, 3)
         self.assertEqual(
