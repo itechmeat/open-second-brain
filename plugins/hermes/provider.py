@@ -13,13 +13,14 @@ and the optional readback hook ``get_status_config`` are added alongside.
 from __future__ import annotations
 
 import atexit
+import hashlib
 import json
 import logging
 import os
 import shutil
 import threading
-from pathlib import Path
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 if TYPE_CHECKING:
@@ -287,6 +288,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._lock = threading.Lock()
         self._sync_threads: list[threading.Thread] = []
         self._queued_query: str = ""
+        self._prefetch_sequence = 0
 
 
     # -- required surface ----------------------------------------------------
@@ -492,7 +494,12 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         if tool_name not in MEMORY_TOOLS:
             # Enforce the curated surface at execution time, not just discovery.
             raise BridgeError(f"unsupported memory tool: {tool_name}")
-        return self._as_tool_content(self._bridge.call_tool(tool_name, args or {}))
+        forward_args = dict(args or {})
+        if tool_name == "brain_context_pack_outcome":
+            forward_args.setdefault("host", _PREFETCH_RECEIPT_HOST)
+            if self._session_id:
+                forward_args.setdefault("session_id", self._session_id)
+        return self._as_tool_content(self._bridge.call_tool(tool_name, forward_args))
 
     def get_config_schema(self) -> list[dict[str, Any]]:
         """The wizard's field list, derived from :data:`_CONFIG_FIELDS`.
@@ -618,29 +625,80 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         """
         parts: list[str] = []
         sid = session_id or self._session_id
-        gate = self._structured(self._safe_call("brain_recall_gate", {"prompt": query}))
+        turn_id = str(_kwargs.get("turn_id") or "")
+        with self._lock:
+            self._prefetch_sequence += 1
+            sequence = self._prefetch_sequence
+        gate_args: dict[str, Any] = {
+            "prompt": query,
+            "telemetry_host": _PREFETCH_RECEIPT_HOST,
+        }
+        if sid:
+            gate_args["session_id"] = sid
+        if turn_id:
+            gate_args["turn_id"] = turn_id
+        gate = self._structured(self._safe_call("brain_recall_gate", gate_args))
         if gate.get("retrieve"):
-            pack = self._safe_call(
-                "brain_context_pack",
-                {
-                    "max_tokens": _PREFETCH_MAX_TOKENS,
-                    "receipt": True,
-                    "receipt_host": _PREFETCH_RECEIPT_HOST,
-                    "telemetry": True,
-                    "telemetry_host": _PREFETCH_RECEIPT_HOST,
-                    **({"session_id": sid} if sid else {}),
-                },
+            common_search_args: dict[str, Any] = {
+                "query": query,
+                "disclosure": "full",
+                "profile": "thorough",
+                "record_access": False,
+                "telemetry": True,
+                "telemetry_host": _PREFETCH_RECEIPT_HOST,
+            }
+            if sid:
+                common_search_args["session_id"] = sid
+            if turn_id:
+                common_search_args["turn_id"] = turn_id
+            preference_args = {
+                **common_search_args,
+                "limit": 3,
+                "path_prefix": "Brain/preferences/",
+                "properties": {"kind": ["brain-preference"], "_status": ["confirmed"]},
+            }
+            ordinary_args = {**common_search_args, "limit": 5}
+            search_results = [
+                self._structured(self._safe_call("brain_search", preference_args)),
+                self._structured(self._safe_call("brain_search", ordinary_args)),
+            ]
+            recalled = self._search_text(search_results)
+            sample_id = None
+            # A healthy brain_search no-match is an honest abstention. Only
+            # fall back to the legacy pack when the search surface itself is
+            # unavailable (old server/schema or a bridge that returned no
+            # structured search contract), so a generic active pack cannot
+            # masquerade as a match for the current prompt.
+            search_surface_available = any(
+                "results" in result or "cards" in result for result in search_results
             )
-            recalled = self._context_pack_text(pack)
+            if recalled:
+                sample_id = self._search_sample_id(query, sid, turn_id, sequence)
+            elif not search_surface_available:
+                pack = self._safe_call(
+                    "brain_context_pack",
+                    {
+                        "max_tokens": _PREFETCH_MAX_TOKENS,
+                        "receipt": True,
+                        "receipt_host": _PREFETCH_RECEIPT_HOST,
+                        "telemetry": True,
+                        "telemetry_host": _PREFETCH_RECEIPT_HOST,
+                        **({"session_id": sid} if sid else {}),
+                    },
+                )
+                recalled = self._context_pack_text(pack)
+                sample_id = self._receipt_id(pack)
             if recalled:
                 parts.append(recalled)
-                receipt_id = self._receipt_id(pack)
-                if receipt_id:
+                if sample_id:
                     parts.append(
-                        "[O2B context-pack metadata] "
+                        "[O2B recall metadata] "
                         + json.dumps(
                             {
-                                "sample_id": receipt_id,
+                                "sample_id": sample_id,
+                                "source": "brain_search"
+                                if search_surface_available
+                                else "brain_context_pack",
                                 "outcome": "unknown_until_explicit_tool_call",
                                 "tool": "brain_context_pack_outcome",
                             },
@@ -801,6 +859,13 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         return ""
 
     @staticmethod
+    def _search_sample_id(query: str, session_id: str, turn_id: str, sequence: int) -> str:
+        """Return a non-reversible sample id for a semantic search injection."""
+        material = "\0".join((session_id, turn_id or str(sequence), query))
+        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
+        return f"hermes-search-{digest}"
+
+    @staticmethod
     def _context_pack_text(result: Any) -> str:
         """Recall text from ``brain_context_pack``: prefer structured bodies.
 
@@ -823,6 +888,47 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
                 if isinstance(item, dict) and str(item.get("body") or "").strip()
             )
         return OpenSecondBrainMemoryProvider._text(result)
+
+    @staticmethod
+    def _recall_body(text: str) -> str:
+        """Prefer a complete frontmatter principle over a cut-off search body."""
+        for line in text.splitlines():
+            if not line.startswith("principle:"):
+                continue
+            value = line.partition(":")[2].strip()
+            if value.startswith('"') and value.endswith('"'):
+                try:
+                    return str(json.loads(value))
+                except json.JSONDecodeError:
+                    pass
+            return value.strip("'")
+        return text.strip()
+
+    @staticmethod
+    def _search_text(results: Iterable[dict[str, Any]]) -> str:
+        """Format preference-first semantic search without expanding the budget."""
+        blocks: list[str] = []
+        seen_paths: set[str] = set()
+        for result in results:
+            rows = result.get("results") or result.get("cards")
+            if not isinstance(rows, list):
+                continue
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                path = row.get("path")
+                text = row.get("content") or row.get("snippet")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                if isinstance(path, str) and path:
+                    if path in seen_paths:
+                        continue
+                    seen_paths.add(path)
+                    prefix = f"[{path}]\n"
+                else:
+                    prefix = ""
+                blocks.append(prefix + OpenSecondBrainMemoryProvider._recall_body(text))
+        return "\n\n".join(blocks)[: _PREFETCH_MAX_TOKENS * 4]
 
     def _append_turn(self, user: str, assistant: str, session_id: str) -> None:
         with self._lock:

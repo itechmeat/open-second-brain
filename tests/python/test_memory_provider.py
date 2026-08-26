@@ -802,6 +802,70 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
+    def test_prefetch_uses_query_aware_search_and_carries_search_sample(self):
+        preference = {
+            "path": "Brain/preferences/pref-test.md",
+            "content": '---\nkind: brain-preference\nprinciple: "PREF RULE"\n---\n',
+        }
+        signal = {
+            "path": "Brain/inbox/sig-test.md",
+            "content": '---\nkind: brain-signal\nprinciple: "SIGNAL RULE"\n---\n',
+        }
+
+        def search(args):
+            if args.get("path_prefix"):
+                return {"structuredContent": {"results": [preference]}}
+            return {"structuredContent": {"results": [preference, signal]}}
+
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_search": search,
+                "brain_context_pack": {"structuredContent": {"items": []}},
+                "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("which pricing rule applies", session_id="sess-1", turn_id="turn-7")
+
+        self.assertIn("PREF RULE", out)
+        self.assertIn("SIGNAL RULE", out)
+        self.assertEqual(out.count("Brain/preferences/pref-test.md"), 1)
+        self.assertNotIn("brain_context_pack", [name for name, _ in bridge.calls])
+
+        metadata = json.loads(out.split("[O2B recall metadata] ", 1)[1].split("\n", 1)[0])
+        self.assertEqual(metadata["source"], "brain_search")
+        self.assertTrue(metadata["sample_id"].startswith("hermes-search-"))
+        search_calls = [args for name, args in bridge.calls if name == "brain_search"]
+        self.assertEqual(len(search_calls), 2)
+        self.assertEqual(search_calls[0]["limit"], 3)
+        self.assertEqual(search_calls[0]["path_prefix"], "Brain/preferences/")
+        self.assertEqual(search_calls[0]["properties"], {"kind": ["brain-preference"], "_status": ["confirmed"]})
+        self.assertEqual(search_calls[1]["limit"], 5)
+        self.assertNotIn("path_prefix", search_calls[1])
+        for args in search_calls:
+            self.assertEqual(args["query"], "which pricing rule applies")
+            self.assertEqual(args["disclosure"], "full")
+            self.assertEqual(args["profile"], "thorough")
+            self.assertIs(args["record_access"], False)
+            self.assertIs(args["telemetry"], True)
+            self.assertEqual(args["session_id"], "sess-1")
+            self.assertEqual(args["turn_id"], "turn-7")
+
+        provider.handle_tool_call(
+            "brain_context_pack_outcome",
+            {
+                "operation": "post",
+                "sample_id": metadata["sample_id"],
+                "first_pass_success": True,
+            },
+        )
+        outcome_args = next(a for n, a in bridge.calls if n == "brain_context_pack_outcome")
+        self.assertEqual(outcome_args["sample_id"], metadata["sample_id"])
+        self.assertIs(outcome_args["first_pass_success"], True)
+        self.assertEqual(outcome_args["host"], "hermes")
+        self.assertEqual(outcome_args["session_id"], "sess-1")
+
     def test_prefetch_exposes_receipt_and_agent_posts_structured_outcome(self):
         bridge = FakeBrainBridge(
             results={
