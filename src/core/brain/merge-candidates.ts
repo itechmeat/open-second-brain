@@ -12,11 +12,16 @@
  * Callers that already parsed the preferences (digest, doctor)
  * pass them in via `opts.preferences` to avoid a second pass over
  * `Brain/preferences/`.
+ *
+ * Pages a merge already resolved are excluded, through the predicate
+ * `page-dedup` and the hygiene dedup detector share
+ * ({@link isMergeResolved}).
  */
 
 import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
+import { isMergeResolved, mergePointerLookup } from "./page-meta/page-id.ts";
 import { brainDirs } from "./paths.ts";
 import { parsePreference } from "./preference.ts";
 import { findSimilarPairs, tokenise } from "./similarity.ts";
@@ -72,6 +77,7 @@ export function findMergeCandidates(
     );
   }
   const prefs = opts.preferences ?? readPreferences(vault);
+  const pointerOf = mergePointerLookup(prefs.map((p) => [p.id, p.merged_into ?? null] as const));
 
   const entries = [];
   for (const p of prefs) {
@@ -81,6 +87,11 @@ export function findMergeCandidates(
     ) {
       continue;
     }
+    // A page a merge already resolved is not a merge candidate again
+    // (GitHub #180). Same predicate `page-dedup` and the hygiene dedup
+    // detector ask, so the three surfaces cannot drift into three
+    // different opinions of what "already merged" means.
+    if (isMergeResolved(p.id, pointerOf)) continue;
     entries.push({
       id: p.id,
       bucketKey: `${p.topic}\x00${p.scope ?? ""}`,

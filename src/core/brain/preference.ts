@@ -78,6 +78,7 @@ import {
   isBrainMemoryLayer,
 } from "./types.ts";
 import { readCommitmentTier, validateCommitmentTier } from "./commitment.ts";
+import { readMergedInto } from "./page-meta/page-id.ts";
 import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
@@ -1009,6 +1010,7 @@ export function parsePreference(
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }
       : {}),
+    ...(readMergedInto(meta) !== null ? { merged_into: readMergedInto(meta)! } : {}),
     ...(readCommitmentTier(meta) !== null ? { commitment: readCommitmentTier(meta)! } : {}),
     ...(meta["aliases"] !== undefined && Array.isArray(meta["aliases"])
       ? { aliases: [...(meta["aliases"] as ReadonlyArray<string>)] }

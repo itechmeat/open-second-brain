@@ -15,7 +15,8 @@ import {
   JACCARD_MERGE_SUGGEST_THRESHOLD,
   MERGE_SUGGESTION_LIMIT,
 } from "../../../src/core/brain/merge-candidates.ts";
-import { writePreference } from "../../../src/core/brain/preference.ts";
+import { setMergedInto } from "../../../src/core/brain/page-meta/page-id.ts";
+import { parsePreference, writePreference } from "../../../src/core/brain/preference.ts";
 import { BRAIN_CONFIDENCE, BRAIN_PREFERENCE_STATUS } from "../../../src/core/brain/types.ts";
 
 let vault: string;
@@ -198,5 +199,48 @@ describe("findMergeCandidates", () => {
     }
     const out = findMergeCandidates(vault);
     expect(out.length).toBe(MERGE_SUGGESTION_LIMIT);
+  });
+
+  test("a pair the merge already resolved does not surface again", () => {
+    // The digest's `## Merge suggestions` section repeated an applied
+    // merge forever, in step with `page-dedup` (GitHub #180). Both read
+    // the one shared "already resolved" predicate now.
+    makePref({
+      slug: "imperative-commits",
+      topic: "commits",
+      principle: "Use imperative voice in commit subjects",
+    });
+    makePref({
+      slug: "imperative-subjects",
+      topic: "commits",
+      principle: "Write commit subjects in imperative voice",
+    });
+    const before = findMergeCandidates(vault);
+    expect(before.length).toBe(1);
+
+    setMergedInto(vault, before[0]!.b, before[0]!.a);
+    expect(findMergeCandidates(vault)).toEqual([]);
+  });
+
+  test("pre-parsed preferences carry the pointer the filter reads", () => {
+    // The digest and the doctor hand their own parse in via
+    // `opts.preferences` to avoid a second walk. That path has to reach
+    // the same verdict as the filesystem one, or the fix holds on one
+    // surface and not the other.
+    makePref({
+      slug: "imperative-commits",
+      topic: "commits",
+      principle: "Use imperative voice in commit subjects",
+    });
+    makePref({
+      slug: "imperative-subjects",
+      topic: "commits",
+      principle: "Write commit subjects in imperative voice",
+    });
+    setMergedInto(vault, "pref-imperative-subjects", "pref-imperative-commits");
+    const preferences = ["imperative-commits", "imperative-subjects"].map((slug) =>
+      parsePreference(join(vault, "Brain", "preferences", `pref-${slug}.md`)),
+    );
+    expect(findMergeCandidates(vault, { preferences })).toEqual([]);
   });
 });

@@ -16,7 +16,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { EmbeddingProvider } from "../../../src/core/search/embeddings/contract.ts";
-import { detectSemanticDedup } from "../../../src/core/brain/hygiene/detectors/dedup.ts";
+import {
+  detectDedup,
+  detectSemanticDedup,
+} from "../../../src/core/brain/hygiene/detectors/dedup.ts";
 
 let vault: string;
 
@@ -29,24 +32,21 @@ afterEach(() => {
   rmSync(vault, { recursive: true, force: true });
 });
 
-function writePref(slug: string, topic: string, principle: string): void {
-  writeFileSync(
-    join(vault, "Brain", "preferences", `pref-${slug}.md`),
-    [
-      "---",
-      "kind: brain-preference",
-      `id: pref-${slug}`,
-      "tags: [brain, brain/preference]",
-      `topic: ${topic}`,
-      "_status: confirmed",
-      `principle: ${principle}`,
-      "created_at: 2026-01-01T00:00:00Z",
-      "unconfirmed_until: 2026-01-15T00:00:00Z",
-      "---",
-      "",
-    ].join("\n"),
-    "utf8",
-  );
+function writePref(slug: string, topic: string, principle: string, mergedInto?: string): void {
+  const lines = [
+    "---",
+    "kind: brain-preference",
+    `id: pref-${slug}`,
+    "tags: [brain, brain/preference]",
+    `topic: ${topic}`,
+    "_status: confirmed",
+    `principle: ${principle}`,
+    "created_at: 2026-01-01T00:00:00Z",
+    "unconfirmed_until: 2026-01-15T00:00:00Z",
+  ];
+  if (mergedInto !== undefined) lines.push(`merged_into: ${mergedInto}`);
+  lines.push("---", "");
+  writeFileSync(join(vault, "Brain", "preferences", `pref-${slug}.md`), lines.join("\n"), "utf8");
 }
 
 function fixedVectorProvider(vectors: Readonly<Record<string, number[]>>): EmbeddingProvider {
@@ -99,5 +99,36 @@ describe("detectSemanticDedup", () => {
     const result = await detectSemanticDedup(vault, { provider: null });
     expect(result.method).toBe("lexical");
     expect(result.findings).toHaveLength(0);
+  });
+
+  test("a preference the merge already resolved is not nominated again", async () => {
+    // Same fixture as the embedding test above, except `pref-b` now
+    // carries the pointer a merge would have stamped on it. The hygiene
+    // scan repeated this finding forever alongside `page-dedup` (GitHub
+    // #180); both detectors now ask the one shared predicate.
+    writePref("a", "writing-style", "Never use exclamation marks in docs");
+    writePref("b", "doc-tone", "Do not use exclamation marks in documentation", "pref-a");
+    const provider = fixedVectorProvider({
+      "Never use exclamation marks in docs": [1, 0, 0],
+      "Do not use exclamation marks in documentation": [0.999, 0.0447, 0],
+    });
+    const result = await detectSemanticDedup(vault, { provider });
+    expect(result.findings).toHaveLength(0);
+  });
+});
+
+describe("detectDedup", () => {
+  test("nominates a near-duplicate pair", () => {
+    writePref("x", "same-topic", "Collect the metrics before optimizing the code");
+    writePref("y", "same-topic", "Collect the metrics before optimizing the code base");
+    const findings = detectDedup(vault, { now: new Date(0) });
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.targets).toEqual(["pref-x", "pref-y"]);
+  });
+
+  test("a preference the merge already resolved is not nominated again", () => {
+    writePref("x", "same-topic", "Collect the metrics before optimizing the code");
+    writePref("y", "same-topic", "Collect the metrics before optimizing the code base", "pref-x");
+    expect(detectDedup(vault, { now: new Date(0) })).toHaveLength(0);
   });
 });

@@ -892,6 +892,16 @@ export interface BrainPreference {
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   /**
+   * Canonical page this one was merged into by the dedup pass, when it
+   * carries the pointer. Read-only here: the pointer is written by
+   * `setMergedInto`, never by the preference writer.
+   *
+   * Present on the parsed type so every duplicate detector can tell an
+   * already-resolved page from a live one without a second walk of
+   * `Brain/preferences/` (GitHub #180).
+   */
+  readonly merged_into?: string;
+  /**
    * Optional commitment tier (Belief lifecycle suite, B3, t_e112c63c):
    * `exploring | leaning | decided | locked`. When set, the injection
    * formatter renders the tier label in place of the raw confidence

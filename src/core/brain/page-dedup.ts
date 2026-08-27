@@ -30,7 +30,12 @@ import { compositeScopeKey, scopeFromFrontmatter } from "../scope-key.ts";
 import { matchScope, mayDescend, resolveVaultScope } from "../vault-scope/index.ts";
 import { pathCovers, type VaultScopeRules } from "../vault-scope/defaults.ts";
 import { brainDirs, BRAIN_ROOT_REL } from "./paths.ts";
-import { setMergedInto } from "./page-meta/page-id.ts";
+import {
+  isMergeResolved,
+  mergePointerLookup,
+  readMergedInto,
+  setMergedInto,
+} from "./page-meta/page-id.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
@@ -46,6 +51,12 @@ export interface PageRecord {
   readonly principle: string;
   /** Creation timestamp from frontmatter; missing entries fall back to mtime. */
   readonly createdAtMs: number;
+  /**
+   * The `merged_into:` pointer this page carries, or `null`. Present so
+   * the grouping pass can tell a page a merge already resolved from one
+   * still awaiting a decision, without a second read of the frontmatter.
+   */
+  readonly mergedInto: string | null;
 }
 
 export interface DedupCandidate {
@@ -102,6 +113,7 @@ function readPageRecords(vault: string): PageRecord[] {
         topic,
         principle,
         createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : 0,
+        mergedInto: readMergedInto(meta),
       });
     }
   }
@@ -114,9 +126,20 @@ function readPageRecords(vault: string): PageRecord[] {
  * page with the oldest `created_at` (and the lowest id as
  * tie-breaker), which biases toward keeping the first-recorded
  * version of any rule.
+ *
+ * Pages a merge already resolved leave the pool before the canonical is
+ * picked (GitHub #180). Without that filter the pass re-proposed every
+ * merge it had ever applied, forever: the pointer it writes is invisible
+ * to the key, so the finished cluster looked exactly like an untouched
+ * one to this function and to the six surfaces that read through it.
+ * That was not only noise - re-applying rewrote a deliberate
+ * `merged_into` at a new canonical, and on pages with no `created_at`
+ * (where the ordering falls back to an mtime the merge itself moved) the
+ * second pass reversed the pair and wrote a cycle.
  */
 export function findDuplicateCandidates(vault: string): DedupReport {
   const records = readPageRecords(vault);
+  const pointerOf = mergePointerLookup(records.map((r) => [r.id, r.mergedInto] as const));
   const byKey = new Map<string, PageRecord[]>();
   for (const r of records) {
     if (r.key.trim().length === 0) continue; // skip empty / malformed pages
@@ -126,17 +149,21 @@ export function findDuplicateCandidates(vault: string): DedupReport {
   }
   const candidates: DedupCandidate[] = [];
   for (const [key, group] of byKey) {
-    if (group.length < 2) continue;
-    group.sort((a, b) => {
+    // Resolved members are dropped rather than the whole group skipped:
+    // a third page that duplicates the canonical after an earlier merge
+    // is still a real finding.
+    const live = group.filter((r) => !isMergeResolved(r.id, pointerOf));
+    if (live.length < 2) continue;
+    live.sort((a, b) => {
       if (a.createdAtMs !== b.createdAtMs) return a.createdAtMs - b.createdAtMs;
       return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
     });
-    const canonical = group[0]!;
+    const canonical = live[0]!;
     candidates.push({
       key,
-      pages: Object.freeze(group.slice()),
+      pages: Object.freeze(live.slice()),
       canonical,
-      secondaries: Object.freeze(group.slice(1)),
+      secondaries: Object.freeze(live.slice(1)),
     });
   }
   candidates.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));

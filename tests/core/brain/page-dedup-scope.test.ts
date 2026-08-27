@@ -4,6 +4,12 @@
  * (or scopeless, the pre-scope world) still collapses. Additive keying: a
  * scopeless page keys byte-identically to before, so existing global dedup
  * state is untouched and a rerun over old rows does not re-collapse.
+ *
+ * The N2 invariant below is STRENGTHENED by GitHub #180: a rerun used to
+ * re-propose the pair it had just merged, and "no NEW cluster, no extra
+ * secondary" was as much as this file asked of it. A merge now resolves
+ * the secondary out of the candidate pool, so the rerun proposes nothing
+ * at all - which satisfies "nothing new" strictly rather than by degrees.
  */
 
 import { test, expect, beforeEach, afterEach } from "bun:test";
@@ -74,18 +80,13 @@ test("N2 idempotency: a second dedup pass over pre-existing scopeless rows re-co
     for (const s of c.secondaries) mergePage(vault, s.id, c.canonical.id);
   }
 
-  // Pass 2: rerun over the same rows. The scopeless scope key is unaffected
-  // by `merged_into`, so the same pair is found again - not a NEW cluster
-  // and not additional secondaries beyond the one already merged.
+  // Pass 2: rerun over the same rows. The scope key is still unaffected by
+  // `merged_into` - the pages keep grouping together - but the merged
+  // secondary is no longer a candidate, so the finished cluster drops out
+  // and the pass proposes nothing. Zero clusters is the strictest possible
+  // reading of "re-collapses nothing new".
   const second = findDuplicateCandidates(vault);
-  expect(second.candidates).toHaveLength(1);
-  expect(second.candidates[0]!.secondaries.map((s) => s.id)).toEqual(
-    first.candidates[0]!.secondaries.map((s) => s.id),
-  );
-
-  // Re-applying is a pure no-op: no additional wikilink rewrites happen.
-  const secondary = second.candidates[0]!.secondaries[0]!;
-  const canonical = second.candidates[0]!.canonical;
-  const rerun = mergePage(vault, secondary.id, canonical.id);
-  expect(rerun.wikilinksUpdated).toBe(0);
+  expect(second.candidates).toHaveLength(0);
+  // The pages are all still there - a merge is a pointer, not a delete.
+  expect(second.scanned).toBe(2);
 });

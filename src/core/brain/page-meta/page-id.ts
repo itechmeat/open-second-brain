@@ -45,6 +45,57 @@ export function readMergedInto(meta: Readonly<Record<string, unknown>>): string 
 }
 
 /**
+ * What a page id points at, for a set of pages a caller already holds.
+ *
+ * The merge graph lives in frontmatter, so every question about it is
+ * really a question about a pointer lookup. Passing the lookup rather
+ * than a vault path is what lets one definition of "already resolved"
+ * serve a detector working from records it has parsed and a writer
+ * working from files on disk.
+ */
+export type MergePointerLookup = (id: string) => string | null;
+
+/**
+ * A {@link MergePointerLookup} over pages already in memory. Entries are
+ * `[id, pointer]` pairs; a `null` or empty pointer means the page
+ * carries none.
+ */
+export function mergePointerLookup(
+  entries: Iterable<readonly [string, string | null]>,
+): MergePointerLookup {
+  const pointers = new Map<string, string>();
+  for (const [id, target] of entries) {
+    if (target !== null && target.trim().length > 0) pointers.set(id, target.trim());
+  }
+  return (id) => pointers.get(id) ?? null;
+}
+
+/**
+ * True when a merge has already resolved this page into another one -
+ * the single definition every duplicate detector asks (GitHub #180).
+ *
+ * The test is the presence of a pointer, not where the pointer leads,
+ * and that IS the transitive answer rather than an approximation of one:
+ * a chain (`b -> x -> a`), a pointer that leaves the group entirely, and
+ * a pointer whose target nobody kept all begin with a pointer on this
+ * page. A page that has been de-canonicalised is not a merge candidate
+ * again whatever its canonical turned out to be, so following the chain
+ * further could only ever confirm what the first hop already said.
+ *
+ * A DANGLING target is deliberately included. It means the merge
+ * happened and the canonical was later lost - a lint problem, never a
+ * licence to re-merge the page at some new canonical and overwrite the
+ * record of the first decision.
+ *
+ * Where the chain leads does matter to the write seam, which has to
+ * refuse a pointer that would close a loop; that question is
+ * {@link resolveCanonicalId}'s, and it walks.
+ */
+export function isMergeResolved(id: string, pointerOf: MergePointerLookup): boolean {
+  return pointerOf(id) !== null;
+}
+
+/**
  * Strict page-id format: `pref-<slug>` or `ret-<slug>` where the
  * slug matches the same `[a-z0-9-]+` shape `validateSlug` enforces.
  * Anything else - path separators, newlines, dots, uppercase - is

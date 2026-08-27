@@ -24,6 +24,7 @@ import { makeProvider } from "../../../search/embeddings/provider.ts";
 import { providerProducesVectors } from "../../../search/embeddings/contract.ts";
 import type { EmbeddingProvider } from "../../../search/embeddings/contract.ts";
 import { findMergeCandidates } from "../../merge-candidates.ts";
+import { isMergeResolved, mergePointerLookup } from "../../page-meta/page-id.ts";
 import { brainDirs } from "../../paths.ts";
 import { parsePreference } from "../../preference.ts";
 import { hygieneFindingId } from "./id.ts";
@@ -64,6 +65,8 @@ interface PrefCandidate {
   readonly topic: string;
   readonly scope: string | null;
   readonly principle: string;
+  /** The `merged_into:` pointer the page carries, or `null`. */
+  readonly mergedInto: string | null;
 }
 
 function listPreferenceCandidates(vault: string): PrefCandidate[] {
@@ -79,13 +82,19 @@ function listPreferenceCandidates(vault: string): PrefCandidate[] {
         topic: pref.topic,
         scope: pref.scope ?? null,
         principle: pref.principle,
+        mergedInto: pref.merged_into ?? null,
       });
     } catch {
       continue;
     }
     if (out.length >= DEDUP_CANDIDATE_CAP) break;
   }
-  return out;
+  // A page a merge already resolved is not a duplicate to nominate again
+  // (GitHub #180) - the same predicate `page-dedup` and the digest's
+  // merge suggestions ask. Filtered after the cap rather than before it
+  // so the bound stays a bound on files READ.
+  const pointerOf = mergePointerLookup(out.map((c) => [c.id, c.mergedInto] as const));
+  return out.filter((c) => !isMergeResolved(c.id, pointerOf));
 }
 
 function cosine(a: ReadonlyArray<number>, b: ReadonlyArray<number>): number {
