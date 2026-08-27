@@ -17,6 +17,7 @@
 
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset, RecallBenchmarkReport } from "./benchmark.ts";
+import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 import type { ResolvedRerankConfig, ResolvedSearchConfig } from "./types.ts";
 
 export interface RerankEvalGateOptions {
@@ -66,8 +67,19 @@ export async function runRerankEvalGate(
   const minHitDelta = opts.minHitDelta ?? 0.01;
   const k = opts.k;
 
-  const baseline = await runRecallBenchmark(withRerank(config, false, kind), dataset, { k });
-  const reranked = await runRecallBenchmark(withRerank(config, true, kind), dataset, { k });
+  // An internal gate with no caller: it scores the reranker against the
+  // whole corpus, and a run that stopped seeing reserved pages would
+  // compare the two arms over different vaults. Named through the shared
+  // constant so the claim is the same claim every lane makes.
+  const reach = MAINTENANCE_LANE_REACH;
+  const baseline = await runRecallBenchmark(withRerank(config, false, kind), dataset, {
+    k,
+    transportReach: reach,
+  });
+  const reranked = await runRecallBenchmark(withRerank(config, true, kind), dataset, {
+    k,
+    transportReach: reach,
+  });
 
   const hitDelta = reranked.hitAtK - baseline.hitAtK;
   const mrrDelta = reranked.mrr - baseline.mrr;

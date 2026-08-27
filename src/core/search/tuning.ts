@@ -40,6 +40,7 @@ import {
   TUNING_TRAVERSAL_DEPTHS,
   tuningPath,
 } from "./tuning-store.ts";
+import type { TransportReach } from "../graph/transport-reach.ts";
 import type { ResolvedSearchConfig, TunedParameters } from "./types.ts";
 
 export interface TuningEvaluation {
@@ -61,6 +62,14 @@ export interface TuneRecallOptions {
   readonly k?: number;
   /** Injected clock for the persisted `evaluated_at` stamp. */
   readonly now: Date;
+  /**
+   * The reach the party that supplied this dataset was established at,
+   * forwarded verbatim to every grid cell's benchmark run. Absent
+   * resolves to the narrowest there - see
+   * {@link RecallBenchmarkOptions.transportReach}, which is where the
+   * reason lives.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 /** The full bounded grid in stable order (defaults first). */
@@ -96,6 +105,7 @@ export async function tuneRecall(
     grid.map(async (params): Promise<TuningEvaluation> => {
       const report = await runRecallBenchmark(applyTunedParameters(config, params), dataset, {
         ...(opts.k !== undefined ? { k: opts.k } : {}),
+        ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
         expand: params.expansion,
       });
       return Object.freeze({ params, mrr: report.mrr, hitAtK: report.hitAtK });

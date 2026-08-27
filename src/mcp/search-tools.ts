@@ -1465,7 +1465,14 @@ async function toolBrainEval(
   let report;
   try {
     report = await withTimeout(
-      runRecallBenchmark(config, dataset, { ...(k !== undefined ? { k } : {}), expand }),
+      runRecallBenchmark(config, dataset, {
+        ...(k !== undefined ? { k } : {}),
+        expand,
+        // The dataset is the caller's, and so is the reach it is scored
+        // at: `hit` / `rank` / `answerContained` over a corpus the caller
+        // did not earn is an oracle, not a metric.
+        transportReach: contextReach(ctx),
+      }),
       EVAL_TIMEOUT_MS,
       searchTimeoutError,
     );

@@ -21,7 +21,7 @@
 
 import { Semaphore } from "./embeddings/http-util.ts";
 import { search } from "./search.ts";
-import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, SearchOutcome } from "./types.ts";
 
@@ -82,6 +82,26 @@ export interface RecallBenchmarkOptions {
   readonly k?: number;
   /** Route every query through deterministic expansion (t_2fa95db1). */
   readonly expand?: boolean;
+  /**
+   * The reach the party that supplied this dataset was established at.
+   *
+   * Load-bearing, not decorative. This is not an internal lane: the
+   * dataset is a required argument of `brain_benchmark` and `brain_tune`,
+   * both callable over any transport, and the report answers per query
+   * with `hit`, `rank`, `expectedFound` for caller-named paths and
+   * `answerContained` for a caller-supplied string. Run at a reach the
+   * caller did not earn, that is an existence oracle over the reserved
+   * corpus and a substring oracle over its bodies - reachable without
+   * ever calling a tool the registry classifies as covered.
+   *
+   * Absent resolves to the narrowest, on the same terms
+   * {@link SearchOptions.transportReach} does. The lanes that must score
+   * the whole corpus - the CLI benchmark, the tuning sweep's own
+   * measurement, the rerank eval gate - pass {@link TRANSPORT_REACH.local}
+   * explicitly, because a benchmark that stopped seeing reserved pages
+   * would score a smaller corpus than the one it is benchmarking.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 export interface RecallBenchmarkQueryResult {
@@ -231,6 +251,7 @@ export async function runRecallBenchmark(
   }
   const k = opts.k ?? BENCHMARK_DEFAULT_K;
   const expand = opts.expand === true;
+  const reach = resolvedTransportReach(opts.transportReach);
 
   const perQuery = await Promise.all(
     dataset.queries.map(async (q): Promise<RecallBenchmarkQueryResult> => {
@@ -242,10 +263,10 @@ export async function runRecallBenchmark(
           query: q.query,
           limit: depth,
           ...(expand ? { expand: true } : {}),
-          // Internal measurement lane: a benchmark that stopped seeing
-          // reserved pages would score a smaller corpus than the one it
-          // is benchmarking.
-          transportReach: TRANSPORT_REACH.local,
+          // The reach of whoever supplied the dataset - see
+          // `RecallBenchmarkOptions.transportReach` for why this is not
+          // the internal-lane constant it used to be.
+          transportReach: reach,
         });
       } finally {
         permit();

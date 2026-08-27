@@ -22,6 +22,7 @@ import { SearchError } from "../../../core/search/types.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { emitNextStep } from "../../advisory-rail.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 const USAGE =
   "usage: o2b brain tune run --dataset <path> [--k N] | status | reset  [--vault <path>] [--json]";
@@ -99,6 +100,7 @@ export async function cmdBrainTune(argv: string[]): Promise<number> {
     const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
     const now = new Date();
     const report = await tuneRecall(searchConfig, dataset, {
+      transportReach: CLI_TRANSPORT_REACH,
       ...(k !== undefined ? { k } : {}),
       now,
     });

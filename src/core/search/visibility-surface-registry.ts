@@ -429,10 +429,16 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_eval",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "scores retrieval quality (hit@k, MRR, …) over an operator-supplied dataset and returns " +
-      "metrics, not note bodies; included for completeness of the file-level sweep only.",
+      "scores retrieval quality (hit@k, MRR, …) over a CALLER-supplied dataset, so 'metrics, not " +
+      "note bodies' was the wrong reason to exclude it: `hit` / `rank` / `expectedFound` answer " +
+      "for caller-named paths and `answerContained` substring-tests a caller-supplied string " +
+      "against the retrieved content, which is an existence oracle and a content oracle over " +
+      "whatever corpus the run scored. runRecallBenchmark now takes the reach and passes it to " +
+      "every search() it makes, so the benchmark measures the corpus this caller can reach and " +
+      "root A does the withholding. brain_tune inherits it: the grid is scored with the same " +
+      "benchmark.",
   },
   {
     surface: "brain_codegraph_report",

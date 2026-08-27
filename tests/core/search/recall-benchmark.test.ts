@@ -29,7 +29,8 @@ import {
   runRecallBenchmark,
 } from "../../../src/core/search/benchmark.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
-import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import type { ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 
 const FIXTURE = join(import.meta.dir, "..", "..", "fixtures", "recall-benchmark");
@@ -182,5 +183,72 @@ describe("runRecallBenchmark", () => {
     const report = await runRecallBenchmark(config, loadDataset(), { k: 5, expand: true });
     expect(report.expand).toBe(true);
     expect(report.hitAtK).toBeGreaterThanOrEqual(MIN_HIT_AT_5);
+  });
+});
+
+// --- The dataset is the caller's, and so is its reach ------------------------
+//
+// `brain_benchmark` and `brain_tune` take the dataset as a required tool
+// argument over any transport, and the report answers per query with
+// `hit`, `rank`, `expectedFound` for caller-named paths and
+// `answerContained` for a caller-supplied string. The lane used to pin
+// `local` regardless.
+//
+// REFUTED, and recorded rather than dropped: that pin was NOT an oracle
+// over `visibility:`-tagged pages. `search()` also applies the caller's
+// visibility SCOPE, and the benchmark passes none, so a tagged page was
+// already outside every benchmark run at every reach - reverting the fix
+// leaves a tagged-page probe scoring absent either way.
+//
+// What the pin DID reach is the unmeasurable page: a document still in
+// the index whose file cannot be read. The reach rule substitutes the
+// reserved token for it and denies at `remote`; the caller-scope rule
+// reads its empty frontmatter as untagged and keeps it. That is the
+// difference below, and it is the whole observable difference.
+
+describe("runRecallBenchmark at the caller's reach", () => {
+  const vault = mkdtempSync(join(tmpdir(), "o2b-bench-reach-"));
+  const dbPath = join(vault, "index.sqlite");
+  let cfg: ResolvedSearchConfig;
+
+  beforeAll(async () => {
+    writeMd(vault, "open.md", "# Open\n\nthe payments tier rollout is staged");
+    writeMd(vault, "vanished.md", "# Vanished\n\nthe payments tier rollout is staged, revised");
+    cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+    // Indexed, then gone: the routine trigger is a page deleted or
+    // renamed between runs. The document row survives, so it can still
+    // rank; only its frontmatter has become unmeasurable.
+    rmSync(join(vault, "vanished.md"), { force: true });
+  });
+
+  afterAll(() => rmSync(vault, { recursive: true, force: true }));
+
+  const probe = (expected: string) =>
+    parseRecallBenchmarkDataset({
+      queries: [{ id: "probe", query: "payments tier rollout staged", expected: [expected] }],
+    });
+
+  test("an unmeasurable page scores as absent for a caller that established nothing", async () => {
+    const report = await runRecallBenchmark(cfg, probe("vanished.md"), { k: 5 });
+    const q = report.perQuery[0]!;
+    expect(q.hit).toBe(false);
+    expect(q.rank).toBeNull();
+    expect(q.expectedFound).toBe(0);
+  });
+
+  test("a lane that established local reach still scores the whole corpus", async () => {
+    const report = await runRecallBenchmark(cfg, probe("vanished.md"), {
+      k: 5,
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(report.perQuery[0]!.hit).toBe(true);
+  });
+
+  test("an ordinary page scores at both reaches, so the gate is not blanket-denying", async () => {
+    for (const transportReach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote] as const) {
+      const report = await runRecallBenchmark(cfg, probe("open.md"), { k: 5, transportReach });
+      expect(report.perQuery[0]!.hit).toBe(true);
+    }
   });
 });

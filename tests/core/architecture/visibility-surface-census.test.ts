@@ -482,6 +482,7 @@ describe("visibility surface census", () => {
         "brain_bridges",
         "brain_clusters",
         "brain_deep_synthesis",
+        "brain_eval",
         "brain_file_context",
         "brain_query",
         "brain_recall_feedback",

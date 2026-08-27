@@ -73,6 +73,7 @@ import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/bra
 import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
 import { isoSecond } from "../../core/brain/time.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -106,6 +107,10 @@ async function toolBrainBenchmark(
   const report = await runRecallBenchmark(searchConfig, dataset, {
     ...(k !== undefined ? { k: k as number } : {}),
     expand: args["expand"] === true,
+    // The dataset is the caller's, and so is the reach it is scored at:
+    // `hit` / `rank` / `expectedFound` for caller-named paths is an
+    // existence oracle over any corpus the caller did not earn.
+    transportReach: contextReach(ctx),
   });
   try {
     appendMetric(ctx.vault, {
@@ -171,6 +176,9 @@ async function toolBrainTune(
   const report = await tuneRecall(searchConfig, dataset, {
     ...(k !== undefined ? { k: k as number } : {}),
     now,
+    // Same reasoning as `brain_benchmark`: the grid is scored with the
+    // benchmark, so every cell inherits whatever reach is passed here.
+    transportReach: contextReach(ctx),
   });
   try {
     appendMetric(ctx.vault, {
