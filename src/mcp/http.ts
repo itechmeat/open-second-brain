@@ -29,6 +29,7 @@ import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INTERNAL_ERROR, INVALID_REQUEST, PARSE_ERROR } from "./protocol.ts";
 import { DRAIN_STATE, RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 
 export interface ServeHttpOptions {
   readonly host?: string;
@@ -47,6 +48,8 @@ export interface HttpServerHandle {
   readonly host: string;
   readonly port: number;
   readonly url: string;
+  /** The reach this bind minted for every request it will carry. */
+  readonly reach: TransportReach;
   /** The in-flight register, so a caller can report what is running. */
   readonly drain: RequestDrain;
   /**
@@ -79,7 +82,11 @@ export async function startHttp(
     );
   }
   const port = opts.port ?? 0;
-  const mcp = new MCPServer(ctx, runtimeOpts);
+  // A transport fact, set after the caller's runtime options for the same
+  // reason `sendNotification` is on stdio: a runtime option must not be
+  // able to claim a reach this bind did not establish.
+  const reach = httpBindReach(host);
+  const mcp = new MCPServer(ctx, { ...runtimeOpts, reach });
   const drain = new RequestDrain();
   const deadlineMs = opts.drainDeadlineMs ?? resolveDrainDeadlineMs(process.env);
   const server = createServer(async (req, res) => {
@@ -140,6 +147,7 @@ export async function startHttp(
     host,
     port: actualPort,
     url: `http://${host}:${actualPort}`,
+    reach,
     drain,
     close: () => closeHttp(server, drain, deadlineMs, sockets),
   };
@@ -334,6 +342,22 @@ function authorized(req: IncomingMessage, apiKey: string): boolean {
 
 /** Canonical loopback host names a rebinding guard trusts. */
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
+
+/**
+ * What an HTTP bind on `host` establishes about the callers it will
+ * accept: nothing beyond "a request arrived", unless the bind is
+ * loopback - in which case the request originated on this host.
+ *
+ * Keyed on the BIND rather than on a per-request peer address, because
+ * that is what this transport actually controls: a non-loopback bind is
+ * an explicit decision to expose the Brain on the network, and it already
+ * carries a mandatory bearer (see {@link startHttp}). A `Host` header is
+ * a caller-supplied string and could not be used here for the reason
+ * `./reach-refusal.ts` states.
+ */
+export function httpBindReach(host: string): TransportReach {
+  return isLoopbackHost(host) ? TRANSPORT_REACH.local : TRANSPORT_REACH.remote;
+}
 
 export function isLoopbackHost(host: string): boolean {
   return LOOPBACK_HOSTS.has(normaliseHostname(host));

@@ -68,6 +68,7 @@ import {
 import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
+import { TRANSPORT_REACH } from "../core/graph/transport-reach.ts";
 import { startHttp, isLoopbackHost } from "../mcp/http.ts";
 import { serveStdio } from "../mcp/stdio.ts";
 import { SERVER_VERSION } from "../mcp/protocol.ts";
@@ -919,7 +920,11 @@ async function cmdToolCall(argv: string[]): Promise<number> {
       args[k] = v;
     }
   }
-  const server = new MCPServer({ vault, configPath: config });
+  // The CLI tool-call bridge runs in the operator's own shell against
+  // the operator's own vault, so it establishes the same reach stdio
+  // does - and for the same reason: filesystem-equivalent access is
+  // already held before the first argument is parsed.
+  const server = new MCPServer({ vault, configPath: config }, { reach: TRANSPORT_REACH.local });
   try {
     const result = await server.callTool(toolName, args);
     process.stdout.write(JSON.stringify(result, null, 2) + "\n");

@@ -12,6 +12,7 @@
  * single downward dependency direction.
  */
 
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import type { ProgressSink } from "../core/brain/progress.ts";
@@ -110,6 +111,20 @@ export interface ServerContext {
    */
   readonly artifactStore?: ArtifactStore;
   /**
+   * How far the caller of this process had to reach to get here, minted
+   * by the transport that accepted the request (see
+   * `src/core/graph/transport-reach.ts`).
+   *
+   * Optional on the TYPE and mandatory in EFFECT: read it through
+   * {@link contextReach}, never directly. A context assembled by hand -
+   * an embedded caller, a test - established nothing about who is asking,
+   * and {@link contextReach} answers that with the narrowest reach rather
+   * than the widest. The field is optional so those contexts stay valid;
+   * the reader is what makes the omission fail closed instead of silently
+   * granting local access.
+   */
+  readonly reach?: TransportReach;
+  /**
    * Resolved agent identity for this server process
    * (context-integrity-gates, Unit A), from `resolveAgentName`.
    *
@@ -169,4 +184,17 @@ export interface ToolDefinition {
     args: Record<string, unknown>,
     onProgress?: ProgressSink,
   ) => Promise<unknown> | unknown;
+}
+
+/**
+ * The reach a handler must answer at, resolved fail-closed.
+ *
+ * A context carrying no minted reach is not a context that proved local
+ * access; it is one where nobody established anything, and an
+ * unestablished trust level is not the absence of a boundary. Same
+ * convention `entityStatusInScope` follows for a status outside its
+ * vocabulary, and `owner-scope-view.ts` for an unresolved owner.
+ */
+export function contextReach(ctx: ServerContext): TransportReach {
+  return ctx.reach ?? TRANSPORT_REACH.remote;
 }

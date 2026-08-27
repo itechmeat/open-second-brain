@@ -23,6 +23,21 @@ import { errorResponse, type JsonRpcResponse } from "./server.ts";
 import { INVALID_REQUEST, PARSE_ERROR, type JsonRpcNotification } from "./protocol.ts";
 import { RequestDrain, resolveDrainDeadlineMs, type DrainOutcome } from "./drain.ts";
 import { ORIGIN_CHANNEL, setOriginChannel } from "../core/origin-channel.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
+
+/**
+ * What a stdio connection establishes about its caller.
+ *
+ * `local`, and the reason is the process tree rather than the protocol:
+ * this transport is spoken over the stdin and stdout of a process the
+ * caller started, so the caller already holds whatever filesystem access
+ * that process runs with. It does NOT prove operator intent - a remote
+ * host can spawn a stdio subprocess - and the alternative, minting
+ * `remote` here, would take an operator's own reserved pages away from
+ * their own editor and their own CLI. The limit is stated rather than
+ * papered over; see `src/core/graph/transport-reach.ts`.
+ */
+export const STDIO_TRANSPORT_REACH: TransportReach = TRANSPORT_REACH.local;
 
 /**
  * Any frame this transport writes: a response to a request, or a
@@ -40,6 +55,8 @@ type OutboundFrame = JsonRpcResponse | JsonRpcNotification;
  */
 export interface StdioTransportHandle {
   readonly drain: RequestDrain;
+  /** The reach this transport minted for every request it will carry. */
+  readonly reach: TransportReach;
   /** Stop reading new lines, await the in-flight request, end the loop. */
   close(): Promise<DrainOutcome>;
 }
@@ -85,6 +102,10 @@ export async function serveStdio(
   const server = new MCPServer(ctx, {
     ...runtimeOpts,
     sendNotification: (notification) => writeFrame(stdout, notification),
+    // A transport fact, so it is set after the caller's options for the
+    // same reason `sendNotification` is: a runtime option must not be
+    // able to claim a reach this transport did not establish.
+    reach: STDIO_TRANSPORT_REACH,
   });
   const rl = createInterface({ input: stdin, crlfDelay: Infinity });
 
@@ -92,6 +113,7 @@ export async function serveStdio(
   const deadlineMs = ioOpts.drainDeadlineMs ?? resolveDrainDeadlineMs(process.env);
   ioOpts.onStart?.({
     drain,
+    reach: STDIO_TRANSPORT_REACH,
     close: async () => {
       // The wait comes first and the reader is closed after it: closing
       // the interface while a `tools/call` is still running would end the
@@ -203,6 +225,7 @@ export async function serveStdioFromString(
   const server = new MCPServer(ctx, {
     ...opts,
     sendNotification: (notification) => out.push(frameLine(notification)),
+    reach: STDIO_TRANSPORT_REACH,
   });
   for (const rawLine of input.split("\n")) {
     const line = rawLine.trim();

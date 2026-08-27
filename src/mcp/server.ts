@@ -11,6 +11,7 @@ import {
 } from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
+import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
   INTERNAL_ERROR,
@@ -45,6 +46,7 @@ import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -87,6 +89,17 @@ export interface MCPServerRuntimeOptions {
    * write inside their own loops.
    */
   readonly sendNotification?: (notification: JsonRpcNotification) => void;
+  /**
+   * The reach this transport establishes for every caller it accepts
+   * (`src/core/graph/transport-reach.ts`).
+   *
+   * Absent means no transport minted one - an embedded caller, a probe,
+   * a test - and that resolves to {@link TRANSPORT_REACH.remote}, the
+   * narrowest. A transport that owns the fact sets it AFTER spreading a
+   * caller's options, exactly as `sendNotification` is set, so a runtime
+   * option cannot override what the transport established.
+   */
+  readonly reach?: TransportReach;
 }
 
 export interface JsonRpcRequest {
@@ -121,6 +134,8 @@ export class MCPServer {
   private readonly routeMetricsEnabled: boolean;
   /** See {@link MCPServerRuntimeOptions.sendNotification}. */
   private readonly sendNotification: ((notification: JsonRpcNotification) => void) | undefined;
+  /** See {@link MCPServerRuntimeOptions.reach}; fail-closed when unminted. */
+  readonly reach: TransportReach;
 
   constructor(opts: MCPServerOptions, runtimeOpts: MCPServerRuntimeOptions = {}) {
     this.vault = opts.vault;
@@ -138,6 +153,7 @@ export class MCPServer {
     this.capabilityReport = evaluated.report;
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
     this.sendNotification = runtimeOpts.sendNotification;
+    this.reach = runtimeOpts.reach ?? TRANSPORT_REACH.remote;
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.
@@ -157,6 +173,7 @@ export class MCPServer {
       repoRoot: this.repoRoot,
       capabilityReport: this.capabilityReport,
       artifactStore: this.artifactStore,
+      reach: this.reach,
       // Owner-scope isolation (context-integrity-gates, Unit A): the
       // only source of identity for `brain_context`, which takes no
       // arguments. Resolved per access, like `resolveAgentName`'s other
@@ -210,6 +227,11 @@ export class MCPServer {
     args: Record<string, unknown>,
     onProgress?: ProgressSink,
   ): Promise<unknown> {
+    // Before the unknown-argument gate: a caller naming the visibility
+    // boundary is told about the boundary, not offered a typo suggestion
+    // for it - and the rule holds for an open schema, which that gate
+    // cannot see.
+    assertNoCallerSuppliedReach(tool, args);
     assertKnownArguments(tool, args);
     if (!this.routeMetricsEnabled) return tool.handler(this.context, args, onProgress);
     const start = performance.now();
