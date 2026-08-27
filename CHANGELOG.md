@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.53.0] - 2026-08-27
+
+Hermes injected recall on every gated turn without ever telling the vault what the turn was about, and [@Yori940619](https://github.com/Yori940619) named it in [#181](https://github.com/itechmeat/open-second-brain/pull/181): the pack was query-blind, and the pages that would have mattered lost the budget to whichever confirmed preferences happened to sort first. The diagnosis is right and the preference-first ordering the pull request argued for is the right instinct. The mechanism it proposed is the part that changed. Recall would have moved onto raw `brain_search`, and that path is the one place a curated injection must not go: it runs no prompt-injection guard, post-filters a general ranker instead of enumerating the preference directory, returns retired and merely-demoted superseded pages, never consults owner-scope delivery, enforces no response-level token budget, and issues no receipt. The fix belongs one layer down, inside the lane, and that is where it landed.
+
+### Added
+
+- **`brain_context_pack` reads its query two ways, and the second one ranks.** The tool has always accepted a `query` and has always meant a case-insensitive SUBSTRING match against `topic + principle`, so a natural-language turn missed every candidate and came back with an empty pack and a `filter-miss` for each page. `query_mode: "ranked"` takes the query out of the filter and into the sort: the already-collected candidates are ORDERED by structural token overlap - the same deterministic, stopword-free, language-agnostic kernel the rated-decision matcher uses, with no model and no embedding, so it works on an install that has never indexed a vector - and none of them is excluded. The budget decides what is dropped, not a lexical accident. Relevance sits between session focus and density in the comparator and under tier, so a bound focus still dominates and a peripheral page still never outranks a core one. An omitted `query_mode` is byte-identical to every release before this one and a test pins it; the mode requires a query, stated in the schema as `dependentRequired` and refused by the handler rather than accepted as a silent no-op. Because the change is inside the lane, the containment guard, the curated pool, the tombstone and supersession-tip filters, owner-scope delivery, `max_tokens`, the named skip reasons, and the server-issued `receipt_id` are all inherited rather than bypassed.
+
+### Fixed
+
+- **Hermes recall is query-aware without leaving the lane that makes it safe.** `prefetch` calls one tool, `brain_context_pack`, and now carries the turn on it in ranked mode. The sample id in the injected metadata line is the server-issued `receipt_id` again rather than a locally hashed string: an id with no receipt behind it resolves `unresolved / sample_absent` on every outcome an agent posts, which would have undone what [#179](https://github.com/itechmeat/open-second-brain/pull/179) shipped one release earlier. The local character budget is gone with it - `max_tokens` is a TOKEN budget the server enforces against the bodies it emits, and re-spending it in Python at four bytes per token over-injected by two to four times on Cyrillic and CJK vaults and cut the joined output mid-string with no marker. The two helpers that formatted search rows are deleted; one of them scanned a whole result for a line beginning `principle:` and returned that line alone, so an ordinary note carrying such a line in its body was reduced to it.
+- **Two silences on the Hermes boundary, both named now.** `brain_context_pack` computed injection-time tension warnings and the owner-scope observation and its MCP projection discarded both, so the one surface that puts vault text in front of a model every turn was the one surface that could not say a memory it injected is contested; the tool forwards them as `brain_pre_compress_pack` always has, absent when empty. On the provider side those warnings reach the log, and a gated turn that recalls nothing states that rather than passing for a healthy injection. The correlation defaults `handle_tool_call` supplies for `brain_context_pack_outcome` are also scoped to `operation: "post"` - `host` and `session_id` are read filters for `list` and `summary`, and defaulting them there narrowed an agent's own query to this host's rows without telling it.
+
+### Notes
+
+- The three regression pins [#179](https://github.com/itechmeat/open-second-brain/pull/179) added still pass, but they were passing for the wrong reason while the search lane existed: the test bridge answers `{}` for an unregistered tool, which sent them down the fallback path instead of the shipped one. Each now asserts by name which lane ran, so a future rerouting fails them instead of sliding past.
+
 ## [1.52.1] - 2026-08-24
 
 The context-pack outcome ledger shipped with receipts on the read side and nothing on the Hermes side to carry them, so a deployment that injected recall on every turn still recorded zero outcomes. Contributed by [@Yori940619](https://github.com/Yori940619) ([#179](https://github.com/itechmeat/open-second-brain/pull/179)), with one course correction along the way that is worth recording: the first revision inferred success and repair from hardcoded phrase lists in a single language, and the rework removed raw-text inference entirely - the honest shape, and now the pinned one.
@@ -7357,6 +7374,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.53.0]: https://github.com/itechmeat/open-second-brain/compare/v1.52.1...v1.53.0
 [1.52.1]: https://github.com/itechmeat/open-second-brain/compare/v1.52.0...v1.52.1
 [1.52.0]: https://github.com/itechmeat/open-second-brain/compare/v1.51.0...v1.52.0
 [1.51.0]: https://github.com/itechmeat/open-second-brain/compare/v1.50.3...v1.51.0
