@@ -93,6 +93,7 @@ import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts
 import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts";
 import { JSONRPC_VERSION } from "../../src/mcp/protocol.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
+import { PROGRESS_META_KEY } from "../../src/mcp/progress.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import {
   VISIBILITY_SURFACE_CATEGORY,
@@ -625,6 +626,15 @@ test("the _meta channel is live on these probes, so the sweep covers it", async 
   // The refusal proves the member is populated. A sweep that asserted
   // over an envelope with no `_meta` would be covering a channel that was
   // never there.
+  //
+  // Asserted on the RESULT rather than by searching the serialised
+  // envelope for the string: every probe sends `params._meta.progressToken`
+  // itself, so a substring check matched the request the probe made and
+  // would have stayed green over an empty or absent `result._meta` - the
+  // exact retirement it exists to catch.
   const response = await drive(TRANSPORT_REACH.remote, "brain_search", { query: QUERY });
-  expect(response).toContain("_meta");
+  const meta = (JSON.parse(response) as { result?: { _meta?: Record<string, unknown> } }).result
+    ?._meta;
+  expect(meta, "result._meta is where a reserved name could ride out").toBeDefined();
+  expect(Object.keys(meta!)).toContain(PROGRESS_META_KEY);
 });
