@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, mkdtempSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -142,10 +142,32 @@ describe("dream progress", () => {
       //     forensic evidence of when the pass really ran.
       // Everything else the pass authored is compared.
       const EXCLUDED_PREFIXES = ["Brain/.snapshots/", "Brain/log/dream-runs/"];
+      // The archive's SIZE escapes that first exclusion: the snapshot log
+      // entry records `size_bytes`, so the tar's mtime nondeterminism is
+      // republished into a file this assertion does compare, and the two
+      // trees' mtimes differ whenever the copy straddles a second. The
+      // field is NORMALISED rather than the day log excluded - excluding
+      // it would drop the pass's main authored artifact from the
+      // comparison, which is most of what this test is for. Every other
+      // member of that entry (run_id, reason, channel) still compares.
+      const ARCHIVE_SIZE_FIELD = /(size_bytes"?:\s*"?)\d+/g;
+      const ARCHIVE_SIZE_PLACEHOLDER = "$1<archive-size>";
+      const NORMALISED_PREFIX = "Brain/log/";
       const authored = (root: string): Map<string, string> => {
         const kept = new Map<string, string>();
         for (const [path, digest] of digestVaultFiles(root)) {
-          if (!EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) kept.set(path, digest);
+          if (EXCLUDED_PREFIXES.some((prefix) => path.startsWith(prefix))) continue;
+          // Digest everywhere else; the day log is text, so it is compared
+          // as normalised text and a mismatch prints the offending line.
+          kept.set(
+            path,
+            path.startsWith(NORMALISED_PREFIX)
+              ? readFileSync(join(root, path), "utf8").replaceAll(
+                  ARCHIVE_SIZE_FIELD,
+                  ARCHIVE_SIZE_PLACEHOLDER,
+                )
+              : digest,
+          );
         }
         return kept;
       };
