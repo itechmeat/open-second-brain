@@ -365,6 +365,9 @@ async function toolBrainBacklinks(
   const refs = view.visible(target)
     ? (index.get(target) ?? []).filter((r) => view.visible(r.source))
     : [];
+  const unparsed = index.unparsed
+    .filter((u) => view.visible(u.source))
+    .map((u) => ({ source: u.source, source_kind: u.sourceKind, reason: u.reason }));
   return {
     id: target,
     count: refs.length,
@@ -377,17 +380,15 @@ async function toolBrainBacklinks(
     // A `count` beside a non-empty `unparsed` is not a measurement: the
     // walk skipped artifacts whose references it could not read, and a
     // caller told only the count would read a legacy vault's zero as a
-    // genuine zero. Omitted entirely when the walk was clean, so a
-    // healthy vault's payload is byte-identical.
-    ...(index.unparsed.length > 0
-      ? {
-          unparsed: index.unparsed.map((u) => ({
-            source: u.source,
-            source_kind: u.sourceKind,
-            reason: u.reason,
-          })),
-        }
-      : {}),
+    // genuine zero. Omitted entirely when the walk is clean, so a healthy
+    // vault's payload is byte-identical.
+    //
+    // Filtered by the same rule the refs are. Each entry NAMES its source
+    // artifact by id, so an unfiltered list disclosed a reserved page's id
+    // through a call that never mentioned it - and the honesty this field
+    // exists for does not extend to being honest about pages the caller
+    // may not know exist.
+    ...(unparsed.length > 0 ? { unparsed } : {}),
   };
 }
 

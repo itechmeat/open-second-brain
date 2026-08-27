@@ -107,12 +107,28 @@ export function normaliseWikilinkTarget(value: string): string {
  * {@link parseArtifactRef} — they apply the same Obsidian-flavoured
  * resolution rules to the post-bracket part of the link.
  */
-function stripBasenameDecoration(body: string): string {
+/**
+ * Drop a wikilink body's alias and anchor, keeping the target verbatim -
+ * folder segments and `.md` included.
+ *
+ * The half of {@link stripBasenameDecoration} that removes DECORATION,
+ * split out because a consumer that resolves a target to a vault path
+ * needs exactly this and must not have the other half: collapsing
+ * `Brain/preferences/pref-x.md|the rule` to `pref-x` turns a
+ * path-shaped reference into a bare basename that resolves to no file,
+ * which is a fail-open for any rule asked over it.
+ */
+export function stripWikilinkDecoration(body: string): string {
   let s = body.trim();
   const pipe = s.indexOf("|");
   if (pipe >= 0) s = s.slice(0, pipe).trim();
   const hash = s.indexOf("#");
   if (hash >= 0) s = s.slice(0, hash).trim();
+  return s;
+}
+
+function stripBasenameDecoration(body: string): string {
+  let s = stripWikilinkDecoration(body);
   s = basename(s);
   if (s.endsWith(".md")) s = s.slice(0, -".md".length);
   return s;

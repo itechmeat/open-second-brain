@@ -34,7 +34,7 @@ import { existsSync } from "node:fs";
 
 import type { FrontmatterCache } from "../search/result-filters.ts";
 import { BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
-import { ANCHORED_WIKILINK_RE } from "./wikilink.ts";
+import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "./wikilink.ts";
 
 /** The `.md` extension every Brain artifact id resolves through. */
 const MARKDOWN_EXT = ".md";
@@ -65,13 +65,21 @@ export type ArtifactRef = string | null | undefined;
  * Deliberately NOT `parseWikilinkRich`: that normaliser collapses folder
  * segments and drops `.md`, which turns a path-shaped link into a bare
  * basename that resolves to no artifact - the same fail-open by a longer
- * route. Only the brackets come off; the anchor / alias decoration inside
- * them is handled by the id-resolution step, which simply finds no file
- * and treats the row as naming nothing.
+ * route.
+ *
+ * The alias and anchor DO come off, through the decoration-only half of
+ * that normaliser. Leaving them on was a fail-open with a comment on it:
+ * `pref-x|alias`, `pref-x#Raw` and
+ * `Brain/preferences/pref-x.md|the rule` end in neither `.md` nor an id
+ * any directory holds, so they resolved to nothing and their rows passed
+ * unconditionally - and these are not hypothetical spellings, they are
+ * what `brain_apply_evidence` documents for its own `artifact` argument.
+ * Cutting decoration can only ever SHORTEN the target, so a reference
+ * that resolved before still resolves and one that did not may now.
  */
 function unbracket(ref: string): string {
   const match = ANCHORED_WIKILINK_RE.exec(ref.trim());
-  return match === null ? ref : match[1]!.trim();
+  return stripWikilinkDecoration(match === null ? ref : match[1]!);
 }
 
 /** One rule, bound to one vault, asked over references. */
@@ -167,17 +175,27 @@ export function artifactRefView(
   pathVisible: (rel: string, cache: FrontmatterCache) => boolean,
 ): ArtifactRefView {
   const cache: FrontmatterCache = new Map();
+  // Per-response memo over the REFERENCE, beside the one over the path.
+  // Rows name the same artifact repeatedly - a log day's events about one
+  // preference, a backlink list's sources - and `artifactPath` costs one
+  // `existsSync` per Brain directory for every id-shaped string that
+  // resolves to nothing, which is the common case now that the whole
+  // payload is offered rather than four named keys.
+  const verdicts = new Map<string, boolean>();
   const visible = (ref: ArtifactRef): boolean => {
     if (ref === null || ref === undefined || ref.length === 0) return true;
+    const memo = verdicts.get(ref);
+    if (memo !== undefined) return memo;
     // A reference that names a path is resolved as one; anything else is
     // a Brain artifact id, and an id with no artifact on disk names
     // nothing that could be hidden - see {@link artifactPath} for why
     // that reading is only true while its directory list is complete.
     const bare = unbracket(ref);
-    if (bare.length === 0) return true;
-    const rel = bare.endsWith(MARKDOWN_EXT) ? bare : artifactPath(vault, bare);
-    if (rel === null) return true;
-    return pathVisible(rel, cache);
+    const rel =
+      bare.length === 0 ? null : bare.endsWith(MARKDOWN_EXT) ? bare : artifactPath(vault, bare);
+    const verdict = rel === null ? true : pathVisible(rel, cache);
+    verdicts.set(ref, verdict);
+    return verdict;
   };
   return Object.freeze({
     filtersNothing: false,

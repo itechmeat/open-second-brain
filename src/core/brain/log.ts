@@ -540,27 +540,46 @@ function parseIsoUtc(timestamp: string): IsoUtcParts {
 }
 
 /**
- * Every artifact one log entry names, as a reference an
+ * Every artifact one log entry names, as references an
  * {@link ArtifactRefView} can resolve.
  *
  * A log entry is the one record shape whose SUBJECT is another artifact:
  * it says what was applied to which preference, over which page. Two
  * surfaces filter log rows by what they name - the `osb://log/{date}`
- * resource and `brain_query` - and a second copy of this field list would
- * be a second answer to "what does this row disclose", which is exactly
- * how one of the two would come to disclose more than the other.
+ * resource and `brain_query` - and a second copy of the answer would be
+ * how one of the two comes to disclose more than the other.
+ *
+ * EVERY string in the payload is offered, rather than a named list of
+ * keys. The list was `path` / `preference` / `signal` / `artifact`, and a
+ * census of the writers in this tree found artifact references in
+ * `target`, `subject_a`, `subject_b`, `successor`, `predecessor`,
+ * `source`, `source_path`, `note`, `file`, `files`, `retired`,
+ * `superseded_by` and `conflicts` as well - so the list was not a
+ * measurement of what a row discloses, it was a sample of it, and every
+ * key outside it made its row unconditionally visible. Enumerating a
+ * payload whose writers are open-ended is the defect, not the particular
+ * keys that were missing from the enumeration.
+ *
+ * Offering too much is SAFE in a way offering too little is not: a string
+ * that resolves to no artifact on disk is read as naming nothing and lets
+ * its row through unchanged, which is the same answer the view gives an
+ * absent key. So the fail direction of the widening is the harmless one.
+ *
+ * Array-valued keys are flattened rather than dropped.
+ * {@link BrainLogEntryPayload} is `string | ReadonlyArray<string>` and
+ * `parseLogDay` produces an array whenever a key repeats or uses the
+ * indented sub-bullet form - so a `typeof === "string"` test answered
+ * `undefined` for a real multi-artifact reference, which the view reads
+ * as "names nothing".
  */
 export function logEntryArtifactRefs(entry: BrainLogEntry): ReadonlyArray<string | undefined> {
   const body = (entry.body ?? {}) as Record<string, unknown>;
-  const field = (key: string): string | undefined =>
-    typeof body[key] === "string" ? (body[key] as string) : undefined;
-  return LOG_ENTRY_REF_FIELDS.map(field);
+  const refs: Array<string | undefined> = [];
+  for (const value of Object.values(body)) {
+    if (typeof value === "string") refs.push(value);
+    else if (Array.isArray(value)) {
+      for (const item of value) if (typeof item === "string") refs.push(item);
+    }
+  }
+  return refs;
 }
-
-/** The body keys that carry an artifact reference, named once. */
-const LOG_ENTRY_REF_FIELDS: ReadonlyArray<string> = Object.freeze([
-  "path",
-  "preference",
-  "signal",
-  "artifact",
-]);
