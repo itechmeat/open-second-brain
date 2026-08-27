@@ -15,10 +15,12 @@ import {
 } from "../../brain/trust/retrieval-receipts.ts";
 import { trustGateAdjuster } from "../../brain/trust/retrieval-gate.ts";
 import { applyRelationPolarityPhase } from "../graph-phases.ts";
+import { resolvedTransportReach } from "../../graph/transport-reach.ts";
 import { applyRankAdjusters, type RankAdjuster } from "../rank-adjust.ts";
 import { applyReinforceBoost, loadReinforceStrengths } from "../reinforce.ts";
 import { applyCrossEncoderRerank } from "../rerank/index.ts";
 import {
+  applyReachFilter,
   readCachedFrontmatter,
   supersedeFadeAdjuster,
   type FrontmatterCache,
@@ -67,6 +69,32 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   const polarized = config.recall.relationPolarityEnabled
     ? applyRelationPolarityPhase(store, excluded, opts.includeSuperseded === true)
     : excluded;
+  // Root A again, and it has to be: the polarity phase resolves typed
+  // `superseded_by` edges to documents that were NEVER in the filtered
+  // pool, fetches their representative chunks off the store and appends
+  // them with full path, title and content. Nothing between that append
+  // and the outcome re-asks any pool filter, so a public page naming a
+  // reserved successor was a route to that successor's body at remote
+  // reach - the pool filter never saw it, because it was not in the pool
+  // to see. Re-asking over the whole pool rather than the pulled-in rows
+  // alone is deliberate: the verdict is idempotent and every already-
+  // filtered row answers off the shared frontmatter cache, so one
+  // spelling of the rule costs less than a second one that tracked which
+  // rows were new.
+  //
+  // RECORDED, not fixed here: the caller's `visibility` scope and its
+  // `agentScope` have the same gap at this seam, and they predate this
+  // boundary - a pulled-in successor bypasses `applyVisibilityScope` and
+  // `applyAgentScope` exactly as it bypassed the reach rule. Closing
+  // those means re-resolving the caller's whole filter set after a
+  // post-rank phase, which is a change to the ownership boundary rather
+  // than to this one.
+  const reachable = applyReachFilter(
+    polarized,
+    resolvedTransportReach(opts.transportReach),
+    config.vault,
+    frontmatterCache,
+  );
   // Self-tuning reinforce (Search & Recall Quality Suite): opt-in. When
   // the caller passes a reinforce set, the persisted ledger lifts
   // proven-useful memories by a bounded boost BEFORE the top_k cut, so
@@ -74,8 +102,8 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
   // untouched; an empty ledger is a no-op either way.
   const reinforced =
     opts.reinforce !== undefined
-      ? applyReinforceBoost(polarized, loadReinforceStrengths(config.vault))
-      : polarized;
+      ? applyReinforceBoost(reachable, loadReinforceStrengths(config.vault))
+      : reachable;
   // Cross-encoder rerank (retrieval-precision-quality-loop, card A): the
   // final reader step, appended AFTER every heuristic rerank. Disabled
   // (default) returns the pool unchanged (byte-identical); enabled but

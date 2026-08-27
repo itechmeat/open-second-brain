@@ -22,6 +22,7 @@ import {
 } from "../../../src/core/search/relation-polarity.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { search } from "../../../src/core/search/search.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import type { BrainSearchResult } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
@@ -380,4 +381,59 @@ test("a node that is both demoted predecessor and positive target composes order
   // positive boost adds on top of the demoted base.
   const both = forward.find((r) => r.path === "both.md")!;
   expect(both.score).toBeCloseTo(0.9 * SUPERSEDED_DEMOTION + RELATION_BOOST_PER_EDGE, 5);
+});
+
+// --- Root A holds across the pull-in (private-is-not-a-suggestion) ----------
+//
+// The polarity phase resolves `superseded_by` to documents that were
+// never in the filtered pool and appends their representative chunks with
+// full path, title and content. That append is downstream of every pool
+// filter, so without a second ask a public page naming a reserved
+// successor is a route to the successor's body.
+
+test("a reserved successor is not pulled into a remote caller's window", async () => {
+  writeMd(
+    vault,
+    "public-brief.md",
+    [
+      "---",
+      "title: Public brief",
+      'superseded_by: "[[deal-terms]]"',
+      "---",
+      "# Public brief",
+      "",
+      "The blue-green rollout strategy for the payments tier.",
+    ].join("\n"),
+  );
+  writeMd(
+    vault,
+    "deal-terms.md",
+    [
+      "---",
+      "title: Deal terms",
+      "visibility: [private]",
+      "---",
+      "# Deal terms",
+      "",
+      "The blue-green rollout strategy for the payments tier, revised.",
+    ].join("\n"),
+  );
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+
+  const remote = await search(cfg, { query: "blue-green rollout payments tier", limit: 10 });
+  expect(remote.results.map((r) => r.path)).not.toContain("deal-terms.md");
+  // Not just absent from the paths: none of its body may ride out on
+  // another row either.
+  expect(JSON.stringify(remote.results)).not.toContain("revised");
+
+  // The control: the same edge, the same corpus, at a reach that reaches
+  // the page. The pull-in itself still works.
+  const local = await search(cfg, {
+    query: "blue-green rollout payments tier",
+    limit: 10,
+    visibility: ["private"],
+    transportReach: TRANSPORT_REACH.local,
+  });
+  expect(local.results.map((r) => r.path)).toContain("deal-terms.md");
 });
