@@ -15,7 +15,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,5 +62,49 @@ describe("listVaultPages", () => {
   test("a vault that never wrote the token is identical at both reaches", () => {
     rmSync(join(vault, "reserved.md"));
     expect(titles(TRANSPORT_REACH.remote)).toEqual(titles(TRANSPORT_REACH.local));
+  });
+});
+
+// --- The unmeasurable page: one rule, one fail direction ---------------------
+//
+// The three roots have to agree about the page they cannot read. Roots A
+// and C substitute the reserved token for it (`isPathReadableAtReach`);
+// root B used to read its empty parsed map as "declares nothing" and
+// admit it at remote reach, which is the same rule failing in two
+// directions on the same input.
+
+describe("a page whose file cannot be read", () => {
+  const unreadable = (): string => {
+    const path = join(vault, "unreadable.md");
+    writeFileSync(path, "---\ntitle: Unreadable\n---\n\nbody");
+    chmodSync(path, 0o000);
+    return path;
+  };
+
+  test("is withheld at remote reach, exactly as a reserved page is", () => {
+    const path = unreadable();
+    try {
+      const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
+      expect(titles).not.toContain("unreadable");
+      expect(titles).not.toContain("Unreadable");
+    } finally {
+      chmodSync(path, 0o644);
+    }
+  });
+
+  test("is kept at local reach, where the caller can open the file itself", () => {
+    const path = unreadable();
+    try {
+      const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
+      expect(titles).toContain("unreadable");
+    } finally {
+      chmodSync(path, 0o644);
+    }
+  });
+
+  test("a readable untagged page is unaffected at both reaches", () => {
+    for (const reach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote] as const) {
+      expect(listVaultPages(vault, { reach }).map((p) => p.title)).toContain("Open");
+    }
   });
 });
