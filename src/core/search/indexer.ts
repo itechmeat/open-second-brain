@@ -110,6 +110,7 @@ import type {
   ResolvedSearchConfig,
   VisibilityHonestyFinding,
 } from "./types.ts";
+import { pageVisibility } from "../graph/visibility.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -461,6 +462,13 @@ async function indexIntoRun(
           // above: unchanged content can only ever resolve to the same
           // anchor, so declining to recompute it cannot stale it.
           eventAnchor: resolveEventAnchor(frontmatter, body),
+          // What this run MEASURED of the page's visibility declaration,
+          // from the frontmatter already parsed above (v12). The indexer
+          // marks; it never skips. A `continue` here would be a live
+          // defect: `seen.add` runs BEFORE the content is read, so the
+          // deletion sweep would not purge a skipped page's stale rows and
+          // the page would keep whatever chunks it already had.
+          visibility: pageVisibility(frontmatter),
         });
         // Framework-kind files feed the tier-guard post-pass: keep the
         // parsed frontmatter of this run's changed docs that declare a

@@ -76,13 +76,15 @@ test("the word 'visibility' in body prose, with no 'visibility:' key text, does 
   if (peek.kind === "read") expect(peek.value).toBe(false);
 });
 
-test("a 'visibility:' phrase in body prose (no frontmatter block) still flips the peek, by design", async () => {
-  // The documented imprecision is not scoped to frontmatter VALUES: the
-  // heuristic reads chunk_index 0 wholesale, and a page with no
-  // frontmatter block puts its own first content chunk there. A body
-  // line spelling the exact key phrase is charged as a false positive
-  // for the same reason a quoted title would be - pinned here as the
-  // shape of the tradeoff, not as an oversight to close.
+test("a 'visibility:' phrase in body prose no longer flips the peek", async () => {
+  // The tradeoff this case used to pin is GONE, and its removal is the
+  // point rather than a side effect. The answer came from a
+  // `LIKE '%visibility:%'` scan of chunk zero, which a page with no
+  // frontmatter fills with its own first content chunk - so a body line
+  // spelling the key phrase was charged as a tagged vault, exactly as a
+  // quoted title was. It is now read off `documents.visibility`, decided
+  // by the same `pageVisibility` the read boundary uses, so prose cannot
+  // declare anything.
   writeMd(
     vault,
     "a.md",
@@ -92,7 +94,16 @@ test("a 'visibility:' phrase in body prose (no frontmatter block) still flips th
 
   const peek = peekVisibilityTagPresence(dbPath);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(true);
+  if (peek.kind === "read") expect(peek.value).toBe(false);
+});
+
+test("a frontmatter VALUE quoting the key no longer flips it either", async () => {
+  writeMd(vault, "a.md", '---\ntitle: "on visibility: a note"\n---\n\n# A\n\nBody.');
+  await indexVault(makeConfig({ vault, dbPath }));
+
+  const peek = peekVisibilityTagPresence(dbPath);
+  expect(peek.kind).toBe("read");
+  if (peek.kind === "read") expect(peek.value).toBe(false);
 });
 
 test("an absent index reads absent, never a false folded into a read", () => {

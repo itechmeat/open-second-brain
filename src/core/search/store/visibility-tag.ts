@@ -1,69 +1,92 @@
 /**
- * Whether the index holds ANY evidence that a page declares
- * `visibility:` frontmatter, read without a vault walk
- * (nothing-writes-silently, unit H).
+ * What the index knows about `visibility:` frontmatter, read off the
+ * column the indexer materialises rather than by scanning chunk bodies
+ * (private-is-not-a-suggestion, unit 6).
  *
- * The chunker (`chunker.ts`'s `packBlocks`) emits a page's frontmatter
- * block as its own chunk, verbatim, ahead of every other chunk the page
- * produces - so `chunks.content` at `chunk_index = 0` IS the page's raw
- * YAML text when the page has frontmatter at all, and the FIRST real
- * content chunk (never frontmatter) when it does not. That is a
- * structural fact about how the index is built, not a coincidence this
- * module is trusting: it is exercised as `INTRUDER_CHUNK_INDEX_ZERO` in
- * `tests/core/search/visibility-tag-presence.test.ts`.
+ * ## What this replaced, and why
  *
- * That makes "does any page use `visibility:`" answerable from the
- * ALREADY-BUILT index - no filesystem walk, no per-page frontmatter
- * parse, and no new table. It is imprecise in the direction that costs
- * nothing: a
- * frontmatter VALUE that happens to contain the literal substring
- * `visibility:` (a title field quoting the word, say) reads as a tagged
- * vault when none exists. `search check`'s honesty finding this feeds
- * is worded to survive that - it names a caller-supplied filter, not an
- * exact count of tagged pages - and the alternative, parsing every
- * frontmatter block back out of `chunks` to confirm the key rather than
- * the substring, re-derives the vault-walk cost this module exists to
- * avoid.
+ * Until v12 the answer came from a `LIKE '%visibility:%'` scan of every
+ * document's `chunk_index = 0` row - a full table scan whose cheapest
+ * case was a vault that DOES use the field and whose worst case was the
+ * common one, and which was imprecise in a direction it could not
+ * correct: a frontmatter VALUE quoting the literal `visibility:` (a title
+ * quoting the word, say) read as a tagged vault when none existed.
  *
- * ## What it costs, stated rather than implied
+ * `documents.visibility` is that same fact, decided by the same
+ * {@link pageVisibility} the read boundary uses, written once per upsert
+ * and backfilled for pre-existing rows by migration 12. The scan and its
+ * substring guess are both gone.
  *
- * It is a SCAN of `chunks`, not an index lookup. No index serves it and
- * none could: the only index on the table is `idx_chunks_document`
- * (`schema.ts`), and a leading-wildcard `LIKE` is unindexable in any
- * case, so `chunk_index = ?` is a filter applied per row rather than a
- * seek. `EXISTS` stops at the first match, which makes a vault that DOES
- * use the field cheap and the common case - a vault that never has -
- * the worst one: every chunk body is read to conclude "no".
+ * ## Three states, and why the count of the third is reported
  *
- * What makes that affordable is WHERE it runs, not how small it is: once
- * per `indexCheck`, an operator-invoked diagnostic, and nowhere on a
- * query path. A caller wanting this answer per search would need a
- * recorded flag rather than this scan.
+ * NULL means the index holds no chunk zero for that document and
+ * therefore measured nothing. It is not "no tokens", and
+ * {@link countUnmeasuredDocuments} exists so `search check` can report
+ * that population rather than absorb it into the measured one.
+ *
+ * ## What this is NOT
+ *
+ * It is not the read boundary. That is the live frontmatter check at the
+ * three read roots (`isPathReadableAtReach`), which reads the FILE. A
+ * column is a snapshot of the last index run, and a page reserved a
+ * minute ago must be reserved now rather than at the next run - so the
+ * column reports, and the file decides.
  */
 
 import { Database } from "bun:sqlite";
 
+import { DOCUMENT_VISIBILITY_COLUMN, DOCUMENT_VISIBILITY_NONE } from "../schema.ts";
 import { peekReadonlyIndex, type IndexPeek } from "./state.ts";
 
-/** The `chunk_index` a page's frontmatter block lands at, when it has one. */
-const FRONTMATTER_CHUNK_INDEX = 0;
-
-/** Substring a frontmatter chunk carries when the page declares the key. */
-const VISIBILITY_KEY_PATTERN = "%visibility:%";
-
 /**
- * True when at least one document's `chunk_index = 0` row contains the
- * literal substring `visibility:`. One `LIKE` scan of `chunks`, stopping
- * at the first hit - see the module docblock for what that costs and why
- * this is not the indexed lookup its shape suggests.
+ * True when at least one document was measured and declares at least one
+ * visibility token. Exact: `[]` is the measured-and-empty value and NULL
+ * is the unmeasured one, so neither can read as a tagged page.
  */
 export function anyVisibilityTagPresent(db: Database): boolean {
   const row = db
-    .query<{ present: number }, [string, number]>(
-      "SELECT EXISTS(SELECT 1 FROM chunks WHERE content LIKE ?1 AND chunk_index = ?2) AS present",
+    .query<{ present: number }, [string]>(
+      `SELECT EXISTS(SELECT 1 FROM documents ` +
+        `WHERE ${DOCUMENT_VISIBILITY_COLUMN} IS NOT NULL ` +
+        `AND ${DOCUMENT_VISIBILITY_COLUMN} <> ?1) AS present`,
     )
-    .get(VISIBILITY_KEY_PATTERN, FRONTMATTER_CHUNK_INDEX);
+    .get(DOCUMENT_VISIBILITY_NONE);
   return row?.present === 1;
+}
+
+/**
+ * How many indexed documents the index measured nothing for.
+ *
+ * Reported rather than absorbed: these rows are the legacy population a
+ * migration could not read, and a diagnostic that folded them into "no
+ * tokens" would be answering a question nobody could check.
+ */
+export function countUnmeasuredDocuments(db: Database): number {
+  const row = db
+    .query<{ n: number }, []>(
+      `SELECT COUNT(*) AS n FROM documents WHERE ${DOCUMENT_VISIBILITY_COLUMN} IS NULL`,
+    )
+    .get();
+  return row?.n ?? 0;
+}
+
+/**
+ * How many indexed documents declare the token reserved against remote
+ * reads - the population this boundary withholds from a remote caller.
+ *
+ * `json_each` rather than a substring match, so a token that CONTAINS the
+ * reserved one is not counted as it.
+ */
+export function countRemoteReservedDocuments(db: Database, token: string): number {
+  const row = db
+    .query<{ n: number }, [string]>(
+      `SELECT COUNT(*) AS n FROM documents ` +
+        `WHERE ${DOCUMENT_VISIBILITY_COLUMN} IS NOT NULL ` +
+        `AND EXISTS(SELECT 1 FROM json_each(documents.${DOCUMENT_VISIBILITY_COLUMN}) ` +
+        `WHERE json_each.value = ?1)`,
+    )
+    .get(token);
+  return row?.n ?? 0;
 }
 
 /**
@@ -75,4 +98,25 @@ export function anyVisibilityTagPresent(db: Database): boolean {
  */
 export function peekVisibilityTagPresence(dbPath: string): IndexPeek<boolean> {
   return peekReadonlyIndex(dbPath, (_read, db) => anyVisibilityTagPresent(db));
+}
+
+/**
+ * The two populations `search check` reports beside the presence flag,
+ * read in one open so the diagnostic pays one probe rather than three.
+ */
+export interface VisibilityColumnCensus {
+  readonly tagged: boolean;
+  readonly unmeasured: number;
+  readonly reserved: number;
+}
+
+export function peekVisibilityColumnCensus(
+  dbPath: string,
+  reservedToken: string,
+): IndexPeek<VisibilityColumnCensus> {
+  return peekReadonlyIndex(dbPath, (_read, db) => ({
+    tagged: anyVisibilityTagPresent(db),
+    unmeasured: countUnmeasuredDocuments(db),
+    reserved: countRemoteReservedDocuments(db, reservedToken),
+  }));
 }

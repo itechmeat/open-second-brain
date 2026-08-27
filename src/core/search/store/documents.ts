@@ -7,7 +7,11 @@
 import { Database } from "bun:sqlite";
 
 import { isEventAnchorSource, type EventAnchor } from "../event-anchor.ts";
-import { documentBasename } from "../schema.ts";
+import {
+  DOCUMENT_VISIBILITY_COLUMN,
+  documentBasename,
+  encodeDocumentVisibility,
+} from "../schema.ts";
 import { SearchError } from "../types.ts";
 import { nowIso } from "./sql.ts";
 import { purgeVecRowsForDocument } from "./vectors.ts";
@@ -58,6 +62,21 @@ export interface DocumentInput {
    *     because a hard time filter now depends on the difference.
    */
   readonly eventAnchor?: EventAnchor | null;
+  /**
+   * The page's normalised `visibility:` tokens, as {@link pageVisibility}
+   * reads them - an empty array for a page that declares none (v12).
+   *
+   * ABSENT means the caller did not measure them, and the column is left
+   * NULL. That is a third state and not a synonym for the empty array:
+   * "this page declares no visibility" and "nobody looked" are different
+   * statements, and only the first is something the page said.
+   *
+   * The column records what the INDEX knows. It is not the read boundary
+   * - that is the live frontmatter check at the three read roots
+   * (`isPathReadableAtReach`), which reads the file rather than a
+   * snapshot of it and is therefore never stale by a whole index run.
+   */
+  readonly visibility?: ReadonlyArray<string>;
 }
 
 export interface DocumentSummary {
@@ -118,6 +137,7 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         number | null,
         string | null,
         number,
+        string | null,
         string,
         string,
         string,
@@ -125,8 +145,9 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
     >(
       "INSERT INTO documents(path, basename, title, content_hash, mtime, size, page_type, authored_at, " +
         "  event_anchor_start_ms, event_anchor_end_ms, event_anchor_source, event_anchor_examined, " +
+        `  ${DOCUMENT_VISIBILITY_COLUMN}, ` +
         "  created_at, updated_at, indexed_at) " +
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) " +
         "ON CONFLICT(path) DO UPDATE SET " +
         "  basename = excluded.basename, " +
         "  title = excluded.title, " +
@@ -139,6 +160,7 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
         "  event_anchor_end_ms = excluded.event_anchor_end_ms, " +
         "  event_anchor_source = excluded.event_anchor_source, " +
         "  event_anchor_examined = excluded.event_anchor_examined, " +
+        `  ${DOCUMENT_VISIBILITY_COLUMN} = excluded.${DOCUMENT_VISIBILITY_COLUMN}, ` +
         "  updated_at = excluded.updated_at, " +
         "  indexed_at = excluded.indexed_at " +
         "RETURNING id",
@@ -158,6 +180,8 @@ export function upsertDocument(db: Database, doc: DocumentInput): number {
       // Examined iff the caller stated an answer. `null` IS an answer
       // ("this note declares nothing"); leaving the field out is not.
       doc.eventAnchor === undefined ? EXAMINED_NO : EXAMINED_YES,
+      // Absent means unmeasured, which is NULL - see `DocumentInput`.
+      doc.visibility === undefined ? null : encodeDocumentVisibility(doc.visibility),
       now,
       now,
       now,

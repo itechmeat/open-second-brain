@@ -10,13 +10,15 @@
 import { Database } from "bun:sqlite";
 
 import { SearchError } from "./types.ts";
+import { pageVisibility } from "../graph/visibility.ts";
+import { parseFrontmatterText } from "../vault.ts";
 
 /**
  * Latest schema version this code understands. A DB with a value above
  * this raises `SCHEMA_MISMATCH` on open — the operator must reindex
  * with a newer binary.
  */
-export const LATEST_SCHEMA_VERSION = 11;
+export const LATEST_SCHEMA_VERSION = 12;
 
 /**
  * The one command that rebuilds an index this binary cannot read. Every
@@ -546,7 +548,105 @@ export const MIGRATIONS: ReadonlyArray<Migration> = Object.freeze([
       }
     },
   },
+  {
+    // v12 (private-is-not-a-suggestion) - what the INDEX could measure of
+    // each page's `visibility:` frontmatter, materialised so a diagnostic
+    // does not have to scan every chunk body to answer it.
+    //
+    // Three states, all three distinct:
+    //
+    //   - a JSON array of the page's normalised tokens - measured;
+    //   - `[]` - measured, and the page declares none;
+    //   - NULL - this document has no chunk zero at all, so the index
+    //     holds nothing to measure. Not a synonym for `[]`.
+    //
+    // The BACKFILL is the whole of why this migration is more than an
+    // `ALTER TABLE`. A column added without one is NULL for every
+    // existing row, and treating NULL as reserved - which is the only
+    // fail-closed reading of "unmeasured" - would withhold every document
+    // in every vault on upgrade, including the overwhelming majority that
+    // never used the field. The frontmatter is already IN the index:
+    // `chunker.ts`'s `packBlocks` emits a page's frontmatter block as its
+    // own chunk, verbatim, at `chunk_index = 0`. So the backfill is one
+    // table scan and a parse per document, with no vault walk and no
+    // operator action.
+    //
+    // It runs INSIDE this migration's transaction, and the reason is
+    // atomicity rather than speed: a half-filled column leaves measurable
+    // rows reading as unmeasured, which is the blackout this backfill
+    // exists to prevent, and a crash mid-pass would leave exactly that.
+    //
+    // RECORDED LIMIT: an UNTERMINATED frontmatter block is measured as
+    // `[]` rather than as NULL. The design expected NULL, and the index
+    // cannot produce it: `chunker.ts`'s `readFrontmatter` drops the
+    // opening `---` and keeps the rest as body, so chunk zero of a page
+    // with an unterminated block is byte-indistinguishable from chunk
+    // zero of a page with no frontmatter at all. It does not matter,
+    // because `parseFrontmatterText` reads an unterminated block on the
+    // REAL FILE as declaring nothing too - so the column and the live
+    // boundary at the three read roots agree, rather than one of them
+    // being wrong in private.
+    version: 12,
+    up(db) {
+      const docCols = db.query<{ name: string }, []>("PRAGMA table_info(documents)").all();
+      if (!docCols.some((c) => c.name === DOCUMENT_VISIBILITY_COLUMN)) {
+        db.exec(`ALTER TABLE documents ADD COLUMN ${DOCUMENT_VISIBILITY_COLUMN} TEXT`);
+      }
+      backfillDocumentVisibility(db);
+    },
+  },
 ]);
+
+/**
+ * The `documents` column holding what the index measured of a page's
+ * `visibility:` frontmatter. Named once: the migration, the store, the
+ * indexer and the diagnostics all spell it from here.
+ */
+export const DOCUMENT_VISIBILITY_COLUMN = "visibility";
+
+/** The measured-and-empty value, so `[]` is never written as a literal. */
+export const DOCUMENT_VISIBILITY_NONE = "[]";
+
+/** The `chunk_index` a page's frontmatter block lands at, when it has one. */
+const FRONTMATTER_CHUNK_INDEX = 0;
+
+/**
+ * Encode a page's normalised visibility tokens for the column.
+ *
+ * JSON rather than a delimited list, because a visibility token is an
+ * opaque string from a page's frontmatter and any delimiter this module
+ * chose could appear inside one - which would turn one token into two and
+ * silently change what the page declared.
+ */
+export function encodeDocumentVisibility(tokens: ReadonlyArray<string>): string {
+  return JSON.stringify(tokens);
+}
+
+/**
+ * Fill {@link DOCUMENT_VISIBILITY_COLUMN} for every row that has no value
+ * yet, from the frontmatter chunk the index already holds.
+ *
+ * A document with no chunk zero is left NULL - the index holds nothing to
+ * measure, and saying "no tokens" about it would be a claim nobody made.
+ */
+function backfillDocumentVisibility(db: Database): void {
+  const rows = db
+    .query<{ id: number; content: string | null }, [number]>(
+      `SELECT d.id AS id, c.content AS content FROM documents d ` +
+        `LEFT JOIN chunks c ON c.document_id = d.id AND c.chunk_index = ?1 ` +
+        `WHERE d.${DOCUMENT_VISIBILITY_COLUMN} IS NULL`,
+    )
+    .all(FRONTMATTER_CHUNK_INDEX);
+  if (rows.length === 0) return;
+  const update = db.query<never, [string, number]>(
+    `UPDATE documents SET ${DOCUMENT_VISIBILITY_COLUMN} = ?1 WHERE id = ?2`,
+  );
+  for (const row of rows) {
+    if (row.content === null) continue;
+    const [meta] = parseFrontmatterText(row.content);
+    update.run(encodeDocumentVisibility(pageVisibility(meta)), row.id);
+  }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The expected-object manifest
