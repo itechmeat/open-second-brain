@@ -802,69 +802,177 @@ class ProviderLifecycleTests(unittest.TestCase):
         self.assertIn("RECALLED", out)
         self.assertIn("@pf-agent", out)
 
-    def test_prefetch_uses_query_aware_search_and_carries_search_sample(self):
-        preference = {
-            "path": "Brain/preferences/pref-test.md",
-            "content": '---\nkind: brain-preference\nprinciple: "PREF RULE"\n---\n',
-        }
-        signal = {
-            "path": "Brain/inbox/sig-test.md",
-            "content": '---\nkind: brain-signal\nprinciple: "SIGNAL RULE"\n---\n',
-        }
-
-        def search(args):
-            if args.get("path_prefix"):
-                return {"structuredContent": {"results": [preference]}}
-            return {"structuredContent": {"results": [preference, signal]}}
-
+    def test_prefetch_query_reaches_the_pack_lane(self):
+        # The turn's query rides the curated lane in ranked mode, so the
+        # guard, the preference pool, the budget and the receipt all still
+        # apply. Nothing is recalled through raw brain_search.
         bridge = FakeBrainBridge(
             results={
                 "brain_recall_gate": {"structuredContent": {"retrieve": True}},
-                "brain_search": search,
-                "brain_context_pack": {"structuredContent": {"items": []}},
-                "brain_context_pack_outcome": {"structuredContent": {"recorded": True}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-ranked",
+                        "items": [{"body": "quote the enterprise tier first"}],
+                    }
+                },
             }
         )
         provider = self._init(bridge, hermes_home="/tmp/hh")
         out = provider.prefetch("which pricing rule applies", session_id="sess-1", turn_id="turn-7")
 
-        self.assertIn("PREF RULE", out)
-        self.assertIn("SIGNAL RULE", out)
-        self.assertEqual(out.count("Brain/preferences/pref-test.md"), 1)
-        self.assertNotIn("brain_context_pack", [name for name, _ in bridge.calls])
+        self.assertIn("quote the enterprise tier first", out)
+        self.assertNotIn("brain_search", [name for name, _ in bridge.calls])
+        pack_args = next(a for n, a in bridge.calls if n == "brain_context_pack")
+        self.assertEqual(pack_args["query"], "which pricing rule applies")
+        self.assertEqual(pack_args["query_mode"], "ranked")
+        self.assertEqual(pack_args["turn_id"], "turn-7")
+        self.assertEqual(pack_args["session_id"], "sess-1")
+        gate_args = next(a for n, a in bridge.calls if n == "brain_recall_gate")
+        self.assertEqual(gate_args["turn_id"], "turn-7")
+        self.assertEqual(gate_args["telemetry_host"], "hermes")
 
-        metadata = json.loads(out.split("[O2B recall metadata] ", 1)[1].split("\n", 1)[0])
-        self.assertEqual(metadata["source"], "brain_search")
-        self.assertTrue(metadata["sample_id"].startswith("hermes-search-"))
-        search_calls = [args for name, args in bridge.calls if name == "brain_search"]
-        self.assertEqual(len(search_calls), 2)
-        self.assertEqual(search_calls[0]["limit"], 3)
-        self.assertEqual(search_calls[0]["path_prefix"], "Brain/preferences/")
-        self.assertEqual(search_calls[0]["properties"], {"kind": ["brain-preference"], "_status": ["confirmed"]})
-        self.assertEqual(search_calls[1]["limit"], 5)
-        self.assertNotIn("path_prefix", search_calls[1])
-        for args in search_calls:
-            self.assertEqual(args["query"], "which pricing rule applies")
-            self.assertEqual(args["disclosure"], "full")
-            self.assertEqual(args["profile"], "thorough")
-            self.assertIs(args["record_access"], False)
-            self.assertIs(args["telemetry"], True)
-            self.assertEqual(args["session_id"], "sess-1")
-            self.assertEqual(args["turn_id"], "turn-7")
+    def test_prefetch_keeps_the_server_receipt_as_sample_id(self):
+        # The sample id an agent later posts an outcome against must be the
+        # id the server wrote a receipt under, never a locally hashed
+        # string: an id with no receipt behind it resolves to
+        # unresolved/sample_absent forever.
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-server-issued",
+                        "items": [{"body": "keep RRF"}],
+                    }
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("what did we decide", session_id="sess-1")
 
+        metadata = json.loads(out.split("[O2B context-pack metadata] ", 1)[1].split("\n", 1)[0])
+        self.assertEqual(metadata["sample_id"], "receipt-server-issued")
+        self.assertNotIn("hermes-search-", out)
+
+    def test_prefetch_surfaces_a_pack_warning_instead_of_swallowing_it(self):
+        # An injected memory that is the subject of an unresolved tension is
+        # a degraded recall. The pack names it; the provider must not drop
+        # the name on the floor.
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {
+                    "structuredContent": {
+                        "receipt_id": "receipt-warned",
+                        "items": [{"body": "always use tabs"}],
+                        "warnings": ["tension t-123 is unresolved for pref-tabs"],
+                    }
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        with self.assertLogs("plugins.hermes.provider", level="WARNING") as logs:
+            provider.prefetch("indentation", session_id="sess-1")
+        self.assertTrue(
+            any("tension t-123 is unresolved" in line for line in logs.output), logs.output
+        )
+
+    def test_prefetch_has_one_recall_lane_and_names_an_empty_one(self):
+        # There is no second lane to fall back to, and an empty pack on a
+        # gated turn says so rather than passing for a healthy injection.
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {"structuredContent": {"items": []}},
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        with self.assertLogs("plugins.hermes.provider", level="INFO") as logs:
+            out = provider.prefetch("what did we decide", session_id="sess-1")
+        self.assertNotIn("brain_search", [name for name, _ in bridge.calls])
+        self.assertNotIn("[O2B context-pack metadata]", out)
+        self.assertTrue(
+            any("brain_context_pack" in line for line in logs.output), logs.output
+        )
+
+    def test_prefetch_budget_holds_for_cyrillic_and_cjk(self):
+        # The budget is a TOKEN budget the server enforces, not a character
+        # budget guessed in Python at four bytes per token - a ratio that is
+        # wrong by 2x to 4x on Cyrillic and CJK. Nothing is cut locally, and
+        # the declared budget travels with the request.
+        for script, body in (
+            ("cyrillic", "\u043f\u0440\u0430\u0432\u0438\u043b\u043e " * 800),
+            ("cjk", "\u5b9a\u4ef7\u89c4\u5219" * 1200),
+        ):
+            with self.subTest(script=script):
+                bridge = FakeBrainBridge(
+                    results={
+                        "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                        "brain_context_pack": {
+                            "structuredContent": {
+                                "receipt_id": "receipt-" + script,
+                                "items": [{"body": body}],
+                            }
+                        },
+                    }
+                )
+                provider = self._init(bridge, hermes_home="/tmp/hh")
+                out = provider.prefetch("q", session_id="sess-1")
+                self.assertIn(body, out)
+                pack_args = next(a for n, a in bridge.calls if n == "brain_context_pack")
+                self.assertEqual(pack_args["max_tokens"], 1024)
+
+    def test_prefetch_keeps_a_plain_note_body_intact(self):
+        # Regression for the deleted `_recall_body`: it scanned every line of
+        # a result for one beginning `principle:` and returned that value
+        # alone, so an ordinary note carrying such a line in its BODY was
+        # reduced to it and the rest was silently deleted.
+        body = (
+            "principle: never ship on friday\n"
+            "We tried it twice and both rollbacks landed on a weekend."
+        )
+        bridge = FakeBrainBridge(
+            results={
+                "brain_recall_gate": {"structuredContent": {"retrieve": True}},
+                "brain_context_pack": {
+                    "structuredContent": {"receipt_id": "receipt-plain", "items": [{"body": body}]}
+                },
+            }
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        out = provider.prefetch("deployments", session_id="sess-1")
+        self.assertIn("We tried it twice and both rollbacks landed on a weekend.", out)
+
+    def test_outcome_list_is_not_silently_host_filtered(self):
+        # `host` is a READ filter for list/summary, so defaulting it there
+        # would narrow an agent's query to hermes rows without saying so.
+        # The correlation defaults belong to `post` alone.
+        bridge = FakeBrainBridge(
+            results={"brain_context_pack_outcome": {"structuredContent": {"rows": []}}}
+        )
+        provider = self._init(bridge, hermes_home="/tmp/hh")
+        provider.handle_tool_call("brain_context_pack_outcome", {"operation": "list"})
+        provider.handle_tool_call("brain_context_pack_outcome", {"operation": "summary"})
         provider.handle_tool_call(
             "brain_context_pack_outcome",
-            {
-                "operation": "post",
-                "sample_id": metadata["sample_id"],
-                "first_pass_success": True,
-            },
+            {"operation": "post", "sample_id": "s", "first_pass_success": True},
         )
-        outcome_args = next(a for n, a in bridge.calls if n == "brain_context_pack_outcome")
-        self.assertEqual(outcome_args["sample_id"], metadata["sample_id"])
-        self.assertIs(outcome_args["first_pass_success"], True)
-        self.assertEqual(outcome_args["host"], "hermes")
-        self.assertEqual(outcome_args["session_id"], "sess-1")
+        reads = [
+            a
+            for n, a in bridge.calls
+            if n == "brain_context_pack_outcome" and a["operation"] in ("list", "summary")
+        ]
+        self.assertEqual(len(reads), 2)
+        for args in reads:
+            self.assertNotIn("host", args)
+            self.assertNotIn("session_id", args)
+        posted = next(
+            a
+            for n, a in bridge.calls
+            if n == "brain_context_pack_outcome" and a["operation"] == "post"
+        )
+        self.assertEqual(posted["host"], "hermes")
+        self.assertEqual(posted["session_id"], "sess-1")
 
     def test_prefetch_exposes_receipt_and_agent_posts_structured_outcome(self):
         bridge = FakeBrainBridge(
@@ -895,7 +1003,16 @@ class ProviderLifecycleTests(unittest.TestCase):
             )
 
         self.assertIn('"sample_id": "receipt-1"', out)
+        # Names the lane under test: an unregistered fake tool answers `{}`,
+        # so a pin that only asserts on the OUTPUT can keep passing while the
+        # provider quietly recalls through something else.
+        self.assertEqual(
+            [n for n, _ in bridge.calls if n in ("brain_context_pack", "brain_search")],
+            ["brain_context_pack"],
+        )
+        self.assertIn("[O2B context-pack metadata] ", out)
         pack_args = next(a for n, a in bridge.calls if n == "brain_context_pack")
+        self.assertEqual(pack_args["query_mode"], "ranked")
         self.assertIs(pack_args["receipt"], True)
         self.assertEqual(pack_args["receipt_host"], "hermes")
         self.assertIs(pack_args["telemetry"], True)
@@ -924,6 +1041,11 @@ class ProviderLifecycleTests(unittest.TestCase):
         provider = self._init(bridge, hermes_home="/tmp/hh")
         provider.prefetch("what did we decide", session_id="sess-1")
         provider.prefetch("tell me something else", session_id="sess-1")
+        # Both turns recalled through the shipped lane, and neither posted.
+        self.assertEqual(
+            [n for n, _ in bridge.calls if n in ("brain_context_pack", "brain_search")],
+            ["brain_context_pack", "brain_context_pack"],
+        )
         self.assertEqual(
             [name for name, _ in bridge.calls if name == "brain_context_pack_outcome"], []
         )
@@ -954,8 +1076,10 @@ class ProviderLifecycleTests(unittest.TestCase):
             provider.prefetch("我之前说过，不对", session_id="sess-1")
 
         self.assertEqual(gate_calls, 3)
+        # The one gated turn ran on the context-pack lane, and no search lane
+        # exists to absorb the multilingual turns instead.
         self.assertEqual(
-            [name for name, _ in bridge.calls if name == "brain_context_pack"],
+            [n for n, _ in bridge.calls if n in ("brain_context_pack", "brain_search")],
             ["brain_context_pack"],
         )
         self.assertEqual(

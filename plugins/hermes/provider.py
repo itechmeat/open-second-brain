@@ -13,7 +13,6 @@ and the optional readback hook ``get_status_config`` are added alongside.
 from __future__ import annotations
 
 import atexit
-import hashlib
 import json
 import logging
 import os
@@ -143,9 +142,17 @@ def _resolved_config_values() -> dict[str, str]:
 # Durable per-session transcript written under ``hermes_home``.
 SESSION_TRANSCRIPT_FILENAME = "session-transcript.jsonl"
 
-# Token budget for the recall slice fetched on each prefetch.
+# Token budget for the recall slice fetched on each prefetch. Enforced
+# SERVER-side by `brain_context_pack`, which estimates tokens against the
+# bodies it emits; the provider never re-spends it as a character budget,
+# because the four-bytes-per-token heuristic that would take is wrong by two
+# to four times on Cyrillic and CJK vaults.
 _PREFETCH_MAX_TOKENS = 1024
 _PREFETCH_RECEIPT_HOST = "hermes"
+# How `brain_context_pack` reads the turn: order the curated candidates by
+# relevance rather than filtering them, so a natural-language turn spends the
+# budget on what matters instead of substring-missing every page.
+_PREFETCH_QUERY_MODE = "ranked"
 
 # A provider instance is created per AIAgent, but the MCP server is a gateway
 # resource rather than a session resource. Keep one bridge per effective server
@@ -288,7 +295,6 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         self._lock = threading.Lock()
         self._sync_threads: list[threading.Thread] = []
         self._queued_query: str = ""
-        self._prefetch_sequence = 0
 
 
     # -- required surface ----------------------------------------------------
@@ -495,7 +501,12 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             # Enforce the curated surface at execution time, not just discovery.
             raise BridgeError(f"unsupported memory tool: {tool_name}")
         forward_args = dict(args or {})
-        if tool_name == "brain_context_pack_outcome":
+        # Correlation defaults for the outcome POST only. `host` and
+        # `session_id` are also READ filters on list/summary, so supplying
+        # them there would narrow an agent's query to this host's rows
+        # without ever telling it - the "narrowed without saying so" failure
+        # the architecture notes call out by name.
+        if tool_name == "brain_context_pack_outcome" and forward_args.get("operation") == "post":
             forward_args.setdefault("host", _PREFETCH_RECEIPT_HOST)
             if self._session_id:
                 forward_args.setdefault("session_id", self._session_id)
@@ -611,6 +622,23 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         receipt_id = structured.get("receipt_id")
         return str(receipt_id) if receipt_id else None
 
+    def _log_pack_warnings(self, pack: Any) -> None:
+        """Surface the pack's own warnings; a degraded recall must name itself.
+
+        `brain_context_pack` reports injection-time tension warnings and the
+        owner-scope observation. They describe the material about to enter the
+        prompt - a memory that is the subject of an unresolved contradiction,
+        for one - and are for the operator, not the model, so they go to the
+        log rather than into the injected text.
+        """
+        warnings = self._structured(pack).get("warnings")
+        if not isinstance(warnings, list):
+            return
+        for warning in warnings:
+            text = str(warning).strip()
+            if text:
+                logger.warning("%s: brain_context_pack: %s", self.PROVIDER_NAME, text)
+
     def system_prompt_block(self) -> str:
         """Static provider context: the current active-preferences body."""
         result = self._safe_call("brain_context", {})
@@ -622,13 +650,19 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         The recall gate decides whether a retrieval runs; the identity reminder
         (the behaviour the retired ``pre_llm_call`` hook used to provide) is
         always appended when an agent identity is configured.
+
+        Recall has exactly ONE lane, ``brain_context_pack``, and the turn's
+        query rides it in ranked mode. That lane is where the prompt-injection
+        guard, the curated preference pool, the tombstone and supersession-tip
+        filters, owner-scope delivery, the enforced token budget, and the
+        server-issued receipt live; a raw ``brain_search`` recall would have
+        query-awareness and none of them. There is no second lane and no
+        fallback: a lane that fails says so through ``_safe_call`` and this
+        turn is injected nothing.
         """
         parts: list[str] = []
         sid = session_id or self._session_id
         turn_id = str(_kwargs.get("turn_id") or "")
-        with self._lock:
-            self._prefetch_sequence += 1
-            sequence = self._prefetch_sequence
         gate_args: dict[str, Any] = {
             "prompt": query,
             "telemetry_host": _PREFETCH_RECEIPT_HOST,
@@ -639,72 +673,51 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
             gate_args["turn_id"] = turn_id
         gate = self._structured(self._safe_call("brain_recall_gate", gate_args))
         if gate.get("retrieve"):
-            common_search_args: dict[str, Any] = {
-                "query": query,
-                "disclosure": "full",
-                "profile": "thorough",
-                "record_access": False,
+            pack_args: dict[str, Any] = {
+                "max_tokens": _PREFETCH_MAX_TOKENS,
+                "receipt": True,
+                "receipt_host": _PREFETCH_RECEIPT_HOST,
                 "telemetry": True,
                 "telemetry_host": _PREFETCH_RECEIPT_HOST,
             }
+            # Ranked mode ORDERS the curated candidates by relevance to this
+            # turn and excludes none, so the budget decides what is dropped.
+            # The server refuses a mode with no query, so both travel or
+            # neither does.
+            if query.strip():
+                pack_args["query"] = query
+                pack_args["query_mode"] = _PREFETCH_QUERY_MODE
             if sid:
-                common_search_args["session_id"] = sid
+                pack_args["session_id"] = sid
             if turn_id:
-                common_search_args["turn_id"] = turn_id
-            preference_args = {
-                **common_search_args,
-                "limit": 3,
-                "path_prefix": "Brain/preferences/",
-                "properties": {"kind": ["brain-preference"], "_status": ["confirmed"]},
-            }
-            ordinary_args = {**common_search_args, "limit": 5}
-            search_results = [
-                self._structured(self._safe_call("brain_search", preference_args)),
-                self._structured(self._safe_call("brain_search", ordinary_args)),
-            ]
-            recalled = self._search_text(search_results)
-            sample_id = None
-            # A healthy brain_search no-match is an honest abstention. Only
-            # fall back to the legacy pack when the search surface itself is
-            # unavailable (old server/schema or a bridge that returned no
-            # structured search contract), so a generic active pack cannot
-            # masquerade as a match for the current prompt.
-            search_surface_available = any(
-                "results" in result or "cards" in result for result in search_results
-            )
-            if recalled:
-                sample_id = self._search_sample_id(query, sid, turn_id, sequence)
-            elif not search_surface_available:
-                pack = self._safe_call(
-                    "brain_context_pack",
-                    {
-                        "max_tokens": _PREFETCH_MAX_TOKENS,
-                        "receipt": True,
-                        "receipt_host": _PREFETCH_RECEIPT_HOST,
-                        "telemetry": True,
-                        "telemetry_host": _PREFETCH_RECEIPT_HOST,
-                        **({"session_id": sid} if sid else {}),
-                    },
-                )
-                recalled = self._context_pack_text(pack)
-                sample_id = self._receipt_id(pack)
+                pack_args["turn_id"] = turn_id
+            pack = self._safe_call("brain_context_pack", pack_args)
+            self._log_pack_warnings(pack)
+            recalled = self._context_pack_text(pack)
             if recalled:
                 parts.append(recalled)
-                if sample_id:
+                receipt_id = self._receipt_id(pack)
+                if receipt_id:
                     parts.append(
-                        "[O2B recall metadata] "
+                        "[O2B context-pack metadata] "
                         + json.dumps(
                             {
-                                "sample_id": sample_id,
-                                "source": "brain_search"
-                                if search_surface_available
-                                else "brain_context_pack",
+                                "sample_id": receipt_id,
                                 "outcome": "unknown_until_explicit_tool_call",
                                 "tool": "brain_context_pack_outcome",
                             },
                             ensure_ascii=False,
                         )
                     )
+            else:
+                # A gated turn that recalls nothing is a fact worth stating:
+                # on an empty vault it is normal, and after a failed bridge
+                # call it is the second half of the warning `_safe_call`
+                # already emitted. Either way it is not a silent no-op.
+                logger.info(
+                    "%s: brain_context_pack returned no recall for a gated turn",
+                    self.PROVIDER_NAME,
+                )
         # Skill auto-attach (Agent Surface Suite): the TS side gates on the
         # skill_auto_attach config key and returns an empty block when off,
         # so the default injection stays byte-identical. Fail-soft like every
@@ -859,13 +872,6 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         return ""
 
     @staticmethod
-    def _search_sample_id(query: str, session_id: str, turn_id: str, sequence: int) -> str:
-        """Return a non-reversible sample id for a semantic search injection."""
-        material = "\0".join((session_id, turn_id or str(sequence), query))
-        digest = hashlib.sha256(material.encode("utf-8")).hexdigest()
-        return f"hermes-search-{digest}"
-
-    @staticmethod
     def _context_pack_text(result: Any) -> str:
         """Recall text from ``brain_context_pack``: prefer structured bodies.
 
@@ -888,47 +894,6 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
                 if isinstance(item, dict) and str(item.get("body") or "").strip()
             )
         return OpenSecondBrainMemoryProvider._text(result)
-
-    @staticmethod
-    def _recall_body(text: str) -> str:
-        """Prefer a complete frontmatter principle over a cut-off search body."""
-        for line in text.splitlines():
-            if not line.startswith("principle:"):
-                continue
-            value = line.partition(":")[2].strip()
-            if value.startswith('"') and value.endswith('"'):
-                try:
-                    return str(json.loads(value))
-                except json.JSONDecodeError:
-                    pass
-            return value.strip("'")
-        return text.strip()
-
-    @staticmethod
-    def _search_text(results: Iterable[dict[str, Any]]) -> str:
-        """Format preference-first semantic search without expanding the budget."""
-        blocks: list[str] = []
-        seen_paths: set[str] = set()
-        for result in results:
-            rows = result.get("results") or result.get("cards")
-            if not isinstance(rows, list):
-                continue
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                path = row.get("path")
-                text = row.get("content") or row.get("snippet")
-                if not isinstance(text, str) or not text.strip():
-                    continue
-                if isinstance(path, str) and path:
-                    if path in seen_paths:
-                        continue
-                    seen_paths.add(path)
-                    prefix = f"[{path}]\n"
-                else:
-                    prefix = ""
-                blocks.append(prefix + OpenSecondBrainMemoryProvider._recall_body(text))
-        return "\n\n".join(blocks)[: _PREFETCH_MAX_TOKENS * 4]
 
     def _append_turn(self, user: str, assistant: str, session_id: str) -> None:
         with self._lock:
