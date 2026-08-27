@@ -38,6 +38,7 @@ import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
 import { isoSecond } from "../../core/brain/time.ts";
@@ -327,7 +328,16 @@ async function toolBrainClusters(
     // visible half of a link graph would produce different communities
     // for every caller and write them over each other. This filters what
     // the CALLER is told, which is the boundary the gate declares.
-    const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+    // Both rules, ANDed: a community naming a page EITHER rule withholds
+    // is dropped whole. The reserved-token half arrived with the read
+    // roots; the argument above for dropping rather than trimming is the
+    // same for it, and detection stays vault-wide for the same reason -
+    // clustering the visible half of a link graph would produce different
+    // communities per caller and write them over each other.
+    const view = everyArtifactRefView(
+      gatedOwnerScopeView(ctx.vault, ctx.agentName),
+      reachView(ctx.vault, contextReach(ctx)),
+    );
     const visible = view.keep(communities, (c) => c.members.map((m) => m.path));
     // `written` / `removed` are the cluster NOTES, and a cluster note is
     // named `cluster-<community id>.md` after the seed page - so its own
@@ -345,11 +355,11 @@ async function toolBrainClusters(
       })),
       written: materialized.written.filter((p) => visibleNotes.has(p)),
       // A removal names a community that no longer exists, so there is
-      // no surviving membership to ask about. Under a scope the list is
-      // withheld whole: it is the one field here whose subject cannot be
-      // resolved, and a `removed` entry naming a hidden seed is the same
-      // disclosure as a `written` one.
-      removed: view.scope === null ? materialized.removed : [],
+      // no surviving membership to ask about. Whenever ANY rule is live
+      // the list is withheld whole: it is the one field here whose
+      // subject cannot be resolved, and a `removed` entry naming a hidden
+      // seed is the same disclosure as a `written` one.
+      removed: view.filtersNothing ? materialized.removed : [],
       ...(materialized.batches ? { batches: materialized.batches } : {}),
     };
   } finally {
