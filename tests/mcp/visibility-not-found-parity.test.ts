@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
+import { writeSignal } from "../../src/core/brain/signal.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../src/core/graph/visibility.ts";
@@ -35,6 +36,7 @@ import { search } from "../../src/core/search/search.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
 import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
 /** HOME is pinned per file by convention; nothing pins it globally. */
@@ -77,6 +79,24 @@ beforeEach(async () => {
     },
     { deviceId: "" },
   );
+  // Two signals on the shared topic, one of them reserved: the topic
+  // read is entitled, so the reserved ROW has to disappear from it - and
+  // from the count the telemetry writes about it.
+  for (const [slug, reserved] of [
+    [`${SHARED_TOPIC}-open`, false],
+    [`${MARKER}-sig`, true],
+  ] as ReadonlyArray<readonly [string, boolean]>) {
+    const res = writeSignal(vault, {
+      topic: SHARED_TOPIC,
+      signal: "positive",
+      agent: "tester",
+      principle: `principle for ${slug}`,
+      created_at: "2026-05-01T00:00:00Z",
+      date: "2026-05-01",
+      slug,
+    });
+    if (reserved) reserveFile(res.path);
+  }
   // A vault page for the chunk-id half, and an ordinary one beside it so
   // the query has something to match either way.
   writeFileSync(join(vault, "open.md"), `# Open\n\nshared ${QUERY} here`);
@@ -102,7 +122,11 @@ function makePref(slug: string, topic?: string): void {
 
 /** Add the reserved token to an existing preference's frontmatter. */
 function reserve(id: string): void {
-  const path = join(brainDirs(vault).preferences, `${id}.md`);
+  reserveFile(join(brainDirs(vault).preferences, `${id}.md`));
+}
+
+/** Add the reserved token to the frontmatter of the page at `path`. */
+function reserveFile(path: string): void {
   const text = readFileSync(path, "utf8");
   const end = text.indexOf("\n---", 3);
   if (end === -1) throw new Error(`no frontmatter block in ${path}`);
@@ -215,6 +239,39 @@ describe("brain_query mode=preference", () => {
 
   test("the same preference is returned at local reach", async () => {
     expect(await ask(`pref-${MARKER}-r`, TRANSPORT_REACH.local)).toBe("returned");
+  });
+
+  test("topic-mode telemetry counts the rows the caller was SHOWN", async () => {
+    // The count is written to the vault's recall-telemetry log and handed
+    // back verbatim by `brain_recall_telemetry`, so a pre-filter number
+    // is a count oracle reached through a second tool. The `since` branch
+    // recounted after filtering; the topic branch did not.
+    const ctx: ServerContext = {
+      vault,
+      reach: TRANSPORT_REACH.remote,
+      configPath: null,
+      repoRoot: null,
+    };
+    const out = (await brainQuery().handler(ctx, {
+      topic: SHARED_TOPIC,
+      telemetry: true,
+    })) as { signals: unknown[]; all_log_events: unknown[] };
+    const shown = out.signals.length + out.all_log_events.length;
+    const records = listRecallTelemetry(vault, { mode: "query" });
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.at(-1)!.payload["result_count"]).toBe(shown);
+  });
+
+  test("that topic really does have a row to withhold, so the count above is not trivially equal", async () => {
+    const rows = async (reach: TransportReach): Promise<number> => {
+      const ctx: ServerContext = { vault, reach, configPath: null, repoRoot: null };
+      const out = (await brainQuery().handler(ctx, { topic: SHARED_TOPIC })) as {
+        signals: unknown[];
+        all_log_events: unknown[];
+      };
+      return out.signals.length + out.all_log_events.length;
+    };
+    expect(await rows(TRANSPORT_REACH.local)).toBeGreaterThan(await rows(TRANSPORT_REACH.remote));
   });
 });
 

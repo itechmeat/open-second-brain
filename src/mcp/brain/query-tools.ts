@@ -221,7 +221,14 @@ async function toolBrainQuery(
         transportReach: contextReach(ctx),
         ...(asOf !== null ? { now: asOf } : {}),
       });
-      const resultCount = res.signals.length + res.all_log_events.length;
+      // Filter BEFORE the count, as the `since` branch below does. The
+      // count is written to the vault's recall-telemetry log and handed
+      // back verbatim by `brain_recall_telemetry`, so a pre-filter number
+      // tells the caller how many rows it was not shown - a count oracle
+      // reached through a second tool rather than this one.
+      const signals = queryView.keep(res.signals, (sig) => [sig.id]);
+      const logEvents = queryView.keep(res.all_log_events, (e) => logEntryArtifactRefs(e));
+      const resultCount = signals.length + logEvents.length;
       emitQueryTelemetry(resultCount > 0 ? "ok" : "empty", resultCount);
       const topicPrefOwner = res.preference?.owner;
       const topicPrefVisible =
@@ -231,11 +238,9 @@ async function toolBrainQuery(
       return {
         mode: "topic",
         topic,
-        signals: queryView.keep(res.signals, (sig) => [sig.id]).map(serializeSignal),
+        signals: signals.map(serializeSignal),
         preference: topicPrefVisible ? serializePreference(res.preference!) : null,
-        all_log_events: queryView
-          .keep(res.all_log_events, (e) => logEntryArtifactRefs(e))
-          .map(serializeLogEntry),
+        all_log_events: logEvents.map(serializeLogEntry),
       };
     }
 

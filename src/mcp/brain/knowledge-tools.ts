@@ -215,12 +215,25 @@ async function toolBrainBridges(
     } catch {
       // Metrics are observability, not correctness.
     }
+    // Root closure over what the CALLER is told. Detection stays
+    // vault-wide - a bridge proposed from the visible half of a link
+    // graph would differ per caller and the proposals are written to one
+    // shared artifact - so the walk is unfiltered, the write is
+    // unfiltered, and the response is not. A proposal names two pages by
+    // path, so one withheld end withholds the proposal WHOLE: a bridge
+    // reported with one end missing is not a narrower true finding but a
+    // false one. `scanned_candidates` is a corpus size that names nothing
+    // and is the same number at every reach, so it stays as measured.
+    //
+    // `list` reads the artifact this branch just wrote, and asks the rule
+    // over the FILE - which is why writing it unfiltered is safe here.
+    const view = reachView(ctx.vault, contextReach(ctx));
     return {
       vec_available: report.vecAvailable,
       ...(report.reason !== undefined ? { reason: report.reason } : {}),
       scanned_candidates: report.scannedCandidates,
-      proposals: report.proposals,
-      artifact: "Brain/proposals/bridges.md",
+      proposals: report.proposals.filter((p) => view.row(p.source, p.target)),
+      artifact: join(BRAIN_PROPOSALS_REL, BRIDGE_PROPOSALS_FILE),
     };
   } finally {
     await store.close();

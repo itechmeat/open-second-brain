@@ -188,10 +188,17 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     kind: K.mcpTool,
     category: C.covered,
     reason:
-      "the list mode readFileSyncs Brain/proposals/bridges.md by path rather than through a read " +
-      "root, so it asks reachView at the site of the read and a reserved proposals page answers " +
-      "exactly as an absent one does - registered as a guarded direct vault read by the " +
-      "root-closure sweep in the architecture census.",
+      "BOTH modes, because classifying the tool off the list mode alone was the registry making " +
+      "a claim the tool did not hold. The list mode readFileSyncs Brain/proposals/bridges.md by " +
+      "path rather than through a read root, so it asks reachView at the site of the read and a " +
+      "reserved proposals page answers exactly as an absent one does - registered as a guarded " +
+      "direct vault read by the root-closure sweep in the architecture census. The discover mode " +
+      "returned discoverBridges()'s proposals verbatim, each naming two pages by path off the " +
+      "vec index, which keeps reserved pages by design (the column reports, it does not " +
+      "exclude); it now drops a proposal WHOLE when either end is withheld. Detection stays " +
+      "vault-wide and the shared artifact is still written unfiltered - a bridge proposed from " +
+      "the visible half of a link graph would differ per caller - so the rule is applied to what " +
+      "the caller is told, which is the same shape brain_clusters run uses.",
   },
   {
     surface: "brain_clusters",
