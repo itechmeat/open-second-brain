@@ -141,6 +141,56 @@ describe("visibility scoping in search", () => {
     expect(out.results.every((r) => r.path.startsWith("public-"))).toBe(true);
   });
 
+  test("the retrieval trail never counts what the reserved-token rule withheld", async () => {
+    // The trail answers "did MY scope remove my results". The reach rule
+    // is not a scope the caller requested, so a count of its drops would
+    // tell this caller that pages it may not read matched its query -
+    // the existence oracle a withheld page is supposed to be free of.
+    writeMd(vault, "reserved.md", "---\nvisibility: [private]\n---\nlattice widget reserved");
+    writeMd(vault, "open.md", "# Open\n\nlattice widget open");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const remote = await search(cfg, { query: "lattice widget", limit: 10 });
+    expect(remote.results.map((r) => r.path)).toEqual(["open.md"]);
+    const codes = (remote.retrievalTrail?.degraded ?? []).map((d) => d.code);
+    expect(codes).not.toContain("scope-filters-dropped-rows");
+
+    // The local half is the control: the same corpus reaches both pages
+    // once the caller's own scope names the token too - the reach rule
+    // and the caller-scope rule are independent, and BOTH have to admit
+    // the page. Still nothing to report as narrowing.
+    const local = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      visibility: [REMOTE_DENY_VISIBILITY_TOKEN],
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(local.results.map((r) => r.path).toSorted()).toEqual(["open.md", "reserved.md"]);
+    expect((local.retrievalTrail?.degraded ?? []).map((d) => d.code)).not.toContain(
+      "scope-filters-dropped-rows",
+    );
+  });
+
+  test("a scope the caller DID request is still reported as narrowing", async () => {
+    // The counterweight to the test above: removing the reach drop from
+    // the trail must not silence the narrowing the trail exists for.
+    writeMd(vault, "team.md", "---\nvisibility: [team]\n---\nlattice widget team");
+    writeMd(vault, "open.md", "# Open\n\nlattice widget open");
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const out = await search(cfg, {
+      query: "lattice widget",
+      limit: 10,
+      visibility: ["some-other-token"],
+    });
+    expect(out.results.map((r) => r.path)).toEqual(["open.md"]);
+    expect((out.retrievalTrail?.degraded ?? []).map((d) => d.code)).toContain(
+      "scope-filters-dropped-rows",
+    );
+  });
+
   test("an all-untagged vault is unaffected by the default scope", async () => {
     writeMd(vault, "a.md", "# A\n\nlattice alpha");
     writeMd(vault, "b.md", "# B\n\nlattice beta");

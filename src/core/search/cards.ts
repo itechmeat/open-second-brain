@@ -7,7 +7,7 @@
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
 import { isPathOwnerVisible, isPathReadableAtReach } from "./result-filters.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { markWindow, matchOffset, toCodePointOffset, windowStartWithin } from "./snippet-window.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -151,7 +151,7 @@ export async function expandHit(
     throw new SearchError("INVALID_INPUT", "chunkId must be a positive integer");
   }
   const agentScope = normalizeAgentScope(input.agentScope);
-  const reach = input.transportReach ?? TRANSPORT_REACH.remote;
+  const reach = resolvedTransportReach(input.transportReach);
   const store = await Store.open(config, { mode: "read" });
   try {
     const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);

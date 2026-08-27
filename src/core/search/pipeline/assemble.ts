@@ -96,6 +96,7 @@ export interface AssemblyInput {
 
 interface Assembly {
   readonly preVisibility: number;
+  readonly prePoolFilters: number;
   readonly visible: ReadonlyArray<BrainSearchResult>;
   /** Whether the cap truncated the pool, as opposed to the pool running out. */
   readonly capHit: boolean;
@@ -326,8 +327,9 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // candidate list:
   //
   //  - default-scope visibility (no explicit filter, so no overfetch
-  //    above) drops tagged pages; untagged vaults never drop a row, so
-  //    this never fires for them,
+  //    above) drops tagged pages, and the reserved-token rule drops pages
+  //    reserved against this caller's reach; untagged vaults never drop a
+  //    row, so this never fires for them,
   //  - the exact-duplicate merge folds byte-identical passages away.
   //
   // In either case, and only when the narrow cap was actually hit (as
@@ -336,7 +338,7 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // fetch. A pool with no dropped and no merged rows never re-assembles,
   // so its results stay byte-identical.
   const visibilityDropped =
-    !filters.canDropRows && assembled.visible.length < assembled.preVisibility;
+    !filters.canDropRows && assembled.visible.length < assembled.prePoolFilters;
   if (
     assembled.visible.length < limit &&
     assembled.capHit &&
@@ -375,9 +377,12 @@ function noteAssemblyNarrowings(
       dropped: assembled.floorDropped,
     });
   }
-  // `preVisibility` is the row count before visibility, ownership and the
-  // composite session/project scope ran. The difference is the answer to
-  // "did a scope remove my results", which nothing could ask before.
+  // `preVisibility` is the row count before the visibility, ownership and
+  // composite session/project scopes the CALLER requested ran - the reach
+  // rule is already counted out of it. The difference is the answer to
+  // "did a scope remove my results", which nothing could ask before; the
+  // reach rule is not one of those scopes, and its drop count is withheld
+  // rather than published (see `pipeline/pool-filters.ts`).
   const scoped = assembled.preVisibility - assembled.visible.length;
   if (scoped > 0) {
     noteDegradation(sink, RETRIEVAL_DEGRADATION.scopeFiltersDroppedRows, {

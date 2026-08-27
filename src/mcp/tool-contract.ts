@@ -12,7 +12,7 @@
  * single downward dependency direction.
  */
 
-import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../core/graph/transport-reach.ts";
 import type { OutputSchema } from "./output-contract.ts";
 import type { ArtifactStore } from "./artifact-store.ts";
 import type { ProgressSink } from "../core/brain/progress.ts";
@@ -196,5 +196,5 @@ export interface ToolDefinition {
  * vocabulary, and `owner-scope-view.ts` for an unresolved owner.
  */
 export function contextReach(ctx: ServerContext): TransportReach {
-  return ctx.reach ?? TRANSPORT_REACH.remote;
+  return resolvedTransportReach(ctx.reach);
 }

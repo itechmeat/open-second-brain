@@ -9,7 +9,7 @@
 
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../../graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../../graph/transport-reach.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
 import {
   applyAgentScope,
@@ -17,6 +17,7 @@ import {
   applyPropertyFilter,
   applyScopeFilter,
   applyStatusFilter,
+  applyReachFilter,
   applyVisibilityScope,
   type FrontmatterCache,
 } from "../result-filters.ts";
@@ -70,7 +71,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
   // one-shot backfill is what widens the pool when it actually happens.
   // Folding it in would make every remote search overfetch up front,
   // including in the vaults that never wrote the token.
-  const reach = opts.transportReach ?? TRANSPORT_REACH.remote;
+  const reach = resolvedTransportReach(opts.transportReach);
   // Agent-ownership scope (Unit 5): null means "no scope requested" -
   // no ownership filtering, so untagged vaults stay byte-identical.
   const agentScope = normalizeAgentScope(opts.agentScope);
@@ -107,13 +108,32 @@ export interface FilterContext {
 
 export interface FilteredPool {
   /**
-   * Row count before visibility scoping, for the backfill decision - and,
-   * since evidence-at-the-boundary C2, for the retrieval trail: the gap
-   * between this and `visible` is the only evidence that an owner,
-   * visibility or session scope removed the answer rather than the vault
-   * holding no match.
+   * Row count after the reach rule and before every CALLER-REQUESTED
+   * scope. Since evidence-at-the-boundary C2 this is the retrieval
+   * trail's baseline: the gap between it and `visible` is the only
+   * evidence that an owner, visibility or session scope removed the
+   * answer rather than the vault holding no match.
+   *
+   * The reserved-token rule is counted OUT of it. That rule is not a
+   * scope the caller requested, and publishing how many rows it removed
+   * would tell the caller that pages it may not read matched its query -
+   * which is the existence oracle the boundary exists to close. Use
+   * {@link FilteredPool.prePoolFilters} for anything that must see the
+   * whole drop and does not report it.
    */
   readonly preVisibility: number;
+  /**
+   * Row count before ANY post-rank filter that can shrink the window,
+   * the reach rule included.
+   *
+   * Exists for the assembly's one-shot backfill, which has to widen the
+   * rank cap whenever the window shrank for a reason the caller did not
+   * ask for - and a reserved page crowding the cap is exactly that. It
+   * is deliberately NOT the trail's baseline: the backfill consumes this
+   * number to fetch more rows and never reports it, so it discloses
+   * nothing, while the trail publishes its baseline verbatim.
+   */
+  readonly prePoolFilters: number;
   readonly visible: ReadonlyArray<BrainSearchResult>;
 }
 
@@ -142,10 +162,21 @@ export function applyPoolFilters(
     filters.degreeFilters.length > 0
       ? applyDegreeFilter(propFiltered, filters.degreeFilters, ctx.store)
       : propFiltered;
-  const visible = applyVisibilityScope(
+  // Root A, and it runs BEFORE the trail's baseline is taken. The
+  // caller's own scopes are counted below, because "did my scope remove
+  // my results" is a question the caller may ask about a filter it
+  // requested; the reserved-token rule is not one of those, and a count
+  // of what it withheld would say "there is one more page here than I am
+  // showing you" - the existence oracle the boundary exists to close.
+  const reachable = applyReachFilter(
     degreeFiltered,
-    filters.visibilityScope,
     filters.reach,
+    ctx.vault,
+    ctx.frontmatterCache,
+  );
+  const visible = applyVisibilityScope(
+    reachable,
+    filters.visibilityScope,
     ctx.vault,
     ctx.frontmatterCache,
   );
@@ -162,5 +193,14 @@ export function applyPoolFilters(
     filters.scopeFilter !== null
       ? applyScopeFilter(scoped, filters.scopeFilter, ctx.vault, ctx.frontmatterCache)
       : scoped;
-  return { preVisibility: degreeFiltered.length, visible: compositeScoped };
+  // Two counts, and the split is the whole point: the trail subtracts
+  // from the pool AFTER the reach rule, so the number it publishes is
+  // exactly what the caller's own arguments removed, while the backfill
+  // subtracts from the pool BEFORE it, so a reserved page crowding the
+  // rank cap still widens the window rather than emptying it.
+  return {
+    preVisibility: reachable.length,
+    prePoolFilters: degreeFiltered.length,
+    visible: compositeScoped,
+  };
 }

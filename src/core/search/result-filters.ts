@@ -253,36 +253,56 @@ export function applyDegreeFilter(
 }
 
 /**
- * The one place the visibility rule meets a ranked result set.
+ * The reserved-token rule over a ranked result set: root A.
  *
- * TWO questions over one frontmatter read, and they compose in one
- * direction only:
+ * Separate from {@link applyVisibilityScope}, and the separation is
+ * load-bearing rather than tidy. The two answer different questions -
+ * this one "may a caller at this REACH see the page at all", that one
+ * "does the caller's requested scope reach the page's tags" - and only
+ * the second is a filter the CALLER asked for. The retrieval trail
+ * reports how many rows the caller's own scopes removed, so a reach drop
+ * counted on that side would hand the caller the number of pages it was
+ * withheld from, which is the existence oracle this boundary exists to
+ * close. Running first, and being counted out before the trail's
+ * baseline is taken, is what makes a withheld page indistinguishable
+ * from an absent one.
  *
- *   - {@link isRemotelyReadable} - may a caller at this REACH see the
- *     page at all? Deny-by-default for the reserved token, and the
- *     caller's `scope` cannot lift it.
- *   - {@link isVisible} - does the caller's requested `scope` reach the
- *     page's tags? Unchanged, and still caller-liftable for every
- *     non-reserved token.
+ * The per-path verdict is {@link isPathReadableAtReach}, so this pass
+ * and the by-chunk-id drill-down cannot drift on what "reserved" means -
+ * including the unreadable-file verdict, which an empty frontmatter map
+ * cannot express.
+ */
+export function applyReachFilter(
+  ranked: ReadonlyArray<BrainSearchResult>,
+  reach: TransportReach,
+  vault: string,
+  frontmatterCache: FrontmatterCache,
+): ReadonlyArray<BrainSearchResult> {
+  return ranked.filter((r) => isPathReadableAtReach(vault, r.path, reach, frontmatterCache));
+}
+
+/**
+ * The caller's requested visibility scope over a ranked result set.
  *
- * The reach half is {@link isPathReadableAtReach}, which is where the
- * fail-closed verdict for an unreadable page lives. It answers the reach
- * question ONLY: letting an unmeasurable page's substituted token reach
- * {@link isVisible} too would drop every unreadable page from every
+ * Answers {@link isVisible} only, and is still caller-liftable for every
+ * non-reserved token. It cannot lift the reserved one because
+ * {@link applyReachFilter} has already run and this pass only ever
+ * narrows further.
+ *
+ * Deliberately does NOT see the unmeasurable-page substitution
+ * {@link isPathReadableAtReach} makes: letting that token reach
+ * {@link isVisible} would drop every unreadable page from every
  * default-scope search at every reach, which is a caller-scope rule this
  * boundary has no business changing.
  */
 export function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: ReadonlySet<string>,
-  reach: TransportReach,
   vault: string,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
-  return ranked.filter(
-    (r) =>
-      isPathReadableAtReach(vault, r.path, reach, frontmatterCache) &&
-      isVisible(pageVisibility(readCachedFrontmatter(frontmatterCache, vault, r.path)), scope),
+  return ranked.filter((r) =>
+    isVisible(pageVisibility(readCachedFrontmatter(frontmatterCache, vault, r.path)), scope),
   );
 }
 

@@ -37,7 +37,7 @@ import { parsePreference, parseRetired } from "./preference.ts";
 import { ownerScopeView } from "./owner-scope-view.ts";
 import { everyArtifactRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
 import { reachView } from "./reach-view.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../graph/transport-reach.ts";
 import { parseSignal } from "./signal.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -269,7 +269,7 @@ export function queryByTopic(
   // when both keep it.
   const view = everyArtifactRefView(
     ownerScopeView(vault, options.ownerScope ?? null),
-    reachView(vault, options.transportReach ?? TRANSPORT_REACH.remote),
+    reachView(vault, resolvedTransportReach(options.transportReach)),
   );
   let preference: BrainPreference | BrainRetired | null = null;
   preference = findPreferenceForTopic(dirs.preferences, want, "preference", view);

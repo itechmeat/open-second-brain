@@ -46,7 +46,7 @@ import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../core/graph/transport-reach.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -153,7 +153,7 @@ export class MCPServer {
     this.capabilityReport = evaluated.report;
     this.routeMetricsEnabled = routeMetricsGate(this.configPath ?? undefined);
     this.sendNotification = runtimeOpts.sendNotification;
-    this.reach = runtimeOpts.reach ?? TRANSPORT_REACH.remote;
+    this.reach = resolvedTransportReach(runtimeOpts.reach);
     const runId = runtimeOpts.artifactRunId ?? `run-${process.pid}-${Date.now().toString(36)}`;
     this.artifactStore = new ArtifactStore({ vault: this.vault, runId });
     // Best-effort housekeeping: clear prior processes' stale artifacts.

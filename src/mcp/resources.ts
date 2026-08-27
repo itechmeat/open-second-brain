@@ -82,7 +82,7 @@ import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/bra
 import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
 import { everyArtifactRefView, type ArtifactRefView } from "../core/brain/artifact-ref-view.ts";
 import { reachView } from "../core/brain/reach-view.ts";
-import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
+import { resolvedTransportReach, type TransportReach } from "../core/graph/transport-reach.ts";
 import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import { logEntryArtifactRefs } from "../core/brain/log.ts";
@@ -245,7 +245,7 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
  */
 function requestView(ctx: ResourceContext): RequestView {
   const owner = gatedOwnerScopeView(ctx.vault, ctx.agentName);
-  const reach = reachView(ctx.vault, ctx.reach ?? TRANSPORT_REACH.remote);
+  const reach = reachView(ctx.vault, resolvedTransportReach(ctx.reach));
   return Object.freeze({
     ownerScope: owner.scope,
     reach: reach.reach,
