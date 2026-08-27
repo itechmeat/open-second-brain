@@ -1273,3 +1273,38 @@ log line is machine-composed rather than authored.
   tension warnings and the owner-scope observation now reach the caller as
   `brain_pre_compress_pack` has always passed them, absent when empty. No new
   tool - the surface stays at 113.
+- Since v1.54.0 a page may RESERVE itself against remote reads, and the
+  reservation is enforced rather than advisory. A vault page whose
+  `visibility:` frontmatter carries the reserved token is not returned, not
+  counted, and not named in an error when the request arrived at `remote`
+  reach. The other visibility tokens are unchanged: they remain opaque,
+  caller-scoped view filters, and the caller's own `visibility` argument
+  still narrows exactly as before - what it can no longer do is name the
+  reserved token and be handed the page. A vault that never wrote the token
+  sees no change.
+- Since v1.54.0 the reach a request arrived at is MINTED by the transport
+  and refused when a caller supplies it. stdio mints `local`, because the
+  caller started this process and holds whatever filesystem access it runs
+  with. An HTTP bind mints from the bind host alone: loopback is `local`,
+  every other interface is `remote`. The value is set after the caller's
+  runtime options are spread, so a runtime option cannot claim a reach the
+  bind did not establish, and a `Host` header is never read for it. A
+  `tools/call` carrying a reach-shaped argument is refused with `-32602`,
+  the refusal token `caller-supplied-reach`, and structured `data`
+  (`tool`, `refused_arguments`, `reserved_argument_names`). The check runs
+  ahead of the unknown-argument gate and does not consult the tool's
+  schema, so an open schema is covered too; argument names are compared
+  case-folded and separator-free, so `reach`, `transport_reach` and
+  `transport-reach` are one argument rather than three. `disclosure` is
+  deliberately not reserved - it is the unrelated result-depth mode on the
+  recall surfaces.
+- Since v1.54.0 a withheld page is reported exactly as an absent one. On
+  the key-addressed reads - a chunk id, a preference id, the templated
+  `osb://` readers - the message is byte-identical to the one an absent
+  subject produces, because both key spaces are enumerable and a
+  distinguishable refusal would be an existence oracle over exactly the
+  population the boundary hides. What the `local` bypass proves is
+  filesystem-equivalent access, or a request that originated on this host.
+  It does NOT prove operator intent: a remote host can spawn a stdio
+  subprocess. The alternative - no bypass at all - would take an operator's
+  own reserved notes away from the operator's own shell.

@@ -1637,6 +1637,53 @@ Entity-boosted retrieval and header-anchored chunking populate on the
 next reindex and need no configuration. Every result carries a
 `why_retrieved` list naming the scoring layers that ranked it.
 
+### The reserved visibility token (since v1.54.0)
+
+```text
+o2b search query --visibility <token>...   narrow results to pages declaring one of these visibility tokens
+o2b search check                           reports how many indexed documents reserve themselves against remote
+                                           reads, how many enumerated note-returning surfaces still do not consult
+                                           the field, and how many documents hold no frontmatter the index measured
+```
+
+A vault page's `visibility:` frontmatter carries opaque, language-neutral
+tokens, and ONE of them is reserved: a page declaring it is not readable
+at `remote` reach. Reach is a transport fact rather than a caller
+argument - stdio and every command in this CLI run at `local` reach,
+because the operator is running this binary in their own shell against a
+vault they can already open in an editor, while an HTTP bind is `local`
+only on loopback. A CLI that withheld the operator's own reserved pages
+from the operator would hide data from the only party entitled to it
+while proving nothing to anyone.
+
+The rule is enforced at three read roots - the ranked search pipeline,
+the page walker, and the by-path and by-chunk-id read primitives - and an
+architecture sweep fails the suite when a file under `src/mcp/`,
+`src/cli/` or `src/openclaw/` reads a vault path directly without a
+registered reason. `--visibility` keeps its existing meaning and can only
+NARROW: it selects among the other tokens and cannot lift the reserved
+one. A vault that never wrote the reserved token behaves exactly as it
+did before.
+
+Fail-closed, in both directions that matter. A page whose file cannot be
+read - deleted, renamed, moved to a failing mount, or chmod'd between one
+call and the next - is treated as declaring the reserved token at
+`remote` reach, because an unreadable visibility claim is not the absence
+of one; at `local` reach it is kept, since the operator is the party who
+has to fix it. A withheld page is reported exactly as an absent one, and
+no result count on a read surface states how many rows were withheld -
+the only place the withheld population is named is the `o2b search check`
+diagnostic above, which the operator ran deliberately at local reach.
+
+Schema 12 adds `documents.visibility`, holding what the INDEX measured of
+each page's frontmatter, and backfills it during the migration from the
+frontmatter the index already stores - one table scan, no vault walk, no
+reindex. The column reports; the live file decides. Three states are kept
+distinct: the page's tokens, an empty list for a page that declares none,
+and unmeasured for a document the index holds no frontmatter chunk for.
+`o2b search check` reports the unmeasured population rather than counting
+it as declaring nothing.
+
 ## What leaves the machine unscanned (network egress)
 
 Every export that writes a FILE - `brain export`, `brain explorer --export`,
