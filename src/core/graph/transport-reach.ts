@@ -64,6 +64,23 @@ export function isTransportReach(value: unknown): value is TransportReach {
 }
 
 /**
+ * The reach to answer at when nobody minted one.
+ *
+ * An unestablished reach is not the absence of a boundary, so an absent
+ * value resolves to {@link TRANSPORT_REACH.remote}, the narrowest. Named
+ * here once because the alternative is what it was: the same `?? remote`
+ * spelled at every options bag and every context reader, which is one
+ * rule with six spellings and five places to forget to change it.
+ *
+ * Callers that hold a `ServerContext` reach it through `contextReach`
+ * (`src/mcp/tool-contract.ts`), which is this function under the name
+ * that seam already uses.
+ */
+export function resolvedTransportReach(reach: TransportReach | undefined): TransportReach {
+  return reach ?? TRANSPORT_REACH.remote;
+}
+
+/**
  * The reach an INTERNAL maintenance lane walks the vault at.
  *
  * `local`, and not because a lane proved anything about a caller - it has

@@ -16,6 +16,7 @@
  */
 
 import { normalizeScopeFilter } from "../scope-key.ts";
+import { resolvedTransportReach } from "../graph/transport-reach.ts";
 import type { Store } from "./store.ts";
 import type { SearchOptions, SearchOutcome } from "./types.ts";
 
@@ -100,6 +101,16 @@ export function buildCacheKey(
     properties: canonicalProperties(opts.properties),
     visibility: opts.visibility ? [...opts.visibility].toSorted() : null,
     agentScope: opts.agentScope ?? null,
+    // The transport reach partitions the cache, and unconditionally.
+    // It decides which pages are in the pool at all - a `local` outcome
+    // holds rows the reserved-token rule withholds from `remote` - so a
+    // key that omitted it would let one row serve both, in whichever
+    // direction the operator's own CLI happened to warm it first. Folded
+    // in RESOLVED rather than raw, so an absent reach and an explicit
+    // `remote` key identically; and folded in unconditionally, because
+    // every row written before this boundary existed was computed
+    // without it and must not be served under it.
+    transportReach: resolvedTransportReach(opts.transportReach),
     scope: canonicalScope(opts),
     // Relational arm (t_09b7ccea) changes the result set, so a per-query
     // override partitions the cache. Dropped when absent, so a query that
