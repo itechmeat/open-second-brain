@@ -34,7 +34,10 @@ import { filterExpired, isExpired } from "./expiration.ts";
 import type { BrainLogEntry } from "./log.ts";
 import { listLogDates, readLogDay } from "./log-jsonl.ts";
 import { parsePreference, parseRetired } from "./preference.ts";
-import { ownerScopeView, type OwnerScopeView } from "./owner-scope-view.ts";
+import { ownerScopeView } from "./owner-scope-view.ts";
+import { everyArtifactRefView, type ArtifactRefView } from "./artifact-ref-view.ts";
+import { reachView } from "./reach-view.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { parseSignal } from "./signal.ts";
 import { isTombstoned } from "./lifecycle/tombstone.ts";
 import { parseFrontmatter } from "../vault.ts";
@@ -127,6 +130,18 @@ export interface QueryByTopicOptions {
    * rule this caller actually has.
    */
   readonly ownerScope?: string | null;
+  /**
+   * Transport reach the topic's CURRENT RULE is selected under
+   * (private-is-not-a-suggestion, unit 5). Absent resolves to the
+   * narrowest.
+   *
+   * It reaches the SELECTION for the same reason the owner scope above
+   * does: a topic resolves to exactly one preference, so filtering the
+   * result afterwards would report the topic as having no rule at all
+   * whenever a reserved preference happened to sort ahead of a readable
+   * one - hiding the readable rule from every caller.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 // ----- Public API -----------------------------------------------------------
@@ -249,7 +264,13 @@ export function queryByTopic(
   signals = filterExpired(signals, { now, showExpired });
 
   // Current rule — prefer the active preference; fall back to retired.
-  const view = ownerScopeView(vault, options.ownerScope ?? null);
+  // Both selection rules, ANDed. They are independent questions and
+  // neither is folded into the other; a candidate survives the walk only
+  // when both keep it.
+  const view = everyArtifactRefView(
+    ownerScopeView(vault, options.ownerScope ?? null),
+    reachView(vault, options.transportReach ?? TRANSPORT_REACH.remote),
+  );
   let preference: BrainPreference | BrainRetired | null = null;
   preference = findPreferenceForTopic(dirs.preferences, want, "preference", view);
   if (!preference) {
@@ -372,7 +393,7 @@ function findPreferenceForTopic(
   dir: string,
   topic: string,
   kind: "preference" | "retired",
-  view: OwnerScopeView,
+  view: ArtifactRefView,
 ): BrainPreference | BrainRetired | null {
   if (!existsSync(dir)) return null;
   const prefix = kind === "preference" ? "pref-" : "ret-";

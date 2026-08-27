@@ -200,7 +200,9 @@ test("an unscoped call still serves a deleted file's indexed chunk", async () =>
     transportReach: TRANSPORT_REACH.local,
   });
   expect(unscoped.results.map((r) => r.path)).toContain("notes/owned-a.md");
-  expect((await expandHit(config, { chunkId })).note.path).toBe("notes/owned-a.md");
+  expect(
+    (await expandHit(config, { chunkId, transportReach: TRANSPORT_REACH.local })).note.path,
+  ).toBe("notes/owned-a.md");
 });
 
 // ----- A2: a present-but-unusable `owner:` is never ownerless --------------

@@ -630,6 +630,19 @@ export interface ExpandHitInput {
    * would confirm the chunk exists. Omitted / blank filters nothing.
    */
   readonly agentScope?: string;
+  /**
+   * How far this caller reached, minted by the transport
+   * (`src/core/graph/transport-reach.ts`). Absent resolves to the
+   * narrowest, on the same terms {@link SearchOptions.transportReach}
+   * does.
+   *
+   * A chunk id is a sequential integer, so this surface is the enumerable
+   * back door to every reserved page in the index. A page reserved
+   * against remote reads is refused here with the SAME error an absent
+   * chunk produces - the convention the owner-scope refusal above already
+   * follows, for the same reason.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 /**

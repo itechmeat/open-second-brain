@@ -79,7 +79,10 @@ import {
   validateSlug,
 } from "../core/brain/paths.ts";
 import { BrainNotFoundError, queryByPreference, queryByTopic } from "../core/brain/query.ts";
-import { gatedOwnerScopeView, type OwnerScopeView } from "../core/brain/owner-scope-view.ts";
+import { gatedOwnerScopeView } from "../core/brain/owner-scope-view.ts";
+import { everyArtifactRefView, type ArtifactRefView } from "../core/brain/artifact-ref-view.ts";
+import { reachView } from "../core/brain/reach-view.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
 import type { BrainLogEntry } from "../core/brain/log.ts";
@@ -102,6 +105,17 @@ export interface ResourceContext {
    * surfaces cannot disagree about what an unidentified caller sees.
    */
   readonly agentName?: string | undefined;
+  /**
+   * How far the caller of this read reached, minted by the transport
+   * (`src/core/graph/transport-reach.ts`) and threaded from
+   * `MCPServer.reach` exactly as {@link ResourceContext.agentName} is
+   * threaded from `MCPServer.agentName`.
+   *
+   * Optional on the TYPE and mandatory in EFFECT, on the same terms
+   * `ServerContext.reach` is: absent means no transport established
+   * anything, which resolves to the narrowest rather than the widest.
+   */
+  readonly reach?: TransportReach;
 }
 
 export interface ResourceDescriptor {
@@ -206,25 +220,53 @@ export function readResource(ctx: ResourceContext, uri: string): ResourceContent
     case "status":
       return readStatus(ctx, uri);
     case "preference":
-      return readPreference(ctx, uri, parsed.id, ownerView(ctx));
+      return readPreference(ctx, uri, parsed.id, requestView(ctx));
     case "topic":
-      return readTopic(ctx, uri, parsed.slug, ownerView(ctx));
+      return readTopic(ctx, uri, parsed.slug, requestView(ctx));
     case "log":
-      return readLog(ctx, uri, parsed.date, ownerView(ctx));
+      return readLog(ctx, uri, parsed.date, requestView(ctx));
     case "backlinks":
-      return readBacklinks(ctx, uri, parsed.id, ownerView(ctx));
+      return readBacklinks(ctx, uri, parsed.id, requestView(ctx));
   }
 }
 
 /**
- * The ownership rule bound to this request, built once per read.
+ * Both rules bound to this request, built once per read.
  *
  * Constructed at the switch rather than inside each reader so a reader
  * added later cannot be the one that forgot: the four templated cases
  * pass it explicitly and the compiler requires it.
+ *
+ * The two are ANDed rather than folded: ownership and reserved-token
+ * visibility are independent questions with independent answers, and a
+ * row survives only when both keep it. Which one dropped it is not
+ * observable, because neither reports a count - see
+ * `src/core/brain/artifact-ref-view.ts`.
  */
-function ownerView(ctx: ResourceContext): OwnerScopeView {
-  return gatedOwnerScopeView(ctx.vault, ctx.agentName);
+function requestView(ctx: ResourceContext): RequestView {
+  const owner = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  const reach = reachView(ctx.vault, ctx.reach ?? TRANSPORT_REACH.remote);
+  return Object.freeze({
+    ownerScope: owner.scope,
+    reach: reach.reach,
+    refs: everyArtifactRefView(owner, reach),
+  });
+}
+
+/**
+ * The two rules this request is answered under.
+ *
+ * `refs` is the ANDed decision every reference-shaped filter asks.
+ * `ownerScope` is separate because two readers push ownership into their
+ * SELECTION rather than filtering afterwards - `queryByTopic` and
+ * `buildBacklinkIndex` both take a scope - and that argument is the owner
+ * rule's alone. The reserved-token rule has no selection-side form; it is
+ * asked over the rows those selections return.
+ */
+interface RequestView {
+  readonly ownerScope: string | null;
+  readonly reach: TransportReach;
+  readonly refs: ArtifactRefView;
 }
 
 /**
@@ -352,7 +394,7 @@ function readPreference(
   ctx: ResourceContext,
   uri: string,
   rawId: string,
-  view: OwnerScopeView,
+  view: RequestView,
 ): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `resource id must not be empty: ${uri}`);
@@ -398,7 +440,7 @@ function readPreference(
   // The whole file, `owner:` line and body prose included, is what this
   // reader hands back - so the ownership question is asked before the
   // read, not filtered out of the bytes afterwards.
-  if (!view.visible(resolvedId)) throw notFound(rawId);
+  if (!view.refs.visible(resolvedId)) throw notFound(rawId);
   return readMarkdown(uri, filePath);
 }
 
@@ -406,7 +448,7 @@ function readTopic(
   ctx: ResourceContext,
   uri: string,
   rawSlug: string,
-  view: OwnerScopeView,
+  view: RequestView,
 ): ResourceContent {
   if (!rawSlug.trim()) {
     throw new MCPError(INVALID_PARAMS, `topic slug must not be empty: ${uri}`);
@@ -418,7 +460,10 @@ function readTopic(
     // to one preference and several may carry it, so filtering afterwards
     // would report the topic as having no rule whenever another owner's
     // preference happened to sort first.
-    result = queryByTopic(ctx.vault, rawSlug, { ownerScope: view.scope });
+    result = queryByTopic(ctx.vault, rawSlug, {
+      ownerScope: view.ownerScope,
+      transportReach: view.reach,
+    });
   } catch (err) {
     if (err instanceof BrainNotFoundError) {
       throw new MCPError(INTERNAL_ERROR, err.message);
@@ -433,8 +478,8 @@ function readTopic(
   // already has that shape for a topic that never reached promotion.
   const scoped = Object.freeze({
     ...result,
-    signals: view.keep(result.signals, (s) => [s.id]),
-    all_log_events: view.keep(result.all_log_events, (e) => logEventRefs(e)),
+    signals: view.refs.keep(result.signals, (s) => [s.id]),
+    all_log_events: view.refs.keep(result.all_log_events, (e) => logEventRefs(e)),
   });
   return {
     uri,
@@ -462,7 +507,7 @@ function readLog(
   ctx: ResourceContext,
   uri: string,
   rawDate: string,
-  view: OwnerScopeView,
+  view: RequestView,
 ): ResourceContent {
   validateIsoDate(rawDate);
   // Per-device shards (Memory Integrity Suite): a day's human view can
@@ -474,7 +519,7 @@ function readLog(
     throw new MCPError(INTERNAL_ERROR, `no log file for date '${rawDate}'`);
   }
   const shard = (f: { path: string }): string =>
-    withVisibleLogEvents(readFileSync(f.path, "utf8"), view);
+    withVisibleLogEvents(readFileSync(f.path, "utf8"), view.refs);
   // The single-shard read stays verbatim (trailing newline included), so
   // a vault with the gate off is byte-identical to the pre-filter shape.
   if (files.length === 1) return { uri, mimeType: MIME_MARKDOWN, text: shard(files[0]!) };
@@ -500,8 +545,8 @@ const LOG_EVENT_HEADING = "\n## ";
  * event, and the wikilink / `.md` path tokens inside the section - not a
  * match on any event's prose.
  */
-function withVisibleLogEvents(markdown: string, view: OwnerScopeView): string {
-  if (view.scope === null) return markdown;
+function withVisibleLogEvents(markdown: string, view: ArtifactRefView): string {
+  if (view.filtersNothing) return markdown;
   const parts = markdown.split(LOG_EVENT_HEADING);
   const head = parts[0]!;
   const kept = parts
@@ -524,7 +569,7 @@ function readBacklinks(
   ctx: ResourceContext,
   uri: string,
   rawId: string,
-  view: OwnerScopeView,
+  view: RequestView,
 ): ResourceContent {
   if (!rawId.trim()) {
     throw new MCPError(INVALID_PARAMS, `backlinks target must not be empty: ${uri}`);
@@ -542,8 +587,10 @@ function readBacklinks(
   // not-found path at all (an unknown target is a legitimate zero), so a
   // refusal here would be the one response shape that proves the page
   // exists. The echoed target is the caller's own argument.
-  const index = buildBacklinkIndex(ctx.vault, view.scope);
-  const refs = view.visible(target) ? (index.get(target) ?? []) : [];
+  const index = buildBacklinkIndex(ctx.vault, view.ownerScope);
+  const refs = view.refs.visible(target)
+    ? (index.get(target) ?? []).filter((ref) => view.refs.visible(ref.source))
+    : [];
   return {
     uri,
     mimeType: MIME_MARKDOWN,

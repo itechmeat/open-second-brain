@@ -29,6 +29,7 @@ import {
 } from "../../core/brain/types.ts";
 import type { BrainLogEntry } from "../../core/brain/log.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -199,6 +200,7 @@ async function toolBrainQuery(
       const showExpired = coerceBoolOptional(args, "show_expired") ?? false;
       const res = queryByTopic(ctx.vault, topic, {
         showExpired,
+        transportReach: contextReach(ctx),
         ...(asOf !== null ? { now: asOf } : {}),
       });
       const resultCount = res.signals.length + res.all_log_events.length;

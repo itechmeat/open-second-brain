@@ -6,7 +6,8 @@
 
 import { normalizeAgentScope } from "../graph/agent-scope.ts";
 import { formatLinePointer } from "./line-numbering.ts";
-import { isPathOwnerVisible } from "./result-filters.ts";
+import { isPathOwnerVisible, isPathReadableAtReach } from "./result-filters.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { markWindow, matchOffset, toCodePointOffset, windowStartWithin } from "./snippet-window.ts";
 import { Store } from "./store.ts";
 import { SearchError } from "./types.ts";
@@ -150,6 +151,7 @@ export async function expandHit(
     throw new SearchError("INVALID_INPUT", "chunkId must be a positive integer");
   }
   const agentScope = normalizeAgentScope(input.agentScope);
+  const reach = input.transportReach ?? TRANSPORT_REACH.remote;
   const store = await Store.open(config, { mode: "read" });
   try {
     const hit = store.hydrateChunks([input.chunkId]).get(input.chunkId);
@@ -157,6 +159,9 @@ export async function expandHit(
       throw notFound(input.chunkId);
     }
     if (agentScope !== null && !ownerVisible(config, hit.path, agentScope)) {
+      throw notFound(input.chunkId);
+    }
+    if (!reachReadable(config, hit.path, reach)) {
       throw notFound(input.chunkId);
     }
     // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
@@ -218,6 +223,21 @@ function notFound(chunkId: number): SearchError {
  * means — including the unreadable-file verdict, which an empty
  * frontmatter map cannot express.
  */
+/**
+ * May a caller at `reach` read the note at `path`? Fails CLOSED on an
+ * unreadable page, exactly as the ranked filter decides it.
+ *
+ * Delegates to {@link isPathReadableAtReach} rather than restating the
+ * rule, so the drill-down and the ranked pipeline cannot drift on what
+ * "reserved" means. Unlike the ownership check above, this one is asked
+ * on EVERY call rather than only when the caller supplied an argument -
+ * the reach is never a caller argument, and a boundary a caller opts into
+ * is not a boundary.
+ */
+function reachReadable(config: ResolvedSearchConfig, path: string, reach: TransportReach): boolean {
+  return isPathReadableAtReach(config.vault, path, reach, new Map());
+}
+
 function ownerVisible(config: ResolvedSearchConfig, path: string, scope: string): boolean {
   // One hit, so the cache is a formality — it exists because the shared
   // reader takes one, and reusing it keeps this check on exactly the

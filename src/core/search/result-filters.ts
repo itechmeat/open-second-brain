@@ -265,17 +265,12 @@ export function applyDegreeFilter(
  *     page's tags? Unchanged, and still caller-liftable for every
  *     non-reserved token.
  *
- * FAILS CLOSED at {@link TRANSPORT_REACH.remote} on a page whose file
- * cannot be READ - the routine trigger being a document still in the
- * index whose file was deleted, renamed or made unreadable since the last
- * run. An unreadable visibility claim is not the absence of one, the
- * convention {@link isPathOwnerVisible} already holds for ownership. The
- * verdict comes from {@link readCachedFrontmatterEntry} rather than from
- * an empty metadata map, because the parser resolves an unreadable file
- * to `{}` and never throws. At {@link TRANSPORT_REACH.local} the row is
- * kept, because that caller can read the file directly anyway and taking
- * it away would only hide a stale index row from the operator who has to
- * fix it.
+ * The reach half is {@link isPathReadableAtReach}, which is where the
+ * fail-closed verdict for an unreadable page lives. It answers the reach
+ * question ONLY: letting an unmeasurable page's substituted token reach
+ * {@link isVisible} too would drop every unreadable page from every
+ * default-scope search at every reach, which is a caller-scope rule this
+ * boundary has no business changing.
  */
 export function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
@@ -284,16 +279,41 @@ export function applyVisibilityScope(
   vault: string,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
-  return ranked.filter((r) => {
-    const entry = readCachedFrontmatterEntry(frontmatterCache, vault, r.path);
-    const tags = pageVisibility(entry.meta);
-    // The substitution answers the REACH question only. Letting it reach
-    // `isVisible` too would drop every unreadable page from every default
-    // -scope search, at every reach, which is a caller-scope rule this
-    // boundary has no business changing.
-    const reachTags = entry.unreadable ? UNMEASURABLE_VISIBILITY : tags;
-    return isRemotelyReadable(reachTags, reach) && isVisible(tags, scope);
-  });
+  return ranked.filter(
+    (r) =>
+      isPathReadableAtReach(vault, r.path, reach, frontmatterCache) &&
+      isVisible(pageVisibility(readCachedFrontmatter(frontmatterCache, vault, r.path)), scope),
+  );
+}
+
+/**
+ * May a caller at `reach` read the page at this vault-relative path? The
+ * one place the reserved-token rule meets the filesystem, so every
+ * surface that owns a path - ranked results, the by-chunk-id drill-down,
+ * a report row naming an artifact - resolves it identically.
+ *
+ * FAILS CLOSED at {@link TRANSPORT_REACH.remote} on a page whose file
+ * cannot be READ, the routine trigger being a document still in the index
+ * whose file was deleted, renamed or made unreadable since the last run.
+ * An unreadable visibility claim is not the absence of one, the
+ * convention {@link isPathOwnerVisible} beside it already holds for
+ * ownership. The verdict comes from {@link readCachedFrontmatterEntry}
+ * rather than from an empty metadata map, because the parser resolves an
+ * unreadable file to `{}` and never throws, so a `catch` arm here would
+ * be dead code. At {@link TRANSPORT_REACH.local} the page is readable
+ * unconditionally - that caller can open the file directly anyway, and
+ * hiding a stale index row from the operator who has to fix it helps
+ * nobody.
+ */
+export function isPathReadableAtReach(
+  vault: string,
+  path: string,
+  reach: TransportReach,
+  frontmatterCache: FrontmatterCache,
+): boolean {
+  const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
+  const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
+  return isRemotelyReadable(tags, reach);
 }
 
 /**

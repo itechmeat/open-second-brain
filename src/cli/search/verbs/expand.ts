@@ -15,6 +15,7 @@ import {
   resolveConfig,
   VAULT_FLAGS,
 } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 export async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -44,6 +45,7 @@ export async function cmdSearchExpand(argv: ReadonlyArray<string>): Promise<numb
   try {
     result = await expandHit(cfg, {
       chunkId,
+      transportReach: CLI_TRANSPORT_REACH,
       ...(rawLimit !== undefined ? { rawLimit } : {}),
       ...(cursor !== undefined ? { cursor } : {}),
       ...(agentScope !== undefined ? { agentScope } : {}),

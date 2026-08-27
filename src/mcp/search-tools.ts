@@ -1701,6 +1701,7 @@ async function toolBrainSearchExpand(
     result = await withTimeout(
       expandHit(config, {
         chunkId: rawChunk,
+        transportReach: contextReach(ctx),
         ...(expandScope !== undefined ? { agentScope: expandScope } : {}),
         ...(rawLimit !== undefined ? { rawLimit } : {}),
         ...(cursor !== undefined ? { cursor } : {}),

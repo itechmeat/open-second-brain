@@ -402,6 +402,11 @@ import {
   ORIGIN_CHANNELS,
 } from "../../../src/core/origin-channel.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
+import {
+  TRANSPORT_REACH,
+  TRANSPORT_REACHES,
+  isTransportReach,
+} from "../../../src/core/graph/transport-reach.ts";
 
 interface VocabularyUnderCensus {
   /** Identifies the vocabulary in a failure message. */
@@ -1095,6 +1100,16 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     guard: isOwnerScopeRefusal,
   },
   {
+    // private-is-not-a-suggestion, U2. How far the caller of this process
+    // had to reach to get here. Minted by the transport and never parsed
+    // out of a request, so the guard is for a value read back off a
+    // stored envelope rather than for one arriving from a caller.
+    name: "TRANSPORT_REACH",
+    values: TRANSPORT_REACH,
+    members: TRANSPORT_REACHES,
+    guard: isTransportReach,
+  },
+  {
     // U5. Whether a registered search origin could be read at all.
     // `unreachable` and `unknown` are distinct members because "it is not
     // there" and "I could not look" have different repairs, and neither
@@ -1502,7 +1517,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 73;
+const VOCABULARY_POPULATION = 74;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {
