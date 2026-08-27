@@ -440,7 +440,15 @@ function readPreference(
   // The whole file, `owner:` line and body prose included, is what this
   // reader hands back - so the ownership question is asked before the
   // read, not filtered out of the bytes afterwards.
-  if (!view.refs.visible(resolvedId)) throw notFound(rawId);
+  //
+  // `normalized`, not `rawId`: the absent branch above rethrows what
+  // `queryByPreference` threw, and that names the NORMALISED id. This
+  // reader accepts the bare slug too, so echoing the raw one here made
+  // `osb://preference/acme` answer "...for id 'acme'" when the page
+  // existed and was withheld, against "...for id 'pref-acme'" when it did
+  // not - the presence of the prefix a one-bit existence oracle over the
+  // whole reserved population.
+  if (!view.refs.visible(resolvedId)) throw notFound(normalized);
   return readMarkdown(uri, filePath);
 }
 

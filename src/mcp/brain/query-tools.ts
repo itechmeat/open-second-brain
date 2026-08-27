@@ -183,15 +183,19 @@ async function toolBrainQuery(
         // retired record is read through the same predicate as an active
         // one - retiring a memory must not publish it.
         const prefOwner = res.preference.owner;
+        // Both refusals carry the CALLER'S OWN ARGUMENT, which is what
+        // `queryByPreference` throws for a preference that does not
+        // exist. `BrainNotFoundError` formats the sentence itself, so
+        // passing a sentence to it produced "...found for id 'preference
+        // not found: pref-x'" against the absent form's "...for id
+        // 'pref-x'" - two messages, over a `pref-<slug>` key space a
+        // caller can enumerate, which is exactly the existence oracle the
+        // comment claimed was closed.
         if (ownerScope !== null && !isPreferenceVisible({ owner: prefOwner }, ownerScope)) {
-          throw new BrainNotFoundError(`preference not found: ${preference}`);
+          throw new BrainNotFoundError(preference);
         }
-        // A reserved preference answers with the message an absent one
-        // produces, byte for byte - preference ids are `pref-<slug>` and
-        // therefore guessable, so a distinguishable refusal would be an
-        // existence oracle over exactly the population being reserved.
         if (!queryView.visible(res.preference.id)) {
-          throw new BrainNotFoundError(`preference not found: ${preference}`);
+          throw new BrainNotFoundError(preference);
         }
         emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
         return {

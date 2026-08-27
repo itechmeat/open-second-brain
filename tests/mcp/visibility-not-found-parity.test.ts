@@ -34,6 +34,8 @@ import { indexVault } from "../../src/core/search/indexer.ts";
 import { search } from "../../src/core/search/search.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
 import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
+import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
 
 /** HOME is pinned per file by convention; nothing pins it globally. */
 process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-vis-parity-home-"));
@@ -164,6 +166,55 @@ describe("templated osb:// resources", () => {
     expect(withheld.replace(`pref-${MARKER}-r`, "ID")).toBe(
       absent.replace("pref-never-existed", "ID"),
     );
+  });
+
+  test("the BARE SLUG key shape has the same parity as the prefixed one", () => {
+    // The reader accepts `pref-foo`, `ret-foo` and the bare slug, so the
+    // key space a caller enumerates is the bare one too. The absent
+    // branch echoes the NORMALISED id (`queryByPreference` was handed
+    // it); the withheld branch echoed the raw one, so the presence of the
+    // `pref-` prefix in the message answered "does this page exist" over
+    // exactly the reserved population.
+    const withheld = read(`osb://preference/${MARKER}-r`, TRANSPORT_REACH.remote);
+    const absent = read("osb://preference/never-existed", TRANSPORT_REACH.remote);
+    expect(withheld).toStartWith("threw:");
+    expect(withheld.replace(`pref-${MARKER}-r`, "ID")).toBe(
+      absent.replace("pref-never-existed", "ID"),
+    );
+  });
+});
+
+/**
+ * `brain_query mode=preference` over the same key space, through the tool
+ * rather than the resource. Preference ids are `pref-<slug>` and a slug
+ * is a topic name, so this is the most guessable key surface the boundary
+ * has.
+ */
+describe("brain_query mode=preference", () => {
+  const brainQuery = (): ToolDefinition => BRAIN_TOOLS.find((t) => t.name === "brain_query")!;
+
+  const ask = async (preference: string, reach: TransportReach): Promise<string> => {
+    const ctx: ServerContext = { vault, reach, configPath: null, repoRoot: null };
+    try {
+      await brainQuery().handler(ctx, { preference });
+      return "returned";
+    } catch (err) {
+      return `threw: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  };
+
+  test("a withheld preference is refused with the message an absent one produces", async () => {
+    const withheld = await ask(`pref-${MARKER}-r`, TRANSPORT_REACH.remote);
+    const absent = await ask("pref-never-existed", TRANSPORT_REACH.remote);
+    expect(withheld).toStartWith("threw:");
+    // Only the caller's own argument may differ between the two.
+    expect(withheld.replace(`pref-${MARKER}-r`, "ID")).toBe(
+      absent.replace("pref-never-existed", "ID"),
+    );
+  });
+
+  test("the same preference is returned at local reach", async () => {
+    expect(await ask(`pref-${MARKER}-r`, TRANSPORT_REACH.local)).toBe("returned");
   });
 });
 
