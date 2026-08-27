@@ -16,7 +16,11 @@ import {
 } from "../../core/config.ts";
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { readActiveSessionFocus } from "../../core/search/session-focus.ts";
-import { packContext } from "../../core/brain/context-pack.ts";
+import {
+  CONTEXT_PACK_QUERY_MODES,
+  isContextPackQueryMode,
+  packContext,
+} from "../../core/brain/context-pack.ts";
 import { assessRecallAdequacy } from "../../core/brain/recall-adequacy.ts";
 import { recordRecallAdequacyDemand } from "../../core/brain/query-demand.ts";
 import { emitGatedTelemetry } from "../../core/brain/continuity/emit.ts";
@@ -93,6 +97,24 @@ async function toolBrainContextPack(
     throw new MCPError(INVALID_PARAMS, "brain_context_pack: max_tokens must be a positive integer");
   }
   const query = typeof args["query"] === "string" ? (args["query"] as string) : undefined;
+  // Ranked query mode (v1.53.0). Enforced beside the `dependentRequired`
+  // that declares it: a mode with no query would otherwise be accepted and
+  // do nothing, which is the silent no-op this project refuses.
+  const queryMode = coerceStr(args, "query_mode", false);
+  if (queryMode !== null) {
+    if (!isContextPackQueryMode(queryMode)) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `brain_context_pack: query_mode must be one of ${CONTEXT_PACK_QUERY_MODES.join(", ")}`,
+      );
+    }
+    if (query === undefined) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        "brain_context_pack: query_mode requires query; a mode with nothing to read is inert",
+      );
+    }
+  }
   const includeLanes = coerceBool(args, "lanes");
   const cacheStable = coerceBool(args, "cache_stable");
   const dedupRepeated = coerceBool(args, "dedup_repeated");
@@ -175,6 +197,7 @@ async function toolBrainContextPack(
     ...(densityRanking ? { densityRanking: true } : {}),
     ...(sessionFocus !== null ? { sessionFocus } : {}),
     ...(query ? { query } : {}),
+    ...(queryMode !== null ? { queryMode } : {}),
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
     ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
@@ -222,6 +245,13 @@ async function toolBrainContextPack(
     ...(report.receiptId ? { receipt_id: report.receiptId } : {}),
     ...(report.telemetryId ? { telemetry_id: report.telemetryId } : {}),
     ...(report.lanes ? { lanes: report.lanes } : {}),
+    // The core computes injection-time tension warnings and the
+    // owner-scope observation and this projection dropped both, so the one
+    // surface that puts vault text in front of a model every turn was the
+    // one surface that could not say a memory it injected is contested.
+    // `brain_pre_compress_pack` has forwarded them all along; absent when
+    // empty, so a warning-free pack stays byte-identical.
+    ...(report.warnings ? { warnings: report.warnings } : {}),
     ...(adequacy !== undefined
       ? {
           adequacy: {
@@ -701,7 +731,14 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         query: {
           type: "string",
-          description: "Optional case/Unicode-insensitive substring filter on topic + principle.",
+          description:
+            "Optional query. Read as a case/Unicode-insensitive substring filter on topic + principle unless `query_mode` says otherwise.",
+        },
+        query_mode: {
+          type: "string",
+          enum: [...CONTEXT_PACK_QUERY_MODES],
+          description:
+            "How `query` is read: `substring` (default) filters, dropping misses as `filter-miss`; `ranked` orders candidates by token overlap and excludes none.",
         },
         focus_session: {
           type: "string",
@@ -776,8 +813,12 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       // Both or neither, stated declaratively so a schema-driven client can
       // discover the pairing instead of learning it from an INVALID_PARAMS
       // at call time. Built beside the enforcement; see
-      // `recallAdequacyPairing`.
-      dependentRequired: recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
+      // `recallAdequacyPairing`. `query_mode` joins it one-directionally:
+      // a mode needs a query, a query needs no mode.
+      dependentRequired: {
+        ...recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
+        query_mode: ["query"],
+      },
       additionalProperties: false,
     },
     handler: toolBrainContextPack,

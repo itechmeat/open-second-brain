@@ -1255,3 +1255,21 @@ log line is machine-composed rather than authored.
   letter; `o2b state status` names the location and the records are listable
   from core. Single-artifact lanes are deliberately excluded: their one
   failure IS the response. No new tool - the surface stays at 113.
+- Since v1.53.0 `brain_context_pack` reads its `query` two ways. The default is
+  the substring filter it has always been - a case/Unicode-insensitive match
+  against `topic + principle`, every miss dropped with a `filter-miss` skip -
+  and an omitted `query_mode` keeps that reading byte-identical. `query_mode:
+  "ranked"` instead ORDERS the curated candidates by structural token overlap
+  (the same deterministic, stopword-free kernel the rated-decision matcher
+  uses - no model, no embedding, so it works on an install that has never
+  indexed a vector) and excludes none of them, so a natural-language turn
+  prioritises the budget rather than emptying the pack. `query_mode` requires
+  `query`; the schema states the pairing as `dependentRequired` and the
+  handler refuses a mode with nothing to read. Everything the lane exists for
+  - the containment guard, the curated preference pool, the tombstone and
+  supersession-tip filters, owner-scope delivery, `max_tokens`, the named skip
+  reasons, and the server-issued `receipt_id` - applies unchanged in both
+  modes. The tool also stops discarding the report's `warnings`: injection-time
+  tension warnings and the owner-scope observation now reach the caller as
+  `brain_pre_compress_pack` has always passed them, absent when empty. No new
+  tool - the surface stays at 113.

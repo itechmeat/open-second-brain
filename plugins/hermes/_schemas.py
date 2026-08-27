@@ -499,9 +499,18 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                    'description': 'Strict upper bound on the '
                                                                   "returned slice's token count."},
                                     'query': {'type': 'string',
-                                              'description': 'Optional case/Unicode-insensitive '
-                                                             'substring filter on topic + '
-                                                             'principle.'},
+                                              'description': 'Optional query. Read as a '
+                                                             'case/Unicode-insensitive substring '
+                                                             'filter on topic + principle unless '
+                                                             '`query_mode` says otherwise.'},
+                                    'query_mode': {'type': 'string',
+                                                   'enum': ['substring', 'ranked'],
+                                                   'description': 'How `query` is read: '
+                                                                  '`substring` (default) filters, '
+                                                                  'dropping misses as '
+                                                                  '`filter-miss`; `ranked` orders '
+                                                                  'candidates by token overlap and '
+                                                                  'excludes none.'},
                                     'focus_session': {'type': 'string',
                                                       'minLength': 1,
                                                       'maxLength': 128,
@@ -600,7 +609,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                    'ownership filtering.'}},
                      'required': ['max_tokens'],
                      'dependentRequired': {'recall_scores': ['match_quality'],
-                                           'match_quality': ['recall_scores']},
+                                           'match_quality': ['recall_scores'],
+                                           'query_mode': ['query']},
                      'additionalProperties': False}},
     {
         "name": "brain_context_pack_outcome",

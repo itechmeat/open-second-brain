@@ -13,6 +13,7 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { CONTEXT_GUARD_PLACEHOLDER } from "../../src/core/brain/safety/context-guard.ts";
+import { persistTension } from "../../src/core/brain/tensions.ts";
 
 let tmp: string;
 let vault: string;
@@ -268,5 +269,175 @@ describe("brain_context_pack tool — round trip", () => {
     expect(safety.reasons.map((reason) => reason.code)).toContain(
       "prompt_injection.instruction_override",
     );
+  });
+});
+
+/**
+ * Ranked query mode over the MCP surface (v1.53.0).
+ *
+ * Claims pinned here:
+ *   1. `query_mode: "ranked"` reaches the core: the query-relevant page
+ *      leads and nothing is dropped with `filter-miss`.
+ *   2. `query` alone keeps the substring reading, byte-identical to every
+ *      release before this one.
+ *   3. `query_mode` without `query` is refused, not silently inert - the
+ *      schema states the pairing and the handler enforces it.
+ *   4. An unknown mode is refused and the refusal names the accepted set.
+ *   5. The declaration is discoverable: closed schema, described property,
+ *      declared pairing.
+ *   6. The receipt the lane issues is unaffected by the mode.
+ */
+describe("brain_context_pack tool — ranked query mode", () => {
+  const PRICING_TURN = "which pricing rule applies to this enterprise quote";
+
+  function writeTwoCorePreferences(): void {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-deploy.md"),
+      "---\nid: pref-deploy\ntopic: deployment window\nprinciple: never ship on friday\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n",
+    );
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-pricing.md"),
+      "---\nid: pref-pricing\ntopic: pricing rules\nprinciple: quote the enterprise tier before applying any discount\ntier: core\ncreated_at: 2026-04-01T00:00:00Z\n---\n",
+    );
+  }
+
+  async function callPackRaw(
+    server: MCPServer,
+    args: Record<string, unknown>,
+  ): Promise<{ error?: { code: number; message: string } }> {
+    return (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 11,
+      method: "tools/call",
+      params: { name: "brain_context_pack", arguments: args },
+    })) as { error?: { code: number; message: string } };
+  }
+
+  test("ranked mode orders by relevance and excludes nothing", async () => {
+    writeTwoCorePreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {
+      max_tokens: 10_000,
+      query: PRICING_TURN,
+      query_mode: "ranked",
+    });
+    const items = out["items"] as Array<{ id: string }>;
+    expect(items.map((i) => i.id)).toEqual(["pref-pricing", "pref-deploy"]);
+    expect(out["skipped"]).toEqual([]);
+  });
+
+  test("query without a mode keeps the substring reading", async () => {
+    writeTwoCorePreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000, query: PRICING_TURN });
+    expect(out["items"]).toEqual([]);
+    const skipped = out["skipped"] as Array<{ reason: string }>;
+    expect(skipped.map((s) => s.reason)).toEqual(["filter-miss", "filter-miss"]);
+  });
+
+  test("query_mode without query is refused", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, { max_tokens: 10_000, query_mode: "ranked" });
+    expect(r.error).toBeDefined();
+    expect(r.error!.message).toContain("query_mode");
+    expect(r.error!.message).toContain("query");
+  });
+
+  test("an unknown query_mode names the accepted set", async () => {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const r = await callPackRaw(server, {
+      max_tokens: 10_000,
+      query: "x",
+      query_mode: "semantic",
+    });
+    expect(r.error).toBeDefined();
+    expect(r.error!.message).toContain("substring");
+    expect(r.error!.message).toContain("ranked");
+  });
+
+  test("the declaration is closed, described, and states the pairing", () => {
+    const tool = buildToolTable("full").find((t) => t.name === "brain_context_pack")!;
+    const schema = tool.inputSchema as {
+      properties: Record<string, { type?: string; enum?: string[]; description?: string }>;
+      dependentRequired?: Record<string, ReadonlyArray<string>>;
+      additionalProperties?: boolean;
+    };
+    const declared = schema.properties["query_mode"]!;
+    expect(declared.enum).toEqual(["substring", "ranked"]);
+    expect(declared.description!.length).toBeGreaterThan(0);
+    expect(schema.additionalProperties).toBe(false);
+    expect(schema.dependentRequired!["query_mode"]).toEqual(["query"]);
+  });
+
+  test("the receipt is issued in ranked mode exactly as in the default", async () => {
+    writeTwoCorePreferences();
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, {
+      max_tokens: 10_000,
+      query: PRICING_TURN,
+      query_mode: "ranked",
+      receipt: true,
+      receipt_host: "hermes",
+    });
+    expect(typeof out["receipt_id"]).toBe("string");
+    expect((out["receipt_id"] as string).length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Injection-time warnings reach the caller (v1.53.0).
+ *
+ * `packContext` computes tension warnings and the owner-scope observation
+ * and this tool's projection dropped both, so the primary injection surface
+ * could not tell an agent that a memory it just injected is contested.
+ */
+describe("brain_context_pack tool — warnings", () => {
+  test("an unresolved tension over an injected memory is reported, not dropped", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-tabs.md"),
+      "---\nid: pref-tabs\ntopic: t\nprinciple: always use tabs\ntier: core\n---\n\nAlways use tabs.\n",
+    );
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-spaces.md"),
+      "---\nid: pref-spaces\ntopic: t\nprinciple: never use tabs\ntier: core\n---\n\nNever use tabs.\n",
+    );
+    const { record } = persistTension(
+      vault,
+      {
+        aId: "pref-tabs",
+        bId: "pref-spaces",
+        subject: "for indentation tabs use",
+        jaccard: 0.6,
+        aSign: "positive",
+        bSign: "negative",
+        aQuote: "Always use tabs.",
+        bQuote: "Never use tabs.",
+        action: "ask_user",
+      },
+      { agent: "tester" },
+    );
+
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000 });
+    const warnings = out["warnings"] as ReadonlyArray<string>;
+    expect(Array.isArray(warnings)).toBe(true);
+    expect(warnings.some((w) => w.includes(record.id))).toBe(true);
+  });
+
+  test("a tension-free vault carries no warnings key", async () => {
+    writeFileSync(
+      join(vault, "Brain", "preferences", "pref-tabs.md"),
+      "---\nid: pref-tabs\ntopic: t\nprinciple: always use tabs\ntier: core\n---\n\nAlways use tabs.\n",
+    );
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    const out = await callPack(server, { max_tokens: 10_000 });
+    expect(out["warnings"]).toBeUndefined();
   });
 });

@@ -44,6 +44,7 @@ import {
 import { estimateTokens } from "./text/tokenizer.ts";
 import { densityScore } from "./context-density.ts";
 import { normalizeForDedup } from "./text/normalize.ts";
+import { jaccard, tokenise } from "./similarity.ts";
 import { applyCharBudget, type CharBudgetDegradationMode } from "./recall-budget.ts";
 import { emitContextReceipt, type ContextReceiptOptions } from "./context-receipts.ts";
 import type { RecallAdequacyVerdict } from "./recall-adequacy.ts";
@@ -81,6 +82,33 @@ const TIER_ORDER: ReadonlyArray<PageTier> = [
   PAGE_TIER.supporting,
   PAGE_TIER.peripheral,
 ];
+
+/**
+ * How {@link ContextPackOptions.query} is applied (v1.53.0).
+ *
+ * `substring` is the original meaning and the default: a
+ * case/Unicode-insensitive substring match of the whole query against
+ * `topic + principle`, and anything that misses is dropped with a
+ * `filter-miss` skip. That answers "give me the pages about X" and
+ * nothing else - a natural-language turn matches no page at all, so a
+ * caller that hands this argument a user prompt gets an empty pack.
+ *
+ * `ranked` answers the other question: "of the pages this lane would
+ * inject anyway, which ones does this turn make relevant?" It ORDERS the
+ * collected candidates by structural token overlap and excludes none, so
+ * the budget - not a lexical accident - decides what is dropped, and the
+ * curated pool, guard, tip preference, owner scope, and receipt the lane
+ * exists for all still apply.
+ */
+export const CONTEXT_PACK_QUERY_MODES = ["substring", "ranked"] as const;
+
+export type ContextPackQueryMode = (typeof CONTEXT_PACK_QUERY_MODES)[number];
+
+export function isContextPackQueryMode(value: unknown): value is ContextPackQueryMode {
+  return (
+    typeof value === "string" && (CONTEXT_PACK_QUERY_MODES as ReadonlyArray<string>).includes(value)
+  );
+}
 
 export interface ContextPackItem extends ContextTransformAnnotations {
   readonly id: string;
@@ -171,8 +199,19 @@ export interface PackStampOptions {
 
 export interface ContextPackOptions {
   readonly maxTokens: number;
-  /** Optional case-insensitive substring filter on topic + principle. */
+  /**
+   * Optional query. Read as a case-insensitive substring filter on topic +
+   * principle by default; see {@link ContextPackOptions.queryMode} for the
+   * ranking reading.
+   */
   readonly query?: string;
+  /**
+   * How {@link ContextPackOptions.query} is applied (v1.53.0). Omitted is
+   * `substring`, byte-identical to every release before this one. `ranked`
+   * orders instead of filtering - see {@link CONTEXT_PACK_QUERY_MODES}.
+   * Without a `query` the mode has nothing to act on and is inert.
+   */
+  readonly queryMode?: ContextPackQueryMode;
   /**
    * Per-memory character cap (v0.20.0): trim any single page's body to
    * this many code points before it consumes the token budget, so one
@@ -414,7 +453,12 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
       startedAtMs,
     );
   }
-  const query = opts.query ? normalizeForDedup(opts.query) : null;
+  // One query argument, two readings (v1.53.0). `ranked` takes the query
+  // out of the filter and into the sort, so `query` below - the substring
+  // predicate - is null in that mode and no candidate is ever excluded for
+  // failing to contain the turn verbatim.
+  const rankedQuery = opts.queryMode === "ranked" && opts.query ? opts.query : null;
+  const query = rankedQuery === null && opts.query ? normalizeForDedup(opts.query) : null;
   // Opt-in language-agnostic prompt-injection containment (Unit 1).
   // Default off, so the surfaced bodies are byte-identical to the legacy
   // blocklist guard unless the vault enables the flag.
@@ -448,6 +492,25 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     }
   }
 
+  // Query relevance (v1.53.0), computed once per candidate ONLY in ranked
+  // mode. Structural token overlap - the same deterministic, stopword-free,
+  // language-agnostic kernel `matchRatedDecisions` ranks with; no model, no
+  // embedding, so it works on a default install that has never indexed a
+  // vector. Matched against topic + principle + body because the turn's
+  // vocabulary lands in the body as often as in the one-line principle.
+  // The map is empty when the mode is off, so both sides read 0 and the
+  // comparator falls straight through.
+  const relevanceById = new Map<string, number>();
+  if (rankedQuery !== null) {
+    const queryTokens = tokenise(rankedQuery);
+    for (const c of candidates) {
+      relevanceById.set(
+        c.id,
+        jaccard(queryTokens, tokenise(`${c.topic} ${c.principle} ${c.body}`)),
+      );
+    }
+  }
+
   // Value-per-token density (impact-per-token allocation, t_affa3bd9):
   // computed once per candidate ONLY when opted in, so with the flag off
   // the map is empty, the density comparator is a no-op, and the sort
@@ -473,6 +536,14 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     const focusA = focusScore.get(a.id) ?? 0;
     const focusB = focusScore.get(b.id) ?? 0;
     if (focusA !== focusB) return focusB - focusA;
+    // Ranked-query relevance sits between focus and density: a bound
+    // session focus is a standing, operator-established target and still
+    // dominates, while density is a static content heuristic that an
+    // explicit per-call query outranks. Tier remains the coarse gate above
+    // all three - a peripheral page never outranks a core one on relevance.
+    const relA = relevanceById.get(a.id) ?? 0;
+    const relB = relevanceById.get(b.id) ?? 0;
+    if (relA !== relB) return relB - relA;
     // Density breaks within-tier ties after focus, before recency. The
     // map is empty when the flag is off, so both sides read 0 and the
     // comparator falls straight through to recency → id.
@@ -741,6 +812,10 @@ function finalizeContextPackReport(
                   lanes: String(opts.includeLanes === true),
                   max_tokens: String(report.maxTokens),
                   query: opts.query ?? "",
+                  // Added only when the caller named a mode: the same
+                  // query read two ways is two different requests, but a
+                  // caller that named none must keep the prefix it had.
+                  ...(opts.queryMode !== undefined ? { query_mode: opts.queryMode } : {}),
                 }),
               ],
             }),
