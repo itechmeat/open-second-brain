@@ -21,6 +21,7 @@
 
 import { Semaphore } from "./embeddings/http-util.ts";
 import { search } from "./search.ts";
+import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
 import { SearchError } from "./types.ts";
 import type { ResolvedSearchConfig, SearchOutcome } from "./types.ts";
 
@@ -241,6 +242,10 @@ export async function runRecallBenchmark(
           query: q.query,
           limit: depth,
           ...(expand ? { expand: true } : {}),
+          // Internal measurement lane: a benchmark that stopped seeing
+          // reserved pages would score a smaller corpus than the one it
+          // is benchmarking.
+          transportReach: TRANSPORT_REACH.local,
         });
       } finally {
         permit();

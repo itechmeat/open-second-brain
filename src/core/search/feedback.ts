@@ -24,6 +24,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync, existsSync
 import { join } from "node:path";
 
 import type { BrainSearchResult, ResolvedSearchConfig, WeightProfile } from "./types.ts";
+import type { TransportReach } from "../graph/transport-reach.ts";
 
 /** Lower bound for one learned per-layer multiplier. */
 export const LEARNED_WEIGHT_MIN = 0.8;
@@ -282,12 +283,29 @@ export function learnedWeightsReason(w: WeightProfile): string {
   return `learned_weights: ${parts.join(" ")}`;
 }
 
+/**
+ * How deep the judged query is re-run before the verdict is scored.
+ * Hoisted so the depth is named where it is decided rather than inline.
+ */
+const FEEDBACK_RERUN_LIMIT = 50;
+
 export interface CaptureRecallFeedbackInput {
   readonly query: string;
   readonly resultPath: string;
   readonly verdict: "up" | "down";
   /** Injected clock for deterministic tests. Defaults to Date.now(). */
   readonly nowMs?: number;
+  /**
+   * How far this caller reached, minted by the transport
+   * (`src/core/graph/transport-reach.ts`).
+   *
+   * Load-bearing rather than decorative: {@link
+   * CaptureRecallFeedbackOutcome.resultFound} reports whether the judged
+   * path came back, so a re-run that saw a reserved page would answer
+   * "yes, it exists" to a caller the page is reserved against. Omitted
+   * resolves to the narrowest.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 export interface CaptureRecallFeedbackOutcome {
@@ -312,7 +330,11 @@ export async function captureRecallFeedback(
   input: CaptureRecallFeedbackInput,
 ): Promise<CaptureRecallFeedbackOutcome> {
   const { search } = await import("./search.ts");
-  const outcome = await search(config, { query: input.query, limit: 50 });
+  const outcome = await search(config, {
+    query: input.query,
+    limit: FEEDBACK_RERUN_LIMIT,
+    ...(input.transportReach !== undefined ? { transportReach: input.transportReach } : {}),
+  });
   const hit = outcome.results.find((r) => r.path === input.resultPath);
   const contributions: LayerContributions = hit
     ? contributionsFromResult(hit)

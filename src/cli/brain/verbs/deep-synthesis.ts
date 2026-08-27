@@ -16,6 +16,7 @@ import {
 import { createTriggers } from "../../../core/brain/triggers/store.ts";
 import { resolveSearchConfig, SearchError } from "../../../core/search/index.ts";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -41,7 +42,11 @@ export async function cmdBrainDeepSynthesis(argv: string[]): Promise<number> {
     const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
     const searchConfig = resolveSearchConfig({ vault, configPath: config });
     const now = new Date();
-    const report = await deepSynthesis(searchConfig, topic, { now, limit });
+    const report = await deepSynthesis(searchConfig, topic, {
+      now,
+      limit,
+      transportReach: CLI_TRANSPORT_REACH,
+    });
 
     let enqueued = 0;
     if (flags["triggers"] === true) {

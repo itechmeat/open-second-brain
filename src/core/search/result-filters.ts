@@ -12,7 +12,13 @@ import { parseFrontmatterWithNotices } from "../vault.ts";
 import { BRAIN_STATE_REL } from "../brain/paths.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import type { FrontmatterMap } from "../types.ts";
-import { isVisible, pageVisibility } from "../graph/visibility.ts";
+import {
+  REMOTE_DENY_VISIBILITY_TOKEN,
+  isRemotelyReadable,
+  isVisible,
+  pageVisibility,
+} from "../graph/visibility.ts";
+import { type TransportReach } from "../graph/transport-reach.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
 import { scopeAxisReachable, scopeFromFrontmatter, type CompositeScope } from "../scope-key.ts";
 import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
@@ -246,21 +252,59 @@ export function applyDegreeFilter(
   return applyDegreeFilters(ranked, predicates, (path) => degreeForPath(snapshot, path));
 }
 
+/**
+ * The one place the visibility rule meets a ranked result set.
+ *
+ * TWO questions over one frontmatter read, and they compose in one
+ * direction only:
+ *
+ *   - {@link isRemotelyReadable} - may a caller at this REACH see the
+ *     page at all? Deny-by-default for the reserved token, and the
+ *     caller's `scope` cannot lift it.
+ *   - {@link isVisible} - does the caller's requested `scope` reach the
+ *     page's tags? Unchanged, and still caller-liftable for every
+ *     non-reserved token.
+ *
+ * FAILS CLOSED at {@link TRANSPORT_REACH.remote} on a page whose file
+ * cannot be READ - the routine trigger being a document still in the
+ * index whose file was deleted, renamed or made unreadable since the last
+ * run. An unreadable visibility claim is not the absence of one, the
+ * convention {@link isPathOwnerVisible} already holds for ownership. The
+ * verdict comes from {@link readCachedFrontmatterEntry} rather than from
+ * an empty metadata map, because the parser resolves an unreadable file
+ * to `{}` and never throws. At {@link TRANSPORT_REACH.local} the row is
+ * kept, because that caller can read the file directly anyway and taking
+ * it away would only hide a stale index row from the operator who has to
+ * fix it.
+ */
 export function applyVisibilityScope(
   ranked: ReadonlyArray<BrainSearchResult>,
   scope: ReadonlySet<string>,
+  reach: TransportReach,
   vault: string,
   frontmatterCache: FrontmatterCache,
 ): ReadonlyArray<BrainSearchResult> {
-  const tagsFor = (path: string): string[] => {
-    try {
-      return pageVisibility(readCachedFrontmatter(frontmatterCache, vault, path));
-    } catch {
-      return [];
-    }
-  };
-  return ranked.filter((r) => isVisible(tagsFor(r.path), scope));
+  return ranked.filter((r) => {
+    const entry = readCachedFrontmatterEntry(frontmatterCache, vault, r.path);
+    const tags = pageVisibility(entry.meta);
+    // The substitution answers the REACH question only. Letting it reach
+    // `isVisible` too would drop every unreadable page from every default
+    // -scope search, at every reach, which is a caller-scope rule this
+    // boundary has no business changing.
+    const reachTags = entry.unreadable ? UNMEASURABLE_VISIBILITY : tags;
+    return isRemotelyReadable(reachTags, reach) && isVisible(tags, scope);
+  });
 }
+
+/**
+ * The tag list an unreadable page answers with: the reserved token, so a
+ * page nobody can measure is treated exactly as one that reserved itself.
+ * Spelled as a constant rather than an inline literal so the fail-closed
+ * choice is visible at the definition rather than inferred from a branch.
+ */
+const UNMEASURABLE_VISIBILITY: ReadonlyArray<string> = Object.freeze([
+  REMOTE_DENY_VISIBILITY_TOKEN,
+]);
 
 /**
  * Composite scope filter (t_37c05a34): drop results outside the requested

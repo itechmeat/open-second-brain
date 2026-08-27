@@ -28,6 +28,7 @@ import {
   resolveConfigPath,
   VAULT_FLAGS,
 } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 /** Both malformed `--property` shapes report the same way. */
 function propertyFormatError(entry: string): CliError {
@@ -127,6 +128,10 @@ export async function cmdSearchQuery(argv: ReadonlyArray<string>): Promise<numbe
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined && visibility.length > 0 ? { visibility } : {}),
+    // The operator's own shell against the operator's own vault; carried
+    // into the cross-vault union below on the same options object, so a
+    // federated CLI query is bound by the same rule.
+    transportReach: CLI_TRANSPORT_REACH,
     // Owner-scope isolation (context-integrity-gates, Unit A): an
     // owner-private page is returned only to its own scope. Omitting the
     // flag applies no ownership filtering at all.

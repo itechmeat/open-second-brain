@@ -1,6 +1,7 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { fileContextRecall } from "../../../core/brain/file-recall.ts";
 import { brainVerbContext, parse, usageError } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 /**
  * `o2b brain file-context <file-path> [--limit N] [--min-bytes N] [--vault PATH] [--json]`
@@ -34,6 +35,7 @@ export async function cmdBrainFileContext(argv: string[]): Promise<number> {
 
   const searchConfig = resolveSearchConfig({ vault, configPath: config ?? undefined });
   const result = await fileContextRecall(searchConfig, {
+    transportReach: CLI_TRANSPORT_REACH,
     filePath,
     ...(limit !== undefined ? { limit } : {}),
     ...(minBytes !== undefined ? { minBytes } : {}),

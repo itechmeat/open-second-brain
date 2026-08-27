@@ -62,6 +62,7 @@ import {
   type ClaimNode,
 } from "../../core/brain/claim-graph.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
@@ -393,6 +394,7 @@ async function toolBrainDeepSynthesis(
     now,
     limit,
     ...(agentScope !== undefined ? { agentScope } : {}),
+    transportReach: contextReach(ctx),
   });
   let triggersCreated: number | undefined;
   if (enqueue) {

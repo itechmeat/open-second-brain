@@ -27,6 +27,7 @@
  */
 
 import { search } from "./search.ts";
+import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
 import { readQueryDemand } from "../brain/query-demand.ts";
 import type { ResolvedSearchConfig } from "./types.ts";
 import { resolveOpenAiCompatEndpoint } from "./embeddings/provider-resolve.ts";
@@ -171,6 +172,9 @@ async function defaultFetchCandidates(
     query,
     limit: topK,
     selfHeal: false,
+    // Internal measurement lane: the fit check compares rerankers over
+    // this vault's own corpus and hands no page to anyone.
+    transportReach: TRANSPORT_REACH.local,
   });
   return {
     query,

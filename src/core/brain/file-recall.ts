@@ -18,6 +18,7 @@ import { statSync } from "node:fs";
 
 import { search } from "../search/search.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
+import type { TransportReach } from "../graph/transport-reach.ts";
 
 const DEFAULT_LIMIT = 5;
 const DEFAULT_MIN_BYTES = 1500;
@@ -37,6 +38,15 @@ export interface FileContextOptions {
    * unscoped call byte-identical.
    */
   readonly agentScope?: string;
+  /**
+   * How far this caller reached, minted by the transport
+   * (`src/core/graph/transport-reach.ts`) and threaded straight into
+   * {@link SearchOptions.transportReach}, so a page reserved against
+   * remote reads is withheld here on exactly the same terms it is
+   * withheld from a direct search. Omitted resolves to the narrowest,
+   * which is what a lane that established nothing should get.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 export interface FileContextResult {
@@ -102,6 +112,7 @@ export async function fileContextRecall(
     query,
     limit,
     ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
+    ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
   });
   return frozenResult(opts.filePath, false, null, query, outcome.results);
 }

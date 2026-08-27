@@ -21,6 +21,7 @@ import { sha256Hex } from "../integrity/digest.ts";
 import { search } from "../search/search.ts";
 import { walkVault } from "../search/walker.ts";
 import type { BrainSearchResult, ResolvedSearchConfig } from "../search/types.ts";
+import type { TransportReach } from "../graph/transport-reach.ts";
 import { buildEntityIndex } from "./entities/index-builder.ts";
 import { extractWikilinkRichBodies, parseWikilinkRich } from "./link-graph/parse-wikilink.ts";
 import { fileAgeMs, msToWholeDays } from "./time.ts";
@@ -231,6 +232,15 @@ export interface DeepSynthesisOptions {
    * unscoped call byte-identical.
    */
   readonly agentScope?: string;
+  /**
+   * How far this caller reached, minted by the transport
+   * (`src/core/graph/transport-reach.ts`) and threaded straight into
+   * {@link SearchOptions.transportReach}, so a page reserved against
+   * remote reads is withheld here on exactly the same terms it is
+   * withheld from a direct search. Omitted resolves to the narrowest,
+   * which is what a lane that established nothing should get.
+   */
+  readonly transportReach?: TransportReach;
 }
 
 const CHECKED = Object.freeze([
@@ -367,6 +377,7 @@ export async function deepSynthesis(
     limit: rawLimit,
     keywordOnly: true,
     ...(opts.agentScope !== undefined ? { agentScope: opts.agentScope } : {}),
+    ...(opts.transportReach !== undefined ? { transportReach: opts.transportReach } : {}),
   });
 
   // Dedupe chunk hits into per-document notes (best score wins), THEN

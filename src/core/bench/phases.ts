@@ -17,6 +17,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { packContext } from "../brain/context-pack.ts";
+import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
 import { loadNormalizedContinuityRecords } from "../brain/continuity/read-model.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
 import { extractPreCompactRecords } from "../brain/pre-compact-extract.ts";
@@ -53,6 +54,15 @@ import {
   type BenchQuestionResult,
   type BenchReport,
 } from "./types.ts";
+
+/**
+ * The reach the benchmark harness runs its queries at.
+ *
+ * Local: a bench run measures this vault's own corpus and hands no page
+ * to any caller, so a run that stopped seeing reserved pages would score
+ * a smaller vault than the one under test.
+ */
+const BENCH_REACH = TRANSPORT_REACH.local;
 
 export interface BenchRunOptions {
   readonly fixture: BenchFixture;
@@ -133,7 +143,7 @@ export async function runMemoryBench(opts: BenchRunOptions): Promise<BenchReport
   // the FTS index exists before any timed retrieval.
   if (!phaseDone(checkpoint, "index")) {
     const config = benchSearchConfig(vault);
-    await search(config, { query: "warmup", limit: 1 });
+    await search(config, { query: "warmup", limit: 1, transportReach: BENCH_REACH });
     checkpoint = completeBenchPhase(run.runDir, checkpoint, "index");
   }
 
@@ -184,6 +194,7 @@ async function retrieveQuestion(
     const outcome = await search(config, {
       query: question.query ?? "",
       limit: question.top_k ?? 5,
+      transportReach: BENCH_REACH,
     });
     return {
       id: question.id,

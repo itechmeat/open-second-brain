@@ -13,6 +13,7 @@
  * before is still exported from this path.
  */
 
+import type { TransportReach } from "../graph/transport-reach.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
 import type { ReconciliationOutcome, ReconciliationReport } from "../reconciliation-report.ts";
@@ -813,8 +814,30 @@ export interface SearchOptions {
    * a page that declares visibility values is returned only when this
    * scope includes one of them. Absent/empty = default scope (reaches
    * untagged pages only). See src/core/graph/visibility.ts.
+   *
+   * This argument NARROWS and cannot lift: a scope naming
+   * {@link REMOTE_DENY_VISIBILITY_TOKEN} does not make a page reserved
+   * against remote reads readable at {@link TRANSPORT_REACH.remote}. See
+   * {@link SearchOptions.transportReach}.
    */
   readonly visibility?: ReadonlyArray<string>;
+  /**
+   * How far the caller of this search had to reach to get here, minted by
+   * the transport that accepted the request
+   * (`src/core/graph/transport-reach.ts`).
+   *
+   * Absent resolves to {@link TRANSPORT_REACH.remote}, the narrowest: a
+   * search whose caller nobody established anything about is not a search
+   * that proved local access. Every internal lane that must see the whole
+   * corpus - benchmarks, recall feedback, rerank fit - passes
+   * {@link TRANSPORT_REACH.local} explicitly, and so does the CLI, which
+   * runs in the operator's own shell.
+   *
+   * NOT to be confused with {@link SearchOptions.disclosure}, which is
+   * the result-DEPTH mode; this one decides which pages exist for this
+   * caller at all.
+   */
+  readonly transportReach?: TransportReach;
   /**
    * Requested agent-ownership scope (Unit 5). When set, a page that
    * declares an `owner:` frontmatter token is returned only if its owner

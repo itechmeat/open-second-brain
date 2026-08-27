@@ -9,6 +9,7 @@
 import { defaultConfigPath } from "../../../core/config.ts";
 import { resolveSearchConfig, search, SearchError } from "../../../core/search/index.ts";
 import { fail, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 export async function cmdBrainSgrep(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -41,6 +42,7 @@ export async function cmdBrainSgrep(argv: string[]): Promise<number> {
     const outcome = await search(searchConfig, {
       query,
       limit,
+      transportReach: CLI_TRANSPORT_REACH,
       keywordOnly: flags["keyword-only"] === true,
       ...(pathPrefix !== undefined ? { pathPrefix } : {}),
       ...(typeof flags["agent-scope"] === "string"

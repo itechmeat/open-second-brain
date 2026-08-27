@@ -49,6 +49,7 @@ import {
 } from "../core/search/retrieval-trail.ts";
 import { probeRetrievalCorpus } from "../core/search/pipeline/outcome.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
+import { contextReach } from "./tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import {
   AGENT_SCOPE_SCHEMA,
@@ -940,6 +941,10 @@ async function toolBrainSearch(
     ...(properties !== undefined ? { properties } : {}),
     ...(degreeFilters !== undefined ? { degreeFilters } : {}),
     ...(visibility !== undefined ? { visibility } : {}),
+    // The reach the transport minted for this caller. Carried into the
+    // cross-vault union too, which spreads these options onto every
+    // federated leg, so a federated caller is bound by the same rule.
+    transportReach: contextReach(ctx),
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(scope !== undefined ? { scope } : {}),
     ...(structuredQuery !== undefined ? { structuredQuery } : {}),
@@ -1298,7 +1303,12 @@ async function toolBrainRecallFeedback(
     vault: ctx.vault,
     configPath: ctx.configPath ?? undefined,
   });
-  const outcome = await captureRecallFeedback(config, { query, resultPath, verdict });
+  const outcome = await captureRecallFeedback(config, {
+    query,
+    resultPath,
+    verdict,
+    transportReach: contextReach(ctx),
+  });
   return {
     recorded: true,
     result_found: outcome.resultFound,
@@ -1560,6 +1570,7 @@ async function toolBrainFileContext(
     const agentScope = coerceAgentScope(ctx, args, false);
     const outcome = await fileContextRecall(config, {
       ...(agentScope !== undefined ? { agentScope } : {}),
+      transportReach: contextReach(ctx),
       filePath,
       ...(limit !== undefined ? { limit } : {}),
       ...(minBytes !== undefined ? { minBytes } : {}),

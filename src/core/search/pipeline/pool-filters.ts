@@ -9,6 +9,7 @@
 
 import { normalizeAgentScope } from "../../graph/agent-scope.ts";
 import { normalizeVisibilityScope } from "../../graph/visibility.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../graph/transport-reach.ts";
 import { normalizeScopeFilter } from "../../scope-key.ts";
 import {
   applyAgentScope,
@@ -27,6 +28,12 @@ export interface PoolFilters {
   readonly properties: ReadonlyMap<string, ReadonlyArray<string>> | null;
   readonly degreeFilters: ReadonlyArray<DegreePredicate>;
   readonly visibilityScope: ReturnType<typeof normalizeVisibilityScope>;
+  /**
+   * The reach this search's caller was established at. Absent from the
+   * options means nobody established one, which resolves to the narrowest
+   * - see {@link SearchOptions.transportReach}.
+   */
+  readonly reach: TransportReach;
   readonly agentScope: ReturnType<typeof normalizeAgentScope>;
   readonly scopeFilter: ReturnType<typeof normalizeScopeFilter> | null;
   /**
@@ -57,6 +64,13 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
   // the window.
   const visibilityScope = normalizeVisibilityScope(opts.visibility ?? []);
   const hasVisibilityRequest = (opts.visibility?.length ?? 0) > 0;
+  // Deny-by-default reach. NOT folded into `canDropRows`: a reserved page
+  // dropped at remote reach shrinks the window exactly the way a tagged
+  // page already does under the default scope, and the assembly's
+  // one-shot backfill is what widens the pool when it actually happens.
+  // Folding it in would make every remote search overfetch up front,
+  // including in the vaults that never wrote the token.
+  const reach = opts.transportReach ?? TRANSPORT_REACH.remote;
   // Agent-ownership scope (Unit 5): null means "no scope requested" -
   // no ownership filtering, so untagged vaults stay byte-identical.
   const agentScope = normalizeAgentScope(opts.agentScope);
@@ -73,6 +87,7 @@ export function resolvePoolFilters(opts: SearchOptions): PoolFilters {
     properties,
     degreeFilters,
     visibilityScope,
+    reach,
     agentScope,
     scopeFilter,
     canDropRows:
@@ -130,6 +145,7 @@ export function applyPoolFilters(
   const visible = applyVisibilityScope(
     degreeFiltered,
     filters.visibilityScope,
+    filters.reach,
     ctx.vault,
     ctx.frontmatterCache,
   );

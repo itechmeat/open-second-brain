@@ -22,6 +22,7 @@ import { expandHit } from "../../../src/core/search/cards.ts";
 import { indexVault, resolveSearchConfig, search } from "../../../src/core/search/index.ts";
 import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
@@ -187,7 +188,17 @@ test("an unreadable owner-tagged file is hidden from another owner", async () =>
 test("an unscoped call still serves a deleted file's indexed chunk", async () => {
   const chunkId = await chunkIdFor("notes/owned-a.md");
   rmSync(join(vault, "notes", "owned-a.md"));
-  const unscoped = await search(config, { query: QUERY, limit: 20 });
+  // Unscoped means no OWNERSHIP filtering. The reach is minted separately
+  // and is what decides whether an unmeasurable page may be answered at
+  // all, so this case states the local one - the operator's own CLI, who
+  // is exactly the caller who needs to see the stale row in order to fix
+  // it. The remote counterpart is pinned in
+  // `tests/core/search/visibility-filter.test.ts`.
+  const unscoped = await search(config, {
+    query: QUERY,
+    limit: 20,
+    transportReach: TRANSPORT_REACH.local,
+  });
   expect(unscoped.results.map((r) => r.path)).toContain("notes/owned-a.md");
   expect((await expandHit(config, { chunkId })).note.path).toBe("notes/owned-a.md");
 });

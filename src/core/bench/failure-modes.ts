@@ -88,6 +88,7 @@
 import { estimateTokens } from "../brain/text/tokenizer.ts";
 import type { RecallInjectDecision, RecallResultSet } from "../brain/recall-inject.ts";
 import { resolveSearchConfig, search } from "../search/index.ts";
+import { TRANSPORT_REACH } from "../graph/transport-reach.ts";
 
 /**
  * How one proactive-recall decision failed, or nothing when it was right.
@@ -135,7 +136,14 @@ export function benchRecallRetriever(
   limit: number,
 ): (query: string) => Promise<RecallResultSet> {
   return async (query) => {
-    const outcome = await search(config, { query, limit });
+    // Internal measurement lane: nothing here reaches a remote caller, so
+    // it measures the whole corpus. A lane that stopped seeing reserved
+    // pages would report a smaller vault than the one it is measuring.
+    const outcome = await search(config, {
+      query,
+      limit,
+      transportReach: TRANSPORT_REACH.local,
+    });
     return Object.freeze({
       candidates: Object.freeze(
         outcome.results.map((result) =>

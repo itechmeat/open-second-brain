@@ -22,6 +22,7 @@ import {
   resolveConfig,
   VAULT_FLAGS,
 } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 export async function cmdSearchFeedback(argv: ReadonlyArray<string>): Promise<number> {
   const { flags } = parseFlags(argv, {
@@ -41,7 +42,12 @@ export async function cmdSearchFeedback(argv: ReadonlyArray<string>): Promise<nu
     throw new CliError("--verdict must be 'up' or 'down'");
   }
   const cfg = resolveConfig(flags);
-  const outcome = await captureRecallFeedback(cfg, { query, resultPath, verdict });
+  const outcome = await captureRecallFeedback(cfg, {
+    query,
+    resultPath,
+    verdict,
+    transportReach: CLI_TRANSPORT_REACH,
+  });
   if (flagBoolean(flags, "json")) {
     process.stdout.write(
       JSON.stringify({
