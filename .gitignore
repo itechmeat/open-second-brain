@@ -31,3 +31,7 @@ sandbox-vault/
 # Local Kanban/git worktrees (never committed; exclude from lint/fmt)
 .worktrees/
 .code-ranker/
+
+# Agentic-playbooks runner artifacts (never committed; exclude from lint/fmt)
+.apb/runs/
+.apb/tmp/
