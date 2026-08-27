@@ -3115,6 +3115,33 @@ function vaultRelative(target, vault) {
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
 }
 
+// src/core/graph/transport-reach.ts
+var TRANSPORT_REACH = Object.freeze({
+  local: "local",
+  remote: "remote"
+});
+var TRANSPORT_REACHES = Object.freeze([
+  TRANSPORT_REACH.local,
+  TRANSPORT_REACH.remote
+]);
+var MAINTENANCE_LANE_REACH = TRANSPORT_REACH.local;
+
+// src/core/graph/visibility.ts
+function normToken(raw) {
+  return raw.normalize("NFC").trim().toLowerCase();
+}
+function pageVisibility(meta) {
+  const v = meta["visibility"];
+  const list = Array.isArray(v) ? v : typeof v === "string" && v.length > 0 ? [v] : [];
+  return list.map((s) => normToken(String(s))).filter((s) => s.length > 0);
+}
+var REMOTE_DENY_VISIBILITY_TOKEN = "private";
+function isRemotelyReadable(pageTags, reach) {
+  if (reach === TRANSPORT_REACH.local)
+    return true;
+  return !pageTags.includes(REMOTE_DENY_VISIBILITY_TOKEN);
+}
+
 // src/core/vault.ts
 var FRONTMATTER_RE = /^---\s*\n([\s\S]*?)\n---\s*\n?/;
 var FRONTMATTER_KEY_PATTERN = "[a-zA-Z_][a-zA-Z0-9_-]*";
@@ -3236,14 +3263,15 @@ function clipNoticeLine(line) {
   return line.length <= NOTICE_LINE_MAX ? line : line.slice(0, NOTICE_LINE_MAX) + NOTICE_LINE_ELLIPSIS;
 }
 var LIST_VAULT_PAGES_SITE = "vault.listVaultPages";
-function listVaultPages(vaultDir, opts = {}) {
+function listVaultPages(vaultDir, opts) {
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
-  const pages = [];
-  walk(vaultDir, vaultDir, skipDirs, skipFiles, pages, {
+  const walked = [];
+  walk(vaultDir, vaultDir, skipDirs, skipFiles, walked, {
     sink: opts.notices,
     site: opts.site ?? LIST_VAULT_PAGES_SITE
   });
+  const pages = walked.filter((p) => isRemotelyReadable(pageVisibility(p.metadata), opts.reach));
   pages.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
   return pages;
 }
@@ -3441,6 +3469,7 @@ function vaultPathField(ctx) {
 }
 
 // src/openclaw/index.ts
+var OPENCLAW_TRANSPORT_REACH = TRANSPORT_REACH.remote;
 function resolveVaultPath(api) {
   const cfg = api.pluginConfig ?? {};
   return cfg.vault || process.env["VAULT_DIR"] || ".";
@@ -3510,7 +3539,7 @@ var openclaw_default = definePluginEntry({
         const limit = typeof params["limit"] === "number" ? params["limit"] : 50;
         if (limit < 1 || limit > 500)
           throw new Error("argument 'limit' must be between 1 and 500");
-        const pages = listVaultPages(vault).filter((p) => vaultPageInStatusScope(p.metadata, ENTITY_STATUS_SCOPE.readable));
+        const pages = listVaultPages(vault, { reach: OPENCLAW_TRANSPORT_REACH }).filter((p) => vaultPageInStatusScope(p.metadata, ENTITY_STATUS_SCOPE.readable));
         const needle = pattern ? pattern.toLowerCase() : null;
         const matched = (needle === null ? pages : pages.filter((p) => p.title.toLowerCase().includes(needle))).slice(0, limit).map((p) => ({
           title: p.title,

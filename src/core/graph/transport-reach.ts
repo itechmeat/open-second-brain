@@ -62,3 +62,19 @@ export const TRANSPORT_REACHES: ReadonlyArray<TransportReach> = Object.freeze([
 export function isTransportReach(value: unknown): value is TransportReach {
   return typeof value === "string" && (TRANSPORT_REACHES as ReadonlyArray<string>).includes(value);
 }
+
+/**
+ * The reach an INTERNAL maintenance lane walks the vault at.
+ *
+ * `local`, and not because a lane proved anything about a caller - it has
+ * no caller. A heal pass, a link-graph repair, a portability export, a
+ * freshness sweep or a schema report reads the vault to reason about the
+ * vault, and its output is a repair or a diagnostic rather than a page
+ * handed to anyone. A lane that stopped seeing reserved pages would
+ * report a smaller vault than the one it is fixing, and would then break
+ * the links into the pages it could not see.
+ *
+ * Named here once so the claim every lane makes is the same claim, and so
+ * a reader can find all of them by finding this constant.
+ */
+export const MAINTENANCE_LANE_REACH: TransportReach = TRANSPORT_REACH.local;

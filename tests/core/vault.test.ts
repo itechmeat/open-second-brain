@@ -24,6 +24,7 @@ import {
   slugify,
   writeFrontmatter,
 } from "../../src/core/vault.ts";
+import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
 
 let tmp: string;
 
@@ -382,11 +383,18 @@ describe("extractWikilinks", () => {
   });
 });
 
+/**
+ * None of these pages carries the reserved visibility token, so the walk
+ * answers identically at either reach; the cases that DO turn on it live
+ * in `tests/core/vault/list-vault-pages-visibility.test.ts`.
+ */
+const REACH_AGNOSTIC = TRANSPORT_REACH.local;
+
 describe("listVaultPages", () => {
   test("discovers Markdown files", () => {
     writeFileSync(join(tmp, "page1.md"), "---\ntitle: Alpha\n---\n\nContent.");
     writeFileSync(join(tmp, "page2.md"), "Beta content without frontmatter.");
-    const pages = listVaultPages(tmp);
+    const pages = listVaultPages(tmp, { reach: REACH_AGNOSTIC });
     expect(pages.length).toBe(2);
     const titles = pages.map((p) => p.title);
     expect(titles).toContain("Alpha");
@@ -397,13 +405,13 @@ describe("listVaultPages", () => {
     writeFileSync(join(tmp, "page.md"), "Content.");
     mkdirSync(join(tmp, ".obsidian"));
     writeFileSync(join(tmp, ".obsidian", "hidden.md"), "Hidden.");
-    expect(listVaultPages(tmp).length).toBe(1);
+    expect(listVaultPages(tmp, { reach: REACH_AGNOSTIC }).length).toBe(1);
   });
 
   test("skips excluded files (index.md, log.md)", () => {
     writeFileSync(join(tmp, "page.md"), "Content.");
     writeFileSync(join(tmp, "index.md"), "Index.");
-    const pages = listVaultPages(tmp);
+    const pages = listVaultPages(tmp, { reach: REACH_AGNOSTIC });
     expect(pages.length).toBe(1);
     expect(pages[0]!.title).toBe("page");
   });
@@ -412,7 +420,7 @@ describe("listVaultPages", () => {
     writeFileSync(join(tmp, "clean.md"), "---\ntitle: Alpha\ntags:\n  - a\n---\n\nContent.");
     writeFileSync(join(tmp, "odd.md"), "---\ntitle: Beta\n-foo\n---\n\nContent.");
     const notices: DegradationNotice[] = [];
-    const pages = listVaultPages(tmp, { notices });
+    const pages = listVaultPages(tmp, { notices, reach: REACH_AGNOSTIC });
     // Control flow unchanged: the odd page is still listed.
     expect(pages.length).toBe(2);
     expect(notices).toHaveLength(1);
@@ -424,7 +432,7 @@ describe("listVaultPages", () => {
     writeFileSync(join(tmp, "clean.md"), "---\ntitle: Alpha\ntags:\n  - a\n---\n\nContent.");
     writeFileSync(join(tmp, "plain.md"), "No frontmatter at all.");
     const notices: DegradationNotice[] = [];
-    listVaultPages(tmp, { notices });
+    listVaultPages(tmp, { notices, reach: REACH_AGNOSTIC });
     expect(notices).toEqual([]);
   });
 
@@ -436,7 +444,7 @@ describe("listVaultPages", () => {
     chmodSync(locked, 0o000);
     const notices: DegradationNotice[] = [];
     try {
-      const pages = listVaultPages(tmp, { notices });
+      const pages = listVaultPages(tmp, { notices, reach: REACH_AGNOSTIC });
       // Same control flow as before: the unreadable subtree is skipped.
       expect(pages.length).toBe(1);
       expect(notices).toHaveLength(1);

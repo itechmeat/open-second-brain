@@ -23,6 +23,7 @@ import { ensureInsideVault } from "../../path-safety.ts";
 import { EXCLUDED_DIRS, extractWikilinks, listVaultPages, parseFrontmatter } from "../../vault.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-scope.ts";
 import { canonicalCoOccurrenceKey } from "./co-occurrence.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 /** Upper bound on the evidence hydrated from a target note. */
 export const HOLDOUT_EVIDENCE_MAX_CHARS = 2000;
@@ -77,7 +78,10 @@ export interface HoldoutGateResult {
  */
 function buildKeyAdjacency(vault: string): Map<string, Set<string>> {
   const adjacency = new Map<string, Set<string>>();
-  for (const page of listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS] })) {
+  for (const page of listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS],
+    reach: MAINTENANCE_LANE_REACH,
+  })) {
     if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     const sourceKey = canonicalCoOccurrenceKey(page.path);
     if (sourceKey === null) continue;

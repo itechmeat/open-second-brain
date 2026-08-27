@@ -53,6 +53,7 @@ import { unresolvedField, vaultPathField } from "./vault-path-field.ts";
 import {
   TOOL_SCOPE,
   TOOL_SCOPES,
+  contextReach,
   type ServerContext,
   type ToolCapabilityReport,
   type ToolDefinition,
@@ -217,8 +218,14 @@ async function toolQuery(
   const scope = normalizeAgentScope(coerceAgentScope(ctx, args, false));
 
   const notices: DegradationNotice[] = [];
+  // Root B: the reach the transport minted for this caller. A page
+  // reserved against remote reads never reaches the ownership filter
+  // below, and never reaches the count either.
+  const reach = contextReach(ctx);
   const listed =
-    scope === null ? listVaultPages(ctx.vault) : listVaultPages(ctx.vault, { notices });
+    scope === null
+      ? listVaultPages(ctx.vault, { reach })
+      : listVaultPages(ctx.vault, { notices, reach });
   const unreadable = new Set(
     notices
       .filter((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable)

@@ -38,6 +38,7 @@ import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../entities/page-sc
 import { canonicalCoOccurrenceKey, computeCoOccurrenceSuggestions } from "./co-occurrence.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { scaffoldStub } from "../notes/scaffold-stub.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 /** Identity-strength tiers, strongest first. `inferred` is opt-in. */
 export const IDENTITY_STRENGTH = Object.freeze({
@@ -408,7 +409,10 @@ interface CollectedPage {
  */
 function loadPages(vault: string): CollectedPage[] {
   const out: CollectedPage[] = [];
-  for (const page of listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS] })) {
+  for (const page of listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS],
+    reach: MAINTENANCE_LANE_REACH,
+  })) {
     if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     const rel = canonicalNotePath(relative(vault, page.path));
     const key = canonicalCoOccurrenceKey(rel);

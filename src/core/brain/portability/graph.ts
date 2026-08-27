@@ -35,6 +35,7 @@ import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import { loadVaultMap, resolveTokens } from "./role-tokens.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 export const GRAPH_VERSION = "1";
 
@@ -84,7 +85,10 @@ function collectRelations(meta: FrontmatterMap): Record<string, ReadonlyArray<st
  * sorted graph. Pure and read-only.
  */
 export function exportVaultGraph(vault: string): VaultGraph {
-  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL] });
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
+    reach: MAINTENANCE_LANE_REACH,
+  });
   const nodes: VaultGraphNode[] = [];
   for (const page of pages) {
     let body: string;

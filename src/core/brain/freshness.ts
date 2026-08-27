@@ -25,6 +25,7 @@ import { isAbsolute, join } from "node:path";
 
 import { sha256Hex } from "../integrity/digest.ts";
 import { listVaultPages, parseFrontmatter } from "../vault.ts";
+import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 /** Hash value recorded for a source that did not exist at derivation. */
 export const MISSING_SOURCE_HASH = "missing";
@@ -168,7 +169,7 @@ function freshnessOf(vault: string, pagePath: string, contract: SourceStamp): Pa
  * the contract. On-demand and read-only.
  */
 export function scanFreshness(vault: string): FreshnessReport {
-  const pages = listVaultPages(vault);
+  const pages = listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH });
   let withContract = 0;
   let fresh = 0;
   const stale: PageFreshness[] = [];

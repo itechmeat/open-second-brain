@@ -29,6 +29,7 @@ import {
 import type { FrontmatterMap } from "../../types.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 export const CO_OCCURRENCE_SCHEMA_VERSION = "o2b.cooccurrence.v1";
 
@@ -95,7 +96,10 @@ export function computeCoOccurrenceSuggestions(
   const minScore = opts.minScore ?? DEFAULT_MIN_SCORE;
   const limit = Math.max(0, Math.floor(opts.limit ?? DEFAULT_LIMIT));
 
-  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL] });
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
+    reach: MAINTENANCE_LANE_REACH,
+  });
 
   // pageKey -> set of canonical targets it references (for direct-link
   // exclusion). targetSets in stable insertion order for hashing.

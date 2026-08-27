@@ -39,6 +39,7 @@ import { resolveNotePath } from "../note-path.ts";
 import type { SchemaPack } from "../schema-pack.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { OPERATION, progressCounter, withProgress, type ProgressCounter } from "../progress.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 export const BRIDGE_DEFAULT_MIN_SIMILARITY = 0.8;
 export const BRIDGE_DEFAULT_MAX_PROPOSALS = 10;
@@ -374,7 +375,7 @@ export function acceptBridge(
  */
 function countBasenameMatches(vault: string, base: string): number {
   let count = 0;
-  for (const page of listVaultPages(vault)) {
+  for (const page of listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH })) {
     if (!vaultPageInStatusScope(page.metadata, ENTITY_STATUS_SCOPE.readable)) continue;
     if (basename(page.path, ".md") === base) count++;
   }

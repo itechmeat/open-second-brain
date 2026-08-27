@@ -15,6 +15,7 @@ import {
   type SchemaVocabularyCategory,
 } from "./schema-vocab.ts";
 import { parseSignal } from "./signal.ts";
+import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 export interface SchemaTokenUsage {
   readonly token: string;
@@ -234,7 +235,7 @@ function scanPageTypes(
   counts: Map<string, number>,
   findings: SchemaReportFinding[],
 ): void {
-  for (const page of listVaultPages(vault)) {
+  for (const page of listVaultPages(vault, { reach: MAINTENANCE_LANE_REACH })) {
     const rel = vaultRelative(page.path, vault);
     if (rel === "Brain" || rel.startsWith("Brain/")) continue;
     const raw = page.metadata["schema_type"];

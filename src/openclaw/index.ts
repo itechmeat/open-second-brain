@@ -17,10 +17,25 @@ import { probeVaultDirectory } from "../core/vault-presence.ts";
 import { doctor } from "../core/doctor.ts";
 import { buildReminder } from "../core/identity-reminder.ts";
 import { listVaultPages } from "../core/vault.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import { ENTITY_STATUS_SCOPE, vaultPageInStatusScope } from "../core/brain/entities/page-scope.ts";
 import { deriveRuntimeAgentName, normalizeAgentArgument } from "../core/agent-identity.ts";
 import { vaultRelative as vaultRelativePath } from "../core/path-safety.ts";
 import { vaultPathField } from "../mcp/vault-path-field.ts";
+
+/**
+ * What this runtime establishes about the caller of its tools.
+ *
+ * `remote`, and the distinction from the CLI is the caller rather than
+ * the machine. A CLI verb is typed by the operator; these tools are
+ * called by a model, over a conversation whose steering this plugin
+ * cannot see. Running on the operator's own host proves that the PROCESS
+ * has filesystem access, not that the party asking is entitled to a page
+ * the operator reserved - so this surface takes the narrowest reach, and
+ * an operator who wants those pages in this runtime reads them the way
+ * they reserved them: locally.
+ */
+const OPENCLAW_TRANSPORT_REACH: TransportReach = TRANSPORT_REACH.remote;
 
 interface PluginConfig {
   vault?: string;
@@ -125,7 +140,7 @@ export default definePluginEntry({
         // by title, which is exactly the surface that would hand one back, and
         // it is a page walker rather than an entity reader so the entity read
         // census does not cover it. Non-entity pages are unaffected.
-        const pages = listVaultPages(vault).filter((p) =>
+        const pages = listVaultPages(vault, { reach: OPENCLAW_TRANSPORT_REACH }).filter((p) =>
           vaultPageInStatusScope(p.metadata, ENTITY_STATUS_SCOPE.readable),
         );
         const needle = pattern ? pattern.toLowerCase() : null;

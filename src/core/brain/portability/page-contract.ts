@@ -26,6 +26,7 @@ import {
 } from "../../graph/frontmatter-relations.ts";
 import { BRAIN_ROOT_REL } from "../paths.ts";
 import { isoSecond } from "../time.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 export const PAGE_CONTRACT_VERSION = "1";
 
@@ -109,7 +110,10 @@ function freshnessOf(meta: FrontmatterMap, absPath: string): string | null {
  * `path` for deterministic output. Pure and read-only.
  */
 export function projectPageContracts(vault: string): ReadonlyArray<PageContract> {
-  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL] });
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, BRAIN_ROOT_REL],
+    reach: MAINTENANCE_LANE_REACH,
+  });
   const contracts: PageContract[] = [];
   for (const page of pages) {
     let body: string;

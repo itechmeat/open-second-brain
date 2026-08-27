@@ -573,7 +573,7 @@ async function cmdIndex(argv: string[]): Promise<number> {
   const vault = requireVault(flags["vault"] as string | undefined, defaultConfigPath());
   let pages;
   try {
-    pages = listVaultPages(vault);
+    pages = listVaultPages(vault, { reach: CLI_TRANSPORT_REACH });
   } catch (exc) {
     process.stderr.write(`error: failed to list vault pages: ${(exc as Error).message ?? exc}\n`);
     return 1;

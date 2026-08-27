@@ -71,6 +71,7 @@ import {
   type DeclaredSkillProposalResult,
 } from "./skill-proposals.ts";
 import { BRAIN_CONFIDENCE } from "./types.ts";
+import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 /** Lowest tier a page may carry and still be a skill candidate. */
 export const MATURE_PAGE_TIER: PageTier = PAGE_TIER.core;
@@ -225,7 +226,10 @@ export function planSkillPageDrafts(
   opts: PlanSkillPageDraftsOptions,
 ): SkillPageDraftPlan {
   const brainDir = BRAIN_ROOT_REL.split("/")[0] ?? "Brain";
-  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, brainDir] });
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, brainDir],
+    reach: MAINTENANCE_LANE_REACH,
+  });
   const reuse = observedReuseRates(vault);
   const covered = installedSkillNames(vault, opts);
 

@@ -17,6 +17,7 @@ import {
 } from "../../../src/core/brain/deep-synthesis.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 
 let vault: string;
 let dbPath: string;
@@ -173,7 +174,16 @@ test("a matched note with no retrievable content is excluded with a reason, neve
   // Delete after indexing: the index still surfaces it, but its bytes are gone.
   rmSync(join(vault, "Brain/notes/ghost.md"));
 
-  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "manticores", { now: NOW });
+  // The subject here is how an unretrievable note is REPORTED, not who may
+  // see it: an unreadable page has an unmeasurable visibility claim and is
+  // withheld at remote reach (pinned in
+  // `tests/core/search/visibility-filter.test.ts`). This case asks at the
+  // reach that still surfaces it - the operator's own, who is the caller
+  // who has to act on the exclusion reason.
+  const report = await deepSynthesis(makeConfig({ vault, dbPath }), "manticores", {
+    now: NOW,
+    transportReach: TRANSPORT_REACH.local,
+  });
   // Still a matched note (existing field, unchanged).
   expect(report.notes.some((n) => n.path === "Brain/notes/ghost.md")).toBe(true);
   // But never a finding - it has no evidence identity.

@@ -47,6 +47,7 @@ import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 import { attachProgress, reportProgressRefusal } from "../../progress-rail.ts";
 import { nextCommandField } from "../../../core/brain/next-step.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 const USAGE =
   "usage: o2b brain clusters run [--min-size N] [--batch-size N] [--if-stale] [--progress] | " +
@@ -62,7 +63,7 @@ const CLUSTERS_DIR_REL = join("Brain", "clusters");
  */
 function clustersStaleness(vault: string, nowMs: number): StalenessResult {
   const clustersDir = join(vault, CLUSTERS_DIR_REL);
-  const inputs = listVaultPages(vault)
+  const inputs = listVaultPages(vault, { reach: CLI_TRANSPORT_REACH })
     .map((p) => p.path)
     .filter((p) => !p.startsWith(clustersDir));
   const outputs = existsSync(clustersDir)

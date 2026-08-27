@@ -34,6 +34,7 @@ import {
   type ProgressSink,
 } from "./progress.ts";
 import type { Safeguard } from "./safeguard.ts";
+import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
 
 /** The one stage this pass has: it walks the vault's user pages. */
 const HEAL_ENRICH_STAGE = "heal-enrich";
@@ -113,7 +114,10 @@ function healEnrichmentRun(
   // it - heal must never rewrite Syncthing version history, Obsidian
   // config, or the trash.
   const brainDir = BRAIN_ROOT_REL.split("/")[0] ?? "Brain";
-  const pages = listVaultPages(vault, { skipDirs: [...EXCLUDED_DIRS, brainDir] });
+  const pages = listVaultPages(vault, {
+    skipDirs: [...EXCLUDED_DIRS, brainDir],
+    reach: MAINTENANCE_LANE_REACH,
+  });
   // The stage opens with its denominator, which is why it opens HERE and
   // not before the listing: the page count is the one number a reader
   // wants and it does not exist until the walk returns. It still opens

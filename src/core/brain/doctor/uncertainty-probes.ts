@@ -20,6 +20,7 @@ import { scanStaleLocks } from "../sync-lockfile.ts";
 import { vaultMarkerAbsentNotice } from "../vault-identity.ts";
 import type { DoctorCheck } from "./check.ts";
 import { pushUncertain } from "./uncertain-stream.ts";
+import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
 
 /** Site recorded on the notices the doctor's Brain-tree sweep collects. */
 const DOCTOR_FRONTMATTER_SITE = "brain.doctor";
@@ -50,7 +51,11 @@ export const frontmatterUncertaintyProbe: DoctorCheck = {
     const dirs = brainDirs(vault);
     if (!existsSync(dirs.brain)) return;
     const notices: DegradationNotice[] = [];
-    listVaultPages(dirs.brain, { notices, site: DOCTOR_FRONTMATTER_SITE });
+    listVaultPages(dirs.brain, {
+      notices,
+      site: DOCTOR_FRONTMATTER_SITE,
+      reach: MAINTENANCE_LANE_REACH,
+    });
     for (const notice of notices) {
       // Through the shared stream, not straight onto the array: this
       // walk covers the same Brain/ subtrees the hand-written sweeps do,
