@@ -3263,6 +3263,9 @@ function clipNoticeLine(line) {
   return line.length <= NOTICE_LINE_MAX ? line : line.slice(0, NOTICE_LINE_MAX) + NOTICE_LINE_ELLIPSIS;
 }
 var LIST_VAULT_PAGES_SITE = "vault.listVaultPages";
+var UNMEASURABLE_PAGE_VISIBILITY = Object.freeze([
+  REMOTE_DENY_VISIBILITY_TOKEN
+]);
 function listVaultPages(vaultDir, opts) {
   const skipDirs = new Set(opts.skipDirs ?? DEFAULT_SKIP_DIRS);
   const skipFiles = new Set((opts.skipFiles ?? DEFAULT_SKIP_FILES).map((f) => f.toLowerCase()));
@@ -3271,7 +3274,7 @@ function listVaultPages(vaultDir, opts) {
     sink: opts.notices,
     site: opts.site ?? LIST_VAULT_PAGES_SITE
   });
-  const pages = walked.filter((p) => isRemotelyReadable(pageVisibility(p.metadata), opts.reach));
+  const pages = walked.filter((w) => isRemotelyReadable(w.unreadable ? UNMEASURABLE_PAGE_VISIBILITY : pageVisibility(w.page.metadata), opts.reach)).map((w) => w.page);
   pages.sort((a, b) => a.title.toLowerCase().localeCompare(b.title.toLowerCase()));
   return pages;
 }
@@ -3313,7 +3316,10 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
       notices.sink.push(...pageNotices);
     const titleVal = meta["title"];
     const title = typeof titleVal === "string" && titleVal ? titleVal : stem(entry.name);
-    out.push({ title, path: full, metadata: meta });
+    out.push({
+      page: { title, path: full, metadata: meta },
+      unreadable: pageNotices.some((n) => n.code === DEGRADATION_CODE.frontmatterUnreadable)
+    });
   }
 }
 function stripQuotes(s) {
