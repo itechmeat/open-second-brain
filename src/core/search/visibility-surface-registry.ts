@@ -715,3 +715,89 @@ export function callableVisibilitySurfaces(): ReadonlyArray<VisibilitySurfaceEnt
 export function excludedCallableVisibilitySurfaces(): ReadonlyArray<VisibilitySurfaceEntry> {
   return callableVisibilitySurfaces().filter((entry) => entry.category === C.excluded);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Root closure: the files that read a vault path WITHOUT one of the roots
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Whether a direct vault read applies the boundary itself, or discloses
+ * nothing that needs it.
+ *
+ * The three read roots - `search()`'s pipeline, `listVaultPages`, and the
+ * key-addressed read primitives - are where the reserved-token rule is
+ * enforced, and the guarantee is only as good as the claim that every
+ * caller goes through one of them. A file that opens a vault path with
+ * `node:fs` directly is outside all three, so it either asks the rule on
+ * its own or has a written reason why the question does not arise.
+ */
+export const DIRECT_VAULT_READ_CATEGORY = Object.freeze({
+  /** Consults the reach rule itself, at the site of the read. */
+  guarded: "guarded",
+  /** Hands back nothing a page's reservation would cover. */
+  discloses_nothing: "discloses_nothing",
+} as const);
+
+export type DirectVaultReadCategory =
+  (typeof DIRECT_VAULT_READ_CATEGORY)[keyof typeof DIRECT_VAULT_READ_CATEGORY];
+
+export interface DirectVaultReadEntry {
+  /** Repo-relative path, exactly as the census spells it. */
+  readonly file: string;
+  readonly category: DirectVaultReadCategory;
+  /** What the category alone does not say - the source-verified argument. */
+  readonly reason: string;
+}
+
+const D = DIRECT_VAULT_READ_CATEGORY;
+
+/**
+ * Every file under `src/mcp/`, `src/cli/` and `src/openclaw/` that reads a
+ * vault path through `node:fs` rather than through one of the three roots,
+ * hand-verified against source.
+ *
+ * `tests/core/architecture/visibility-surface-census.test.ts` sweeps for
+ * the shape and fails in BOTH directions - an unregistered file, and a row
+ * naming a file that no longer reads that way - so this list cannot go
+ * quietly stale. What the sweep cannot see is stated in that file's
+ * docblock rather than implied here.
+ */
+export const DIRECT_VAULT_READ_REGISTRY: ReadonlyArray<DirectVaultReadEntry> = Object.freeze([
+  {
+    file: "src/mcp/brain/knowledge-tools.ts",
+    category: D.guarded,
+    reason:
+      "brain_clusters lists Brain/clusters/*.md with readdirSync and brain_bridges reads " +
+      "Brain/proposals/bridges.md with readFileSync, both by path and neither through a read " +
+      "root. Both now ask reachView(ctx.vault, contextReach(ctx)) about each path before its " +
+      "title or body crosses the boundary, which is the same decision isPathReadableAtReach " +
+      "makes for a ranked result.",
+  },
+  {
+    file: "src/cli/onboarding.ts",
+    category: D.discloses_nothing,
+    reason:
+      "countMarkdown readdirSyncs Brain/preferences and Brain/inbox and returns the LENGTH of " +
+      "the filtered list - no path, title or body leaves the function, and the caller is the " +
+      "operator's own shell, which the CLI already answers at local reach. A count of files in " +
+      "the operator's own Brain directory is not a disclosure to anyone else.",
+  },
+  {
+    file: "src/cli/brain/verbs/links.ts",
+    category: D.discloses_nothing,
+    reason:
+      "the link-repair verb readFileSyncs each page it is about to REWRITE and writes it back " +
+      "atomically. It is a maintenance lane in the operator's own shell, and one that must see " +
+      "every page: a repair that stopped reading reserved pages would rewrite the links around " +
+      "them and leave the graph pointing at nothing.",
+  },
+  {
+    file: "src/cli/brain/verbs/clusters.ts",
+    category: D.discloses_nothing,
+    reason:
+      "the CLI mirror of brain_clusters, readdirSyncing Brain/clusters for the staleness " +
+      "fast-path and the listing. It runs in the operator's own shell, which the CLI answers at " +
+      "local reach through CLI_TRANSPORT_REACH, so the reserved-token rule admits every page " +
+      "here by construction rather than by omission.",
+  },
+]);

@@ -104,14 +104,19 @@ import { buildToolTable } from "../../../src/mcp/tools.ts";
 import { listResources, listResourceTemplates } from "../../../src/mcp/resources.ts";
 import { nestedCommand } from "../../../src/cli/command-manifest.ts";
 import {
+  DIRECT_VAULT_READ_CATEGORY,
+  DIRECT_VAULT_READ_REGISTRY,
   VISIBILITY_SURFACE_CATEGORY,
   VISIBILITY_SURFACE_KIND,
   VISIBILITY_SURFACE_REGISTRY,
+  type DirectVaultReadEntry,
   type VisibilitySurfaceEntry,
 } from "../../../src/core/search/visibility-surface-registry.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const MCP_ROOT = join(REPO_ROOT, "src", "mcp");
+const OPENCLAW_ROOT = join(REPO_ROOT, "src", "openclaw");
+const CLI_ROOT = join(REPO_ROOT, "src", "cli");
 const SRC_ROOT = join(REPO_ROOT, "src");
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -372,7 +377,17 @@ function discoverMcpToolPopulation(
   return found;
 }
 
-const MCP_SOURCE_TREE = readTree(MCP_ROOT);
+/**
+ * The tool-surface tree. `src/openclaw/` joined `src/mcp/` here when the
+ * boundary reached it: the previous census named the OpenClaw page walker
+ * as an un-swept surface and left it out, which meant the one place the
+ * charter had already identified as a gap was the one place the sweep
+ * could not have found it. It registers its tools on the OpenClaw plugin
+ * api rather than in `buildToolTable`, but the names it registers are the
+ * same names the MCP surface publishes, so the real-tool filter admits
+ * them and the registry rows they land on are shared.
+ */
+const MCP_SOURCE_TREE = [...readTree(MCP_ROOT), ...readTree(OPENCLAW_ROOT)];
 const REAL_TOOL_NAMES: ReadonlySet<string> = new Set(buildToolTable("full").map((t) => t.name));
 const MCP_TOOL_POPULATION = discoverMcpToolPopulation(MCP_SOURCE_TREE, REAL_TOOL_NAMES);
 
@@ -640,3 +655,145 @@ describe("the census can fail", () => {
     expect([...population]).toEqual(["brain_synthetic_renamed"]);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Root closure: is there a fourth root?
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A direct filesystem READ. Writes are deliberately absent: this sweep is
+ * about what leaves the process, and `write-site-census.test.ts` is the
+ * one that watches what enters the vault.
+ */
+const FS_READ_RE = /\b(readFileSync|readdirSync|createReadStream|opendirSync)\s*\(/;
+
+/**
+ * A path built onto a vault root: `join(vault, …)`, `join(ctx.vault, …)`,
+ * `join(cfg.vault, …)`, `join(vaultDir, …)`. Read off the lexer's `code`
+ * view, so the word appearing inside a string literal or a comment cannot
+ * match.
+ */
+const VAULT_JOIN_RE = /\bjoin\(\s*[A-Za-z_.]*[Vv]ault[A-Za-z_.]*\s*,/;
+
+/** The trees a caller can reach this process through. */
+const SURFACE_TREES: ReadonlyArray<string> = Object.freeze([MCP_ROOT, CLI_ROOT, OPENCLAW_ROOT]);
+
+/**
+ * Every file in the surface trees that opens a vault path itself rather
+ * than going through one of the three read roots.
+ *
+ * Exported as a function of its input so the fixture below can run the
+ * same sweep over a synthetic intruder.
+ */
+function directVaultReadFiles(files: ReadonlyArray<CensusFile>): ReadonlySet<string> {
+  const found = new Set<string>();
+  for (const file of files) {
+    const code = lexedViews(file).code;
+    if (FS_READ_RE.test(code) && VAULT_JOIN_RE.test(code)) found.add(file.path);
+  }
+  return found;
+}
+
+const SURFACE_SOURCE_TREE = SURFACE_TREES.flatMap((root) => readTree(root));
+const DIRECT_VAULT_READERS = directVaultReadFiles(SURFACE_SOURCE_TREE);
+
+/** Measured: files in the surface trees that read a vault path directly. */
+const DIRECT_VAULT_READ_POPULATION_SIZE = 4;
+
+/**
+ * ## What this sweep cannot see, stated rather than implied
+ *
+ * It reads two SHAPES in one file's own text, so it is blind in the same
+ * four ways the tool sweep above is, plus two of its own:
+ *
+ *   - a vault path built without `join` - a template literal, a
+ *     `resolve()`, a path threaded in as an already-absolute string from
+ *     a caller two modules away - reads as no vault path at all;
+ *   - a read performed by a helper in `src/core/` that a surface file
+ *     calls. That is not a gap in the guarantee so much as a restatement
+ *     of it: `src/core/` is where the three roots live, and a core helper
+ *     that reads a vault page without asking them is what the roots exist
+ *     to be. It is out of THIS sweep's population and named here so a
+ *     reader does not read root closure as more than it is.
+ *
+ * What it does establish is the claim the boundary actually rests on: no
+ * file a caller reaches this process through opens a vault page behind
+ * the roots' back without a written reason.
+ */
+describe("root closure", () => {
+  test("every direct vault reader is registered, and every row names one", () => {
+    const registered = new Set(DIRECT_VAULT_READ_REGISTRY.map((e) => e.file));
+    const unregistered = [...DIRECT_VAULT_READERS].filter((f) => !registered.has(f));
+    const stale = [...registered].filter((f) => !DIRECT_VAULT_READERS.has(f));
+    expect(unregistered.toSorted()).toEqual([]);
+    expect(stale.toSorted()).toEqual([]);
+  });
+
+  test("the population is measured, as an equality", () => {
+    expect(DIRECT_VAULT_READERS.size).toBe(DIRECT_VAULT_READ_POPULATION_SIZE);
+  });
+
+  test("every row carries a closed category and a reason of meaningful length", () => {
+    const values = new Set<string>(Object.values(DIRECT_VAULT_READ_CATEGORY));
+    const badCategory = DIRECT_VAULT_READ_REGISTRY.filter((e) => !values.has(e.category));
+    expect(badCategory).toEqual([]);
+    const { thin, lazy } = directReadReasonProblems(DIRECT_VAULT_READ_REGISTRY);
+    expect(thin.toSorted().join("\n")).toBe("");
+    expect(lazy.toSorted().join("\n")).toBe("");
+  });
+
+  test("the guarded reader actually consults the rule at the site of the read", () => {
+    // A category is a claim; this is the check that the claim is true of
+    // the file it is made about. A row that said `guarded` about a file
+    // that never asks would be exactly the decorative classification this
+    // census exists to prevent.
+    for (const entry of DIRECT_VAULT_READ_REGISTRY) {
+      if (entry.category !== DIRECT_VAULT_READ_CATEGORY.guarded) continue;
+      const file = SURFACE_SOURCE_TREE.find((f) => f.path === entry.file);
+      expect(file, `${entry.file} is registered but not in the swept tree`).toBeDefined();
+      expect(lexedViews(file!).code, entry.file).toContain("reachView");
+    }
+  });
+
+  test("a synthetic file reading a vault path directly is reported", () => {
+    const intruder: CensusFile = {
+      path: "src/mcp/brain/synthetic-reader.ts",
+      text:
+        'import { readFileSync } from "node:fs";\n' +
+        'import { join } from "node:path";\n' +
+        "export function leak(vault: string): string {\n" +
+        '  return readFileSync(join(vault, "notes", "secret.md"), "utf8");\n' +
+        "}\n",
+    };
+    expect([...directVaultReadFiles([intruder])]).toEqual([intruder.path]);
+    expect(DIRECT_VAULT_READ_REGISTRY.some((e) => e.file === intruder.path)).toBe(false);
+  });
+
+  test("a file that only WRITES a vault path is not swept in", () => {
+    // The sweep is about what leaves the process. A writer is
+    // `write-site-census.test.ts`'s population, not this one.
+    const writer: CensusFile = {
+      path: "src/cli/synthetic-writer.ts",
+      text:
+        'import { writeFileSync } from "node:fs";\n' +
+        'import { join } from "node:path";\n' +
+        "export function put(vault: string, body: string): void {\n" +
+        '  writeFileSync(join(vault, "notes", "new.md"), body);\n' +
+        "}\n",
+    };
+    expect([...directVaultReadFiles([writer])]).toEqual([]);
+  });
+});
+
+function directReadReasonProblems(entries: ReadonlyArray<DirectVaultReadEntry>): {
+  thin: string[];
+  lazy: string[];
+} {
+  const thin: string[] = [];
+  const lazy: string[] = [];
+  for (const e of entries) {
+    if (e.reason.trim().length < MIN_REASON_LENGTH) thin.push(`${e.file} (${e.reason.length})`);
+    if (LAZY_REASON_RE.test(e.reason)) lazy.push(e.file);
+  }
+  return { thin, lazy };
+}

@@ -37,6 +37,7 @@ import {
 import { diarize, DiarizationError } from "../../core/brain/diarization.ts";
 import { discoverIdeas, ideaCandidates } from "../../core/brain/idea-discovery.ts";
 import { auditMoc, MocAuditError } from "../../core/brain/link-graph/moc-audit.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { normaliseWikilinkTarget } from "../../core/brain/wikilink.ts";
 import { isoSecond } from "../../core/brain/time.ts";
@@ -68,6 +69,17 @@ import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import { AGENT_SCOPE_SCHEMA, coerceAgentScope, coerceStr, coerceBool } from "../coerce.ts";
 import { coercePositiveInteger, toolSafeguard } from "./shared.ts";
+
+/**
+ * Vault-relative locations these two handlers read BY PATH, rather than
+ * through one of the three read roots. Named here because each was
+ * spelled twice - once to build the absolute path and once to report the
+ * relative one - and the two spellings had to agree for the boundary
+ * check below to be asking about the page it was returning.
+ */
+const BRAIN_CLUSTERS_REL = "Brain/clusters";
+const BRAIN_PROPOSALS_REL = "Brain/proposals";
+const BRIDGE_PROPOSALS_FILE = "bridges.md";
 
 /** Forward-looking projection envelope; read-only fold. */
 function toolBrainForesight(
@@ -140,12 +152,19 @@ async function toolBrainBridges(
     }
   }
   if (op === "list") {
-    const path = join(ctx.vault, "Brain", "proposals", "bridges.md");
-    if (!existsSync(path)) return { exists: false, proposals: 0 };
+    const rel = join(BRAIN_PROPOSALS_REL, BRIDGE_PROPOSALS_FILE);
+    const path = join(ctx.vault, rel);
+    // Root closure: this reads a vault page BY PATH without going through
+    // one of the three read roots, so it asks the rule here. A reserved
+    // proposals page answers exactly as an absent one - the same shape
+    // the by-path read primitives hold.
+    if (!existsSync(path) || !reachView(ctx.vault, contextReach(ctx)).visible(rel)) {
+      return { exists: false, proposals: 0 };
+    }
     const [meta] = parseFrontmatter(path);
     return {
       exists: true,
-      path: "Brain/proposals/bridges.md",
+      path: rel,
       generated_at: meta["generated_at"] ?? null,
       proposals: Number(meta["proposals"] ?? 0),
     };
@@ -220,16 +239,23 @@ async function toolBrainClusters(
     throw new MCPError(INVALID_PARAMS, "brain_clusters: operation must be run|list");
   }
   if (op === "list") {
-    const dir = join(ctx.vault, "Brain", "clusters");
+    const dir = join(ctx.vault, BRAIN_CLUSTERS_REL);
     if (!existsSync(dir)) return { clusters: [] };
+    // Root closure: a directory listing by path, outside the three read
+    // roots, so the rule is asked per page here. A withheld cluster is
+    // dropped and nothing counts it - the caller cannot tell this listing
+    // from one over a vault that never held the page.
+    const view = reachView(ctx.vault, contextReach(ctx));
     const clusters = readdirSync(dir)
       .filter((f) => f.endsWith(".md"))
       .toSorted()
       .map((f) => {
+        const rel = join(BRAIN_CLUSTERS_REL, f);
+        if (!view.visible(rel)) return null;
         const [meta] = parseFrontmatter(join(dir, f));
         return meta["kind"] === "brain-cluster"
           ? {
-              path: `Brain/clusters/${f}`,
+              path: rel,
               cluster: String(meta["cluster"] ?? ""),
               size: Number(meta["size"] ?? 0),
               density: Number(meta["density"] ?? 0),
