@@ -123,18 +123,91 @@ describe("setMergedInto", () => {
     expect(readFileSync(path, "utf8")).toContain("merged_into: pref-canonical");
   });
 
-  test("updates an existing pointer", () => {
+  test("reports the write it performed", () => {
+    writePref("canonical", { topic: "x", principle: "y" });
+    writePref("secondary", { topic: "x", principle: "y" });
+    const result = setMergedInto(vault, "pref-secondary", "pref-canonical");
+    expect(result).toEqual({
+      secondary: "pref-secondary",
+      canonical: "pref-canonical",
+      previous: null,
+      changed: true,
+    });
+  });
+
+  test("refuses to repoint a page that already points somewhere else", () => {
+    // This used to be `updates an existing pointer`, and the silent
+    // overwrite it pinned is how a second `page-dedup --apply` destroyed
+    // an operator's deliberate merge (GitHub #180).
     writePref("a", { topic: "x", principle: "y" });
     writePref("b", { topic: "x", principle: "y" });
-    const path = writePref("c", {
-      topic: "x",
-      principle: "y",
-      merged_into: "pref-a",
-    });
-    setMergedInto(vault, "pref-c", "pref-b");
+    const path = writePref("c", { topic: "x", principle: "y", merged_into: "pref-a" });
+    const before = readFileSync(path, "utf8");
+    try {
+      setMergedInto(vault, "pref-c", "pref-b");
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(MergeChainError);
+      expect((e as MergeChainError).code).toBe("REPOINT");
+    }
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("repoints when the caller asks for it explicitly", () => {
+    writePref("a", { topic: "x", principle: "y" });
+    writePref("b", { topic: "x", principle: "y" });
+    const path = writePref("c", { topic: "x", principle: "y", merged_into: "pref-a" });
+    const result = setMergedInto(vault, "pref-c", "pref-b", { repoint: true });
+    expect(result.previous).toBe("pref-a");
+    expect(result.changed).toBe(true);
     const yaml = readFileSync(path, "utf8");
     expect(yaml).toContain("merged_into: pref-b");
     expect(yaml).not.toContain("merged_into: pref-a");
+  });
+
+  test("re-setting the same target changes nothing and says so", () => {
+    writePref("a", { topic: "x", principle: "y" });
+    const path = writePref("b", { topic: "x", principle: "y", merged_into: "pref-a" });
+    const before = readFileSync(path, "utf8");
+    const result = setMergedInto(vault, "pref-b", "pref-a");
+    expect(result.previous).toBe("pref-a");
+    expect(result.changed).toBe(false);
+    expect(readFileSync(path, "utf8")).toBe(before);
+  });
+
+  test("refuses a pointer that would close a cycle", () => {
+    // The mtime-flip destroyer: `pref-b` is already merged into
+    // `pref-a`, and a second pass that reversed the pair used to write
+    // `pref-a -> pref-b` on top of it, leaving both pages unresolvable.
+    writePref("a", { topic: "x", principle: "y" });
+    writePref("b", { topic: "x", principle: "y", merged_into: "pref-a" });
+    const path = join(vault, "Brain", "preferences", "pref-a.md");
+    const before = readFileSync(path, "utf8");
+    try {
+      setMergedInto(vault, "pref-a", "pref-b");
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(MergeChainError);
+      expect((e as MergeChainError).code).toBe("CYCLE");
+    }
+    expect(readFileSync(path, "utf8")).toBe(before);
+    expect(resolveCanonicalId(vault, "pref-b")).toBe("pref-a");
+  });
+
+  test("refuses a cycle reached through a longer chain", () => {
+    writePref("a", { topic: "x", principle: "y" });
+    writePref("c", { topic: "x", principle: "y", merged_into: "pref-a" });
+    writePref("b", { topic: "x", principle: "y", merged_into: "pref-c" });
+    try {
+      setMergedInto(vault, "pref-a", "pref-b");
+      throw new Error("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(MergeChainError);
+      expect((e as MergeChainError).code).toBe("CYCLE");
+    }
+    expect(readFileSync(join(vault, "Brain", "preferences", "pref-a.md"), "utf8")).not.toContain(
+      "merged_into",
+    );
   });
 
   test("rejects self-pointer", () => {

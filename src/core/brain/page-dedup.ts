@@ -595,6 +595,12 @@ export interface MergePageResult {
  * so the caller can report it. Idempotent: calling twice with the
  * same arguments leaves the merged-into pointer in place and yields
  * `wikilinksUpdated: 0` on the second call.
+ *
+ * Raises `MergeChainError` rather than writing when the secondary
+ * already points at a different canonical, or when the canonical
+ * already resolves back through the secondary. Neither is reachable
+ * from {@link findDuplicateCandidates} any more, which is the point: a
+ * merge this pass proposes is one it has established is still open.
  */
 export function mergePage(
   vault: string,

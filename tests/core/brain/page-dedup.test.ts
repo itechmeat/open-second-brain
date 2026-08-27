@@ -8,6 +8,7 @@ import {
   mergePage,
   patchWikilinks,
 } from "../../../src/core/brain/page-dedup.ts";
+import { MergeChainError } from "../../../src/core/brain/page-meta/page-id.ts";
 
 let vault: string;
 
@@ -277,5 +278,21 @@ describe("mergePage", () => {
     expect(first.wikilinksUpdated).toBe(1);
     const second = mergePage(vault, "pref-dup", "pref-canon");
     expect(second.wikilinksUpdated).toBe(0);
+  });
+
+  test("refuses the reverse merge that would close a cycle", () => {
+    // The GitHub #180 destroyer, at the seam that did the damage. Pages
+    // with no `created_at` order by mtime, and the merge moves the
+    // canonical's mtime, so a second pass over this pair used to pick
+    // the reverse direction and write `a -> b` on top of `b -> a`.
+    // `findDuplicateCandidates` no longer proposes it; the writer
+    // refuses it whoever asks.
+    writePref("a", { topic: "x", principle: "y" });
+    writePref("b", { topic: "x", principle: "y" });
+    mergePage(vault, "pref-b", "pref-a");
+    const aPath = join(vault, "Brain", "preferences", "pref-a.md");
+    const before = readFileSync(aPath, "utf8");
+    expect(() => mergePage(vault, "pref-a", "pref-b")).toThrow(MergeChainError);
+    expect(readFileSync(aPath, "utf8")).toBe(before);
   });
 });
