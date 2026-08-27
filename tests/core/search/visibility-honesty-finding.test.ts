@@ -66,6 +66,24 @@ test("a vault with one visibility-tagged page gets the finding, counted from the
   expect(report.visibilityHonesty?.totalSurfaceCount).toBe(callableVisibilitySurfaces().length);
   // Not a trivial zero-of-zero: the registry actually carries excluded rows.
   expect(report.visibilityHonesty!.excludedSurfaceCount).toBeGreaterThan(0);
+  // ...and the covered half is no longer the two surfaces it started as.
+  expect(report.visibilityHonesty!.totalSurfaceCount).toBeGreaterThan(
+    excludedCallableVisibilitySurfaces().length,
+  );
+});
+
+test("the document counts come from the index, not from a hand-written number", async () => {
+  writeMd(vault, "open.md", "# Open\n\nAn ordinary note.");
+  writeMd(vault, "a.md", "---\nvisibility: private\n---\n\n# A\n\nA reserved page.");
+  writeMd(vault, "b.md", "---\nvisibility: private\n---\n\n# B\n\nAnother reserved page.");
+  writeMd(vault, "team.md", "---\nvisibility: team\n---\n\n# T\n\nA team page.");
+  await indexVault(makeConfig({ vault, dbPath }));
+
+  const report = await indexCheck(makeConfig({ vault, dbPath }));
+  // Only the reserved token counts - a non-reserved one is not withheld.
+  expect(report.visibilityHonesty?.reservedDocumentCount).toBe(2);
+  // Every page here has a frontmatter chunk the index could read.
+  expect(report.visibilityHonesty?.unmeasuredDocumentCount).toBe(0);
 });
 
 test("the denominator leaves out the row the registry itself calls not a surface", async () => {

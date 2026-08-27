@@ -500,6 +500,24 @@ export interface VisibilityHonestyFinding {
   readonly excludedSurfaceCount: number;
   /** Every callable surface the registry classifies, covered or excluded. */
   readonly totalSurfaceCount: number;
+  /**
+   * Indexed documents declaring the token reserved against remote reads -
+   * the population this boundary withholds from a remote caller.
+   *
+   * Reported because the boundary is a BEHAVIOUR CHANGE for a vault that
+   * tags pages, and an operator has to be able to see its size rather
+   * than infer it from a search that came back shorter.
+   */
+  readonly reservedDocumentCount: number;
+  /**
+   * Indexed documents the index measured nothing for - it holds no
+   * frontmatter chunk to read.
+   *
+   * Reported rather than absorbed into "declares nothing": the two are
+   * different statements, and folding the legacy population into the
+   * measured one would answer a question nobody could check.
+   */
+  readonly unmeasuredDocumentCount: number;
 }
 
 export interface IndexCheckReport {

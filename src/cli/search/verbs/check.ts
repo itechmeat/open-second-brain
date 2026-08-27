@@ -469,23 +469,34 @@ function describePendingVectors(census: PendingVectorCensus): string {
 }
 
 /**
- * The visibility honesty finding as one operator-facing line
- * (nothing-writes-silently, unit H, form B). Both counts are the
- * registry's own numbers, read at render time - never hand-written here.
+ * The visibility honesty finding as one operator-facing line. Every
+ * number in it is a measurement read at render time - the surface counts
+ * off the registry, the document counts off the index's own column -
+ * never hand-written here.
+ *
+ * The sentence changed shape when the boundary did. It used to say the
+ * field was a caller-supplied view filter and not a privacy boundary,
+ * which was true and is no longer: the reserved token is enforced at
+ * three read roots and cannot be lifted by a caller argument. What stays
+ * is the honesty the finding was built for - the population that is still
+ * outside the boundary, and the population the index cannot measure.
  *
  * The line names the ENUMERATED population rather than implying it is
  * the product's whole surface area. It is not: the MCP half is swept
  * mechanically and its rule has stated blind spots, and the CLI half is
  * hand-enumerated one row per MCP mirror. A reader who took the
  * denominator for "every note-returning surface there is" would size the
- * enforcement work against a number that is a floor.
+ * remaining work against a number that is a floor.
  */
 function describeVisibilityHonesty(finding: VisibilityHonestyFinding): string {
   return (
-    "visibility: frontmatter is a caller-supplied view filter, not a privacy boundary; " +
-    `${finding.excludedSurfaceCount} of the ${finding.totalSurfaceCount} note-returning ` +
-    "surfaces the visibility census enumerates do not honor it, and the census does not " +
-    "claim to enumerate them all (see tests/core/architecture/visibility-surface-census.test.ts)"
+    `${finding.reservedDocumentCount} indexed document(s) reserve themselves against remote ` +
+    `reads; ${finding.excludedSurfaceCount} of the ${finding.totalSurfaceCount} note-returning ` +
+    "surfaces the visibility census enumerates still do not consult the field, and the census " +
+    "does not claim to enumerate them all " +
+    "(see tests/core/architecture/visibility-surface-census.test.ts); " +
+    `${finding.unmeasuredDocumentCount} indexed document(s) hold no frontmatter the index can ` +
+    "measure, and are reported rather than counted as declaring nothing"
   );
 }
 

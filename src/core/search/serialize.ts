@@ -110,6 +110,8 @@ export function serializeVisibilityHonestyFinding(
   return {
     excluded_surface_count: finding.excludedSurfaceCount,
     total_surface_count: finding.totalSurfaceCount,
+    reserved_document_count: finding.reservedDocumentCount,
+    unmeasured_document_count: finding.unmeasuredDocumentCount,
   };
 }
 

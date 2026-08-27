@@ -85,7 +85,7 @@ import { reachView } from "../core/brain/reach-view.ts";
 import { TRANSPORT_REACH, type TransportReach } from "../core/graph/transport-reach.ts";
 import { extractWikilinkRichBodies } from "../core/brain/link-graph/parse-wikilink.ts";
 import { normaliseWikilinkTarget } from "../core/brain/wikilink.ts";
-import type { BrainLogEntry } from "../core/brain/log.ts";
+import { logEntryArtifactRefs } from "../core/brain/log.ts";
 import type { BrainPreference, BrainRetired } from "../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "./protocol.ts";
 
@@ -479,7 +479,7 @@ function readTopic(
   const scoped = Object.freeze({
     ...result,
     signals: view.refs.keep(result.signals, (s) => [s.id]),
-    all_log_events: view.refs.keep(result.all_log_events, (e) => logEventRefs(e)),
+    all_log_events: view.refs.keep(result.all_log_events, (e) => logEntryArtifactRefs(e)),
   });
   return {
     uri,
@@ -496,13 +496,6 @@ function readTopic(
  * artifact are the wikilink-shaped ones, and the view unbrackets them
  * itself. `path` is the vault-relative page the event was about.
  */
-function logEventRefs(entry: BrainLogEntry): ReadonlyArray<string | undefined> {
-  const body = (entry.body ?? {}) as Record<string, unknown>;
-  const field = (key: string): string | undefined =>
-    typeof body[key] === "string" ? (body[key] as string) : undefined;
-  return [field("path"), field("preference"), field("signal"), field("artifact")];
-}
-
 function readLog(
   ctx: ResourceContext,
   uri: string,

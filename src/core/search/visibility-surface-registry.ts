@@ -104,22 +104,23 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_search_expand",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "expandHit() (core/search/cards.ts) hydrates a chunk_id directly off the store and checks " +
-      "only isPathOwnerVisible, and only when the caller supplies agentScope - it never calls " +
-      "applyVisibilityScope or isVisible. A caller holding any valid chunk_id for a " +
-      "visibility-tagged page - not necessarily one it received from a filtered brain_search call " +
-      "- can read the full note through this tool.",
+      "expandHit() (core/search/cards.ts) hydrates a chunk_id straight off the store, so it is " +
+      "root C - the key-addressed read. It asks isPathReadableAtReach on EVERY call rather than " +
+      "only when an argument arrived, and refuses a reserved page with the SAME error an absent " +
+      "chunk produces, because a chunk id is a sequential integer and a distinguishable refusal " +
+      "over an enumerable key space is an existence oracle.",
   },
   {
     surface: "second_brain_query",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "toolQuery (src/mcp/tools.ts) lists pages with listVaultPages(), which accepts only " +
-      "skipDirs/skipFiles, and applies its own owner-scope check over the parsed frontmatter - " +
-      "visibility: is never read on this path.",
+      "toolQuery (src/mcp/tools.ts) lists pages with listVaultPages(), which is root B: the walk " +
+      "takes the reach the transport minted and drops a reserved page over the frontmatter it has " +
+      "already parsed, before the sort and before the array leaves the function - so the ownership " +
+      "filter below it and the total it reports both see the same pages the caller does.",
   },
   {
     surface: "brain_context_pack",
@@ -134,20 +135,25 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_query",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "queryByPreference / queryByTopic (core/brain/query.ts) return Brain preference, retired " +
-      "and log records - id, principle, evidence trail - straight off disk with no visibility " +
-      "check anywhere in the read path.",
+      "queryByPreference / queryByTopic (core/brain/query.ts) return Brain records by id, so this " +
+      "is root C over reference-shaped rows. The topic mode carries the reach into the SELECTION, " +
+      "because a topic resolves to exactly one preference and filtering afterwards would report a " +
+      "topic as having no rule whenever a reserved one sorted first; the signals, the log events " +
+      "and the preference-mode lookup are filtered through reachView, and a reserved preference " +
+      "answers with the message an absent one produces.",
   },
   {
     surface: "brain_backlinks",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "buildBacklinkIndex (core/brain/backlinks.ts) walks the vault with readdirSync + " +
-      "parseFrontmatter directly, gated only by ownerScopeView; visibility: is not among the " +
-      "fields it consults.",
+      "buildBacklinkIndex (core/brain/backlinks.ts) walks the vault itself, and every ref it " +
+      "yields NAMES its source artifact - so root C is applied to the refs as well as to the " +
+      "target. A withheld target answers as an absent one (the empty backlink document) rather " +
+      "than refusing, because an unknown target is a legitimate zero here and a refusal would be " +
+      "the one response shape that proves the page exists.",
   },
   {
     surface: "brain_unlinked_mentions",
@@ -180,22 +186,22 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_bridges",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "discoverBridges (core/brain/link-graph/bridge-discovery.ts) proposes links between " +
-      "embedding-near notes read via listVaultPages and a raw Store handle, and list reads " +
-      "Brain/proposals/bridges.md back - source/target note paths in both cases, with no " +
-      "visibility check on either side of a proposed pair.",
+      "the list mode readFileSyncs Brain/proposals/bridges.md by path rather than through a read " +
+      "root, so it asks reachView at the site of the read and a reserved proposals page answers " +
+      "exactly as an absent one does - registered as a guarded direct vault read by the " +
+      "root-closure sweep in the architecture census.",
   },
   {
     surface: "brain_clusters",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "detectCommunities / materializeClusterNotes (core/brain/link-graph/communities.ts) read " +
-      "the link graph off a raw Store handle and member titles via parseFrontmatter, then " +
-      "materialize cluster notes naming every member page - no visibility check anywhere in the " +
-      "pass.",
+      "the list mode readdirSyncs Brain/clusters/*.md by path rather than through a read root, so " +
+      "it asks reachView at the site of the read: a withheld cluster is dropped and nothing " +
+      "counts it, which is the row the root-closure sweep in " +
+      "tests/core/architecture/visibility-surface-census.test.ts registers as guarded.",
   },
   {
     surface: "brain_moc_audit",
@@ -209,13 +215,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_deep_synthesis",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "deepSynthesis (core/brain/deep-synthesis.ts) is mixed rather than uniformly unfiltered: " +
-      "its matched-notes component calls search() and inherits pool-filters, but its " +
-      "knowledge-gap component (dangling wikilinks) walks the vault directly via walkVault " +
-      "(core/search/walker.ts), which applies no visibility check. The dossier as a whole cannot " +
-      "be called covered because one of its two note-reading paths is not.",
+      "deepSynthesis (core/brain/deep-synthesis.ts) reaches its matched notes through search(), " +
+      "so it is covered transitively by root A: the tool threads contextReach(ctx) into " +
+      "SearchOptions.transportReach and inherits the same pool-filters gate brain_search has.",
   },
   {
     surface: "brain_idea_discovery",
@@ -416,10 +420,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_recall_feedback",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "records a relevance verdict for a prior recall result and returns a confirmation, not note " +
-      "content; included for completeness of the file-level sweep only.",
+      "captureRecallFeedback (core/search/feedback.ts) re-runs the judged query through search() " +
+      "and reports whether the path came back, which is an existence oracle for any page the " +
+      "caller cannot read - so the re-run carries contextReach(ctx) and is covered by root A.",
   },
   {
     surface: "brain_eval",
@@ -478,16 +483,20 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "search expand",
     kind: K.cliVerb,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "src/cli/search/verbs/expand.ts calls expandHit() directly - the same chunk_id hydration " +
-      "brain_search_expand uses, with the same absence of a visibility check.",
+      "src/cli/search/verbs/expand.ts calls expandHit() directly - the same root-C chunk_id " +
+      "hydration brain_search_expand uses - and passes CLI_TRANSPORT_REACH, so the operator's own " +
+      "shell is answered in full by decision rather than by omission.",
   },
   {
     surface: "brain backlinks",
     kind: K.cliVerb,
-    category: C.excluded,
-    reason: "src/cli/brain/verbs/backlinks.ts calls buildBacklinkIndex, same as brain_backlinks.",
+    category: C.covered,
+    reason:
+      "src/cli/brain/verbs/backlinks.ts asks reachView about the target and every ref's source " +
+      "artifact, the same root-C decision brain_backlinks makes over the same index, at " +
+      "CLI_TRANSPORT_REACH - so the two mirrors cannot drift on what a ref discloses.",
   },
   {
     surface: "brain bridges",
@@ -499,9 +508,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain clusters",
     kind: K.cliVerb,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "src/cli/brain/verbs/clusters.ts drives the same communities.ts core as brain_clusters.",
+      "src/cli/brain/verbs/clusters.ts reaches its input set through listVaultPages with " +
+      "CLI_TRANSPORT_REACH (root B) and readdirSyncs Brain/clusters for the listing, which the " +
+      "root-closure sweep registers as a direct vault read that discloses nothing beyond the " +
+      "operator's own shell.",
   },
   {
     surface: "brain moc-audit",
@@ -514,10 +526,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain deep-synthesis",
     kind: K.cliVerb,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "src/cli/brain/verbs/deep-synthesis.ts drives the same mixed deepSynthesis() core as " +
-      "brain_deep_synthesis.",
+      "src/cli/brain/verbs/deep-synthesis.ts calls deepSynthesis with CLI_TRANSPORT_REACH, which " +
+      "threads into search() exactly as the MCP tool does - covered transitively by root A, with " +
+      "the reach stated at the call site rather than defaulted.",
   },
   {
     surface: "brain ideas",
@@ -535,12 +548,11 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain file-context",
     kind: K.cliVerb,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "src/cli/brain/verbs/file-context.ts calls fileContextRecall(), the same wrapper " +
-      "brain_file_context uses - listed here as an entry of record even though the underlying " +
-      "path is visibility-covered, so a reader of this registry does not have to cross-reference " +
-      "the MCP list to learn the CLI verb's answer.",
+      "src/cli/brain/verbs/file-context.ts calls fileContextRecall with CLI_TRANSPORT_REACH, the " +
+      "same root-A path brain_file_context takes, so the CLI mirror and the MCP tool cannot drift " +
+      "on which pages a caller reaches.",
   },
   {
     surface: "brain context-pack",
@@ -551,10 +563,12 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain query",
     kind: K.cliVerb,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "src/cli/brain/verbs/query.ts calls queryByPreference / queryByTopic, the same " +
-      "visibility-blind Brain-record path brain_query uses.",
+      "src/cli/brain/verbs/query.ts passes CLI_TRANSPORT_REACH into QueryByTopicOptions, so the " +
+      "topic selection asks the same root-C rule brain_query asks. The verdict is admit-all " +
+      "because the caller is the operator's own shell, which is a decision this verb makes rather " +
+      "than a question it skips.",
   },
   {
     surface: "brain sources",
@@ -648,34 +662,41 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "osb://preference/{id}",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "gated by gatedOwnerScopeView (agent-scope), per resources.ts's own docblock on why the " +
-      "four templated readers exist - a visibility-tagged preference page is returned in full, " +
-      "frontmatter and body, once the owner-scope check passes.",
+      "root C, the key-addressed read: the whole file - frontmatter, owner line and body prose - " +
+      "is what this reader hands back, so both rules are asked before the read rather than " +
+      "filtered out of the bytes afterwards. A withheld preference is reported byte for byte as " +
+      "an absent one, because preference ids are pref-<topic-slug> and therefore guessable.",
   },
   {
     surface: "osb://topic/{slug}",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "same gatedOwnerScopeView-only path as osb://preference/{id}; visibility: is never read.",
+      "the same root-C view as osb://preference/{id}, with the reach reaching the SELECTION of the " +
+      "topic's current rule for the reason the owner scope already reached it: a topic resolves " +
+      "to one preference, so filtering afterwards would hide a readable rule whenever a reserved " +
+      "one happened to sort ahead of it.",
   },
   {
     surface: "osb://log/{date}",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "withVisibleLogEvents filters rendered log sections by gatedOwnerScopeView over the " +
-      "artifacts each event names; no visibility check on those artifacts.",
+      "withVisibleLogEvents filters rendered log sections by every live rule over the artifacts " +
+      "each event names, reach included, through the shared artifact-ref view. A day with no rule " +
+      "live is returned verbatim - the split-and-rejoin is skipped entirely - so a vault the " +
+      "boundary admits in full stays byte-identical.",
   },
   {
     surface: "osb://backlinks/{id}",
     kind: K.mcpResource,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "calls buildBacklinkIndex directly - resources.ts's own comment calls it 'the last " +
-      "unscoped buildBacklinkIndex call in the product' - gated only by gatedOwnerScopeView.",
+      "the same reference-shaped root-C decision brain_backlinks makes, over the same index: the " +
+      "target and every ref's source artifact are both asked, and a withheld target answers with " +
+      "the empty backlink document rather than a refusal that would prove it exists.",
   },
 
   // --- Excluded: the index's own storage --------------------------------------
@@ -685,10 +706,16 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "chunker.ts's packBlocks emits a page's frontmatter block as its own chunk verbatim " +
-      "(chunk_index 0), and the body as the chunks after it - indexer.ts applies no visibility " +
-      "predicate anywhere in that pass, so a private page's full text, frontmatter included, is " +
-      "stored in chunks and mirrored into chunk_fts regardless of any read-side filter. A copy of " +
-      "the index carries the content a read-side filter only ever hides at query time.",
+      "(chunk_index 0), and the body as the chunks after it. A reserved page's full text is still " +
+      "stored in chunks and mirrored into chunk_fts, and this wave deliberately does not change " +
+      "that: excluding reserved pages from the index would take an operator's own private notes " +
+      "out of their own local search, which is a product regression dressed as a hardening. What " +
+      "DID change is that the indexer records what it measured of each page's declaration in " +
+      "documents.visibility, so the index is self-describing and search check can report the " +
+      "population it cannot measure. The column is not the read boundary - that is the live " +
+      "frontmatter check at the three roots, which reads the file rather than a snapshot of it - " +
+      "so anyone with file access to brain.sqlite still reads what the read side withholds, the " +
+      "same trust boundary the vault's own Markdown files have.",
   },
 ]);
 

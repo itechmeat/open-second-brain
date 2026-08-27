@@ -469,12 +469,26 @@ describe("visibility surface census", () => {
       expect(MCP_TOOL_POPULATION.size).toBe(MCP_TOOL_POPULATION_SIZE);
     });
 
-    test("brain_search and brain_file_context are the only two covered MCP tools", () => {
+    test("the covered MCP tools are exactly the ones a read root reaches", () => {
+      // Written out rather than derived: this list IS the measurement, and
+      // a tool joining or leaving it is a finding to name in the release
+      // rather than a number to re-take. Before this wave it was two.
       const covered = REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.mcpTool)
         .filter((e) => e.category === VISIBILITY_SURFACE_CATEGORY.covered)
         .map((e) => e.surface)
         .toSorted();
-      expect(covered).toEqual(["brain_file_context", "brain_search"]);
+      expect(covered).toEqual([
+        "brain_backlinks",
+        "brain_bridges",
+        "brain_clusters",
+        "brain_deep_synthesis",
+        "brain_file_context",
+        "brain_query",
+        "brain_recall_feedback",
+        "brain_search",
+        "brain_search_expand",
+        "second_brain_query",
+      ]);
     });
   });
 
@@ -491,11 +505,29 @@ describe("visibility surface census", () => {
       expect(advertised.size).toBe(MCP_RESOURCE_POPULATION_SIZE);
     });
 
-    test("no MCP resource is covered - resources.ts never calls applyVisibilityScope", () => {
-      const anyCovered = REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.mcpResource).some(
-        (e) => e.category === VISIBILITY_SURFACE_CATEGORY.covered,
-      );
-      expect(anyCovered).toBe(false);
+    test("the four templated readers are covered and the four whole-vault ones are not", () => {
+      // The split is the design, not an oversight: a templated reader is
+      // keyed by a caller-supplied id and is therefore root C, while the
+      // four whole-vault readers return Brain/active.md, the lessons
+      // digest and the status projection - shared artifacts by
+      // construction, which no page's reservation covers.
+      const byCategory = (category: string): string[] =>
+        REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.mcpResource)
+          .filter((e) => e.category === category)
+          .map((e) => e.surface)
+          .toSorted();
+      expect(byCategory(VISIBILITY_SURFACE_CATEGORY.covered)).toEqual([
+        "osb://backlinks/{id}",
+        "osb://log/{date}",
+        "osb://preference/{id}",
+        "osb://topic/{slug}",
+      ]);
+      expect(byCategory(VISIBILITY_SURFACE_CATEGORY.excluded)).toEqual([
+        "osb://digest/latest",
+        "osb://lessons",
+        "osb://preferences/active",
+        "osb://status",
+      ]);
     });
   });
 
@@ -517,12 +549,24 @@ describe("visibility surface census", () => {
       );
     });
 
-    test("no CLI verb is covered except the two search lanes", () => {
+    test("the covered CLI verbs are exactly the mirrors of the covered tools", () => {
+      // Each of these states its reach at the call site rather than
+      // inheriting a default. The verdict is admit-all, because the caller
+      // is the operator's own shell - which is a decision these verbs make
+      // rather than a question they skip.
       const covered = REGISTRY_BY_KIND(VISIBILITY_SURFACE_KIND.cliVerb)
         .filter((e) => e.category === VISIBILITY_SURFACE_CATEGORY.covered)
         .map((e) => e.surface)
         .toSorted();
-      expect(covered).toEqual(["search query"]);
+      expect(covered).toEqual([
+        "brain backlinks",
+        "brain clusters",
+        "brain deep-synthesis",
+        "brain file-context",
+        "brain query",
+        "search expand",
+        "search query",
+      ]);
     });
   });
 

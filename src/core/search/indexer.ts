@@ -82,7 +82,7 @@ import {
   formatEmbedderRecordContradiction,
   formatEmbeddingAbiDrift,
   peekPendingVectorsSync,
-  peekVisibilityTagPresence,
+  peekVisibilityColumnCensus,
   readEmbedderRecordCensusSync,
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
@@ -110,7 +110,7 @@ import type {
   ResolvedSearchConfig,
   VisibilityHonestyFinding,
 } from "./types.ts";
-import { pageVisibility } from "../graph/visibility.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1664,9 +1664,9 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
  * The visibility honesty finding for an index path, or `null` when there
  * is nothing to be honest ABOUT: the index does not exist, would not
  * open, or - the common case - has never carried a `visibility:`-tagged
- * page. Both counts are read off the registry's own exported list at
- * call time, never hand-written, so the finding cannot drift from the
- * census that backs it (nothing-writes-silently, unit H, form B).
+ * page. The surface counts are read off the registry's own exported list
+ * at call time and the document counts off the index's own column, never
+ * hand-written, so the finding cannot drift from what backs it.
  *
  * CALLABLE rows only. The registry also carries one `index_store` row -
  * the fact that `chunks` stores a private page's text whatever a
@@ -1674,11 +1674,16 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
  * operator could call would inflate a number reported to operators.
  */
 function readVisibilityHonestyFinding(dbPath: string): VisibilityHonestyFinding | null {
-  const peek = peekVisibilityTagPresence(dbPath);
-  if (peek.kind !== "read" || !peek.value) return null;
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
+  if (peek.kind !== "read" || !peek.value.tagged) return null;
   return Object.freeze({
     excludedSurfaceCount: excludedCallableVisibilitySurfaces().length,
     totalSurfaceCount: callableVisibilitySurfaces().length,
+    // Both from the store, never hand-written, for the same reason the
+    // two surface counts are read off the registry: a number an operator
+    // acts on must be the measurement rather than a copy of one.
+    reservedDocumentCount: peek.value.reserved,
+    unmeasuredDocumentCount: peek.value.unmeasured,
   });
 }
 

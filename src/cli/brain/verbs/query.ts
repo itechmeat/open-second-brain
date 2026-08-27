@@ -35,6 +35,7 @@ import {
   renderQueryTopicText,
   usageError,
 } from "../helpers.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 /** The two point-in-time flags, which only the expiry filter reads. */
 const AS_OF_FLAG = "--at";
@@ -107,6 +108,11 @@ export async function cmdBrainQuery(argv: string[]): Promise<number> {
     if (flags["topic"]) {
       const topicOptions: QueryByTopicOptions = {
         showExpired,
+        // The operator's own shell, stated rather than assumed: this verb
+        // asks the same selection rule `brain_query` asks, and the answer
+        // it gets is "admit everything" because of who the caller is, not
+        // because nobody asked.
+        transportReach: CLI_TRANSPORT_REACH,
         ...(asOf !== null ? { now: asOf } : {}),
       };
       const out = queryByTopic(vault, String(flags["topic"]), topicOptions);

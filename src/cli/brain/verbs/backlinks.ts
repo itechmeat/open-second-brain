@@ -2,6 +2,8 @@ import { buildBacklinkIndex } from "../../../core/brain/backlinks.ts";
 import { gatedOwnerScopeView } from "../../../core/brain/owner-scope-view.ts";
 import { normaliseWikilinkTarget } from "../../../core/brain/wikilink.ts";
 import { brainVerbContext, fail, parse, resolveBrainAgent } from "../helpers.ts";
+import { reachView } from "../../../core/brain/reach-view.ts";
+import { CLI_TRANSPORT_REACH } from "../../transport-reach.ts";
 
 /**
  * The one sentence that turns a count into a measurement.
@@ -36,7 +38,14 @@ export async function cmdBrainBacklinks(argv: string[]): Promise<number> {
     vault,
     gatedOwnerScopeView(vault, resolveBrainAgent(flags, config)).scope,
   );
-  const refs = index.get(target) ?? [];
+  // The reserved-token rule, asked here as `brain_backlinks` asks it, so
+  // the two mirrors cannot drift on what a ref discloses. This verb runs
+  // in the operator's own shell, so the view admits everything - by
+  // decision rather than by omission.
+  const view = reachView(vault, CLI_TRANSPORT_REACH);
+  const refs = view.visible(target)
+    ? (index.get(target) ?? []).filter((r) => view.visible(r.source))
+    : [];
 
   if (flags["json"]) {
     process.stdout.write(

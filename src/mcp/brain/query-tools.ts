@@ -52,6 +52,8 @@ import {
 import { loadGuardrailsConfigSafe } from "../../core/brain/policy.ts";
 import { normalizeAgentScope } from "../../core/graph/agent-scope.ts";
 import { isPreferenceVisible } from "../../core/brain/owner-scoped-facts.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
+import { logEntryArtifactRefs } from "../../core/brain/log.ts";
 
 /** Accepted `at` forms, named in every refusal so the exit is actionable. */
 const AS_OF_FORMS = "an ISO-8601 instant or YYYY-MM-DD date";
@@ -148,6 +150,11 @@ async function toolBrainQuery(
     ? normalizeAgentScope(requestedScope)
     : null;
 
+  // Root C's rule over the reference-shaped rows this tool returns:
+  // a signal, a log event and a preference each NAME an artifact, and a
+  // row naming one the caller may not see discloses it by naming it.
+  const queryView = reachView(ctx.vault, contextReach(ctx));
+
   const startedAtMs = Date.now();
   const emitQueryTelemetry = (status: "ok" | "empty" | "error", resultCount: number): void => {
     // Lazy emit kernel (t_5d7aa7c5): gate off = thunk never runs; a
@@ -177,6 +184,13 @@ async function toolBrainQuery(
         // one - retiring a memory must not publish it.
         const prefOwner = res.preference.owner;
         if (ownerScope !== null && !isPreferenceVisible({ owner: prefOwner }, ownerScope)) {
+          throw new BrainNotFoundError(`preference not found: ${preference}`);
+        }
+        // A reserved preference answers with the message an absent one
+        // produces, byte for byte - preference ids are `pref-<slug>` and
+        // therefore guessable, so a distinguishable refusal would be an
+        // existence oracle over exactly the population being reserved.
+        if (!queryView.visible(res.preference.id)) {
           throw new BrainNotFoundError(`preference not found: ${preference}`);
         }
         emitQueryTelemetry(res.evidence.length > 0 ? "ok" : "empty", res.evidence.length);
@@ -213,19 +227,22 @@ async function toolBrainQuery(
       return {
         mode: "topic",
         topic,
-        signals: res.signals.map(serializeSignal),
+        signals: queryView.keep(res.signals, (sig) => [sig.id]).map(serializeSignal),
         preference: topicPrefVisible ? serializePreference(res.preference!) : null,
-        all_log_events: res.all_log_events.map(serializeLogEntry),
+        all_log_events: queryView
+          .keep(res.all_log_events, (e) => logEntryArtifactRefs(e))
+          .map(serializeLogEntry),
       };
     }
 
     // since
     const res = queryByLogSince(ctx.vault, since!);
-    emitQueryTelemetry(res.length > 0 ? "ok" : "empty", res.length);
+    const events = queryView.keep(res, (e) => logEntryArtifactRefs(e));
+    emitQueryTelemetry(events.length > 0 ? "ok" : "empty", events.length);
     return {
       mode: "since",
       since: since!.toISOString(),
-      events: res.map(serializeLogEntry),
+      events: events.map(serializeLogEntry),
     };
   } catch (exc) {
     emitQueryTelemetry("error", 0);
@@ -329,7 +346,16 @@ async function toolBrainBacklinks(
   // (a-label-is-not-a-boundary, U3). The scope is the gated one: no
   // argument exists on this tool, and under `off` the view hides nothing.
   const index = buildBacklinkIndex(ctx.vault, gatedOwnerScopeView(ctx.vault, ctx.agentName).scope);
-  const refs = index.get(target) ?? [];
+  // The same reasoning one rule over: a ref names the artifact that WROTE
+  // it, so an index unfiltered by reach publishes the id of a page
+  // reserved against remote reads. A withheld TARGET answers as an absent
+  // one - the empty backlink document - rather than refusing, because an
+  // unknown target is a legitimate zero here and a refusal would be the
+  // one response shape that proves the page exists.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const refs = view.visible(target)
+    ? (index.get(target) ?? []).filter((r) => view.visible(r.source))
+    : [];
   return {
     id: target,
     count: refs.length,

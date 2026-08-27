@@ -538,3 +538,29 @@ function parseIsoUtc(timestamp: string): IsoUtcParts {
   }
   return { date: m[1]!, hms: `${m[2]!}:${m[3]!}:${m[4]!}` };
 }
+
+/**
+ * Every artifact one log entry names, as a reference an
+ * {@link ArtifactRefView} can resolve.
+ *
+ * A log entry is the one record shape whose SUBJECT is another artifact:
+ * it says what was applied to which preference, over which page. Two
+ * surfaces filter log rows by what they name - the `osb://log/{date}`
+ * resource and `brain_query` - and a second copy of this field list would
+ * be a second answer to "what does this row disclose", which is exactly
+ * how one of the two would come to disclose more than the other.
+ */
+export function logEntryArtifactRefs(entry: BrainLogEntry): ReadonlyArray<string | undefined> {
+  const body = (entry.body ?? {}) as Record<string, unknown>;
+  const field = (key: string): string | undefined =>
+    typeof body[key] === "string" ? (body[key] as string) : undefined;
+  return LOG_ENTRY_REF_FIELDS.map(field);
+}
+
+/** The body keys that carry an artifact reference, named once. */
+const LOG_ENTRY_REF_FIELDS: ReadonlyArray<string> = Object.freeze([
+  "path",
+  "preference",
+  "signal",
+  "artifact",
+]);
