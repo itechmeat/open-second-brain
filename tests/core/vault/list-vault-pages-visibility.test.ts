@@ -84,9 +84,9 @@ describe("a page whose file cannot be read", () => {
   test("is withheld at remote reach, exactly as a reserved page is", () => {
     const path = unreadable();
     try {
-      const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
-      expect(titles).not.toContain("unreadable");
-      expect(titles).not.toContain("Unreadable");
+      const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
+      expect(walked).not.toContain("unreadable");
+      expect(walked).not.toContain("Unreadable");
     } finally {
       chmodSync(path, 0o644);
     }
@@ -95,8 +95,8 @@ describe("a page whose file cannot be read", () => {
   test("is kept at local reach, where the caller can open the file itself", () => {
     const path = unreadable();
     try {
-      const titles = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
-      expect(titles).toContain("unreadable");
+      const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
+      expect(walked).toContain("unreadable");
     } finally {
       chmodSync(path, 0o644);
     }

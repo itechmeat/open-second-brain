@@ -94,6 +94,9 @@ import { indexVault, resolveSearchConfig } from "../../src/core/search/index.ts"
 import { JSONRPC_VERSION } from "../../src/mcp/protocol.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
 import { PROGRESS_META_KEY } from "../../src/mcp/progress.ts";
+
+/** The result member the progress refusal rides on, spelled once. */
+const PROGRESS_META_RESULT_MEMBER = "_meta";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import {
   VISIBILITY_SURFACE_CATEGORY,
@@ -633,8 +636,8 @@ test("the _meta channel is live on these probes, so the sweep covers it", async 
   // would have stayed green over an empty or absent `result._meta` - the
   // exact retirement it exists to catch.
   const response = await drive(TRANSPORT_REACH.remote, "brain_search", { query: QUERY });
-  const meta = (JSON.parse(response) as { result?: { _meta?: Record<string, unknown> } }).result
-    ?._meta;
+  const result = (JSON.parse(response) as { result?: Record<string, unknown> }).result;
+  const meta = result?.[PROGRESS_META_RESULT_MEMBER] as Record<string, unknown> | undefined;
   expect(meta, "result._meta is where a reserved name could ride out").toBeDefined();
   expect(Object.keys(meta!)).toContain(PROGRESS_META_KEY);
 });

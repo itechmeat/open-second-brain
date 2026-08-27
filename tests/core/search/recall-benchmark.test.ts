@@ -207,22 +207,26 @@ describe("runRecallBenchmark", () => {
 // difference below, and it is the whole observable difference.
 
 describe("runRecallBenchmark at the caller's reach", () => {
-  const vault = mkdtempSync(join(tmpdir(), "o2b-bench-reach-"));
-  const dbPath = join(vault, "index.sqlite");
+  const reachVault = mkdtempSync(join(tmpdir(), "o2b-bench-reach-"));
+  const dbPath = join(reachVault, "index.sqlite");
   let cfg: ResolvedSearchConfig;
 
   beforeAll(async () => {
-    writeMd(vault, "open.md", "# Open\n\nthe payments tier rollout is staged");
-    writeMd(vault, "vanished.md", "# Vanished\n\nthe payments tier rollout is staged, revised");
-    cfg = makeConfig({ vault, dbPath });
+    writeMd(reachVault, "open.md", "# Open\n\nthe payments tier rollout is staged");
+    writeMd(
+      reachVault,
+      "vanished.md",
+      "# Vanished\n\nthe payments tier rollout is staged, revised",
+    );
+    cfg = makeConfig({ vault: reachVault, dbPath });
     await indexVault(cfg);
     // Indexed, then gone: the routine trigger is a page deleted or
     // renamed between runs. The document row survives, so it can still
     // rank; only its frontmatter has become unmeasurable.
-    rmSync(join(vault, "vanished.md"), { force: true });
+    rmSync(join(reachVault, "vanished.md"), { force: true });
   });
 
-  afterAll(() => rmSync(vault, { recursive: true, force: true }));
+  afterAll(() => rmSync(reachVault, { recursive: true, force: true }));
 
   const probe = (expected: string) =>
     parseRecallBenchmarkDataset({
@@ -246,9 +250,11 @@ describe("runRecallBenchmark at the caller's reach", () => {
   });
 
   test("an ordinary page scores at both reaches, so the gate is not blanket-denying", async () => {
-    for (const transportReach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote] as const) {
-      const report = await runRecallBenchmark(cfg, probe("open.md"), { k: 5, transportReach });
-      expect(report.perQuery[0]!.hit).toBe(true);
-    }
+    const reports = await Promise.all(
+      [TRANSPORT_REACH.local, TRANSPORT_REACH.remote].map((transportReach) =>
+        runRecallBenchmark(cfg, probe("open.md"), { k: 5, transportReach }),
+      ),
+    );
+    for (const report of reports) expect(report.perQuery[0]!.hit).toBe(true);
   });
 });
