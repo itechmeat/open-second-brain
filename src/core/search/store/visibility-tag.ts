@@ -90,19 +90,16 @@ export function countRemoteReservedDocuments(db: Database, token: string): numbe
 }
 
 /**
- * {@link anyVisibilityTagPresent} for an index path, without opening a
+ * The two populations `search check` reports beside the presence flag,
+ * read in one open so the diagnostic pays one probe rather than three.
+ *
+ * The one seam into this module from an index PATH, without opening a
  * `Store` - the same seam {@link peekPendingVectorsSync} and
  * {@link readEmbedderRecordCensusSync} use, and for the same reason:
  * `indexCheck` probes an in-memory database and never touches the real
- * index otherwise.
- */
-export function peekVisibilityTagPresence(dbPath: string): IndexPeek<boolean> {
-  return peekReadonlyIndex(dbPath, (_read, db) => anyVisibilityTagPresent(db));
-}
-
-/**
- * The two populations `search check` reports beside the presence flag,
- * read in one open so the diagnostic pays one probe rather than three.
+ * index otherwise. A presence-only sibling stood beside it until this
+ * census subsumed its one production caller; it was kept alive by its own
+ * test, which is a passing suite over a path the product no longer walks.
  */
 export interface VisibilityColumnCensus {
   readonly tagged: boolean;

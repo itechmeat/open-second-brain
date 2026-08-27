@@ -88,11 +88,7 @@ export {
 
 export { peekPendingVectorsSync } from "./store/counts.ts";
 
-export {
-  peekVisibilityColumnCensus,
-  peekVisibilityTagPresence,
-  type VisibilityColumnCensus,
-} from "./store/visibility-tag.ts";
+export { peekVisibilityColumnCensus, type VisibilityColumnCensus } from "./store/visibility-tag.ts";
 
 export {
   auditEmbedderRecord,

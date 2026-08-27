@@ -20,6 +20,9 @@
 import { resolveAgentName } from "../../core/config.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
+import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
+import { contextReach } from "../tool-contract.ts";
 import { applyHygienePlan } from "../../core/brain/hygiene/apply.ts";
 import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
 import { resolveConflictFindings } from "../../core/brain/hygiene/resolve-conflicts.ts";
@@ -238,7 +241,16 @@ async function toolBrainHygiene(
   // `unknown_ids` - would be an existence oracle over the same
   // population the scan just refused to enumerate
   // (`preferences-collect.ts` states the convention).
-  const view = gatedOwnerScopeView(ctx.vault, ctx.agentName);
+  // Both rules, ANDed, on the seam the owner rule already sits on. The
+  // detectors walk with `MAINTENANCE_LANE_REACH` - correct for a scan
+  // that must see the whole vault it is diagnosing - so the reserved
+  // pages are deliberately walked IN, and this is where they stop. Adding
+  // the rule here rather than threading it through four detector
+  // signatures also means a detector added later inherits it.
+  const view = everyArtifactRefView(
+    gatedOwnerScopeView(ctx.vault, ctx.agentName),
+    reachView(ctx.vault, contextReach(ctx)),
+  );
   const findings = view.keep(scanned.findings, (f) => findingRefs(ctx.vault, f));
   const report: HygieneScanReport = Object.freeze({ ...scanned, findings });
 

@@ -213,17 +213,6 @@ function notFound(chunkId: number): SearchError {
 }
 
 /**
- * Is the note at `path` reachable under `scope`? Fails CLOSED on an
- * unreadable page, matching `applyAgentScope` on the ranked path: an
- * owner that cannot be determined is treated as somebody else's rather
- * than as shared.
- *
- * Delegates to {@link isPathOwnerVisible} rather than restating the rule,
- * so the drill-down and the ranked filter cannot drift on what "closed"
- * means — including the unreadable-file verdict, which an empty
- * frontmatter map cannot express.
- */
-/**
  * May a caller at `reach` read the note at `path`? Fails CLOSED on an
  * unreadable page, exactly as the ranked filter decides it.
  *
@@ -238,6 +227,17 @@ function reachReadable(config: ResolvedSearchConfig, path: string, reach: Transp
   return isPathReadableAtReach(config.vault, path, reach, new Map());
 }
 
+/**
+ * Is the note at `path` reachable under `scope`? Fails CLOSED on an
+ * unreadable page, matching `applyAgentScope` on the ranked path: an
+ * owner that cannot be determined is treated as somebody else's rather
+ * than as shared.
+ *
+ * Delegates to {@link isPathOwnerVisible} rather than restating the rule,
+ * so the drill-down and the ranked filter cannot drift on what "closed"
+ * means — including the unreadable-file verdict, which an empty
+ * frontmatter map cannot express.
+ */
 function ownerVisible(config: ResolvedSearchConfig, path: string, scope: string): boolean {
   // One hit, so the cache is a formality — it exists because the shared
   // reader takes one, and reusing it keeps this check on exactly the

@@ -36,6 +36,8 @@ import {
   purgeRecurrenceSource,
 } from "../../core/brain/recurrence.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
+import { contextReach } from "../tool-contract.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceStrList } from "../coerce.ts";
 import { coercePositiveInteger, optionalStringArg, requiredStringArg } from "./shared.ts";
@@ -86,10 +88,22 @@ async function toolBrainSkillProposals(
       ...(ctx.repoRoot ? { repoRoot: ctx.repoRoot } : {}),
       ...(skillsDir !== null ? { skillsDir } : {}),
     });
+    // `planSkillPageDrafts` walks with `MAINTENANCE_LANE_REACH`, which is
+    // right for a plan that has to see the whole vault it is proposing
+    // over - and wrong to hand to a caller unfiltered, because both lists
+    // report a page's path and title and `skipped` adds a `detail` about
+    // it. The rule is asked here, over what the caller is told.
+    //
+    // `pages_scanned` is recomputed from the visible lists for the same
+    // reason `brain_hygiene` recomputes its counts: a corpus size taken
+    // before the filter states how many pages were withheld.
+    const view = reachView(ctx.vault, contextReach(ctx));
+    const admitted = report.admitted.filter((c) => view.visible(c.path));
+    const skipped = report.skipped.filter((s) => view.visible(s.path));
     return {
       generated_at: report.generatedAt,
-      pages_scanned: report.pagesScanned,
-      admitted: report.admitted.map((c) => ({
+      pages_scanned: view.filtersNothing ? report.pagesScanned : admitted.length + skipped.length,
+      admitted: admitted.map((c) => ({
         path: c.path,
         title: c.title,
         tier: c.tier,
@@ -99,7 +113,7 @@ async function toolBrainSkillProposals(
         reuse_observations: c.reuseObservations,
         llm_step: c.llmStep,
       })),
-      skipped: report.skipped.map((s) => ({
+      skipped: skipped.map((s) => ({
         path: s.path,
         title: s.title,
         reason: s.reason,

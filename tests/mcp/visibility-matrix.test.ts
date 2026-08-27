@@ -56,11 +56,19 @@
  *
  * The REACHABILITY half - that the fixture actually puts the marker in
  * front of a local caller, without which every `not.toContain` would be a
- * clean sweep over an empty fixture - is asserted for a named subset
- * ({@link RECIPES_REACHING_RESERVED_CONTENT}) rather than derived per
- * recipe. The visibility axis has no per-call classification of its own,
- * and inventing two hundred of them would be two hundred unexecuted
- * labels; the two-sided pin above is what carries the weight instead.
+ * clean sweep over an empty fixture - is NOT per-recipe. The visibility
+ * axis has no per-call classification of its own, and inventing two
+ * hundred of them would be two hundred unexecuted labels.
+ *
+ * So it is measured instead, in two places. A named subset
+ * ({@link RECIPES_REACHING_RESERVED_CONTENT}) is asserted recipe by
+ * recipe, and {@link RECIPES_REACHING_RESERVED_AT_LOCAL} bounds how many
+ * of ALL recipes reach the page at a reach that reaches it. That second
+ * number is the honest size of this sweep's enforcement weight: most
+ * recipes never touch the reserved page even locally, so most of the
+ * remote assertions are coverage of the enumeration rather than of the
+ * rule. Naming the subset without the count understated the gap by two
+ * orders of magnitude, which a review found by measuring it.
  */
 
 import { afterEach, beforeEach, expect, test } from "bun:test";
@@ -502,6 +510,30 @@ const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_unlinked_mentions",
 ]);
 
+/**
+ * How many recipes the fixture actually puts the reserved page in front
+ * of, at a reach that reaches it - MEASURED, not claimed.
+ *
+ * Without this, the `not.toContain` sweep below could be green because
+ * the fixture never reached the page on those recipes, and a reader
+ * counting green test names would read a per-tool proof into a clean
+ * sweep over an empty fixture. A named subset used to be the whole
+ * anchor; a review measured the gap and found it two orders of magnitude
+ * wider than the four recipes named, so the gap is a number this file
+ * takes rather than a caveat it writes.
+ *
+ * Both bounds are asserted. The floor is the non-vacuity claim; the
+ * ceiling is what stops the number drifting up unremarked, because a
+ * recipe joining the reaching set is a recipe whose remote half just
+ * became load-bearing and should be read as such in the diff.
+ */
+const RECIPES_REACHING_RESERVED_AT_LOCAL = { min: 25, max: 45 } as const;
+
+/** Recipes observed to reach it, accumulated as the sweep below runs. */
+let recipesReachingAtLocal = 0;
+/** Recipes the sweep actually drove, so a filtered run cannot read as a measurement. */
+let recipesMeasuredAtLocal = 0;
+
 test("every recipe still naming a reserved page belongs to a surface the registry excludes", () => {
   const covered = [...STILL_NAMED_AT_REMOTE].filter((label) =>
     COVERED_TOOLS.has(label.split(" ")[0] ?? label),
@@ -526,11 +558,31 @@ for (const entry of ALL_ENTRIES) {
           // naming it has been covered, and this list has to say so.
           expect(response, `${label} no longer names a reserved page`).toContain(RESERVED_MARKER);
         }
+        // The reachability half, taken on this recipe's own fresh fixture
+        // and AFTER the assertion above, so the measurement cannot change
+        // what the sweep saw. Counted here rather than in a loop of its
+        // own because several recipes WRITE to the fixture, and a second
+        // pass over one vault would be measuring the vault they left.
+        const local = await drive(TRANSPORT_REACH.local, entry.name, probeArgs(recipe));
+        recipesMeasuredAtLocal += 1;
+        if (local.includes(RESERVED_MARKER)) recipesReachingAtLocal += 1;
       },
       PROBE_TIMEOUT_MS,
     );
   }
 }
+
+test("the sweep's non-vacuity is measured, not assumed", () => {
+  // The counter is only meaningful if the sweep above actually ran, so
+  // that is asserted first: under a name filter this fails by saying the
+  // sweep was skipped rather than by reporting a bound nobody measured.
+  const recipeCount = ALL_ENTRIES.reduce((n, entry) => n + entry.calls.length, 0);
+  expect(recipesMeasuredAtLocal, "the sweep did not run, so nothing was measured").toBe(
+    recipeCount,
+  );
+  expect(recipesReachingAtLocal).toBeGreaterThanOrEqual(RECIPES_REACHING_RESERVED_AT_LOCAL.min);
+  expect(recipesReachingAtLocal).toBeLessThanOrEqual(RECIPES_REACHING_RESERVED_AT_LOCAL.max);
+});
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The federated caller shape

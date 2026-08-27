@@ -67,9 +67,13 @@ test("a vault with one visibility-tagged page gets the finding, counted from the
   // Not a trivial zero-of-zero: the registry actually carries excluded rows.
   expect(report.visibilityHonesty!.excludedSurfaceCount).toBeGreaterThan(0);
   // ...and the covered half is no longer the two surfaces it started as.
-  expect(report.visibilityHonesty!.totalSurfaceCount).toBeGreaterThan(
-    excludedCallableVisibilitySurfaces().length,
-  );
+  // `total > excluded` only says the covered half is at least ONE, which
+  // this wave's whole claim is that it is not - so the assertion is
+  // against the number the wave inherited, not against zero.
+  const COVERED_BEFORE_THIS_WAVE = 2;
+  const covered =
+    report.visibilityHonesty!.totalSurfaceCount - report.visibilityHonesty!.excludedSurfaceCount;
+  expect(covered).toBeGreaterThan(COVERED_BEFORE_THIS_WAVE);
 });
 
 test("the document counts come from the index, not from a hand-written number", async () => {

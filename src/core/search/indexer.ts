@@ -1664,7 +1664,7 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
  * The visibility honesty finding for an index path, or `null` when there
  * is nothing to be honest ABOUT: the index does not exist, would not
  * open, or - the common case - has never carried a `visibility:`-tagged
- * page. The surface counts are read off the registry's own exported list
+ * page AND measured every document it holds. The surface counts are read off the registry's own exported list
  * at call time and the document counts off the index's own column, never
  * hand-written, so the finding cannot drift from what backs it.
  *
@@ -1675,7 +1675,14 @@ function readPendingVectorCensus(dbPath: string): PendingVectorCensus {
  */
 function readVisibilityHonestyFinding(dbPath: string): VisibilityHonestyFinding | null {
   const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
-  if (peek.kind !== "read" || !peek.value.tagged) return null;
+  if (peek.kind !== "read") return null;
+  // Reported when the index HAS something to be honest about, which is
+  // either a tagged page or a population it could not measure. Gating on
+  // `tagged` alone suppressed the unmeasured count in exactly the state
+  // it exists to surface: an index migrated to v12 whose chunk-zero rows
+  // are gone reads as untagged for every row, so the operator was told
+  // nothing at all about the documents the index measured nothing for.
+  if (!peek.value.tagged && peek.value.unmeasured === 0) return null;
   return Object.freeze({
     excludedSurfaceCount: excludedCallableVisibilitySurfaces().length,
     totalSurfaceCount: callableVisibilitySurfaces().length,

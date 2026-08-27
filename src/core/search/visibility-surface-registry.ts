@@ -1,36 +1,50 @@
 /**
  * Every surface that can hand a vault note's path, title, or body back to
- * a caller, classified as visibility-COVERED (routes through
- * `applyVisibilityScope`) or EXCLUDED with a written reason
- * (nothing-writes-silently, unit H, form B).
+ * a caller, classified as visibility-COVERED (a read root decides for it)
+ * or EXCLUDED with a written reason (nothing-writes-silently, unit H,
+ * form B).
  *
- * `graph/visibility.ts`'s `visibility:` frontmatter field is real and
- * wired into exactly one place: `pipeline/pool-filters.ts:130`, inside
- * `search()`. It is caller-liftable scoping, not a boundary - any caller
- * may pass `visibility: ["private"]` and read a tagged page - but even
- * that weaker guarantee only holds for the ONE lane that calls `search()`.
- * Everywhere else, a page's tag is decorative. This module is the
- * enumeration that makes the gap a measured fact instead of a claim:
+ * `graph/visibility.ts`'s `visibility:` field carries two independent
+ * rules, and this list is about the second of them:
+ *
+ *   - the caller's requested SCOPE, which any caller may lift by asking
+ *     for a token, and which reaches only the lanes that call `search()`;
+ *   - ONE reserved token, which a caller cannot lift and which three read
+ *     roots enforce - the search pipeline, `listVaultPages`, and the
+ *     key-addressed reads.
+ *
+ * This module is the enumeration that makes the remaining gap a measured
+ * fact instead of a claim:
  * {@link tests/core/architecture/visibility-surface-census.test.ts} pins
- * that a mechanical sweep of `src/mcp/` and `src/cli/` finds nothing this
- * list does not already carry, and `search check` derives its honesty
- * finding's count from {@link excludedCallableVisibilitySurfaces} rather
- * than a hand-written number.
+ * that a mechanical sweep of `src/mcp/`, `src/cli/` and `src/openclaw/`
+ * finds nothing this list does not already carry, and `search check`
+ * derives its honesty finding's counts from
+ * {@link excludedCallableVisibilitySurfaces} and from the index's own
+ * column rather than from hand-written numbers.
  *
  * The list is the census's POPULATION, not a claim to be every surface
  * there is: the MCP half is swept mechanically with the blind spots that
  * test's docblock states, and the CLI half is hand-enumerated one row per
  * MCP mirror. The `search check` line that reports it says so.
  *
- * This module makes NO enforcement change. It does not touch
- * `graph/visibility.ts`, the indexer, `listVaultPages`, or the
- * owner-scope path - see the census test's docblock for the coverage map
- * a future enforcement wave (Unit H form A, parked) would need.
+ * HISTORY, because a stale claim here is worse than none. This module
+ * shipped as a pure measurement, and its header said so: "makes NO
+ * enforcement change ... a future enforcement wave (Unit H form A,
+ * parked)". That wave is this branch. `graph/visibility.ts`, the indexer
+ * and `listVaultPages` are all touched now, the reserved token is
+ * enforced at the three roots, and the reasons below say per row which
+ * root covers a surface - so the header that described the parked state
+ * would now be describing a state that no longer exists.
  */
 
-/** Whether a surface's data path passes through `applyVisibilityScope`. */
+/** Whether a read root decides what a surface may hand back. */
 export const VISIBILITY_SURFACE_CATEGORY = Object.freeze({
-  /** Routes through `applyVisibilityScope`, directly or via `search()`. */
+  /**
+   * A read root decides for it: the search pipeline's pool filters, the
+   * `listVaultPages` walk, or the key-addressed read's own ask at the
+   * site of the read. Was "routes through `applyVisibilityScope`", which
+   * described the only root that existed when this list was written.
+   */
   covered: "covered",
   /** Can return note path/title/body without ever consulting `visibility:`. */
   excluded: "excluded",
@@ -446,6 +460,64 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "every search() it makes, so the benchmark measures the corpus this caller can reach and " +
       "root A does the withholding. brain_tune inherits it: the grid is scored with the same " +
       "benchmark.",
+  },
+  {
+    surface: "brain_hygiene",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the freshness detector's population comes from listVaultPages(MAINTENANCE_LANE_REACH), so " +
+      "reserved pages are walked IN on purpose - a scan that stopped seeing them would diagnose a " +
+      "smaller vault than the one it is diagnosing - and every finding puts its page's " +
+      "vault-relative path in `targets` with a title stating a fact about it. The rule is asked " +
+      "on the seam the owner rule already sits on, over what the caller is told, so a detector " +
+      "registered after this one inherits it; `counts` is recomputed from the visible findings and " +
+      "a withheld " +
+      "id lands in `unknown_ids` exactly as one nobody issued does.",
+  },
+  {
+    surface: "brain_skill_proposals",
+    kind: K.mcpTool,
+    category: C.covered,
+    reason:
+      "the page_candidates operation calls planSkillPageDrafts, which walks with " +
+      "MAINTENANCE_LANE_REACH, and returns a path and title per page in `admitted` and in " +
+      "`skipped` - the latter with a `detail` stating why the gate turned the page down. Both " +
+      "lists are filtered at the handler and `pages_scanned` is recomputed from them whenever a " +
+      "rule is live, because a corpus size taken before the filter states how many pages were " +
+      "withheld.",
+  },
+  {
+    surface: "brain_procedural_memory",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "collectEntries walks the configured roots with parseFrontmatter and returns `sourcePath` " +
+      "and `title` per entry, so this surface DOES disclose a page's path and title - it is " +
+      "excluded rather than swept in for completeness, and the distinction is the point of the " +
+      "row. It reads procedure-kind pages under caller-named roots rather than through any of " +
+      "the three read roots, and closing it means giving that walk a reach the way listVaultPages " +
+      "has one, which is a fourth root to build rather than a filter to add.",
+  },
+  {
+    surface: "brain_procedural_graph",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "rebuilds the procedural graph and hints over the same population brain_procedural_memory " +
+      "walks, and reports node/edge/entry COUNTS plus generated_at rather than any page's path, " +
+      "title or body - so it inherits that surface's population without inheriting its " +
+      "disclosure. Excluded on the same terms and named here so the pair is visible together.",
+  },
+  {
+    surface: "brain_recurrence",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "swept in for file-level completeness: it shares procedure-tools.ts with " +
+      "brain_skill_proposals but reads only the recurrence ledger, whose entries are content " +
+      "hashes, scope names, support counts and source ids - no page path, title or body reaches " +
+      "this handler at all.",
   },
   {
     surface: "brain_codegraph_report",

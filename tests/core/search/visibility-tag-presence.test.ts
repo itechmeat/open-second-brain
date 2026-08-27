@@ -25,7 +25,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import { indexVault } from "../../../src/core/search/indexer.ts";
-import { peekVisibilityTagPresence } from "../../../src/core/search/store/visibility-tag.ts";
+import { peekVisibilityColumnCensus } from "../../../src/core/search/store/visibility-tag.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 
 let vault: string;
@@ -48,9 +49,9 @@ test("a vault with no visibility frontmatter anywhere reads absent", async () =>
   writeMd(vault, "b.md", "---\ntitle: B\n---\n\n# B\n\nTagged with an unrelated key.");
   await indexVault(makeConfig({ vault, dbPath }));
 
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(false);
+  if (peek.kind === "read") expect(peek.value.tagged).toBe(false);
 });
 
 test("a vault with one visibility-tagged page reads present", async () => {
@@ -58,9 +59,9 @@ test("a vault with one visibility-tagged page reads present", async () => {
   writeMd(vault, "b.md", "---\nvisibility: private\n---\n\n# B\n\nA private page.");
   await indexVault(makeConfig({ vault, dbPath }));
 
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(true);
+  if (peek.kind === "read") expect(peek.value.tagged).toBe(true);
 });
 
 test("the word 'visibility' in body prose, with no 'visibility:' key text, does not flip the peek", async () => {
@@ -71,9 +72,9 @@ test("the word 'visibility' in body prose, with no 'visibility:' key text, does 
   );
   await indexVault(makeConfig({ vault, dbPath }));
 
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(false);
+  if (peek.kind === "read") expect(peek.value.tagged).toBe(false);
 });
 
 test("a 'visibility:' phrase in body prose no longer flips the peek", async () => {
@@ -92,28 +93,28 @@ test("a 'visibility:' phrase in body prose no longer flips the peek", async () =
   );
   await indexVault(makeConfig({ vault, dbPath }));
 
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(false);
+  if (peek.kind === "read") expect(peek.value.tagged).toBe(false);
 });
 
 test("a frontmatter VALUE quoting the key no longer flips it either", async () => {
   writeMd(vault, "a.md", '---\ntitle: "on visibility: a note"\n---\n\n# A\n\nBody.');
   await indexVault(makeConfig({ vault, dbPath }));
 
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("read");
-  if (peek.kind === "read") expect(peek.value).toBe(false);
+  if (peek.kind === "read") expect(peek.value.tagged).toBe(false);
 });
 
 test("an absent index reads absent, never a false folded into a read", () => {
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("absent");
 });
 
 test("a file that is not a readable index reads unreadable with the open's reason", () => {
   mkdirSync(dirname(dbPath), { recursive: true });
   writeFileSync(dbPath, "not a database");
-  const peek = peekVisibilityTagPresence(dbPath);
+  const peek = peekVisibilityColumnCensus(dbPath, REMOTE_DENY_VISIBILITY_TOKEN);
   expect(peek.kind).toBe("unreadable");
 });

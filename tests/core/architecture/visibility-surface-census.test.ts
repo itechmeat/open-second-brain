@@ -81,11 +81,23 @@
  * two modules away (the population rule reads the MCP file's own
  * imports, not its whole call graph - deep-synthesis.ts is in
  * population via `deepSynthesis`, not because knowledge-tools.ts itself
- * imports `search`); and `src/openclaw/` (the OpenClaw native plugin
- * adapter), which the charter scoped this sweep away from even though
- * `src/openclaw/index.ts` hosts its own `listVaultPages`-backed page
- * search with no visibility check - named here, not swept, and worth a
- * follow-up census of its own.
+ * imports `search`).
+ *
+ * `src/openclaw/` used to be named here as a stated blind spot - scoped
+ * away by the charter even though `src/openclaw/index.ts` hosts its own
+ * `listVaultPages`-backed page search with no visibility check. It is
+ * neither any more: the tree is swept (see {@link MCP_SOURCE_TREE}) and
+ * that walk takes a reach. The paragraph is rewritten rather than left
+ * standing, because a blind spot that has been closed mis-sizes the
+ * remaining work in the opposite direction from a blind spot that has
+ * been missed, and this list is the enforceable statement of coverage.
+ *
+ * The vocabulary itself is the live blind spot, and it has cost real
+ * surfaces: `runHygieneScan` and `planSkillPageDrafts` joined it only
+ * after a review found `brain_hygiene` and `brain_skill_proposals`
+ * disclosing reserved page paths from outside a population that could not
+ * see them. A producer reached through a `src/core/` helper is invisible
+ * here until someone names the helper.
  *
  * CLI population is NOT mechanically discovered the way the MCP one is:
  * it is hand-enumerated, one row per MCP tool above that has a CLI
@@ -184,6 +196,15 @@ const NOTE_CONTENT_PRODUCERS: ReadonlyArray<ProducerRule> = Object.freeze([
       "listVaultPages",
     ],
   },
+  // Two producers that reach page content through a `src/core/` helper
+  // rather than through a vault or search primitive directly. They were
+  // the census's stated blind spot and cost it two live surfaces: the
+  // hygiene scan's freshness detector and the skill-page planner both
+  // walk with `MAINTENANCE_LANE_REACH` and both hand paths and titles to
+  // an MCP caller, so neither was counted in the denominator the
+  // operator-facing honesty line reports.
+  { specifierIncludes: "/hygiene/scan.ts", identifiers: ["runHygieneScan"] },
+  { specifierIncludes: "/skill-page-drafts.ts", identifiers: ["planSkillPageDrafts"] },
   { specifierIncludes: "/search/search.ts", identifiers: ["search"] },
   { specifierIncludes: "/search/index.ts", identifiers: ["search", "expandHit"] },
   { specifierIncludes: "/search/cards.ts", identifiers: ["expandHit"] },
@@ -419,8 +440,16 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
 // Population pins - equalities, the way write-site-census pins its own counts
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Measured: MCP tools whose file imports a note-content primitive. */
-const MCP_TOOL_POPULATION_SIZE = 43;
+/**
+ * Measured: MCP tools whose file imports a note-content primitive.
+ *
+ * 43 before the vocabulary gained `runHygieneScan` and
+ * `planSkillPageDrafts`. The five new names are `brain_hygiene` and
+ * `brain_skill_proposals`, which the sweep could not see and which were
+ * both leaking, plus the three tools that share `procedure-tools.ts` with
+ * the second of them and come in on the file-level rule.
+ */
+const MCP_TOOL_POPULATION_SIZE = 48;
 /** Measured: MCP resources + templates, all excluded. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */
@@ -484,10 +513,12 @@ describe("visibility surface census", () => {
         "brain_deep_synthesis",
         "brain_eval",
         "brain_file_context",
+        "brain_hygiene",
         "brain_query",
         "brain_recall_feedback",
         "brain_search",
         "brain_search_expand",
+        "brain_skill_proposals",
         "second_brain_query",
       ]);
     });

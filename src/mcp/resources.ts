@@ -496,14 +496,6 @@ function readTopic(
   };
 }
 
-/**
- * Every artifact one log entry would name, as the owner-scope view
- * spells references.
- *
- * A log body is an untyped payload record; the fields that carry an
- * artifact are the wikilink-shaped ones, and the view unbrackets them
- * itself. `path` is the vault-relative page the event was about.
- */
 function readLog(
   ctx: ResourceContext,
   uri: string,
