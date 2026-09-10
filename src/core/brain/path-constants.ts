@@ -78,6 +78,17 @@ export const BRAIN_ENTITIES_REL = posix.join(BRAIN_ROOT_REL, "entities");
  * value can never resurface through semantic recall.
  */
 export const BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
+/**
+ * Internal machinery lane: `Brain/.state/`. Distinct from
+ * {@link BRAIN_STATE_REL} above despite the near-identical name, and the
+ * two are not interchangeable: `Brain/state/` is OPERATOR-facing memory
+ * content (one page per aspect, readable in Obsidian), while this
+ * dot-directory holds the ledgers and markers this tool keeps for itself
+ * - the session-lineage ledger, the anticipatory cache, the freeze
+ * marker. Dot-prefixed so the vault walker excludes it from search and
+ * indexing exactly as it excludes `.snapshots`.
+ */
+export const BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, ".state");
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
 export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */

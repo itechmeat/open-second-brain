@@ -414,6 +414,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "appending. The `unlinkSync` breaks a lock proven stale by its own mtime, with " +
       "exactly one retry.",
   },
+  "src/core/brain/freeze.ts": {
+    categories: [C.lockPrimitive, C.retentionDelete],
+    calls: ["unlinkSync"],
+    reason:
+      "the freeze marker is a concurrency primitive over the whole vault rather than a " +
+      "note: its entire content is its existence, `unfreeze` is the one command that " +
+      "removes it, and the `unfreeze` log event records who did so and what the marker " +
+      "said. There is nothing for a shared note writer to write.",
+  },
   "src/core/brain/maintenance/journal.ts": {
     categories: [C.appendOnlyLedger],
     calls: ["appendFileSync", "renameSync", "writeFileSync"],
@@ -1079,7 +1088,7 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * vault-shaped disposable directory). Each is now carrying a written
  * exclusion above.
  */
-const DIRECT_WRITE_ROWS = 68;
+const DIRECT_WRITE_ROWS = 69;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1106,7 +1115,7 @@ const DIRECT_WRITE_ROWS = 68;
  * nothing - deleting the only evidence of a partial write is exactly what
  * that module declines to do - so it too arrives with no exclusion owed.
  */
-const SHARED_HELPER_ROWS = 100;
+const SHARED_HELPER_ROWS = 101;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1172,7 +1181,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * ledger, which appends its own record shape and carries the channel on
  * the record rather than in frontmatter.
  */
-const UNSTAMPED_DIRECT_ROWS = 67;
+const UNSTAMPED_DIRECT_ROWS = 68;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1180,7 +1189,7 @@ const UNSTAMPED_DIRECT_ROWS = 67;
  * the log pair through `atomicWriteFileSync`, signals and notes through
  * `writeFrontmatterAtomic` - are the ones missing from this count.
  */
-const UNSTAMPED_SHARED_ROWS = 97;
+const UNSTAMPED_SHARED_ROWS = 98;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

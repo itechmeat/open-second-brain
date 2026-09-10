@@ -42,6 +42,7 @@ import {
   logShardPath,
   validateIsoDate,
 } from "./paths.ts";
+import { WRITE_LANE } from "./freeze-marker.ts";
 import { isValidDeviceId, resolveDeviceId } from "../config.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
@@ -315,7 +316,14 @@ export function appendLogEvent(
   const ts = parseIsoUtc(event.timestamp);
   const path = logShardPath(vault, ts.date, deviceId);
   const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
-  const logDir = brainDirsForWrite(vault).log;
+  // The AUDIT lane (who-wrote-what, Task C). This appender is one of the
+  // two callers that skip the freeze check, and it is the reason the lane
+  // exists at all: `freeze`, `unfreeze` and `write-refused` are events
+  // about a frozen vault, so a freeze that silenced the log would erase
+  // the record of itself and of every write it refused. The identity
+  // assertion still runs - a log line landing in the wrong store is as
+  // wrong as a note landing there.
+  const logDir = brainDirsForWrite(vault, undefined, WRITE_LANE.audit).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
   const withAgent =
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"

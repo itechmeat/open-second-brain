@@ -126,6 +126,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   captureDecisionLog: "capture_decision_log",
   decisionReceipts: "decision_receipts",
   lineageLedger: "lineage_ledger",
+  freezeMarker: "freeze_marker",
   anticipatoryCache: "anticipatory_cache",
   exactState: "exact_state",
   searchFeedback: "search_feedback",
@@ -279,6 +280,7 @@ const PROPOSAL_WATERMARK_FILE = "proposal-watermark.json";
 const TRUTH_DIR = "truth";
 const BRAIN_INTERNAL_STATE_DIR = ".state";
 const LINEAGE_LEDGER_FILE = "session-lineage.jsonl";
+const FROZEN_MARKER_FILE = "frozen.json";
 const ANTICIPATORY_DIR = "anticipatory";
 const SEARCH_STATE_DIR = "search";
 const SEARCH_FEEDBACK_DIR = "feedback";
@@ -718,6 +720,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "never reached it. It is how a broken chain is detectable at all, so deleting it hides " +
       "gaps rather than closing them.",
     sources: ["src/core/brain/lineage/ledger.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.freezeMarker,
+    label: "fleet freeze marker",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_INTERNAL_STATE_DIR, FROZEN_MARKER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "While this file exists every content writer on every device that syncs the vault " +
+      "refuses, which is exactly what an operator asked for when they wrote it. Deleting it " +
+      "by hand is the same act as `o2b brain unfreeze` minus the log event that would have " +
+      "recorded who lifted the stop.",
+    sources: ["src/core/brain/freeze-marker.ts"],
   },
   {
     id: STATE_SURFACE_ID.anticipatoryCache,

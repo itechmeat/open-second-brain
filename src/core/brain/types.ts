@@ -493,6 +493,31 @@ export const BRAIN_LOG_EVENT_KIND = {
    * no event, so the log records changes and not calls.
    */
   expirationSet: "expiration-set",
+  /**
+   * `freeze` (who-wrote-what, Task C) - an operator stopped every content
+   * writer on every device by writing `Brain/.state/frozen.json`. Payload
+   * carries the `reason` (or the empty string when none was given), the
+   * `device_id` the freeze was set from, and the `agent`. Emitted only on
+   * a real transition: freezing an already-frozen vault changes nothing
+   * and writes nothing, so the log records the stop and not the attempt.
+   */
+  freeze: "freeze",
+  /**
+   * `unfreeze` (who-wrote-what, Task C) - the freeze marker was removed
+   * and the content lane reopened. Payload carries the `frozen_at`,
+   * `by` and `reason` read off the marker before it went, plus the
+   * `agent` lifting it: the marker's whole content was its existence, so
+   * this event is the only place that record survives.
+   */
+  unfreeze: "unfreeze",
+  /**
+   * `write-refused` (who-wrote-what, Task C) - a write was refused
+   * because the vault is frozen. Recorded at the MCP tool boundary, which
+   * is the one seam that knows both the refusal and the caller: the guard
+   * itself cannot append (it sits below the log module). Payload carries
+   * the `tool`, the `agent`, and the `reason` the marker gave.
+   */
+  writeRefused: "write-refused",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

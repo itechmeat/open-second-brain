@@ -95,6 +95,14 @@ export const DEGRADATION_CODE = Object.freeze({
    * write path rather than a warning.
    */
   vaultMarkerMismatch: "vault-marker-mismatch",
+  /**
+   * Task C. An operator froze this vault, so the content lane refuses
+   * every write until the marker is removed. Unlike the two above this is
+   * an INTENDED state rather than a defect: the notice exists so the
+   * refusal names when the freeze was set, who set it, why, and the one
+   * command that lifts it.
+   */
+  vaultFrozen: "vault-frozen",
 } as const);
 
 /**

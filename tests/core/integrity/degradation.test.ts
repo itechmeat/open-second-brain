@@ -48,6 +48,8 @@ function owningUnit(code: DegradationCode): string {
       return "J";
     case DEGRADATION_CODE.vaultMarkerMismatch:
       return "J";
+    case DEGRADATION_CODE.vaultFrozen:
+      return "C";
     default:
       return assertNever(code);
   }

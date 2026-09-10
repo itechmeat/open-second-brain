@@ -335,6 +335,16 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
     },
 
     // --- Rewrites through a temp file ------------------------------------
+    "src/core/brain/freeze.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the freeze marker, whose whole content was its existence: the file carries " +
+        "no memory, `o2b brain freeze` writes an identical one in a single command, and the " +
+        "`unfreeze` log event records who lifted the freeze plus what the marker said before " +
+        "it went. Archiving it would preserve a fact the log already holds.",
+    },
+
     "src/core/brain/maintenance/journal.ts": {
       calls: ["renameSync"],
       recovery: UNARCHIVED_BRAIN,

@@ -71,8 +71,17 @@ import {
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import type { WriteLane } from "./freeze-marker.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+/**
+ * The freeze marker's location, re-exported so callers reach every Brain
+ * path through this module. It is DEFINED in `freeze-marker.ts` because
+ * the guard that reads it sits below this module in the import graph -
+ * see that module's docblock for the cycle the split avoids.
+ */
+export { frozenMarkerPath } from "./freeze-marker.ts";
 
 // The canonical vault-relative names live in their own leaf module so
 // `vault-identity.ts` can locate the marker without importing the
@@ -186,9 +195,19 @@ export function brainDirs(vault: string): BrainDirs {
  *     through one of them is guarded at its own entry point, not here.
  *     Those writers call `assertVaultIdentityForWrite` directly; see
  *     its docblock for the two call surfaces and why they differ.
+ *
+ * `lane` selects which half of the write surface the caller belongs to
+ * and is forwarded verbatim to the guard; see its docblock for the
+ * freeze the content lane carries. Exactly one caller passes anything
+ * but the default: the Brain log appender, whose events have to keep
+ * landing while the vault is frozen.
  */
-export function brainDirsForWrite(vault: string, notices?: DegradationNotice[]): BrainDirs {
-  assertVaultIdentityForWrite(vault, notices);
+export function brainDirsForWrite(
+  vault: string,
+  notices?: DegradationNotice[],
+  lane?: WriteLane,
+): BrainDirs {
+  assertVaultIdentityForWrite(vault, notices, lane);
   return brainDirs(vault);
 }
 

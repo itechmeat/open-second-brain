@@ -88,6 +88,7 @@ import {
   type DegradationNotice,
 } from "../integrity/degradation.ts";
 import { compareStamps, formatStampMismatch, type StampMismatch } from "../integrity/stamp.ts";
+import { assertVaultNotFrozen, WRITE_LANE, type WriteLane } from "./freeze-marker.ts";
 import { BRAIN_ROOT_REL } from "./path-constants.ts";
 
 /** Marker schema version. Bumped only on an incompatible field change. */
@@ -350,9 +351,30 @@ export function vaultMarkerAbsentNotice(vault: string): DegradationNotice | null
  * reads. The assertion therefore belongs to the writer, and it belongs
  * BEFORE the writer's first byte - a refusal that arrives after the page
  * is on disk has already materialized the wrong store.
+ *
+ * ## The freeze rides here, and why here rather than at the note seam
+ *
+ * `lane` selects which half of the write surface the caller belongs to
+ * (who-wrote-what, Task C). The default, {@link WRITE_LANE.content},
+ * refuses while `Brain/.state/frozen.json` exists - and it is checked
+ * FIRST, ahead of the identity comparison, because a frozen vault is a
+ * decision an operator made and an identity mismatch is a condition they
+ * have not seen yet; reporting the second while the first holds would
+ * answer a question nobody asked.
+ *
+ * This guard is the freeze's seam because it is the only position every
+ * content writer already passes. Hooking the note-write seam instead
+ * would have left the dream pass, hygiene, page-dedup and the
+ * write-session engine writing preferences, signals and state straight
+ * through a freeze.
  */
-export function assertVaultIdentityForWrite(vault: string, sink?: DegradationNotice[]): void {
+export function assertVaultIdentityForWrite(
+  vault: string,
+  sink?: DegradationNotice[],
+  lane: WriteLane = WRITE_LANE.content,
+): void {
   const root = resolve(vault);
+  if (lane === WRITE_LANE.content) assertVaultNotFrozen(root);
   const vaultId = currentVaultId(root);
   if (vaultId === null) {
     if (sink !== undefined) {
