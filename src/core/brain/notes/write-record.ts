@@ -65,7 +65,10 @@ export const NOTE_WRITE_OP = Object.freeze({
 
 export type NoteWriteOp = (typeof NOTE_WRITE_OP)[keyof typeof NOTE_WRITE_OP];
 
-const NOTE_WRITE_OPS: ReadonlyArray<NoteWriteOp> = Object.freeze(Object.values(NOTE_WRITE_OP));
+/** The operations, in declaration order; the membership half of the trio. */
+export const NOTE_WRITE_OPS: ReadonlyArray<NoteWriteOp> = Object.freeze(
+  Object.values(NOTE_WRITE_OP),
+);
 
 /** True when `value` is a member of {@link NOTE_WRITE_OP}. */
 export function isNoteWriteOp(value: unknown): value is NoteWriteOp {
@@ -173,6 +176,17 @@ export interface RecordNoteWriteInput {
   readonly timestamp?: string;
   /** Caller-asserted identity; defaults to {@link resolveAgentName}. */
   readonly agent?: string;
+  /**
+   * Config file that names the writing agent, when the caller knows
+   * which one it is running under.
+   *
+   * Threaded rather than left to the default discovery because the whole
+   * point of this record is WHO wrote the note: a server started against
+   * an explicit config and a record resolved against the machine default
+   * would attribute the same write to two different agents, and the one
+   * on disk would be the wrong one.
+   */
+  readonly configPath?: string;
 }
 
 /**
@@ -201,7 +215,7 @@ export type NoteWriteReceipt =
 export function recordNoteWrite(vault: string, input: RecordNoteWriteInput): NoteWriteReceipt {
   try {
     const timestamp = input.timestamp ?? isoSecond();
-    const agent = input.agent ?? resolveAgentName();
+    const agent = input.agent ?? resolveAgentName(input.configPath);
     // The seams hand this a vault-relative POSIX path they already
     // judged; an absolute one is admitted too, and both go back through
     // containment rather than being trusted, so a target outside the

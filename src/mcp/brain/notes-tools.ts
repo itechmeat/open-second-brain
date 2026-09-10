@@ -256,6 +256,10 @@ async function toolBrainCreateNote(
       ...(strict !== undefined ? { strict } : {}),
       ...(template !== undefined ? { template } : {}),
       ...(templateVariables !== undefined ? { templateVariables } : {}),
+      // The note-write record names the agent this server runs as, which
+      // is the one THIS config declares - not the one a machine-default
+      // discovery would find (who-wrote-what, Task A).
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     });
     // `outcome` is the discriminant; `created` is the boolean this tool
     // has always returned and stays in lockstep with it, so a skip can
@@ -412,7 +416,11 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
 ): Extract<NoteOpResult, { readonly kind: K }> {
   let batch;
   try {
-    batch = applyWriteBatch(ctx.vault, [op]);
+    batch = applyWriteBatch(
+      ctx.vault,
+      [op],
+      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    );
   } catch (err) {
     throw writeBatchErrorToMcp(err, tool);
   }

@@ -66,8 +66,14 @@ const AGENT_ARG_NAME = "agent";
  * hand-written list is the defect this release is about. The count is
  * pinned so a tool joining or leaving the set is a decision somebody
  * makes on purpose.
+ *
+ * 24 -> 25: `brain_writes` (who-wrote-what, Task A) declares `agent` and
+ * belongs to the same minority `brain_generation_reports` already sits
+ * in - it FILTERS by the identity rather than stamping it, because the
+ * identity on a note-write record came from `resolveAgentName` at the
+ * moment of the write and no caller can supply one after the fact.
  */
-const AGENT_ARGUMENT_TOOL_COUNT = 24;
+const AGENT_ARGUMENT_TOOL_COUNT = 25;
 
 /** Tools that accept a caller-supplied owner scope, derived the same way. */
 const AGENT_SCOPE_TOOL_COUNT = 13;

@@ -401,6 +401,11 @@ import {
   ORIGIN_CHANNEL,
   ORIGIN_CHANNELS,
 } from "../../../src/core/origin-channel.ts";
+import {
+  isNoteWriteOp,
+  NOTE_WRITE_OP,
+  NOTE_WRITE_OPS,
+} from "../../../src/core/brain/notes/write-record.ts";
 import { lexCode } from "../../helpers/source-lexer.ts";
 import {
   TRANSPORT_REACH,
@@ -1253,6 +1258,17 @@ const CENSUS: ReadonlyArray<VocabularyUnderCensus> = Object.freeze([
     members: ORIGIN_CHANNELS,
     guard: isOriginChannel,
   },
+  {
+    // who-wrote-what, Task A. What a recorded note write DID to its
+    // target. `revert` is a member from the start rather than added when
+    // the revert task lands, because a restore is a write like any other
+    // and a reader that could not name it would have to fall back to a
+    // string comparison the moment the first one was recorded.
+    name: "NOTE_WRITE_OP",
+    values: NOTE_WRITE_OP,
+    members: NOTE_WRITE_OPS,
+    guard: isNoteWriteOp,
+  },
 ]);
 
 // ---------------------------------------------------------------------------
@@ -1517,7 +1533,7 @@ const SCANNED = scanVocabularies(SOURCE_TREE);
  * How many four-piece vocabularies `src/` currently holds. Measured, and
  * kept as an equality rather than a floor - see the population test.
  */
-const VOCABULARY_POPULATION = 74;
+const VOCABULARY_POPULATION = 75;
 const REGISTERED = new Map(CENSUS.map((entry) => [entry.name, entry] as const));
 
 describe("verdict vocabulary census", () => {

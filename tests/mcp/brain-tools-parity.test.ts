@@ -166,6 +166,7 @@ const FROZEN_BRAIN_TOOL_NAMES = [
   "brain_update_note",
   "brain_write_batch",
   "brain_write_session",
+  "brain_writes",
 ] as const;
 
 describe("BRAIN_TOOLS frozen surface", () => {

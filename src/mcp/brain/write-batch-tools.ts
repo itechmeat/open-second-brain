@@ -180,7 +180,11 @@ async function toolBrainWriteBatch(
 
   let batch: WriteBatchResult;
   try {
-    batch = applyWriteBatch(ctx.vault, operations);
+    batch = applyWriteBatch(
+      ctx.vault,
+      operations,
+      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    );
   } catch (err) {
     throw writeBatchErrorToMcp(err, "brain_write_batch");
   }

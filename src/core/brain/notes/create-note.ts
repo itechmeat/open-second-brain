@@ -138,6 +138,14 @@ export interface CreateNoteInput {
   readonly template?: string;
   /** Variables the template may reference; requires `template`. */
   readonly templateVariables?: NoteTemplateVariables;
+  /**
+   * Config file that names the writing agent, for the note-write record
+   * (who-wrote-what, Task A). Absent falls back to the same discovery
+   * every other Brain writer uses; a caller that KNOWS which config it
+   * is running under passes it, so the record names the agent the caller
+   * is, not the one the machine default happens to name.
+   */
+  readonly configPath?: string;
 }
 
 /** What a {@link createNote} call actually did. */
@@ -565,6 +573,7 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
     target: relPath,
     before: null,
     after: { bytes: formatFrontmatter(frontmatter, body) },
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
   });
   return { path: relPath, outcome: "created", created: true, ...receipt };
 }

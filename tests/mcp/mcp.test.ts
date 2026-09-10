@@ -220,6 +220,9 @@ describe("tool listing", () => {
         "brain_query",
         "brain_agent_query",
         "brain_agent_diff",
+        // Recorded note writes: who wrote what, and what it replaced
+        // (who-wrote-what Task A).
+        "brain_writes",
         "brain_doctor",
         "brain_health",
         // Unified operator status snapshot (source-pipeline-integrity O3).
@@ -762,7 +765,9 @@ describe("stdio loop", () => {
     // + brain_design_note (one-shot design note grounded in tension,
     //   decision and truth records, salience-lifecycle-enrichment
     //   t_c87644b4) = 113.
-    expect(list.result.tools.length).toBe(113);
+    // + brain_writes (recorded note writes, who-wrote-what Task A
+    //   t_662f4e82) = 114.
+    expect(list.result.tools.length).toBe(114);
   });
 
   test("returns parse error for invalid JSON", async () => {

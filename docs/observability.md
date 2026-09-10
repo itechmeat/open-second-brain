@@ -25,7 +25,28 @@ The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (
 | `pin`, `unpin`, `rollback`, `merge`, `upgrade` | operator-facing vault maintenance |
 | `scan-inline`, `import-session`, `import-claude-memory` | capture and import operations |
 | `note` | a narrative milestone is recorded (`brain_note`) |
+| `note-write` | a vault note is created, updated, appended to, or reverted |
 | `session-lifecycle` | a captured lifecycle event also produced Brain writes |
+
+### Note writes
+
+Every note mutation funnels through two seams - `createNote` and the write-batch kernel - and each one appends exactly ONE `note-write` event. The payload is all strings, because the log payload contract admits `string | string[]` and nothing else:
+
+| Field | What it holds |
+|---|---|
+| `write_id` | `nw_<14 timestamp digits>_<16 hex>`, derived from the event body, so two devices that record the same write agree on its id |
+| `op` | `create`, `update`, `append`, or `revert` (`NOTE_WRITE_OP`) |
+| `target` | vault-relative POSIX path of the note |
+| `hash_before` | sha-256 of the bytes replaced, or the literal `absent` when the target did not exist - deliberately not the sha-256 of zero bytes, which an empty FILE would also produce |
+| `hash_after` | sha-256 of the bytes now on disk |
+| `bytes_before` / `bytes_after` | byte sizes, rendered as decimal strings |
+| `agent` | `resolveAgentName()` against the config the writing surface runs under; caller-asserted by construction, as `src/core/write-binding/index.ts` states |
+
+The device is NOT a payload field: it rides on the log shard name exactly as it does for every other event, and `origin_channel` is stamped by the appender. `listNoteWrites` (`src/core/brain/notes/write-log.ts`) reads the record back and reports the shard as the `device`, the empty string being the legacy un-sharded log rather than an unknown machine. `o2b brain writes` and the `brain_writes` MCP tool are the two surfaces over it, and `brain_agent_query --kind note` answers "which notes did this agent touch" off the same events.
+
+**Order, and the gap the receipt names.** The bytes are written FIRST and the event appended second, so a log failure never fails a write that has already landed - the snapshot-event precedent, with the silence removed. `recordNoteWrite` never throws: it returns `write_id: null` with an `audit_reason`, and every note-write result and MCP receipt carries both. A skipped create (`if_exists: "skip"`) authored no bytes, so it records nothing and carries no `write_id` at all.
+
+**Before-image store.** The bytes an update or append replaced are kept at `Brain/.state/write-images/<sha256>`, written before the atomic write and skipped when an image of that content already exists - so a note toggled between two states costs two files, not two per write. The store is a `STATE_SURFACES` row inside the snapshot region; `o2b brain writes prune-images [--older-than-days N] [--dry-run]` bounds it by file age, default 30 days (`WRITE_IMAGE_RETENTION_DAYS`). An image is a copy of note content the snapshot region already archives, so removing one loses no content - it only narrows how far back a revert can reach, which a revert plan reports by name.
 
 ## Continuity record kinds
 

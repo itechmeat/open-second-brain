@@ -195,11 +195,15 @@ export function listNoteWrites(
     });
   }
 
-  // Newest first, and stable within one second by write id so two
-  // devices reading one synced vault list the same order.
-  writes.sort((a, b) => {
-    if (a.timestamp !== b.timestamp) return a.timestamp < b.timestamp ? 1 : -1;
-    return a.write_id < b.write_id ? 1 : -1;
-  });
+  // Newest first, by REVERSING the order the log already merged rather
+  // than re-sorting on the timestamp. Timestamps are second-precision, so
+  // a sort would tie for every pair of writes made inside one second and
+  // any tiebreak invented here - the write id, the path - would order
+  // them by something that is not when they happened. `readLogDay`
+  // already merges shards by (timestamp, shard id, line), and line order
+  // inside a shard IS the order the appends landed, so reversing keeps
+  // the causal order within a second and stays deterministic across
+  // devices reading one synced vault.
+  writes.reverse();
   return { writes, warnings };
 }

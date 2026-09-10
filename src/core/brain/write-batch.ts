@@ -259,6 +259,17 @@ interface PlannedOperation {
   readonly commit: () => WriteBatchOpResult;
 }
 
+/** Facts the kernel needs that are not part of any single operation. */
+export interface ApplyWriteBatchOptions {
+  /**
+   * Config file that names the writing agent, for the note-write record
+   * (who-wrote-what, Task A). Absent falls back to the shared discovery;
+   * a caller that knows which config it runs under passes it so the
+   * record names the agent the caller is.
+   */
+  readonly configPath?: string;
+}
+
 /**
  * Apply an ordered batch of write operations atomically. Validates and
  * projects every operation in memory first; only if all pass does it
@@ -268,6 +279,7 @@ interface PlannedOperation {
 export function applyWriteBatch(
   vault: string,
   operations: ReadonlyArray<WriteOperation>,
+  opts: ApplyWriteBatchOptions = {},
 ): WriteBatchResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
@@ -288,7 +300,7 @@ export function applyWriteBatch(
   // would silently clobber the first at commit time. Refuse it loudly.
   const noteTargets = new Set<string>();
   const planned: PlannedOperation[] = operations.map((operation, index) =>
-    projectOperation(vault, operation, index, noteTargets),
+    projectOperation(vault, operation, index, noteTargets, opts),
   );
 
   const results = planned.map((p) => p.commit());
@@ -300,15 +312,16 @@ function projectOperation(
   operation: WriteOperation,
   index: number,
   noteTargets: Set<string>,
+  opts: ApplyWriteBatchOptions,
 ): PlannedOperation {
   const kind = (operation as { readonly kind?: unknown } | null | undefined)?.kind;
   switch (kind) {
     case "create_note":
-      return projectCreateNote(vault, operation as CreateNoteOperation, index, noteTargets);
+      return projectCreateNote(vault, operation as CreateNoteOperation, index, noteTargets, opts);
     case "update_note":
-      return projectUpdateNote(vault, operation as UpdateNoteOperation, index, noteTargets);
+      return projectUpdateNote(vault, operation as UpdateNoteOperation, index, noteTargets, opts);
     case "append_note":
-      return projectAppendNote(vault, operation as AppendNoteOperation, index, noteTargets);
+      return projectAppendNote(vault, operation as AppendNoteOperation, index, noteTargets, opts);
     case "apply_evidence":
       return projectApplyEvidence(vault, operation as ApplyEvidenceOperation, index);
     case "append_log_line":
@@ -370,6 +383,7 @@ function projectCreateNote(
   op: CreateNoteOperation,
   index: number,
   noteTargets: Set<string>,
+  opts: ApplyWriteBatchOptions,
 ): PlannedOperation {
   const target = reserveNoteTarget(vault, op.path, index, noteTargets);
   // Pre-check existence so a clobber aborts the batch before any commit.
@@ -390,6 +404,7 @@ function projectCreateNote(
           path: op.path,
           ...(op.frontmatter !== undefined ? { frontmatter: op.frontmatter } : {}),
           ...(op.content !== undefined ? { content: op.content } : {}),
+          ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
         });
         if (res.outcome !== "created") {
           // Unreachable by construction: the batch exposes none of the
@@ -425,6 +440,7 @@ function projectUpdateNote(
   op: UpdateNoteOperation,
   index: number,
   noteTargets: Set<string>,
+  opts: ApplyWriteBatchOptions,
 ): PlannedOperation {
   if (op.frontmatter === undefined && op.body === undefined) {
     throw new WriteBatchError(
@@ -460,7 +476,14 @@ function projectUpdateNote(
   const contents = formatFrontmatter(frontmatter, body);
   return {
     commit: () => {
-      const audit = commitNoteRewrite(vault, target, state.raw, contents, NOTE_WRITE_OP.update);
+      const audit = commitNoteRewrite(
+        vault,
+        target,
+        state.raw,
+        contents,
+        NOTE_WRITE_OP.update,
+        opts,
+      );
       return { kind: "update_note", path: target.relPath, updated: true, ...audit };
     },
   };
@@ -471,6 +494,7 @@ function projectAppendNote(
   op: AppendNoteOperation,
   index: number,
   noteTargets: Set<string>,
+  opts: ApplyWriteBatchOptions,
 ): PlannedOperation {
   if (typeof op.content !== "string" || op.content.trim().length === 0) {
     throw new WriteBatchError(
@@ -486,7 +510,14 @@ function projectAppendNote(
   const contents = formatFrontmatter(state.frontmatter, body);
   return {
     commit: () => {
-      const audit = commitNoteRewrite(vault, target, state.raw, contents, NOTE_WRITE_OP.append);
+      const audit = commitNoteRewrite(
+        vault,
+        target,
+        state.raw,
+        contents,
+        NOTE_WRITE_OP.append,
+        opts,
+      );
       return { kind: "append_note", path: target.relPath, appended: true, ...audit };
     },
   };
@@ -508,6 +539,7 @@ function commitNoteRewrite(
   before: string,
   contents: string,
   op: NoteWriteOp,
+  opts: ApplyWriteBatchOptions,
 ): NoteWriteAudit {
   mkdirSync(dirname(target.abs), { recursive: true });
   storeBeforeImage(vault, before);
@@ -517,6 +549,7 @@ function commitNoteRewrite(
     target: target.relPath,
     before: { bytes: before },
     after: { bytes: contents },
+    ...(opts.configPath !== undefined ? { configPath: opts.configPath } : {}),
   });
 }
 

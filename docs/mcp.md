@@ -194,6 +194,7 @@ flags for a narrower per-process full server.
 | `brain_codegraph_report`    | Read-only codegraph partner report: in-scope code project, index state (`no_project`/`absent`/`not_indexed`/`indexed` with counts/`error`), and structural `Cargo.toml` workspace members. When indexed, attaches a non-blocking `index.health` graph-health gate (`empty-graph`, `collapsed-edges`, `dangling-references`, `self-loops`, `cache-root-mismatch`) surfaced before labeling/import/recall trust the graph. Never installs, extracts, or mutates; non-Rust projects report `cargo_workspace: null` with a reason. | —                                              |
 | `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                              |
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
+| `brain_writes`              | Read-only listing of recorded note writes (create / update / append / revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. `action: plan_revert` is declared and refused until the note-revert task lands. | — |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
@@ -251,7 +252,18 @@ alias-to-replacement table lives in `docs/updating.md`.
 `brain_agent_query` accepts `agents` (string array), `topic`, `query`, `kind`
 (`signal`, `preference`, `log`), and `limit` (1-500, default 50).
 `brain_agent_diff` accepts the same filters plus `mode` (`browse`, `search`,
-`diff`, `map`). Omitting `agents` means all known source agents.
+`diff`, `map`). Omitting `agents` means all known source agents. Both accept
+`kind: note`, which lists the notes an agent wrote: the vault provider maps
+every `note-write` log event to a contribution whose `path` is the note and
+whose title is the operation.
+`brain_writes` accepts `action` (`list`, default; `plan_revert`, refused until
+the note-revert task lands), `agent`, `device`, `path`, `op` (`create`,
+`update`, `append`, `revert`), `since` / `until` (a bare `YYYY-MM-DD` or an
+ISO-8601 UTC timestamp; a bare `until` date covers the whole day it names), and
+`limit` (1-500, default 50). It answers with `total_matched` beside `returned`,
+so a capped list is legible as one, and each row carries `write_id`, both
+content digests, both byte counts and the device the log shard names - the
+empty string being the legacy un-sharded log rather than an unknown machine.
 `brain_search` accepts `query_document` with line-oriented `intent:`, `lex:`,
 `vec:`, and `hyde:` lanes; `focus_query` / `focus_path_prefix` to steer a
 single call; `since` / `until` time ranges (ISO date/datetime, `today`,
@@ -1308,3 +1320,17 @@ log line is machine-composed rather than authored.
   It does NOT prove operator intent: a remote host can spawn a stdio
   subprocess. The alternative - no bypass at all - would take an operator's
   own reserved notes away from the operator's own shell.
+- Since v1.55.0 every note write is attributable. `brain_create_note`,
+  `brain_update_note`, `brain_append_note` and the note operations of
+  `brain_write_batch` each append exactly ONE `note-write` log event carrying
+  a write id, the operation, the target path, the content hash and byte size on
+  both sides, and the agent the server's own config names; the bytes an update
+  or append replaced are kept content-addressed under
+  `Brain/.state/write-images/<sha256>` so a recorded write can be undone from
+  what it displaced. The bytes land BEFORE the event is appended, which is the
+  ordering that keeps a log failure from failing a write - and the receipts say
+  so rather than staying silent: every note-write receipt carries `write_id`,
+  and `write_id: null` arrives with an `audit_reason` naming what went wrong. A
+  skipped create (`if_exists: "skip"`) authored no bytes, so it carries no
+  `write_id` at all. `brain_writes` reads the record back. One new tool - the
+  surface moves from 113 to 114.

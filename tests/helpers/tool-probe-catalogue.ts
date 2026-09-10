@@ -250,6 +250,16 @@ export const REASON = Object.freeze({
     "plans a recompile of DERIVED pages whose sources moved (`Brain/sources`, `Brain/reports`). " +
     "The fixture holds no derived page, so this recipe reaches no owner-taggable content; the " +
     "gap is recorded rather than papered over with a recipe that cannot fail.",
+  noteWriteLedger:
+    "reads the `note-write` event ledger inside the Brain log. The rows are a write id, an " +
+    "operation, a target PATH, two content digests and the agent that recorded them - no page " +
+    "is ever opened, so there is no frontmatter for the ownership rule to read. The honest " +
+    "half: a target path names a note file that MAY carry an `owner:`, and this surface " +
+    "reports the path either way, so an owner-private note an agent wrote is discoverable by " +
+    "path here. The gap is recorded rather than closed by reading every named page, which " +
+    "would turn a log listing into a fan-out over the whole vault; the revert task is where " +
+    "the ownership question is decided, because that is where a caller acts on a target " +
+    "rather than reading that one exists.",
   signalAuthorship:
     "groups SIGNALS by the `agent:` that wrote them. A signal carries no `owner:` anywhere in " +
     "this product, so the agent column names the author of a SHARED artifact - the same fact " +
@@ -271,8 +281,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 99;
-export const PROBE_RECIPE_COUNT = 226;
+export const PROBE_ENTRY_COUNT = 100;
+export const PROBE_RECIPE_COUNT = 228;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -328,6 +338,13 @@ export function hygieneApplyArgs(vault: string): Record<string, unknown> {
  * forgotten — this is the honest half of the matrix.
  */
 export const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
+  {
+    name: "brain_writes",
+    calls: [
+      { args: { action: "list" }, reason: REASON.noteWriteLedger },
+      { args: { action: "list", op: "update" }, reason: REASON.noteWriteLedger },
+    ],
+  },
   { name: "brain_session_grep", calls: one({ query: QUERY }, REASON.sessionLane) },
   { name: "brain_session_expand", calls: one({ id: "sess-probe:0" }, REASON.sessionLane) },
   {

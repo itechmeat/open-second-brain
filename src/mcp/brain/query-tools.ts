@@ -21,6 +21,12 @@ import {
 import { parseIsoUtc } from "../../core/brain/health/iso-time.ts";
 import { diffAgentSources, type AgentSourceDiffMode } from "../../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
+import { listNoteWrites } from "../../core/brain/notes/write-log.ts";
+import {
+  NOTE_WRITE_OP,
+  NOTE_WRITE_OPS,
+  isNoteWriteOp,
+} from "../../core/brain/notes/write-record.ts";
 import {
   AGENT_SOURCE_CONTRIBUTION_KINDS,
   isAgentSourceContributionKind,
@@ -284,6 +290,79 @@ async function toolBrainAgentQuery(
     ...(ownerScope !== undefined ? { ownerScope } : {}),
     limit: coerceInt(args, "limit", 50, 1, 500),
   }) as unknown as Record<string, unknown>;
+}
+
+/**
+ * The two actions `brain_writes` offers. `plan_revert` is DECLARED here
+ * and refused by name until the per-agent revert (t_924129c5) lands: an
+ * agent that asks for a plan learns that the capability is named and not
+ * yet reachable, which is a better answer than an unknown-argument error
+ * that reads as a typo. Declaring it now also means the tool schema pins
+ * across the suite move once rather than twice.
+ */
+const BRAIN_WRITES_ACTION = Object.freeze({
+  list: "list",
+  planRevert: "plan_revert",
+} as const);
+
+const BRAIN_WRITES_ACTIONS: ReadonlyArray<string> = Object.freeze(
+  Object.values(BRAIN_WRITES_ACTION),
+);
+
+/** Default and maximum rows one `brain_writes` list returns. */
+const BRAIN_WRITES_DEFAULT_LIMIT = 50;
+const BRAIN_WRITES_MAX_LIMIT = 500;
+
+async function toolBrainWrites(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const action = coerceStr(args, "action", false) ?? BRAIN_WRITES_ACTION.list;
+  if (action === BRAIN_WRITES_ACTION.planRevert) {
+    throw new MCPError(INVALID_PARAMS, "plan_revert arrives with the note revert task");
+  }
+  if (action !== BRAIN_WRITES_ACTION.list) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_writes: 'action' must be one of ${BRAIN_WRITES_ACTIONS.join(", ")}`,
+    );
+  }
+  const rawOp = coerceStr(args, "op", false);
+  if (rawOp !== null && !isNoteWriteOp(rawOp)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_writes: 'op' must be one of ${Object.values(NOTE_WRITE_OP).join(", ")}`,
+    );
+  }
+  const agent = coerceStr(args, "agent", false);
+  const device = coerceStr(args, "device", false);
+  const path = coerceStr(args, "path", false);
+  const since = coerceStr(args, "since", false);
+  const until = coerceStr(args, "until", false);
+  const limit = coerceInt(args, "limit", BRAIN_WRITES_DEFAULT_LIMIT, 1, BRAIN_WRITES_MAX_LIMIT);
+
+  const result = listNoteWrites(ctx.vault, {
+    ...(agent !== null ? { agent } : {}),
+    ...(device !== null ? { device } : {}),
+    ...(path !== null ? { path } : {}),
+    ...(since !== null ? { since } : {}),
+    ...(until !== null ? { until } : {}),
+    ...(rawOp !== null ? { op: rawOp } : {}),
+  });
+  // `total_matched` beside `returned` so a truncated answer is legible as
+  // one: a list capped at the limit and a list that IS the whole history
+  // are otherwise the same shape.
+  return {
+    action: BRAIN_WRITES_ACTION.list,
+    total_matched: result.writes.length,
+    returned: Math.min(result.writes.length, limit),
+    writes: result.writes.slice(0, limit).map((w) => ({ ...w })),
+    warnings: result.warnings.map((w) => ({
+      path: w.path,
+      line: w.lineNumber,
+      message: w.message,
+    })),
+  };
 }
 
 async function toolBrainAgentDiff(
@@ -712,6 +791,55 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainAgentQuery,
+  },
+  {
+    name: "brain_writes",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "List recorded note writes (create, update, append, revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. Read-only. Action plan_revert is declared and not yet reachable.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [...BRAIN_WRITES_ACTIONS],
+          description: "list returns recorded writes. plan_revert is declared and refused today.",
+        },
+        agent: {
+          type: "string",
+          description: "Exact agent identity that recorded the write.",
+        },
+        device: {
+          type: "string",
+          description: "Exact device id; the empty string is the legacy un-sharded log.",
+        },
+        path: {
+          type: "string",
+          description: "Exact vault-relative target path of the note.",
+        },
+        since: {
+          type: "string",
+          description: "Inclusive lower bound: YYYY-MM-DD or an ISO-8601 UTC timestamp.",
+        },
+        until: {
+          type: "string",
+          description: "Inclusive upper bound, same two spellings; a bare date covers its day.",
+        },
+        op: {
+          type: "string",
+          enum: [...NOTE_WRITE_OPS],
+          description: "Operation filter.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          description: "Maximum writes returned. Defaults to 50.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainWrites,
   },
   {
     name: "brain_agent_diff",
