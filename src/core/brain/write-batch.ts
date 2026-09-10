@@ -26,13 +26,19 @@
  * (temp file + rename), so no single target is ever left half-written.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { CreateNoteError, createNote, resolveNoteTarget } from "./notes/create-note.ts";
 import { refuseBlankOverwrite } from "./notes/blank-overwrite-guard.ts";
+import {
+  NOTE_WRITE_OP,
+  recordNoteWrite,
+  storeBeforeImage,
+  type NoteWriteOp,
+} from "./notes/write-record.ts";
 import { formatFrontmatter, parseFrontmatterWithNotices } from "../vault.ts";
 import { DEGRADATION_CODE } from "../integrity/degradation.ts";
 import {
@@ -205,11 +211,37 @@ export class WriteBatchError extends Error {
   }
 }
 
+/**
+ * The audit half every note-write result carries (who-wrote-what, Task A).
+ *
+ * `write_id` names the `note-write` event that attributes the write; it is
+ * null when the bytes landed and the event could not be appended, and in
+ * that case - and only that case - `audit_reason` says why. The two travel
+ * together so a caller can never read an unrecorded write as a recorded
+ * one.
+ */
+export interface NoteWriteAudit {
+  readonly write_id: string | null;
+  readonly audit_reason?: string;
+}
+
 /** Per-operation outcome, discriminated by `kind`. */
 export type WriteBatchOpResult =
-  | { readonly kind: "create_note"; readonly path: string; readonly created: true }
-  | { readonly kind: "update_note"; readonly path: string; readonly updated: true }
-  | { readonly kind: "append_note"; readonly path: string; readonly appended: true }
+  | ({
+      readonly kind: "create_note";
+      readonly path: string;
+      readonly created: true;
+    } & NoteWriteAudit)
+  | ({
+      readonly kind: "update_note";
+      readonly path: string;
+      readonly updated: true;
+    } & NoteWriteAudit)
+  | ({
+      readonly kind: "append_note";
+      readonly path: string;
+      readonly appended: true;
+    } & NoteWriteAudit)
   | { readonly kind: "apply_evidence"; readonly logged_at: string; readonly log_path: string }
   | { readonly kind: "append_log_line"; readonly logged_at: string; readonly log_path: string };
 
@@ -359,7 +391,28 @@ function projectCreateNote(
           ...(op.frontmatter !== undefined ? { frontmatter: op.frontmatter } : {}),
           ...(op.content !== undefined ? { content: op.content } : {}),
         });
-        return { kind: "create_note", path: res.path, created: true };
+        if (res.outcome !== "created") {
+          // Unreachable by construction: the batch exposes none of the
+          // authoring modes, so `ifExists` is never sent and an occupied
+          // target is a refusal rather than a skip. Named rather than
+          // cast, because a cast would report `created: true` for a call
+          // that created nothing.
+          throw new WriteBatchError(
+            "exists",
+            index,
+            `operation ${index}: note already exists: ${res.path}`,
+            { path: res.path },
+          );
+        }
+        // The create writer records its own event, so the batch carries
+        // its receipt through rather than appending a second one.
+        return {
+          kind: "create_note",
+          path: res.path,
+          created: true,
+          write_id: res.write_id,
+          ...(res.audit_reason !== undefined ? { audit_reason: res.audit_reason } : {}),
+        };
       } catch (err) {
         throw envelopeError(err, index);
       }
@@ -407,9 +460,8 @@ function projectUpdateNote(
   const contents = formatFrontmatter(frontmatter, body);
   return {
     commit: () => {
-      mkdirSync(dirname(target.abs), { recursive: true });
-      atomicWriteFileSync(target.abs, contents);
-      return { kind: "update_note", path: target.relPath, updated: true };
+      const audit = commitNoteRewrite(vault, target, state.raw, contents, NOTE_WRITE_OP.update);
+      return { kind: "update_note", path: target.relPath, updated: true, ...audit };
     },
   };
 }
@@ -434,11 +486,38 @@ function projectAppendNote(
   const contents = formatFrontmatter(state.frontmatter, body);
   return {
     commit: () => {
-      mkdirSync(dirname(target.abs), { recursive: true });
-      atomicWriteFileSync(target.abs, contents);
-      return { kind: "append_note", path: target.relPath, appended: true };
+      const audit = commitNoteRewrite(vault, target, state.raw, contents, NOTE_WRITE_OP.append);
+      return { kind: "append_note", path: target.relPath, appended: true, ...audit };
     },
   };
+}
+
+/**
+ * Commit one note rewrite and attribute it, in the order the design
+ * fixes: keep the bytes this write replaces, write, record.
+ *
+ * The image goes FIRST because it is the only copy of the prior content
+ * that survives the rename - a process that dies between the rename and
+ * the record loses the audit line, which is recoverable, rather than the
+ * bytes, which are not. The record goes LAST and cannot fail the write:
+ * `recordNoteWrite` returns its failure, and this returns it too.
+ */
+function commitNoteRewrite(
+  vault: string,
+  target: { readonly relPath: string; readonly abs: string },
+  before: string,
+  contents: string,
+  op: NoteWriteOp,
+): NoteWriteAudit {
+  mkdirSync(dirname(target.abs), { recursive: true });
+  storeBeforeImage(vault, before);
+  atomicWriteFileSync(target.abs, contents);
+  return recordNoteWrite(vault, {
+    op,
+    target: target.relPath,
+    before: { bytes: before },
+    after: { bytes: contents },
+  });
 }
 
 /** Accepted apply-evidence result values, for phase-1 validation. */
@@ -559,6 +638,17 @@ function projectAppendLogLine(
 interface ExistingNote {
   readonly frontmatter: FrontmatterMap;
   readonly body: string;
+  /**
+   * The target's bytes exactly as they sit on disk (who-wrote-what,
+   * Task A).
+   *
+   * Not `formatFrontmatter(frontmatter, body)`: the before-image and the
+   * `hash_before` have to describe what a revert would put BACK, and a
+   * re-serialisation of the parsed halves is what this build would have
+   * written, not what the previous writer did. Key order, spacing and a
+   * hand-edited block all survive here and would not survive there.
+   */
+  readonly raw: string;
 }
 
 /** Attribution for the frontmatter notices this reader inspects. */
@@ -620,5 +710,8 @@ function readExistingNote(abs: string, relPath: string, index: number): Existing
       { path: relPath, reason },
     );
   }
-  return { frontmatter: { ...frontmatter }, body };
+  // Read after the parse rather than before it: the two notices above
+  // are the named ways this file can be unavailable, and a raw read that
+  // ran first would have to invent a third.
+  return { frontmatter: { ...frontmatter }, body, raw: readFileSync(abs, "utf8") };
 }

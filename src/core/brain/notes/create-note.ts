@@ -74,6 +74,7 @@ import {
   renderNoteTemplate,
   type NoteTemplateVariables,
 } from "./note-template.ts";
+import { NOTE_WRITE_OP, recordNoteWrite } from "./write-record.ts";
 
 /** Machine-readable reason a {@link createNote} call was refused. */
 export type CreateNoteErrorCode =
@@ -148,9 +149,30 @@ export interface CreatedNoteResult {
   readonly path: string;
   readonly outcome: "created";
   readonly created: true;
+  /**
+   * Id of the `note-write` event that attributes this write, or null when
+   * the event could not be appended (who-wrote-what, Task A).
+   *
+   * The bytes land first and the event is appended second, so a log
+   * failure costs the audit line and never the note. `null` is therefore
+   * a real state a caller has to be able to see, and it never arrives
+   * alone: {@link audit_reason} names what went wrong.
+   */
+  readonly write_id: string | null;
+  /** Why {@link write_id} is null. Absent when it is not. */
+  readonly audit_reason?: string;
 }
 
-/** An occupied target left exactly as it was, under `ifExists: "skip"`. */
+/**
+ * An occupied target left exactly as it was, under `ifExists: "skip"`.
+ *
+ * Deliberately WITHOUT a `write_id`: a skip authored no bytes, so there
+ * is no write to attribute and nothing a revert could undo. Carrying
+ * `write_id: null` here would spell "the audit line was lost" for a call
+ * that never had one to lose - the same conflation between "nothing
+ * happened" and "something failed" the `outcome` discriminant exists to
+ * prevent.
+ */
 export interface SkippedNoteResult {
   /** Vault-relative POSIX path of the note that was left alone. */
   readonly path: string;
@@ -533,5 +555,16 @@ export function createNote(vault: string, input: CreateNoteInput): CreateNoteRes
     throw err;
   }
 
-  return { path: relPath, outcome: "created", created: true };
+  // The bytes are on disk. Record the write LAST and never let the
+  // recording fail it: `recordNoteWrite` returns its failure instead of
+  // throwing, and the reason rides out on the result rather than being
+  // swallowed here (who-wrote-what, Task A). A create replaces nothing,
+  // so there is no before-image to store and `hash_before` is `absent`.
+  const receipt = recordNoteWrite(vault, {
+    op: NOTE_WRITE_OP.create,
+    target: relPath,
+    before: null,
+    after: { bytes: formatFrontmatter(frontmatter, body) },
+  });
+  return { path: relPath, outcome: "created", created: true, ...receipt };
 }

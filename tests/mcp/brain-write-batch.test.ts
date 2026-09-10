@@ -30,6 +30,13 @@ import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
+/**
+ * Shape of a note-write id, as `noteWriteId` spells it (who-wrote-what,
+ * Task A). Its value carries the instant of the write, so a receipt test
+ * pins the shape rather than a literal.
+ */
+const NOTE_WRITE_ID_RE = /^nw_\d{14}_[0-9a-f]{16}$/;
+
 let vault: string;
 let configHome: string;
 let ctx: ServerContext;
@@ -291,7 +298,7 @@ describe("brain_write_batch", () => {
  * per call rather than once per operation.
  */
 describe("brain_write_batch - the lint attached to the receipt", () => {
-  test("a clean batch is byte-identical to the receipt that shipped before", async () => {
+  test("a clean batch carries the counts, the results and each write id", async () => {
     const res = await runBatch([
       {
         op: "create_note",
@@ -300,13 +307,19 @@ describe("brain_write_batch - the lint attached to the receipt", () => {
         content: "prose",
       },
     ]);
-    expect(JSON.stringify(res)).toBe(
-      JSON.stringify({
-        applied: 1,
-        results: [{ kind: "create_note", path: "Notes/CleanBatch.md", created: true }],
-        done: true,
-      }),
-    );
+    expect(Object.keys(res)).toEqual(["applied", "results", "done"]);
+    const only = (res["results"] as ReadonlyArray<Record<string, unknown>>)[0]!;
+    expect(Object.keys(only)).toEqual(["kind", "path", "created", "write_id"]);
+    expect(only).toMatchObject({
+      kind: "create_note",
+      path: "Notes/CleanBatch.md",
+      created: true,
+    });
+    // Each note result names the event that attributes it; the batch
+    // envelope itself is unchanged (who-wrote-what, Task A).
+    expect(only["write_id"]).toMatch(NOTE_WRITE_ID_RE);
+    expect(res["applied"]).toBe(1);
+    expect(res["done"]).toBe(true);
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
 
