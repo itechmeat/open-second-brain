@@ -55,7 +55,7 @@ Every note mutation funnels through two seams - `createNote` and the write-batch
 | `op` | `create`, `update`, `append`, or `revert` (`NOTE_WRITE_OP`) |
 | `target` | vault-relative POSIX path of the note |
 | `hash_before` | sha-256 of the bytes replaced, or the literal `absent` when the target did not exist - deliberately not the sha-256 of zero bytes, which an empty FILE would also produce |
-| `hash_after` | sha-256 of the bytes now on disk |
+| `hash_after` | sha-256 of the bytes now on disk, or the same literal `absent` when the write left no file - which only a `revert` that removes a note the selected writes created produces, paired with `bytes_after: 0` |
 | `bytes_before` / `bytes_after` | byte sizes, rendered as decimal strings |
 | `agent` | `resolveAgentName()` against the config the writing surface runs under; caller-asserted by construction, as `src/core/write-binding/index.ts` states |
 
@@ -64,6 +64,20 @@ The device is NOT a payload field: it rides on the log shard name exactly as it 
 **Order, and the gap the receipt names.** The bytes are written FIRST and the event appended second, so a log failure never fails a write that has already landed - the snapshot-event precedent, with the silence removed. `recordNoteWrite` never throws: it returns `write_id: null` with an `audit_reason`, and every note-write result and MCP receipt carries both. A skipped create (`if_exists: "skip"`) authored no bytes, so it records nothing and carries no `write_id` at all.
 
 **Before-image store.** The bytes an update or append replaced are kept at `Brain/.state/write-images/<sha256>`, written before the atomic write and skipped when an image of that content already exists - so a note toggled between two states costs two files, not two per write. The store is a `STATE_SURFACES` row inside the snapshot region; `o2b brain writes prune-images [--older-than-days N] [--dry-run]` bounds it by file age, default 30 days (`WRITE_IMAGE_RETENTION_DAYS`). An image is a copy of note content the snapshot region already archives, so removing one loses no content - it only narrows how far back a revert can reach, which a revert plan reports by name.
+
+**Revert.** `o2b brain writes revert (--agent A | --device D | --path P) [--since --until]` reads the same events back and plans what undoing them would do; `brain_writes` action `plan_revert` returns the same plan and never applies it. A selector naming none of agent, device or path is refused by name (`unbounded_selector`): a time window alone selects every write by every agent on every machine, which is a vault rollback and has its own verb. Per target, over the selected writes S (oldest..newest) and every recorded write A on that target:
+
+| Verdict | When |
+|---|---|
+| `refuse` / `unrecorded` | the current bytes cannot be read at all, so no drift verdict is possible |
+| `refuse` / `drift` | sha-256 of the bytes on disk is not the `hash_after` of the newest write in S - including the target being gone when it should be there |
+| `refuse` / `interleaved` | a write in `A \ S` sits between the oldest and newest write in S. Timestamps are second-precision, so a non-selected write in the SAME second as either end counts too - that is the doubt half of refuse-on-doubt |
+| `refuse` / `already-reverted` | the target already holds exactly what the revert would produce |
+| `refuse` / `image-missing` | a restore's before-image is not in the store, or no longer hashes to its own name |
+| `delete` | the oldest write in S has `hash_before: absent` AND no write in A precedes it - the selection brought the note into existence |
+| `restore` | otherwise: put back the before-image of the oldest write in S |
+
+A refused target is reported, never skipped, and the plan's digest - `sha256(canonical JSON of { selector, entries })`, deliberately NOT covering `planned_at` - covers refusals too, so an operator who applies a digest applies the plan they read. `--apply <digest>` re-plans from scratch and refuses `digest_mismatch` before any byte moves when the vault changed in between; a plan with no actionable entry is refused `nothing_to_apply`; a frozen vault refuses the whole apply by name before anything is read. Everything that does run goes inside ONE `withDestructiveSnapshot` under the `note-revert` reason, so a revert that half-succeeds still has one recovery point covering the state before all of it. Each restored or deleted target keeps a before-image of the bytes it replaced and is recorded through `recordNoteWrite` with `op: revert` - a delete as `hash_after: absent`, `bytes_after: 0` - which is what makes a revert attributable and itself revertible: reverting the reverting agent puts the bytes back.
 
 ### The log chain
 

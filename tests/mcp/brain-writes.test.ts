@@ -13,11 +13,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { recordNoteWrite, storeBeforeImage } from "../../src/core/brain/notes/write-record.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 import { INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
@@ -146,9 +147,72 @@ describe("brain_writes action list", () => {
 });
 
 describe("brain_writes action plan_revert", () => {
-  test("is refused by name rather than as an unknown argument", async () => {
-    const err = await rejectedMcpError(call("brain_writes", { action: "plan_revert" }));
+  /** Do what the write seams do, so the plan reads a real history. */
+  function seedNote(opts: {
+    readonly target: string;
+    readonly bytes: string;
+    readonly agent: string;
+    readonly at: string;
+  }): void {
+    const abs = join(vault, opts.target);
+    const before = existsSync(abs) ? readFileSync(abs, "utf8") : null;
+    mkdirSync(dirname(abs), { recursive: true });
+    if (before !== null) storeBeforeImage(vault, before);
+    atomicWriteFileSync(abs, opts.bytes);
+    recordNoteWrite(vault, {
+      op: before === null ? "create" : "update",
+      target: opts.target,
+      before: before === null ? null : { bytes: before },
+      after: { bytes: opts.bytes },
+      timestamp: opts.at,
+      agent: opts.agent,
+    });
+  }
+
+  const TARGET = "notes/A.md";
+
+  test("returns the entries and the digest, and no apply path", async () => {
+    seedNote({ target: TARGET, bytes: "v0", agent: "seed", at: "2026-03-04T01:00:00Z" });
+    seedNote({ target: TARGET, bytes: "v1", agent: "claude", at: "2026-03-04T02:00:00Z" });
+
+    const reply = await call("brain_writes", { action: "plan_revert", agent: "claude" });
+    expect(reply["action"]).toBe("plan_revert");
+    expect(reply["digest"]).toMatch(/^[0-9a-f]{64}$/);
+    const entries = reply["entries"] as ReadonlyArray<Record<string, unknown>>;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]!["target"]).toBe(TARGET);
+    expect(entries[0]!["action"]).toBe("restore");
+    // The plan is a report: the tool has no apply and moved nothing.
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe("v1");
+    expect(Object.keys(reply)).not.toContain("applied");
+  });
+
+  test("reports a refused target by name rather than dropping it", async () => {
+    seedNote({ target: TARGET, bytes: "v0", agent: "seed", at: "2026-03-04T01:00:00Z" });
+    seedNote({ target: TARGET, bytes: "v1", agent: "claude", at: "2026-03-04T02:00:00Z" });
+    atomicWriteFileSync(join(vault, TARGET), "drifted");
+
+    const reply = await call("brain_writes", { action: "plan_revert", path: TARGET });
+    const entries = reply["entries"] as ReadonlyArray<Record<string, unknown>>;
+    expect(entries[0]!["action"]).toBe("refuse");
+    expect(entries[0]!["reason"]).toBe("drift");
+  });
+
+  test("an unbounded selector is refused with the code, not an empty plan", async () => {
+    const err = await rejectedMcpError(
+      call("brain_writes", { action: "plan_revert", since: "2026-03-04" }),
+    );
     expect(err.code).toBe(INVALID_PARAMS);
-    expect(err.message).toBe("plan_revert arrives with the note revert task");
+    expect(err.message).toContain("unbounded_selector");
+  });
+
+  test("no apply reaches this tool: an --apply-shaped argument is rejected", () => {
+    const schema = tool("brain_writes").inputSchema as {
+      properties: Record<string, unknown>;
+      additionalProperties?: boolean;
+    };
+    expect(schema.additionalProperties).toBe(false);
+    expect(Object.keys(schema.properties)).not.toContain("apply");
+    expect(Object.keys(schema.properties)).not.toContain("digest");
   });
 });

@@ -260,6 +260,13 @@ export const REASON = Object.freeze({
     "would turn a log listing into a fan-out over the whole vault; the revert task is where " +
     "the ownership question is decided, because that is where a caller acts on a target " +
     "rather than reading that one exists.",
+  noteRevertPlan:
+    "plans what undoing the note writes a selector names WOULD do, and applies nothing - the " +
+    "apply is CLI-only by design. It is the one recipe in this entry that opens page bytes: it " +
+    "hashes each named target to decide whether the file drifted since the write it would undo. " +
+    "What it PUBLISHES is a digest, a path, an action token and a refusal reason, never a byte " +
+    "of the page, so an owner-private note reaches this surface as the same path the listing " +
+    "beside it already reports and as nothing more.",
   signalAuthorship:
     "groups SIGNALS by the `agent:` that wrote them. A signal carries no `owner:` anywhere in " +
     "this product, so the agent column names the author of a SHARED artifact - the same fact " +
@@ -282,7 +289,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 100;
-export const PROBE_RECIPE_COUNT = 228;
+export const PROBE_RECIPE_COUNT = 229;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -343,6 +350,10 @@ export const UNSCOPED_CONTENT: ReadonlyArray<ProbeEntry> = [
     calls: [
       { args: { action: "list" }, reason: REASON.noteWriteLedger },
       { args: { action: "list", op: "update" }, reason: REASON.noteWriteLedger },
+      {
+        args: { action: "plan_revert", path: "notes/shared.md" },
+        reason: REASON.noteRevertPlan,
+      },
     ],
   },
   { name: "brain_session_grep", calls: one({ query: QUERY }, REASON.sessionLane) },
