@@ -53,7 +53,7 @@ major cycle after N+1 ships:
 
 | Schema string | File | Since |
 | --- | --- | --- |
-| `o2b.metrics.v1` | `Brain/metrics/<surface>.jsonl` | 0.45.0 |
+| `o2b.metrics.v1` | `Brain/metrics/<surface>[.<device-id>].jsonl` | 0.45.0 |
 | `o2b.tuning.v1` | `Brain/search/tuning.json` | 0.45.0 |
 | `o2b.dream-stage.v1` | `Brain/dream/staged/<run-id>/manifest.json` | 1.0.0 |
 | `o2b.report-snapshot.v1` | `Brain/reports/<surface>/<date>.json` | 1.0.0 |

@@ -8,22 +8,35 @@ read metrics without importing Open Second Brain internals.
 
 ## Layout
 
-One append-only JSONL file per surface:
+One append-only JSONL file per surface PER DEVICE, named
+`<surface>[.<device-id>].jsonl`:
 
 ```
 Brain/metrics/
-├── index.jsonl
-├── bridge_discovery.jsonl
-├── communities.jsonl
-├── recall_benchmark.jsonl
-├── self_tuning.jsonl
-├── self_heal_reindex.jsonl
-└── dream_stage.jsonl
+├── index.jsonl                  # the shard with the empty device id
+├── index.a1b2c3d4.jsonl         # one machine's shard
+├── index.e5f6a7b8.jsonl         # another machine's shard
+├── bridge_discovery.a1b2c3d4.jsonl
+├── communities.a1b2c3d4.jsonl
+├── recall_benchmark.a1b2c3d4.jsonl
+├── self_tuning.a1b2c3d4.jsonl
+├── self_heal_reindex.a1b2c3d4.jsonl
+└── dream_stage.a1b2c3d4.jsonl
 ```
 
 Surface names are lowercase snake_case (`[a-z][a-z0-9_]*`, max 64
-chars). A consumer reads only the files it renders; unknown files in
-the directory must be ignored.
+chars); device ids are lowercase slugs (`[a-z0-9-]`, max 32 chars). The
+vault is Syncthing-replicated, so a device only ever appends to the file
+its own id names - see "The per-device shard rule" in
+`docs/observability.md`. A file with no device suffix is the shard with
+the empty device id and is read exactly like any other.
+
+**A consumer must therefore group by surface, not by file name**: strip
+an optional trailing `.<device-id>` segment before the `.jsonl`
+extension to get the surface, and read every file that maps to the
+surface it renders. Two names are never metric shards: a
+`*.sync-conflict-*` copy (Syncthing leftover; `o2b brain doctor` reports
+it) and any other unknown file in the directory, which must be ignored.
 
 ## Record envelope
 
@@ -41,7 +54,8 @@ Every line is one JSON object:
 - `schema` - envelope version. Evolution rule mirrors continuity
   records: additive optional payload fields do NOT bump the version;
   renames, removals, or semantic changes bump to `o2b.metrics.v2`.
-- `surface` - matches the file name.
+- `surface` - matches the file name with any `.<device-id>` shard
+  suffix removed.
 - `run_at` - ISO-8601 UTC timestamp of the run the record describes.
 - `payload` - surface-specific object (fields below).
 

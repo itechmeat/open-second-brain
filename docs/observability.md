@@ -6,11 +6,26 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 
 | Surface | Location | Writer | Format |
 |---|---|---|---|
-| Brain log | `Brain/log/<date>.md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
-| Continuity store | `Brain/log/continuity/<month>.jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
+| Brain log | `Brain/log/<date>[.<device-id>].md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
+| Continuity store | `Brain/log/continuity/<month>[.<device-id>].jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
+| Idempotency ledger | `Brain/logs/idempotency/<month>[.<device-id>].jsonl` | `rememberKey()` in `src/core/brain/idempotency-ledger.ts` | one `key -> content hash` record per line |
+| Preference mutation audit | `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl` | `appendPrefAudit()` in `src/core/brain/pref-audit.ts` | one JSON record per line |
+| Session lineage ledger | `Brain/.state/session-lineage[.<device-id>].jsonl` (+ `session-lineage-gaps[.<device-id>].jsonl`) | `recordLineageObservation()` in `src/core/brain/lineage/ledger.ts` | one JSON record per line, sequence-numbered and hash-chained per file |
 | Session lifecycle audit | `Brain/log/session-lifecycle/` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |
-| Metrics | `Brain/metrics/<surface>.jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+| Metrics | `Brain/metrics/<surface>[.<device-id>].jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+
+### The per-device shard rule
+
+Every append-only ledger above is one file per period (or per key, or per surface) PER DEVICE. The vault is replicated with Syncthing, and two machines appending to one file inside a single sync window produce a `.sync-conflict-*` copy that no reader merges — so the rows split silently across two files. The shard suffix removes the contention instead of resolving it after the fact: a device only ever appends to the file its own id names.
+
+The grammar is `<base>[.<device-id>].<ext>`, and it lives in exactly one place, `src/core/brain/ledger-shards.ts`. The device id is the lowercase slug `resolveDeviceId()` produces (`src/core/config.ts`), which is device-local config and never synced. **A file with no device suffix is the shard with the EMPTY id**: legacy history stays readable, no migration renames anything, and a vault whose device id resolves empty (`O2B_DEVICE_ID=""`, or a config that cannot be read) keeps writing exactly the bytes it always did.
+
+Every reader merges every shard it finds, in the one order all devices agree on: **the ledger's own sort key, then the shard id, then position within the shard**. The shard id is the tie-break rather than the arrival order because arrival order is precisely what differs between two Syncthing peers — so two machines reading the same set of shards return the same sequence. The continuity store adds its content-hash record id as a last resort after the shard id, which is what keeps a single-shard vault reading back in exactly the order it did before sharding existed.
+
+Two names are never shards. A `*.sync-conflict-*` copy is excluded from every listing even when its middle segment fits the shard-id shape (the `sync-conflict` prefix is reserved in the device-id validator for the same reason), and `o2b brain doctor` reports any leftover copy under any ledger directory as `sync-conflict-log`, naming the directory so the union+dedup merge has an address. A name whose base does not match the ledger's own layout is not that ledger's file at all — bases go into the grammar as patterns, or as escaped literals where the base is a value (a preference id may legitimately contain a dot).
+
+The session lineage ledger is the one with an extra invariant: its sequence numbers and hash chain are per FILE, so a per-device shard is a per-device chain, compaction is per shard, and `verifyLineageLedger` verifies each shard separately and reports each finding under that shard's own path. A break in one machine's ledger says nothing about another's.
 
 The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (whether the kernel handed the agent a byte-stable, cache-eligible preamble across a generation pass), never a provider's cache-hit rate the kernel cannot observe. It stores only the SHA-256 hash and length of the prefix, never the raw prompt - the same payload-safety rule as `generation_report`. See `docs/metrics.md`.
 
