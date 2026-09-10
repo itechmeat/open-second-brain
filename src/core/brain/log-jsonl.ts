@@ -17,6 +17,12 @@
  * lives in exactly one module. Malformed JSONL lines surface as
  * `warnings` instead of aborting the read, matching `parseLogDay`'s
  * tolerance contract.
+ *
+ * The per-shard hash chain (who-wrote-what, Task E) is invisible here by
+ * design: `coerceEntry` reads `ts`, `kind` and `payload` and nothing
+ * else, so a row's `prev` and `h` never reach a reader and a broken
+ * chain never withholds an event. Verification is a separate pass over
+ * the same files ({@link scanJsonlRows}, consumed by `log-chain.ts`).
  */
 
 import { readFileSync } from "node:fs";
@@ -199,6 +205,70 @@ export function readLogDay(
     source: usedMarkdown ? "markdown-fallback" : "jsonl",
     warnings,
   };
+}
+
+/**
+ * One non-blank line of a JSONL shard as the chain verifier sees it:
+ * where it sits in the file and what it parsed to, with `row: null` for
+ * a line that is not a JSON object.
+ *
+ * `lineNumber` is 1-based, because the number an operator needs is the
+ * one their editor shows them.
+ */
+export interface RawJsonlLine {
+  readonly lineNumber: number;
+  readonly row: Readonly<Record<string, unknown>> | null;
+}
+
+/** Every non-blank line of one shard, plus whether the bytes were obtained. */
+export interface RawJsonlScan {
+  /** False when the file could not be read; `lines` is then empty. */
+  readonly readable: boolean;
+  /** The read failure, verbatim, when there was one. */
+  readonly failure: string | null;
+  readonly lines: ReadonlyArray<RawJsonlLine>;
+}
+
+/**
+ * Read one JSONL shard WITHOUT coercing its rows into log entries.
+ *
+ * {@link readLogDay} exists to answer "what happened", so it drops every
+ * row it cannot turn into a `BrainLogEntry` and never sees the chain
+ * fields at all. The chain verifier's question is the opposite one -
+ * "what is in this file, and does it link up" - and a row the reader
+ * discarded is exactly the row it most needs to report. So the two share
+ * the file and nothing else: this scanner parses JSON and stops there.
+ *
+ * Never throws. An unreadable shard reports `readable: false` with the
+ * reason, because "not verified" is not "verified clean".
+ */
+export function scanJsonlRows(path: string): RawJsonlScan {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    const message = (err as NodeJS.ErrnoException).message ?? String(err);
+    return { readable: false, failure: message, lines: [] };
+  }
+  const lines: RawJsonlLine[] = [];
+  const raw = text.split(/\r?\n/);
+  for (let i = 0; i < raw.length; i++) {
+    const line = raw[i]!;
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      lines.push({ lineNumber: i + 1, row: null });
+      continue;
+    }
+    const isObject = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+    lines.push({
+      lineNumber: i + 1,
+      row: isObject ? (parsed as Record<string, unknown>) : null,
+    });
+  }
+  return { readable: true, failure: null, lines };
 }
 
 interface ReadJsonlResult {
