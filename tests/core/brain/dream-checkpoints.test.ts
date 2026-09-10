@@ -46,6 +46,7 @@ import {
 import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { maskLogChainDigests } from "../../helpers/vault-digest.ts";
 
 let vault: string;
 let configHome: string;
@@ -166,7 +167,12 @@ function treeDigest(root: string): string {
         continue;
       }
       const content = rel.startsWith(`${NORMALISED_SUBTREE}/`)
-        ? readFileSync(full, "utf8").replaceAll(ARCHIVE_SIZE_RE, "$1<archive-size>")
+        ? // The chain hash covers `size_bytes`, so the field this
+          // comparison cannot ask to be reproducible propagates into
+          // every row's `h` - see `maskLogChainDigests`.
+          maskLogChainDigests(
+            readFileSync(full, "utf8").replaceAll(ARCHIVE_SIZE_RE, "$1<archive-size>"),
+          )
         : readFileSync(full);
       lines.push(`${rel}:${createHash("sha256").update(content).digest("hex")}`);
     }
