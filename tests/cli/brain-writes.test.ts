@@ -192,6 +192,22 @@ describe("o2b brain writes prune-images", () => {
     expect(res.returncode).toBe(2);
     expect(res.stderr).toContain("--older-than-days must be a non-negative integer");
   });
+
+  test("a name the store did not write is named, not removed and not fatal", async () => {
+    const image = storeBeforeImage(vault, "prior bytes");
+    const stray = join(dirname(writeImagePath(vault, image.sha256)), "readme.txt");
+    writeFileSync(stray, "not an image", "utf8");
+
+    const res = await runCli(["brain", "writes", "prune-images", "--older-than-days", "0"], {
+      env: env(),
+    });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("removed 1");
+    expect(res.stdout).toContain("skipped 1 name(s) that are not before-images");
+    expect(res.stdout).toContain("readme.txt");
+    expect(existsSync(writeImagePath(vault, image.sha256))).toBe(false);
+    expect(existsSync(stray)).toBe(true);
+  });
 });
 
 describe("o2b brain writes revert", () => {

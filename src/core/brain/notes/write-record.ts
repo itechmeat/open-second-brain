@@ -44,7 +44,13 @@ import { atomicWriteFileSync } from "../../fs-atomic.ts";
 import { resolveAgentName } from "../../config.ts";
 import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
 import { appendLogEvent } from "../log.ts";
-import { ensureInsideVault, vaultRelative, writeImagePath, writeImagesDir } from "../paths.ts";
+import {
+  SHA256_HEX_RE,
+  ensureInsideVault,
+  vaultRelative,
+  writeImagePath,
+  writeImagesDir,
+} from "../paths.ts";
 import { fileAgeMs, isoSecond, msToWholeDays } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
@@ -296,6 +302,15 @@ export interface PruneWriteImagesResult {
   readonly removed: ReadonlyArray<string>;
   /** Images left in the store. */
   readonly kept: number;
+  /**
+   * Names in the store that are not before-images, in directory order:
+   * a Syncthing `*.sync-conflict-*` copy, a `.DS_Store`, an editor temp
+   * file. The prune neither removes them nor counts them as kept - it
+   * does not own them - but it names them, because this verb is the
+   * only pass an operator makes over the store and a file nothing will
+   * ever remove is exactly what they need told.
+   */
+  readonly skipped: ReadonlyArray<string>;
   /** True when nothing was actually unlinked. */
   readonly dry_run: boolean;
 }
@@ -326,14 +341,23 @@ export function pruneWriteImages(
   }
   const dryRun = opts.dryRun === true;
   const dir = writeImagesDir(vault);
-  if (!existsSync(dir)) return { removed: [], kept: 0, dry_run: dryRun };
+  if (!existsSync(dir)) return { removed: [], kept: 0, skipped: [], dry_run: dryRun };
   const nowMs = (opts.now ?? new Date()).getTime();
   const removed: string[] = [];
+  const skipped: string[] = [];
   let kept = 0;
   for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
     a.name.localeCompare(b.name),
   )) {
     if (!entry.isFile()) continue;
+    // A name this store did not write is not this prune's to remove, and
+    // it is not a reason to abandon the pass either: the store is a
+    // directory on a synced filesystem, so one conflict copy would
+    // otherwise leave every real image unbounded forever.
+    if (!isWriteImageName(entry.name)) {
+      skipped.push(entry.name);
+      continue;
+    }
     const path = writeImagePath(vault, entry.name);
     // An unmeasurable age is not an old age: a file whose mtime this
     // process cannot read is kept, because "I could not tell" must never
@@ -346,5 +370,15 @@ export function pruneWriteImages(
     if (!dryRun) unlinkSync(path);
     removed.push(entry.name);
   }
-  return { removed, kept, dry_run: dryRun };
+  return { removed, kept, skipped, dry_run: dryRun };
+}
+
+/**
+ * True when `name` is a name {@link storeBeforeImage} could have
+ * written. Asked before {@link writeImagePath}, which throws on anything
+ * else - the throw is right for a caller naming a digest and wrong for a
+ * loop reading a directory.
+ */
+function isWriteImageName(name: string): boolean {
+  return SHA256_HEX_RE.test(name);
 }

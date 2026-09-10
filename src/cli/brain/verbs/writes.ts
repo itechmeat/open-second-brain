@@ -166,6 +166,8 @@ function pruneImages(
       removed: [...result.removed],
       removed_count: result.removed.length,
       kept: result.kept,
+      skipped: [...result.skipped],
+      skipped_count: result.skipped.length,
       dry_run: result.dry_run,
       older_than_days: olderThanDays,
     });
@@ -178,6 +180,13 @@ function pruneImages(
   ok(`${verb} ${result.removed.length} before-image(s) older than ${olderThanDays} day(s)`);
   ok(`kept ${result.kept}`);
   for (const sha of result.removed) ok(`- ${sha}`);
+  // A name this store did not write is left where it is, and the only
+  // pass anybody makes over the store is the one that has to say so -
+  // otherwise a conflict copy sits there unbounded and unmentioned.
+  if (result.skipped.length > 0) {
+    ok(`skipped ${result.skipped.length} name(s) that are not before-images`);
+    for (const name of result.skipped) ok(`? ${name}`);
+  }
   return 0;
 }
 

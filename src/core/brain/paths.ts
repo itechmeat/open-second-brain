@@ -85,7 +85,7 @@ export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
  */
 export { frozenMarkerPath } from "./freeze-marker.ts";
 /** Shape of a sha256 digest as {@link writeImagePath} spells its file names. */
-const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 // The canonical vault-relative names live in their own leaf module so
 // `vault-identity.ts` can locate the marker without importing the

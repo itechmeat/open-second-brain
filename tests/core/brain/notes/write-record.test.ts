@@ -8,7 +8,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -199,10 +207,34 @@ describe("pruneWriteImages", () => {
 
   test("an absent store is an empty result, not a fault", () => {
     expect(existsSync(writeImagesDir(vault))).toBe(false);
-    expect(pruneWriteImages(vault)).toEqual({ removed: [], kept: 0, dry_run: false });
+    expect(pruneWriteImages(vault)).toEqual({ removed: [], kept: 0, skipped: [], dry_run: false });
   });
 
   test("a negative window is refused by name", () => {
     expect(() => pruneWriteImages(vault, { olderThanDays: -1 })).toThrow(/non-negative integer/);
+  });
+
+  /**
+   * The store is a directory on a synced filesystem, so a name that is
+   * not a digest arrives there without anybody putting it there. The
+   * prune is the ONLY bound on the store, so it must survive one.
+   */
+  test("a name that is not a digest is skipped and reported, not thrown on", () => {
+    const image = storeBeforeImage(vault, "gone");
+    const dir = writeImagesDir(vault);
+    writeFileSync(join(dir, "readme.txt"), "not an image", "utf8");
+    writeFileSync(join(dir, "x.sync-conflict-20260910-000000-ABCDEF"), "conflict copy", "utf8");
+
+    const result = pruneWriteImages(vault, { olderThanDays: 0 });
+    expect(result.removed).toEqual([image.sha256]);
+    expect(existsSync(image.path)).toBe(false);
+    expect(result.skipped.toSorted()).toEqual([
+      "readme.txt",
+      "x.sync-conflict-20260910-000000-ABCDEF",
+    ]);
+    expect(result.kept).toBe(0);
+    // Skipped is not kept and not removed: a foreign name is neither an
+    // image this prune spared nor one it took.
+    expect(existsSync(join(dir, "readme.txt"))).toBe(true);
   });
 });
