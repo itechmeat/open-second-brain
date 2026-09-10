@@ -387,7 +387,13 @@ function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): Con
     let text: string;
     try {
       text = readFileSync(ensureInsideVault(shard.path, vault), "utf8");
-    } catch {
+    } catch (err) {
+      // A shard listed a moment ago and gone now (a concurrent prune, a
+      // sync delete) contributes nothing and is skipped. Anything else -
+      // EACCES, EIO - propagates: a shard silently dropped shortens the
+      // history without saying so, and a caller cannot tell a short
+      // history from a complete one.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       continue;
     }
     let line = 0;

@@ -1,5 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -388,4 +396,23 @@ describe("continuity per-device shards", () => {
     const listed = listContinuityRecords(vault, { since: "2026-06-01T00:00:00Z" });
     expect(listed.map((r) => r.payload["snippet"])).toEqual(["1-mine"]);
   });
+
+  /**
+   * A shard this process cannot read is not an empty shard: a listing
+   * that silently drops it reports a shorter history as if it were the
+   * whole one.
+   */
+  test.skipIf(process.getuid?.() === 0)(
+    "an unreadable shard is refused, not listed as absent",
+    () => {
+      writeShard("2026-06", "testdev1", ["1-mine"]);
+      const path = continuityLogPath(vault, "2026-06", "testdev1");
+      chmodSync(path, 0o000);
+      try {
+        expect(() => listContinuityRecords(vault, {})).toThrow(/EACCES|EPERM/);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 });

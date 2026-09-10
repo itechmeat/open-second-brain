@@ -10,7 +10,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -193,6 +201,27 @@ describe("idempotency per-device shards", () => {
       "utf8",
     );
     expect(lookupKey(vault, "conflict")).toBeNull();
+  });
+
+  /**
+   * A shard this process cannot read is not an empty shard. Answering
+   * "never seen" for one turns a retried write into a first write, which
+   * is the one outcome this ledger exists to prevent.
+   */
+  test.skipIf(process.getuid?.() === 0)("an unreadable shard is refused, not read as empty", () => {
+    const path = idempotencyLogPath(vault, "2026-05", "testdev1");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ key: "k", contentHash: "hash-a", createdAt: "2026-05-14T09:00:00Z" })}\n`,
+      "utf8",
+    );
+    chmodSync(path, 0o000);
+    try {
+      expect(() => lookupKey(vault, "k")).toThrow(/EACCES|EPERM/);
+    } finally {
+      chmodSync(path, 0o600);
+    }
   });
 
   test("the lock this device takes is on its own shard", () => {

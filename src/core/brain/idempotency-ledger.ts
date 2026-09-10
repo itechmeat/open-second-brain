@@ -268,7 +268,14 @@ function readAllRecords(vault: string): IdempotencyRecord[] {
     let text: string;
     try {
       text = readFileSync(ensureInsideVault(shard.path, vault), "utf8");
-    } catch {
+    } catch (err) {
+      // A shard that is not there has nothing to say and is skipped.
+      // Anything else - EACCES, EIO, a directory where a file belongs -
+      // propagates: an unreadable shard read as an empty one makes
+      // `lookupKey` answer "never seen", and a retried write then lands
+      // as a first write. That is the one outcome this ledger exists to
+      // prevent, so "I could not tell" must never resolve to "no".
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       continue;
     }
     for (const line of text.split("\n")) {
