@@ -90,10 +90,14 @@ export const NOTE_REVERT_REFUSAL = Object.freeze({
   drift: "drift",
   /**
    * A write this selector did NOT select sits between the oldest and the
-   * newest selected write on this target. Undoing the outer pair would
-   * silently undo the middle one too. Same-second ties count as
-   * interleaved: second-precision timestamps cannot order two writes
-   * inside one second, and this is the doubt half of refuse-on-doubt.
+   * newest selected write on this target, in the merged total order
+   * (timestamp, shard id, line) the reader already yields. Undoing the
+   * outer pair would silently undo the middle one too.
+   *
+   * Same-second ties are decided by that order too, because line order
+   * inside one shard IS append order. Only a tie ACROSS shards is
+   * interleaved on doubt: there the merge falls back to the shard id,
+   * which is a name and not a clock. See {@link interleaves}.
    */
   interleaved: "interleaved",
   /**
@@ -374,6 +378,57 @@ function imageAvailable(vault: string, sha256: string): boolean {
 }
 
 /**
+ * Whether a write nobody selected sits inside the selected window.
+ *
+ * The window is measured in the MERGED TOTAL ORDER `listNoteWrites`
+ * already yields - `readLogDay` orders by (timestamp, shard id, line),
+ * and line order inside one shard IS the order the appends landed - so
+ * "between" is a position, not a timestamp comparison. That matters
+ * because timestamps are second-precision: three writes in one second
+ * are indistinguishable by clock and perfectly ordered by line.
+ *
+ * The one place the position is NOT evidence is a same-second tie across
+ * shards. There the merge falls back to the shard id, which is a name
+ * and not a clock: two devices that wrote in the same second could have
+ * written in either order, and the order shown is alphabetical. So a
+ * non-selected write that shares a second with a selected write is
+ * trusted only when it shares that write's SHARD; otherwise it is
+ * interleaved, which is the refuse-on-doubt half of the rule.
+ *
+ * This is deliberately narrower than "any same-second write is
+ * interleaved", which is what this rule used to say. That reading
+ * refused a create and an update a second apart on one machine - an
+ * order the log proves - and an operator whose whole vault lives on one
+ * device could never revert anything two writes had touched inside a
+ * second.
+ */
+function interleaves(
+  selected: ReadonlyArray<NoteWriteRecord>,
+  universe: ReadonlyArray<NoteWriteRecord>,
+): boolean {
+  const oldest = selected[0]!;
+  const newest = selected[selected.length - 1]!;
+  const selectedIds = new Set(selected.map((w) => w.write_id));
+  const first = universe.findIndex((w) => w.write_id === oldest.write_id);
+  const last = universe.findIndex((w) => w.write_id === newest.write_id);
+
+  return universe.some((w, index) => {
+    if (selectedIds.has(w.write_id)) return false;
+    // Strictly between the two ends in the merged order. A write with a
+    // timestamp strictly inside the window lands here too, because the
+    // merge sorts on the timestamp first.
+    if (index > first && index < last) return true;
+    if (w.timestamp < oldest.timestamp || w.timestamp > newest.timestamp) return false;
+    // Outside the positional window but inside the same second as one of
+    // its ends: trust the position only if the tie is within one shard.
+    // A tie against nothing cannot happen (a strictly-interior timestamp
+    // is already positionally interior), and if it ever does, doubt wins.
+    const tied = selected.filter((s) => s.timestamp === w.timestamp);
+    return tied.length === 0 || tied.some((s) => s.device !== w.device);
+  });
+}
+
+/**
  * Resolve one target, applying the design's rules in the order they are
  * stated: what cannot be judged, then what would destroy unrecorded
  * work, then what would undo somebody else's write, then what is already
@@ -398,14 +453,7 @@ function planTarget(
     return refuse(target, writes, NOTE_REVERT_REFUSAL.drift, hashNow, oldest.hash_before);
   }
 
-  const selectedIds = new Set(writes);
-  const interleaved = universe.some(
-    (w) =>
-      !selectedIds.has(w.write_id) &&
-      w.timestamp >= oldest.timestamp &&
-      w.timestamp <= newest.timestamp,
-  );
-  if (interleaved) {
+  if (interleaves(selected, universe)) {
     return refuse(target, writes, NOTE_REVERT_REFUSAL.interleaved, hashNow, oldest.hash_before);
   }
 

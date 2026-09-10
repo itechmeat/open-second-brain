@@ -71,7 +71,7 @@ The device is NOT a payload field: it rides on the log shard name exactly as it 
 |---|---|
 | `refuse` / `unrecorded` | the current bytes cannot be read at all, so no drift verdict is possible |
 | `refuse` / `drift` | sha-256 of the bytes on disk is not the `hash_after` of the newest write in S - including the target being gone when it should be there |
-| `refuse` / `interleaved` | a write in `A \ S` sits between the oldest and newest write in S. Timestamps are second-precision, so a non-selected write in the SAME second as either end counts too - that is the doubt half of refuse-on-doubt |
+| `refuse` / `interleaved` | a write in `A \ S` sits between the oldest and newest write in S **in the merged total order** - `(timestamp, shard id, line)`, the order `readLogDay` already yields. Timestamps are second-precision, so "between" is a position and not a clock comparison: line order inside one shard IS append order, and three writes in one second on one device are perfectly ordered. The one tie that is not evidence is a same-second tie ACROSS shards, where the merge falls back to the shard id - a name, not a clock - and two devices could have written in either order. So a non-selected write sharing a second with a selected write is trusted only when it shares that write's shard; a cross-shard tie is `interleaved` on doubt |
 | `refuse` / `already-reverted` | the target already holds exactly what the revert would produce |
 | `refuse` / `image-missing` | a restore's before-image is not in the store, or no longer hashes to its own name |
 | `delete` | the oldest write in S has `hash_before: absent` AND no write in A precedes it - the selection brought the note into existence |
