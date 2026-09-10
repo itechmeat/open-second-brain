@@ -487,6 +487,24 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // A shard of the Brain log stopped linking up. Spelled as a
+        // literal for the same reason `vault-frozen` above is: importing
+        // a `*_CODE` identifier from this module into a doctor check
+        // would make the exit census follow the import back and read
+        // every registry entry here as a doctor code.
+        //
+        // The exit is the verifier rather than a repair, and
+        // `autoRepairable: false` is the whole point rather than a
+        // default: the only way to make a broken chain verify is to
+        // rewrite the history it records, which is precisely the act the
+        // chain exists to detect. What an operator can do is SEE the
+        // damage across every shard, which is what the verb prints.
+        code: "log-chain-broken",
+        issueClass: "Brain log shard whose hash chain does not hold",
+        nextCommand: "o2b brain log verify",
+        autoRepairable: false,
+      },
+      {
         code: "recovery-point-stale",
         issueClass: "newest recovery point older than the liveness window",
         nextCommand: "o2b brain snapshot log",

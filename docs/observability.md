@@ -65,6 +65,23 @@ The device is NOT a payload field: it rides on the log shard name exactly as it 
 
 **Before-image store.** The bytes an update or append replaced are kept at `Brain/.state/write-images/<sha256>`, written before the atomic write and skipped when an image of that content already exists - so a note toggled between two states costs two files, not two per write. The store is a `STATE_SURFACES` row inside the snapshot region; `o2b brain writes prune-images [--older-than-days N] [--dry-run]` bounds it by file age, default 30 days (`WRITE_IMAGE_RETENTION_DAYS`). An image is a copy of note content the snapshot region already archives, so removing one loses no content - it only narrows how far back a revert can reach, which a revert plan reports by name.
 
+### The log chain
+
+Once the log is the attribution record for every write, a line someone deleted or edited has to be detectable. Every JSONL row appended from v1.55.0 on carries two extra keys after `payload`:
+
+- `h` — `sha256(canonical JSON of { prev, ts, kind, payload })`, this row's chain hash;
+- `prev` — the `h` of the previous chained line **in the same shard**, or `null` at that shard's genesis.
+
+`prev` is inside the hash rather than beside it, which is what makes the structure a chain: editing any earlier line changes every later hash, so a tampered history cannot be re-linked without rewriting the whole shard from the edit forward. The appender computes the link from the shard text it already holds under the directory lock, which is also what makes the link correct — two appenders reading the same head would otherwise write two lines claiming the same predecessor.
+
+**One chain per shard.** Two machines append to two files that Syncthing delivers in whatever order it likes, so there is no total order to chain across; the chain's unit is one file and a break in one device's shard says nothing about another's. **The markdown twin is a derived rendering and is NOT chained** — a human-editable view is the wrong thing to hold to a hash, and the JSONL sidecar is the machine-primary surface every reader already prefers.
+
+**Report-only.** `readLogDay` reads `ts`, `kind` and `payload` and nothing else, so a broken shard still yields every event it holds. A log that refused to be read because someone edited it would be a worse outcome than the edit. What the chain buys is that the edit has a name, a file and a line number.
+
+`o2b brain log verify [--json]` walks every shard and reports the first break in each, by path and line: `hash-mismatch` (the line was edited after it was written), `prev-mismatch` (a line between it and its predecessor was removed or reordered), `malformed` (the line carries no usable chain link where the chain had already started). It exits 1 when any shard does not link up. `o2b brain doctor` emits one `log-chain-broken` warning per broken shard with the same next command. Neither repairs anything: the only way to make a broken chain verify is to rewrite the history it records, which is the act the chain exists to detect.
+
+Rows written before the chain shipped carry no `h`. They are counted as **legacy** and are clean while they precede the chain — the first chained line after them anchors the shard with `prev: null`. The same shape *after* a chained line is not history but a line whose links were stripped, and it is reported. The head of a shard is not exempt either: the Brain log never compacts, so a first chained line naming a predecessor means the head of the file was cut off. Sync-conflict copies are excluded from verification — they are the doctor's separate `sync-conflict-log` finding, and their chain never held by construction.
+
 ## Continuity record kinds
 
 Every continuity record shares one envelope, and exactly these eight fields in this order: `schema`, `id`, `kind`, `createdAt`, `sourceRefs`, `payload`, `private`, `redacted`. The table marks how each kind is gated - this is the always-on vs opt-in matrix, verified against the call sites named in the right column.

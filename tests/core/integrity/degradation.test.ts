@@ -50,6 +50,8 @@ function owningUnit(code: DegradationCode): string {
       return "J";
     case DEGRADATION_CODE.vaultFrozen:
       return "C";
+    case DEGRADATION_CODE.logChainBroken:
+      return "E";
     default:
       return assertNever(code);
   }
