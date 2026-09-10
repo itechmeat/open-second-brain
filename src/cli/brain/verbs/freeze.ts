@@ -1,6 +1,7 @@
 import { freezeVault, unfreezeVault } from "../../../core/brain/freeze.ts";
 import { resolveAgentName } from "../../../core/config.ts";
 import { brainVerbContext, fail, normalizeFlagString, ok, okJson, parse } from "../helpers.ts";
+import { emitNextStep, type AdvisoryStream } from "../../advisory-rail.ts";
 
 /**
  * `o2b brain freeze` / `o2b brain unfreeze` (who-wrote-what, Task C) -
@@ -46,7 +47,12 @@ export async function cmdBrainFreeze(argv: string[]): Promise<number> {
       });
     } else if (out.changed) {
       ok(`frozen: ${describe(out.marker.frozen_at, out.marker.by, out.marker.reason)}`);
-      ok("every content write is refused until `o2b brain unfreeze` runs");
+      ok("every content write is refused until the freeze is lifted");
+      // The lift is a forward pointer, and forward pointers ride the rail:
+      // the `vault-frozen` signal already names the command, so the verb
+      // does not spell it a second time.
+      const stream: AdvisoryStream = { command: "brain", argv, jsonRequested: false };
+      emitNextStep("vault-frozen", stream);
     } else {
       ok(`already frozen: ${describe(out.marker.frozen_at, out.marker.by, out.marker.reason)}`);
     }
