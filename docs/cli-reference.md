@@ -315,6 +315,8 @@ o2b brain monthly             Month-level Brain synthesis over timeline events, 
 o2b brain query               Read helper: by preference, by topic, or by log timestamp; --topic adds point-in-time recall over the expiration filter: --at <ISO|YYYY-MM-DD> evaluates expiration_date as of that instant (default now, unparseable is refused with exit 2, never coerced) and --show-expired keeps lapsed memories. Both apply to --topic only and are refused elsewhere; omitting both leaves the output byte-identical
 o2b brain agent-query         Read source-agent provenance; filters by --agent, --topic, --query, --kind, --limit; --json mirrors brain_agent_query
 o2b brain agent-diff          Compare source-agent coverage in browse/search/diff/map modes; --json mirrors brain_agent_diff
+o2b brain writes              Recorded note writes, newest first: timestamp, operation, agent, device, target, and the content digest on each side; filters by --agent, --device, --path, --since, --until, --op; --json mirrors brain_writes action=list. The device comes off the log shard, so a legacy un-sharded log prints '-' rather than a guess
+o2b brain writes prune-images (CLI-only) Remove note-write before-images older than --older-than-days (default 30); --dry-run lists what would go and removes nothing; --json
 o2b brain reject              (CLI-only) Retire a preference; requires --reason "<text>". Subsequent signals on the same topic are suppressed.
 o2b brain merge               (CLI-only) Fold one confirmed/quarantine pref into another (<keep> <drop>); --dry-run / --force; drop retires with reason 'merged-into'
 o2b brain pin / unpin         (CLI-only) Toggle pinned: true on a preference (exempt from auto-retire)
