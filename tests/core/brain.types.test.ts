@@ -134,6 +134,15 @@ describe("BRAIN_* const enums", () => {
       // salience-lifecycle-enrichment unit 3c (t_5e338af1) expiration set,
       // changed or explicitly cleared after the artifact was written
       "expiration-set",
+      // who-wrote-what Task C (t_109fa94d) fleet freeze: the two operator
+      // transitions and the refusal each frozen write is recorded as
+      "freeze",
+      "unfreeze",
+      "write-refused",
+      // who-wrote-what Task A (t_662f4e82) one vault note created, updated,
+      // appended to or reverted - the event that makes the bulk of what an
+      // agent produces attributable at all
+      "note-write",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);
@@ -164,6 +173,13 @@ describe("BRAIN_SNAPSHOT_REASON", () => {
     expect(BRAIN_SNAPSHOT_REASON.importClaudeMemory).toBe("import-claude-memory");
     expect(BRAIN_SNAPSHOT_REASON.deleteBySource).toBe("delete-by-source");
     expect(BRAIN_SNAPSHOT_REASON.entityPrune).toBe("entity-prune");
+  });
+
+  test("the two note-file reasons name the verbs that take them", () => {
+    // Both double as archive filename prefixes, so a rename here would
+    // orphan the archives already in `.snapshots/`.
+    expect(BRAIN_SNAPSHOT_REASON.noteDelete).toBe("note-delete");
+    expect(BRAIN_SNAPSHOT_REASON.noteRevert).toBe("note-revert");
   });
 
   test("the three deferred boundary reasons and the manual one are readable", () => {

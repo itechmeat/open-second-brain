@@ -311,6 +311,7 @@ async function toolBrainScaffoldStub(
       sources: coerceStringArray(args, "sources"),
       ...(ifExists !== undefined ? { ifExists: ifExists as CreateNoteIfExists } : {}),
       ...(apply !== undefined ? { apply } : {}),
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     });
     return {
       action,

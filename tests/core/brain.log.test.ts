@@ -3,7 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { appendLogEvent, parseLogDay, type BrainLogEntry } from "../../src/core/brain/log.ts";
+import {
+  appendLogEvent,
+  logChainHash,
+  parseLogDay,
+  type BrainLogEntry,
+} from "../../src/core/brain/log.ts";
 import { brainDirs, logJsonlPath, logPath } from "../../src/core/brain/paths.ts";
 
 let tmp: string;
@@ -253,7 +258,14 @@ describe("appendLogEvent — JSONL sidecar (§23, v0.10.8)", () => {
     // stay one-to-one. `unset` because a test harness is not one of the
     // entry points that claims a channel - the explicit literal for that,
     // never a guessed `cli`.
-    expect(parsed).toEqual({
+    //
+    // `prev` and `h` are the per-shard hash chain (who-wrote-what, Task
+    // E). This is the first line of the shard, so it anchors the chain
+    // with `prev: null`; `h` is asserted against the recomputation
+    // rather than a literal, because a hard-coded digest here would
+    // re-key silently the day the projection gains a field.
+    const { h, ...withoutHash } = parsed as Record<string, unknown>;
+    expect(withoutHash).toEqual({
       ts: "2026-05-19T10:00:00Z",
       kind: "feedback",
       payload: {
@@ -262,7 +274,16 @@ describe("appendLogEvent — JSONL sidecar (§23, v0.10.8)", () => {
         sign: "positive",
         origin_channel: "unset",
       },
+      prev: null,
     });
+    expect(h).toBe(
+      logChainHash(null, "2026-05-19T10:00:00Z", "feedback", {
+        signal: "[[sig-x]]",
+        topic: "x",
+        sign: "positive",
+        origin_channel: "unset",
+      }),
+    );
   });
 
   test("appends a second event to both files", () => {

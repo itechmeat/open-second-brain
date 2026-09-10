@@ -59,9 +59,10 @@ import {
 import {
   isChainedLine,
   type LedgerLine,
+  type LineageLedgerScan,
   lineageChainHash,
   readLineageGapReport,
-  scanLineageLedger,
+  scanLineageLedgerShards,
   sessionLineageLedgerPath,
 } from "./ledger.ts";
 
@@ -80,14 +81,45 @@ const VERIFY_SITE = "brain.lineage.verify";
  */
 const MAX_ITEMIZED_FINDINGS = 20;
 
-export interface LineageLedgerVerification {
-  /** The ledger that was verified, whether or not it exists. */
+/**
+ * One shard's verdict. The chain's unit is one FILE, so a break in one
+ * device's shard says nothing about another's and every count here is
+ * that shard's alone.
+ */
+export interface LineageLedgerShardVerification {
+  /** Empty string for the legacy un-sharded ledger. */
+  readonly shardId: string;
+  /** The shard that was verified. */
   readonly path: string;
-  /** The ledger file is on disk. Distinguishes "no ledger" from "empty ledger". */
+  /** The shard file is on disk. */
   readonly exists: boolean;
-  /** The file's bytes were obtained. False for an absent OR unreadable ledger. */
+  /** The file's bytes were obtained. False for an unreadable shard. */
   readonly readable: boolean;
-  /** Parseable lines found. */
+  /** Parseable lines found in this shard. */
+  readonly lines: number;
+  /** Non-blank lines of this shard that could not be read as a record. */
+  readonly skipped: number;
+  /** Lines of this shard carrying a sequence number and a chain hash. */
+  readonly chained: number;
+  /** Lines of this shard carrying no chain fields. */
+  readonly legacy: number;
+  /** This shard's findings, in file order. */
+  readonly notices: ReadonlyArray<DegradationNotice>;
+  /** True when this shard produced no finding. */
+  readonly ok: boolean;
+}
+
+export interface LineageLedgerVerification {
+  /**
+   * The ledger this device would append to, whether or not it exists.
+   * {@link shards} names every ledger that WAS verified.
+   */
+  readonly path: string;
+  /** At least one ledger shard is on disk. Distinguishes "no ledger" from "empty ledger". */
+  readonly exists: boolean;
+  /** Every shard on disk had its bytes obtained. False when one could not be read. */
+  readonly readable: boolean;
+  /** Parseable lines found, across every shard. */
   readonly lines: number;
   /** Non-blank lines that could not be read as a record. Each is a finding. */
   readonly skipped: number;
@@ -95,11 +127,13 @@ export interface LineageLedgerVerification {
   readonly chained: number;
   /** Lines carrying no chain fields. A finding only AFTER a chained line. */
   readonly legacy: number;
+  /** Per-shard verdicts, in shard-id order. Empty when no shard exists. */
+  readonly shards: ReadonlyArray<LineageLedgerShardVerification>;
   /** Observations recorded as never-appended gaps, listed plus discarded. */
   readonly droppedObservations: number;
   /** True when the gap sidecar's bound discarded records it can no longer list. */
   readonly gapsTruncated: boolean;
-  /** Every finding, in file order. Empty on a clean ledger. */
+  /** Every finding, shard by shard then in file order. Empty on a clean ledger. */
   readonly notices: ReadonlyArray<DegradationNotice>;
   /** True when nothing was found. */
   readonly ok: boolean;
@@ -128,10 +162,73 @@ export function verifyLineageLedger(
 ): LineageLedgerVerification {
   const notices: DegradationNotice[] = [];
   const path = safeLedgerPath(vault);
+
+  // One shard, one chain. Every shard is verified in full and reports
+  // under its OWN path, so an operator holding a finding knows which
+  // machine's ledger to look at.
+  const shards: LineageLedgerShardVerification[] = [];
+  for (const scan of scanLineageLedgerShards(vault)) {
+    shards.push(verifyShard(scan.shardId, scan.path, scan));
+  }
+  for (const shard of shards) notices.push(...shard.notices);
+
+  const lines = shards.reduce((sum, shard) => sum + shard.lines, 0);
+  const skippedTotal = shards.reduce((sum, shard) => sum + shard.skipped, 0);
+  const chained = shards.reduce((sum, shard) => sum + shard.chained, 0);
+  const legacy = shards.reduce((sum, shard) => sum + shard.legacy, 0);
+
+  const gaps = readLineageGapReport(vault, opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {});
+  for (const gap of gaps.records.slice(0, MAX_ITEMIZED_FINDINGS)) {
+    emitDegradationNotice(notices, {
+      code: DEGRADATION_CODE.lineageObservationDropped,
+      site: VERIFY_SITE,
+      detail:
+        `observation for session ${gap.sessionId} (event ${gap.event}) ` +
+        `was never appended: ${gap.reason}`,
+    });
+  }
+  const unlisted = gaps.total - Math.min(gaps.records.length, MAX_ITEMIZED_FINDINGS);
+  if (unlisted > 0) {
+    emitDegradationNotice(notices, {
+      code: DEGRADATION_CODE.lineageObservationDropped,
+      site: VERIFY_SITE,
+      detail:
+        `${unlisted} further observations were never appended and are not itemized` +
+        (gaps.truncated ? ` (${gaps.discarded} beyond the sidecar's retained records)` : ""),
+    });
+  }
+
+  return Object.freeze({
+    path,
+    exists: shards.some((shard) => shard.exists),
+    readable: shards.length > 0 && shards.every((shard) => shard.readable),
+    lines,
+    skipped: skippedTotal,
+    chained,
+    legacy,
+    shards: Object.freeze(shards),
+    droppedObservations: gaps.total,
+    gapsTruncated: gaps.truncated,
+    notices: Object.freeze(notices),
+    ok: notices.length === 0,
+  });
+}
+
+/**
+ * Verify one shard's chain. Extracted from the whole-ledger pass with no
+ * change to what it checks: the conditions in this module's docblock all
+ * concern lines that are ADJACENT IN ONE FILE, and a shard is exactly
+ * that file.
+ */
+function verifyShard(
+  shardId: string,
+  path: string,
+  scan: LineageLedgerScan,
+): LineageLedgerShardVerification {
+  const notices: DegradationNotice[] = [];
   let chained = 0;
   let legacy = 0;
 
-  const scan = scanLineageLedger(vault);
   if (scan.exists && !scan.readable) {
     emitDegradationNotice(notices, {
       code: DEGRADATION_CODE.lineageChainBroken,
@@ -195,32 +292,12 @@ export function verifyLineageLedger(
     }
     chained++;
     sawChained = true;
-    checkChainedLine(line, previous, notices);
+    checkChainedLine(line, previous, notices, path);
     previous = line;
   }
 
-  const gaps = readLineageGapReport(vault, opts.nowMs !== undefined ? { nowMs: opts.nowMs } : {});
-  for (const gap of gaps.records.slice(0, MAX_ITEMIZED_FINDINGS)) {
-    emitDegradationNotice(notices, {
-      code: DEGRADATION_CODE.lineageObservationDropped,
-      site: VERIFY_SITE,
-      detail:
-        `observation for session ${gap.sessionId} (event ${gap.event}) ` +
-        `was never appended: ${gap.reason}`,
-    });
-  }
-  const unlisted = gaps.total - Math.min(gaps.records.length, MAX_ITEMIZED_FINDINGS);
-  if (unlisted > 0) {
-    emitDegradationNotice(notices, {
-      code: DEGRADATION_CODE.lineageObservationDropped,
-      site: VERIFY_SITE,
-      detail:
-        `${unlisted} further observations were never appended and are not itemized` +
-        (gaps.truncated ? ` (${gaps.discarded} beyond the sidecar's retained records)` : ""),
-    });
-  }
-
   return Object.freeze({
+    shardId,
     path,
     exists: scan.exists,
     readable: scan.readable,
@@ -228,8 +305,6 @@ export function verifyLineageLedger(
     skipped: skipped.length,
     chained,
     legacy,
-    droppedObservations: gaps.total,
-    gapsTruncated: gaps.truncated,
     notices: Object.freeze(notices),
     ok: notices.length === 0,
   });
@@ -244,12 +319,14 @@ function checkChainedLine(
   line: LedgerLine,
   previous: LedgerLine | undefined,
   notices: DegradationNotice[],
+  path: string,
 ): void {
   const seq = line.seq!;
   if (lineageChainHash(line) !== line.h) {
     emitDegradationNotice(notices, {
       code: DEGRADATION_CODE.lineageChainBroken,
       site: VERIFY_SITE,
+      path,
       detail:
         `sequence ${seq} (session ${line.sid}): content does not match its ` +
         "recorded hash - the line was edited after it was written",
@@ -261,6 +338,7 @@ function checkChainedLine(
     emitDegradationNotice(notices, {
       code: DEGRADATION_CODE.lineageChainBroken,
       site: VERIFY_SITE,
+      path,
       detail:
         `sequence ${seq} (session ${line.sid}): does not link to sequence ` +
         `${previous.seq} - a line between them was removed or reordered`,
@@ -271,6 +349,7 @@ function checkChainedLine(
     emitDegradationNotice(notices, {
       code: DEGRADATION_CODE.lineageChainBroken,
       site: VERIFY_SITE,
+      path,
       detail: `sequence ${seq} (session ${line.sid}): follows sequence ${previous.seq}`,
     });
   }

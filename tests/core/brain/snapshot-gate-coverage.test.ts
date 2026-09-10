@@ -71,6 +71,7 @@ import {
 import { brainDirs, dreamWorkrunPath } from "../../../src/core/brain/paths.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { maskLogChainDigests } from "../../helpers/vault-digest.ts";
 
 const NOW = new Date("2026-06-01T00:00:00Z");
 
@@ -144,10 +145,15 @@ function dreamOutputRows(brainRoot: string): string[] {
       // rows for every other file.
       if (rel === "_brain.yaml") continue;
       const path = rel.replace(/^log\/(\d{4}-\d{2}-\d{2})\.[0-9a-f]{8}\./, "log/$1.");
-      const text = readFileSync(abs, "utf8")
-        .replace(/^vault_name: .*$/gm, "vault_name: <name>")
-        .replace(/^- size_bytes: \d+$/gm, "- size_bytes: <n>")
-        .replace(/"size_bytes":"\d+"/g, String.raw`"size_bytes":"<n>"`);
+      // The chain hash over each JSONL row covers `size_bytes`, so the
+      // one value normalised above propagates into every row's `h` and
+      // into the `prev` that follows it - see `maskLogChainDigests`.
+      const text = maskLogChainDigests(
+        readFileSync(abs, "utf8")
+          .replace(/^vault_name: .*$/gm, "vault_name: <name>")
+          .replace(/^- size_bytes: \d+$/gm, "- size_bytes: <n>")
+          .replace(/"size_bytes":"\d+"/g, String.raw`"size_bytes":"<n>"`),
+      );
       rows.push(`${path}\t${createHash("sha256").update(text).digest("hex")}`);
     }
   };
@@ -231,10 +237,22 @@ describe("the dream pass runs behind the gate, not beside it", () => {
     // that unit and WITHOUT the snapshot gate this file guards, taken
     // the same way as the two before it, so what it still proves is the
     // same claim: the gate authors none of these bytes.
+    //
+    // Re-measured a THIRD time, in who-wrote-what, and again for bytes
+    // the pass does author: every JSONL log row now carries `prev` and
+    // `h`, the per-shard hash chain (Task E). Unlike the two before it
+    // this literal was taken on the branch that adds the chain rather
+    // than on a tree without the unit, because the chain is computed
+    // inside the appender the pass calls and there is no build of it to
+    // measure the pass against. What the number still guards is that it
+    // does not move again without a named reason - and the masking in
+    // `dreamOutputRows` is what keeps it a guard rather than a coin
+    // flip: `size_bytes` is inside the hashed payload, so without the
+    // mask this digest would differ on every run.
     seedSignal("tidy");
     dream(vault, { now: NOW, agentName: "tester" });
     expect(dreamOutputDigest(join(vault, "Brain"))).toBe(
-      "345b742a592bbfd51305e16fc9e63031f88ba54371ba619e01eecff129f4103a",
+      "595e933323e01c1d2d9c15b5c1b8e1bcede298740cf9ef543c8fdc8845048bc0",
     );
   });
 

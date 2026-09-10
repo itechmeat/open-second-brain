@@ -1,4 +1,28 @@
-export type AgentSourceContributionKind = "signal" | "preference" | "log";
+/**
+ * What a contribution IS, as the roster and the diff group them.
+ *
+ * `note` joined the three originals with the note-write record
+ * (who-wrote-what, Task A / t_662f4e82). It is deliberately its own kind
+ * rather than a `log` contribution that happens to carry a path: "which
+ * notes did this agent touch" is the question the epic exists to answer,
+ * and folding it into `log` would make that question a substring search
+ * over event payloads.
+ */
+export type AgentSourceContributionKind = "signal" | "preference" | "log" | "note";
+
+/** The kinds, in the order the surfaces list them. */
+export const AGENT_SOURCE_CONTRIBUTION_KINDS: ReadonlyArray<AgentSourceContributionKind> =
+  Object.freeze(["signal", "preference", "log", "note"]);
+
+/** True when `value` is a member of {@link AGENT_SOURCE_CONTRIBUTION_KINDS}. */
+export function isAgentSourceContributionKind(
+  value: unknown,
+): value is AgentSourceContributionKind {
+  return (
+    typeof value === "string" &&
+    (AGENT_SOURCE_CONTRIBUTION_KINDS as ReadonlyArray<string>).includes(value)
+  );
+}
 
 export interface AgentSourceContribution {
   readonly provider_id: string;

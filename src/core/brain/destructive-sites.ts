@@ -335,6 +335,16 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
     },
 
     // --- Rewrites through a temp file ------------------------------------
+    "src/core/brain/freeze.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "removes the freeze marker, whose whole content was its existence: the file carries " +
+        "no memory, `o2b brain freeze` writes an identical one in a single command, and the " +
+        "`unfreeze` log event records who lifted the freeze plus what the marker said before " +
+        "it went. Archiving it would preserve a fact the log already holds.",
+    },
+
     "src/core/brain/maintenance/journal.ts": {
       calls: ["renameSync"],
       recovery: UNARCHIVED_BRAIN,
@@ -393,6 +403,18 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "originals and manifest lists are all empty and the loops remove nothing. Recovery is " +
         "PARTIAL rather than covered because `--include-originals` removes the imported file " +
         "outside `Brain/`, which no archive has ever held.",
+    },
+    "src/core/brain/notes/write-record.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "prunes before-images past a retention window measured from each file's own mtime, " +
+        "and an image whose age cannot be measured at all is kept rather than removed. Every " +
+        "image is a COPY of note content that still exists somewhere the snapshot region " +
+        "archives - either on disk as the note's current body or inside an earlier archive - " +
+        "so removing one loses no content; it only narrows how far back a revert can reach, " +
+        "and a revert that cannot reach its before-image refuses that target by name rather " +
+        "than discovering the absence silently.",
     },
     "src/core/brain/notes/lifecycle.ts": {
       calls: ["renameSync", "unlinkSync"],

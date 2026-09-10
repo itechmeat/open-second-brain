@@ -493,6 +493,46 @@ export const BRAIN_LOG_EVENT_KIND = {
    * no event, so the log records changes and not calls.
    */
   expirationSet: "expiration-set",
+  /**
+   * `freeze` (who-wrote-what, Task C) - an operator stopped every content
+   * writer on every device by writing `Brain/.state/frozen.json`. Payload
+   * carries the `reason` (or the empty string when none was given), the
+   * `device_id` the freeze was set from, and the `agent`. Emitted only on
+   * a real transition: freezing an already-frozen vault changes nothing
+   * and writes nothing, so the log records the stop and not the attempt.
+   */
+  freeze: "freeze",
+  /**
+   * `unfreeze` (who-wrote-what, Task C) - the freeze marker was removed
+   * and the content lane reopened. Payload carries the `frozen_at`,
+   * `by` and `reason` read off the marker before it went, plus the
+   * `agent` lifting it: the marker's whole content was its existence, so
+   * this event is the only place that record survives.
+   */
+  unfreeze: "unfreeze",
+  /**
+   * `write-refused` (who-wrote-what, Task C) - a write was refused
+   * because the vault is frozen. Recorded at the MCP tool boundary, which
+   * is the one seam that knows both the refusal and the caller: the guard
+   * itself cannot append (it sits below the log module). Payload carries
+   * the `tool`, the `agent`, and the `reason` the marker gave.
+   */
+  writeRefused: "write-refused",
+  /**
+   * `note-write` (who-wrote-what, Task A / t_662f4e82) - one vault note
+   * was created, updated, appended to, or reverted. This is the event
+   * that makes the bulk of what an agent produces attributable at all:
+   * before it, a note write left no trace in the log and no row in any
+   * roster, so "which notes did this agent touch" had no answer. Payload
+   * carries the `write_id`, the `op` ({@link NOTE_WRITE_OP}), the
+   * vault-relative `target`, the content hash and byte size on both sides
+   * of the write (`hash_before` spelled `absent` when the target did not
+   * exist), and the `agent`; the device rides on the shard name and the
+   * `origin_channel` is stamped by the appender. One event per write,
+   * appended AFTER the bytes land - a create that skipped an occupied
+   * target wrote nothing and records nothing.
+   */
+  noteWrite: "note-write",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 
@@ -612,6 +652,13 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
    * archive's filename prefix.
    */
   noteDelete: "note-delete",
+  /**
+   * Pre-apply point taken before `o2b brain writes revert --apply`
+   * restores before-images or removes the notes its selected writes
+   * created (who-wrote-what, Task D). Kebab-case like its siblings
+   * because the value doubles as the archive's filename prefix.
+   */
+  noteRevert: "note-revert",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */
@@ -663,7 +710,8 @@ export type PrefAuditOp = (typeof PREF_AUDIT_OP)[keyof typeof PREF_AUDIT_OP];
 
 /**
  * One append-only audit line for a single preference mutation. Stored
- * as JSONL under `Brain/log/pref-audit/<pref-id>.jsonl`. `op` is widened
+ * as JSONL under `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl`,
+ * one file per preference per device. `op` is widened
  * to `string` on read so an unknown future op kind round-trips without
  * loss. Revision/hash before-after are `null` where not applicable
  * (e.g. `hash_before` is `null` on a `create`).

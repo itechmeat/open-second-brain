@@ -7,7 +7,12 @@ import { brainDirs } from "../paths.ts";
 import { preferenceOwner } from "../owner-scoped-facts.ts";
 import { parsePreference, parseRetired } from "../preference.ts";
 import { parseSignal } from "../signal.ts";
-import type { BrainPreference, BrainRetired, BrainSignal } from "../types.ts";
+import {
+  BRAIN_LOG_EVENT_KIND,
+  type BrainPreference,
+  type BrainRetired,
+  type BrainSignal,
+} from "../types.ts";
 import { normaliseWikilinkTarget } from "../wikilink.ts";
 import { deepFreeze } from "./freeze.ts";
 import type { AgentSourceContribution, AgentSourceProvider } from "./types.ts";
@@ -172,6 +177,8 @@ function preferenceContribution(
 function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
   const agents = entry.agent ? [entry.agent] : [];
   if (agents.length === 0) return null;
+  const note = noteWriteContribution(entry, agents);
+  if (note !== null) return note;
   return deepFreeze({
     provider_id: PROVIDER_ID,
     kind: "log",
@@ -181,6 +188,46 @@ function logContribution(entry: BrainLogEntry): AgentSourceContribution | null {
     topic: logTopic(entry),
     title: entry.eventType,
     text: logText(entry),
+    data: {
+      event_type: entry.eventType,
+      body: cloneLogBody(entry.body),
+    },
+  });
+}
+
+/**
+ * A `note-write` event as a contribution of kind `note`
+ * (who-wrote-what, Task A / t_662f4e82).
+ *
+ * The whole point of the kind is that the ANSWER is the page: `path`
+ * carries the note the write touched, so `brain_agent_query --kind note`
+ * lists the notes an agent produced with no new reader and no second
+ * index. `title` is the operation and the target together, because a
+ * roster row that read only "note-write" would name the event kind and
+ * not the work.
+ *
+ * A line missing its target is left to fall through to the generic log
+ * contribution rather than being projected as a note with no page: a
+ * pathless `note` row is one an operator could select and never open.
+ */
+function noteWriteContribution(
+  entry: BrainLogEntry,
+  agents: ReadonlyArray<string>,
+): AgentSourceContribution | null {
+  if (entry.eventType !== BRAIN_LOG_EVENT_KIND.noteWrite) return null;
+  const target = entry.body["target"];
+  const op = entry.body["op"];
+  if (typeof target !== "string" || typeof op !== "string") return null;
+  const writeId = entry.body["write_id"];
+  return deepFreeze({
+    provider_id: PROVIDER_ID,
+    kind: "note",
+    id: typeof writeId === "string" ? writeId : `${entry.timestamp}:${entry.eventType}`,
+    agents: Object.freeze([...agents]),
+    timestamp: entry.timestamp,
+    title: `${op} ${target}`,
+    text: logText(entry),
+    path: target,
     data: {
       event_type: entry.eventType,
       body: cloneLogBody(entry.body),

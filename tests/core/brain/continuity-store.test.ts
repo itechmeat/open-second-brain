@@ -1,13 +1,22 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import {
   appendContinuityRecord,
   appendContinuityRecords,
   appendContinuitySourceInvalidation,
+  buildContinuityRecord,
   continuityLogPath,
   isCanonicalUtcTimestamp,
   listContinuityRecords,
@@ -289,4 +298,121 @@ describe("createdAt validation at the store boundary", () => {
     // Nothing was written: no shard exists for a rejected timestamp.
     expect(listContinuityRecords(vault, {})).toHaveLength(0);
   });
+});
+
+/**
+ * Per-device shards (who-wrote-what, Task B / t_1814b9bf). Two devices
+ * syncing one vault must not append to the same month file, and a reader
+ * on either device must see the same merged sequence.
+ */
+describe("continuity per-device shards", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  let configHome: string;
+
+  beforeEach(() => {
+    configHome = mkdtempSync(join(tmpdir(), "o2b-continuity-shard-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    savedEnv["OPEN_SECOND_BRAIN_CONFIG"] = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    savedEnv["O2B_DEVICE_ID"] = process.env["O2B_DEVICE_ID"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    delete process.env["O2B_DEVICE_ID"];
+    writeFileSync(configPath, `vault: ${vault}\ndevice_id: "testdev1"\n`, "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(configHome, { recursive: true, force: true });
+    for (const key of ["OPEN_SECOND_BRAIN_CONFIG", "O2B_DEVICE_ID"]) {
+      const value = savedEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  function record(createdAt: string, snippet: string) {
+    return buildContinuityRecord({
+      kind: "session_turn",
+      createdAt,
+      sourceRefs: [{ id: snippet }],
+      payload: { snippet },
+    });
+  }
+
+  /** Write a shard directly, standing in for a file Syncthing delivered. */
+  function writeShard(month: string, shardId: string, snippets: ReadonlyArray<string>): void {
+    const path = continuityLogPath(vault, month, shardId);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      snippets.map((s) => `${JSON.stringify(record(`${month}-01T10:00:0${s[0]}Z`, s))}\n`).join(""),
+      "utf8",
+    );
+  }
+
+  test("a device with an id writes its own shard and never the bare file", () => {
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-01T10:00:00Z",
+      payload: { snippet: "one" },
+    });
+    expect(existsSync(continuityLogPath(vault, "2026-06", "testdev1"))).toBe(true);
+    expect(existsSync(continuityLogPath(vault, "2026-06", ""))).toBe(false);
+  });
+
+  test("a batch append lands in the device shard too", () => {
+    appendContinuityRecords(vault, [
+      { kind: "session_turn", createdAt: "2026-06-01T10:00:00Z", payload: { snippet: "a" } },
+      { kind: "session_turn", createdAt: "2026-06-01T10:00:01Z", payload: { snippet: "b" } },
+    ]);
+    const raw = readFileSync(continuityLogPath(vault, "2026-06", "testdev1"), "utf8");
+    expect(raw.trim().split("\n")).toHaveLength(2);
+    expect(existsSync(continuityLogPath(vault, "2026-06", ""))).toBe(false);
+  });
+
+  test("the reader merges the bare file and every device shard in one order", () => {
+    writeShard("2026-06", "", ["0-legacy"]);
+    writeShard("2026-06", "devb", ["2-otherdev"]);
+    writeShard("2026-06", "testdev1", ["1-mine"]);
+    expect(listContinuityRecords(vault, {}).map((r) => r.payload["snippet"])).toEqual([
+      "0-legacy",
+      "1-mine",
+      "2-otherdev",
+    ]);
+  });
+
+  test("a sync-conflict copy is not a shard and is never merged", () => {
+    writeShard("2026-06", "testdev1", ["1-mine"]);
+    const dir = dirname(continuityLogPath(vault, "2026-06", ""));
+    writeFileSync(
+      join(dir, "2026-06.sync-conflict-20260601-120000-ABCDEFG.jsonl"),
+      `${JSON.stringify(record("2026-06-01T09:00:00Z", "conflict"))}\n`,
+      "utf8",
+    );
+    expect(listContinuityRecords(vault, {}).map((r) => r.payload["snippet"])).toEqual(["1-mine"]);
+  });
+
+  test("the month range-skip reads the parsed base of a sharded name", () => {
+    writeShard("2026-06", "testdev1", ["1-mine"]);
+    writeShard("2026-05", "testdev1", ["0-may"]);
+    const listed = listContinuityRecords(vault, { since: "2026-06-01T00:00:00Z" });
+    expect(listed.map((r) => r.payload["snippet"])).toEqual(["1-mine"]);
+  });
+
+  /**
+   * A shard this process cannot read is not an empty shard: a listing
+   * that silently drops it reports a shorter history as if it were the
+   * whole one.
+   */
+  test.skipIf(process.getuid?.() === 0)(
+    "an unreadable shard is refused, not listed as absent",
+    () => {
+      writeShard("2026-06", "testdev1", ["1-mine"]);
+      const path = continuityLogPath(vault, "2026-06", "testdev1");
+      chmodSync(path, 0o000);
+      try {
+        expect(() => listContinuityRecords(vault, {})).toThrow(/EACCES|EPERM/);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 });

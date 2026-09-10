@@ -128,3 +128,72 @@ describe("vault agent-source provider", () => {
     expect(readdirSync(brainDirs(tmp).inbox).toSorted()).toEqual(beforeInbox);
   });
 });
+
+/**
+ * The `note` contribution kind (who-wrote-what, Task A / t_662f4e82).
+ *
+ * A `note-write` event is not a `log` contribution that happens to name a
+ * path: it IS the answer to "which notes did this agent touch", so it
+ * gets its own kind, its own `path`, and a title that names the operation
+ * rather than the event kind.
+ */
+describe("note-write events as contributions of kind note", () => {
+  function seedNoteWrite(overrides: Record<string, string> = {}): void {
+    appendLogEvent(
+      tmp,
+      {
+        timestamp: "2026-05-24T10:00:00Z",
+        eventType: "note-write",
+        agent: "claude",
+        body: {
+          write_id: "nw_20260524100000_0123456789abcdef",
+          op: "update",
+          target: "Notes/Design.md",
+          hash_before: "a".repeat(64),
+          hash_after: "b".repeat(64),
+          bytes_before: "10",
+          bytes_after: "20",
+          agent: "claude",
+          ...overrides,
+        },
+      },
+      { deviceId: "" },
+    );
+  }
+
+  test("the write becomes a note contribution keyed by its write id", () => {
+    seedNoteWrite();
+    const note = collectAgentSourceContributions(tmp).find((c) => c.kind === "note");
+    expect(note).toBeDefined();
+    expect(note!.id).toBe("nw_20260524100000_0123456789abcdef");
+    expect(note!.agents).toEqual(["claude"]);
+    // The page IS the answer, so it rides on `path`.
+    expect(note!.path).toBe("Notes/Design.md");
+    // The title names the work, not the event kind.
+    expect(note!.title).toBe("update Notes/Design.md");
+  });
+
+  test("the roster reports the kind, so an agent's notes are one filter away", () => {
+    seedNoteWrite();
+    const claude = listAgentSources(tmp).find((a) => a.id === "claude");
+    expect(claude?.kinds).toContain("note");
+  });
+
+  test("a note-write line with no target stays a log contribution, never a pathless note", () => {
+    // Projecting it as a `note` would put a row in the roster an operator
+    // could select and never open.
+    appendLogEvent(
+      tmp,
+      {
+        timestamp: "2026-05-24T11:00:00Z",
+        eventType: "note-write",
+        agent: "claude",
+        body: { write_id: "nw_20260524110000_ffffffffffffffff", op: "update" },
+      },
+      { deviceId: "" },
+    );
+    const kinds = collectAgentSourceContributions(tmp).map((c) => c.kind);
+    expect(kinds).toContain("log");
+    expect(kinds).not.toContain("note");
+  });
+});

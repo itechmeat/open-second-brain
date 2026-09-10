@@ -3,7 +3,11 @@ import {
   type AgentSourceDiffMode,
   type AgentSourceDiffResult,
 } from "../../../core/brain/agent-source/diff.ts";
-import type { AgentSourceContributionKind } from "../../../core/brain/agent-source/types.ts";
+import {
+  AGENT_SOURCE_CONTRIBUTION_KINDS,
+  isAgentSourceContributionKind,
+  type AgentSourceContributionKind,
+} from "../../../core/brain/agent-source/types.ts";
 import { brainVerbContext, fail, parse } from "../helpers.ts";
 
 export async function cmdBrainAgentDiff(argv: string[]): Promise<number> {
@@ -76,8 +80,8 @@ function parseKind(raw: string | undefined): {
   readonly error?: string;
 } {
   if (raw === undefined) return {};
-  if (raw === "signal" || raw === "preference" || raw === "log") return { value: raw };
-  return { error: "--kind must be one of signal|preference|log" };
+  if (isAgentSourceContributionKind(raw)) return { value: raw };
+  return { error: `--kind must be one of ${AGENT_SOURCE_CONTRIBUTION_KINDS.join("|")}` };
 }
 
 function parseLimit(raw: string | undefined): {

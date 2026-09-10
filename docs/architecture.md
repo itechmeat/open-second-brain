@@ -198,7 +198,7 @@ Recommended behavior:
 
 What "the vault" contains is enumerated rather than assumed.
 `src/core/state/surfaces.ts` declares every durable location this build
-keeps INSIDE a vault — 42 of them — each with the layer that can move it
+keeps INSIDE a vault — 44 of them — each with the layer that can move it
 and what its loss costs, split into `derived` (rebuildable, so deleting it
 costs time) and `vault-content` (the memory itself, permanent without a
 backup). `o2b state status` measures that catalogue against one vault and
@@ -379,13 +379,13 @@ disclosure, so `warn`'s observability here is the `owner:` stamp appearing on
 new files, not a count in any response.
 
 The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
-is the point rather than its size. Ninety-nine classified tools carry 226 call
+is the point rather than its size. One hundred classified tools carry 229 call
 recipes - one per mode, view or operation, because one executed view is not an
 executed classification. Every recipe runs TWICE against the same two-owner
 fixture, once with the gate closed and once with it open, and the classification
 decides what the open run must show: the 32 recipes classified as reaching
 owner-taggable content must surface the marker with the gate off, which is what
-stops the closed run from passing vacuously. The other 194 carry a claim of
+stops the closed run from passing vacuously. The other 197 carry a claim of
 unreachability, and that claim is executed directly - the marker must be absent
 even where nothing is hidden. The first version of this probe asserted only the
 closed half, and 81 of its entries were driven against arguments that named

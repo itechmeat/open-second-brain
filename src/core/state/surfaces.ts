@@ -126,6 +126,8 @@ export const STATE_SURFACE_ID = Object.freeze({
   captureDecisionLog: "capture_decision_log",
   decisionReceipts: "decision_receipts",
   lineageLedger: "lineage_ledger",
+  freezeMarker: "freeze_marker",
+  writeImages: "write_images",
   anticipatoryCache: "anticipatory_cache",
   exactState: "exact_state",
   searchFeedback: "search_feedback",
@@ -279,6 +281,8 @@ const PROPOSAL_WATERMARK_FILE = "proposal-watermark.json";
 const TRUTH_DIR = "truth";
 const BRAIN_INTERNAL_STATE_DIR = ".state";
 const LINEAGE_LEDGER_FILE = "session-lineage.jsonl";
+const FROZEN_MARKER_FILE = "frozen.json";
+const WRITE_IMAGES_DIR = "write-images";
 const ANTICIPATORY_DIR = "anticipatory";
 const SEARCH_STATE_DIR = "search";
 const SEARCH_FEEDBACK_DIR = "feedback";
@@ -614,12 +618,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     label: "continuity ledger",
     tier: STATE_TIER.vaultContent,
     derive: brainLog(CONTINUITY_DIR),
-    override_env: null,
-    override_config_key: null,
+    override_env: DEVICE_ID_ENV,
+    override_config_key: DEVICE_ID_CONFIG_KEY,
     carries_memory: true,
     reason:
-      "One JSONL shard per month recording session handovers, so a new session can pick up what " +
-      "the previous one left unfinished. Nothing recomputes a handover that was never written.",
+      "One JSONL file per month per device (`<month>.<device-id>.jsonl`) recording session " +
+      "handovers, so a new session can pick up what the previous one left unfinished and two " +
+      "machines never write one file. Nothing recomputes a handover that was never written.",
     sources: ["src/core/brain/continuity/store.ts"],
   },
   {
@@ -640,11 +645,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     label: "preference mutation audit",
     tier: STATE_TIER.vaultContent,
     derive: brainLog(PREF_AUDIT_DIR),
-    override_env: null,
-    override_config_key: null,
+    override_env: DEVICE_ID_ENV,
+    override_config_key: DEVICE_ID_CONFIG_KEY,
     carries_memory: true,
     reason:
-      "One append-only JSONL per preference recording every promotion, edit and retirement. It " +
+      "One append-only JSONL per preference per device (`<pref-id>/device.<device-id>.jsonl`) " +
+      "recording every promotion, edit and retirement. A directory per preference because a " +
+      "preference id may contain a dot, which a flat name cannot tell from a device suffix. It " +
       "is the provenance behind a rule the agents follow, and it cannot be reconstructed from " +
       "the preference file it describes.",
     sources: ["src/core/brain/paths.ts"],
@@ -710,14 +717,46 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     label: "session lineage ledger",
     tier: STATE_TIER.vaultContent,
     derive: brainTree(BRAIN_INTERNAL_STATE_DIR, LINEAGE_LEDGER_FILE),
-    override_env: null,
-    override_config_key: null,
+    override_env: DEVICE_ID_ENV,
+    override_config_key: DEVICE_ID_CONFIG_KEY,
     carries_memory: false,
     reason:
       "Which session followed which, plus a companion gap file naming the observations that " +
       "never reached it. It is how a broken chain is detectable at all, so deleting it hides " +
-      "gaps rather than closing them.",
+      "gaps rather than closing them. The name above is the shard with the EMPTY device id; " +
+      "a machine with a device id writes `session-lineage.<device-id>.jsonl` beside it, one " +
+      "hash chain per file, and a reader merges every shard it finds.",
     sources: ["src/core/brain/lineage/ledger.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.freezeMarker,
+    label: "fleet freeze marker",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_INTERNAL_STATE_DIR, FROZEN_MARKER_FILE),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: false,
+    reason:
+      "While this file exists every content writer on every device that syncs the vault " +
+      "refuses, which is exactly what an operator asked for when they wrote it. Deleting it " +
+      "by hand is the same act as `o2b brain unfreeze` minus the log event that would have " +
+      "recorded who lifted the stop.",
+    sources: ["src/core/brain/freeze-marker.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.writeImages,
+    label: "note-write before-images",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_INTERNAL_STATE_DIR, WRITE_IMAGES_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: true,
+    reason:
+      "The bytes each recorded note write replaced, one file per distinct prior content. It is " +
+      "what lets a write be undone from what it displaced rather than from a whole-tree " +
+      "archive, so deleting it narrows how far back a revert can reach - which the revert plan " +
+      "then reports by name. It holds note prose, so it is a copy of your vault text.",
+    sources: ["src/core/brain/notes/write-record.ts", "src/core/brain/paths.ts"],
   },
   {
     id: STATE_SURFACE_ID.anticipatoryCache,
@@ -832,12 +871,13 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     label: "per-surface metrics",
     tier: STATE_TIER.vaultContent,
     derive: brainTree(METRICS_DIR),
-    override_env: null,
-    override_config_key: null,
+    override_env: DEVICE_ID_ENV,
+    override_config_key: DEVICE_ID_CONFIG_KEY,
     carries_memory: false,
     reason:
-      "One append-only JSONL per instrumented surface, timestamped per run. They are " +
-      "observations of runs that already finished, so nothing regenerates them.",
+      "One append-only JSONL per instrumented surface per device " +
+      "(`<surface>.<device-id>.jsonl`), timestamped per run and merged across devices at read. " +
+      "They are observations of runs that already finished, so nothing regenerates them.",
     sources: ["src/core/brain/metrics.ts"],
   },
   {
@@ -1128,12 +1168,15 @@ export function inventoryStateSurfaces(input: StateInventoryInput): StateInvento
 /**
  * Whether the override value is a PATH the derivation should use.
  *
- * The device-id override selects a shard filename inside a directory this
- * inventory reports at directory granularity, so feeding it to the
- * derivation would build `<vault>/Brain/<device-id>`. The origin is still
- * reported, because "your log shard is named by an environment variable"
- * is exactly the provenance an operator looking for their own writes
- * needs; only the path substitution is withheld.
+ * The device-id override selects a shard FILENAME, not a location, so
+ * feeding it to the derivation would build `<vault>/Brain/<device-id>`.
+ * Most rows it applies to are reported at directory granularity, which
+ * already contains every shard; the one row that names a single file
+ * (the session lineage ledger) says in its own `reason` that the name
+ * shown is the empty-shard one. The origin is still reported either way,
+ * because "your shard is named by an environment variable" is exactly the
+ * provenance an operator looking for their own writes needs; only the
+ * path substitution is withheld.
  */
 function movesPath(surface: StateSurface): boolean {
   return surface.override_env !== DEVICE_ID_ENV;

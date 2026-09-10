@@ -95,6 +95,28 @@ export const DEGRADATION_CODE = Object.freeze({
    * write path rather than a warning.
    */
   vaultMarkerMismatch: "vault-marker-mismatch",
+  /**
+   * Task C. An operator froze this vault, so the content lane refuses
+   * every write until the marker is removed. Unlike the two above this is
+   * an INTENDED state rather than a defect: the notice exists so the
+   * refusal names when the freeze was set, who set it, why, and the one
+   * command that lifts it.
+   */
+  vaultFrozen: "vault-frozen",
+  /**
+   * Task E. A shard of the Brain log does not link up: a line's hash does
+   * not recompute, its `prev` does not name the line before it, or a line
+   * carries no chain fields where the chain had already started. Distinct
+   * from {@link DEGRADATION_CODE.lineageChainBroken} because it names a
+   * different file with a different chain shape - one shard per device
+   * per day rather than one ledger - and an operator holding the finding
+   * has to know which of the two to open.
+   *
+   * Report-only, exactly like its lineage sibling: the log's read path
+   * never consults the chain, so a broken shard still yields every event
+   * it holds.
+   */
+  logChainBroken: "log-chain-broken",
 } as const);
 
 /**

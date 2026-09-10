@@ -3,10 +3,38 @@
  *
  * Every mutation to a preference is captured at the mutation chokepoint
  * (`writePreferenceTxn`, `moveToRetired`, `mergePreferences`) as one
- * append-only JSONL line under `Brain/log/pref-audit/<pref-id>.jsonl`.
- * Because the trail is written where the content hash is computed, it is
+ * append-only JSONL line under
+ * `Brain/log/pref-audit/<pref-id>/device[.<deviceId>].jsonl` - one file
+ * per preference per device (who-wrote-what, Task B), so two machines
+ * editing the same preference never contend for one synced file. Because
+ * the trail is written where the content hash is computed, it is
  * authoritative (true before/after) and also catches manual edits routed
  * through the same primitives.
+ *
+ * ## Why a directory per preference
+ *
+ * The trail was flat - `<pref-id>[.<deviceId>].jsonl` - and that name is
+ * ambiguous, because {@link import('./paths.ts').validateSlug} permits a
+ * dot inside a preference id. `pref-a.b.jsonl` is BOTH the legacy trail
+ * of the preference `pref-a.b` and `pref-a`'s shard on a device called
+ * `b`: reading `pref-a` returned the neighbour's records, and appending
+ * for `pref-a` on device `b` wrote into the neighbour's file.
+ *
+ * No separator fixes it. Every character `validateSlug` accepts can also
+ * appear inside a preference id, so any flat name built from
+ * `(prefId, deviceId)` is a name some other valid preference id could
+ * own. One path SEGMENT per preference can not be another preference's
+ * segment, so the directory is the layout that makes the collision
+ * impossible rather than unlikely. Inside it the file is named by a fixed
+ * stem plus the shard id, which is the same grammar every other ledger
+ * uses and which gives the empty (legacy) shard id a name.
+ *
+ * Legacy flat files stay readable and are never renamed: a read merges
+ * `<pref-id>[.<deviceId>].jsonl` from the parent directory with the
+ * per-preference directory. Because a flat name can be ambiguous, every
+ * record read is checked against the id that was asked for; a record
+ * carrying a different `pref_id` is DROPPED and reported as a warning,
+ * never silently mixed in.
  *
  * No-op contract: for an `update` op, {@link appendPrefAudit} writes
  * nothing and returns `false` when `hash_before === hash_after` (both
@@ -23,10 +51,24 @@
  * (kept as the raw string), matching the log-reader tolerance contract.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { prefAuditPath } from "./paths.ts";
+import {
+  listShardedFiles,
+  literalBase,
+  mergeShardedRows,
+  type LedgerShardGrammar,
+  type ShardedRow,
+} from "./ledger-shards.ts";
+import {
+  PREF_AUDIT_EXT,
+  PREF_AUDIT_STEM,
+  prefAuditDir,
+  prefAuditPath,
+  prefAuditPrefDir,
+  validateSlug,
+} from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
@@ -134,47 +176,95 @@ export function appendPrefAudit(
 }
 
 /**
- * Read the full mutation history for one preference id, oldest first.
- * Returns empty records (no warnings) when the file does not exist.
- * Malformed lines and rows missing required fields become warnings;
- * unknown op kinds are preserved verbatim.
+ * Read the full mutation history for one preference id, oldest first,
+ * merged across every device shard.
+ *
+ * Two places hold shards: the per-preference directory every current
+ * write lands in, and the legacy flat names beside it. Both are read; the
+ * legacy ones first, so a same-timestamp tie between the two layouts
+ * resolves the same way on every device. The merge order is (`ts`, shard
+ * id, line), so two machines show the same history whatever order
+ * Syncthing delivered the files in. Returns empty records (no warnings)
+ * when no shard exists. Malformed lines and rows missing required fields
+ * become warnings naming the shard they came from; unknown op kinds are
+ * preserved verbatim.
+ *
+ * A record whose `pref_id` is not the one asked for is DROPPED with a
+ * warning rather than returned: a legacy flat name is ambiguous (see the
+ * module docblock), and answering with the neighbour's history is the one
+ * answer a caller cannot detect.
  */
 export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResult {
-  const path = prefAuditPath(vault, prefId);
-  if (!existsSync(path)) return { records: [], warnings: [] };
-
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (err) {
-    const message = (err as NodeJS.ErrnoException).message ?? String(err);
-    return {
-      records: [],
-      warnings: [{ path, lineNumber: 0, message: `failed to read audit file: ${message}` }],
-    };
-  }
-
-  const records: PrefAuditRecord[] = [];
+  const wanted = validateSlug(prefId);
+  const rows: Array<ShardedRow<PrefAuditRecord>> = [];
   const warnings: PrefAuditParseWarning[] = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.trim() === "") continue;
-    let parsed: unknown;
+  const shards = [
+    ...listShardedFiles(prefAuditDir(vault), legacyPrefAuditGrammar(wanted)),
+    ...listShardedFiles(prefAuditPrefDir(vault, wanted), PREF_AUDIT_GRAMMAR),
+  ];
+  for (const shard of shards) {
+    const path = shard.path;
+    let text: string;
     try {
-      parsed = JSON.parse(line);
-    } catch {
-      warnings.push({
-        path,
-        lineNumber: i + 1,
-        message: `malformed JSONL line: ${line.slice(0, 80)}`,
-      });
+      text = readFileSync(path, "utf8");
+    } catch (err) {
+      const message = (err as NodeJS.ErrnoException).message ?? String(err);
+      warnings.push({ path, lineNumber: 0, message: `failed to read audit file: ${message}` });
       continue;
     }
-    const rec = coerceRecord(parsed, path, i + 1, warnings);
-    if (rec !== null) records.push(rec);
+    const lines = text.split(/\r?\n/);
+    let index = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim() === "") continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        warnings.push({
+          path,
+          lineNumber: i + 1,
+          message: `malformed JSONL line: ${line.slice(0, 80)}`,
+        });
+        continue;
+      }
+      const rec = coerceRecord(parsed, path, i + 1, warnings);
+      if (rec === null) continue;
+      if (rec.pref_id !== wanted) {
+        warnings.push({
+          path,
+          lineNumber: i + 1,
+          message:
+            `audit row belongs to ${rec.pref_id}, not ${wanted} - the legacy flat file name is ` +
+            "ambiguous when a preference id contains a dot; this row was not merged",
+        });
+        continue;
+      }
+      rows.push({ value: rec, shardId: shard.shardId, line: index++ });
+    }
   }
-  return { records, warnings };
+  return { records: mergeShardedRows(rows, (record) => record.ts), warnings };
+}
+
+/**
+ * The name layout of one preference's shards INSIDE its own directory.
+ * The base is the fixed stem, so the directory alone decides which
+ * preference a file belongs to and no id can be mistaken for a shard.
+ */
+const PREF_AUDIT_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: literalBase(PREF_AUDIT_STEM),
+  extensions: Object.freeze([PREF_AUDIT_EXT]),
+});
+
+/**
+ * The legacy flat layout: `<pref-id>[.<deviceId>].jsonl` beside the
+ * per-preference directories. Still read, never written, never renamed.
+ * The pref id goes in as a literal so an unescaped dot cannot widen the
+ * pattern - but the name remains ambiguous in the other direction, which
+ * is why every row it yields is checked against `pref_id`.
+ */
+function legacyPrefAuditGrammar(prefId: string): LedgerShardGrammar {
+  return { base: literalBase(prefId), extensions: [PREF_AUDIT_EXT] };
 }
 
 /**

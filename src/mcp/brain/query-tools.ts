@@ -21,7 +21,22 @@ import {
 import { parseIsoUtc } from "../../core/brain/health/iso-time.ts";
 import { diffAgentSources, type AgentSourceDiffMode } from "../../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
-import type { AgentSourceContributionKind } from "../../core/brain/agent-source/types.ts";
+import {
+  NoteRevertError,
+  planNoteRevert,
+  type NoteRevertSelector,
+} from "../../core/brain/notes/revert.ts";
+import { listNoteWrites } from "../../core/brain/notes/write-log.ts";
+import {
+  NOTE_WRITE_OP,
+  NOTE_WRITE_OPS,
+  isNoteWriteOp,
+} from "../../core/brain/notes/write-record.ts";
+import {
+  AGENT_SOURCE_CONTRIBUTION_KINDS,
+  isAgentSourceContributionKind,
+  type AgentSourceContributionKind,
+} from "../../core/brain/agent-source/types.ts";
 import {
   type BrainPreference,
   type BrainRetired,
@@ -282,6 +297,134 @@ async function toolBrainAgentQuery(
   }) as unknown as Record<string, unknown>;
 }
 
+/**
+ * The two actions `brain_writes` offers.
+ *
+ * `plan_revert` READS: it returns the plan an operator would apply and
+ * carries no apply path of its own. Applying a revert moves bytes an
+ * agent did not ask for on targets it may not have written, and the
+ * design puts that decision at the CLI where a human types the digest
+ * (`docs/brainstorm/who-wrote-what/design.md`, "No new MCP tool for
+ * freeze"). The plan is the half an agent can act on: it names, per
+ * target, what would happen and why not.
+ */
+const BRAIN_WRITES_ACTION = Object.freeze({
+  list: "list",
+  planRevert: "plan_revert",
+} as const);
+
+const BRAIN_WRITES_ACTIONS: ReadonlyArray<string> = Object.freeze(
+  Object.values(BRAIN_WRITES_ACTION),
+);
+
+/** Default and maximum rows one `brain_writes` list returns. */
+const BRAIN_WRITES_DEFAULT_LIMIT = 50;
+const BRAIN_WRITES_MAX_LIMIT = 500;
+
+async function toolBrainWrites(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  const action = coerceStr(args, "action", false) ?? BRAIN_WRITES_ACTION.list;
+  if (action === BRAIN_WRITES_ACTION.planRevert) {
+    return planRevert(ctx, args);
+  }
+  if (action !== BRAIN_WRITES_ACTION.list) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_writes: 'action' must be one of ${BRAIN_WRITES_ACTIONS.join(", ")}`,
+    );
+  }
+  const rawOp = coerceStr(args, "op", false);
+  if (rawOp !== null && !isNoteWriteOp(rawOp)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_writes: 'op' must be one of ${Object.values(NOTE_WRITE_OP).join(", ")}`,
+    );
+  }
+  const agent = coerceStr(args, "agent", false);
+  const device = coerceStr(args, "device", false);
+  const path = coerceStr(args, "path", false);
+  const since = coerceStr(args, "since", false);
+  const until = coerceStr(args, "until", false);
+  const limit = coerceInt(args, "limit", BRAIN_WRITES_DEFAULT_LIMIT, 1, BRAIN_WRITES_MAX_LIMIT);
+
+  const result = listNoteWrites(ctx.vault, {
+    ...(agent !== null ? { agent } : {}),
+    ...(device !== null ? { device } : {}),
+    ...(path !== null ? { path } : {}),
+    ...(since !== null ? { since } : {}),
+    ...(until !== null ? { until } : {}),
+    ...(rawOp !== null ? { op: rawOp } : {}),
+  });
+  // `total_matched` beside `returned` so a truncated answer is legible as
+  // one: a list capped at the limit and a list that IS the whole history
+  // are otherwise the same shape.
+  return {
+    action: BRAIN_WRITES_ACTION.list,
+    total_matched: result.writes.length,
+    returned: Math.min(result.writes.length, limit),
+    writes: result.writes.slice(0, limit).map((w) => ({ ...w })),
+    warnings: result.warnings.map((w) => ({
+      path: w.path,
+      line: w.lineNumber,
+      message: w.message,
+    })),
+  };
+}
+
+/**
+ * The read-only half of the per-agent revert: what undoing the selected
+ * writes WOULD do, sealed by the digest `o2b brain writes revert --apply`
+ * takes.
+ *
+ * Every refusal the planner raises for the whole call - the unbounded
+ * selector, today the only one - comes back as `INVALID_PARAMS` carrying
+ * the CODE, so an agent narrows on a token rather than on a sentence.
+ * Nothing here writes; the digest is the only thing that crosses to the
+ * operator's terminal.
+ */
+function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<string, unknown> {
+  const selector: NoteRevertSelector = {
+    ...selectorArg(args, "agent"),
+    ...selectorArg(args, "device"),
+    ...selectorArg(args, "path"),
+    ...selectorArg(args, "since"),
+    ...selectorArg(args, "until"),
+  };
+  let plan;
+  try {
+    plan = planNoteRevert(ctx.vault, selector);
+  } catch (err) {
+    if (err instanceof NoteRevertError) {
+      throw new MCPError(INVALID_PARAMS, `brain_writes: ${err.code}: ${err.message}`);
+    }
+    throw err;
+  }
+  return {
+    action: BRAIN_WRITES_ACTION.planRevert,
+    selector: { ...plan.selector },
+    entries: plan.entries.map((entry) => ({ ...entry })),
+    digest: plan.digest,
+    planned_at: plan.planned_at,
+    next_command: `o2b brain writes revert --apply ${plan.digest}`,
+    warnings: plan.warnings.map((w) => ({
+      path: w.path,
+      line: w.lineNumber,
+      message: w.message,
+    })),
+  };
+}
+
+/** One selector field, present only when the caller supplied it. */
+function selectorArg(
+  args: Record<string, unknown>,
+  key: "agent" | "device" | "path" | "since" | "until",
+): Partial<Record<typeof key, string>> {
+  const value = coerceStr(args, key, false);
+  return value === null ? {} : { [key]: value };
+}
+
 async function toolBrainAgentDiff(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -314,10 +457,10 @@ function coerceAgentContributionKind(
 ): AgentSourceContributionKind | null {
   const raw = coerceStr(args, key, false);
   if (raw === null) return null;
-  if (raw !== "signal" && raw !== "preference" && raw !== "log") {
+  if (!isAgentSourceContributionKind(raw)) {
     throw new MCPError(
       INVALID_PARAMS,
-      `argument '${key}' must be 'signal', 'preference', or 'log'`,
+      `argument '${key}' must be one of ${AGENT_SOURCE_CONTRIBUTION_KINDS.join(", ")}`,
     );
   }
   return raw;
@@ -690,7 +833,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          enum: ["signal", "preference", "log"],
+          enum: [...AGENT_SOURCE_CONTRIBUTION_KINDS],
           description: "Contribution kind filter.",
         },
         limit: {
@@ -708,6 +851,56 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       additionalProperties: false,
     },
     handler: toolBrainAgentQuery,
+  },
+  {
+    name: "brain_writes",
+    previewBudget: MCP_PREVIEW_BUDGET,
+    description:
+      "List recorded note writes (create, update, append, revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. plan_revert returns the sealed plan for undoing them. Read-only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        action: {
+          type: "string",
+          enum: [...BRAIN_WRITES_ACTIONS],
+          description:
+            "list returns recorded writes. plan_revert returns the sealed undo plan; applying it is CLI-only.",
+        },
+        agent: {
+          type: "string",
+          description: "Exact agent identity that recorded the write.",
+        },
+        device: {
+          type: "string",
+          description: "Exact device id; the empty string is the legacy un-sharded log.",
+        },
+        path: {
+          type: "string",
+          description: "Exact vault-relative target path of the note.",
+        },
+        since: {
+          type: "string",
+          description: "Inclusive lower bound: YYYY-MM-DD or an ISO-8601 UTC timestamp.",
+        },
+        until: {
+          type: "string",
+          description: "Inclusive upper bound, same two spellings; a bare date covers its day.",
+        },
+        op: {
+          type: "string",
+          enum: [...NOTE_WRITE_OPS],
+          description: "Operation filter.",
+        },
+        limit: {
+          type: "integer",
+          minimum: 1,
+          maximum: 500,
+          description: "Maximum writes returned. Defaults to 50.",
+        },
+      },
+      additionalProperties: false,
+    },
+    handler: toolBrainWrites,
   },
   {
     name: "brain_agent_diff",
@@ -738,7 +931,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          enum: ["signal", "preference", "log"],
+          enum: [...AGENT_SOURCE_CONTRIBUTION_KINDS],
           description: "Contribution kind filter.",
         },
         limit: {

@@ -17,17 +17,43 @@
  * lives in exactly one module. Malformed JSONL lines surface as
  * `warnings` instead of aborting the read, matching `parseLogDay`'s
  * tolerance contract.
+ *
+ * The per-shard hash chain (who-wrote-what, Task E) is invisible here by
+ * design: `coerceEntry` reads `ts`, `kind` and `payload` and nothing
+ * else, so a row's `prev` and `h` never reach a reader and a broken
+ * chain never withholds an event. Verification is a separate pass over
+ * the same files ({@link scanJsonlRows}, consumed by `log-chain.ts`).
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
+import {
+  listShardedFiles,
+  listSyncConflictFiles,
+  mergeShardedRows,
+  parseShardedName,
+  type LedgerShardGrammar,
+  type ShardedRow,
+} from "./ledger-shards.ts";
 import { brainDirs, validateIsoDate } from "./paths.ts";
 import { parseLogDayFile, type BrainLogEntry, type BrainLogParseWarning } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 export interface ReadLogDayResult {
   readonly entries: ReadonlyArray<BrainLogEntry>;
+  /**
+   * The shard id each entry in {@link entries} came from, at the same
+   * index; the empty string for the legacy un-sharded pair.
+   *
+   * A parallel array rather than a field on the entry, because
+   * `BrainLogEntry` is the shape the markdown parser, the JSONL parser
+   * and every writer already agree on, and a key that only one of the
+   * three could fill would be absent exactly where a reader needs it.
+   * The shard id IS the device id (see `logShardPath`), which is how the
+   * note-write reader answers "which machine wrote this" without a field
+   * in the payload.
+   */
+  readonly entryShardIds: ReadonlyArray<string>;
   readonly source: "jsonl" | "markdown-fallback";
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
 }
@@ -47,19 +73,17 @@ export interface ReadLogDayResult {
 // break the contract of the other surface.
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
-// One log file name: `<date>.jsonl`, `<date>.md`, or the sharded
-// `<date>.<deviceId>.jsonl` / `.md`. Device ids are lowercase slugs
-// (see `resolveDeviceId`); Syncthing conflict copies and anything else
-// that does not match are NOT log shards.
-const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.([a-z0-9-]{1,32}))?\.(jsonl|md)$/;
-
 /**
- * A Syncthing conflict copy is named `<stem>.sync-conflict-<stamp>.<ext>`,
- * so its middle segment can pass the shard-id shape. Named once because
- * both the recogniser that must REJECT it and the leftover reporter that
- * must FIND it key on the same marker.
+ * One log file name: `<date>.jsonl`, `<date>.md`, or the sharded
+ * `<date>.<deviceId>.jsonl` / `.md`. The grammar itself, the device-id
+ * slug and the sync-conflict exclusion live in `ledger-shards.ts`, which
+ * every append-only ledger in the vault now shares; this declaration is
+ * the log's own base and extensions and nothing more.
  */
-const SYNC_CONFLICT_SHARD_PREFIX = "sync-conflict";
+const LOG_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "\\d{4}-\\d{2}-\\d{2}",
+  extensions: Object.freeze(["jsonl", "md"]),
+});
 
 /** The shape of one recognised `Brain/log/` daily file name. */
 export interface ParsedLogFileName {
@@ -87,13 +111,9 @@ export interface ParsedLogFileName {
  * the layout, rather than a third copy of the pattern.
  */
 export function parseLogFileName(name: string): ParsedLogFileName | null {
-  const m = LOG_FILE_RE.exec(name);
-  if (m === null) return null;
-  const shardId = m[2] ?? "";
-  // Defensive: a hand-renamed Syncthing conflict copy could match the
-  // shard-id shape; conflict copies are never log shards.
-  if (shardId.startsWith(SYNC_CONFLICT_SHARD_PREFIX)) return null;
-  return { date: m[1]!, shardId, ext: m[3] as "jsonl" | "md" };
+  const parsed = parseShardedName(name, LOG_GRAMMAR);
+  if (parsed === null) return null;
+  return { date: parsed.base, shardId: parsed.shardId, ext: parsed.ext as "jsonl" | "md" };
 }
 
 export interface LogShardFile extends ParsedLogFileName {
@@ -108,18 +128,13 @@ export interface LogShardFile extends ParsedLogFileName {
  * of paying one `readdirSync` + sort per date.
  */
 export function listLogShardFiles(vault: string): LogShardFile[] {
-  const dir = brainDirs(vault).log;
-  if (!existsSync(dir)) return [];
-  const out: LogShardFile[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
-    if (!entry.isFile()) continue;
-    const parsed = parseLogFileName(entry.name);
-    if (parsed === null) continue;
-    out.push({ ...parsed, path: join(dir, entry.name), name: entry.name });
-  }
-  return out;
+  return listShardedFiles(brainDirs(vault).log, LOG_GRAMMAR).map((file) => ({
+    date: file.base,
+    shardId: file.shardId,
+    ext: file.ext as "jsonl" | "md",
+    path: file.path,
+    name: file.name,
+  }));
 }
 
 /**
@@ -139,12 +154,7 @@ export function listLogDates(vault: string): string[] {
  * for a manual union+dedup merge.
  */
 export function listLogSyncConflicts(vault: string): string[] {
-  const dir = brainDirs(vault).log;
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.includes(`.${SYNC_CONFLICT_SHARD_PREFIX}-`))
-    .map((e) => join(dir, e.name))
-    .toSorted();
+  return listSyncConflictFiles(brainDirs(vault).log);
 }
 
 /** Markdown log files (legacy + shards) for doctor's per-file lint. */
@@ -173,7 +183,9 @@ export function readLogDay(
 ): ReadLogDayResult {
   const validDate = validateIsoDate(date);
   const shards = (preloadedShards ?? listLogShardFiles(vault)).filter((f) => f.date === validDate);
-  if (shards.length === 0) return { entries: [], source: "jsonl", warnings: [] };
+  if (shards.length === 0) {
+    return { entries: [], entryShardIds: [], source: "jsonl", warnings: [] };
+  }
 
   // Group by shard id; per shard prefer .jsonl over .md.
   const byShard = new Map<string, { jsonl?: LogShardFile; md?: LogShardFile }>();
@@ -183,12 +195,7 @@ export function readLogDay(
     byShard.set(f.shardId, slot);
   }
 
-  interface Tagged {
-    readonly entry: BrainLogEntry;
-    readonly shardId: string;
-    readonly line: number;
-  }
-  const tagged: Tagged[] = [];
+  const tagged: Array<ShardedRow<BrainLogEntry>> = [];
   const warnings: BrainLogParseWarning[] = [];
   let usedMarkdown = false;
 
@@ -196,31 +203,95 @@ export function readLogDay(
     const slot = byShard.get(shardId)!;
     if (slot.jsonl) {
       const r = readJsonl(slot.jsonl.path);
-      r.entries.forEach((entry, i) => tagged.push({ entry, shardId, line: i }));
+      r.entries.forEach((entry, i) => tagged.push({ value: entry, shardId, line: i }));
       warnings.push(...r.warnings);
       continue;
     }
     if (slot.md) {
       usedMarkdown = true;
       const r = parseLogDayFile(vault, validDate, slot.md.path);
-      r.entries.forEach((entry, i) => tagged.push({ entry, shardId, line: i }));
+      r.entries.forEach((entry, i) => tagged.push({ value: entry, shardId, line: i }));
       warnings.push(...r.warnings);
     }
   }
 
-  tagged.sort((a, b) => {
-    if (a.entry.timestamp !== b.entry.timestamp) {
-      return a.entry.timestamp < b.entry.timestamp ? -1 : 1;
-    }
-    if (a.shardId !== b.shardId) return a.shardId < b.shardId ? -1 : 1;
-    return a.line - b.line;
-  });
-
+  // The merge orders by (timestamp, shard id, line) and returns values
+  // only, so the shard id rides inside the value to come out beside its
+  // entry at the same index.
+  const merged = mergeShardedRows(
+    tagged.map((row) => ({ ...row, value: { entry: row.value, shardId: row.shardId } })),
+    (row) => row.entry.timestamp,
+  );
   return {
-    entries: tagged.map((t) => t.entry),
+    entries: merged.map((row) => row.entry),
+    entryShardIds: merged.map((row) => row.shardId),
     source: usedMarkdown ? "markdown-fallback" : "jsonl",
     warnings,
   };
+}
+
+/**
+ * One non-blank line of a JSONL shard as the chain verifier sees it:
+ * where it sits in the file and what it parsed to, with `row: null` for
+ * a line that is not a JSON object.
+ *
+ * `lineNumber` is 1-based, because the number an operator needs is the
+ * one their editor shows them.
+ */
+export interface RawJsonlLine {
+  readonly lineNumber: number;
+  readonly row: Readonly<Record<string, unknown>> | null;
+}
+
+/** Every non-blank line of one shard, plus whether the bytes were obtained. */
+export interface RawJsonlScan {
+  /** False when the file could not be read; `lines` is then empty. */
+  readonly readable: boolean;
+  /** The read failure, verbatim, when there was one. */
+  readonly failure: string | null;
+  readonly lines: ReadonlyArray<RawJsonlLine>;
+}
+
+/**
+ * Read one JSONL shard WITHOUT coercing its rows into log entries.
+ *
+ * {@link readLogDay} exists to answer "what happened", so it drops every
+ * row it cannot turn into a `BrainLogEntry` and never sees the chain
+ * fields at all. The chain verifier's question is the opposite one -
+ * "what is in this file, and does it link up" - and a row the reader
+ * discarded is exactly the row it most needs to report. So the two share
+ * the file and nothing else: this scanner parses JSON and stops there.
+ *
+ * Never throws. An unreadable shard reports `readable: false` with the
+ * reason, because "not verified" is not "verified clean".
+ */
+export function scanJsonlRows(path: string): RawJsonlScan {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (err) {
+    const message = (err as NodeJS.ErrnoException).message ?? String(err);
+    return { readable: false, failure: message, lines: [] };
+  }
+  const lines: RawJsonlLine[] = [];
+  const raw = text.split(/\r?\n/);
+  for (let i = 0; i < raw.length; i++) {
+    const line = raw[i]!;
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      lines.push({ lineNumber: i + 1, row: null });
+      continue;
+    }
+    const isObject = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
+    lines.push({
+      lineNumber: i + 1,
+      row: isObject ? (parsed as Record<string, unknown>) : null,
+    });
+  }
+  return { readable: true, failure: null, lines };
 }
 
 interface ReadJsonlResult {

@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { isFileAlreadyExists } from "../fs-atomic.ts";
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
+import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import {
   BRAIN_ARTIFACTS_REL,
   BRAIN_ACTIVE_FILE,
@@ -67,12 +68,24 @@ import {
   BRAIN_STATE_REL,
   BRAIN_TENSIONS_REL,
   BRAIN_THESES_REL,
+  BRAIN_WRITE_IMAGES_REL,
   DERIVED_STORE_DIR,
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import type { WriteLane } from "./freeze-marker.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+/**
+ * The freeze marker's location, re-exported so callers reach every Brain
+ * path through this module. It is DEFINED in `freeze-marker.ts` because
+ * the guard that reads it sits below this module in the import graph -
+ * see that module's docblock for the cycle the split avoids.
+ */
+export { frozenMarkerPath } from "./freeze-marker.ts";
+/** Shape of a sha256 digest as {@link writeImagePath} spells its file names. */
+export const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 // The canonical vault-relative names live in their own leaf module so
 // `vault-identity.ts` can locate the marker without importing the
@@ -186,9 +199,19 @@ export function brainDirs(vault: string): BrainDirs {
  *     through one of them is guarded at its own entry point, not here.
  *     Those writers call `assertVaultIdentityForWrite` directly; see
  *     its docblock for the two call surfaces and why they differ.
+ *
+ * `lane` selects which half of the write surface the caller belongs to
+ * and is forwarded verbatim to the guard; see its docblock for the
+ * freeze the content lane carries. Exactly one caller passes anything
+ * but the default: the Brain log appender, whose events have to keep
+ * landing while the vault is frozen.
  */
-export function brainDirsForWrite(vault: string, notices?: DegradationNotice[]): BrainDirs {
-  assertVaultIdentityForWrite(vault, notices);
+export function brainDirsForWrite(
+  vault: string,
+  notices?: DegradationNotice[],
+  lane?: WriteLane,
+): BrainDirs {
+  assertVaultIdentityForWrite(vault, notices, lane);
   return brainDirs(vault);
 }
 
@@ -246,6 +269,36 @@ export function brainPinnedPath(vault: string): string {
 /** Overwrite-only exact-state lane directory: `Brain/state/` (t_b0c9d0a3). */
 export function brainStateDir(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_STATE_REL), vault);
+}
+
+/**
+ * Content-addressed before-image store: `Brain/.state/write-images/`
+ * (who-wrote-what, Task A).
+ *
+ * Holds the raw bytes each note write replaced, keyed by their sha256, so
+ * a recorded write can be undone from the content it displaced rather
+ * than from a whole-tree archive. Inside `Brain/`, so the snapshot region
+ * already covers it.
+ */
+export function writeImagesDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_WRITE_IMAGES_REL), vault);
+}
+
+/**
+ * One before-image: `Brain/.state/write-images/<sha256>`.
+ *
+ * The digest is validated rather than trusted, because it reaches this
+ * builder from a log payload an operator may have hand-edited and a
+ * separator smuggled through it would be a traversal out of the store.
+ */
+export function writeImagePath(vault: string, sha256: string): string {
+  if (!SHA256_HEX_RE.test(sha256)) {
+    throw new Error(
+      `writeImagePath: invalid before-image digest ${JSON.stringify(sha256)} - ` +
+        "expected 64 lowercase hexadecimal characters",
+    );
+  }
+  return ensureInsideVault(join(writeImagesDir(vault), sha256), vault);
 }
 
 /** A single exact-state aspect page: `Brain/state/<aspect>.md` (t_b0c9d0a3). */
@@ -553,15 +606,59 @@ export function prefAuditDir(vault: string): string {
 }
 
 /**
- * Brain lifecycle suite (Feature 1). Append-only audit JSONL for a
- * single preference: `Brain/log/pref-audit/<pref-id>.jsonl`. The pref
+ * Brain lifecycle suite (Feature 1). The directory holding ONE
+ * preference's audit shards: `Brain/log/pref-audit/<pref-id>/`. The pref
  * id (`pref-<slug>` / `ret-<slug>`) is validated through
  * {@link validateSlug} so it cannot escape the canonical directory.
+ *
+ * A directory rather than a name prefix because {@link validateSlug}
+ * permits a dot inside a preference id: flat, `pref-a.b.jsonl` is both
+ * `pref-a.b`'s trail and `pref-a`'s shard on a device called `b`, and no
+ * separator built out of characters `validateSlug` accepts can tell them
+ * apart. One path segment per preference can never be another
+ * preference's segment. See the module docblock of
+ * `src/core/brain/pref-audit.ts` for the whole decision.
  */
-export function prefAuditPath(vault: string, prefId: string): string {
-  const id = validateSlug(prefId);
-  return ensureInsideVault(join(prefAuditDir(vault), `${id}.jsonl`), vault);
+export function prefAuditPrefDir(vault: string, prefId: string): string {
+  return ensureInsideVault(join(prefAuditDir(vault), validateSlug(prefId)), vault);
 }
+
+/**
+ * Brain lifecycle suite (Feature 1). Append-only audit JSONL for a
+ * single preference on a single device:
+ * `Brain/log/pref-audit/<pref-id>/device[.<deviceId>].jsonl`.
+ *
+ * `shardId` defaults to this device's id (who-wrote-what, Task B), so two
+ * machines editing one preference never append to the same file. The
+ * empty shard id is the un-sharded name inside that directory.
+ *
+ * The stem is fixed rather than the device id alone so the empty shard id
+ * still has a name, and so the shared shard grammar names this file the
+ * same way it names every other ledger's.
+ */
+export function prefAuditPath(
+  vault: string,
+  prefId: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  return ensureInsideVault(
+    join(
+      prefAuditPrefDir(vault, prefId),
+      shardedFileName(PREF_AUDIT_STEM, shardId, PREF_AUDIT_EXT),
+    ),
+    vault,
+  );
+}
+
+/** Extension of every preference-audit shard. */
+export const PREF_AUDIT_EXT = "jsonl";
+
+/**
+ * Fixed base name of every preference-audit shard inside its
+ * per-preference directory. A stem rather than the bare device id so the
+ * legacy empty shard id still yields a name.
+ */
+export const PREF_AUDIT_STEM = "device";
 
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {

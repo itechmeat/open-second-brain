@@ -28,6 +28,13 @@ import { PAGE_LINT_KEY } from "../../src/core/brain/page-lint.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
+/**
+ * Shape of a note-write id, as `noteWriteId` spells it (who-wrote-what,
+ * Task A). Its value carries the instant of the write, so a receipt test
+ * pins the shape rather than a literal.
+ */
+const NOTE_WRITE_ID_RE = /^nw_\d{14}_[0-9a-f]{16}$/;
+
 /** Await `result`, assert it rejected with an MCPError, and return it. */
 async function rejectedMcpError(result: unknown): Promise<MCPError> {
   let thrown: unknown;
@@ -272,17 +279,29 @@ describe("the lint attached to the update / append receipts", () => {
     args: Record<string, unknown>,
   ): Promise<Record<string, unknown>> => (await tool.handler(ctx, args)) as Record<string, unknown>;
 
-  test("a clean update is byte-identical to the receipt that shipped before", async () => {
+  test("a clean update carries the flag, the path and the write id, in that order", async () => {
     seedNote("Notes/Clean.md", "old body", "title: Clean");
     const res = await call(updateTool, { path: "Notes/Clean.md", content: "new body" });
-    expect(JSON.stringify(res)).toBe(JSON.stringify({ updated: true, path: "Notes/Clean.md" }));
+    // The shape is pinned in full so a field cannot arrive unannounced.
+    // `write_id` joined it with the note-write record (who-wrote-what,
+    // Task A) and is the one key whose VALUE cannot be a literal: it is
+    // derived from the instant of the write.
+    expect(Object.keys(res)).toEqual(["updated", "path", "write_id"]);
+    expect(res).toMatchObject({ updated: true, path: "Notes/Clean.md" });
+    expect(res["write_id"]).toMatch(NOTE_WRITE_ID_RE);
+    // An id present means no audit reason is owed, and the lint has
+    // nothing to say about a clean page.
+    expect("audit_reason" in res).toBe(false);
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
 
-  test("a clean append is byte-identical to the receipt that shipped before", async () => {
+  test("a clean append carries the flag, the path and the write id, in that order", async () => {
     seedNote("Notes/CleanA.md", "first", "title: CleanA");
     const res = await call(appendTool, { path: "Notes/CleanA.md", content: "second" });
-    expect(JSON.stringify(res)).toBe(JSON.stringify({ appended: true, path: "Notes/CleanA.md" }));
+    expect(Object.keys(res)).toEqual(["appended", "path", "write_id"]);
+    expect(res).toMatchObject({ appended: true, path: "Notes/CleanA.md" });
+    expect(res["write_id"]).toMatch(NOTE_WRITE_ID_RE);
+    expect("audit_reason" in res).toBe(false);
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
 

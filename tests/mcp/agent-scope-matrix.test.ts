@@ -211,7 +211,7 @@ test("the matrix classifies every tool exactly once", () => {
 });
 
 test("the tool count is unchanged: an argument was added, never a tool", () => {
-  expect(TOOLS.length).toBe(113);
+  expect(TOOLS.length).toBe(114);
 });
 
 test("every argument-scoped surface declares agent_scope in its input schema", () => {

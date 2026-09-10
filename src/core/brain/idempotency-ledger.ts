@@ -15,27 +15,37 @@
  *   - {@link lookupKey} reads the stored record for a key (audit / C6 /
  *     the pre-write dedupe consult the writers perform).
  *
- * Storage mirrors the continuity store's append/list model: month-sharded
- * JSONL under `<vault>/Brain/logs/idempotency/<YYYY-MM>.jsonl`, appended
- * under a per-shard lock. Reads scan every shard because a retry may land
- * in a later month than the original write.
+ * Storage mirrors the continuity store's append/list model: JSONL under
+ * `<vault>/Brain/logs/idempotency/<YYYY-MM>[.<deviceId>].jsonl`, one file
+ * per month per device, appended under a per-file lock. Reads scan every
+ * file because a retry may land in a later month than the original write,
+ * and because a key remembered on one device has to be honoured on
+ * another once Syncthing has delivered its shard.
  *
  * Concurrency boundary (inherited from the continuity model): the
  * check-and-append is atomic within a single shard under its lock. Two
  * genuinely-concurrent FIRST writers of the same key can both observe
  * "absent" and both proceed — a rare race the append-only store does not
- * guard. The primary target — a SEQUENTIAL retry after a crash / double
- * delivery — is fully deduped because the prior write is already durable
- * on disk before the retry runs.
+ * guard, and one the per-device layout does not widen: the lock this
+ * device takes is on the only file this device writes. The primary
+ * target — a SEQUENTIAL retry after a crash / double delivery — is fully
+ * deduped because the prior write is already durable on disk before the
+ * retry runs.
  *
  * The kernel stays deterministic: no LLM, no wall-clock beyond the
  * caller-supplied (or defaulted) `createdAt`.
  */
 
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
+import {
+  listShardedFiles,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "./ledger-shards.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "./paths.ts";
 import { acquireLockSync } from "./sync-lockfile.ts";
 import { isoSecond } from "./time.ts";
@@ -43,6 +53,16 @@ import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** Month-sharded JSONL root, distinct from `Brain/log/` (the human trail). */
 const IDEMPOTENCY_REL = `${BRAIN_ROOT_REL}/logs/idempotency`;
+
+/** Shard base: one file per UTC month, per device. */
+const MONTH_RE = /^\d{4}-\d{2}$/;
+const IDEMPOTENCY_EXT = "jsonl";
+
+/** The ledger's file-name layout, handed to the shared shard grammar. */
+const IDEMPOTENCY_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "\\d{4}-\\d{2}",
+  extensions: Object.freeze([IDEMPOTENCY_EXT]),
+});
 
 /** Hard cap on a client key. Long enough for `<session-id>:<slug>` joins. */
 const KEY_MAX_LEN = 256;
@@ -121,15 +141,43 @@ export function computePayloadHash(fields: Readonly<Record<string, unknown>>): s
   return sha256Hex(canonicalJson(fields));
 }
 
-export function idempotencyLogPath(vault: string, month: string): string {
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`invalid idempotency month: ${month}`);
-  return ensureInsideVault(join(vault, IDEMPOTENCY_REL, `${month}.jsonl`), vault);
+/**
+ * The directory every idempotency shard lives in. Exported so the sweep
+ * that reports Syncthing conflict copies names this ledger's directory
+ * through the module that owns it, rather than re-deriving the path.
+ */
+export function idempotencyLogDir(vault: string): string {
+  return ensureInsideVault(join(vault, IDEMPOTENCY_REL), vault);
 }
 
 /**
- * Look up the stored record for a client key across all month shards.
- * Returns the first-written record for the key (shards read in ascending
- * month order, lines in append order) or `null` when the key is unseen.
+ * One month's shard for one device: `<month>[.<shardId>].jsonl`.
+ *
+ * `shardId` defaults to this device's id, so an append lands in a file no
+ * other device writes. The empty shard id is the legacy un-sharded name,
+ * still read by every lookup and never renamed.
+ */
+export function idempotencyLogPath(
+  vault: string,
+  month: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  if (!MONTH_RE.test(month)) throw new Error(`invalid idempotency month: ${month}`);
+  return ensureInsideVault(
+    join(vault, IDEMPOTENCY_REL, shardedFileName(month, shardId, IDEMPOTENCY_EXT)),
+    vault,
+  );
+}
+
+/**
+ * Look up the stored record for a client key across EVERY shard of every
+ * month. Returns the first-written record for the key (shards read in
+ * ascending file-name order, lines in append order) or `null` when the
+ * key is unseen.
+ *
+ * The scan spans devices on purpose: a key remembered on one machine has
+ * to be honoured on another once Syncthing has delivered its shard, or
+ * the retry this ledger exists to dedupe would go through twice.
  */
 export function lookupKey(vault: string, key: string): IdempotencyRecord | null {
   const normalised = normaliseKey(key);
@@ -157,6 +205,9 @@ export function rememberKey(vault: string, input: RememberKeyInput): RememberKey
   const handle = acquireLockSync(shardPath);
   try {
     // Re-scan under the lock so a same-shard concurrent insert is caught.
+    // The lock is on THIS device's shard - the only file this call can
+    // append to - while the scan still spans every shard, so a key a
+    // synced peer already remembered is honoured here too.
     const existing = lookupKey(vault, key);
     if (existing) {
       return {
@@ -211,13 +262,23 @@ function monthOf(createdAt: string): string {
 }
 
 function readAllRecords(vault: string): IdempotencyRecord[] {
-  const dir = ensureInsideVault(join(vault, IDEMPOTENCY_REL), vault);
-  if (!existsSync(dir)) return [];
+  const dir = idempotencyLogDir(vault);
   const records: IdempotencyRecord[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".jsonl")) continue;
-    const path = ensureInsideVault(join(dir, name), vault);
-    for (const line of readFileSync(path, "utf8").split("\n")) {
+  for (const shard of listShardedFiles(dir, IDEMPOTENCY_GRAMMAR)) {
+    let text: string;
+    try {
+      text = readFileSync(ensureInsideVault(shard.path, vault), "utf8");
+    } catch (err) {
+      // A shard that is not there has nothing to say and is skipped.
+      // Anything else - EACCES, EIO, a directory where a file belongs -
+      // propagates: an unreadable shard read as an empty one makes
+      // `lookupKey` answer "never seen", and a retried write then lands
+      // as a first write. That is the one outcome this ledger exists to
+      // prevent, so "I could not tell" must never resolve to "no".
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+      continue;
+    }
+    for (const line of text.split("\n")) {
       if (!line.trim()) continue;
       try {
         records.push(JSON.parse(line) as IdempotencyRecord);

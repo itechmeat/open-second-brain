@@ -1,9 +1,12 @@
 /**
  * Dashboard-ready metrics sink (link-recall-intelligence, Task 1).
  *
- * One append-only JSONL file per surface under `Brain/metrics/` -
- * the stable on-disk contract the upcoming dashboard plugin reads
- * without importing OSB internals. Every record is one line:
+ * One append-only JSONL file per surface per device under
+ * `Brain/metrics/<surface>[.<deviceId>].jsonl` - the stable on-disk
+ * contract the upcoming dashboard plugin reads without importing Open
+ * Second Brain internals. A reader merges every device's shard of a
+ * surface (who-wrote-what, Task B); the bare name is the shard with the
+ * empty id. Every record is one line:
  *
  *   {"schema":"o2b.metrics.v1","surface":"...","run_at":"...","payload":{...}}
  *
@@ -19,8 +22,15 @@
  * consumers in `docs/metrics.md`.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import {
+  listShardedFiles,
+  literalBase,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+} from "./ledger-shards.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** On-disk schema version stamped on every metric record. */
@@ -28,6 +38,9 @@ export const METRICS_SCHEMA_VERSION = "o2b.metrics.v1";
 
 /** Surface names: lowercase snake_case, max 64 chars. */
 const SURFACE_RE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/** Extension of every metric shard. */
+const METRICS_EXT = "jsonl";
 
 /** ISO-8601 UTC timestamp shape (second or millisecond precision). */
 const ISO_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
@@ -61,13 +74,43 @@ export interface ListMetricsFilter {
   readonly limit?: number;
 }
 
-function metricsDir(vault: string): string {
+/**
+ * The directory every metric shard lives in. Exported so the sweep that
+ * reports Syncthing conflict copies names this ledger's directory through
+ * the module that owns it, rather than re-deriving the path.
+ */
+export function metricsDir(vault: string): string {
   return join(vault, "Brain", "metrics");
 }
 
-function surfacePath(vault: string, surface: string): string {
-  return join(metricsDir(vault), `${surface}.jsonl`);
+/**
+ * This device's shard for one surface: `<surface>[.<deviceId>].jsonl`.
+ * The empty shard id is the legacy un-sharded name, which every read
+ * still merges and no migration renames.
+ */
+function surfacePath(
+  vault: string,
+  surface: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  return join(metricsDir(vault), shardedFileName(surface, shardId, METRICS_EXT));
 }
+
+/**
+ * The name layout of ONE surface's shards. Surface names are validated
+ * `[a-z][a-z0-9_]*` and so carry no dot, but they go in as a literal all
+ * the same: the base is a value, not a shape, and escaping it is what
+ * keeps `index_v2.jsonl` from ever parsing as a shard of `index`.
+ */
+function surfaceGrammar(surface: string): LedgerShardGrammar {
+  return { base: literalBase(surface), extensions: [METRICS_EXT] };
+}
+
+/** The layout of the whole directory, for discovering surfaces. */
+const ANY_SURFACE_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "[a-z][a-z0-9_]{0,63}",
+  extensions: Object.freeze([METRICS_EXT]),
+});
 
 function assertSurface(surface: string): void {
   if (!SURFACE_RE.test(surface)) {
@@ -112,13 +155,12 @@ export function listMetrics(vault: string, filter: ListMetricsFilter = {}): Metr
     assertSurface(filter.surface);
     surfaces = [filter.surface];
   } else {
-    const dir = metricsDir(vault);
-    if (!existsSync(dir)) return [];
-    surfaces = readdirSync(dir)
-      .filter((f) => f.endsWith(".jsonl"))
-      .map((f) => f.slice(0, -".jsonl".length))
-      .filter((s) => SURFACE_RE.test(s))
-      .toSorted();
+    // Every surface that has at least one shard, sharded or not. The
+    // grammar strips a device suffix, so one surface written by three
+    // devices is discovered once.
+    surfaces = [
+      ...new Set(listShardedFiles(metricsDir(vault), ANY_SURFACE_GRAMMAR).map((f) => f.base)),
+    ].toSorted();
   }
 
   const out: Array<{ record: MetricRecord; seq: number }> = [];
@@ -141,29 +183,46 @@ export function listMetrics(vault: string, filter: ListMetricsFilter = {}): Metr
   return filter.limit !== undefined ? records.slice(0, Math.max(0, filter.limit)) : records;
 }
 
+/**
+ * One surface's records across every device shard, in (shard id, line)
+ * order. The shard id orders the merge rather than the file name, so the
+ * legacy un-sharded file - the shard with the empty id - always leads,
+ * and two devices agree on the sequence whatever order Syncthing
+ * delivered their files in.
+ */
 function readSurface(vault: string, surface: string): MetricRecord[] {
-  const path = surfacePath(vault, surface);
-  if (!existsSync(path)) return [];
+  const shards = listShardedFiles(metricsDir(vault), surfaceGrammar(surface)).toSorted((a, b) =>
+    a.shardId < b.shardId ? -1 : a.shardId > b.shardId ? 1 : 0,
+  );
   const out: MetricRecord[] = [];
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (line.trim().length === 0) continue;
+  for (const shard of shards) {
+    let text: string;
     try {
-      const parsed: unknown = JSON.parse(line);
-      if (
-        parsed !== null &&
-        typeof parsed === "object" &&
-        !Array.isArray(parsed) &&
-        typeof (parsed as { schema?: unknown }).schema === "string" &&
-        typeof (parsed as { surface?: unknown }).surface === "string" &&
-        typeof (parsed as { run_at?: unknown }).run_at === "string" &&
-        (parsed as { payload?: unknown }).payload !== null &&
-        typeof (parsed as { payload?: unknown }).payload === "object" &&
-        !Array.isArray((parsed as { payload?: unknown }).payload)
-      ) {
-        out.push(parsed as MetricRecord);
-      }
+      text = readFileSync(shard.path, "utf8");
     } catch {
-      // Fail-soft: a torn line never breaks the metrics read.
+      // Fail-soft: an unreadable shard never breaks the metrics read.
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      if (line.trim().length === 0) continue;
+      try {
+        const parsed: unknown = JSON.parse(line);
+        if (
+          parsed !== null &&
+          typeof parsed === "object" &&
+          !Array.isArray(parsed) &&
+          typeof (parsed as { schema?: unknown }).schema === "string" &&
+          typeof (parsed as { surface?: unknown }).surface === "string" &&
+          typeof (parsed as { run_at?: unknown }).run_at === "string" &&
+          (parsed as { payload?: unknown }).payload !== null &&
+          typeof (parsed as { payload?: unknown }).payload === "object" &&
+          !Array.isArray((parsed as { payload?: unknown }).payload)
+        ) {
+          out.push(parsed as MetricRecord);
+        }
+      } catch {
+        // Fail-soft: a torn line never breaks the metrics read.
+      }
     }
   }
   return out;

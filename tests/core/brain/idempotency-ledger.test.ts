@@ -10,10 +10,19 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
+import { acquireLockSync } from "../../../src/core/brain/sync-lockfile.ts";
 import {
   computePayloadHash,
   idempotencyLogPath,
@@ -117,5 +126,113 @@ describe("idempotency ledger", () => {
     expect(a).toBe(b);
     const c = computePayloadHash({ topic: "t", principle: "different", scope: "s" });
     expect(c).not.toBe(a);
+  });
+});
+
+/**
+ * Per-device shards (who-wrote-what, Task B / t_1814b9bf). A key
+ * remembered on one device must be honoured on another once Syncthing
+ * has delivered its shard - and neither device may write the other's
+ * file.
+ */
+describe("idempotency per-device shards", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  let configHome: string;
+
+  beforeEach(() => {
+    configHome = mkdtempSync(join(tmpdir(), "o2b-idempotency-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    savedEnv["OPEN_SECOND_BRAIN_CONFIG"] = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    savedEnv["O2B_DEVICE_ID"] = process.env["O2B_DEVICE_ID"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    delete process.env["O2B_DEVICE_ID"];
+    writeFileSync(configPath, `vault: ${vault}\ndevice_id: "testdev1"\n`, "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(configHome, { recursive: true, force: true });
+    for (const key of ["OPEN_SECOND_BRAIN_CONFIG", "O2B_DEVICE_ID"]) {
+      const value = savedEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  test("a device with an id writes its own shard and never the bare file", () => {
+    rememberKey(vault, { key: "k", contentHash: "hash-a", createdAt: "2026-05-14T10:00:00Z" });
+    expect(existsSync(idempotencyLogPath(vault, "2026-05", "testdev1"))).toBe(true);
+    expect(existsSync(idempotencyLogPath(vault, "2026-05", ""))).toBe(false);
+  });
+
+  test("lookupKey finds a key another device remembered", () => {
+    const path = idempotencyLogPath(vault, "2026-05", "devb");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ key: "remote", contentHash: "hash-r", createdAt: "2026-05-14T09:00:00Z" })}\n`,
+      "utf8",
+    );
+    expect(lookupKey(vault, "remote")?.contentHash).toBe("hash-r");
+  });
+
+  test("a key another device remembered dedupes this device's write", () => {
+    const path = idempotencyLogPath(vault, "2026-05", "devb");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ key: "shared", contentHash: "hash-a", createdAt: "2026-05-14T09:00:00Z" })}\n`,
+      "utf8",
+    );
+    const r = rememberKey(vault, {
+      key: "shared",
+      contentHash: "hash-a",
+      createdAt: "2026-05-14T10:00:00Z",
+    });
+    expect(r.status).toBe(REMEMBER_KEY_STATUS.duplicate_match);
+    expect(existsSync(idempotencyLogPath(vault, "2026-05", "testdev1"))).toBe(false);
+  });
+
+  test("a sync-conflict copy is not a shard and is never read", () => {
+    const dir = dirname(idempotencyLogPath(vault, "2026-05", ""));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "2026-05.sync-conflict-20260514-120000-ABCDEFG.jsonl"),
+      `${JSON.stringify({ key: "conflict", contentHash: "hash-c", createdAt: "2026-05-14T09:00:00Z" })}\n`,
+      "utf8",
+    );
+    expect(lookupKey(vault, "conflict")).toBeNull();
+  });
+
+  /**
+   * A shard this process cannot read is not an empty shard. Answering
+   * "never seen" for one turns a retried write into a first write, which
+   * is the one outcome this ledger exists to prevent.
+   */
+  test.skipIf(process.getuid?.() === 0)("an unreadable shard is refused, not read as empty", () => {
+    const path = idempotencyLogPath(vault, "2026-05", "testdev1");
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(
+      path,
+      `${JSON.stringify({ key: "k", contentHash: "hash-a", createdAt: "2026-05-14T09:00:00Z" })}\n`,
+      "utf8",
+    );
+    chmodSync(path, 0o000);
+    try {
+      expect(() => lookupKey(vault, "k")).toThrow(/EACCES|EPERM/);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
+
+  test("the lock this device takes is on its own shard", () => {
+    const own = idempotencyLogPath(vault, "2026-05", "testdev1");
+    const handle = acquireLockSync(own);
+    try {
+      expect(() =>
+        rememberKey(vault, { key: "k", contentHash: "hash-a", createdAt: "2026-05-14T10:00:00Z" }),
+      ).toThrow("lock busy");
+    } finally {
+      handle.release();
+    }
   });
 });

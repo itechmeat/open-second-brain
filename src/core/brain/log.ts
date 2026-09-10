@@ -28,6 +28,14 @@
  * `agent` one: the server-derived channel of the process that wrote it
  * (`src/core/origin-channel.ts`). Events written before that shipped
  * carry no such bullet and are never rewritten to add one.
+ *
+ * Every appended JSONL row also carries a per-shard hash chain
+ * ({@link LOG_CHAIN_FIELDS}, who-wrote-what Task E): once the log is the
+ * attribution record for every write, a line someone deleted or edited
+ * has to be detectable. The markdown twin is a derived rendering of the
+ * same events and is deliberately NOT chained - a human-editable view is
+ * the wrong thing to hold to a hash, and the JSONL sidecar is the
+ * machine-primary surface every reader already prefers.
  */
 
 import { existsSync, mkdirSync, readFileSync } from "node:fs";
@@ -35,6 +43,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { canonicalJson, sha256Hex } from "../integrity/digest.ts";
 import {
   brainDirsForWrite,
   logPath,
@@ -42,7 +51,9 @@ import {
   logShardPath,
   validateIsoDate,
 } from "./paths.ts";
-import { isValidDeviceId, resolveDeviceId } from "../config.ts";
+import { WRITE_LANE } from "./freeze-marker.ts";
+import { isValidDeviceId } from "../config.ts";
+import { resolveAppendShardId } from "./ledger-shards.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
@@ -260,20 +271,13 @@ function acquireLogLock(logDir: string): () => void {
 export interface AppendLogEventOptions {
   /**
    * Per-device shard id (Memory Integrity Suite). Defaults to
-   * `resolveDeviceId()` from the device-local config; the empty string
-   * forces the legacy un-sharded `<date>.jsonl` / `<date>.md` pair.
+   * {@link resolveAppendShardId}, which reads the device-local config and
+   * falls back to the empty string - the legacy un-sharded
+   * `<date>.jsonl` / `<date>.md` pair - when the config cannot be
+   * resolved. That fallback and the reasoning behind it now live in
+   * `ledger-shards.ts`, shared with every other append-only ledger.
    *
-   * ANY resolution failure falls back to the legacy pair - a missing HOME,
-   * an unwritable config home, or a config file that is present but cannot
-   * be read (`ConfigReadError`). This caller is the one that absorbs that
-   * error, and it is deliberate rather than an oversight: appending is the
-   * always-on write path behind every hook and every session-capture
-   * event, so failing it turns one bad file mode into a dead session. The
-   * fallback is also not a neutral value invented to look healthy - it is
-   * the documented shard shape the `O2B_DEVICE_ID=""` opt-out selects, it
-   * loses no data, and the log-dir lock still orders concurrent writers.
-   * The condition itself is not swallowed anywhere: every OTHER caller of
-   * `resolveDeviceId` propagates it, and the CLI reports it by name.
+   * Passing the empty string here forces the legacy pair explicitly.
    */
   readonly deviceId?: string;
 }
@@ -300,13 +304,7 @@ export function appendLogEvent(
     }
     deviceId = opts.deviceId;
   } else {
-    try {
-      deviceId = resolveDeviceId();
-    } catch {
-      // Legacy un-sharded pair. See AppendLogEventOptions.deviceId for why
-      // this one caller absorbs what every other caller propagates.
-      deviceId = "";
-    }
+    deviceId = resolveAppendShardId();
   }
   // Parse the timestamp once to extract date + HHMMSS deterministically.
   // We deliberately do not accept Date objects: the caller controls the
@@ -315,7 +313,14 @@ export function appendLogEvent(
   const ts = parseIsoUtc(event.timestamp);
   const path = logShardPath(vault, ts.date, deviceId);
   const jsonlPath = logShardJsonlPath(vault, ts.date, deviceId);
-  const logDir = brainDirsForWrite(vault).log;
+  // The AUDIT lane (who-wrote-what, Task C). This appender is one of the
+  // two callers that skip the freeze check, and it is the reason the lane
+  // exists at all: `freeze`, `unfreeze` and `write-refused` are events
+  // about a frozen vault, so a freeze that silenced the log would erase
+  // the record of itself and of every write it refused. The identity
+  // assertion still runs - a log line landing in the wrong store is as
+  // wrong as a note landing there.
+  const logDir = brainDirsForWrite(vault, undefined, WRITE_LANE.audit).log;
   const topLevelAgent = (event as { agent?: unknown }).agent;
   const withAgent =
     typeof topLevelAgent === "string" && typeof event.body["agent"] !== "string"
@@ -354,8 +359,14 @@ export function appendLogEvent(
     // One row per event. The row is a deterministic projection of the
     // markdown body so the markdown and JSONL representations describe
     // the same event byte-for-byte after JSON.parse.
+    // The chain (Task E) costs nothing extra here: the shard's bytes are
+    // already in hand under the directory lock, so the link to the
+    // previous line is one backward scan of text this append had to read
+    // anyway. Holding the lock is also what makes the link CORRECT - two
+    // appenders reading the same head would otherwise write two lines
+    // claiming the same predecessor.
     const existingJsonl = existsSync(jsonlPath) ? readFileSync(jsonlPath, "utf8") : "";
-    const line = renderJsonlLine(diskEvent);
+    const line = renderJsonlLine(diskEvent, lastChainHash(existingJsonl));
     const nextJsonl =
       existingJsonl === "" ? `${line}\n` : `${existingJsonl.replace(/\s+$/, "")}\n${line}\n`;
     atomicWriteFileSync(jsonlPath, nextJsonl);
@@ -426,22 +437,106 @@ function renderEventBlock(event: BrainLogEntry, hms: string): string {
 }
 
 /**
- * Render the JSONL projection of an event (§23, v0.10.8). The row
- * shape is `{ ts, kind, payload }` where `payload` is a one-to-one map
+ * Render the JSONL projection of an event (§23, v0.10.8; chained by
+ * who-wrote-what Task E). The row shape is
+ * `{ ts, kind, payload, prev, h }` where `payload` is a one-to-one map
  * of the markdown body bullets. Array bullets become JSON arrays;
  * scalar bullets become JSON strings. The function never sorts keys,
- * so byte-identical inputs produce byte-identical rows.
+ * so byte-identical inputs plus a byte-identical `prev` produce
+ * byte-identical rows.
+ *
+ * The chain fields come LAST so the projection the readers have always
+ * consumed still reads as the head of the row, and `readJsonl` ignores
+ * them entirely - the chain is an audit surface, never a read gate.
  */
-function renderJsonlLine(event: BrainLogEntry): string {
+function renderJsonlLine(event: BrainLogEntry, prev: string | null): string {
   const payload: Record<string, string | ReadonlyArray<string>> = {};
   for (const [key, value] of Object.entries(event.body)) {
     payload[key] = value;
   }
+  const ts = event.timestamp;
+  const kind: string = event.eventType;
   return JSON.stringify({
-    ts: event.timestamp,
-    kind: event.eventType,
+    ts,
+    kind,
     payload,
+    [LOG_CHAIN_FIELDS.prev]: prev,
+    [LOG_CHAIN_FIELDS.h]: logChainHash(prev, ts, kind, payload),
   });
+}
+
+// ----- The per-shard hash chain ---------------------------------------------
+
+/**
+ * The two chain-carrying keys of a JSONL log row, named once because
+ * three surfaces spell them: the renderer above, the head scanner
+ * below, and the verifier in `log-chain.ts`.
+ *
+ * They are the ONLY keys the chain adds. Everything else a row carries
+ * is hashed, so a field a future writer adds to the projection is
+ * covered by the chain automatically.
+ */
+export const LOG_CHAIN_FIELDS = Object.freeze({
+  /** The preceding chained line's {@link LOG_CHAIN_FIELDS.h}, `null` at genesis. */
+  prev: "prev",
+  /** This line's chain hash. */
+  h: "h",
+} as const);
+
+/**
+ * The chain hash a row carries: sha256 over the canonical JSON of its
+ * link plus its whole projection.
+ *
+ * `prev` is inside the hash rather than beside it, which is what makes
+ * the structure a chain: editing any earlier line changes every later
+ * hash, so a tampered history cannot be re-linked without rewriting the
+ * whole shard from the edit forward.
+ *
+ * Defined here rather than in `log-chain.ts` even though the verifier is
+ * that module's subject: the appender needs it, `log-chain.ts` needs the
+ * shard listing from `log-jsonl.ts`, and `log-jsonl.ts` needs this
+ * module's parser - so a hash living with the verifier would close an
+ * import cycle. `log-chain.ts` re-exports it, so callers reading about
+ * the chain find it where the design puts it.
+ */
+export function logChainHash(
+  prev: string | null,
+  ts: string,
+  kind: string,
+  payload: Readonly<Record<string, string | ReadonlyArray<string>>>,
+): string {
+  return sha256Hex(canonicalJson({ prev, ts, kind, payload }));
+}
+
+/**
+ * The chain head of a shard already read into memory: the `h` of the
+ * LAST line that carries one, or `null` when no line does.
+ *
+ * Scanned from the end and stopped at the first hit, so an append costs
+ * one JSON parse rather than one per line of the day. Lines that carry
+ * no `h` are the pre-chain history of a vault that upgraded mid-day;
+ * they are skipped rather than treated as a break, and the first chained
+ * line written after them anchors the shard's chain with `prev: null`.
+ * A line that will not parse is skipped for the same reason - the
+ * appender's job is to link to the newest link that exists, and naming
+ * the damage is the verifier's.
+ */
+function lastChainHash(jsonl: string): string | null {
+  const lines = jsonl.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.trim() === "") continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (parsed === null || typeof parsed !== "object") continue;
+    const h = (parsed as Record<string, unknown>)[LOG_CHAIN_FIELDS.h];
+    if (typeof h === "string" && h !== "") return h;
+  }
+  return null;
 }
 
 // ----- Bullet block parser --------------------------------------------------

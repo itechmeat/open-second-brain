@@ -187,6 +187,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "embedding-model-sunset-announced",
   "entity-label-malformed",
   "entity-quote-variant-collision",
+  "log-chain-broken",
   "low-evidence-confirmed",
   "orphan-evidence",
   "principle-corrupted",
@@ -198,6 +199,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "sync-conflict-log",
   "tier-drift",
   "topic-key-collision",
+  "vault-frozen",
   "vault-walk-entry-skipped",
 ];
 

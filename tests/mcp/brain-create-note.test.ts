@@ -21,6 +21,13 @@ import { WRITE_BINDING_REFUSED_CODE } from "../../src/core/write-binding/index.t
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
+/**
+ * Shape of a note-write id, as `noteWriteId` spells it (who-wrote-what,
+ * Task A). Its value carries the instant of the write, so a receipt test
+ * pins the shape rather than a literal.
+ */
+const NOTE_WRITE_ID_RE = /^nw_\d{14}_[0-9a-f]{16}$/;
+
 let vault: string;
 let configHome: string;
 let ctx: ServerContext;
@@ -246,15 +253,19 @@ describe("brain_create_note - the lint attached to the receipt", () => {
   const call = async (args: Record<string, unknown>): Promise<Record<string, unknown>> =>
     (await handler(ctx, args)) as Record<string, unknown>;
 
-  test("a clean write is byte-identical to the receipt that shipped before", async () => {
+  test("a clean write carries the flags, the path and the write id", async () => {
     const res = await call({
       path: "Notes/Clean.md",
       frontmatter: { title: "Clean" },
       content: "plain prose, no links",
     });
-    expect(JSON.stringify(res)).toBe(
-      JSON.stringify({ created: true, outcome: "created", path: "Notes/Clean.md" }),
-    );
+    expect(Object.keys(res)).toEqual(["created", "outcome", "path", "write_id"]);
+    expect(res).toMatchObject({ created: true, outcome: "created", path: "Notes/Clean.md" });
+    // `write_id` joined the receipt with the note-write record
+    // (who-wrote-what, Task A); its value is derived from the instant of
+    // the write, so the shape is what can be pinned.
+    expect(res["write_id"]).toMatch(NOTE_WRITE_ID_RE);
+    expect("audit_reason" in res).toBe(false);
     expect(PAGE_LINT_KEY in res).toBe(false);
   });
 

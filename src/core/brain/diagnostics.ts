@@ -471,6 +471,40 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // doctor check would make the census follow the import back and
         // read every registry entry below as a doctor code. Same reason
         // `recall-channel-silent` is a literal here.
+        // The vault carries a freeze marker. Spelled as a literal for
+        // the same reason `recovery-point-stale` below is: importing a
+        // `*_CODE` identifier from this module into a doctor check would
+        // make the exit census follow the import back and read every
+        // registry entry here as a doctor code.
+        //
+        // `autoRepairable: false` is load-bearing rather than a default.
+        // A freeze is an instruction, not a defect, and a repair pass
+        // that lifted one would be overruling the operator who set it
+        // from a machine they may not be sitting at.
+        code: "vault-frozen",
+        issueClass: "vault frozen: every content write is refused",
+        nextCommand: "o2b brain unfreeze",
+        autoRepairable: false,
+      },
+      {
+        // A shard of the Brain log stopped linking up. Spelled as a
+        // literal for the same reason `vault-frozen` above is: importing
+        // a `*_CODE` identifier from this module into a doctor check
+        // would make the exit census follow the import back and read
+        // every registry entry here as a doctor code.
+        //
+        // The exit is the verifier rather than a repair, and
+        // `autoRepairable: false` is the whole point rather than a
+        // default: the only way to make a broken chain verify is to
+        // rewrite the history it records, which is precisely the act the
+        // chain exists to detect. What an operator can do is SEE the
+        // damage across every shard, which is what the verb prints.
+        code: "log-chain-broken",
+        issueClass: "Brain log shard whose hash chain does not hold",
+        nextCommand: "o2b brain log verify",
+        autoRepairable: false,
+      },
+      {
         code: "recovery-point-stale",
         issueClass: "newest recovery point older than the liveness window",
         nextCommand: "o2b brain snapshot log",

@@ -1,8 +1,16 @@
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { originChannelStamp } from "../../origin-channel.ts";
+import {
+  listShardedFiles,
+  mergeShardedRows,
+  resolveAppendShardId,
+  shardedFileName,
+  type LedgerShardGrammar,
+  type ShardedRow,
+} from "../ledger-shards.ts";
 import { BRAIN_LOG_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
@@ -40,6 +48,20 @@ export interface ContinuityPaginationOptions extends ContinuityRecordFilter {
 
 const CONTINUITY_REL = `${BRAIN_LOG_REL}/continuity`;
 const CURSOR_PREFIX = "offset:";
+
+/** Shard base: one file per UTC month. */
+const MONTH_RE = /^\d{4}-\d{2}$/;
+const CONTINUITY_EXT = "jsonl";
+
+/**
+ * The ledger's file-name layout, handed to the shared shard grammar.
+ * The base is the month, so a sharded name still yields the month the
+ * `since`/`until` range-skip below tests without re-parsing the name.
+ */
+const CONTINUITY_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "\\d{4}-\\d{2}",
+  extensions: Object.freeze([CONTINUITY_EXT]),
+});
 
 /**
  * Canonical UTC ISO-8601 shape: `YYYY-MM-DDTHH:MM:SS[.sss]Z`. A trailing
@@ -93,9 +115,34 @@ export function assertCanonicalCreatedAt(createdAt: unknown): string {
   return createdAt;
 }
 
-export function continuityLogPath(vault: string, month: string): string {
-  if (!/^\d{4}-\d{2}$/.test(month)) throw new Error(`invalid continuity month: ${month}`);
-  return ensureInsideVault(join(vault, CONTINUITY_REL, `${month}.jsonl`), vault);
+/**
+ * The directory every continuity shard lives in. Exported so the sweep
+ * that reports Syncthing conflict copies names this ledger's directory
+ * through the module that owns it, rather than re-deriving the path.
+ */
+export function continuityLogDir(vault: string): string {
+  return ensureInsideVault(join(vault, CONTINUITY_REL), vault);
+}
+
+/**
+ * One month's shard for one device: `<month>[.<shardId>].jsonl`.
+ *
+ * `shardId` defaults to this device's id, so an append lands in a file no
+ * other device writes and Syncthing never has two versions of one month
+ * to reconcile. The empty shard id is the legacy un-sharded name, which
+ * every reader still merges and no migration renames - a vault whose
+ * device id resolves empty keeps writing exactly the file it always did.
+ */
+export function continuityLogPath(
+  vault: string,
+  month: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  if (!MONTH_RE.test(month)) throw new Error(`invalid continuity month: ${month}`);
+  return ensureInsideVault(
+    join(vault, CONTINUITY_REL, shardedFileName(month, shardId, CONTINUITY_EXT)),
+    vault,
+  );
 }
 
 export function appendContinuityRecord(
@@ -308,54 +355,63 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
 }
 
 /**
- * Read every stored record, optionally skipping whole month shards that
- * a `since`/`until` filter proves cannot contribute a matching record.
+ * Read every stored record across every device shard, optionally skipping
+ * whole months that a `since`/`until` filter proves cannot contribute a
+ * matching record.
  *
- * Shards are named `YYYY-MM.jsonl`, so the shard month is a 7-char prefix
- * of every record's `createdAt` inside it. A shard whose month sorts
- * strictly before `since`'s month can only hold records with
- * `createdAt < since` (rejected by {@link matches}); one whose month sorts
- * strictly after `until`'s month can only hold `createdAt > until`. Both
- * are skipped without opening the file. The boundary months (equal to
- * `since`/`until`'s month) are still read in full, so the returned set is
- * byte-identical to reading everything and letting `matches` filter -
- * this only avoids reading shards that would contribute nothing. Grows
- * the read cost with the queried window, not the whole log history.
+ * Shards are named `<month>[.<deviceId>].jsonl`, and the shared grammar
+ * hands back the month as the parsed base - so the range-skip below tests
+ * the month whether or not a device suffix is present. A month whose
+ * shards sort strictly before `since`'s month can only hold records with
+ * `createdAt < since` (rejected by {@link matches}); one strictly after
+ * `until`'s month can only hold `createdAt > until`. Both are skipped
+ * without opening the file. The boundary months are still read in full,
+ * so the returned set is identical to reading everything and letting
+ * `matches` filter - this only avoids reading files that would contribute
+ * nothing. Grows the read cost with the queried window, not the whole
+ * history.
+ *
+ * Order is (`createdAt`, shard id, `id`). The shard id is the tie-break
+ * every device agrees on regardless of Syncthing arrival order; `id` is
+ * the last resort, and because it is a content hash a single-shard vault
+ * reads back in exactly the order it always did.
  */
 function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): ContinuityRecord[] {
-  const dir = ensureInsideVault(join(vault, CONTINUITY_REL), vault);
-  if (!existsSync(dir)) return [];
+  const dir = continuityLogDir(vault);
   const sinceMonth = filter.since ? filter.since.slice(0, 7) : undefined;
   const untilMonth = filter.until ? filter.until.slice(0, 7) : undefined;
-  const records: ContinuityRecord[] = [];
-  for (const name of readdirSync(dir).toSorted()) {
-    if (!name.endsWith(".jsonl")) continue;
-    const month = name.slice(0, -".jsonl".length);
-    // Only a canonical YYYY-MM shard has a month prefix we can range-skip
-    // on; any other name is read in full to stay byte-identical.
-    if (/^\d{4}-\d{2}$/.test(month)) {
-      if (sinceMonth !== undefined && month < sinceMonth) continue;
-      if (untilMonth !== undefined && month > untilMonth) continue;
-    }
-    const path = ensureInsideVault(join(dir, name), vault);
-    let st;
+  const rows: Array<ShardedRow<ContinuityRecord>> = [];
+  for (const shard of listShardedFiles(dir, CONTINUITY_GRAMMAR)) {
+    if (sinceMonth !== undefined && shard.base < sinceMonth) continue;
+    if (untilMonth !== undefined && shard.base > untilMonth) continue;
+    let text: string;
     try {
-      st = statSync(path);
-    } catch {
+      text = readFileSync(ensureInsideVault(shard.path, vault), "utf8");
+    } catch (err) {
+      // A shard listed a moment ago and gone now (a concurrent prune, a
+      // sync delete) contributes nothing and is skipped. Anything else -
+      // EACCES, EIO - propagates: a shard silently dropped shortens the
+      // history without saying so, and a caller cannot tell a short
+      // history from a complete one.
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
       continue;
     }
-    if (!st.isFile()) continue;
-    for (const line of readFileSync(path, "utf8").split("\n")) {
-      if (!line.trim()) continue;
+    let line = 0;
+    for (const raw of text.split("\n")) {
+      if (!raw.trim()) continue;
       try {
-        records.push(JSON.parse(line) as ContinuityRecord);
+        rows.push({ value: JSON.parse(raw) as ContinuityRecord, shardId: shard.shardId, line });
       } catch {
         continue;
       }
+      line++;
     }
   }
-  records.sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id));
-  return records;
+  return mergeShardedRows(
+    rows,
+    (record) => record.createdAt,
+    (record) => record.id,
+  );
 }
 
 function matches(record: ContinuityRecord, filter: ContinuityRecordFilter): boolean {

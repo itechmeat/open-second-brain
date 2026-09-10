@@ -75,6 +75,14 @@ import {
 } from "../../integrity/degradation.ts";
 import type { GitWorkspaceIdentity } from "../git/reader.ts";
 import { computePayloadHash } from "../idempotency-ledger.ts";
+import {
+  listShardedFiles,
+  literalBase,
+  mergeShardedRows,
+  resolveAppendShardId,
+  shardedFileName,
+  type ShardedRow,
+} from "../ledger-shards.ts";
 import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
 import { acquireLockSync, type LockHandle } from "../sync-lockfile.ts";
 import { assertVaultIdentityForWrite, VaultIdentityMismatchError } from "../vault-identity.ts";
@@ -119,8 +127,15 @@ const GAP_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const GAP_LOCK_STALE_MS = 60_000;
 
 const STATE_DIR_REL = posix.join(BRAIN_ROOT_REL, ".state");
-const LEDGER_FILE = "session-lineage.jsonl";
-const GAPS_FILE = "session-lineage-gaps.jsonl";
+/**
+ * Shard bases. The two are distinct stems rather than one stem with a
+ * suffix, so `session-lineage-gaps.jsonl` can never parse as a shard of
+ * `session-lineage`: the grammar splits on a dot, and `-gaps` is part of
+ * the base.
+ */
+const LEDGER_BASE = "session-lineage";
+const GAPS_BASE = "session-lineage-gaps";
+const LINEAGE_EXT = "jsonl";
 
 /** Site recorded on every notice this module emits. */
 const LEDGER_SITE = "brain.lineage.ledger";
@@ -248,17 +263,81 @@ export function brainStateDirPath(vault: string): string {
   return ensureInsideVault(join(vault, STATE_DIR_REL), vault);
 }
 
-export function sessionLineageLedgerPath(vault: string): string {
-  return ensureInsideVault(join(vault, STATE_DIR_REL, LEDGER_FILE), vault);
+/**
+ * This device's ledger shard: `session-lineage[.<deviceId>].jsonl`.
+ *
+ * One chain and one sequence per FILE, so a per-device shard is a
+ * per-device chain (who-wrote-what, Task B) and two machines syncing one
+ * vault never rewrite each other's compaction. The empty shard id is the
+ * legacy un-sharded name, still merged by every read and never renamed.
+ */
+export function sessionLineageLedgerPath(
+  vault: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  return ensureInsideVault(
+    join(vault, STATE_DIR_REL, shardedFileName(LEDGER_BASE, shardId, LINEAGE_EXT)),
+    vault,
+  );
 }
 
 /**
  * Sidecar holding observations that were never appended. Lives beside
  * the ledger under the same dot-directory, which is excluded from vault
  * walking and search indexing - a diagnostic must not become a note.
+ *
+ * Shards with the ledger: each device bounds and ages its OWN sidecar,
+ * carrying its own discard accumulator, and the report sums them. The
+ * sidecar's trim lock therefore never crosses a device boundary either.
  */
-export function sessionLineageGapsPath(vault: string): string {
-  return ensureInsideVault(join(vault, STATE_DIR_REL, GAPS_FILE), vault);
+export function sessionLineageGapsPath(
+  vault: string,
+  shardId: string = resolveAppendShardId(),
+): string {
+  return ensureInsideVault(
+    join(vault, STATE_DIR_REL, shardedFileName(GAPS_BASE, shardId, LINEAGE_EXT)),
+    vault,
+  );
+}
+
+/** One shard of the ledger (or of its gap sidecar) as found on disk. */
+export interface LineageShardFile {
+  /** Empty string for the legacy un-sharded file. */
+  readonly shardId: string;
+  readonly path: string;
+}
+
+/**
+ * Every ledger shard under `Brain/.state/`, ordered by shard id so the
+ * legacy file leads and two devices agree on the sequence whatever order
+ * Syncthing delivered their files in. Fail-soft: a state directory that
+ * cannot be listed yields no shards, matching every other read here.
+ */
+export function listSessionLineageShards(vault: string): LineageShardFile[] {
+  return listLineageShards(vault, LEDGER_BASE);
+}
+
+/** The gap sidecar's shards. See {@link listSessionLineageShards}. */
+export function listSessionLineageGapShards(vault: string): LineageShardFile[] {
+  return listLineageShards(vault, GAPS_BASE);
+}
+
+function listLineageShards(vault: string, base: string): LineageShardFile[] {
+  let dir: string;
+  try {
+    dir = brainStateDirPath(vault);
+  } catch {
+    return [];
+  }
+  let files;
+  try {
+    files = listShardedFiles(dir, { base: literalBase(base), extensions: [LINEAGE_EXT] });
+  } catch {
+    return [];
+  }
+  return files
+    .map((file) => ({ shardId: file.shardId, path: file.path }))
+    .toSorted((a, b) => (a.shardId < b.shardId ? -1 : a.shardId > b.shardId ? 1 : 0));
 }
 
 export interface LedgerLine {
@@ -473,20 +552,30 @@ export interface LineageLedgerScan {
  * needs line order and the chain fields that per-session state folds
  * away.
  */
-export function scanLineageLedger(vault: string): LineageLedgerScan {
-  const absent = Object.freeze({
+export function scanLineageLedger(
+  vault: string,
+  shardId: string = resolveAppendShardId(),
+): LineageLedgerScan {
+  let path: string;
+  try {
+    path = sessionLineageLedgerPath(vault, shardId);
+  } catch {
+    return absentScan();
+  }
+  return scanLineageShard(path);
+}
+
+function absentScan(): LineageLedgerScan {
+  return Object.freeze({
     exists: false,
     readable: false,
     lines: Object.freeze([]),
     skippedLineNumbers: Object.freeze([]),
   });
-  let path: string;
-  try {
-    path = sessionLineageLedgerPath(vault);
-  } catch {
-    return absent;
-  }
-  if (!existsSync(path)) return absent;
+}
+
+function scanLineageShard(path: string): LineageLedgerScan {
+  if (!existsSync(path)) return absentScan();
   let raw: string;
   try {
     raw = readFileSync(path, "utf8");
@@ -505,6 +594,22 @@ export function scanLineageLedger(vault: string): LineageLedgerScan {
     lines: Object.freeze(parsed.lines),
     skippedLineNumbers: Object.freeze(parsed.skippedLineNumbers),
   });
+}
+
+/** One shard's scan, together with which shard it was. */
+export interface LineageLedgerShardScan extends LineageLedgerScan, LineageShardFile {}
+
+/**
+ * Scan EVERY ledger shard, in shard-id order. The unit of the chain is
+ * one file, so the verifier walks these one at a time and reports each
+ * by its own path; a break in one device's shard says nothing about
+ * another's.
+ */
+export function scanLineageLedgerShards(vault: string): LineageLedgerShardScan[] {
+  return listSessionLineageShards(vault).map((shard) => ({
+    ...shard,
+    ...scanLineageShard(shard.path),
+  }));
 }
 
 /** The sidecar as a whole: what it still lists, and what it no longer can. */
@@ -624,28 +729,42 @@ export function readLineageGapReport(
   opts: ReadLineageGapsOptions = {},
 ): LineageGapReport {
   const nowMs = opts.nowMs ?? Date.now();
-  const empty = Object.freeze({
-    exists: false,
-    records: Object.freeze([]),
-    discarded: 0,
-    truncated: false,
-    total: 0,
-  });
-  let raw: string;
-  try {
-    const path = sessionLineageGapsPath(vault);
-    if (!existsSync(path)) return empty;
-    raw = readFileSync(path, "utf8");
-  } catch {
-    return empty;
+  const rows: Array<ShardedRow<LineageGapRecord>> = [];
+  let exists = false;
+  let discarded = 0;
+  // One sidecar per device, each with its own bound and its own discard
+  // accumulator; the report is their union and the sum of what each
+  // device's trim threw away.
+  for (const shard of listSessionLineageGapShards(vault)) {
+    let raw: string;
+    try {
+      raw = readFileSync(shard.path, "utf8");
+    } catch {
+      continue;
+    }
+    exists = true;
+    const parsed = parseGapFile(raw, nowMs);
+    discarded += parsed.discarded;
+    parsed.records.forEach((value, index) =>
+      rows.push({ value, shardId: shard.shardId, line: index }),
+    );
   }
-  const parsed = parseGapFile(raw, nowMs);
+  if (!exists) {
+    return Object.freeze({
+      exists: false,
+      records: Object.freeze([]),
+      discarded: 0,
+      truncated: false,
+      total: 0,
+    });
+  }
+  const records = mergeShardedRows(rows, (record) => record.at);
   return Object.freeze({
     exists: true,
-    records: Object.freeze(parsed.records),
-    discarded: parsed.discarded,
-    truncated: parsed.discarded > 0,
-    total: parsed.records.length + parsed.discarded,
+    records: Object.freeze(records),
+    discarded,
+    truncated: discarded > 0,
+    total: records.length + discarded,
   });
 }
 
@@ -721,7 +840,16 @@ function buildState(lines: ReadonlyArray<LedgerLine>): Map<string, LineageLedger
  * belong to `verify.ts`, which reports them to the doctor.
  */
 export function readLineageLedger(vault: string): LineageLedgerState {
-  return buildState(scanLineageLedger(vault).lines.map((entry) => entry.line));
+  const rows: Array<ShardedRow<LedgerLine>> = [];
+  for (const shard of scanLineageLedgerShards(vault)) {
+    shard.lines.forEach((entry, index) =>
+      rows.push({ value: entry.line, shardId: shard.shardId, line: index }),
+    );
+  }
+  // (at, shard id, line): every device folds the same observations in the
+  // same order, so per-session state does not depend on which machine is
+  // asking or on when Syncthing delivered the other machine's shard.
+  return buildState(mergeShardedRows(rows, (line) => line.at));
 }
 
 /**

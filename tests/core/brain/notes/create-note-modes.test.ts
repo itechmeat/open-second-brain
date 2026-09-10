@@ -40,6 +40,7 @@ import {
   CreateNoteError,
   type CreateNoteResult,
 } from "../../../../src/core/brain/notes/create-note.ts";
+import { listNoteWrites } from "../../../../src/core/brain/notes/write-log.ts";
 import { applyWriteBatch, WriteBatchError } from "../../../../src/core/brain/write-batch.ts";
 
 /**
@@ -104,8 +105,31 @@ const GOLDEN_BASELINE_FRONTMATTER_KEYS: ReadonlyArray<string> = Object.freeze([
  */
 const GOLDEN_BARE_NOTE = "---\norigin_channel: unset\n---\n\njust a body\n";
 
-/** Result field order the MCP surface and the SDK both read. */
-const GOLDEN_RESULT_KEYS: ReadonlyArray<string> = Object.freeze(["path", "outcome", "created"]);
+/**
+ * Result field order the MCP surface and the SDK both read.
+ *
+ * `write_id` joined it with the note-write record (who-wrote-what,
+ * Task A): every created note now names the log event that attributes
+ * it, or names why there is none. A skipped result deliberately does NOT
+ * grow the field - see {@link GOLDEN_SKIPPED_RESULT_KEYS}.
+ */
+const GOLDEN_RESULT_KEYS: ReadonlyArray<string> = Object.freeze([
+  "path",
+  "outcome",
+  "created",
+  "write_id",
+]);
+
+/**
+ * A skip authored no bytes, so it has no write to attribute. Pinned
+ * separately and WITHOUT `write_id`, because a null id here would read as
+ * a lost audit line for a call that never had one.
+ */
+const GOLDEN_SKIPPED_RESULT_KEYS: ReadonlyArray<string> = Object.freeze([
+  "path",
+  "outcome",
+  "created",
+]);
 
 let vault: string;
 beforeEach(() => {
@@ -214,6 +238,11 @@ describe("createNote - the new options are byte-identical when absent", () => {
     // The result envelope is the one addition this unit makes, and it is
     // pinned in full so a fourth field cannot arrive unannounced.
     expect(Object.keys(res)).toEqual([...GOLDEN_RESULT_KEYS]);
+    // The id is the one the note-write event carries, not a placeholder.
+    // Narrowed on the discriminant rather than cast, because only the
+    // created arm has a write to name.
+    if (res.outcome !== "created") throw new Error("expected a created result");
+    expect(res.write_id).toMatch(/^nw_\d{14}_[0-9a-f]{16}$/);
   });
 });
 
@@ -228,7 +257,17 @@ describe('createNote - ifExists: "skip"', () => {
     expect(res.outcome).toBe("skipped");
     expect(res.created).toBe(false);
     expect(res.path).toBe("Notes/Dup.md");
+    // No `write_id`: nothing was written, so there is nothing to
+    // attribute and no null to mistake for a lost audit line.
+    expect(Object.keys(res)).toEqual([...GOLDEN_SKIPPED_RESULT_KEYS]);
     expect(readFileSync(join(vault, "Notes/Dup.md"), "utf8")).toContain("original");
+  });
+
+  test("a skip appends no note-write event: the log records writes, not calls", () => {
+    createNote(vault, { path: "Notes/Dup.md", content: "original" });
+    expect(listNoteWrites(vault).writes).toHaveLength(1);
+    createNote(vault, { path: "Notes/Dup.md", content: "replacement", ifExists: "skip" });
+    expect(listNoteWrites(vault).writes).toHaveLength(1);
   });
 
   test("a skip leaves the vault tree byte-for-byte unchanged, directories included", () => {

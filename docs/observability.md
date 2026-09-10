@@ -6,11 +6,26 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 
 | Surface | Location | Writer | Format |
 |---|---|---|---|
-| Brain log | `Brain/log/<date>.md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
-| Continuity store | `Brain/log/continuity/<month>.jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
+| Brain log | `Brain/log/<date>[.<device-id>].md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
+| Continuity store | `Brain/log/continuity/<month>[.<device-id>].jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
+| Idempotency ledger | `Brain/logs/idempotency/<month>[.<device-id>].jsonl` | `rememberKey()` in `src/core/brain/idempotency-ledger.ts` | one `key -> content hash` record per line |
+| Preference mutation audit | `Brain/log/pref-audit/<pref-id>/device[.<device-id>].jsonl` (legacy flat `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl` still read) | `appendPrefAudit()` in `src/core/brain/pref-audit.ts` | one JSON record per line |
+| Session lineage ledger | `Brain/.state/session-lineage[.<device-id>].jsonl` (+ `session-lineage-gaps[.<device-id>].jsonl`) | `recordLineageObservation()` in `src/core/brain/lineage/ledger.ts` | one JSON record per line, sequence-numbered and hash-chained per file |
 | Session lifecycle audit | `Brain/log/session-lifecycle/` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |
-| Metrics | `Brain/metrics/<surface>.jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+| Metrics | `Brain/metrics/<surface>[.<device-id>].jsonl` | `appendMetric()` in `src/core/brain/metrics.ts` | one run-level JSON record per line (see `docs/metrics.md`) |
+
+### The per-device shard rule
+
+Every append-only ledger above is one file per period (or per key, or per surface) PER DEVICE. The vault is replicated with Syncthing, and two machines appending to one file inside a single sync window produce a `.sync-conflict-*` copy that no reader merges — so the rows split silently across two files. The shard suffix removes the contention instead of resolving it after the fact: a device only ever appends to the file its own id names.
+
+The grammar is `<base>[.<device-id>].<ext>`, and it lives in exactly one place, `src/core/brain/ledger-shards.ts`. The device id is the lowercase slug `resolveDeviceId()` produces (`src/core/config.ts`), which is device-local config and never synced. **A file with no device suffix is the shard with the EMPTY id**: legacy history stays readable, no migration renames anything, and a vault whose device id resolves empty (`O2B_DEVICE_ID=""`, or a config that cannot be read) keeps writing exactly the bytes it always did.
+
+Every reader merges every shard it finds, in the one order all devices agree on: **the ledger's own sort key, then the shard id, then position within the shard**. The shard id is the tie-break rather than the arrival order because arrival order is precisely what differs between two Syncthing peers — so two machines reading the same set of shards return the same sequence. The continuity store adds its content-hash record id as a last resort after the shard id, which is what keeps a single-shard vault reading back in exactly the order it did before sharding existed.
+
+Two names are never shards. A `*.sync-conflict-*` copy is excluded from every listing even when its middle segment fits the shard-id shape (the `sync-conflict` prefix is reserved in the device-id validator for the same reason), and `o2b brain doctor` reports any leftover copy under any ledger directory as `sync-conflict-log`, naming the directory so the union+dedup merge has an address. A name whose base does not match the ledger's own layout is not that ledger's file at all — bases go into the grammar as patterns, or as escaped literals where the base is a value (a preference id may legitimately contain a dot).
+
+The session lineage ledger is the one with an extra invariant: its sequence numbers and hash chain are per FILE, so a per-device shard is a per-device chain, compaction is per shard, and `verifyLineageLedger` verifies each shard separately and reports each finding under that shard's own path. A break in one machine's ledger says nothing about another's.
 
 The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (whether the kernel handed the agent a byte-stable, cache-eligible preamble across a generation pass), never a provider's cache-hit rate the kernel cannot observe. It stores only the SHA-256 hash and length of the prefix, never the raw prompt - the same payload-safety rule as `generation_report`. See `docs/metrics.md`.
 
@@ -23,9 +38,63 @@ The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (
 | `dream`, `promote`, `retire`, `noted-redundant`, `signal-suppressed`, `skip-corrupted-frontmatter`, `reconcile` | the deterministic learning pass runs |
 | `feedback`, `apply-evidence`, `force-confirmed`, `reject` | a taste signal or evidence event is recorded |
 | `pin`, `unpin`, `rollback`, `merge`, `upgrade` | operator-facing vault maintenance |
+| `freeze`, `unfreeze` | an operator stopped or reopened the content lane for every device that syncs the vault (`o2b brain freeze` / `o2b brain unfreeze`). One event per real transition only - a second freeze, or an unfreeze on an open vault, writes nothing. `freeze` carries the `reason` and the `device_id` it was set from; `unfreeze` carries the `frozen_at`, `by` and `reason` read off the marker before it was removed, which is the only place they survive the file |
+| `write-refused` | a write was refused because the vault is frozen. Appended at the MCP tool boundary - the guard that refuses sits below the log module and cannot append without closing an import cycle - one per refused call, carrying the `tool`, the `agent` and the marker's `reason`. The Brain log itself keeps writing while frozen (the audit write lane, `WRITE_LANE.audit` in `src/core/brain/freeze-marker.ts`), because a freeze that silenced the log would erase the record of itself |
 | `scan-inline`, `import-session`, `import-claude-memory` | capture and import operations |
 | `note` | a narrative milestone is recorded (`brain_note`) |
+| `note-write` | a vault note is created, updated, appended to, or reverted |
 | `session-lifecycle` | a captured lifecycle event also produced Brain writes |
+
+### Note writes
+
+Every note mutation funnels through two seams - `createNote` and the write-batch kernel - and each one appends exactly ONE `note-write` event. The payload is all strings, because the log payload contract admits `string | string[]` and nothing else:
+
+| Field | What it holds |
+|---|---|
+| `write_id` | `nw_<14 timestamp digits>_<16 hex>`, derived from the event body, so two devices that record the same write agree on its id |
+| `op` | `create`, `update`, `append`, or `revert` (`NOTE_WRITE_OP`) |
+| `target` | vault-relative POSIX path of the note |
+| `hash_before` | sha-256 of the bytes replaced, or the literal `absent` when the target did not exist - deliberately not the sha-256 of zero bytes, which an empty FILE would also produce |
+| `hash_after` | sha-256 of the bytes now on disk, or the same literal `absent` when the write left no file - which only a `revert` that removes a note the selected writes created produces, paired with `bytes_after: 0` |
+| `bytes_before` / `bytes_after` | byte sizes, rendered as decimal strings |
+| `agent` | `resolveAgentName()` against the config the writing surface runs under; caller-asserted by construction, as `src/core/write-binding/index.ts` states |
+
+The device is NOT a payload field: it rides on the log shard name exactly as it does for every other event, and `origin_channel` is stamped by the appender. `listNoteWrites` (`src/core/brain/notes/write-log.ts`) reads the record back and reports the shard as the `device`, the empty string being the legacy un-sharded log rather than an unknown machine. `o2b brain writes` and the `brain_writes` MCP tool are the two surfaces over it, and `brain_agent_query --kind note` answers "which notes did this agent touch" off the same events.
+
+**Order, and the gap the receipt names.** The bytes are written FIRST and the event appended second, so a log failure never fails a write that has already landed - the snapshot-event precedent, with the silence removed. `recordNoteWrite` never throws: it returns `write_id: null` with an `audit_reason`, and every note-write result and MCP receipt carries both. A skipped create (`if_exists: "skip"`) authored no bytes, so it records nothing and carries no `write_id` at all.
+
+**Before-image store.** The bytes an update or append replaced are kept at `Brain/.state/write-images/<sha256>`, written before the atomic write and skipped when an image of that content already exists - so a note toggled between two states costs two files, not two per write. The store is a `STATE_SURFACES` row inside the snapshot region; `o2b brain writes prune-images [--older-than-days N] [--dry-run]` bounds it by file age, default 30 days (`WRITE_IMAGE_RETENTION_DAYS`). An image is a copy of note content the snapshot region already archives, so removing one loses no content - it only narrows how far back a revert can reach, which a revert plan reports by name.
+
+**Revert.** `o2b brain writes revert (--agent A | --device D | --path P) [--since --until]` reads the same events back and plans what undoing them would do; `brain_writes` action `plan_revert` returns the same plan and never applies it. A selector naming none of agent, device or path is refused by name (`unbounded_selector`): a time window alone selects every write by every agent on every machine, which is a vault rollback and has its own verb. Per target, over the selected writes S (oldest..newest) and every recorded write A on that target:
+
+| Verdict | When |
+|---|---|
+| `refuse` / `unrecorded` | the current bytes cannot be read at all, so no drift verdict is possible |
+| `refuse` / `drift` | sha-256 of the bytes on disk is not the `hash_after` of the newest write in S - including the target being gone when it should be there |
+| `refuse` / `interleaved` | a write in `A \ S` sits between the oldest and newest write in S **in the merged total order** - `(timestamp, shard id, line)`, the order `readLogDay` already yields. Timestamps are second-precision, so "between" is a position and not a clock comparison: line order inside one shard IS append order, and three writes in one second on one device are perfectly ordered. The one tie that is not evidence is a same-second tie ACROSS shards, where the merge falls back to the shard id - a name, not a clock - and two devices could have written in either order. So a non-selected write sharing a second with a selected write is trusted only when it shares that write's shard; a cross-shard tie is `interleaved` on doubt |
+| `refuse` / `already-reverted` | the target already holds exactly what the revert would produce |
+| `refuse` / `image-missing` | a restore's before-image is not in the store, or no longer hashes to its own name |
+| `delete` | the oldest write in S has `hash_before: absent` AND no write in A precedes it - the selection brought the note into existence |
+| `restore` | otherwise: put back the before-image of the oldest write in S |
+
+A refused target is reported, never skipped, and the plan's digest - `sha256(canonical JSON of { selector, entries })`, deliberately NOT covering `planned_at` - covers refusals too, so an operator who applies a digest applies the plan they read. `--apply <digest>` re-plans from scratch and refuses `digest_mismatch` before any byte moves when the vault changed in between; a plan with no actionable entry is refused `nothing_to_apply`; a frozen vault refuses the whole apply by name before anything is read. Everything that does run goes inside ONE `withDestructiveSnapshot` under the `note-revert` reason, so a revert that half-succeeds still has one recovery point covering the state before all of it. Each restored or deleted target keeps a before-image of the bytes it replaced and is recorded through `recordNoteWrite` with `op: revert` - a delete as `hash_after: absent`, `bytes_after: 0` - which is what makes a revert attributable and itself revertible: reverting the reverting agent puts the bytes back.
+
+### The log chain
+
+Once the log is the attribution record for every write, a line someone deleted or edited has to be detectable. Every JSONL row appended from v1.55.0 on carries two extra keys after `payload`:
+
+- `h` — `sha256(canonical JSON of { prev, ts, kind, payload })`, this row's chain hash;
+- `prev` — the `h` of the previous chained line **in the same shard**, or `null` at that shard's genesis.
+
+`prev` is inside the hash rather than beside it, which is what makes the structure a chain: editing any earlier line changes every later hash, so a tampered history cannot be re-linked without rewriting the whole shard from the edit forward. The appender computes the link from the shard text it already holds under the directory lock, which is also what makes the link correct — two appenders reading the same head would otherwise write two lines claiming the same predecessor.
+
+**One chain per shard.** Two machines append to two files that Syncthing delivers in whatever order it likes, so there is no total order to chain across; the chain's unit is one file and a break in one device's shard says nothing about another's. **The markdown twin is a derived rendering and is NOT chained** — a human-editable view is the wrong thing to hold to a hash, and the JSONL sidecar is the machine-primary surface every reader already prefers.
+
+**Report-only.** `readLogDay` reads `ts`, `kind` and `payload` and nothing else, so a broken shard still yields every event it holds. A log that refused to be read because someone edited it would be a worse outcome than the edit. What the chain buys is that the edit has a name, a file and a line number.
+
+`o2b brain log verify [--json]` walks every shard and reports the first break in each, by path and line: `hash-mismatch` (the line was edited after it was written), `prev-mismatch` (a line between it and its predecessor was removed or reordered), `malformed` (the line carries no usable chain link where the chain had already started). It exits 1 when any shard does not link up. `o2b brain doctor` emits one `log-chain-broken` warning per broken shard with the same next command. Neither repairs anything: the only way to make a broken chain verify is to rewrite the history it records, which is the act the chain exists to detect.
+
+Rows written before the chain shipped carry no `h`. They are counted as **legacy** and are clean while they precede the chain — the first chained line after them anchors the shard with `prev: null`. The same shape *after* a chained line is not history but a line whose links were stripped, and it is reported. The head of a shard is not exempt either: the Brain log never compacts, so a first chained line naming a predecessor means the head of the file was cut off. Sync-conflict copies are excluded from verification — they are the doctor's separate `sync-conflict-log` finding, and their chain never held by construction.
 
 ## Continuity record kinds
 
