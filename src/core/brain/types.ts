@@ -652,6 +652,13 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
    * archive's filename prefix.
    */
   noteDelete: "note-delete",
+  /**
+   * Pre-apply point taken before `o2b brain writes revert --apply`
+   * restores before-images or removes the notes its selected writes
+   * created (who-wrote-what, Task D). Kebab-case like its siblings
+   * because the value doubles as the archive's filename prefix.
+   */
+  noteRevert: "note-revert",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */

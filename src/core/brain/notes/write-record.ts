@@ -77,7 +77,8 @@ export function isNoteWriteOp(value: unknown): value is NoteWriteOp {
 }
 
 /**
- * What `hash_before` says when the target did not exist.
+ * What `hash_before` says when the target did not exist - and what
+ * `hash_after` says when the write left it not existing.
  *
  * A literal rather than an empty string or a missing key: the payload
  * contract admits only strings, an absent key would be indistinguishable
@@ -85,6 +86,13 @@ export function isNoteWriteOp(value: unknown): value is NoteWriteOp {
  * an empty FILE would also produce. "There was nothing here" and "there
  * was an empty file here" are different facts and a revert reads them
  * differently.
+ *
+ * ONE literal for both sides rather than two, because it names one fact -
+ * no file at this path - and a reader comparing the two sides of a write
+ * would otherwise have to know two spellings of it. The `revert` that
+ * removes a note the selected writes created is the only producer of the
+ * `hash_after` half today (`notes/revert.ts`), and it pairs the literal
+ * with `bytes_after: "0"`.
  */
 export const NOTE_WRITE_NO_PRIOR = "absent";
 
@@ -171,8 +179,13 @@ export interface RecordNoteWriteInput {
   readonly target: string;
   /** The replaced bytes, or null when the target did not exist. */
   readonly before: NoteWriteBytes | null;
-  /** The bytes now on disk. */
-  readonly after: NoteWriteBytes;
+  /**
+   * The bytes now on disk, or null when the write left NO file at the
+   * target. Only the revert path produces the null side today: undoing
+   * the writes that created a note removes it, and a removal that could
+   * not be recorded would be the one write in this ledger with no line.
+   */
+  readonly after: NoteWriteBytes | null;
   /** ISO-8601 UTC second; defaults to now. */
   readonly timestamp?: string;
   /** Caller-asserted identity; defaults to {@link resolveAgentName}. */
@@ -229,12 +242,14 @@ export function recordNoteWrite(vault: string, input: RecordNoteWriteInput): Not
     const target = vaultRelative(abs, vault);
     const hashBefore = input.before === null ? NOTE_WRITE_NO_PRIOR : sha256Hex(input.before.bytes);
     const bytesBefore = input.before === null ? 0 : Buffer.byteLength(input.before.bytes, "utf8");
+    const hashAfter = input.after === null ? NOTE_WRITE_NO_PRIOR : sha256Hex(input.after.bytes);
+    const bytesAfter = input.after === null ? 0 : Buffer.byteLength(input.after.bytes, "utf8");
     const idInput: NoteWriteIdInput = {
       timestamp,
       op: input.op,
       target,
       hash_before: hashBefore,
-      hash_after: sha256Hex(input.after.bytes),
+      hash_after: hashAfter,
       agent,
     };
     // Every value is a string: `BrainLogEntryPayload` admits `string |
@@ -252,7 +267,7 @@ export function recordNoteWrite(vault: string, input: RecordNoteWriteInput): Not
         hash_before: idInput.hash_before,
         hash_after: idInput.hash_after,
         bytes_before: String(bytesBefore),
-        bytes_after: String(Buffer.byteLength(input.after.bytes, "utf8")),
+        bytes_after: String(bytesAfter),
         agent,
       },
     });

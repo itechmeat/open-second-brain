@@ -175,6 +175,13 @@ describe("BRAIN_SNAPSHOT_REASON", () => {
     expect(BRAIN_SNAPSHOT_REASON.entityPrune).toBe("entity-prune");
   });
 
+  test("the two note-file reasons name the verbs that take them", () => {
+    // Both double as archive filename prefixes, so a rename here would
+    // orphan the archives already in `.snapshots/`.
+    expect(BRAIN_SNAPSHOT_REASON.noteDelete).toBe("note-delete");
+    expect(BRAIN_SNAPSHOT_REASON.noteRevert).toBe("note-revert");
+  });
+
   test("the three deferred boundary reasons and the manual one are readable", () => {
     // Nothing WRITES these yet (taking snapshots at those boundaries is
     // deferred), and the manifest must still be able to read a reason a

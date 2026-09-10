@@ -637,6 +637,17 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "removes generated cluster notes the current run no longer expects, and only " +
       "those whose own frontmatter declares the generated kind.",
   },
+  "src/core/brain/notes/revert.ts": {
+    categories: [C.retentionDelete],
+    calls: ["unlinkSync"],
+    reason:
+      "removes a note the selected writes created, when undoing them means the note should " +
+      "not exist at all. There is nothing for a shared writer to author on the way out, and " +
+      "the restore half of the same module writes the recorded before-image through " +
+      "`atomicWriteFileSync`. The unlink runs inside `withDestructiveSnapshot`, so the " +
+      "destructive-site census holds it rather than an exclusion of its own, and the bytes it " +
+      "removes are kept as a before-image first, which is what makes the delete revertible.",
+  },
   "src/core/brain/notes/write-record.ts": {
     categories: [C.retentionDelete],
     calls: ["unlinkSync"],
@@ -1101,8 +1112,12 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 68 -> 69: `src/core/brain/notes/write-record.ts` prunes before-images
  * past their retention window; its write half routes through
  * `atomicWriteFileSync`, so only the unlink is a direct call.
+ *
+ * 70 -> 71: `src/core/brain/notes/revert.ts` unlinks the note a reverted
+ * create brought into existence; its restore half writes the recorded
+ * before-image through `atomicWriteFileSync`.
  */
-const DIRECT_WRITE_ROWS = 70;
+const DIRECT_WRITE_ROWS = 71;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1134,8 +1149,13 @@ const DIRECT_WRITE_ROWS = 70;
  * only this one - the retention prune it also owns unlinks directly - so
  * it is the rare module that arrives in the shared class and still owes
  * a written exclusion for the other half.
+ *
+ * 102 -> 103: `src/core/brain/notes/revert.ts` restores a before-image
+ * through `atomicWriteFileSync` and, like the record module beside it,
+ * sits in both classes - the delete arm unlinks directly and carries its
+ * own written exclusion.
  */
-const SHARED_HELPER_ROWS = 102;
+const SHARED_HELPER_ROWS = 103;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1201,7 +1221,7 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * ledger, which appends its own record shape and carries the channel on
  * the record rather than in frontmatter.
  */
-const UNSTAMPED_DIRECT_ROWS = 69;
+const UNSTAMPED_DIRECT_ROWS = 70;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
@@ -1209,7 +1229,7 @@ const UNSTAMPED_DIRECT_ROWS = 69;
  * the log pair through `atomicWriteFileSync`, signals and notes through
  * `writeFrontmatterAtomic` - are the ones missing from this count.
  */
-const UNSTAMPED_SHARED_ROWS = 99;
+const UNSTAMPED_SHARED_ROWS = 100;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

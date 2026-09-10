@@ -697,7 +697,8 @@ event to the archive that would undo it.
 
 Every snapshot now carries a typed reason from one closed vocabulary
 (`BRAIN_SNAPSHOT_REASON`): `dream`, `upgrade`, `import-claude-memory`,
-`delete-by-source`, `entity-prune`, `note-delete` for the six destructive
+`delete-by-source`, `entity-prune`, `note-delete`, `note-revert` for the
+seven destructive
 call sites, plus `manual` for the recovery point a rollback takes of the
 live tree it is about to discard (`restoreSnapshotWithRecoveryPoint` in
 `snapshot-gate.ts`, reached from `o2b brain rollback`). Three members have

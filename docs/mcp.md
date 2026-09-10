@@ -194,7 +194,7 @@ flags for a narrower per-process full server.
 | `brain_codegraph_report`    | Read-only codegraph partner report: in-scope code project, index state (`no_project`/`absent`/`not_indexed`/`indexed` with counts/`error`), and structural `Cargo.toml` workspace members. When indexed, attaches a non-blocking `index.health` graph-health gate (`empty-graph`, `collapsed-edges`, `dangling-references`, `self-loops`, `cache-root-mismatch`) surfaced before labeling/import/recall trust the graph. Never installs, extracts, or mutates; non-Rust projects report `cargo_workspace: null` with a reason. | —                                              |
 | `brain_agent_query`         | Read-only source-agent retrieval over Brain provenance. Filters by agents, topic, free-text query, contribution kind, and limit.               | —                                              |
 | `brain_agent_diff`          | Read-only comparison between source agents using browse/search/diff/map modes over the same provenance foundation.                             | —                                              |
-| `brain_writes`              | Read-only listing of recorded note writes (create / update / append / revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. `action: plan_revert` is declared and refused until the note-revert task lands. | — |
+| `brain_writes`              | Read-only listing of recorded note writes (create / update / append / revert), newest first, with the agent, the device the log shard names, the target path and the content digest on each side. Filters by agent, device, path, op and time window. `action: plan_revert` returns the sealed plan for undoing a selection of those writes - one entry per target with its action, refusal reason and both digests - and never applies it; applying is CLI-only. | — |
 | `brain_audit`               | Read-only per-preference mutation trail (create / promote / update / retire / merge) with agent, reason, revision + content-hash before/after. | `pref_id`                                      |
 | `brain_brief`               | Read-only Brain summary for any window: `view: morning \| daily \| weekly \| monthly \| operator \| digest`.                                   | `view`                                         |
 | `brain_analytics`           | Read-only Brain analytics for any lens: `view: timeline \| attention_flows \| belief_evolution \| concept_synthesis \| dedup`. `view=dedup` summarises the persisted exact-hash ingest dedup records into a trend plus a per-source re-ingest ranking; every count is an exact sha-256 drop, never a semantic figure (the semantic detectors nominate merge candidates and never drop). | `view`                                         |
@@ -256,14 +256,25 @@ alias-to-replacement table lives in `docs/updating.md`.
 `kind: note`, which lists the notes an agent wrote: the vault provider maps
 every `note-write` log event to a contribution whose `path` is the note and
 whose title is the operation.
-`brain_writes` accepts `action` (`list`, default; `plan_revert`, refused until
-the note-revert task lands), `agent`, `device`, `path`, `op` (`create`,
+`brain_writes` accepts `action` (`list`, default; `plan_revert`), `agent`,
+`device`, `path`, `op` (`create`,
 `update`, `append`, `revert`), `since` / `until` (a bare `YYYY-MM-DD` or an
 ISO-8601 UTC timestamp; a bare `until` date covers the whole day it names), and
 `limit` (1-500, default 50). It answers with `total_matched` beside `returned`,
 so a capped list is legible as one, and each row carries `write_id`, both
 content digests, both byte counts and the device the log shard names - the
 empty string being the legacy un-sharded log rather than an unknown machine.
+`action: plan_revert` takes the same selector (`agent`, `device`, `path`,
+`since`, `until`) and returns the sealed plan for undoing the writes it names:
+one entry per target with `action` (`restore`, `delete`, `refuse`), `reason`
+when refused (`drift`, `interleaved`, `image-missing`, `unrecorded`,
+`already-reverted`), the selected `writes` oldest first, and `hash_now` /
+`hash_to`; plus the `digest` that seals it and `next_command`. A selector
+naming none of `agent`, `device` or `path` is refused with `INVALID_PARAMS`
+carrying `unbounded_selector` - a time window alone is a vault rollback. There
+is no apply here: applying moves bytes on targets the caller may never have
+written, so `o2b brain writes revert --apply <digest>` is where a human types
+the digest.
 `brain_search` accepts `query_document` with line-oriented `intent:`, `lex:`,
 `vec:`, and `hyde:` lanes; `focus_query` / `focus_path_prefix` to steer a
 single call; `since` / `until` time ranges (ISO date/datetime, `today`,

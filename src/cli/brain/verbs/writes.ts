@@ -1,3 +1,11 @@
+import {
+  NOTE_REVERT_ACTION,
+  NoteRevertError,
+  applyNoteRevert,
+  planNoteRevert,
+  type NoteRevertEntry,
+  type NoteRevertSelector,
+} from "../../../core/brain/notes/revert.ts";
 import { listNoteWrites, type NoteWriteRecord } from "../../../core/brain/notes/write-log.ts";
 import {
   NOTE_WRITE_OP,
@@ -8,6 +16,7 @@ import {
 } from "../../../core/brain/notes/write-record.ts";
 import {
   brainVerbContext,
+  fail,
   normalizeFlagString,
   ok,
   okJson,
@@ -21,6 +30,7 @@ import {
  *
  * Subcommands:
  *   list          (default)  recorded note writes, newest first
+ *   revert                   plan, and with --apply run, a per-agent undo
  *   prune-images             bound the before-image store by age
  *
  * `list` is the default because the question that brings an operator
@@ -40,6 +50,7 @@ export async function cmdBrainWrites(argv: string[]): Promise<number> {
     op: { type: "string" },
     "older-than-days": { type: "string" },
     "dry-run": { type: "boolean" },
+    apply: { type: "string" },
     json: { type: "boolean" },
   });
   const json = flags["json"] === true;
@@ -47,10 +58,15 @@ export async function cmdBrainWrites(argv: string[]): Promise<number> {
   if (sub === undefined || sub.startsWith("--") || sub === "list") {
     return listWrites(flags, json);
   }
+  if (sub === "revert") {
+    return revert(flags, json);
+  }
   if (sub === "prune-images") {
     return pruneImages(flags, json);
   }
-  return usageError(`unknown brain writes subcommand '${sub}' - expected list or prune-images`);
+  return usageError(
+    `unknown brain writes subcommand '${sub}' - expected list, revert or prune-images`,
+  );
 }
 
 /** Hex characters of each digest shown in the plain table. */
@@ -162,5 +178,139 @@ function pruneImages(
   ok(`${verb} ${result.removed.length} before-image(s) older than ${olderThanDays} day(s)`);
   ok(`kept ${result.kept}`);
   for (const sha of result.removed) ok(`- ${sha}`);
+  return 0;
+}
+
+/**
+ * `revert` - plan what undoing a selection of writes would do, and with
+ * `--apply <digest>` do it.
+ *
+ * Two invocations rather than a confirmation prompt, because the digest
+ * is what makes the second one refer to the first: an operator applies
+ * the plan they read, and a vault that moved in between is refused
+ * rather than re-planned silently. The plan itself is a REPORT and exits
+ * 0 even when every target is refused - a revert that finds nothing safe
+ * to undo answered the question it was asked. Only a selector this verb
+ * will not accept, and an apply that cannot run, exit non-zero.
+ */
+function revert(
+  flags: Record<string, string | boolean | string[] | undefined>,
+  json: boolean,
+): number {
+  const selector: NoteRevertSelector = {
+    ...selectorField(flags, "agent"),
+    ...selectorField(flags, "device"),
+    ...selectorField(flags, "path"),
+    ...selectorField(flags, "since"),
+    ...selectorField(flags, "until"),
+  };
+  const digest = normalizeFlagString(flags["apply"]);
+  const { vault } = brainVerbContext(flags);
+
+  try {
+    return digest === null
+      ? printPlan(vault, selector, json)
+      : printApply(vault, selector, digest, json);
+  } catch (err) {
+    // The code first, then the sentence: an operator scripting around
+    // this reads one token, and the rest of the line is for the human.
+    if (err instanceof NoteRevertError) return fail(`${err.code}: ${err.message}`);
+    throw err;
+  }
+}
+
+/** One selector field, present only when the flag carried a value. */
+function selectorField(
+  flags: Record<string, string | boolean | string[] | undefined>,
+  key: "agent" | "device" | "path" | "since" | "until",
+): Partial<Record<typeof key, string>> {
+  const value = normalizeFlagString(flags[key]);
+  return value === null ? {} : { [key]: value };
+}
+
+/** The plan's own `--apply` line, so the digest never has to be retyped. */
+function applyInvocation(selector: NoteRevertSelector, digest: string): string {
+  const parts = ["o2b", "brain", "writes", "revert"];
+  for (const [key, value] of Object.entries(selector)) parts.push(`--${key}`, String(value));
+  parts.push("--apply", digest);
+  return parts.join(" ");
+}
+
+/** One planned target: what, where, why not, how many writes, both digests. */
+function renderEntry(entry: NoteRevertEntry): string {
+  const now = entry.hash_now.slice(0, DIGEST_PREVIEW_LENGTH);
+  const to = entry.hash_to.slice(0, DIGEST_PREVIEW_LENGTH);
+  return [
+    entry.action,
+    entry.target,
+    entry.reason ?? ABSENT_COLUMN,
+    String(entry.writes.length),
+    `${now} -> ${to}`,
+  ].join("  ");
+}
+
+function printPlan(vault: string, selector: NoteRevertSelector, json: boolean): number {
+  const plan = planNoteRevert(vault, selector);
+  if (json) {
+    okJson({
+      selector: { ...plan.selector },
+      entries: plan.entries.map((e) => ({ ...e })),
+      digest: plan.digest,
+      planned_at: plan.planned_at,
+      warnings: plan.warnings.map((w) => ({
+        path: w.path,
+        line: w.lineNumber,
+        message: w.message,
+      })),
+    });
+    return 0;
+  }
+
+  if (plan.entries.length === 0) ok("no recorded note writes match this selector");
+  for (const entry of plan.entries) ok(renderEntry(entry));
+  // Warnings before the digest, because a day whose log lost a line is a
+  // day whose write history is incomplete, and the digest below seals
+  // exactly the plan that incomplete history produced.
+  for (const warning of plan.warnings) {
+    ok(`warning: ${warning.path}:${warning.lineNumber}: ${warning.message}`);
+  }
+  ok(`digest: ${plan.digest}`);
+  ok(applyInvocation(plan.selector, plan.digest));
+  return 0;
+}
+
+function printApply(
+  vault: string,
+  selector: NoteRevertSelector,
+  digest: string,
+  json: boolean,
+): number {
+  const result = applyNoteRevert(vault, selector, digest);
+  if (json) {
+    okJson({
+      snapshot: { ...result.snapshot },
+      applied: result.applied.map((e) => ({ ...e })),
+      refused: result.refused.map((e) => ({ ...e })),
+      recorded: result.recorded.map((r) => ({ ...r })),
+      recoverability: {
+        state: result.recoverability.state,
+        coverage: [...result.recoverability.coverage],
+        blockers: [...result.recoverability.blockers],
+      },
+    });
+    return 0;
+  }
+
+  ok(`snapshot: ${result.snapshot.run_id}`);
+  for (const entry of result.applied) ok(`${entry.action}  ${entry.target}`);
+  for (const entry of result.refused) {
+    ok(`${NOTE_REVERT_ACTION.refuse}  ${entry.target}  ${entry.reason ?? ABSENT_COLUMN}`);
+  }
+  // An unrecorded revert is a fact the operator is told, not one they
+  // have to infer from a missing line in a later listing.
+  for (const row of result.recorded) {
+    if (row.write_id === null) ok(`warning: ${row.target}: ${row.audit_reason}`);
+  }
+  ok(`recoverability: ${result.recoverability.state}`);
   return 0;
 }

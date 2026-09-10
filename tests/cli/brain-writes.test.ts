@@ -7,13 +7,13 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { appendLogEvent } from "../../src/core/brain/log.ts";
-import { storeBeforeImage } from "../../src/core/brain/notes/write-record.ts";
+import { recordNoteWrite, storeBeforeImage } from "../../src/core/brain/notes/write-record.ts";
 import { writeImagePath } from "../../src/core/brain/paths.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../src/core/brain/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
@@ -142,10 +142,10 @@ describe("o2b brain writes", () => {
     expect(res.stderr).toContain("--op must be one of create|update|append|revert");
   });
 
-  test("an unknown subcommand names the two that exist", async () => {
+  test("an unknown subcommand names the three that exist", async () => {
     const res = await runCli(["brain", "writes", "purge"], { env: env() });
     expect(res.returncode).toBe(2);
-    expect(res.stderr).toContain("expected list or prune-images");
+    expect(res.stderr).toContain("expected list, revert or prune-images");
   });
 });
 
@@ -191,5 +191,131 @@ describe("o2b brain writes prune-images", () => {
     });
     expect(res.returncode).toBe(2);
     expect(res.stderr).toContain("--older-than-days must be a non-negative integer");
+  });
+});
+
+describe("o2b brain writes revert", () => {
+  /** Do what the write seams do, so the plan reads a real history. */
+  function seedNote(opts: {
+    readonly target: string;
+    readonly bytes: string;
+    readonly agent: string;
+    readonly at: string;
+  }): void {
+    const abs = join(vault, opts.target);
+    const before = existsSync(abs) ? readFileSync(abs, "utf8") : null;
+    mkdirSync(dirname(abs), { recursive: true });
+    if (before !== null) storeBeforeImage(vault, before);
+    writeFileSync(abs, opts.bytes);
+    recordNoteWrite(vault, {
+      op: before === null ? "create" : "update",
+      target: opts.target,
+      before: before === null ? null : { bytes: before },
+      after: { bytes: opts.bytes },
+      timestamp: opts.at,
+      agent: opts.agent,
+    });
+  }
+
+  const TARGET = "notes/A.md";
+
+  function seedTwoUpdatesByA(): void {
+    seedNote({ target: TARGET, bytes: "v0", agent: "seed", at: "2026-03-04T01:00:00Z" });
+    seedNote({ target: TARGET, bytes: "v1", agent: "claude", at: "2026-03-04T02:00:00Z" });
+    seedNote({ target: TARGET, bytes: "v2", agent: "claude", at: "2026-03-04T03:00:00Z" });
+  }
+
+  test("prints the plan, the digest and the exact --apply invocation", async () => {
+    seedTwoUpdatesByA();
+    const res = await runCli(["brain", "writes", "revert", "--agent", "claude"], { env: env() });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain(TARGET);
+    expect(res.stdout).toContain("restore");
+    expect(res.stdout).toMatch(/digest: [0-9a-f]{64}/);
+    const digest = res.stdout
+      .split("\n")
+      .find((l) => l.startsWith("digest:"))!
+      .slice("digest:".length)
+      .trim();
+    expect(res.stdout).toContain(`o2b brain writes revert --agent claude --apply ${digest}`);
+    // A plan is a report: nothing moved.
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe("v2");
+  });
+
+  test("a selector naming nobody and nothing is refused, and exits 1", async () => {
+    const res = await runCli(["brain", "writes", "revert", "--since", "2026-03-04"], {
+      env: env(),
+    });
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain("unbounded_selector");
+  });
+
+  test("a plan that refuses every target is a report, not a failure", async () => {
+    seedTwoUpdatesByA();
+    writeFileSync(join(vault, TARGET), "drifted");
+    const res = await runCli(["brain", "writes", "revert", "--agent", "claude"], { env: env() });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("drift");
+  });
+
+  test("--apply restores the bytes and names the snapshot it took", async () => {
+    seedTwoUpdatesByA();
+    const plan = await runCli(["brain", "writes", "revert", "--agent", "claude", "--json"], {
+      env: env(),
+    });
+    const digest = (JSON.parse(plan.stdout) as { digest: string }).digest;
+
+    const res = await runCli(
+      ["brain", "writes", "revert", "--agent", "claude", "--apply", digest],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).toContain("note-revert-");
+    expect(res.stdout).toContain(`restore  ${TARGET}`);
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe("v0");
+  });
+
+  test("a stale digest is refused by name and exits 1", async () => {
+    seedTwoUpdatesByA();
+    const res = await runCli(
+      ["brain", "writes", "revert", "--agent", "claude", "--apply", "f".repeat(64)],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain("digest_mismatch");
+    expect(readFileSync(join(vault, TARGET), "utf8")).toBe("v2");
+  });
+
+  test("a plan with nothing to apply is refused by name and exits 1", async () => {
+    seedTwoUpdatesByA();
+    writeFileSync(join(vault, TARGET), "drifted");
+    const plan = await runCli(["brain", "writes", "revert", "--agent", "claude", "--json"], {
+      env: env(),
+    });
+    const digest = (JSON.parse(plan.stdout) as { digest: string }).digest;
+    const res = await runCli(
+      ["brain", "writes", "revert", "--agent", "claude", "--apply", digest],
+      { env: env() },
+    );
+    expect(res.returncode).toBe(1);
+    expect(res.stderr).toContain("nothing_to_apply");
+  });
+
+  test("--json carries the entries and the digest", async () => {
+    seedTwoUpdatesByA();
+    const res = await runCli(["brain", "writes", "revert", "--path", TARGET, "--json"], {
+      env: env(),
+    });
+    expect(res.returncode).toBe(0);
+    const payload = JSON.parse(res.stdout) as {
+      digest: string;
+      entries: ReadonlyArray<Record<string, unknown>>;
+      selector: Record<string, unknown>;
+    };
+    expect(payload.selector).toEqual({ path: TARGET });
+    expect(payload.entries).toHaveLength(1);
+    // A path with no agent selects EVERY write on that note, including
+    // the one that created it, so undoing them all removes the note.
+    expect(payload.entries[0]!["action"]).toBe("delete");
   });
 });
