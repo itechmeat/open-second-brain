@@ -11,10 +11,14 @@
 import { join } from "node:path";
 
 import { realpathInsideVault, vaultRelative } from "../../path-safety.ts";
+import { continuityLogDir } from "../continuity/store.ts";
 import { scanDanglingWorkruns } from "../dream-workrun.ts";
 import { readTierDriftCount } from "../frontmatter-tiers.ts";
-import { listLogSyncConflicts } from "../log-jsonl.ts";
-import { brainDirs } from "../paths.ts";
+import { idempotencyLogDir } from "../idempotency-ledger.ts";
+import { listSyncConflictFiles } from "../ledger-shards.ts";
+import { brainStateDirPath } from "../lineage/ledger.ts";
+import { metricsDir } from "../metrics.ts";
+import { brainDirs, prefAuditDir } from "../paths.ts";
 import type { DoctorCheck } from "./check.ts";
 import type { DoctorUncertainEntry } from "./report.ts";
 import {
@@ -73,23 +77,57 @@ export const danglingWorkrunCheck: DoctorCheck = {
 };
 
 /**
- * Memory Integrity Suite: leftover Syncthing conflict copies under
- * Brain/log/. The per-device shard layout prevents new ones; old
- * copies need a manual union+dedup merge into the day's log.
+ * Every append-only ledger directory in the vault, each named by the
+ * module that owns it rather than by a path spelled a second time here.
+ *
+ * All six shard per device (who-wrote-what, Task B), which is what makes
+ * one finding cover all of them: the shard layout prevents NEW conflicts
+ * everywhere, so a `*.sync-conflict-*` copy under any of these means the
+ * same thing - a file that exists and that no reader merges.
+ */
+const LEDGER_DIRS: ReadonlyArray<(vault: string) => string> = Object.freeze([
+  (vault: string) => brainDirs(vault).log,
+  continuityLogDir,
+  idempotencyLogDir,
+  prefAuditDir,
+  metricsDir,
+  brainStateDirPath,
+]);
+
+/**
+ * Memory Integrity Suite: leftover Syncthing conflict copies under any
+ * append-only ledger directory. The per-device shard layout prevents new
+ * ones; old copies need a manual union+dedup merge into the shard they
+ * were split from.
+ *
+ * One exit, one meaning - "a sync conflict copy exists that no reader
+ * merges" - so the code stays `sync-conflict-log` and the DETAIL names
+ * the directory the copy was found in.
  */
 export const syncConflictLogCheck: DoctorCheck = {
   failSoft: true,
   run({ vault }, { issues, uncertain }) {
-    const conflicts = listSyncConflicts(vault, uncertain);
-    for (const path of conflicts) {
-      issues.push({
-        severity: "warning",
-        code: "sync-conflict-log",
-        path,
-        message:
-          `Syncthing sync-conflict copy under Brain/log/: ${path}. ` +
-          "Merge its rows into the day's log (union + dedup by ts and content), then delete it.",
-      });
+    for (const dir of LEDGER_DIRS) {
+      let ledgerDir: string;
+      try {
+        ledgerDir = dir(vault);
+      } catch {
+        // A directory whose own resolver refuses (a vault path that
+        // escapes its root) is not a directory this sweep can visit;
+        // the resolver's caller is where that refusal belongs.
+        continue;
+      }
+      for (const path of listSyncConflicts(ledgerDir, uncertain)) {
+        issues.push({
+          severity: "warning",
+          code: "sync-conflict-log",
+          path,
+          message:
+            `Syncthing sync-conflict copy under ${vaultRelative(ledgerDir, vault)}/: ${path}. ` +
+            "Merge its rows into the shard it was split from (union + dedup by timestamp and " +
+            "content), then delete it.",
+        });
+      }
     }
   },
 };
@@ -98,19 +136,21 @@ export const syncConflictLogCheck: DoctorCheck = {
 const SYNC_CONFLICT_SITE = "brain.doctor.syncConflictLog";
 
 /**
- * The conflict copies under `Brain/log/`, or none plus a named reason.
+ * The conflict copies under one ledger directory, or none plus a named
+ * reason.
  *
  * The listing is behind a shared helper, so the failure arrives here as
  * a throw. Swallowed by the pass's fail-soft arm it produced no finding
  * at all, which reads as "no conflict copies" - the answer this check
- * exists to distinguish from "the directory was not read".
+ * exists to distinguish from "the directory was not read". Reported per
+ * directory, so one unreadable ledger does not silence the other five.
  */
-function listSyncConflicts(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
+function listSyncConflicts(dir: string, uncertain: DoctorUncertainEntry[]): string[] {
   try {
-    return listLogSyncConflicts(vault);
+    return listSyncConflictFiles(dir);
   } catch (err) {
     reportSweptFailure(
-      brainDirs(vault).log,
+      dir,
       "sync-conflict listing failed",
       err,
       {

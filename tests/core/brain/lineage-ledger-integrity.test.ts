@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   appendFileSync,
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -560,4 +561,128 @@ describe("recordLineageObservation — genuinely concurrent writers", () => {
     const landed = [...state.keys()].filter((sid) => sid.startsWith("w")).length;
     expect(landed).toBe(appended);
   }, 30_000);
+});
+
+// ----- per-device shards ----------------------------------------------------
+
+/**
+ * Per-device shards (who-wrote-what, Task B / t_1814b9bf). The chain and
+ * its sequence are per FILE, so each device keeps its own chain; the
+ * reader merges every shard and the verifier reports per shard path.
+ */
+describe("session lineage per-device shards", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  let configHome: string;
+
+  beforeEach(() => {
+    configHome = mkdtempSync(join(tmpdir(), "o2b-ledger-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    savedEnv["OPEN_SECOND_BRAIN_CONFIG"] = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    savedEnv["O2B_DEVICE_ID"] = process.env["O2B_DEVICE_ID"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    delete process.env["O2B_DEVICE_ID"];
+    writeFileSync(configPath, `vault: ${tmp}\ndevice_id: "testdev1"\n`, "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(configHome, { recursive: true, force: true });
+    for (const key of ["OPEN_SECOND_BRAIN_CONFIG", "O2B_DEVICE_ID"]) {
+      const value = savedEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  test("a device with an id writes its own shard and never the bare file", () => {
+    record("s-1", T0);
+    expect(readFileSync(sessionLineageLedgerPath(tmp, "testdev1"), "utf8")).toContain("s-1");
+    expect(existsSync(sessionLineageLedgerPath(tmp, ""))).toBe(false);
+  });
+
+  test("each shard carries its own chain, starting at sequence 1", () => {
+    record("s-1", T0);
+    record("s-2", T0 + 1_000);
+    // A second device's shard, arrived through Syncthing: its own chain.
+    const other = sessionLineageLedgerPath(tmp, "devb");
+    writeFileSync(
+      other,
+      `${JSON.stringify({ sid: "s-3", at: new Date(T0 + 2_000).toISOString(), event: "Stop" })}\n`,
+      "utf8",
+    );
+    const mine = readFileSync(sessionLineageLedgerPath(tmp, "testdev1"), "utf8")
+      .split("\n")
+      .filter((l) => l.trim().length > 0)
+      .map((l) => JSON.parse(l) as RawLine);
+    expect(mine.map((l) => l.seq)).toEqual([1, 2]);
+    expect(mine[0]!.prev).toBeNull();
+  });
+
+  test("the reader merges every shard by observation time", () => {
+    record("mine", T0 + 1_000);
+    writeFileSync(
+      sessionLineageLedgerPath(tmp, "devb"),
+      `${JSON.stringify({ sid: "theirs", at: new Date(T0).toISOString(), event: "Stop" })}\n`,
+      "utf8",
+    );
+    const state = readLineageLedger(tmp);
+    expect([...state.keys()].toSorted()).toEqual(["mine", "theirs"]);
+  });
+
+  test("a sync-conflict copy is neither merged nor verified", () => {
+    record("mine", T0);
+    writeFileSync(
+      join(
+        dirname(sessionLineageLedgerPath(tmp, "")),
+        "session-lineage.sync-conflict-20260610-080000-ABCDEFG.jsonl",
+      ),
+      "{ not a ledger line\n",
+      "utf8",
+    );
+    expect([...readLineageLedger(tmp).keys()]).toEqual(["mine"]);
+    expect(verifyLineageLedger(tmp).ok).toBe(true);
+  });
+
+  test("verify reports every shard by its own path and names the broken one", () => {
+    record("mine", T0);
+    const other = sessionLineageLedgerPath(tmp, "devb");
+    writeFileSync(
+      other,
+      `${JSON.stringify({ sid: "theirs", at: new Date(T0).toISOString(), event: "Stop", seq: 1, prev: null, h: "0".repeat(64) })}\n`,
+      "utf8",
+    );
+    const report = verifyLineageLedger(tmp);
+    expect(report.shards.map((s) => s.shardId).toSorted()).toEqual(["devb", "testdev1"]);
+    expect(report.ok).toBe(false);
+    expect(report.notices.every((n) => n.path === other)).toBe(true);
+    expect(report.shards.find((s) => s.shardId === "testdev1")!.ok).toBe(true);
+    expect(report.shards.find((s) => s.shardId === "devb")!.ok).toBe(false);
+  });
+
+  test("a vault with no shard at all still reports absence, not a finding", () => {
+    const report = verifyLineageLedger(join(tmp, "elsewhere"));
+    expect(report.exists).toBe(false);
+    expect(report.shards).toHaveLength(0);
+    expect(report.ok).toBe(true);
+  });
+
+  test("the gap sidecar shards with the ledger and the report merges both", () => {
+    const handle = acquireLockSync(sessionLineageLedgerPath(tmp, "testdev1"));
+    try {
+      expect(record("dropped-here", T0).status).toBe(LINEAGE_RECORD_STATUS.dropped);
+    } finally {
+      handle.release();
+    }
+    expect(existsSync(sessionLineageGapsPath(tmp, "testdev1"))).toBe(true);
+    expect(existsSync(sessionLineageGapsPath(tmp, ""))).toBe(false);
+    writeFileSync(
+      sessionLineageGapsPath(tmp, "devb"),
+      `${JSON.stringify({ sid: "dropped-there", at: new Date(T0).toISOString(), rat: new Date(T0).toISOString(), event: "Stop", reason: "lock-busy" })}\n`,
+      "utf8",
+    );
+    const report = readLineageGapReport(tmp, { nowMs: T0 + 1_000 });
+    expect(report.records.map((r) => r.sessionId).toSorted()).toEqual([
+      "dropped-here",
+      "dropped-there",
+    ]);
+  });
 });

@@ -43,7 +43,8 @@ import {
   validateIsoDate,
 } from "./paths.ts";
 import { WRITE_LANE } from "./freeze-marker.ts";
-import { isValidDeviceId, resolveDeviceId } from "../config.ts";
+import { isValidDeviceId } from "../config.ts";
+import { resolveAppendShardId } from "./ledger-shards.ts";
 import { ORIGIN_CHANNEL_FIELD, originChannelStamp } from "../origin-channel.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
@@ -261,20 +262,13 @@ function acquireLogLock(logDir: string): () => void {
 export interface AppendLogEventOptions {
   /**
    * Per-device shard id (Memory Integrity Suite). Defaults to
-   * `resolveDeviceId()` from the device-local config; the empty string
-   * forces the legacy un-sharded `<date>.jsonl` / `<date>.md` pair.
+   * {@link resolveAppendShardId}, which reads the device-local config and
+   * falls back to the empty string - the legacy un-sharded
+   * `<date>.jsonl` / `<date>.md` pair - when the config cannot be
+   * resolved. That fallback and the reasoning behind it now live in
+   * `ledger-shards.ts`, shared with every other append-only ledger.
    *
-   * ANY resolution failure falls back to the legacy pair - a missing HOME,
-   * an unwritable config home, or a config file that is present but cannot
-   * be read (`ConfigReadError`). This caller is the one that absorbs that
-   * error, and it is deliberate rather than an oversight: appending is the
-   * always-on write path behind every hook and every session-capture
-   * event, so failing it turns one bad file mode into a dead session. The
-   * fallback is also not a neutral value invented to look healthy - it is
-   * the documented shard shape the `O2B_DEVICE_ID=""` opt-out selects, it
-   * loses no data, and the log-dir lock still orders concurrent writers.
-   * The condition itself is not swallowed anywhere: every OTHER caller of
-   * `resolveDeviceId` propagates it, and the CLI reports it by name.
+   * Passing the empty string here forces the legacy pair explicitly.
    */
   readonly deviceId?: string;
 }
@@ -301,13 +295,7 @@ export function appendLogEvent(
     }
     deviceId = opts.deviceId;
   } else {
-    try {
-      deviceId = resolveDeviceId();
-    } catch {
-      // Legacy un-sharded pair. See AppendLogEventOptions.deviceId for why
-      // this one caller absorbs what every other caller propagates.
-      deviceId = "";
-    }
+    deviceId = resolveAppendShardId();
   }
   // Parse the timestamp once to extract date + HHMMSS deterministically.
   // We deliberately do not accept Date objects: the caller controls the

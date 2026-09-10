@@ -3,8 +3,11 @@
  *
  * Every mutation to a preference is captured at the mutation chokepoint
  * (`writePreferenceTxn`, `moveToRetired`, `mergePreferences`) as one
- * append-only JSONL line under `Brain/log/pref-audit/<pref-id>.jsonl`.
- * Because the trail is written where the content hash is computed, it is
+ * append-only JSONL line under
+ * `Brain/log/pref-audit/<pref-id>[.<deviceId>].jsonl` - one file per
+ * preference per device (who-wrote-what, Task B), so two machines editing
+ * the same preference never contend for one synced file. Because the
+ * trail is written where the content hash is computed, it is
  * authoritative (true before/after) and also catches manual edits routed
  * through the same primitives.
  *
@@ -23,10 +26,17 @@
  * (kept as the raw string), matching the log-reader tolerance contract.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname } from "node:path";
 
-import { prefAuditPath } from "./paths.ts";
+import {
+  listShardedFiles,
+  literalBase,
+  mergeShardedRows,
+  type LedgerShardGrammar,
+  type ShardedRow,
+} from "./ledger-shards.ts";
+import { PREF_AUDIT_EXT, prefAuditDir, prefAuditPath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { isoSecond } from "./time.ts";
 import { PREF_AUDIT_OP, type PrefAuditOp, type PrefAuditRecord } from "./types.ts";
@@ -134,47 +144,61 @@ export function appendPrefAudit(
 }
 
 /**
- * Read the full mutation history for one preference id, oldest first.
- * Returns empty records (no warnings) when the file does not exist.
- * Malformed lines and rows missing required fields become warnings;
- * unknown op kinds are preserved verbatim.
+ * Read the full mutation history for one preference id, oldest first,
+ * merged across every device shard.
+ *
+ * The trail one preference leaves is `<pref-id>[.<deviceId>].jsonl`, and
+ * two machines editing the same preference each write their own. The
+ * merge order is (`ts`, shard id, line), so both devices show the same
+ * history whatever order Syncthing delivered the files in. Returns empty
+ * records (no warnings) when no shard exists. Malformed lines and rows
+ * missing required fields become warnings naming the shard they came
+ * from; unknown op kinds are preserved verbatim.
  */
 export function readPrefAudit(vault: string, prefId: string): ReadPrefAuditResult {
-  const path = prefAuditPath(vault, prefId);
-  if (!existsSync(path)) return { records: [], warnings: [] };
-
-  let text: string;
-  try {
-    text = readFileSync(path, "utf8");
-  } catch (err) {
-    const message = (err as NodeJS.ErrnoException).message ?? String(err);
-    return {
-      records: [],
-      warnings: [{ path, lineNumber: 0, message: `failed to read audit file: ${message}` }],
-    };
-  }
-
-  const records: PrefAuditRecord[] = [];
+  const rows: Array<ShardedRow<PrefAuditRecord>> = [];
   const warnings: PrefAuditParseWarning[] = [];
-  const lines = text.split(/\r?\n/);
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    if (line.trim() === "") continue;
-    let parsed: unknown;
+  for (const shard of listShardedFiles(prefAuditDir(vault), prefAuditGrammar(prefId))) {
+    const path = shard.path;
+    let text: string;
     try {
-      parsed = JSON.parse(line);
-    } catch {
-      warnings.push({
-        path,
-        lineNumber: i + 1,
-        message: `malformed JSONL line: ${line.slice(0, 80)}`,
-      });
+      text = readFileSync(path, "utf8");
+    } catch (err) {
+      const message = (err as NodeJS.ErrnoException).message ?? String(err);
+      warnings.push({ path, lineNumber: 0, message: `failed to read audit file: ${message}` });
       continue;
     }
-    const rec = coerceRecord(parsed, path, i + 1, warnings);
-    if (rec !== null) records.push(rec);
+    const lines = text.split(/\r?\n/);
+    let index = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (line.trim() === "") continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        warnings.push({
+          path,
+          lineNumber: i + 1,
+          message: `malformed JSONL line: ${line.slice(0, 80)}`,
+        });
+        continue;
+      }
+      const rec = coerceRecord(parsed, path, i + 1, warnings);
+      if (rec !== null) rows.push({ value: rec, shardId: shard.shardId, line: index++ });
+    }
   }
-  return { records, warnings };
+  return { records: mergeShardedRows(rows, (record) => record.ts), warnings };
+}
+
+/**
+ * The name layout of ONE preference's shards. The pref id goes in as a
+ * literal because {@link import('./paths.ts').validateSlug} permits a
+ * dot inside it, and an unescaped id would let a sibling preference's
+ * file parse as this one's shard.
+ */
+function prefAuditGrammar(prefId: string): LedgerShardGrammar {
+  return { base: literalBase(validateSlug(prefId)), extensions: [PREF_AUDIT_EXT] };
 }
 
 /**

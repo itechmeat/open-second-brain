@@ -688,7 +688,8 @@ export type PrefAuditOp = (typeof PREF_AUDIT_OP)[keyof typeof PREF_AUDIT_OP];
 
 /**
  * One append-only audit line for a single preference mutation. Stored
- * as JSONL under `Brain/log/pref-audit/<pref-id>.jsonl`. `op` is widened
+ * as JSONL under `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl`,
+ * one file per preference per device. `op` is widened
  * to `string` on read so an unknown future op kind round-trips without
  * loss. Revision/hash before-after are `null` where not applicable
  * (e.g. `hash_before` is `null` on a `create`).

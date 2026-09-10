@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { isFileAlreadyExists } from "../fs-atomic.ts";
 import { ensureInsideVault, vaultRelative } from "../path-safety.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
+import { resolveAppendShardId, shardedFileName } from "./ledger-shards.ts";
 import {
   BRAIN_ARTIFACTS_REL,
   BRAIN_ACTIVE_FILE,
@@ -573,14 +574,30 @@ export function prefAuditDir(vault: string): string {
 
 /**
  * Brain lifecycle suite (Feature 1). Append-only audit JSONL for a
- * single preference: `Brain/log/pref-audit/<pref-id>.jsonl`. The pref
- * id (`pref-<slug>` / `ret-<slug>`) is validated through
+ * single preference on a single device:
+ * `Brain/log/pref-audit/<pref-id>[.<deviceId>].jsonl`. The pref id
+ * (`pref-<slug>` / `ret-<slug>`) is validated through
  * {@link validateSlug} so it cannot escape the canonical directory.
+ *
+ * `shardId` defaults to this device's id (who-wrote-what, Task B), so two
+ * machines editing one preference never append to the same file. The
+ * empty shard id is the legacy un-sharded name, still merged by every
+ * read and never renamed.
  */
-export function prefAuditPath(vault: string, prefId: string): string {
+export function prefAuditPath(
+  vault: string,
+  prefId: string,
+  shardId: string = resolveAppendShardId(),
+): string {
   const id = validateSlug(prefId);
-  return ensureInsideVault(join(prefAuditDir(vault), `${id}.jsonl`), vault);
+  return ensureInsideVault(
+    join(prefAuditDir(vault), shardedFileName(id, shardId, PREF_AUDIT_EXT)),
+    vault,
+  );
 }
+
+/** Extension of every preference-audit shard. */
+export const PREF_AUDIT_EXT = "jsonl";
 
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {
