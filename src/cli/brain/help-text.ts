@@ -327,13 +327,13 @@ export const VERB_HELP: Record<string, string> = {
     "--show-expired keeps lapsed memories; both apply to --topic only.\n",
   "agent-query":
     "usage: o2b brain agent-query [--agent <id>...] [--topic <slug>] [--query <text>]\n" +
-    "                             [--kind signal|preference|log] [--limit <n>]\n" +
+    "                             [--kind signal|preference|log|note] [--limit <n>]\n" +
     "                             [--vault <path>] [--json]\n" +
     "Read-only source-agent retrieval over Brain provenance. Omit --agent to query all known agents.\n",
   "agent-diff":
     "usage: o2b brain agent-diff [--mode browse|search|diff|map] [--agent <id>...]\n" +
     "                            [--topic <slug>] [--query <text>]\n" +
-    "                            [--kind signal|preference|log] [--limit <n>]\n" +
+    "                            [--kind signal|preference|log|note] [--limit <n>]\n" +
     "                            [--vault <path>] [--json]\n" +
     "Compare source-agent coverage using the same provenance foundation as agent-query.\n",
   reject:

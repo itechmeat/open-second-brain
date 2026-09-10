@@ -21,7 +21,11 @@ import {
 import { parseIsoUtc } from "../../core/brain/health/iso-time.ts";
 import { diffAgentSources, type AgentSourceDiffMode } from "../../core/brain/agent-source/diff.ts";
 import { queryAgentSources } from "../../core/brain/agent-source/query.ts";
-import type { AgentSourceContributionKind } from "../../core/brain/agent-source/types.ts";
+import {
+  AGENT_SOURCE_CONTRIBUTION_KINDS,
+  isAgentSourceContributionKind,
+  type AgentSourceContributionKind,
+} from "../../core/brain/agent-source/types.ts";
 import {
   type BrainPreference,
   type BrainRetired,
@@ -314,10 +318,10 @@ function coerceAgentContributionKind(
 ): AgentSourceContributionKind | null {
   const raw = coerceStr(args, key, false);
   if (raw === null) return null;
-  if (raw !== "signal" && raw !== "preference" && raw !== "log") {
+  if (!isAgentSourceContributionKind(raw)) {
     throw new MCPError(
       INVALID_PARAMS,
-      `argument '${key}' must be 'signal', 'preference', or 'log'`,
+      `argument '${key}' must be one of ${AGENT_SOURCE_CONTRIBUTION_KINDS.join(", ")}`,
     );
   }
   return raw;
@@ -690,7 +694,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          enum: ["signal", "preference", "log"],
+          enum: [...AGENT_SOURCE_CONTRIBUTION_KINDS],
           description: "Contribution kind filter.",
         },
         limit: {
@@ -738,7 +742,7 @@ export const QUERY_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         kind: {
           type: "string",
-          enum: ["signal", "preference", "log"],
+          enum: [...AGENT_SOURCE_CONTRIBUTION_KINDS],
           description: "Contribution kind filter.",
         },
         limit: {
