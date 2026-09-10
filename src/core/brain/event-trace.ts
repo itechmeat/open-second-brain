@@ -1,9 +1,10 @@
 /**
  * Event → context-trace join reader.
  *
- * The Brain log (`Brain/log/<date>.md` + JSONL sidecar) records WHAT
- * happened; the continuity store (`Brain/log/continuity/<month>.jsonl`)
- * records WHICH CONTEXT was supplied to those operations. The two
+ * The Brain log (`Brain/log/<date>[.<device-id>].md` + JSONL sidecar)
+ * records WHAT happened; the continuity store
+ * (`Brain/log/continuity/<month>[.<device-id>].jsonl`) records WHICH
+ * CONTEXT was supplied to those operations. The two
  * surfaces are written independently and, until now, were read
  * independently — an operator asking "why did the agent do this?" had
  * to query the log, copy a correlation id, and then query each
