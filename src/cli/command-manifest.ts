@@ -184,6 +184,17 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
           flag("vault", "string"),
           flag("json", "boolean"),
         ]),
+        command(
+          "log",
+          "Inspect Brain/log itself: verify (per-shard hash chain)",
+          [],
+          [
+            command("verify", "Report where each log shard stops linking up", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),

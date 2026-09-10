@@ -53,6 +53,7 @@ Brain verbs (observing memory):
   reject           Move a preference to retired (user-rejected); --yes if pinned
   freeze           Stop every content write on every device (--reason <text>)
   unfreeze         Lift the freeze and reopen the content lane
+  log              Inspect Brain/log itself: verify (per-shard hash chain)
   pin              Mark a preference exempt from automatic retire (idempotent)
   unpin            Clear the pinned flag (idempotent)
   state            Overwrite-only exact-state lane (set/get/list/clear --aspect)
@@ -344,6 +345,9 @@ export const VERB_HELP: Record<string, string> = {
   freeze:
     "usage: o2b brain freeze [--reason <text>] [--vault <path>] [--json]\n" +
     "Write Brain/.state/frozen.json. While it exists every content write in this vault is refused - on this device and, once Syncthing has carried the marker, on every device that shares it. The Brain log keeps recording, so the freeze and the writes it refuses stay auditable. Idempotent: a second freeze keeps the first one's reason.\n",
+  log:
+    "usage: o2b brain log verify [--vault <path>] [--json]\n" +
+    "Walk every JSONL shard of the Brain log and report where each one stops linking up. Each appended row carries prev and h, a sha256 over the previous line's hash plus the row's own ts, kind and payload, so an edited or deleted line is detectable. Output names the shard path, the line number, and whether the line was edited (hash-mismatch), removed or reordered (prev-mismatch), or stripped of its chain fields (malformed). Rows written before the chain shipped carry no h; they are counted as legacy and are clean while they precede the chain. Reports only: nothing here rewrites a log to make it verify, and the read path never consults the chain. Exits 1 when any shard does not link up.\n",
   unfreeze:
     "usage: o2b brain unfreeze [--vault <path>] [--json]\n" +
     "Remove the freeze marker and reopen the content lane. The unfreeze log event records who lifted it and what the marker said, which is the only place that survives the file. Idempotent.\n",
