@@ -3074,7 +3074,9 @@ var DEGRADATION_CODE = Object.freeze({
   lineageObservationDropped: "lineage-observation-dropped",
   lineageChainBroken: "lineage-chain-broken",
   vaultMarkerAbsent: "vault-marker-absent",
-  vaultMarkerMismatch: "vault-marker-mismatch"
+  vaultMarkerMismatch: "vault-marker-mismatch",
+  vaultFrozen: "vault-frozen",
+  logChainBroken: "log-chain-broken"
 });
 
 class DegradationNoticeError extends Error {
