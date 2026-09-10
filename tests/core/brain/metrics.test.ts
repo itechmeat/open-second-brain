@@ -8,7 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -121,5 +121,70 @@ describe("listMetrics", () => {
     writeFileSync(join(vault, "Brain", "metrics", "README.md"), "# not a metric\n");
     appendMetric(vault, { surface: "index", runAt: NOW, payload: { n: 1 } });
     expect(listMetrics(vault)).toHaveLength(1);
+  });
+});
+
+/**
+ * Per-device shards (who-wrote-what, Task B / t_1814b9bf). Two machines
+ * running the same instrumented pass must not append to one surface file.
+ */
+describe("metrics per-device shards", () => {
+  const savedEnv: Record<string, string | undefined> = {};
+  let configHome: string;
+
+  function metricsPath(name: string): string {
+    return join(vault, "Brain", "metrics", name);
+  }
+
+  beforeEach(() => {
+    configHome = mkdtempSync(join(tmpdir(), "o2b-metrics-cfg-"));
+    const configPath = join(configHome, "config.yaml");
+    savedEnv["OPEN_SECOND_BRAIN_CONFIG"] = process.env["OPEN_SECOND_BRAIN_CONFIG"];
+    savedEnv["O2B_DEVICE_ID"] = process.env["O2B_DEVICE_ID"];
+    process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
+    delete process.env["O2B_DEVICE_ID"];
+    writeFileSync(configPath, `vault: ${vault}\ndevice_id: "testdev1"\n`, "utf8");
+  });
+
+  afterEach(() => {
+    rmSync(configHome, { recursive: true, force: true });
+    for (const key of ["OPEN_SECOND_BRAIN_CONFIG", "O2B_DEVICE_ID"]) {
+      const value = savedEnv[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+
+  function line(runAt: string, n: number): string {
+    return `${JSON.stringify({ schema: METRICS_SCHEMA_VERSION, surface: "index", run_at: runAt, payload: { n } })}\n`;
+  }
+
+  test("a device with an id writes its own shard and never the bare file", () => {
+    appendMetric(vault, { surface: "index", runAt: NOW, payload: { n: 1 } });
+    expect(existsSync(metricsPath("index.testdev1.jsonl"))).toBe(true);
+    expect(existsSync(metricsPath("index.jsonl"))).toBe(false);
+  });
+
+  test("the reader merges the bare file and every device shard, newest first", () => {
+    mkdirSync(join(vault, "Brain", "metrics"), { recursive: true });
+    writeFileSync(metricsPath("index.jsonl"), line("2026-06-05T10:00:00Z", 1));
+    writeFileSync(metricsPath("index.devb.jsonl"), line("2026-06-05T10:00:02Z", 3));
+    writeFileSync(metricsPath("index.testdev1.jsonl"), line("2026-06-05T10:00:01Z", 2));
+    expect(listMetrics(vault, { surface: "index" }).map((r) => r.payload["n"])).toEqual([3, 2, 1]);
+  });
+
+  test("a sync-conflict copy is not a shard and is never merged", () => {
+    mkdirSync(join(vault, "Brain", "metrics"), { recursive: true });
+    writeFileSync(metricsPath("index.testdev1.jsonl"), line("2026-06-05T10:00:01Z", 2));
+    writeFileSync(
+      metricsPath("index.sync-conflict-20260605-120000-ABCDEFG.jsonl"),
+      line("2026-06-05T10:00:00Z", 99),
+    );
+    expect(listMetrics(vault, { surface: "index" }).map((r) => r.payload["n"])).toEqual([2]);
+  });
+
+  test("an unfiltered listing discovers a surface that only has device shards", () => {
+    appendMetric(vault, { surface: "bridge_discovery", runAt: NOW, payload: { n: 7 } });
+    expect(listMetrics(vault).map((r) => r.surface)).toEqual(["bridge_discovery"]);
   });
 });
