@@ -106,13 +106,14 @@ describe("recordNoteWrite", () => {
       timestamp: TS,
       agent: AGENT,
     });
-    expect(receipt.write_id).toMatch(/^nw_\d{14}_[0-9a-f]{16}$/);
+    const writeId = receipt.write_id;
+    expect(writeId).toMatch(/^nw_\d{14}_[0-9a-f]{16}$/);
 
     const day = readLogDay(vault, DATE);
     const events = day.entries.filter((e) => e.eventType === BRAIN_LOG_EVENT_KIND.noteWrite);
     expect(events).toHaveLength(1);
     const body = events[0]!.body;
-    expect(body["write_id"]).toBe(receipt.write_id);
+    expect(body["write_id"]).toBe(writeId!);
     expect(body["op"]).toBe(NOTE_WRITE_OP.update);
     expect(body["target"]).toBe("Notes/A.md");
     expect(body["hash_before"]).toBe(sha256Hex("old"));
