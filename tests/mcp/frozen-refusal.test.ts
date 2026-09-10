@@ -51,6 +51,12 @@ async function createNote(path: string) {
   });
 }
 
+/** `brain_status`'s structured payload. */
+async function status(): Promise<Record<string, unknown>> {
+  const result = await server.callTool("brain_status", {});
+  return result["structuredContent"] as Record<string, unknown>;
+}
+
 /** Every `write-refused` payload in the log, across every day and shard. */
 function refusals(): ReadonlyArray<Record<string, unknown>> {
   const out: Record<string, unknown>[] = [];
@@ -105,6 +111,20 @@ describe("a write tool called on a frozen vault", () => {
     const response = await createNote("notes/thawed.md");
     expect((response as { error?: unknown }).error).toBeUndefined();
     expect(existsSync(join(vault, "notes", "thawed.md"))).toBe(true);
+  });
+});
+
+describe("brain_status", () => {
+  test("reports the freeze, and reports its absence just as plainly", async () => {
+    const open = await status();
+    expect(open["frozen"]).toBeNull();
+
+    freezeVault(vault, { agent: "@operator", reason: "migrating" });
+    const marker = (await status())["frozen"] as Record<string, unknown>;
+    expect(marker["by"]).toBe("@operator");
+    expect(marker["reason"]).toBe("migrating");
+    expect(typeof marker["frozen_at"]).toBe("string");
+    expect(typeof marker["device_id"]).toBe("string");
   });
 });
 
