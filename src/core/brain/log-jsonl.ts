@@ -19,9 +19,16 @@
  * tolerance contract.
  */
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
+import {
+  listShardedFiles,
+  listSyncConflictFiles,
+  mergeShardedRows,
+  parseShardedName,
+  type LedgerShardGrammar,
+  type ShardedRow,
+} from "./ledger-shards.ts";
 import { brainDirs, validateIsoDate } from "./paths.ts";
 import { parseLogDayFile, type BrainLogEntry, type BrainLogParseWarning } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
@@ -47,19 +54,17 @@ export interface ReadLogDayResult {
 // break the contract of the other surface.
 const ISO_UTC_TS_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 
-// One log file name: `<date>.jsonl`, `<date>.md`, or the sharded
-// `<date>.<deviceId>.jsonl` / `.md`. Device ids are lowercase slugs
-// (see `resolveDeviceId`); Syncthing conflict copies and anything else
-// that does not match are NOT log shards.
-const LOG_FILE_RE = /^(\d{4}-\d{2}-\d{2})(?:\.([a-z0-9-]{1,32}))?\.(jsonl|md)$/;
-
 /**
- * A Syncthing conflict copy is named `<stem>.sync-conflict-<stamp>.<ext>`,
- * so its middle segment can pass the shard-id shape. Named once because
- * both the recogniser that must REJECT it and the leftover reporter that
- * must FIND it key on the same marker.
+ * One log file name: `<date>.jsonl`, `<date>.md`, or the sharded
+ * `<date>.<deviceId>.jsonl` / `.md`. The grammar itself, the device-id
+ * slug and the sync-conflict exclusion live in `ledger-shards.ts`, which
+ * every append-only ledger in the vault now shares; this declaration is
+ * the log's own base and extensions and nothing more.
  */
-const SYNC_CONFLICT_SHARD_PREFIX = "sync-conflict";
+const LOG_GRAMMAR: LedgerShardGrammar = Object.freeze({
+  base: "\\d{4}-\\d{2}-\\d{2}",
+  extensions: Object.freeze(["jsonl", "md"]),
+});
 
 /** The shape of one recognised `Brain/log/` daily file name. */
 export interface ParsedLogFileName {
@@ -87,13 +92,9 @@ export interface ParsedLogFileName {
  * the layout, rather than a third copy of the pattern.
  */
 export function parseLogFileName(name: string): ParsedLogFileName | null {
-  const m = LOG_FILE_RE.exec(name);
-  if (m === null) return null;
-  const shardId = m[2] ?? "";
-  // Defensive: a hand-renamed Syncthing conflict copy could match the
-  // shard-id shape; conflict copies are never log shards.
-  if (shardId.startsWith(SYNC_CONFLICT_SHARD_PREFIX)) return null;
-  return { date: m[1]!, shardId, ext: m[3] as "jsonl" | "md" };
+  const parsed = parseShardedName(name, LOG_GRAMMAR);
+  if (parsed === null) return null;
+  return { date: parsed.base, shardId: parsed.shardId, ext: parsed.ext as "jsonl" | "md" };
 }
 
 export interface LogShardFile extends ParsedLogFileName {
@@ -108,18 +109,13 @@ export interface LogShardFile extends ParsedLogFileName {
  * of paying one `readdirSync` + sort per date.
  */
 export function listLogShardFiles(vault: string): LogShardFile[] {
-  const dir = brainDirs(vault).log;
-  if (!existsSync(dir)) return [];
-  const out: LogShardFile[] = [];
-  for (const entry of readdirSync(dir, { withFileTypes: true }).toSorted((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
-    if (!entry.isFile()) continue;
-    const parsed = parseLogFileName(entry.name);
-    if (parsed === null) continue;
-    out.push({ ...parsed, path: join(dir, entry.name), name: entry.name });
-  }
-  return out;
+  return listShardedFiles(brainDirs(vault).log, LOG_GRAMMAR).map((file) => ({
+    date: file.base,
+    shardId: file.shardId,
+    ext: file.ext as "jsonl" | "md",
+    path: file.path,
+    name: file.name,
+  }));
 }
 
 /**
@@ -139,12 +135,7 @@ export function listLogDates(vault: string): string[] {
  * for a manual union+dedup merge.
  */
 export function listLogSyncConflicts(vault: string): string[] {
-  const dir = brainDirs(vault).log;
-  if (!existsSync(dir)) return [];
-  return readdirSync(dir, { withFileTypes: true })
-    .filter((e) => e.isFile() && e.name.includes(`.${SYNC_CONFLICT_SHARD_PREFIX}-`))
-    .map((e) => join(dir, e.name))
-    .toSorted();
+  return listSyncConflictFiles(brainDirs(vault).log);
 }
 
 /** Markdown log files (legacy + shards) for doctor's per-file lint. */
@@ -183,12 +174,7 @@ export function readLogDay(
     byShard.set(f.shardId, slot);
   }
 
-  interface Tagged {
-    readonly entry: BrainLogEntry;
-    readonly shardId: string;
-    readonly line: number;
-  }
-  const tagged: Tagged[] = [];
+  const tagged: Array<ShardedRow<BrainLogEntry>> = [];
   const warnings: BrainLogParseWarning[] = [];
   let usedMarkdown = false;
 
@@ -196,28 +182,20 @@ export function readLogDay(
     const slot = byShard.get(shardId)!;
     if (slot.jsonl) {
       const r = readJsonl(slot.jsonl.path);
-      r.entries.forEach((entry, i) => tagged.push({ entry, shardId, line: i }));
+      r.entries.forEach((entry, i) => tagged.push({ value: entry, shardId, line: i }));
       warnings.push(...r.warnings);
       continue;
     }
     if (slot.md) {
       usedMarkdown = true;
       const r = parseLogDayFile(vault, validDate, slot.md.path);
-      r.entries.forEach((entry, i) => tagged.push({ entry, shardId, line: i }));
+      r.entries.forEach((entry, i) => tagged.push({ value: entry, shardId, line: i }));
       warnings.push(...r.warnings);
     }
   }
 
-  tagged.sort((a, b) => {
-    if (a.entry.timestamp !== b.entry.timestamp) {
-      return a.entry.timestamp < b.entry.timestamp ? -1 : 1;
-    }
-    if (a.shardId !== b.shardId) return a.shardId < b.shardId ? -1 : 1;
-    return a.line - b.line;
-  });
-
   return {
-    entries: tagged.map((t) => t.entry),
+    entries: mergeShardedRows(tagged, (entry) => entry.timestamp),
     source: usedMarkdown ? "markdown-fallback" : "jsonl",
     warnings,
   };
