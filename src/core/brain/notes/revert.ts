@@ -119,6 +119,14 @@ export const NOTE_REVERT_REFUSAL = Object.freeze({
    * answer as a restore that rewrites identical bytes and logs a write.
    */
   alreadyReverted: "already-reverted",
+  /**
+   * The recorded target is not a path inside this vault: a corrupt log
+   * line, a hand-appended one, a crafted one. Distinct from
+   * `unrecorded`, which is a fact about BYTES that could not be read at
+   * a path this vault owns; this is a fact about the log, and no revert
+   * of such a target could ever be safe.
+   */
+  targetInvalid: "target-invalid",
 } as const);
 
 export type NoteRevertRefusal = (typeof NOTE_REVERT_REFUSAL)[keyof typeof NOTE_REVERT_REFUSAL];
@@ -251,6 +259,14 @@ export interface NoteRevertRecorded {
 }
 
 /** What one apply did. */
+/** One target the apply reached and could not complete, and why. */
+export interface NoteRevertFailure {
+  /** Vault-relative POSIX path of the note. */
+  readonly target: string;
+  /** The error's own message; a machine code here would be an invention. */
+  readonly reason: string;
+}
+
 export interface NoteRevertApplyResult {
   /** The recovery point the whole apply ran behind. */
   readonly snapshot: { readonly run_id: string; readonly path: string };
@@ -263,6 +279,17 @@ export interface NoteRevertApplyResult {
   readonly refused: ReadonlyArray<NoteRevertEntry>;
   /** One row per applied target, naming its `revert` write id. */
   readonly recorded: ReadonlyArray<NoteRevertRecorded>;
+  /**
+   * Entries the apply reached and could not carry out, for a reason no
+   * plan could have predicted - an unwritable directory, an I/O error, a
+   * target replaced under the apply. A third bucket rather than a
+   * refusal, because a refusal is a fact about the vault the plan
+   * already knew and this is a failure of this run; and a bucket rather
+   * than a throw, because one failing entry must not lose the entries
+   * after it, which would then appear in neither `applied` nor
+   * `refused`.
+   */
+  readonly failed: ReadonlyArray<NoteRevertFailure>;
   /**
    * What the recovery point is worth for what this apply reached. A
    * note under `Brain/` and a note outside it are covered differently,
@@ -443,7 +470,23 @@ function planTarget(
   const oldest = selected[0]!;
   const newest = selected[selected.length - 1]!;
   const writes = selected.map((w) => w.write_id);
-  const current = readCurrent(ensureInsideVault(join(vault, target), vault));
+  // The plan is a report over every target the selection touched, so a
+  // target this vault would never have written costs that target and
+  // not the plan: one crafted log line must not take the verdict on
+  // every other note with it.
+  let abs: string;
+  try {
+    abs = ensureInsideVault(join(vault, target), vault);
+  } catch {
+    return refuse(
+      target,
+      writes,
+      NOTE_REVERT_REFUSAL.targetInvalid,
+      NOTE_REVERT_HASH_UNREADABLE,
+      oldest.hash_before,
+    );
+  }
+  const current = readCurrent(abs);
   const hashNow = hashOf(current);
 
   if (current.kind === "unreadable") {
@@ -604,6 +647,7 @@ export function applyNoteRevert(
     (e) => e.action === NOTE_REVERT_ACTION.refuse,
   );
   const recorded: NoteRevertRecorded[] = [];
+  const failed: NoteRevertFailure[] = [];
   const record = (entry: NoteRevertEntry, before: string | null, after: string | null): void => {
     applied.push(entry);
     recorded.push(
@@ -627,42 +671,61 @@ export function applyNoteRevert(
     BRAIN_SNAPSHOT_REASON.noteRevert,
     () => {
       for (const entry of actionable) {
-        const abs = ensureInsideVault(join(vault, entry.target), vault);
-        const current = readCurrent(abs);
-        if (entry.action === NOTE_REVERT_ACTION.delete) {
-          // The plan proved the bytes are the ones the newest selected
-          // write left, so `current` is those bytes; keeping an image of
-          // them is what makes this delete itself revertible.
-          if (current.kind !== "bytes") {
+        // Per-entry boundary. Every step below can throw on a condition
+        // the plan could not see, and the recovery point is already
+        // taken - so an escaping throw would abandon every entry after
+        // this one inside a half-applied gate, and those entries would
+        // appear in neither `applied` nor `refused`. Named in `failed`,
+        // the operator reads what did not happen instead of inferring it
+        // from what is missing.
+        //
+        // Inline rather than behind a helper on purpose: the removal
+        // below has to stay lexically inside this gate's argument list,
+        // which is what the destructive-site census reads.
+        try {
+          const abs = ensureInsideVault(join(vault, entry.target), vault);
+          const current = readCurrent(abs);
+          if (entry.action === NOTE_REVERT_ACTION.delete) {
+            // The plan proved the bytes are the ones the newest selected
+            // write left, so `current` is those bytes; keeping an image
+            // of them is what makes this delete itself revertible.
+            if (current.kind !== "bytes") {
+              refused.push({
+                ...entry,
+                action: NOTE_REVERT_ACTION.refuse,
+                reason: NOTE_REVERT_REFUSAL.unrecorded,
+              });
+              continue;
+            }
+            storeBeforeImage(vault, current.bytes);
+            unlinkSync(abs);
+            record(entry, current.bytes, null);
+            continue;
+          }
+          // A restore verifies the image against the digest the plan
+          // sealed BEFORE it writes: restoring bytes that are not the
+          // ones recorded is the one failure a revert must never have,
+          // and a corrupt or vanished image is the same answer the plan
+          // gives.
+          const bytes = readImage(vault, entry.hash_to);
+          if (bytes === null) {
             refused.push({
               ...entry,
               action: NOTE_REVERT_ACTION.refuse,
-              reason: NOTE_REVERT_REFUSAL.unrecorded,
+              reason: NOTE_REVERT_REFUSAL.imageMissing,
             });
             continue;
           }
-          storeBeforeImage(vault, current.bytes);
-          unlinkSync(abs);
-          record(entry, current.bytes, null);
-          continue;
-        }
-        // A restore verifies the image against the digest the plan
-        // sealed BEFORE it writes: restoring bytes that are not the ones
-        // recorded is the one failure a revert must never have, and a
-        // corrupt or vanished image is the same answer the plan gives.
-        const bytes = readImage(vault, entry.hash_to);
-        if (bytes === null) {
-          refused.push({
-            ...entry,
-            action: NOTE_REVERT_ACTION.refuse,
-            reason: NOTE_REVERT_REFUSAL.imageMissing,
+          if (current.kind === "bytes") storeBeforeImage(vault, current.bytes);
+          mkdirSync(dirname(abs), { recursive: true });
+          atomicWriteFileSync(abs, bytes);
+          record(entry, current.kind === "bytes" ? current.bytes : null, bytes);
+        } catch (err) {
+          failed.push({
+            target: entry.target,
+            reason: err instanceof Error ? err.message : String(err),
           });
-          continue;
         }
-        if (current.kind === "bytes") storeBeforeImage(vault, current.bytes);
-        mkdirSync(dirname(abs), { recursive: true });
-        atomicWriteFileSync(abs, bytes);
-        record(entry, current.kind === "bytes" ? current.bytes : null, bytes);
       }
     },
     {
@@ -675,6 +738,7 @@ export function applyNoteRevert(
     snapshot: { run_id: gated.snapshot.runId, path: gated.snapshot.path },
     applied,
     refused,
+    failed,
     recorded,
     recoverability: gated.recoverability,
   };

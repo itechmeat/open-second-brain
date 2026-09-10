@@ -300,6 +300,7 @@ function printApply(
       snapshot: { ...result.snapshot },
       applied: result.applied.map((e) => ({ ...e })),
       refused: result.refused.map((e) => ({ ...e })),
+      failed: result.failed.map((f) => ({ ...f })),
       recorded: result.recorded.map((r) => ({ ...r })),
       recoverability: {
         state: result.recoverability.state,
@@ -314,6 +315,12 @@ function printApply(
   for (const entry of result.applied) ok(`${entry.action}  ${entry.target}`);
   for (const entry of result.refused) {
     ok(`${NOTE_REVERT_ACTION.refuse}  ${entry.target}  ${entry.reason ?? ABSENT_COLUMN}`);
+  }
+  // A target the apply could not carry out is neither applied nor
+  // refused, and a plan whose entry appears nowhere reads as a plan that
+  // never contained it.
+  for (const failure of result.failed) {
+    ok(`failed  ${failure.target}  ${failure.reason}`);
   }
   // An unrecorded revert is a fact the operator is told, not one they
   // have to infer from a missing line in a later listing.

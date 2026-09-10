@@ -12,6 +12,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -43,6 +44,7 @@ import {
   NOTE_REVERT_ACTION,
   NOTE_REVERT_ERROR,
   NOTE_REVERT_REFUSAL,
+  NOTE_REVERT_REFUSALS,
   NoteRevertError,
   applyNoteRevert,
   planNoteRevert,
@@ -474,4 +476,93 @@ describe("applyNoteRevert", () => {
     });
     expect(noteBytes()).toBe("v2");
   });
+});
+
+/**
+ * The log is a file, and a file can hold a target this vault would never
+ * have written - a corrupt line, a hand-appended one, a crafted one. The
+ * plan is a REPORT: one unusable target must cost that target and not
+ * every other target in the same plan, and the apply must not lose an
+ * entry between `applied` and `refused` because a later one threw.
+ */
+describe("a target the plan cannot resolve", () => {
+  /** Append a `note-write` event naming `target`, bypassing the seams. */
+  function seedRawWrite(target: string, agent: string, timestamp: string): void {
+    appendLogEvent(
+      vault,
+      {
+        timestamp,
+        eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
+        agent,
+        body: {
+          write_id: `nw_${timestamp.replace(/[^0-9]/g, "")}_0123456789abcdef`,
+          op: NOTE_WRITE_OP.update,
+          target,
+          hash_before: sha256Hex("old"),
+          hash_after: sha256Hex("new"),
+          bytes_before: "3",
+          bytes_after: "3",
+          agent,
+        },
+      },
+      { deviceId: "" },
+    );
+  }
+
+  test("a target that escapes the vault is refused by name, not thrown", () => {
+    seedWrite({ bytes: "v0", agent: A, at: at(1) });
+    seedRawWrite("../../escape.md", A, at(2));
+
+    const plan = planNoteRevert(vault, { agent: A });
+    const escaped = plan.entries.find((e) => e.target === "../../escape.md");
+    expect(escaped?.action).toBe(NOTE_REVERT_ACTION.refuse);
+    expect(escaped?.reason).toBe(NOTE_REVERT_REFUSAL.targetInvalid);
+    // The other target in the same plan is still resolved.
+    expect(plan.entries.find((e) => e.target === TARGET)).toBeDefined();
+  });
+
+  test("the refusal is a member of the closed vocabulary", () => {
+    expect(NOTE_REVERT_REFUSAL.targetInvalid).toBe("target-invalid");
+    expect(NOTE_REVERT_REFUSALS).toContain(NOTE_REVERT_REFUSAL.targetInvalid);
+  });
+
+  /**
+   * The plan proved both targets restorable; the second one then fails
+   * on a condition no plan can see - the directory it has to write into
+   * is not writable. Without a per-entry boundary the throw escapes the
+   * gate and the second target appears in neither `applied` nor
+   * `refused`, which reads as "it was not in the plan".
+   */
+  test.skipIf(process.getuid?.() === 0)(
+    "an entry that throws mid-apply is named, and the others still run",
+    () => {
+      seedWrite({ target: "notes/one/A.md", bytes: "v0", agent: SEED, at: at(1) });
+      seedWrite({ target: "notes/one/A.md", bytes: "v1", agent: A, at: at(2) });
+      seedWrite({ target: "notes/two/B.md", bytes: "w0", agent: SEED, at: at(3) });
+      seedWrite({ target: "notes/two/B.md", bytes: "w1", agent: A, at: at(4) });
+
+      const plan = planNoteRevert(vault, { agent: A });
+      expect(plan.entries.map((e) => e.target)).toEqual(["notes/one/A.md", "notes/two/B.md"]);
+      expect(plan.entries.every((e) => e.action === NOTE_REVERT_ACTION.restore)).toBe(true);
+
+      // Readable, so the re-plan still sees the same bytes and the digest
+      // still matches; not writable, so the restore itself throws.
+      const twoDir = join(vault, "notes/two");
+      chmodSync(twoDir, 0o500);
+      let result;
+      try {
+        result = applyNoteRevert(vault, { agent: A }, plan.digest);
+      } finally {
+        chmodSync(twoDir, 0o700);
+      }
+
+      expect(result.applied.map((e) => e.target)).toEqual(["notes/one/A.md"]);
+      expect(readFileSync(join(vault, "notes/one/A.md"), "utf8")).toBe("v0");
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]!.target).toBe("notes/two/B.md");
+      expect(result.failed[0]!.reason).toMatch(/EACCES|EPERM|permission/i);
+      // Untouched: the failure cost this target and nothing else.
+      expect(readFileSync(join(vault, "notes/two/B.md"), "utf8")).toBe("w1");
+    },
+  );
 });
