@@ -335,6 +335,12 @@ export interface ScaffoldStubInput {
   readonly ifExists?: CreateNoteIfExists;
   /** False (the default) resolves and plans, writing nothing. */
   readonly apply?: boolean;
+  /**
+   * Config file that names the writing agent, forwarded to `createNote`
+   * for the note-write record (who-wrote-what, Task A). A stub is a note
+   * like any other and is attributed like one.
+   */
+  readonly configPath?: string;
 }
 
 export interface ScaffoldStubResult {
@@ -484,6 +490,7 @@ export function scaffoldStub(vault: string, input: ScaffoldStubInput): ScaffoldS
     frontmatter,
     content: body,
     ...(input.ifExists !== undefined ? { ifExists: input.ifExists } : {}),
+    ...(input.configPath !== undefined ? { configPath: input.configPath } : {}),
   });
   return Object.freeze({
     target,

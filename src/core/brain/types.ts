@@ -518,6 +518,21 @@ export const BRAIN_LOG_EVENT_KIND = {
    * the `tool`, the `agent`, and the `reason` the marker gave.
    */
   writeRefused: "write-refused",
+  /**
+   * `note-write` (who-wrote-what, Task A / t_662f4e82) - one vault note
+   * was created, updated, appended to, or reverted. This is the event
+   * that makes the bulk of what an agent produces attributable at all:
+   * before it, a note write left no trace in the log and no row in any
+   * roster, so "which notes did this agent touch" had no answer. Payload
+   * carries the `write_id`, the `op` ({@link NOTE_WRITE_OP}), the
+   * vault-relative `target`, the content hash and byte size on both sides
+   * of the write (`hash_before` spelled `absent` when the target did not
+   * exist), and the `agent`; the device rides on the shard name and the
+   * `origin_channel` is stamped by the appender. One event per write,
+   * appended AFTER the bytes land - a create that skipped an occupied
+   * target wrote nothing and records nothing.
+   */
+  noteWrite: "note-write",
 } as const;
 export type BrainLogEventKind = (typeof BRAIN_LOG_EVENT_KIND)[keyof typeof BRAIN_LOG_EVENT_KIND];
 

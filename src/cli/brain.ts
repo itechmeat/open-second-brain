@@ -27,6 +27,7 @@ import {
   cmdBrainQuery,
   cmdBrainAgentQuery,
   cmdBrainAgentDiff,
+  cmdBrainWrites,
   cmdBrainReject,
   cmdBrainFreeze,
   cmdBrainPin,
@@ -252,6 +253,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainAgentQuery(rest);
       case "agent-diff":
         return await cmdBrainAgentDiff(rest);
+      case "writes":
+        return await cmdBrainWrites(rest);
       case "reject":
         return await cmdBrainReject(rest);
       case "freeze":

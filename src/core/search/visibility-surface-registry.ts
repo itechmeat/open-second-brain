@@ -353,6 +353,18 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
       "gated by an explicit agent_scope argument only - never by visibility.",
   },
   {
+    surface: "brain_writes",
+    kind: K.mcpTool,
+    category: C.excluded,
+    reason:
+      "listNoteWrites (core/brain/notes/write-log.ts) projects `note-write` events out of the " +
+      "Brain log and never opens the notes they name, so no `visibility:` is on the path to be " +
+      "consulted. It returns a target PATH and two content digests rather than any note body - " +
+      "which bounds the exposure to the existence of a page and its name, not its prose - but " +
+      "the path of a note marked private is still reported, so this is excluded rather than " +
+      "covered.",
+  },
+  {
     surface: "brain_agent_diff",
     kind: K.mcpTool,
     category: C.excluded,

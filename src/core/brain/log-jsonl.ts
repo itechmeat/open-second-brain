@@ -35,6 +35,19 @@ import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "./types.ts";
 
 export interface ReadLogDayResult {
   readonly entries: ReadonlyArray<BrainLogEntry>;
+  /**
+   * The shard id each entry in {@link entries} came from, at the same
+   * index; the empty string for the legacy un-sharded pair.
+   *
+   * A parallel array rather than a field on the entry, because
+   * `BrainLogEntry` is the shape the markdown parser, the JSONL parser
+   * and every writer already agree on, and a key that only one of the
+   * three could fill would be absent exactly where a reader needs it.
+   * The shard id IS the device id (see `logShardPath`), which is how the
+   * note-write reader answers "which machine wrote this" without a field
+   * in the payload.
+   */
+  readonly entryShardIds: ReadonlyArray<string>;
   readonly source: "jsonl" | "markdown-fallback";
   readonly warnings: ReadonlyArray<BrainLogParseWarning>;
 }
@@ -164,7 +177,9 @@ export function readLogDay(
 ): ReadLogDayResult {
   const validDate = validateIsoDate(date);
   const shards = (preloadedShards ?? listLogShardFiles(vault)).filter((f) => f.date === validDate);
-  if (shards.length === 0) return { entries: [], source: "jsonl", warnings: [] };
+  if (shards.length === 0) {
+    return { entries: [], entryShardIds: [], source: "jsonl", warnings: [] };
+  }
 
   // Group by shard id; per shard prefer .jsonl over .md.
   const byShard = new Map<string, { jsonl?: LogShardFile; md?: LogShardFile }>();
@@ -194,8 +209,16 @@ export function readLogDay(
     }
   }
 
+  // The merge orders by (timestamp, shard id, line) and returns values
+  // only, so the shard id rides inside the value to come out beside its
+  // entry at the same index.
+  const merged = mergeShardedRows(
+    tagged.map((row) => ({ ...row, value: { entry: row.value, shardId: row.shardId } })),
+    (row) => row.entry.timestamp,
+  );
   return {
-    entries: mergeShardedRows(tagged, (entry) => entry.timestamp),
+    entries: merged.map((row) => row.entry),
+    entryShardIds: merged.map((row) => row.shardId),
     source: usedMarkdown ? "markdown-fallback" : "jsonl",
     warnings,
   };

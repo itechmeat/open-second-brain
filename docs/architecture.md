@@ -198,7 +198,7 @@ Recommended behavior:
 
 What "the vault" contains is enumerated rather than assumed.
 `src/core/state/surfaces.ts` declares every durable location this build
-keeps INSIDE a vault — 43 of them — each with the layer that can move it
+keeps INSIDE a vault — 44 of them — each with the layer that can move it
 and what its loss costs, split into `derived` (rebuildable, so deleting it
 costs time) and `vault-content` (the memory itself, permanent without a
 backup). `o2b state status` measures that catalogue against one vault and

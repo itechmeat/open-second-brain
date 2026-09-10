@@ -197,8 +197,14 @@ describe("the unverifiable surface this rule exists for", () => {
    * equality fails in both directions; when it does, recount with the
    * regex below, update this constant, and say in the commit which
    * schemas moved it.
+   *
+   * 25 -> 26: `brain_writes` (who-wrote-what, Task A). It is the one
+   * `agent:` property in the set that is not a writer's claim at all -
+   * the tool is read-only and the argument selects which recorded writes
+   * to list. It still counts, because the regex measures the SURFACE a
+   * caller can spell and not the use each schema makes of it.
    */
-  const CALLER_SUPPLIED_AGENT_PROPERTIES = 25;
+  const CALLER_SUPPLIED_AGENT_PROPERTIES = 26;
 
   test("is exactly what the rule was argued from, in both directions", () => {
     let count = 0;

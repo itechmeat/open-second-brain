@@ -449,7 +449,7 @@ function reasonProblems(entries: ReadonlyArray<VisibilitySurfaceEntry>): {
  * both leaking, plus the three tools that share `procedure-tools.ts` with
  * the second of them and come in on the file-level rule.
  */
-const MCP_TOOL_POPULATION_SIZE = 48;
+const MCP_TOOL_POPULATION_SIZE = 49;
 /** Measured: MCP resources + templates, all excluded. */
 const MCP_RESOURCE_POPULATION_SIZE = 8;
 /** Measured: hand-enumerated CLI verb mirrors. */

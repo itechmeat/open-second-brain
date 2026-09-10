@@ -50,6 +50,7 @@ Brain verbs (observing memory):
   query            Read by --preference, --topic, or --since
   agent-query      Read Brain provenance by source agent (--agent; --json)
   agent-diff       Compare source-agent coverage (browse/search/diff/map)
+  writes           Recorded note writes: list (default), prune-images
   reject           Move a preference to retired (user-rejected); --yes if pinned
   freeze           Stop every content write on every device (--reason <text>)
   unfreeze         Lift the freeze and reopen the content lane
@@ -329,13 +330,23 @@ export const VERB_HELP: Record<string, string> = {
     "--show-expired keeps lapsed memories; both apply to --topic only.\n",
   "agent-query":
     "usage: o2b brain agent-query [--agent <id>...] [--topic <slug>] [--query <text>]\n" +
-    "                             [--kind signal|preference|log] [--limit <n>]\n" +
+    "                             [--kind signal|preference|log|note] [--limit <n>]\n" +
     "                             [--vault <path>] [--json]\n" +
     "Read-only source-agent retrieval over Brain provenance. Omit --agent to query all known agents.\n",
+  writes:
+    "usage: o2b brain writes [list] [--agent <id>] [--device <id>] [--path <note>]\n" +
+    "                        [--since <date>] [--until <date>] [--op create|update|append|revert]\n" +
+    "                        [--vault <path>] [--json]\n" +
+    "       o2b brain writes prune-images [--older-than-days <n>] [--dry-run]\n" +
+    "                        [--vault <path>] [--json]\n" +
+    "Read-only listing of every recorded note write, newest first: timestamp, operation,\n" +
+    "agent, device, target, and the content digest on each side of the write. The device\n" +
+    "comes off the log shard, so a legacy un-sharded log prints '-' rather than a guess.\n" +
+    "prune-images bounds the before-image store by file age; the default window is 30 days.\n",
   "agent-diff":
     "usage: o2b brain agent-diff [--mode browse|search|diff|map] [--agent <id>...]\n" +
     "                            [--topic <slug>] [--query <text>]\n" +
-    "                            [--kind signal|preference|log] [--limit <n>]\n" +
+    "                            [--kind signal|preference|log|note] [--limit <n>]\n" +
     "                            [--vault <path>] [--json]\n" +
     "Compare source-agent coverage using the same provenance foundation as agent-query.\n",
   reject:

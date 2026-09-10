@@ -88,7 +88,8 @@ export const BRAIN_STATE_REL = posix.join(BRAIN_ROOT_REL, "state");
  * marker. Dot-prefixed so the vault walker excludes it from search and
  * indexing exactly as it excludes `.snapshots`.
  */
-export const BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, ".state");
+export const BRAIN_INTERNAL_STATE_DIR = ".state";
+export const BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INTERNAL_STATE_DIR);
 /** Obsidian Bases view definitions: `Brain/bases/<view>.base` (v1.15.0). */
 export const BRAIN_BASES_REL = posix.join(BRAIN_ROOT_REL, "bases");
 /** Ingested source summary pages: `Brain/sources/src-<slug>.md` (v1.7.0). */
@@ -107,6 +108,16 @@ export const BRAIN_SNAPSHOTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_SNAPSHOTS_DI
  */
 export const BRAIN_ARTIFACTS_DIR = ".artifacts";
 export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
+
+/**
+/**
+ * Content-addressed store of the bytes a note write replaced:
+ * `Brain/.state/write-images/<sha256>` (who-wrote-what, Task A). One file
+ * per distinct prior content, so repeated edits between two states cost
+ * one file rather than one per write.
+ */
+export const BRAIN_WRITE_IMAGES_DIR = "write-images";
+export const BRAIN_WRITE_IMAGES_REL = posix.join(BRAIN_INTERNAL_STATE_REL, BRAIN_WRITE_IMAGES_DIR);
 
 /**
  * The top-level `Brain/` entries the snapshot family never touches:

@@ -37,6 +37,7 @@ import {
   WriteBatchError,
   type AppendNoteOperation,
   type UpdateNoteOperation,
+  type NoteWriteAudit,
   type WriteBatchOpResult,
 } from "../../core/brain/write-batch.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
@@ -257,6 +258,10 @@ async function toolBrainCreateNote(
       ...(strict !== undefined ? { strict } : {}),
       ...(template !== undefined ? { template } : {}),
       ...(templateVariables !== undefined ? { templateVariables } : {}),
+      // The note-write record names the agent this server runs as, which
+      // is the one THIS config declares - not the one a machine-default
+      // discovery would find (who-wrote-what, Task A).
+      ...(ctx.configPath !== null ? { configPath: ctx.configPath } : {}),
     });
     // `outcome` is the discriminant; `created` is the boolean this tool
     // has always returned and stays in lockstep with it, so a skip can
@@ -266,6 +271,11 @@ async function toolBrainCreateNote(
       created: res.created,
       outcome: res.outcome,
       path: res.path,
+      // The audit half rides on the receipt for a create and NOT for a
+      // skip (who-wrote-what, Task A): a skip authored no bytes, so it
+      // has no write to attribute and no null that could be mistaken for
+      // a lost one.
+      ...(res.outcome === "created" ? auditFields(res) : {}),
     });
   } catch (err) {
     // Almost every CreateNoteError is a client-input fault (bad path,
@@ -341,7 +351,11 @@ async function toolBrainUpdateNote(
   const result = runSingleWrite(ctx, op, "brain_update_note");
   // The flag comes off the kernel result rather than being restated here:
   // one fact, one source.
-  return noteWriteResult(ctx, [result.path], { updated: result.updated, path: result.path });
+  return noteWriteResult(ctx, [result.path], {
+    updated: result.updated,
+    path: result.path,
+    ...auditFields(result),
+  });
 }
 
 /**
@@ -356,7 +370,28 @@ async function toolBrainAppendNote(
   const content = coerceStr(args, "content", true)!;
   const op: AppendNoteOperation = { kind: "append_note", path, content };
   const result = runSingleWrite(ctx, op, "brain_append_note");
-  return noteWriteResult(ctx, [result.path], { appended: result.appended, path: result.path });
+  return noteWriteResult(ctx, [result.path], {
+    appended: result.appended,
+    path: result.path,
+    ...auditFields(result),
+  });
+}
+
+/**
+ * The `write_id` (and, when it is null, the `audit_reason`) of one note
+ * write, as receipt fields.
+ *
+ * The bytes land before the event is appended, so `write_id: null` is a
+ * state the caller has to be able to see: the note exists and nothing
+ * attributes it. Both keys are always spelled together - the receipt
+ * never carries a bare null - so an agent reading the reply learns which
+ * of the two happened rather than inferring it from an absence.
+ */
+function auditFields(audit: NoteWriteAudit): Record<string, unknown> {
+  return {
+    write_id: audit.write_id,
+    ...(audit.audit_reason !== undefined ? { audit_reason: audit.audit_reason } : {}),
+  };
 }
 
 /** The kernel results that name a note file: exactly the three note ops. */
@@ -384,7 +419,11 @@ function runSingleWrite<K extends SingleNoteOperation["kind"]>(
 ): Extract<NoteOpResult, { readonly kind: K }> {
   let batch;
   try {
-    batch = applyWriteBatch(ctx.vault, [op]);
+    batch = applyWriteBatch(
+      ctx.vault,
+      [op],
+      ctx.configPath !== null ? { configPath: ctx.configPath } : {},
+    );
   } catch (err) {
     throw writeBatchErrorToMcp(err, tool);
   }

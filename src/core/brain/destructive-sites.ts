@@ -404,6 +404,18 @@ export const DESTRUCTIVE_SITES: Readonly<Record<string, DestructiveSiteDeclarati
         "PARTIAL rather than covered because `--include-originals` removes the imported file " +
         "outside `Brain/`, which no archive has ever held.",
     },
+    "src/core/brain/notes/write-record.ts": {
+      calls: ["unlinkSync"],
+      recovery: UNARCHIVED_BRAIN,
+      reason:
+        "prunes before-images past a retention window measured from each file's own mtime, " +
+        "and an image whose age cannot be measured at all is kept rather than removed. Every " +
+        "image is a COPY of note content that still exists somewhere the snapshot region " +
+        "archives - either on disk as the note's current body or inside an earlier archive - " +
+        "so removing one loses no content; it only narrows how far back a revert can reach, " +
+        "and a revert that cannot reach its before-image refuses that target by name rather " +
+        "than discovering the absence silently.",
+    },
     "src/core/brain/notes/lifecycle.ts": {
       calls: ["renameSync", "unlinkSync"],
       recovery: UNARCHIVED_OUTSIDE,

@@ -40,6 +40,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { applyWriteBatch, WriteBatchError } from "../../../src/core/brain/write-batch.ts";
+import { listNoteWrites, type NoteWriteRecord } from "../../../src/core/brain/notes/write-log.ts";
+import {
+  NOTE_WRITE_NO_PRIOR,
+  pruneWriteImages,
+} from "../../../src/core/brain/notes/write-record.ts";
+import { writeImagePath } from "../../../src/core/brain/paths.ts";
+import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 
 let vault: string;
 
@@ -402,5 +409,95 @@ describe("applyWriteBatch note operations", () => {
     }
     // The atomic temp-file + rename pipeline never touched the target.
     expect(readFileSync(abs, "utf8")).toBe(before);
+  });
+});
+
+/**
+ * Attributable note writes (who-wrote-what, Task A / t_662f4e82).
+ *
+ * The kernel is one of the two seams every note mutation funnels through,
+ * so this is where "exactly one event per write" is pinned - along with
+ * the before-image, which is what makes a recorded write undoable rather
+ * than merely visible.
+ */
+describe("applyWriteBatch note-write attribution", () => {
+  function noteWrites(): ReadonlyArray<NoteWriteRecord> {
+    return listNoteWrites(vault).writes;
+  }
+
+  test("each of the three note operations appends exactly one event", () => {
+    seedNote("Notes/Doc.md", "original body", "title: Doc");
+    applyWriteBatch(vault, [{ kind: "create_note", path: "Notes/Fresh.md", content: "fresh" }]);
+    applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "next body" }]);
+    applyWriteBatch(vault, [{ kind: "append_note", path: "Notes/Doc.md", content: "more" }]);
+
+    const writes = noteWrites();
+    expect(writes).toHaveLength(3);
+    expect(writes.map((w) => `${w.op} ${w.target}`).toSorted()).toEqual([
+      "append Notes/Doc.md",
+      "create Notes/Fresh.md",
+      "update Notes/Doc.md",
+    ]);
+  });
+
+  test("every note result carries the id of the event that attributes it", () => {
+    seedNote("Notes/Doc.md", "original body", "title: Doc");
+    const res = applyWriteBatch(vault, [
+      { kind: "create_note", path: "Notes/Fresh.md", content: "fresh" },
+      { kind: "update_note", path: "Notes/Doc.md", body: "next body" },
+    ]);
+    const ids = res.results.map((r) => ("write_id" in r ? r.write_id : null));
+    for (const id of ids) expect(id).toMatch(/^nw_\d{14}_[0-9a-f]{16}$/);
+    expect(new Set(noteWrites().map((w) => w.write_id))).toEqual(new Set(ids as string[]));
+    // The audit half is a pair: an id present means no reason is owed.
+    for (const r of res.results) expect("audit_reason" in r).toBe(false);
+  });
+
+  test("an update records the bytes it replaced and the bytes it wrote", () => {
+    const abs = seedNote("Notes/Doc.md", "original body", "title: Doc");
+    const before = readFileSync(abs, "utf8");
+    applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "next body" }]);
+    const after = readFileSync(abs, "utf8");
+
+    const write = noteWrites()[0]!;
+    expect(write.hash_before).toBe(sha256Hex(before));
+    expect(write.hash_after).toBe(sha256Hex(after));
+    expect(write.bytes_before).toBe(Buffer.byteLength(before, "utf8"));
+    expect(write.bytes_after).toBe(Buffer.byteLength(after, "utf8"));
+    // The before-image holds the exact prior bytes, keyed by their hash.
+    expect(readFileSync(writeImagePath(vault, write.hash_before), "utf8")).toBe(before);
+  });
+
+  test("a create records no prior content and stores no image", () => {
+    applyWriteBatch(vault, [{ kind: "create_note", path: "Notes/Fresh.md", content: "fresh" }]);
+    const write = noteWrites()[0]!;
+    expect(write.hash_before).toBe(NOTE_WRITE_NO_PRIOR);
+    expect(write.bytes_before).toBe(0);
+    expect(pruneWriteImages(vault, { olderThanDays: 0, dryRun: true }).removed).toEqual([]);
+  });
+
+  test("returning a note to a former state re-uses the image already stored", () => {
+    const abs = seedNote("Notes/Doc.md", "one", "title: Doc");
+    const first = readFileSync(abs, "utf8");
+    applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "two" }]);
+    const second = readFileSync(abs, "utf8");
+    applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "one" }]);
+    applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Doc.md", body: "two" }]);
+
+    // Three rewrites, two distinct prior contents, two image files.
+    expect(noteWrites()).toHaveLength(3);
+    const stored = pruneWriteImages(vault, { olderThanDays: 0, dryRun: true }).removed;
+    expect(stored.toSorted()).toEqual([sha256Hex(first), sha256Hex(second)].toSorted());
+  });
+
+  test("a refused batch records nothing, because no bytes were written", () => {
+    seedNote("Notes/Doc.md", "original body", "title: Doc");
+    expect(() =>
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Doc.md", body: "next body" },
+        { kind: "update_note", path: "Notes/Missing.md", body: "never" },
+      ]),
+    ).toThrow(WriteBatchError);
+    expect(noteWrites()).toEqual([]);
   });
 });

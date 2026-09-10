@@ -173,6 +173,38 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ]),
         command("agent-query", "Read source-agent provenance"),
         command("agent-diff", "Compare source-agent coverage"),
+        command(
+          "writes",
+          "Recorded note writes: list (default), prune-images",
+          [
+            flag("vault", "string"),
+            flag("agent", "string"),
+            flag("device", "string"),
+            flag("path", "string"),
+            flag("since", "string"),
+            flag("until", "string"),
+            flag("op", "string"),
+            flag("json", "boolean"),
+          ],
+          [
+            command("list", "Recorded note writes, newest first", [
+              flag("vault", "string"),
+              flag("agent", "string"),
+              flag("device", "string"),
+              flag("path", "string"),
+              flag("since", "string"),
+              flag("until", "string"),
+              flag("op", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("prune-images", "Remove before-images past a retention window", [
+              flag("vault", "string"),
+              flag("older-than-days", "string"),
+              flag("dry-run", "boolean"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command("reject", "Retire a preference"),
         command("merge", "Merge duplicate preferences"),
         command("freeze", "Stop every content write on every device", [

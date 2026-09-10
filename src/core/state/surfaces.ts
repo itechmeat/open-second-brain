@@ -127,6 +127,7 @@ export const STATE_SURFACE_ID = Object.freeze({
   decisionReceipts: "decision_receipts",
   lineageLedger: "lineage_ledger",
   freezeMarker: "freeze_marker",
+  writeImages: "write_images",
   anticipatoryCache: "anticipatory_cache",
   exactState: "exact_state",
   searchFeedback: "search_feedback",
@@ -281,6 +282,7 @@ const TRUTH_DIR = "truth";
 const BRAIN_INTERNAL_STATE_DIR = ".state";
 const LINEAGE_LEDGER_FILE = "session-lineage.jsonl";
 const FROZEN_MARKER_FILE = "frozen.json";
+const WRITE_IMAGES_DIR = "write-images";
 const ANTICIPATORY_DIR = "anticipatory";
 const SEARCH_STATE_DIR = "search";
 const SEARCH_FEEDBACK_DIR = "feedback";
@@ -738,6 +740,21 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
       "by hand is the same act as `o2b brain unfreeze` minus the log event that would have " +
       "recorded who lifted the stop.",
     sources: ["src/core/brain/freeze-marker.ts"],
+  },
+  {
+    id: STATE_SURFACE_ID.writeImages,
+    label: "note-write before-images",
+    tier: STATE_TIER.vaultContent,
+    derive: brainTree(BRAIN_INTERNAL_STATE_DIR, WRITE_IMAGES_DIR),
+    override_env: null,
+    override_config_key: null,
+    carries_memory: true,
+    reason:
+      "The bytes each recorded note write replaced, one file per distinct prior content. It is " +
+      "what lets a write be undone from what it displaced rather than from a whole-tree " +
+      "archive, so deleting it narrows how far back a revert can reach - which the revert plan " +
+      "then reports by name. It holds note prose, so it is a copy of your vault text.",
+    sources: ["src/core/brain/notes/write-record.ts", "src/core/brain/paths.ts"],
   },
   {
     id: STATE_SURFACE_ID.anticipatoryCache,
