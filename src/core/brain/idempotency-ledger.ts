@@ -142,6 +142,15 @@ export function computePayloadHash(fields: Readonly<Record<string, unknown>>): s
 }
 
 /**
+ * The directory every idempotency shard lives in. Exported so the sweep
+ * that reports Syncthing conflict copies names this ledger's directory
+ * through the module that owns it, rather than re-deriving the path.
+ */
+export function idempotencyLogDir(vault: string): string {
+  return ensureInsideVault(join(vault, IDEMPOTENCY_REL), vault);
+}
+
+/**
  * One month's shard for one device: `<month>[.<shardId>].jsonl`.
  *
  * `shardId` defaults to this device's id, so an append lands in a file no
@@ -253,7 +262,7 @@ function monthOf(createdAt: string): string {
 }
 
 function readAllRecords(vault: string): IdempotencyRecord[] {
-  const dir = ensureInsideVault(join(vault, IDEMPOTENCY_REL), vault);
+  const dir = idempotencyLogDir(vault);
   const records: IdempotencyRecord[] = [];
   for (const shard of listShardedFiles(dir, IDEMPOTENCY_GRAMMAR)) {
     let text: string;

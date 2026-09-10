@@ -74,7 +74,12 @@ export interface ListMetricsFilter {
   readonly limit?: number;
 }
 
-function metricsDir(vault: string): string {
+/**
+ * The directory every metric shard lives in. Exported so the sweep that
+ * reports Syncthing conflict copies names this ledger's directory through
+ * the module that owns it, rather than re-deriving the path.
+ */
+export function metricsDir(vault: string): string {
   return join(vault, "Brain", "metrics");
 }
 

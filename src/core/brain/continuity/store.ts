@@ -116,6 +116,15 @@ export function assertCanonicalCreatedAt(createdAt: unknown): string {
 }
 
 /**
+ * The directory every continuity shard lives in. Exported so the sweep
+ * that reports Syncthing conflict copies names this ledger's directory
+ * through the module that owns it, rather than re-deriving the path.
+ */
+export function continuityLogDir(vault: string): string {
+  return ensureInsideVault(join(vault, CONTINUITY_REL), vault);
+}
+
+/**
  * One month's shard for one device: `<month>[.<shardId>].jsonl`.
  *
  * `shardId` defaults to this device's id, so an append lands in a file no
@@ -368,7 +377,7 @@ function appendRecord(vault: string, record: ContinuityRecord): ContinuityRecord
  * reads back in exactly the order it always did.
  */
 function readAllRecords(vault: string, filter: ContinuityRecordFilter = {}): ContinuityRecord[] {
-  const dir = ensureInsideVault(join(vault, CONTINUITY_REL), vault);
+  const dir = continuityLogDir(vault);
   const sinceMonth = filter.since ? filter.since.slice(0, 7) : undefined;
   const untilMonth = filter.until ? filter.until.slice(0, 7) : undefined;
   const rows: Array<ShardedRow<ContinuityRecord>> = [];
