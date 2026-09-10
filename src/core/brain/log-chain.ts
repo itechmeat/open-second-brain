@@ -187,7 +187,7 @@ export function verifyLogChain(vault: string): LogChainVerification {
       code: DEGRADATION_CODE.logChainBroken,
       site: VERIFY_SITE,
       path: shard.path,
-      detail: `line ${shard.firstBreak.line}: ${breakDetail(shard.firstBreak.reason)}`,
+      detail: `line ${shard.firstBreak.line} ${breakDetail(shard.firstBreak.reason)}`,
     });
   }
   if (unreported > 0) {
@@ -212,7 +212,7 @@ export function verifyLogChain(vault: string): LogChainVerification {
 export function breakDetail(reason: LogChainBreakReason): string {
   switch (reason) {
     case LOG_CHAIN_BREAK_REASON.hashMismatch:
-      return "content does not match its recorded hash - the line was edited after it was written";
+      return "carries a hash its content does not match - the line was edited after it was written";
     case LOG_CHAIN_BREAK_REASON.prevMismatch:
       return "does not link to the line before it - a line between them was removed or reordered";
     case LOG_CHAIN_BREAK_REASON.malformed:
