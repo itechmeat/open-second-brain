@@ -29,10 +29,12 @@ import {
   VaultFrozenError,
   resetFreezeMarkerCache,
 } from "../../../../src/core/brain/freeze-marker.ts";
+import { appendLogEvent } from "../../../../src/core/brain/log.ts";
 import { listNoteWrites } from "../../../../src/core/brain/notes/write-log.ts";
 import {
   NOTE_WRITE_NO_PRIOR,
   NOTE_WRITE_OP,
+  noteWriteId,
   recordNoteWrite,
   storeBeforeImage,
   type NoteWriteOp,
@@ -49,7 +51,7 @@ import { writeImagePath } from "../../../../src/core/brain/paths.ts";
 import { listSnapshots } from "../../../../src/core/brain/snapshot.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { sha256Hex } from "../../../../src/core/integrity/digest.ts";
-import { BRAIN_SNAPSHOT_REASON } from "../../../../src/core/brain/types.ts";
+import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "../../../../src/core/brain/types.ts";
 
 const SEED = "agent-seed";
 const A = "agent-a";
@@ -90,6 +92,14 @@ function seedWrite(opts: {
   readonly agent: string;
   readonly at: string;
   readonly op?: NoteWriteOp;
+  /**
+   * Device shard the event lands on. Absent means whatever the appender
+   * resolves, which is the single-device case every other test wants;
+   * naming it is how the same-second tests put two writes on the same
+   * shard or on two, which is the whole difference between a known order
+   * and a guess.
+   */
+  readonly device?: string;
 }): string {
   const target = opts.target ?? TARGET;
   const abs = join(vault, target);
@@ -97,16 +107,51 @@ function seedWrite(opts: {
   mkdirSync(dirname(abs), { recursive: true });
   if (before !== null) storeBeforeImage(vault, before);
   atomicWriteFileSync(abs, opts.bytes);
-  const receipt = recordNoteWrite(vault, {
-    op: opts.op ?? (before === null ? NOTE_WRITE_OP.create : NOTE_WRITE_OP.update),
-    target,
-    before: before === null ? null : { bytes: before },
-    after: { bytes: opts.bytes },
+  const op = opts.op ?? (before === null ? NOTE_WRITE_OP.create : NOTE_WRITE_OP.update);
+  if (opts.device === undefined) {
+    const receipt = recordNoteWrite(vault, {
+      op,
+      target,
+      before: before === null ? null : { bytes: before },
+      after: { bytes: opts.bytes },
+      timestamp: opts.at,
+      agent: opts.agent,
+    });
+    expect(receipt.write_id).not.toBeNull();
+    return receipt.write_id!;
+  }
+  // `recordNoteWrite` does not thread a shard - the appender resolves it
+  // from config - so a test that needs two shards in one vault builds the
+  // same event body and hands the appender the device directly.
+  const body = {
     timestamp: opts.at,
+    op,
+    target,
+    hash_before: before === null ? NOTE_WRITE_NO_PRIOR : sha256Hex(before),
+    hash_after: sha256Hex(opts.bytes),
     agent: opts.agent,
-  });
-  expect(receipt.write_id).not.toBeNull();
-  return receipt.write_id!;
+  } as const;
+  const writeId = noteWriteId(body);
+  appendLogEvent(
+    vault,
+    {
+      timestamp: opts.at,
+      eventType: BRAIN_LOG_EVENT_KIND.noteWrite,
+      agent: opts.agent,
+      body: {
+        write_id: writeId,
+        op: body.op,
+        target: body.target,
+        hash_before: body.hash_before,
+        hash_after: body.hash_after,
+        bytes_before: String(before === null ? 0 : Buffer.byteLength(before, "utf8")),
+        bytes_after: String(Buffer.byteLength(opts.bytes, "utf8")),
+        agent: opts.agent,
+      },
+    },
+    { deviceId: opts.device },
+  );
+  return writeId;
 }
 
 /** `seed` created it, then A edited it twice and nobody else touched it. */
@@ -182,6 +227,34 @@ describe("planNoteRevert refusals", () => {
     seedWrite({ bytes: "v1", agent: A, at: at(2) });
     seedWrite({ bytes: "vB", agent: B, at: at(3) });
     seedWrite({ bytes: "v3", agent: A, at: at(4) });
+
+    const entry = planNoteRevert(vault, { agent: A }).entries[0]!;
+    expect(entry.action).toBe(NOTE_REVERT_ACTION.refuse);
+    expect(entry.reason).toBe(NOTE_REVERT_REFUSAL.interleaved);
+  });
+
+  test("a same-second write on the SAME shard is ordered by line, not refused", () => {
+    // One shard, one second, two writes. Line order inside a shard IS
+    // append order and `readLogDay` merges on (timestamp, shard id,
+    // line), so B's create is PROVABLY before A's update and there is
+    // nothing ambiguous to refuse over.
+    const target = "notes/two.md";
+    const ts = at(2);
+    seedWrite({ target, bytes: "b0", agent: B, at: ts, device: "deva" });
+    seedWrite({ target, bytes: "a1", agent: A, at: ts, device: "deva" });
+
+    const entry = planNoteRevert(vault, { agent: A }).entries[0]!;
+    expect(entry.action).toBe(NOTE_REVERT_ACTION.restore);
+    expect(entry.hash_to).toBe(sha256Hex("b0"));
+  });
+
+  test("a same-second write on a DIFFERENT shard is still interleaved", () => {
+    // Two devices, one second. Nothing orders them: the merge falls back
+    // to the shard id, which is a name, not a clock. Refuse on doubt.
+    const target = "notes/two.md";
+    const ts = at(2);
+    seedWrite({ target, bytes: "b0", agent: B, at: ts, device: "devb" });
+    seedWrite({ target, bytes: "a1", agent: A, at: ts, device: "deva" });
 
     const entry = planNoteRevert(vault, { agent: A }).entries[0]!;
     expect(entry.action).toBe(NOTE_REVERT_ACTION.refuse);
