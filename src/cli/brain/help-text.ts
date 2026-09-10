@@ -50,7 +50,7 @@ Brain verbs (observing memory):
   query            Read by --preference, --topic, or --since
   agent-query      Read Brain provenance by source agent (--agent; --json)
   agent-diff       Compare source-agent coverage (browse/search/diff/map)
-  writes           Recorded note writes: list (default), prune-images
+  writes           Recorded note writes: list (default), revert, prune-images
   reject           Move a preference to retired (user-rejected); --yes if pinned
   freeze           Stop every content write on every device (--reason <text>)
   unfreeze         Lift the freeze and reopen the content lane
@@ -338,11 +338,22 @@ export const VERB_HELP: Record<string, string> = {
     "usage: o2b brain writes [list] [--agent <id>] [--device <id>] [--path <note>]\n" +
     "                        [--since <date>] [--until <date>] [--op create|update|append|revert]\n" +
     "                        [--vault <path>] [--json]\n" +
+    "       o2b brain writes revert (--agent <id> | --device <id> | --path <note>)\n" +
+    "                        [--since <date>] [--until <date>] [--apply <digest>]\n" +
+    "                        [--vault <path>] [--json]\n" +
     "       o2b brain writes prune-images [--older-than-days <n>] [--dry-run]\n" +
     "                        [--vault <path>] [--json]\n" +
     "Read-only listing of every recorded note write, newest first: timestamp, operation,\n" +
     "agent, device, target, and the content digest on each side of the write. The device\n" +
     "comes off the log shard, so a legacy un-sharded log prints '-' rather than a guess.\n" +
+    "revert plans what undoing the selected writes would do: each target resolves to\n" +
+    "restore, delete or a named refusal (drift, interleaved, image-missing, unrecorded,\n" +
+    "already-reverted), and the plan is sealed by a digest printed with the exact --apply\n" +
+    "line that runs it. A selector naming no agent, device or path is refused - a time\n" +
+    "window alone is a vault rollback, which is o2b brain rollback. --apply re-plans,\n" +
+    "refuses a digest that no longer describes the vault before any byte moves, takes a\n" +
+    "note-revert snapshot, and records each restored or deleted target as a note write of\n" +
+    "operation revert, so a revert is itself attributable and revertible.\n" +
     "prune-images bounds the before-image store by file age; the default window is 30 days.\n",
   "agent-diff":
     "usage: o2b brain agent-diff [--mode browse|search|diff|map] [--agent <id>...]\n" +

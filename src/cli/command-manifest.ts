@@ -175,7 +175,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("agent-diff", "Compare source-agent coverage"),
         command(
           "writes",
-          "Recorded note writes: list (default), prune-images",
+          "Recorded note writes: list (default), revert, prune-images",
           [
             flag("vault", "string"),
             flag("agent", "string"),
@@ -184,6 +184,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
             flag("since", "string"),
             flag("until", "string"),
             flag("op", "string"),
+            flag("apply", "string"),
             flag("json", "boolean"),
           ],
           [
@@ -195,6 +196,16 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
               flag("since", "string"),
               flag("until", "string"),
               flag("op", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("revert", "Plan, and with --apply run, a per-agent undo of note writes", [
+              flag("vault", "string"),
+              flag("agent", "string"),
+              flag("device", "string"),
+              flag("path", "string"),
+              flag("since", "string"),
+              flag("until", "string"),
+              flag("apply", "string"),
               flag("json", "boolean"),
             ]),
             command("prune-images", "Remove before-images past a retention window", [
