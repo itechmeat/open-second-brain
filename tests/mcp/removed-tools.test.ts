@@ -191,5 +191,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   // + brain_design_note (one-shot design note grounded in tension,
   //   decision and truth records, salience-lifecycle-enrichment
   //   t_c87644b4) = 113.
-  expect(list.result.tools.length).toBe(113);
+  // + brain_writes (recorded note writes, who-wrote-what Task A
+  //   t_662f4e82) = 114.
+  expect(list.result.tools.length).toBe(114);
 });

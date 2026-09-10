@@ -46,6 +46,7 @@ import { canonicalJson, sha256Hex } from "../../integrity/digest.ts";
 import { appendLogEvent } from "../log.ts";
 import { ensureInsideVault, vaultRelative, writeImagePath, writeImagesDir } from "../paths.ts";
 import { fileAgeMs, isoSecond, msToWholeDays } from "../time.ts";
+import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
 
 /**
@@ -297,6 +298,11 @@ export function pruneWriteImages(
   vault: string,
   opts: PruneWriteImagesOptions = {},
 ): PruneWriteImagesResult {
+  // The one entry point in this module a caller reaches on its own: the
+  // store and the record are written from inside the note seams, which
+  // are guarded before their first byte, and this removes vault bytes
+  // from an operator verb that passes through nothing else.
+  assertVaultIdentityForWrite(vault);
   const olderThanDays = opts.olderThanDays ?? WRITE_IMAGE_RETENTION_DAYS;
   if (!Number.isInteger(olderThanDays) || olderThanDays < 0) {
     throw new Error(

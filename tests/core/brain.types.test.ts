@@ -134,6 +134,10 @@ describe("BRAIN_* const enums", () => {
       // salience-lifecycle-enrichment unit 3c (t_5e338af1) expiration set,
       // changed or explicitly cleared after the artifact was written
       "expiration-set",
+      // who-wrote-what Task A (t_662f4e82) one vault note created, updated,
+      // appended to or reverted - the event that makes the bulk of what an
+      // agent produces attributable at all
+      "note-write",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);
