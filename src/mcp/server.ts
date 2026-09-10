@@ -11,6 +11,8 @@ import {
 } from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
+import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
+import { UNRESOLVED_AGENT, vaultFrozenRefusal } from "./frozen-refusal.ts";
 import { assertNoCallerSuppliedReach } from "./reach-refusal.ts";
 import { buildInstructions } from "./instructions.ts";
 import {
@@ -233,14 +235,20 @@ export class MCPServer {
     // cannot see.
     assertNoCallerSuppliedReach(tool, args);
     assertKnownArguments(tool, args);
-    if (!this.routeMetricsEnabled) return tool.handler(this.context, args, onProgress);
+    if (!this.routeMetricsEnabled) {
+      try {
+        return await tool.handler(this.context, args, onProgress);
+      } catch (exc) {
+        throw this.mapFrozen(tool, exc);
+      }
+    }
     const start = performance.now();
     let status: McpRouteStatus = "ok";
     try {
       return await tool.handler(this.context, args, onProgress);
     } catch (exc) {
       status = "error";
-      throw exc;
+      throw this.mapFrozen(tool, exc);
     } finally {
       emitMcpRouteLatency(
         this.vault,
@@ -254,6 +262,29 @@ export class MCPServer {
         this.routeMetricsEnabled,
       );
     }
+  }
+
+  /**
+   * Map a frozen-vault refusal onto the structured error a caller can
+   * act on, recording one `write-refused` event on the way through.
+   *
+   * Here rather than in each write tool because the freeze is enforced
+   * at the vault guard, so ANY handler can raise it - including the
+   * internal writers a tool composes - and a per-tool `catch` would
+   * cover the ones somebody remembered. Every other exception passes
+   * through untouched.
+   */
+  private mapFrozen(tool: ToolDefinition, exc: unknown): unknown {
+    if (!(exc instanceof VaultFrozenError)) return exc;
+    // `agentName` is optional on the context - a transport may supply
+    // none - so an absent identity is recorded as the named absence
+    // rather than as a plausible-looking name nobody claimed.
+    return vaultFrozenRefusal(
+      this.vault,
+      tool.name,
+      exc,
+      () => this.context.agentName ?? UNRESOLVED_AGENT,
+    );
   }
 
   /** Process one JSON-RPC request or notification. Returns null for notifications. */

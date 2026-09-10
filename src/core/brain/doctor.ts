@@ -75,6 +75,7 @@ import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts"
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
+import { frozenVaultCheck } from "./doctor/frozen-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
   danglingWorkrunCheck,
@@ -159,6 +160,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   entityRegistryCheck,
   capturePatternCheck,
   syncConflictLogCheck,
+  frozenVaultCheck,
   symlinkEscapeCheck,
   frontmatterUncertaintyProbe,
   lineageLedgerProbe,

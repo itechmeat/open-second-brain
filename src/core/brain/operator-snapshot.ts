@@ -18,6 +18,7 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 
 import { resolveSearchConfig } from "../search/index.ts";
+import { FREEZE_NEXT_COMMAND, readFreezeMarker, type FreezeMarker } from "./freeze-marker.ts";
 import { runDoctor } from "./doctor.ts";
 import { resolveSignal } from "./diagnostics.ts";
 import { runHygieneScan } from "./hygiene/scan.ts";
@@ -65,6 +66,19 @@ export interface OperatorSnapshot {
   readonly problems: ReadonlyArray<SnapshotProblem>;
   /** True when there are no problem lines. */
   readonly healthy: boolean;
+  /**
+   * The fleet freeze, or `null` when the vault is open (who-wrote-what,
+   * Task C).
+   *
+   * Reported here rather than only as a doctor finding because "why is
+   * nothing writing" is the first question a freeze raises, and the
+   * operator snapshot is the surface that answers first questions. It is
+   * NOT folded into {@link healthy}: a freeze is a state an operator
+   * asked for, and calling it a problem would report an instruction as a
+   * fault. The doctor names it as a warning, which is where a standing
+   * condition belongs.
+   */
+  readonly frozen: FreezeMarker | null;
 }
 
 export interface BuildOperatorSnapshotOptions {
@@ -188,6 +202,7 @@ export async function buildOperatorSnapshot(
     healthVerdict,
     problems: Object.freeze(problems),
     healthy: problems.length === 0,
+    frozen: readFreezeMarker(vault),
   });
 }
 
@@ -213,6 +228,17 @@ export function renderOperatorSnapshot(snap: OperatorSnapshot): string {
       `search index ${snap.stateFiles.searchIndex ? "present" : "absent"}`,
   );
   out.push(`  health: ${snap.healthVerdict}`);
+  // Printed on BOTH branches, and that is the point: "no line" would be
+  // indistinguishable from a renderer that forgot to ask, and the state
+  // an operator most needs stated is the one where nothing is writing.
+  out.push(
+    snap.frozen === null
+      ? "  frozen: no"
+      : `  frozen: yes - set at ${snap.frozen.frozen_at} by ` +
+          `${snap.frozen.by === "" ? "an unnamed agent" : snap.frozen.by} ` +
+          `(${snap.frozen.reason === "" ? "no reason given" : snap.frozen.reason}); ` +
+          `lift with \`${FREEZE_NEXT_COMMAND}\``,
+  );
 
   if (!snap.healthy) {
     out.push("");

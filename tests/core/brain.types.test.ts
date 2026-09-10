@@ -134,6 +134,11 @@ describe("BRAIN_* const enums", () => {
       // salience-lifecycle-enrichment unit 3c (t_5e338af1) expiration set,
       // changed or explicitly cleared after the artifact was written
       "expiration-set",
+      // who-wrote-what Task C (t_109fa94d) fleet freeze: the two operator
+      // transitions and the refusal each frozen write is recorded as
+      "freeze",
+      "unfreeze",
+      "write-refused",
     ]);
     const actual = new Set<string>(Object.values(BRAIN_LOG_EVENT_KIND));
     expect(actual).toEqual(expected);

@@ -23,6 +23,8 @@ The `prompt_prefix` metric surface measures STRUCTURAL prompt-prefix stability (
 | `dream`, `promote`, `retire`, `noted-redundant`, `signal-suppressed`, `skip-corrupted-frontmatter`, `reconcile` | the deterministic learning pass runs |
 | `feedback`, `apply-evidence`, `force-confirmed`, `reject` | a taste signal or evidence event is recorded |
 | `pin`, `unpin`, `rollback`, `merge`, `upgrade` | operator-facing vault maintenance |
+| `freeze`, `unfreeze` | an operator stopped or reopened the content lane for every device that syncs the vault (`o2b brain freeze` / `o2b brain unfreeze`). One event per real transition only - a second freeze, or an unfreeze on an open vault, writes nothing. `freeze` carries the `reason` and the `device_id` it was set from; `unfreeze` carries the `frozen_at`, `by` and `reason` read off the marker before it was removed, which is the only place they survive the file |
+| `write-refused` | a write was refused because the vault is frozen. Appended at the MCP tool boundary - the guard that refuses sits below the log module and cannot append without closing an import cycle - one per refused call, carrying the `tool`, the `agent` and the marker's `reason`. The Brain log itself keeps writing while frozen (the audit write lane, `WRITE_LANE.audit` in `src/core/brain/freeze-marker.ts`), because a freeze that silenced the log would erase the record of itself |
 | `scan-inline`, `import-session`, `import-claude-memory` | capture and import operations |
 | `note` | a narrative milestone is recorded (`brain_note`) |
 | `session-lifecycle` | a captured lifecycle event also produced Brain writes |

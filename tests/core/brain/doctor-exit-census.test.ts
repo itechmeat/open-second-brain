@@ -198,6 +198,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "sync-conflict-log",
   "tier-drift",
   "topic-key-collision",
+  "vault-frozen",
   "vault-walk-entry-skipped",
 ];
 

@@ -471,6 +471,22 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         // doctor check would make the census follow the import back and
         // read every registry entry below as a doctor code. Same reason
         // `recall-channel-silent` is a literal here.
+        // The vault carries a freeze marker. Spelled as a literal for
+        // the same reason `recovery-point-stale` below is: importing a
+        // `*_CODE` identifier from this module into a doctor check would
+        // make the exit census follow the import back and read every
+        // registry entry here as a doctor code.
+        //
+        // `autoRepairable: false` is load-bearing rather than a default.
+        // A freeze is an instruction, not a defect, and a repair pass
+        // that lifted one would be overruling the operator who set it
+        // from a machine they may not be sitting at.
+        code: "vault-frozen",
+        issueClass: "vault frozen: every content write is refused",
+        nextCommand: "o2b brain unfreeze",
+        autoRepairable: false,
+      },
+      {
         code: "recovery-point-stale",
         issueClass: "newest recovery point older than the liveness window",
         nextCommand: "o2b brain snapshot log",

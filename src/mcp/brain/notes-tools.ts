@@ -43,6 +43,7 @@ import { nextCommandField } from "../../core/brain/next-step.ts";
 import { lintWrittenPages, pageLintField, type PageLintField } from "../../core/brain/page-lint.ts";
 import { WRITE_BINDING_REFUSED_CODE } from "../../core/write-binding/index.ts";
 import { isFrontmatterKey } from "../../core/vault.ts";
+import { rethrowVaultFrozen } from "../frozen-refusal.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { coerceBoolOptional, coerceStr, coerceStringOptional } from "../coerce.ts";
@@ -199,6 +200,7 @@ export function parseFrontmatterArg(
  * than an opaque throw.
  */
 export function writeBatchErrorToMcp(err: unknown, tool: string): MCPError {
+  rethrowVaultFrozen(err);
   if (err instanceof WriteBatchError) {
     return new MCPError(rpcCodeFor(err.code), `${tool}: ${err.message}`, {
       code: err.code,
@@ -281,6 +283,7 @@ async function toolBrainCreateNote(
         ...(err.violations.length > 0 ? { violations: err.violations } : {}),
       });
     }
+    rethrowVaultFrozen(err);
     throw new MCPError(INTERNAL_ERROR, err instanceof Error ? err.message : String(err));
   }
 }

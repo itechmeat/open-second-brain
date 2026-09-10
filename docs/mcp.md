@@ -1298,6 +1298,21 @@ log line is machine-composed rather than authored.
   `transport-reach` are one argument rather than three. `disclosure` is
   deliberately not reserved - it is the unrelated result-depth mode on the
   recall surfaces.
+- Since v1.55.0 a write attempted while the vault is FROZEN
+  (`o2b brain freeze`, marker `Brain/.state/frozen.json`) is refused with
+  `-32602`, the refusal token `vault_frozen`, and structured `data`:
+  `code`, `tool`, `frozen_at`, `by`, `reason`, and
+  `next_command: "o2b brain unfreeze"`. The refusal is raised by the vault
+  write guard, so it covers every tool that puts bytes in the vault -
+  including the internal writers a tool composes - rather than a list of
+  write tools somebody maintained. Each refused call also appends one
+  `write-refused` event to the Brain log naming the tool, the caller and
+  the marker's reason; when that append itself fails, the payload carries
+  an `audit_reason` saying why rather than reporting a record that does
+  not exist. No MCP tool sets or clears the freeze: lifting one is an
+  operator decision about a fleet an agent cannot see, so `freeze` and
+  `unfreeze` are CLI-only. `brain_status` reports the state as
+  `frozen: null | { frozen_at, by, device_id, reason }`.
 - Since v1.54.0 a withheld page is reported exactly as an absent one. On
   the key-addressed reads - a chunk id, a preference id, the templated
   `osb://` readers - the message is byte-identical to the one an absent

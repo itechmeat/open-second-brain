@@ -175,6 +175,15 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("agent-diff", "Compare source-agent coverage"),
         command("reject", "Retire a preference"),
         command("merge", "Merge duplicate preferences"),
+        command("freeze", "Stop every content write on every device", [
+          flag("vault", "string"),
+          flag("reason", "string"),
+          flag("json", "boolean"),
+        ]),
+        command("unfreeze", "Lift the freeze and reopen the content lane", [
+          flag("vault", "string"),
+          flag("json", "boolean"),
+        ]),
         command("pin", "Pin a preference"),
         command("unpin", "Unpin a preference"),
         command("set-primary", "Set primary Brain agent"),

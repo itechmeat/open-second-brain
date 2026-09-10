@@ -17,6 +17,7 @@ export { cmdBrainQuery } from "./query.ts";
 export { cmdBrainAgentQuery } from "./agent-query.ts";
 export { cmdBrainAgentDiff } from "./agent-diff.ts";
 export { cmdBrainReject } from "./reject.ts";
+export { cmdBrainFreeze, cmdBrainUnfreeze } from "./freeze.ts";
 export { cmdBrainPin, cmdBrainUnpin } from "./pin.ts";
 export { cmdBrainState } from "./state.ts";
 export { cmdBrainSetPrimary } from "./set-primary.ts";
