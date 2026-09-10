@@ -183,6 +183,21 @@ describe("mergeShardedRows", () => {
     ]);
   });
 
+  test("a ledger's own last-resort key replaces line order when supplied", () => {
+    const rows = [
+      { value: { at: "2026-08-01", tag: "z" }, shardId: "a", line: 0 },
+      { value: { at: "2026-08-01", tag: "a" }, shardId: "a", line: 1 },
+    ];
+    expect(
+      mergeShardedRows(
+        rows,
+        (v) => v.at,
+        (v) => v.tag,
+      ).map((v) => v.tag),
+    ).toEqual(["a", "z"]);
+    expect(mergeShardedRows(rows, (v) => v.at).map((v) => v.tag)).toEqual(["z", "a"]);
+  });
+
   test("the order does not depend on the order the shards arrived in", () => {
     const rows = [
       { value: { at: "2026-08-01", tag: "a" }, shardId: "a", line: 0 },
