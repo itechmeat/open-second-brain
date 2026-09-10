@@ -649,9 +649,11 @@ export const STATE_SURFACES: ReadonlyArray<StateSurface> = Object.freeze([
     override_config_key: DEVICE_ID_CONFIG_KEY,
     carries_memory: true,
     reason:
-      "One append-only JSONL per preference per device (`<pref-id>.<device-id>.jsonl`) recording " +
-      "every promotion, edit and retirement. It is the provenance behind a rule the agents " +
-      "follow, and it cannot be reconstructed from the preference file it describes.",
+      "One append-only JSONL per preference per device (`<pref-id>/device.<device-id>.jsonl`) " +
+      "recording every promotion, edit and retirement. A directory per preference because a " +
+      "preference id may contain a dot, which a flat name cannot tell from a device suffix. It " +
+      "is the provenance behind a rule the agents follow, and it cannot be reconstructed from " +
+      "the preference file it describes.",
     sources: ["src/core/brain/paths.ts"],
   },
   {

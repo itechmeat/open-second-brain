@@ -9,7 +9,7 @@ Open Second Brain records what it did - learning events, recall decisions, serve
 | Brain log | `Brain/log/<date>[.<device-id>].md` + JSONL sidecar | `appendLogEvent()` in `src/core/brain/log.ts` | Markdown line + JSONL row per event |
 | Continuity store | `Brain/log/continuity/<month>[.<device-id>].jsonl` | `appendContinuityRecord()` in `src/core/brain/continuity/store.ts` | one JSON record per line |
 | Idempotency ledger | `Brain/logs/idempotency/<month>[.<device-id>].jsonl` | `rememberKey()` in `src/core/brain/idempotency-ledger.ts` | one `key -> content hash` record per line |
-| Preference mutation audit | `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl` | `appendPrefAudit()` in `src/core/brain/pref-audit.ts` | one JSON record per line |
+| Preference mutation audit | `Brain/log/pref-audit/<pref-id>/device[.<device-id>].jsonl` (legacy flat `Brain/log/pref-audit/<pref-id>[.<device-id>].jsonl` still read) | `appendPrefAudit()` in `src/core/brain/pref-audit.ts` | one JSON record per line |
 | Session lineage ledger | `Brain/.state/session-lineage[.<device-id>].jsonl` (+ `session-lineage-gaps[.<device-id>].jsonl`) | `recordLineageObservation()` in `src/core/brain/lineage/ledger.ts` | one JSON record per line, sequence-numbered and hash-chained per file |
 | Session lifecycle audit | `Brain/log/session-lifecycle/` | `captureSessionLifecycleEvent()` in `src/core/brain/session-lifecycle.ts` | JSONL audit rows |
 | Bench runs | `<runs-dir>/<run-id>/` (default `.open-second-brain/bench-runs/`, gitignored) | `runMemoryBench()` in `src/core/bench/phases.ts` | `checkpoint.json`, per-question results, `report.json` |

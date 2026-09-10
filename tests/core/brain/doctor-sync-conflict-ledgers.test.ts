@@ -87,4 +87,16 @@ describe("sync-conflict sweep across every ledger directory", () => {
     const dirs = LEDGERS.map(([, dir]) => dir(vault));
     expect(new Set(dirs).size).toBe(LEDGERS.length);
   });
+
+  /**
+   * The preference audit is the one ledger whose shards live a level
+   * down - one directory per preference - so sweeping only its parent
+   * would report a clean ledger while a copy nobody merges sat inside.
+   */
+  test("a conflict copy inside a per-preference directory is reported too", () => {
+    const path = plant(join(prefAuditDir(vault), "pref-alpha"), "device");
+    const findings = conflictFindings();
+    expect(findings).toHaveLength(1);
+    expect(findings[0]!.path).toBe(path);
+  });
 });

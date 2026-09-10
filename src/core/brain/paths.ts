@@ -606,31 +606,59 @@ export function prefAuditDir(vault: string): string {
 }
 
 /**
+ * Brain lifecycle suite (Feature 1). The directory holding ONE
+ * preference's audit shards: `Brain/log/pref-audit/<pref-id>/`. The pref
+ * id (`pref-<slug>` / `ret-<slug>`) is validated through
+ * {@link validateSlug} so it cannot escape the canonical directory.
+ *
+ * A directory rather than a name prefix because {@link validateSlug}
+ * permits a dot inside a preference id: flat, `pref-a.b.jsonl` is both
+ * `pref-a.b`'s trail and `pref-a`'s shard on a device called `b`, and no
+ * separator built out of characters `validateSlug` accepts can tell them
+ * apart. One path segment per preference can never be another
+ * preference's segment. See the module docblock of
+ * `src/core/brain/pref-audit.ts` for the whole decision.
+ */
+export function prefAuditPrefDir(vault: string, prefId: string): string {
+  return ensureInsideVault(join(prefAuditDir(vault), validateSlug(prefId)), vault);
+}
+
+/**
  * Brain lifecycle suite (Feature 1). Append-only audit JSONL for a
  * single preference on a single device:
- * `Brain/log/pref-audit/<pref-id>[.<deviceId>].jsonl`. The pref id
- * (`pref-<slug>` / `ret-<slug>`) is validated through
- * {@link validateSlug} so it cannot escape the canonical directory.
+ * `Brain/log/pref-audit/<pref-id>/device[.<deviceId>].jsonl`.
  *
  * `shardId` defaults to this device's id (who-wrote-what, Task B), so two
  * machines editing one preference never append to the same file. The
- * empty shard id is the legacy un-sharded name, still merged by every
- * read and never renamed.
+ * empty shard id is the un-sharded name inside that directory.
+ *
+ * The stem is fixed rather than the device id alone so the empty shard id
+ * still has a name, and so the shared shard grammar names this file the
+ * same way it names every other ledger's.
  */
 export function prefAuditPath(
   vault: string,
   prefId: string,
   shardId: string = resolveAppendShardId(),
 ): string {
-  const id = validateSlug(prefId);
   return ensureInsideVault(
-    join(prefAuditDir(vault), shardedFileName(id, shardId, PREF_AUDIT_EXT)),
+    join(
+      prefAuditPrefDir(vault, prefId),
+      shardedFileName(PREF_AUDIT_STEM, shardId, PREF_AUDIT_EXT),
+    ),
     vault,
   );
 }
 
 /** Extension of every preference-audit shard. */
 export const PREF_AUDIT_EXT = "jsonl";
+
+/**
+ * Fixed base name of every preference-audit shard inside its
+ * per-preference directory. A stem rather than the bare device id so the
+ * legacy empty shard id still yields a name.
+ */
+export const PREF_AUDIT_STEM = "device";
 
 /** Snapshots directory: `Brain/.snapshots/`. */
 export function snapshotsDir(vault: string): string {

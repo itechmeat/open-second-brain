@@ -85,14 +85,43 @@ export const danglingWorkrunCheck: DoctorCheck = {
  * everywhere, so a `*.sync-conflict-*` copy under any of these means the
  * same thing - a file that exists and that no reader merges.
  */
-const LEDGER_DIRS: ReadonlyArray<(vault: string) => string> = Object.freeze([
-  (vault: string) => brainDirs(vault).log,
-  continuityLogDir,
-  idempotencyLogDir,
-  prefAuditDir,
-  metricsDir,
-  brainStateDirPath,
-]);
+const LEDGER_DIRS: ReadonlyArray<(vault: string, uncertain: DoctorUncertainEntry[]) => string[]> =
+  Object.freeze([
+    (vault: string) => [brainDirs(vault).log],
+    (vault: string) => [continuityLogDir(vault)],
+    (vault: string) => [idempotencyLogDir(vault)],
+    prefAuditSweepDirs,
+    (vault: string) => [metricsDir(vault)],
+    (vault: string) => [brainStateDirPath(vault)],
+  ]);
+
+/**
+ * The preference audit keeps one DIRECTORY per preference
+ * (`pref-audit/<pref-id>/`), so its shards - and therefore any conflict
+ * copy of one - live a level below the others. Sweeping only the parent
+ * would report a clean ledger while a copy nobody merges sat inside it.
+ *
+ * A parent that cannot be listed is reported by name through the shared
+ * swept-path reporter rather than read as "no preferences": the whole
+ * point of this check is to keep "nothing found" and "nothing looked at"
+ * apart.
+ */
+function prefAuditSweepDirs(vault: string, uncertain: DoctorUncertainEntry[]): string[] {
+  const parent = prefAuditDir(vault);
+  const entries = readSweptDir(
+    parent,
+    {
+      site: SYNC_CONFLICT_SITE,
+      consequence:
+        "its per-preference subdirectories were not listed for Syncthing conflict copies, so a " +
+        "leftover copy waiting to be merged is missing from this report",
+      uncertain,
+    },
+    SWEEP_ORIGIN.root,
+  );
+  if (entries === null) return [parent];
+  return [parent, ...entries.filter((e) => e.isDirectory()).map((e) => join(parent, e.name))];
+}
 
 /**
  * Memory Integrity Suite: leftover Syncthing conflict copies under any
@@ -107,26 +136,28 @@ const LEDGER_DIRS: ReadonlyArray<(vault: string) => string> = Object.freeze([
 export const syncConflictLogCheck: DoctorCheck = {
   failSoft: true,
   run({ vault }, { issues, uncertain }) {
-    for (const dir of LEDGER_DIRS) {
-      let ledgerDir: string;
+    for (const resolve of LEDGER_DIRS) {
+      let ledgerDirs: string[];
       try {
-        ledgerDir = dir(vault);
+        ledgerDirs = resolve(vault, uncertain);
       } catch {
         // A directory whose own resolver refuses (a vault path that
         // escapes its root) is not a directory this sweep can visit;
         // the resolver's caller is where that refusal belongs.
         continue;
       }
-      for (const path of listSyncConflicts(ledgerDir, uncertain)) {
-        issues.push({
-          severity: "warning",
-          code: "sync-conflict-log",
-          path,
-          message:
-            `Syncthing sync-conflict copy under ${vaultRelative(ledgerDir, vault)}/: ${path}. ` +
-            "Merge its rows into the shard it was split from (union + dedup by timestamp and " +
-            "content), then delete it.",
-        });
+      for (const ledgerDir of ledgerDirs) {
+        for (const path of listSyncConflicts(ledgerDir, uncertain)) {
+          issues.push({
+            severity: "warning",
+            code: "sync-conflict-log",
+            path,
+            message:
+              `Syncthing sync-conflict copy under ${vaultRelative(ledgerDir, vault)}/: ${path}. ` +
+              "Merge its rows into the shard it was split from (union + dedup by timestamp and " +
+              "content), then delete it.",
+          });
+        }
       }
     }
   },
