@@ -157,11 +157,41 @@ describe("the audit lane's blast radius", () => {
     return out;
   }
 
+  /**
+   * Two spellings reach the same lane. `WRITE_LANE.audit` is the one the
+   * exemption is written in; the bare literal `"audit"` passed as the
+   * third argument to either guard is the same request wearing different
+   * clothes, and a pin that greps only the constant would let it in.
+   */
+  const LANE_SPELLINGS: ReadonlyArray<RegExp> = Object.freeze([
+    /WRITE_LANE\.audit\b/,
+    // `fn(vault, <anything but a comma or paren>, "audit")` across lines.
+    /\b(?:assertVaultIdentityForWrite|brainDirsForWrite)\s*\(\s*[^,()]*,[^,()]*,\s*["'`]audit["'`]/s,
+  ]);
+
   test("WRITE_LANE.audit is requested from the record-keeping modules and nowhere else", () => {
     const requesting = sourceFiles(join(REPO_ROOT, "src"))
-      .filter((abs) => /WRITE_LANE\.audit\b/.test(readFileSync(abs, "utf8")))
+      .filter((abs) => {
+        const text = readFileSync(abs, "utf8");
+        return LANE_SPELLINGS.some((re) => re.test(text));
+      })
       .map((abs) => relative(REPO_ROOT, abs).split("\\").join("/"));
     expect(requesting.toSorted()).toEqual([...ALLOWED].toSorted());
+  });
+
+  test("the literal spelling of the lane is caught, not only the constant", () => {
+    const literalCall = 'assertVaultIdentityForWrite(vault, undefined, "audit");';
+    expect(LANE_SPELLINGS.some((re) => re.test(literalCall))).toBe(true);
+    expect(
+      LANE_SPELLINGS.some((re) => re.test('brainDirsForWrite(v, undefined, "audit").log')),
+    ).toBe(true);
+    // The content lane, spelled either way, is not the audit lane.
+    expect(LANE_SPELLINGS.some((re) => re.test("assertVaultIdentityForWrite(vault);"))).toBe(false);
+    expect(
+      LANE_SPELLINGS.some((re) =>
+        re.test('assertVaultIdentityForWrite(vault, undefined, "content")'),
+      ),
+    ).toBe(false);
   });
 
   test("the lane vocabulary is what the pin is written against", () => {
