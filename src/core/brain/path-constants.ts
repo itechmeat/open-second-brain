@@ -110,7 +110,6 @@ export const BRAIN_ARTIFACTS_DIR = ".artifacts";
 export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
 
 /**
-/**
  * Content-addressed store of the bytes a note write replaced:
  * `Brain/.state/write-images/<sha256>` (who-wrote-what, Task A). One file
  * per distinct prior content, so repeated edits between two states cost
