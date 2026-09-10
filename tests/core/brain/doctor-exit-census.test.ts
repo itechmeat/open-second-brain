@@ -187,6 +187,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "embedding-model-sunset-announced",
   "entity-label-malformed",
   "entity-quote-variant-collision",
+  "log-chain-broken",
   "low-evidence-confirmed",
   "orphan-evidence",
   "principle-corrupted",
