@@ -49,6 +49,7 @@ import {
   brainStateDir,
   captureDecisionLogPath,
   captureWatermarkPath,
+  writeImagesDir,
 } from "../../../src/core/brain/paths.ts";
 import { deadLetterDir } from "../../../src/core/brain/dead-letter.ts";
 import { checkpointPath } from "../../../src/core/brain/ingest/checkpoint.ts";
@@ -253,6 +254,7 @@ const RESOLVER_BINDINGS: ReadonlyArray<readonly [StateSurfaceId, (vault: string)
     ["proposal_watermark", (v) => proposalWatermarkPath(v)],
     ["decision_receipts", (v) => receiptsDir(v)],
     ["lineage_ledger", (v) => sessionLineageLedgerPath(v)],
+    ["write_images", (v) => writeImagesDir(v)],
     ["anticipatory_cache", (v) => dirname(anticipatoryCachePath(v, "root-session"))],
     ["exact_state", (v) => brainStateDir(v)],
     ["search_feedback", (v) => feedbackDir(v)],

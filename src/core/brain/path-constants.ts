@@ -98,6 +98,26 @@ export const BRAIN_ARTIFACTS_DIR = ".artifacts";
 export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
 
 /**
+ * Directory NAME of the internal machinery-state root, as a top-level
+ * `Brain/` entry. NOT {@link BRAIN_STATE_REL}: that one is the authored
+ * exact-state lane an operator reads, this one holds ledgers and stores
+ * the machinery keeps for itself (the session-lineage ledger, the
+ * note-write before-image store). Dot-directory so the vault walker
+ * excludes it from search exactly like `.snapshots`.
+ */
+export const BRAIN_INTERNAL_STATE_DIR = ".state";
+export const BRAIN_INTERNAL_STATE_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INTERNAL_STATE_DIR);
+
+/**
+ * Content-addressed store of the bytes a note write replaced:
+ * `Brain/.state/write-images/<sha256>` (who-wrote-what, Task A). One file
+ * per distinct prior content, so repeated edits between two states cost
+ * one file rather than one per write.
+ */
+export const BRAIN_WRITE_IMAGES_DIR = "write-images";
+export const BRAIN_WRITE_IMAGES_REL = posix.join(BRAIN_INTERNAL_STATE_REL, BRAIN_WRITE_IMAGES_DIR);
+
+/**
  * The top-level `Brain/` entries the snapshot family never touches:
  * never archived, never hashed into a manifest, and never removed by a
  * restore.

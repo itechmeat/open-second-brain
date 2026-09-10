@@ -67,12 +67,16 @@ import {
   BRAIN_STATE_REL,
   BRAIN_TENSIONS_REL,
   BRAIN_THESES_REL,
+  BRAIN_WRITE_IMAGES_REL,
   DERIVED_STORE_DIR,
   HOOK_AUDIT_DIR,
 } from "./path-constants.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 export { ensureInsideVault, vaultRelative } from "../path-safety.ts";
+
+/** Shape of a sha256 digest as {@link writeImagePath} spells its file names. */
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 
 // The canonical vault-relative names live in their own leaf module so
 // `vault-identity.ts` can locate the marker without importing the
@@ -246,6 +250,36 @@ export function brainPinnedPath(vault: string): string {
 /** Overwrite-only exact-state lane directory: `Brain/state/` (t_b0c9d0a3). */
 export function brainStateDir(vault: string): string {
   return ensureInsideVault(join(vault, BRAIN_STATE_REL), vault);
+}
+
+/**
+ * Content-addressed before-image store: `Brain/.state/write-images/`
+ * (who-wrote-what, Task A).
+ *
+ * Holds the raw bytes each note write replaced, keyed by their sha256, so
+ * a recorded write can be undone from the content it displaced rather
+ * than from a whole-tree archive. Inside `Brain/`, so the snapshot region
+ * already covers it.
+ */
+export function writeImagesDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_WRITE_IMAGES_REL), vault);
+}
+
+/**
+ * One before-image: `Brain/.state/write-images/<sha256>`.
+ *
+ * The digest is validated rather than trusted, because it reaches this
+ * builder from a log payload an operator may have hand-edited and a
+ * separator smuggled through it would be a traversal out of the store.
+ */
+export function writeImagePath(vault: string, sha256: string): string {
+  if (!SHA256_HEX_RE.test(sha256)) {
+    throw new Error(
+      `writeImagePath: invalid before-image digest ${JSON.stringify(sha256)} - ` +
+        "expected 64 lowercase hexadecimal characters",
+    );
+  }
+  return ensureInsideVault(join(writeImagesDir(vault), sha256), vault);
 }
 
 /** A single exact-state aspect page: `Brain/state/<aspect>.md` (t_b0c9d0a3). */
