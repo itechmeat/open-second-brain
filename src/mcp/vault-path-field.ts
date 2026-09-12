@@ -31,6 +31,7 @@
  */
 
 import { ConfigReadError, resolveExposeHostPaths, vaultStoreReference } from "../core/config.ts";
+import { escapeRegex } from "../core/strings.ts";
 import type { UnresolvedField } from "../core/vault-presence.ts";
 import type { OutputSchema } from "./output-contract.ts";
 
@@ -128,6 +129,18 @@ const HOME_REFERENCE = "~";
 const SHORTEST_FOLDABLE_HOME = 2;
 
 /**
+ * What may NOT follow the home for the match to be the home.
+ *
+ * A plain prefix replacement run as `/home/dev` would clip
+ * `/home/developer` into `~eloper`: a mangled path is worse than either
+ * the raw one or the folded one, because it names a file that does not
+ * exist. The home matches only where the next character cannot continue
+ * a directory name - a separator, punctuation, whitespace, or the end of
+ * the sentence.
+ */
+const NAME_CHARACTER = "[A-Za-z0-9._-]";
+
+/**
  * Free-form adapter prose with the host home folded to `~`.
  *
  * `verify()` composes its `details` and `fix_hint` sentences from
@@ -152,6 +165,8 @@ export function foldHostHome(text: string, home: string, source: HostPathPolicyS
     if (resolveExposeHostPaths(source.configPath ?? undefined)) return text;
   } catch (err) {
     if (!(err instanceof ConfigReadError)) throw err;
+    // Fall through and fold: an unreadable config is not consent to
+    // print host paths, and the branch that prints them is opt-in.
   }
-  return text.replaceAll(home, HOME_REFERENCE);
+  return text.replace(new RegExp(`${escapeRegex(home)}(?!${NAME_CHARACTER})`, "g"), HOME_REFERENCE);
 }

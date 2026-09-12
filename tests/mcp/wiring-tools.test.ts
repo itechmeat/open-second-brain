@@ -33,6 +33,7 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { WIRING_TOOL_NAME, WIRING_VIEWS, hostWiringEntry } from "../../src/mcp/wiring-tools.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
+import { foldHostHome } from "../../src/mcp/vault-path-field.ts";
 import {
   projectsRegistryPath,
   registerLinkedProject,
@@ -382,6 +383,26 @@ describe("view=hosts", () => {
       resetHostProbeRunner();
       resetCodexRunner();
     }
+  });
+
+  test("a sibling home that extends this one is left alone", () => {
+    // A plain prefix replacement run as `/home/dev` clips
+    // `/home/developer` into `~eloper` - a path that names no file,
+    // which is worse than either the raw one or the folded one.
+    const home = join(sandbox.root, "dev");
+    const sibling = `${home}eloper/.codex/config.toml`;
+    const folded = foldHostHome(`${home}/.codex/config.toml and ${sibling}`, home, {
+      configPath: sandbox.configPath,
+    });
+    expect(folded).toBe(`${FOLDED_HOME}/.codex/config.toml and ${sibling}`);
+  });
+
+  test("the home folds at the end of a sentence and before punctuation too", () => {
+    const home = join(sandbox.root, "dev");
+    const folded = foldHostHome(`checked ${home}, then ${home}`, home, {
+      configPath: sandbox.configPath,
+    });
+    expect(folded).toBe(`checked ${FOLDED_HOME}, then ${FOLDED_HOME}`);
   });
 
   test("`expose_host_paths` restores the raw path in that same sentence", () => {

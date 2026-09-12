@@ -46,8 +46,6 @@ export interface BuildInstructionsOpts {
   readonly capabilities: ToolCapabilityReport;
 }
 
-/** Separator between the identity sentence and the body that follows it. */
-
 /**
  * The opening identity sentence of every scope's instructions.
  *
