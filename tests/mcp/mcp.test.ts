@@ -185,6 +185,9 @@ describe("tool listing", () => {
         "second_brain_capabilities",
         // Core read/health (writable legacy tools removed in v0.9.0).
         "second_brain_status",
+        // What this install is wired into: linked projects, verified
+        // install targets (what-this-install-knows).
+        "second_brain_wiring",
         "second_brain_query",
         "vault_health",
         // Preview-budget artifact fetch (added in v0.18.0).
@@ -767,7 +770,9 @@ describe("stdio loop", () => {
     //   t_c87644b4) = 113.
     // + brain_writes (recorded note writes, who-wrote-what Task A
     //   t_662f4e82) = 114.
-    expect(list.result.tools.length).toBe(114);
+    // + second_brain_wiring (linked projects and verified install targets,
+    //   what-this-install-knows t_49315346 + t_09d7e9e9) = 115.
+    expect(list.result.tools.length).toBe(115);
   });
 
   test("returns parse error for invalid JSON", async () => {

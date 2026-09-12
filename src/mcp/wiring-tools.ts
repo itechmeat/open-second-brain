@@ -151,8 +151,12 @@ function toolWiring(ctx: ServerContext, args: Record<string, unknown>): unknown 
 export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: WIRING_TOOL_NAME,
+    // Under the 300-character registry cap: the path policy and the
+    // per-view field tables are long-form guidance, and `registry-guard.ts`
+    // states that those belong in docs/mcp.md rather than in a schema every
+    // client pays for on every request.
     description:
-      "Report what this Open Second Brain install is wired into. view=projects lists every registered project link with its pointer state; view=hosts verifies every install target the way `o2b install --check` does and may ask host CLIs, with each wait bounded. Paths are opaque unless expose_host_paths is set. Read-only.",
+      "Report what this Open Second Brain install is wired into. view=projects lists each registered project link with its pointer state and whether its vault still exists; view=hosts verifies every install target as `o2b install --check` does, and may ask host CLIs under a bounded wait. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
