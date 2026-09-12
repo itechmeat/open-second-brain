@@ -48,9 +48,17 @@
  * scope's segments declare. Not the whole withheld set: a `max_tools`
  * window on the full scope withholds over a hundred tools, and pasting
  * that list into the handshake would spend more tokens explaining an
- * absence than the removed guidance ever cost. The block says where the
- * complete report is, and {@link CAPABILITY_DIAGNOSTIC_TOOL} is never
- * itself withheld, so that pointer always leads somewhere.
+ * absence than the removed guidance ever cost.
+ *
+ * The block closes by saying where the complete report is - but only on
+ * a surface that has one. No capability WINDOW ever withholds
+ * {@link CAPABILITY_DIAGNOSTIC_TOOL}, and the writer scope does not
+ * register it at all: `buildToolTable("writer")` is the five always-
+ * loaded tools and nothing else. Pointing an agent there would be the
+ * defect this module exists to remove, reintroduced by the sentence
+ * that explains the removal, so the pointer is emitted only when the
+ * report says the tool is available and the names stand alone
+ * otherwise.
  */
 
 import { CAPABILITY_DIAGNOSTIC_TOOL } from "./capabilities.ts";
@@ -391,6 +399,9 @@ function renderWithheldBlock(scope: ToolScope, report: ToolCapabilityReport): st
     lines.push(`${BULLET}${name}: ${reasons.get(name) ?? UNREGISTERED_REASON}`);
   }
   if (lines.length === 0) return null;
+  if (!available.has(CAPABILITY_DIAGNOSTIC_TOOL)) {
+    return [WITHHELD_BLOCK_HEADING, ...lines].join(LINE_BREAK);
+  }
   return [WITHHELD_BLOCK_HEADING, ...lines, "", WITHHELD_BLOCK_POINTER].join(LINE_BREAK);
 }
 

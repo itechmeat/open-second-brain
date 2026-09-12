@@ -176,6 +176,51 @@ describe("a runtime that withholds everything instructs nothing", () => {
     expect(text).toContain(WITHHELD_BLOCK_HEADING);
     expect(text).toContain(`${WITHHELD_TOOL}: not allowed by runtime capability window`);
   });
+
+  test("a paragraph whose every tool-bearing clause went renders nothing at all", () => {
+    // The full body's memory-contract paragraph closes with an
+    // unconditional caveat ("Skip Brain calls for casual chat..."). With
+    // every writer withheld it has nothing left to caveat, and a
+    // surviving orphan sentence is the shape this rule exists to
+    // prevent.
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.full,
+      capabilities: reportFor(TOOL_SCOPE.full, window),
+    });
+    const [body] = text.split(WITHHELD_BLOCK_HEADING);
+    expect(body).not.toContain("Skip Brain calls");
+    expect(body).not.toContain("Memory contract");
+  });
+});
+
+describe("the block points at a report only where there is one to read", () => {
+  const window: RuntimeCapabilityWindow = { disabledTools: [WITHHELD_TOOL] };
+
+  test("the full scope, which registers the diagnostic, names it", () => {
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.full,
+      capabilities: reportFor(TOOL_SCOPE.full, window),
+    });
+    expect(text).toContain(CAPABILITY_DIAGNOSTIC_TOOL);
+  });
+
+  test("the writer scope, which does not register it, does not send an agent there", () => {
+    // `buildToolTable("writer")` is the five always-loaded tools and
+    // nothing else, so the pointer would have named a tool this server
+    // answers `unknown tool` for - the defect the module removes,
+    // reintroduced by the sentence explaining the removal.
+    const registered = new Set(buildToolTable(TOOL_SCOPE.writer).map((tool) => tool.name));
+    expect(registered.has(CAPABILITY_DIAGNOSTIC_TOOL)).toBe(false);
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.writer,
+      capabilities: reportFor(TOOL_SCOPE.writer, window),
+    });
+    expect(text).toContain(WITHHELD_BLOCK_HEADING);
+    expect(text).not.toContain(CAPABILITY_DIAGNOSTIC_TOOL);
+  });
 });
 
 describe("the unresolved-identity branch is unchanged", () => {
