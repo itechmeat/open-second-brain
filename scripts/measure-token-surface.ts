@@ -19,6 +19,8 @@ import { budgetActiveBody } from "../src/core/brain/active-budget.ts";
 import { parseFrontmatterText } from "../src/core/vault.ts";
 import { estimateTokens } from "../src/core/brain/text/tokenizer.ts";
 import { buildInstructions } from "../src/mcp/instructions.ts";
+import { evaluateToolCapabilities } from "../src/mcp/capabilities.ts";
+import { SERVER_NAME } from "../src/mcp/protocol.ts";
 import { buildToolTable } from "../src/mcp/tools.ts";
 import {
   TOOL_SCOPE,
@@ -65,8 +67,20 @@ const listed = rows.filter((r) => !r.hidden);
 const hidden = rows.filter((r) => r.hidden);
 
 // Every scope opens with the identity line, so every scope is measured.
+// The window is left unset on purpose: this measures the WIDEST block a
+// host can be handed, and a runtime that withholds tools is handed less.
 const instructionChars = Object.fromEntries(
-  TOOL_SCOPES.map((scope) => [scope, buildInstructions({ agent: "agent", scope }).length]),
+  TOOL_SCOPES.map((scope) => [
+    scope,
+    buildInstructions({
+      agent: "agent",
+      scope,
+      capabilities: evaluateToolCapabilities(buildToolTable(scope), {
+        scope,
+        serverName: SERVER_NAME,
+      }).report,
+    }).length,
+  ]),
 ) as Record<ToolScope, number>;
 
 const vault = resolveVault();
