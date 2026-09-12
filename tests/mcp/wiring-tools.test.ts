@@ -31,7 +31,12 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
-import { WIRING_TOOL_NAME, WIRING_VIEWS, hostWiringEntry } from "../../src/mcp/wiring-tools.ts";
+import {
+  WIRING_MAX_PROJECTS,
+  WIRING_TOOL_NAME,
+  WIRING_VIEWS,
+  hostWiringEntry,
+} from "../../src/mcp/wiring-tools.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { foldHostHome } from "../../src/mcp/vault-path-field.ts";
 import {
@@ -185,6 +190,35 @@ describe("view=projects", () => {
   test("an empty registry is an empty list, not an error", async () => {
     const { payload } = await callWiring({ view: "projects" });
     expect(payload!["projects"]).toEqual([]);
+    expect(payload!["total"]).toBe(0);
+    expect(payload!["returned"]).toBe(0);
+    expect(payload!["truncated"]).toBe(false);
+  });
+
+  test("an uncapped registry is capped, and the payload says so", async () => {
+    // Nothing caps `projects.json` - every `o2b brain project link`
+    // appends to it - and this response lands in model context, so the
+    // bound has to be in the payload rather than in the expectation
+    // that operators link few projects.
+    const over = WIRING_MAX_PROJECTS + 3;
+    for (let i = 0; i < over; i++) {
+      const project = join(sandbox.root, `linked-${i}`);
+      mkdirSync(project, { recursive: true });
+      registerLinkedProject(sandbox.configPath, project, sandbox.vault);
+    }
+    const { payload } = await callWiring({ view: "projects" });
+    expect((payload!["projects"] as unknown[]).length).toBe(WIRING_MAX_PROJECTS);
+    expect(payload!["total"]).toBe(over);
+    expect(payload!["returned"]).toBe(WIRING_MAX_PROJECTS);
+    expect(payload!["truncated"]).toBe(true);
+  });
+
+  test("a registry under the cap is not reported as truncated", async () => {
+    registerLinkedProject(sandbox.configPath, sandbox.project, sandbox.vault);
+    const { payload } = await callWiring({ view: "projects" });
+    expect(payload!["total"]).toBe(1);
+    expect(payload!["returned"]).toBe(1);
+    expect(payload!["truncated"]).toBe(false);
   });
 
   test("each of the four pointer states is reported as itself", async () => {

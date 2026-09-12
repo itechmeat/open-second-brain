@@ -384,6 +384,14 @@ answered.
 | `pointer` | `ok`, `missing`, `malformed`, or `mismatch` - the state of that project's `.o2b-vault.json` against the registry. |
 | `vault_exists` | Whether the vault directory is still present. |
 
+Beside `projects` the payload carries `total` (links found), `returned`
+(entries actually carried) and `truncated`. The list is capped at 25: nothing
+caps `projects.json` - every `o2b brain project link` appends to it - and this
+response lands in model context, so the bound is in the payload rather than in
+an assumption about how many projects an operator links. The `view=hosts` list
+is not capped; a registry this build closes bounds it already. The CLI verb
+stays uncapped too - it renders to a terminal.
+
 A registry file damaged by hand reads as no links at all - not as the entries
 it can still parse - and the call succeeds. That is the tolerance the CLI
 reader already has (`listLinkedProjects` parses the registry as a whole), and

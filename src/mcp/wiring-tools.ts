@@ -74,6 +74,30 @@ const HOSTS_VIEW = "hosts";
 /** Membership list of the accepted `view` values, in schema order. */
 export const WIRING_VIEWS: ReadonlyArray<string> = Object.freeze([PROJECTS_VIEW, HOSTS_VIEW]);
 
+/**
+ * Most project links `view=projects` carries inline.
+ *
+ * The hosts view is bounded by construction - one entry per adapter in
+ * a registry this build closes - and the projects view is not. Nothing
+ * caps `projects.json`: every `o2b brain project link` appends to it,
+ * so the registry grows with the operator's habits and the serialized
+ * result grows with it. That is the one thing this tool's
+ * preview-budget exemption claims cannot happen, and the claim has to
+ * be made true by the payload rather than by hope.
+ *
+ * Capped rather than budgeted because the budget is per TOOL, not per
+ * view: the shared `MCP_PREVIEW_BUDGET` is ~2000 characters and the
+ * hosts view already renders around 1700 with nothing installed, so a
+ * tool-wide budget would park an operator's connector diagnostic in an
+ * artifact on almost every call. The cap here bounds the view that
+ * needs bounding and leaves the other one alone.
+ *
+ * Matches `PAGE_LINT_MAX_FINDINGS` at twenty-five, and the list
+ * declares its own truncation the same way that report does, so a
+ * capped answer can never be read as a complete one.
+ */
+export const WIRING_MAX_PROJECTS = 25;
+
 /** One registered project link, rendered under the path policy. */
 function projectEntry(status: LinkedProjectStatus, ctx: ServerContext): Record<string, unknown> {
   return {
@@ -99,13 +123,23 @@ function projectEntry(status: LinkedProjectStatus, ctx: ServerContext): Record<s
  * on this surface as it does on the CLI. That is core's contract, not
  * this view's: a tool that refused where the verb tolerates would be the
  * second answer this file exists to avoid.
+ *
+ * The list is capped at {@link WIRING_MAX_PROJECTS} and carries `total`,
+ * `returned` and `truncated` beside it, so what an unbounded registry
+ * costs this payload is bounded and a capped answer cannot be read as a
+ * complete one. The CLI verb is uncapped and stays so: it renders to a
+ * terminal, not into model context.
  */
 function viewProjects(ctx: ServerContext): Record<string, unknown> {
   const links = linkedProjectsStatus(ctx.configPath ?? defaultConfigPath());
+  const returned = links.slice(0, WIRING_MAX_PROJECTS);
   return {
     vault_path: vaultPathField(ctx),
     view: PROJECTS_VIEW,
-    projects: links.map((status) => projectEntry(status, ctx)),
+    projects: returned.map((status) => projectEntry(status, ctx)),
+    total: links.length,
+    returned: returned.length,
+    truncated: links.length > returned.length,
   };
 }
 
@@ -206,9 +240,23 @@ export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       properties: {
         vault_path: VAULT_PATH_OUTPUT_SCHEMA,
         view: { type: "string", description: "The view this payload answers." },
+        total: {
+          type: "number",
+          description: "view=projects: registered project links found, the cap included.",
+        },
+        returned: {
+          type: "number",
+          description: "view=projects: entries actually carried in `projects`.",
+        },
+        truncated: {
+          type: "boolean",
+          description: "view=projects: true iff `total` exceeds `returned`.",
+        },
         projects: {
           type: "array",
-          description: "view=projects: one entry per registered project link.",
+          description:
+            "view=projects: one entry per registered project link, capped; " +
+            "read `total`, `returned` and `truncated` beside it.",
           items: {
             type: "object",
             required: ["project_ref", "vault_ref", "pointer", "vault_exists"],
