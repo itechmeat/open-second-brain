@@ -613,8 +613,12 @@ before, so the only difference is in the withheld cases. The block lists the
 tools this text would have instructed and cannot, not the whole withheld set -
 a `--max-tools` window can withhold over a hundred tools, and pasting that list
 into the first thing every agent reads would cost more than the removed
-guidance did. It points at `second_brain_capabilities`, which is never itself
-withheld, for the complete report.
+guidance did. On a surface that registers `second_brain_capabilities` the
+block closes by pointing there for the complete report; no capability window
+ever withholds that tool. The writer scope does not register it at all, so
+there the block ends with the names - a handshake sending an agent to a tool
+its own server answers `unknown tool` for would be the defect this rendering
+removes, reintroduced by the sentence that explains the removal.
 
 ### The host ceiling (since v1.50.0)
 
