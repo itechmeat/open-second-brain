@@ -152,6 +152,21 @@ describe("dream progress", () => {
       // member of that entry (run_id, reason, channel) still compares.
       const ARCHIVE_SIZE_FIELD = /(size_bytes"?:\s*"?)\d+/g;
       const ARCHIVE_SIZE_PLACEHOLDER = "$1<archive-size>";
+      // The chain hashes carry that size with them, so normalising the
+      // field alone leaves the nondeterminism in the two places the
+      // field was taken out of. `h` is computed over the payload
+      // INCLUDING the real `size_bytes`, and every later line in the day
+      // log chains off it through `prev`, so one straddled second
+      // re-keys the whole file - which is this test failing on a loaded
+      // CI runner and passing on every developer box.
+      //
+      // The chain is not what this test is for, and it is not left
+      // unguarded: the log-integrity suites verify it end to end. What
+      // this one asserts is that attaching an observer changes nothing
+      // the pass AUTHORED, and what the pass authored is the payloads.
+      // `prev: null` is a literal, not a digest, and stays.
+      const CHAIN_HASH_FIELD = /("(?:h|prev)":")[0-9a-f]{64}"/g;
+      const CHAIN_HASH_PLACEHOLDER = '$1<chain-hash>"';
       const NORMALISED_PREFIX = "Brain/log/";
       const authored = (root: string): Map<string, string> => {
         const kept = new Map<string, string>();
@@ -162,10 +177,9 @@ describe("dream progress", () => {
           kept.set(
             path,
             path.startsWith(NORMALISED_PREFIX)
-              ? readFileSync(join(root, path), "utf8").replaceAll(
-                  ARCHIVE_SIZE_FIELD,
-                  ARCHIVE_SIZE_PLACEHOLDER,
-                )
+              ? readFileSync(join(root, path), "utf8")
+                  .replaceAll(ARCHIVE_SIZE_FIELD, ARCHIVE_SIZE_PLACEHOLDER)
+                  .replaceAll(CHAIN_HASH_FIELD, CHAIN_HASH_PLACEHOLDER)
               : digest,
           );
         }
