@@ -66,6 +66,22 @@ const EXPOSE_ENV = "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS";
 /** The override `defaultConfigPath` consults before the host home. */
 const CONFIG_PATH_ENV = "OPEN_SECOND_BRAIN_CONFIG";
 
+/**
+ * Every environment variable this file writes.
+ *
+ * Bun runs the whole suite in ONE process and `tests/setup.ts` makes it
+ * hermetic by pointing `OPEN_SECOND_BRAIN_CONFIG` at a throwaway config
+ * for every file that does not set its own. A `delete` here therefore
+ * does not restore a prior state - it destroys that default for every
+ * file bun schedules after this one, which is why the restore below is
+ * a snapshot of the value rather than a removal of the key.
+ */
+const MUTATED_ENV: ReadonlyArray<string> = Object.freeze([
+  INSTALLATION_SECRET_ENV_KEY,
+  EXPOSE_ENV,
+  CONFIG_PATH_ENV,
+]);
+
 interface Sandbox {
   readonly root: string;
   readonly configPath: string;
@@ -74,8 +90,7 @@ interface Sandbox {
 }
 
 let sandbox: Sandbox;
-let savedSecret: string | undefined;
-let savedExpose: string | undefined;
+let savedEnv: Map<string, string | undefined>;
 
 function makeSandbox(): Sandbox {
   const root = mkdtempSync(join(tmpdir(), "o2b-wiring-"));
@@ -90,18 +105,17 @@ function makeSandbox(): Sandbox {
 }
 
 beforeEach(() => {
-  savedSecret = process.env[INSTALLATION_SECRET_ENV_KEY];
-  savedExpose = process.env[EXPOSE_ENV];
+  savedEnv = new Map(MUTATED_ENV.map((key) => [key, process.env[key]]));
   process.env[INSTALLATION_SECRET_ENV_KEY] = SECRET;
   delete process.env[EXPOSE_ENV];
   sandbox = makeSandbox();
 });
 
 afterEach(() => {
-  if (savedSecret === undefined) delete process.env[INSTALLATION_SECRET_ENV_KEY];
-  else process.env[INSTALLATION_SECRET_ENV_KEY] = savedSecret;
-  if (savedExpose === undefined) delete process.env[EXPOSE_ENV];
-  else process.env[EXPOSE_ENV] = savedExpose;
+  for (const [key, value] of savedEnv) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
   rmSync(sandbox.root, { recursive: true, force: true });
 });
 
@@ -242,8 +256,13 @@ describe("view=projects path policy", () => {
     const { payload } = await callWiring({ view: "projects" });
     const serialised = JSON.stringify(payload);
     expect(serialised).not.toContain(sandbox.project);
+    // Both sides of the link, not just the one: the two fields are
+    // rendered by the same call and an assertion over one of them would
+    // pass for a payload that leaked the other.
+    expect(serialised).not.toContain(sandbox.vault);
     const projects = payload!["projects"] as Array<Record<string, unknown>>;
     expect(projects[0]!["project_ref"]).toHaveProperty("error");
+    expect(projects[0]!["vault_ref"]).toHaveProperty("error");
   });
 
   test("a registry damaged by hand reads as no links, exactly as the CLI verb does", async () => {
@@ -266,13 +285,12 @@ describe("view=projects path policy", () => {
     registerLinkedProject(sandbox.configPath, sandbox.project, sandbox.vault);
     writeVaultPointer(sandbox.project, sandbox.vault);
     process.env[CONFIG_PATH_ENV] = sandbox.configPath;
-    try {
-      const server = new MCPServer({ vault: sandbox.vault });
-      const { payload } = await callWiring({ view: "projects" }, server);
-      expect((payload!["projects"] as unknown[]).length).toBe(1);
-    } finally {
-      delete process.env[CONFIG_PATH_ENV];
-    }
+    // No local restore: `afterEach` puts every key in `MUTATED_ENV` back
+    // to the value it snapshotted, which for this one is the hermetic
+    // default `tests/setup.ts` installs for the whole process.
+    const server = new MCPServer({ vault: sandbox.vault });
+    const { payload } = await callWiring({ view: "projects" }, server);
+    expect((payload!["projects"] as unknown[]).length).toBe(1);
   });
 });
 
@@ -417,7 +435,8 @@ describe("view=hosts", () => {
       });
       expect((entry["details"] as string[]).join("; ")).toContain(`${home}/.codex/`);
     } finally {
-      delete process.env[EXPOSE_ENV];
+      // `afterEach` restores EXPOSE_ENV from the snapshot; the runners
+      // are process-global and have no snapshot, so they reset here.
       resetHostProbeRunner();
       resetCodexRunner();
     }
