@@ -56,6 +56,7 @@ import {
   uninstallCli,
 } from "./install-cli.ts";
 import { cmdUpdate } from "./update.ts";
+import { ROOT_VERSION_FLAG_TOKEN, cmdVersion } from "./version.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
@@ -1002,6 +1003,11 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     process.stdout.write(renderHelp());
     return 0;
   }
+  if (argv[0] === ROOT_VERSION_FLAG_TOKEN) {
+    // The synonym of `o2b version`, routed to the same renderer rather
+    // than printing a second line of its own.
+    return cmdVersion(argv.slice(1));
+  }
   const command = argv[0]!;
   const rest = argv.slice(1);
 
@@ -1073,6 +1079,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return cmdHelp(rest);
       case "completions":
         return cmdCompletions(rest);
+      case "version":
+        return cmdVersion(rest);
       case "aider":
         return await handleAiderSubcommand(rest);
       case "brain":
