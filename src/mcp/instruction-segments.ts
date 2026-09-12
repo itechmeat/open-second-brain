@@ -36,6 +36,16 @@
  *     left to lead into is not guidance, and a sentence such as "Five
  *     tools live here" is a claim that stops being true the moment one
  *     of them is withheld.
+ *   - The exception to that last rule is declared, not inferred: a
+ *     segment marked {@link InstructionSegment.standsAlone} states a
+ *     fact of its own rather than introducing the items around it, so it
+ *     keeps its paragraph alive when they go.
+ *
+ * A paragraph's LEAD-IN is a segment, not a prefix welded to the first
+ * item. It has to be, or withholding the first tool takes the heading
+ * with it and the survivors open mid-sentence - the memory contract
+ * losing "Memory contract: call", the view list losing "Consolidated
+ * read views:".
  *
  * The fully-available render is byte-identical to the strings this model
  * replaces; `tests/mcp/instruction-segments.test.ts` pins that against a
@@ -79,6 +89,16 @@ export interface InstructionSegment {
    * begins a new sentence of its own.
    */
   readonly separator?: string;
+  /**
+   * Exempts this segment from the paragraph-drop rule.
+   *
+   * Unconditional text is a lead-in by default, and a lead-in goes when
+   * its items go. A segment that states a fact of its own does not:
+   * that every unlisted tool stays callable through `tools/call` is
+   * true whatever the runtime withholds, and it is the sentence the
+   * catalog's "Second pass" depends on to mean anything.
+   */
+  readonly standsAlone?: boolean;
 }
 
 /** Segments that render as one paragraph. */
@@ -88,8 +108,15 @@ export interface InstructionParagraph {
   readonly end?: string;
 }
 
-/** Between two paragraphs, and between the body and the withheld block. */
-const PARAGRAPH_BREAK = "\n\n";
+/**
+ * Between two paragraphs, and between the body and the withheld block.
+ *
+ * Exported because the identity line is joined to the body with this
+ * same break one module up: two spellings of one document's block
+ * separator can drift, and the fixture that would catch the drift is
+ * pinned against the joined result.
+ */
+export const PARAGRAPH_BREAK = "\n\n";
 
 /** Between the lines of a bulleted paragraph. */
 const LINE_BREAK = "\n";
@@ -102,6 +129,9 @@ const SENTENCE = ". ";
 
 /** Between two items of an inline list. */
 const ITEM = ", ";
+
+/** Between a lead-in and the first item it introduces. */
+const LEAD_IN = " ";
 
 /** Indent of a bullet, matching the shipped writer body. */
 const BULLET = "  - ";
@@ -152,9 +182,10 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
   {
     end: ".",
     segments: [
+      unconditional("Memory contract: call", LEAD_IN),
       {
         tools: ["brain_feedback"],
-        text: "Memory contract: call brain_feedback once per taste signal the user expresses",
+        text: "brain_feedback once per taste signal the user expresses",
         separator: CLAUSE,
       },
       {
@@ -188,11 +219,10 @@ const FULL_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
   {
     end: ".",
     segments: [
+      unconditional("Consolidated read views:", LEAD_IN),
       {
         tools: ["brain_brief"],
-        text:
-          "Consolidated read views: brain_brief (view: morning | daily | weekly | " +
-          "monthly | operator | digest)",
+        text: "brain_brief (view: morning | daily | weekly | monthly | operator | digest)",
         separator: ITEM,
       },
       {
@@ -311,11 +341,23 @@ const CATALOG_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
   {
     segments: [
       {
+        // The enumeration is a claim about a set, so it goes when a
+        // member does.
         tools: [...WRITER_TOOLS, HYDRATE_TOOL],
         text:
           "This server advertises a compact first-pass tool set: the capability\n" +
           "diagnostic, the five always-loaded Brain writers/readers, and\n" +
-          "tool_hydrate. Every other Open Second Brain tool stays CALLABLE via\n" +
+          "tool_hydrate",
+        separator: SENTENCE,
+      },
+      {
+        // The fact that nothing is unreachable does not depend on which
+        // tools this runtime allows, and the "Second pass" paragraph
+        // below is unreadable without it.
+        tools: [],
+        standsAlone: true,
+        text:
+          "Every other Open Second Brain tool stays CALLABLE via\n" +
           "tools/call — it is only omitted from tools/list to keep schema tokens\n" +
           "out of your prompt until needed.",
       },
@@ -379,7 +421,10 @@ function renderParagraph(
   const rendered = paragraph.segments.filter((segment) => segment.tools.every(isAvailable));
   if (rendered.length === 0) return null;
   const conditional = paragraph.segments.some((segment) => segment.tools.length > 0);
-  if (conditional && !rendered.some((segment) => segment.tools.length > 0)) return null;
+  const survivesOnItsOwn = rendered.some(
+    (segment) => segment.tools.length > 0 || segment.standsAlone === true,
+  );
+  if (conditional && !survivesOnItsOwn) return null;
   let out = "";
   let pending = "";
   for (const segment of rendered) {

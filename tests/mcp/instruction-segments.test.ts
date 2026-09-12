@@ -31,7 +31,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildInstructions } from "../../src/mcp/instructions.ts";
-import { WITHHELD_BLOCK_HEADING, segmentToolNames } from "../../src/mcp/instruction-segments.ts";
+import {
+  PARAGRAPH_BREAK,
+  WITHHELD_BLOCK_HEADING,
+  segmentToolNames,
+} from "../../src/mcp/instruction-segments.ts";
 import {
   CAPABILITY_DIAGNOSTIC_TOOL,
   evaluateToolCapabilities,
@@ -191,6 +195,68 @@ describe("a runtime that withholds everything instructs nothing", () => {
     const [body] = text.split(WITHHELD_BLOCK_HEADING);
     expect(body).not.toContain("Skip Brain calls");
     expect(body).not.toContain("Memory contract");
+  });
+});
+
+describe("a dropped clause takes its punctuation and leaves its lead-in", () => {
+  /** The paragraph `text` opens, as a whole and with nothing appended. */
+  function paragraphOpening(text: string, prefix: string): string {
+    const paragraph = text.split(PARAGRAPH_BREAK).find((block) => block.startsWith(prefix));
+    expect(paragraph).toBeDefined();
+    return paragraph!;
+  }
+
+  test("the memory contract keeps its lead-in when the first tool named goes", () => {
+    // Exact text, not `toContain`: a doubled "; ", a stranded separator
+    // or a heading welded to the dropped clause are all invisible to a
+    // substring probe, and all of them are what this rule is about.
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.full,
+      capabilities: reportFor(TOOL_SCOPE.full, { disabledTools: ["brain_feedback"] }),
+    });
+    expect(paragraphOpening(text, "Memory contract")).toBe(
+      "Memory contract: call brain_apply_evidence right after producing a durable artifact " +
+        "a preference in `Brain/preferences/` scopes to (result: applied | violated | " +
+        "outdated); brain_note for narrative milestones that fit neither; " +
+        "brain_pinned_context for current-task facts that must survive context rotation. " +
+        "brain_context bootstraps a session when the host injects no active.md hook. " +
+        "Skip Brain calls for casual chat, exploration, and trivial edits - " +
+        "a misrecorded signal is worse than a missed one.",
+    );
+  });
+
+  test("the view list keeps its lead-in when the first view named goes", () => {
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.full,
+      capabilities: reportFor(TOOL_SCOPE.full, { disabledTools: ["brain_brief"] }),
+    });
+    expect(paragraphOpening(text, "Consolidated read views")).toBe(
+      "Consolidated read views: brain_analytics (view: timeline | attention_flows | " +
+        "belief_evolution | concept_synthesis), schema_inspect (view: graph | lint | stats " +
+        "| orphans | explain_type | active_pack | packs).",
+    );
+  });
+
+  test("the catalog keeps the fact its second pass depends on", () => {
+    // The enumeration ("the five always-loaded Brain writers/readers")
+    // stops being true and goes. The sentence beside it does not depend
+    // on the window at all, and without it the reader meets "Second
+    // pass:" with no first pass described anywhere.
+    const text = buildInstructions({
+      agent: AGENT,
+      scope: TOOL_SCOPE.catalog,
+      capabilities: reportFor(TOOL_SCOPE.catalog, { disabledTools: [WITHHELD_TOOL] }),
+    });
+    const [body] = text.split(WITHHELD_BLOCK_HEADING);
+    expect(body).not.toContain("compact first-pass tool set");
+    expect(paragraphOpening(text, "Every other")).toBe(
+      "Every other Open Second Brain tool stays CALLABLE via\n" +
+        "tools/call — it is only omitted from tools/list to keep schema tokens\n" +
+        "out of your prompt until needed.",
+    );
+    expect(body).toContain("Second pass: call tool_hydrate");
   });
 });
 

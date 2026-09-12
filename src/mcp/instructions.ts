@@ -14,7 +14,7 @@
  * remaining `brain_*` surface ships on the deferred full server.
  */
 
-import { renderScopeBody } from "./instruction-segments.ts";
+import { PARAGRAPH_BREAK, renderScopeBody } from "./instruction-segments.ts";
 import { TOOL_SCOPE, type ToolCapabilityReport, type ToolScope } from "./tool-contract.ts";
 
 export interface BuildInstructionsOpts {
@@ -47,7 +47,6 @@ export interface BuildInstructionsOpts {
 }
 
 /** Separator between the identity sentence and the body that follows it. */
-const PARAGRAPH_BREAK = "\n\n";
 
 /**
  * The opening identity sentence of every scope's instructions.
