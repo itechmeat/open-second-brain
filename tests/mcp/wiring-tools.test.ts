@@ -13,11 +13,19 @@
  * contract `vault_path` already obeys. A payload that leaked a project
  * directory would be the same defect the vault-path census exists to
  * prevent, one field over.
+ *
+ * The hosts view leaks differently: `verify()` composes its `details`
+ * and `fix_hint` sentences from `InstallEnv.home`, so the path arrives
+ * inside prose no store reference can render. `foldHostHome` folds the
+ * home prefix there, and the no-host-path assertion below is over the
+ * SERIALISED payload of both views - the census in
+ * `tests/core/architecture/vault-path-census.test.ts` is keyed on the
+ * field name `vault_path` and cannot see either of these fields.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { Writable } from "node:stream";
 import { join } from "node:path";
 
@@ -241,6 +249,59 @@ describe("view=projects path policy", () => {
   });
 });
 
+/** How a folded sentence names the host home; see `foldHostHome`. */
+const FOLDED_HOME = "~";
+
+/** The identity a staged registration is written under. */
+const STAGE_AGENT = "wiring-test";
+
+/** The timezone a staged registration is written under. */
+const STAGE_TIMEZONE = "UTC";
+
+/**
+ * A codex registration this build wrote, under `home`.
+ *
+ * An unstaged target verifies to "no install manifest entry" - a
+ * sentence carrying no path at all - so a path assertion over it would
+ * pass for the wrong reason. An absent binary sends `apply` down the
+ * file-writing path, so the registration exists as a real artifact.
+ *
+ * LEAVES both runners stubbed, because `verify()` consults them too -
+ * an unstubbed host probe would spawn whatever `codex` binary the test
+ * machine happens to have. Every caller resets them in its own
+ * `finally`; a caller that wants a different probe answer overrides it.
+ */
+function stageCodexInstall(home: string, vault: string): InstallEnv {
+  const installEnv: InstallEnv = {
+    vault,
+    home,
+    cwd: home,
+    env: { VAULT_AGENT_NAME: STAGE_AGENT, VAULT_TIMEZONE: STAGE_TIMEZONE },
+    now: new Date(),
+  };
+  const payload = buildPayload({ vault, agent_name: STAGE_AGENT, timezone: STAGE_TIMEZONE });
+  setCodexRunner({
+    available: () => false,
+    run: () => {
+      throw new Error("the adapter must not spawn codex when it reported the binary absent");
+    },
+  });
+  setHostProbeRunner({
+    available: () => false,
+    run: () => {
+      throw new Error("the probe must not spawn when it reported the binary absent");
+    },
+  });
+  const sink = new Writable({ write: (_c, _e, cb) => cb() }) as unknown as NodeJS.WriteStream;
+  codexAdapter.apply(codexAdapter.plan(payload, installEnv), payload, installEnv, {
+    dryRun: false,
+    force: false,
+    stdout: sink,
+    stderr: sink,
+  });
+  return installEnv;
+}
+
 describe("view=hosts", () => {
   test("reports one entry per registered adapter", async () => {
     const { payload } = await callWiring({ view: "hosts" });
@@ -254,22 +315,65 @@ describe("view=hosts", () => {
     }
   });
 
-  test("it is the same verify() answer `o2b install --check` renders", async () => {
+  test("it is the same verify() answer, over the same registry and env", async () => {
     // Not "an equivalent aggregate": the same call over the same
     // registry with the same env, so one implementation of connector
-    // health cannot become two that disagree.
+    // health cannot become two that disagree. The env is built through
+    // `buildInstallEnv` - the constructor `o2b install` now shares - so
+    // splitting that constructor again fails here.
     const env = buildInstallEnv({ vault: sandbox.vault, configPath: sandbox.configPath });
+    const policy = { configPath: sandbox.configPath };
     const direct = defaultRegistry.list().map((adapter) => adapter.verify(env));
     const { payload } = await callWiring({ view: "hosts" });
     const hosts = payload!["hosts"] as Array<Record<string, unknown>>;
-    expect(hosts).toEqual(
-      direct.map((r) => ({
-        target: r.target,
-        status: r.status,
-        details: [...r.details],
-        fix_hint: r.fix_hint,
-      })),
-    );
+    expect(hosts).toEqual(direct.map((r) => hostWiringEntry(r, env.home, policy)));
+  });
+
+  test("the serialised payload of neither view carries this process's home", async () => {
+    // The cheap end-to-end guard. It is not the one with teeth - an
+    // install-free home verifies to "no install manifest entry", a
+    // sentence with no path in it - so the folding assertions below
+    // stage a registration first.
+    for (const view of WIRING_VIEWS) {
+      const { payload } = await callWiring({ view });
+      expect(JSON.stringify(payload)).not.toContain(homedir());
+    }
+  });
+
+  test("adapter prose folds the host home instead of naming it", () => {
+    const home = mkdtempSync(join(sandbox.root, "fold-home-"));
+    const installEnv = stageCodexInstall(home, sandbox.vault);
+    try {
+      const entry = hostWiringEntry(codexAdapter.verify(installEnv), home, {
+        configPath: sandbox.configPath,
+      });
+      const details = (entry["details"] as string[]).join("; ");
+      // Staged, so the sentence names a file: the assertion below is
+      // about WHICH form that name takes, not about its absence.
+      expect(details).toContain(`${FOLDED_HOME}/.codex/`);
+      expect(details).not.toContain(home);
+    } finally {
+      resetHostProbeRunner();
+      resetCodexRunner();
+    }
+  });
+
+  test("`expose_host_paths` restores the raw path in that same sentence", () => {
+    // The escape hatch is ONE flag for both mechanisms: the config that
+    // un-hashes `vault_path` un-folds the adapter prose with it.
+    const home = mkdtempSync(join(sandbox.root, "expose-home-"));
+    const installEnv = stageCodexInstall(home, sandbox.vault);
+    process.env[EXPOSE_ENV] = "1";
+    try {
+      const entry = hostWiringEntry(codexAdapter.verify(installEnv), home, {
+        configPath: sandbox.configPath,
+      });
+      expect((entry["details"] as string[]).join("; ")).toContain(`${home}/.codex/`);
+    } finally {
+      delete process.env[EXPOSE_ENV];
+      resetHostProbeRunner();
+      resetCodexRunner();
+    }
   });
 
   test("an unresolved vault is refused by name, not reported as ten clean targets", async () => {
@@ -301,41 +405,17 @@ describe("view=hosts", () => {
     // adapter suites do, and the assertion is over the view's own
     // mapping of the real `verify()` answer - the deep-equality test
     // above is what ties that mapping to the env the view builds.
-    const home = mkdtempSync(join(sandbox.root, "home-"));
-    const installEnv: InstallEnv = {
-      vault: sandbox.vault,
-      home,
-      cwd: home,
-      env: { VAULT_AGENT_NAME: "wiring-test", VAULT_TIMEZONE: "UTC" },
-      now: new Date(),
-    };
-    const payload = buildPayload({
-      vault: sandbox.vault,
-      agent_name: "wiring-test",
-      timezone: "UTC",
-    });
-    // An absent binary sends `apply` down the file-writing path, so the
-    // registration exists as an artifact this build wrote.
-    setCodexRunner({
-      available: () => false,
-      run: () => {
-        throw new Error("the adapter must not spawn codex when it reported the binary absent");
-      },
-    });
-    const sink = new Writable({ write: (_c, _e, cb) => cb() }) as unknown as NodeJS.WriteStream;
-    codexAdapter.apply(codexAdapter.plan(payload, installEnv), payload, installEnv, {
-      dryRun: false,
-      force: false,
-      stdout: sink,
-      stderr: sink,
-    });
-    // The host binary answers, and refuses.
-    setHostProbeRunner({
-      available: () => true,
-      run: () => ({ exitCode: 4, stdout: "", stderr: "failed to load configuration\n" }),
-    });
+    const home = mkdtempSync(join(sandbox.root, "probe-home-"));
+    const installEnv = stageCodexInstall(home, sandbox.vault);
     try {
-      const entry = hostWiringEntry(codexAdapter.verify(installEnv));
+      // The host binary answers, and refuses.
+      setHostProbeRunner({
+        available: () => true,
+        run: () => ({ exitCode: 4, stdout: "", stderr: "failed to load configuration\n" }),
+      });
+      const entry = hostWiringEntry(codexAdapter.verify(installEnv), home, {
+        configPath: sandbox.configPath,
+      });
       const details = (entry["details"] as string[]).join("; ");
       expect(details).toContain("exited 4");
       expect(details).toContain("failed to load configuration");

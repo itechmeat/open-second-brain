@@ -111,12 +111,20 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * deciding the move is intended.
  *
  * 44 to 46: `second_brain_wiring` joined the surface and emits the field
- * once per view, through the producer. Its two other path-bearing fields
- * (`project_ref`, `vault_ref`) are not named `vault_path` and are
- * therefore outside this population by name; they render through
- * `hostPathReference`, the generalisation of the same producer, and the
- * tool's own tests assert the serialised payload carries no absolute
- * host path.
+ * once per view, through the producer.
+ *
+ * That tool is also where this census's reach ends, so the limit is
+ * stated rather than left to be discovered. The population is keyed on
+ * the FIELD NAME `vault_path`, and the tool carries three other
+ * path-bearing members: `project_ref` and `vault_ref`, which render
+ * through `hostPathReference` (the generalisation of the same
+ * producer), and the adapter prose in `details` / `fix_hint`, where the
+ * path arrives inside a sentence no store reference can render and
+ * `foldHostHome` folds the home prefix instead. Neither class is
+ * visible here. What guards them is `tests/mcp/wiring-tools.test.ts`,
+ * which asserts over the SERIALISED payload of both views - and a
+ * future view that adds a fourth path-bearing member under a fourth
+ * name needs its own assertion there, because this count will not move.
  */
 const EMITTING_SITES = 46;
 

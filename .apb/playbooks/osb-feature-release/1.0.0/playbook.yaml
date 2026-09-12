@@ -1,0 +1,350 @@
+schema: 2
+id: osb-feature-release
+name: OSB feature release wave
+description: >-
+  Run one full release wave for Open Second Brain: scan the kanban
+  triage column, propose argued scope options to the operator, then
+  drive the feature-release-playbook through every phase in order -
+  reconnaissance and design, TDD implementation, self-review against
+  main, QA, docs and version bump, PR with a verified mermaid,
+  operator-gated merge, a release with an interaction-diagram image,
+  and the tracker tick that moves the shipped cards to done. The
+  operator brief rides as a default parameter any run may override.
+version: 1.0.0
+
+params:
+  - name: brief
+    type: text
+    label: "Standing engineering brief (override to change the rules of the cycle)"
+    default: >-
+      Work as a senior backend developer: SOLID, KISS, DRY, repeated
+      values hoisted into named constants. Forbidden: fallbacks that
+      silently do nothing and mislead (errors surface explicitly, by
+      name), stubs, hardcoded values that belong in constants, and
+      hardcoded natural-language phrases in any language - everything
+      is English and other-language cases are handled abstractly.
+      Follow the feature-release-playbook skill through ALL its phases
+      in order; merging or skipping phases is forbidden. In the
+      self-review phase check every change against main even if it is
+      already committed, using the superpowers review skills. Bump the
+      project version before pushing, inside the feature PR, per
+      CLAUDE.md (edit package.json only, then run
+      scripts/sync-version.ts). After opening the PR verify that any
+      mermaid diagram renders correctly. Never move the selected
+      triage cards until the finale (moving them early triggers the
+      hermes agents); after the release move them to done with handoff
+      summaries. Reply to the operator in the operator's chat
+      language; write every artifact in English.
+  - name: cycle_focus
+    type: text
+    label: "What this cycle should optimize for (override per run)"
+    default: >-
+      Pick one or several RELATED triage cards by priority, reading
+      the validator comments on each. Propose two or three options and
+      argue them properly; usefulness to the project is the supreme
+      criterion. A pull request around 50-70 changed files with at
+      most 10 features is the target shape, and hitting that target is
+      the weakest signal of all - never trade usefulness for it.
+
+defaults:
+  profile: osb-developer
+  retries: 1
+
+trigger:
+  when:
+    - "start a new open-second-brain release cycle from the kanban board"
+    - "implement a batch of related triage tasks end to end and release them"
+    - "run the feature-release-playbook as a full wave with an operator scope gate"
+  avoid_when:
+    - "validating or triaging cards without implementing (use osb-triage-validator)"
+    - "a single trivial fix that does not warrant a release wave"
+  examples:
+    - "начинаем новый цикл"
+    - "take a big scope of related low-priority tasks and ship a release"
+
+requires:
+  files:
+    - .ai-notes/kanban.ts
+    - CLAUDE.md
+  commands:
+    - bun
+    - git
+    - gh
+
+effects: [fs_read, fs_write, network, external, irreversible]
+
+goal:
+  statement: >-
+    A scope the operator chose is implemented, merged into main,
+    released on GitHub with an interaction-diagram image, and every
+    shipped card on the kanban board reads done with a handoff
+    summary.
+  criteria:
+    - description: >-
+        Every phase of the feature-release-playbook ran in order, none
+        merged and none skipped, with the self-review comparing the
+        full branch against main.
+    - description: >-
+        The version was bumped inside the feature PR, the release is
+        published with a rendered interaction diagram, and the shipped
+        cards are in done while refused or reshaped cards carry their
+        verdicts.
+
+nodes:
+  - { id: start, type: start, title: Start }
+
+  - id: scope_scan
+    type: agent_task
+    title: Scan the board and build scope options
+    expected_duration: 20m
+    prompt: |
+      Standing brief: {{params.brief}}
+      Cycle focus: {{params.cycle_focus}}
+
+      Run `bun .ai-notes/kanban.ts triage --json` from the project root
+      (server-local, credential-bearing script: run it, never copy it
+      or any token). Read every card WITH its comments - validator
+      comments carry verdicts and corrected scopes. Build TWO or THREE
+      candidate scope options. For each option: the card ids and
+      titles, the unifying spine that makes them one coherent PR, the
+      argued usefulness to the project right now, a rough size
+      estimate, and the main risk. Recommend one option and say why.
+
+      Wrap ONLY the final proposal in <node_output> and </node_output>
+      tags: first a compact human-readable summary of the options
+      (this is what the operator will read at the review gate), then a
+      line `JSON:` followed by the options as compact JSON
+      [{option, cards: [ids], spine, why, size, risk}].
+    outputs:
+      extract: node_output
+
+  - id: choose_scope
+    type: human_review
+    title: Operator picks the scope
+    options: [option-1, option-2, option-3, revise]
+    prompt: >-
+      Read the scope options in the scope_scan output. Pick option-1,
+      option-2, or option-3 to start the wave on that scope, or
+      "revise" with a note describing what to change - the scan will
+      run again with your note.
+
+  - id: design
+    type: agent_task
+    title: "Phases 0-1: reconnaissance, brainstorm, design"
+    expected_duration: 60m
+    prompt: |
+      Standing brief: {{params.brief}}
+      The run context below carries the scope options and the
+      operator's review decision (which option was picked, plus any
+      note). Honor the picked option exactly.
+      {{run.context}}
+
+      Invoke the feature-release-playbook skill and run its phases 0
+      and 1 for the chosen option, with one strengthening this project
+      has proven necessary: BEFORE the consultant brainstorm, verify
+      every selected card's premise against the live source (open the
+      anchors, grep for mechanisms the card claims are missing, check
+      the kernel invariants). Past waves found a third to two thirds
+      of premises corrected or refuted by this reading. A refuted card
+      gets its verdict recorded in the design doc rather than being
+      built.
+
+      Deliverables committed on a new feat/<slug> branch: the
+      docs/brainstorm/<slug>/ set (design.md, plan.md, variants.md,
+      cli-output/) per the playbook's own templates, with the plan
+      broken into TDD-ready tasks.
+
+      Wrap ONLY a completion summary in <node_output> and
+      </node_output> tags: branch name, slug, task list from plan.md,
+      any premise corrections or refusals, commit sha.
+    outputs:
+      extract: node_output
+
+  - id: implement
+    type: agent_task
+    title: "Phase 2: TDD implementation"
+    expected_duration: 4h
+    prompt: |
+      Standing brief: {{params.brief}}
+      Design summary: {{nodes.design.output}}
+
+      Run phase 2 of the feature-release-playbook on the branch the
+      design phase created: implement plan.md task by task, strict
+      TDD - failing test first, run it and see the expected failure,
+      implement to green, refactor green, one conventional commit per
+      atomic unit, formatted and linted before every commit. Test runs
+      use a throwaway HOME (`env HOME=$(mktemp -d) bun test <paths>`).
+      Improve defects you find in code you touch and name them in the
+      commit bodies.
+
+      Wrap ONLY a completion summary in <node_output> and
+      </node_output> tags: commits (sha + title), per-task status,
+      failing-first evidence snippets, suites run with counts.
+    outputs:
+      extract: node_output
+
+  - id: self_review
+    type: agent_task
+    title: "Phase 3: self-review against main"
+    expected_duration: 90m
+    prompt: |
+      Standing brief: {{params.brief}}
+      Implementation summary: {{nodes.implement.output}}
+
+      Run phase 3 of the feature-release-playbook: the full
+      self-review of EVERYTHING on the branch relative to main -
+      committed work included. Use the superpowers review skills
+      (requesting-code-review, verification-before-completion): static
+      security scan of the diff, an independent fresh-context review
+      of the complete branch diff, and evidence-backed verification of
+      every claim. Apply the findings in dedicated fix commits; a
+      finding you reject is named with its reason.
+
+      Wrap ONLY a completion summary in <node_output> and
+      </node_output> tags: findings by severity, dispositions, fix
+      commits, remaining known issues (should be none or argued).
+    outputs:
+      extract: node_output
+
+  - id: qa
+    type: agent_task
+    title: "Phase 4: QA gates"
+    expected_duration: 45m
+    prompt: |
+      Standing brief: {{params.brief}}
+      Self-review summary: {{nodes.self_review.output}}
+
+      Run phase 4 of the feature-release-playbook: the full test suite
+      on a clean HOME, typecheck, lint, sync/schema checks the project
+      ships, and a real smoke of the new behavior through the actual
+      CLI or MCP surface. Fix in-branch until every gate is green; do
+      not proceed with a red gate.
+
+      Wrap ONLY the results in <node_output> and </node_output> tags:
+      each gate with its actual counts/output tail, smoke evidence.
+    outputs:
+      extract: node_output
+
+  - id: docs_version
+    type: agent_task
+    title: "Phase 5: docs and version bump"
+    expected_duration: 40m
+    prompt: |
+      Standing brief: {{params.brief}}
+      QA results: {{nodes.qa.output}}
+
+      Run phase 5 of the feature-release-playbook: CHANGELOG.md entry
+      in the house voice under the next version heading plus its
+      compare link-reference, README "What is new" refresh, every doc
+      the design named as affected, and the version bump per CLAUDE.md
+      (package.json only, then scripts/sync-version.ts, verify with
+      --check) - the bump rides in this PR, before any push. Commit.
+
+      Wrap ONLY a summary in <node_output> and </node_output> tags:
+      new version, changelog heading, docs touched, commit sha,
+      sync-check result.
+    outputs:
+      extract: node_output
+
+  - id: pr
+    type: agent_task
+    title: "Phases 6-7: PR, mermaid, review handling"
+    expected_duration: 45m
+    prompt: |
+      Standing brief: {{params.brief}}
+      Docs summary: {{nodes.docs_version.output}}
+
+      Run phases 6 and 7 of the feature-release-playbook: push the
+      branch, open the PR with the playbook's body shape (capability
+      summary, a mermaid diagram of the process-level benefit,
+      concrete benefits, what ships, test plan). VERIFY the mermaid
+      parses/renders before relying on it (headless mermaid.parse or
+      equivalent) and verify it survived into the PR body. Arm
+      auto-merge (squash). Wait briefly for the configured AI reviewer
+      and apply its findings per the playbook; if it skips (file-count
+      or credit limits), document the compensating internal review in
+      a PR comment. Watch CI on the PR and fix a red gate in-branch.
+
+      Wrap ONLY a summary in <node_output> and </node_output> tags:
+      PR number and URL, mermaid verification evidence, CI status,
+      reviewer outcome.
+    outputs:
+      extract: node_output
+
+  - id: merge_gate
+    type: human_review
+    title: Operator merge gate
+    options: [merged, abandon]
+    prompt: >-
+      Approve the PR on GitHub (auto-merge is armed; approval triggers
+      the squash). When you see it merged, pick "merged". Pick
+      "abandon" only to stop the wave without releasing.
+
+  - id: release
+    type: agent_task
+    title: "Phases 8-9: release with an interaction diagram"
+    expected_duration: 60m
+    prompt: |
+      Standing brief: {{params.brief}}
+      PR summary: {{nodes.pr.output}}
+      Operator note at the merge gate: {{nodes.merge_gate.review_note}}
+
+      Confirm the PR is merged (gh pr view --json state) and main CI
+      is green, sync local main, then run the release phase. The
+      release image follows the INTERACTION-DIAGRAM style of release
+      v1.10.0 (https://github.com/itechmeat/open-second-brain/releases/tag/v1.10.0):
+      a scheme of interacting parts that shows the usefulness of THIS
+      release - actors, flows, and arrows - not text blocks and not
+      deep technical detail. Render it, then LOOK at the rendered
+      image and verify the layout and especially the arrows are
+      correct and anchored to their blocks (clean orthogonal or
+      straight connectors, never skewed bezier curves from empty
+      space); iterate until it reads well. Publish the GitHub release
+      in the house voice with the image, upload source assets.
+
+      Wrap ONLY a summary in <node_output> and </node_output> tags:
+      release URL, asset names, image verification note.
+    outputs:
+      extract: node_output
+
+  - id: tracker
+    type: agent_task
+    title: "Phase 10: tracker tick"
+    expected_duration: 20m
+    prompt: |
+      Standing brief: {{params.brief}}
+      Release summary: {{nodes.release.output}}
+      Design summary (for refusals): {{nodes.design.output}}
+
+      Run phase 10: move every shipped card to done via
+      `bun .ai-notes/kanban.ts done <id> "<handoff summary pointing at
+      the release URL>"`. Cards whose premise was refused or reshaped
+      get a verdict comment and an appropriate parked priority instead
+      of a dishonest done. Nothing in the scope is left open without
+      either a done or a recorded verdict.
+
+      Wrap ONLY the final wave summary in <node_output> and
+      </node_output> tags: per-card disposition, release URL, version.
+    outputs:
+      extract: node_output
+
+  - { id: done, type: finish, outcome: success }
+  - { id: abandoned, type: finish, outcome: failure }
+
+edges:
+  - { from: start, to: scope_scan }
+  - { from: scope_scan, to: choose_scope }
+  - { from: choose_scope, to: design, condition: { type: review_status, equals: option-1 } }
+  - { from: choose_scope, to: design, condition: { type: review_status, equals: option-2 } }
+  - { from: choose_scope, to: design, condition: { type: review_status, equals: option-3 } }
+  - { from: choose_scope, to: scope_scan, condition: { type: review_status, equals: revise }, max_traversals: 3 }
+  - { from: design, to: implement }
+  - { from: implement, to: self_review }
+  - { from: self_review, to: qa }
+  - { from: qa, to: docs_version }
+  - { from: docs_version, to: pr }
+  - { from: pr, to: merge_gate }
+  - { from: merge_gate, to: release, condition: { type: review_status, equals: merged } }
+  - { from: merge_gate, to: abandoned, condition: { type: review_status, equals: abandon } }
+  - { from: release, to: tracker }
+  - { from: tracker, to: done }

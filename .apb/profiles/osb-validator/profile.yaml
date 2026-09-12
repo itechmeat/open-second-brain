@@ -1,0 +1,10 @@
+name: osb-validator
+description: Read-only triage validator for the Open Second Brain kanban board; verifies card premises against the live source and stamps structured verdicts.
+hermetic: true
+executor:
+  agent: claude
+  model: claude-opus-5
+  fallbacks:
+    - { agent: opencode, model: zai/glm-5.3 }
+soul: any
+skills: []

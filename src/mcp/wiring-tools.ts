@@ -27,10 +27,17 @@
  * ## Paths
  *
  * The project registry is keyed on absolute host paths and an MCP
- * response lands in model context, so every reference here goes through
- * {@link hostPathReference} - the same `expose_host_paths` contract
- * `vault_path` obeys, generalised to a second path rather than
+ * response lands in model context, so every path-valued FIELD here goes
+ * through {@link hostPathReference} - the same `expose_host_paths`
+ * contract `vault_path` obeys, generalised to a second path rather than
  * reimplemented for one.
+ *
+ * The hosts view also carries free-form adapter prose, and `verify()`
+ * composes those sentences from `InstallEnv.home`. A store reference
+ * cannot render them - it keys the vault, not a third party's config
+ * file - so they go through {@link foldHostHome}, which folds the one
+ * home prefix this run resolved. The two mechanisms answer the same
+ * question, `expose_host_paths`, off the same config.
  */
 
 import {
@@ -47,7 +54,13 @@ import type { VerifyResult } from "../core/install/types.ts";
 import { dispatchByView } from "./brain/shared.ts";
 import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
-import { VAULT_PATH_OUTPUT_SCHEMA, hostPathReference, vaultPathField } from "./vault-path-field.ts";
+import {
+  VAULT_PATH_OUTPUT_SCHEMA,
+  type HostPathPolicySource,
+  foldHostHome,
+  hostPathReference,
+  vaultPathField,
+} from "./vault-path-field.ts";
 
 /** The tool name, shared with the tests and the registry guard. */
 export const WIRING_TOOL_NAME = "second_brain_wiring";
@@ -92,6 +105,10 @@ function viewProjects(ctx: ServerContext): Record<string, unknown> {
 /**
  * One adapter's verify answer, as the payload carries it.
  *
+ * `details` and `fix_hint` are the adapter's own sentences and name the
+ * files it looked at, so they are folded against the home this run
+ * verified rather than copied through; see {@link foldHostHome}.
+ *
  * Exported for the test that drives a named probe SKIP through it. That
  * branch is only reachable from an installed target verified against a
  * specific host home, and `os.homedir()` in this runtime does not follow
@@ -100,12 +117,16 @@ function viewProjects(ctx: ServerContext): Record<string, unknown> {
  * exactly as the adapter suites do - and asserts this mapping over the
  * real `verify()` answer instead of over a synthetic one.
  */
-export function hostWiringEntry(result: VerifyResult): Record<string, unknown> {
+export function hostWiringEntry(
+  result: VerifyResult,
+  home: string,
+  policy: HostPathPolicySource,
+): Record<string, unknown> {
   return {
     target: result.target,
     status: result.status,
-    details: [...result.details],
-    fix_hint: result.fix_hint,
+    details: result.details.map((line) => foldHostHome(line, home, policy)),
+    fix_hint: result.fix_hint === null ? null : foldHostHome(result.fix_hint, home, policy),
   };
 }
 
@@ -133,7 +154,9 @@ function viewHosts(ctx: ServerContext): Record<string, unknown> {
   return {
     vault_path: vaultPathField(ctx),
     view: HOSTS_VIEW,
-    hosts: defaultRegistry.list().map((adapter) => hostWiringEntry(adapter.verify(env))),
+    hosts: defaultRegistry
+      .list()
+      .map((adapter) => hostWiringEntry(adapter.verify(env), env.home, ctx)),
   };
 }
 
@@ -210,9 +233,14 @@ export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
               },
               details: {
                 type: "array",
-                description: "What the adapter observed, one line per finding.",
+                description:
+                  "What the adapter observed, one line per finding. Host paths in these " +
+                  "sentences are folded to `~` unless `expose_host_paths` is set.",
                 items: { type: "string" },
               },
+              // Nullable, and the descriptor language has no union form;
+              // see VAULT_PATH_OUTPUT_SCHEMA for why empty is the honest
+              // shape. Folded against the host home exactly as `details` is.
               fix_hint: {},
             },
           },

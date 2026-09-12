@@ -306,6 +306,12 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "runtime_config_blocks row the adapters already declare",
   ],
   [
+    "src/mcp/wiring-tools.ts",
+    "the only out-of-vault path it handles is `InstallEnv.home`, and it handles it in order to " +
+      "REMOVE it: `foldHostHome` folds that prefix out of the adapter sentences before they reach " +
+      "an MCP payload. The tool reads install state and writes nothing anywhere",
+  ],
+  [
     "src/core/install/env.ts",
     "the only out-of-vault path it builds is `InstallEnv.home`, which it hands to the adapters; " +
       "every file written from it belongs to the runtime_config_blocks row, and this constructor " +
