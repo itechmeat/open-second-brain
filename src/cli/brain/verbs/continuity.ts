@@ -37,10 +37,10 @@ import {
   countSessionlessRecords,
   renderAtifTrajectories,
 } from "../../../core/brain/continuity/export-atif.ts";
-import packageJson from "../../../../package.json" with { type: "json" };
+import { OPEN_SECOND_BRAIN_VERSION } from "../../../core/version.ts";
 import { brainVerbContext, fail, parse, usageError } from "../helpers.ts";
 
-const CLI_VERSION: string = packageJson.version;
+const CLI_VERSION: string = OPEN_SECOND_BRAIN_VERSION;
 
 const USAGE =
   "usage: o2b brain continuity export --format atof|atif [--session <id>] [--month YYYY-MM] [--out <dir>] [--json]\n" +

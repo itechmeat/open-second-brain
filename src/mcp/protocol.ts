@@ -6,12 +6,12 @@
  * same JSON-RPC error codes.
  */
 
-import packageJson from "../../package.json" with { type: "json" };
+import { OPEN_SECOND_BRAIN_VERSION } from "../core/version.ts";
 
 export const PROTOCOL_VERSION = "2025-06-18";
 export const SERVER_NAME = "open-second-brain";
 export const JSONRPC_VERSION = "2.0";
-export const SERVER_VERSION: string = packageJson.version;
+export const SERVER_VERSION: string = OPEN_SECOND_BRAIN_VERSION;
 
 export const PARSE_ERROR = -32700;
 export const INVALID_REQUEST = -32600;
