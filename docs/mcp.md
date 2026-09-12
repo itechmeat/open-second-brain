@@ -367,7 +367,13 @@ already produced the answer.
 
 `view` is required and there is no aggregate member, so a projects read never
 pays for a host probe. An absent or unknown `view` is refused with `-32602`
-naming the accepted members.
+naming the accepted members, and `view=hosts` without a resolved vault is
+refused with the same code and the sentence `o2b install --check` gives -
+verify reads a per-vault manifest, so an unset vault would report every
+runtime absent.
+
+Every payload carries `vault_path` and `view` at the top level, whichever view
+answered.
 
 **`view=projects`** returns one entry per registered project link:
 
@@ -378,12 +384,19 @@ naming the accepted members.
 | `pointer` | `ok`, `missing`, `malformed`, or `mismatch` - the state of that project's `.o2b-vault.json` against the registry. |
 | `vault_exists` | Whether the vault directory is still present. |
 
-A registry damaged by hand degrades to the entries it can still read, the same
-tolerance the CLI reader has, rather than failing the whole call.
+A registry file damaged by hand reads as no links at all - not as the entries
+it can still parse - and the call succeeds. That is the tolerance the CLI
+reader already has (`listLinkedProjects` parses the registry as a whole), and
+this view answers what `o2b brain project status` answers rather than refusing
+where the verb tolerates. A server started without a config path reads the
+machine default, as `view=hosts` does.
 
 **`view=hosts`** returns one entry per registered install target, carrying
 `target`, the `VerifyStatus` member (`ok`, `drift`, `not-installed`,
-`mcp-unreachable`), the `details` the adapter observed, and `fix_hint`. It is
+`mcp-unreachable`), the `details` the adapter observed, and `fix_hint`. Those
+last two are the adapter's own sentences and name the host config files it
+looked at, so the home prefix in them is folded to `~` under the same
+`expose_host_paths` flag that governs the reference fields below. It is
 the same `verify()` call over the same registry and the same `InstallEnv` that
 `o2b install --check` makes, so connector health has one implementation rather
 than two that can drift.
@@ -582,8 +595,10 @@ max tool window`.
 
 `advertised_tool_count` is the number a host actually LISTS: available minus
 the tools marked hidden, which `tools/list` filters out. Under the `catalog`
-surface the two numbers are a hundred and three apart, and it is the
-advertised one a host's ceiling applies to.
+surface it is seven whatever the tool table's size - the capability
+diagnostic, the five always-loaded Brain tools and `tool_hydrate` - and
+everything else stays callable through `tools/call`. It is the advertised
+number a host's ceiling applies to.
 
 ### The handshake instructions follow the window (since v1.56.0)
 
@@ -927,7 +942,7 @@ server to your Codex MCP config the same way as Hermes.
 
 The plugin's `.mcp.json` ships **two** MCP-server entries:
 
-- `open-second-brain` - the full surface: 49 advertised tools (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_memory_bridge`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
+- `open-second-brain` - the full surface, whose advertised tool count is stated once under "Tool Highlights" above (including the consolidated `brain_brief`, `brain_analytics`, and `schema_inspect`, plus `brain_health`, `brain_mcp_landscape`, `brain_agent_query`, `brain_agent_diff`, `brain_recall_gate`, `brain_pinned_context`, `brain_memory_bridge`, `brain_pre_compress_pack`, `brain_audit`, `brain_sources`, and `brain_switch_vault`) and 18 hidden deprecated aliases listed under "Consolidated views and deprecated aliases" above; subject to Claude Code's `MCPSearch` tool-search deferral when MCP definitions push the system prompt past 10% of the context window.
 - `open-second-brain-writer` - a minimal always-loaded surface of five tools: `brain_feedback`, `brain_apply_evidence`, `brain_note`, `brain_pinned_context` (writers) and `brain_context` (read-only pull-bootstrap of `Brain/active.md` plus pinned context, v0.16.0). The agent records taste signals, evidence events, milestone notes, and current-task pinned facts - and fetches the active rule digest at session start in runtimes without a SessionStart hook - without a ToolSearch round-trip on every session boot.
 
 Both servers reuse the same backing CLI (`o2b mcp --scope writer` vs the default `--scope full`). Handlers are byte-identical; the writer-mode instructions text explicitly tells the agent to prefer the writer copy over any duplicate the full server still exposes (both call the same code path).

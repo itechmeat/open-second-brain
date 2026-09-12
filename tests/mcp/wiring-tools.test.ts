@@ -419,8 +419,14 @@ describe("view=hosts", () => {
       id: 2,
       method: "tools/call",
       params: { name: WIRING_TOOL_NAME, arguments: { view: "hosts" } },
-    })) as { result?: { content: ReadonlyArray<{ text: string }> }; error?: { message: string } };
+    })) as {
+      result?: { content: ReadonlyArray<{ text: string }> };
+      error?: { code: number; message: string };
+    };
     expect(response.error?.message).toContain(VAULT_NOT_CONFIGURED_REASON);
+    // The code docs/mcp.md gives for this refusal, alongside the one it
+    // gives for a bad `view`.
+    expect(response.error?.code).toBe(INVALID_PARAMS);
     expect(response.result).toBeUndefined();
   });
   test("a probe that cannot run reaches the payload as its named reason, not an ok", () => {
