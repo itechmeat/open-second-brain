@@ -26,6 +26,16 @@ const VERSION_FLAG = "--version";
 /** Exit code the CLI reserves for a usage error. */
 const USAGE_EXIT = 2;
 
+/** Both spellings refuse `argv` identically; see the test that calls it. */
+async function expectSameRefusal(argv: ReadonlyArray<string>): Promise<void> {
+  const viaFlag = await runCli([VERSION_FLAG, ...argv]);
+  const viaVerb = await runCli([VERSION_COMMAND, ...argv]);
+  expect(viaFlag.returncode).toBe(USAGE_EXIT);
+  expect(viaFlag.returncode).toBe(viaVerb.returncode);
+  expect(viaFlag.stderr).toBe(viaVerb.stderr);
+  expect(viaFlag.stdout).toBe("");
+}
+
 describe("o2b version", () => {
   test("prints the version constant and exits 0", async () => {
     const result = await runCli([VERSION_COMMAND]);
@@ -73,14 +83,11 @@ describe("o2b version", () => {
     // a stack trace and exited 1 where the verb printed a usage error
     // and exited 2 - the divergence the synonym exists to prevent,
     // visible only to whoever typed the wrong one.
-    for (const argv of [["latest"], ["--short"]]) {
-      const viaFlag = await runCli([VERSION_FLAG, ...argv]);
-      const viaVerb = await runCli([VERSION_COMMAND, ...argv]);
-      expect(viaFlag.returncode).toBe(USAGE_EXIT);
-      expect(viaFlag.returncode).toBe(viaVerb.returncode);
-      expect(viaFlag.stderr).toBe(viaVerb.stderr);
-      expect(viaFlag.stdout).toBe("");
-    }
+    // Sequential by construction, and not a loop: `runCli` refuses a
+    // concurrent in-process run by name, because it swaps the
+    // environment, the working directory and both streams.
+    await expectSameRefusal(["latest"]);
+    await expectSameRefusal(["--short"]);
   });
 });
 

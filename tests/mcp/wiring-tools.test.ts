@@ -360,8 +360,8 @@ describe("view=hosts", () => {
     // install-free home verifies to "no install manifest entry", a
     // sentence with no path in it - so the folding assertions below
     // stage a registration first.
-    for (const view of WIRING_VIEWS) {
-      const { payload } = await callWiring({ view });
+    const answers = await Promise.all(WIRING_VIEWS.map((view) => callWiring({ view })));
+    for (const { payload } of answers) {
       expect(JSON.stringify(payload)).not.toContain(homedir());
     }
   });
