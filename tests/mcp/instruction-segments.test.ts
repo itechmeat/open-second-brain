@@ -24,6 +24,15 @@
  * fully-available render of each scope against a byte-for-byte fixture
  * captured from the frozen strings this change replaces. Only the
  * withheld cases may differ, and the rest of this file is those cases.
+ *
+ * One sentence in `catalog.txt` is a deliberate exception. The frozen
+ * string said every tool omitted from `tools/list` stays callable
+ * through `tools/call`, which was true of the catalog surface's hiding
+ * and false of a capability window - the window removes the tool from
+ * the table `tools/call` routes on. A window is exactly what this
+ * module renders for, so the one paragraph that contradicted it was
+ * rewritten rather than pinned, and the fixture carries the corrected
+ * text.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -244,9 +253,13 @@ describe("a dropped clause takes its punctuation and leaves its lead-in", () => 
 
   test("the catalog keeps the fact its second pass depends on", () => {
     // The enumeration ("the five always-loaded Brain writers/readers")
-    // stops being true and goes. The sentence beside it does not depend
-    // on the window at all, and without it the reader meets "Second
-    // pass:" with no first pass described anywhere.
+    // stops being true and goes. The sentence beside it stays, because
+    // without it the reader meets "Second pass:" with no first pass
+    // described anywhere - and it stays TRUE under a window because it
+    // separates the two reasons a tool can be missing from tools/list:
+    // the catalog surface hides it (still callable) and the window
+    // withholds it (not callable), which is exactly the case this test
+    // stages.
     const text = buildInstructions({
       agent: AGENT,
       scope: TOOL_SCOPE.catalog,
@@ -254,10 +267,11 @@ describe("a dropped clause takes its punctuation and leaves its lead-in", () => 
     });
     const [body] = text.split(WITHHELD_BLOCK_HEADING);
     expect(body).not.toContain("compact first-pass tool set");
-    expect(paragraphOpening(text, "Every other")).toBe(
-      "Every other Open Second Brain tool stays CALLABLE via\n" +
-        "tools/call — it is only omitted from tools/list to keep schema tokens\n" +
-        "out of your prompt until needed.",
+    expect(paragraphOpening(text, "A tool the catalog")).toBe(
+      "A tool the catalog surface alone omits from\n" +
+        "tools/list stays CALLABLE via tools/call — the omission keeps schema\n" +
+        "tokens out of your prompt until needed. A tool a runtime capability\n" +
+        "window withholds is not callable at all.",
     );
     expect(body).toContain("Second pass: call tool_hydrate");
   });

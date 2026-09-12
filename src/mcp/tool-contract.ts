@@ -95,6 +95,12 @@ export interface ToolCapabilityReport {
    * `tool_hydrate` - and it is this number the host's ceiling applies
    * to. Stated as the relation rather than as the gap, which was a
    * figure that went stale on the next tool added and twice had.
+   *
+   * Seven is the NO-WINDOW count. `evaluateToolCapabilities` applies
+   * the runtime capability window before counting, so a window that
+   * withholds one of those seven lowers this number with it - the only
+   * exception being the capability diagnostic, which no window
+   * withholds.
    */
   readonly advertised_tool_count: number;
   readonly host_ceiling: HostCeilingReport;

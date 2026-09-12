@@ -51,6 +51,15 @@
  * replaces; `tests/mcp/instruction-segments.test.ts` pins that against a
  * captured fixture so a reshaping cannot quietly become a rewrite.
  *
+ * The catalog body carries the one deliberate exception. Its frozen
+ * string said every tool omitted from `tools/list` stays callable
+ * through `tools/call`; that is true of the catalog surface's hiding
+ * and false of a capability window, which removes the tool from the
+ * table `tools/call` routes on. Carrying that sentence unchanged into a
+ * module whose whole subject is the window would ship a handshake that
+ * contradicts the runtime it was rendered for, so the sentence now
+ * separates the two cases and the fixture carries the corrected text.
+ *
  * ## What the withheld block does and does not list
  *
  * It lists the tools THIS TEXT would have instructed and cannot - the
@@ -94,9 +103,9 @@ export interface InstructionSegment {
    *
    * Unconditional text is a lead-in by default, and a lead-in goes when
    * its items go. A segment that states a fact of its own does not:
-   * that every unlisted tool stays callable through `tools/call` is
-   * true whatever the runtime withholds, and it is the sentence the
-   * catalog's "Second pass" depends on to mean anything.
+   * what the catalog surface's hiding does and does not do to
+   * callability is true whatever the runtime withholds, and it is the
+   * sentence the catalog's "Second pass" depends on to mean anything.
    */
   readonly standsAlone?: boolean;
 }
@@ -357,9 +366,10 @@ const CATALOG_BODY: ReadonlyArray<InstructionParagraph> = Object.freeze([
         tools: [],
         standsAlone: true,
         text:
-          "Every other Open Second Brain tool stays CALLABLE via\n" +
-          "tools/call — it is only omitted from tools/list to keep schema tokens\n" +
-          "out of your prompt until needed.",
+          "A tool the catalog surface alone omits from\n" +
+          "tools/list stays CALLABLE via tools/call — the omission keeps schema\n" +
+          "tokens out of your prompt until needed. A tool a runtime capability\n" +
+          "window withholds is not callable at all.",
       },
     ],
   },

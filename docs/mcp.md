@@ -597,8 +597,14 @@ max tool window`.
 the tools marked hidden, which `tools/list` filters out. Under the `catalog`
 surface it is seven whatever the tool table's size - the capability
 diagnostic, the five always-loaded Brain tools and `tool_hydrate` - and
-everything else stays callable through `tools/call`. It is the advertised
-number a host's ceiling applies to.
+everything the surface merely hides stays callable through `tools/call`. It
+is the advertised number a host's ceiling applies to.
+
+Seven is the no-window count. The window is applied before the count, so a
+window that withholds one of those seven lowers `advertised_tool_count` with
+it, and a tool the window withheld is not callable through `tools/call`
+either - unlike one the catalog surface merely hid. The capability
+diagnostic is the one tool no window withholds.
 
 ### The handshake instructions follow the window (since v1.56.0)
 
@@ -609,7 +615,11 @@ tool this runtime withheld is REMOVED rather than contradicted, and a block at
 the end names each removed tool with the reason the evaluator produced.
 
 A runtime that withholds nothing renders text byte-identical to what shipped
-before, so the only difference is in the withheld cases. The block lists the
+before, so the only difference is in the withheld cases. The one deliberate
+exception is in the `catalog` body: the frozen string said every tool omitted
+from `tools/list` stays callable through `tools/call`, which holds for the
+tools the catalog surface hides and not for the ones a window withholds, so
+that sentence now separates the two cases. The block lists the
 tools this text would have instructed and cannot, not the whole withheld set -
 a `--max-tools` window can withhold over a hundred tools, and pasting that list
 into the first thing every agent reads would cost more than the removed

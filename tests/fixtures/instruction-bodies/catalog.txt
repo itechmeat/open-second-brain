@@ -2,9 +2,10 @@ Open Second Brain — two-pass catalog MCP surface.
 
 This server advertises a compact first-pass tool set: the capability
 diagnostic, the five always-loaded Brain writers/readers, and
-tool_hydrate. Every other Open Second Brain tool stays CALLABLE via
-tools/call — it is only omitted from tools/list to keep schema tokens
-out of your prompt until needed.
+tool_hydrate. A tool the catalog surface alone omits from
+tools/list stays CALLABLE via tools/call — the omission keeps schema
+tokens out of your prompt until needed. A tool a runtime capability
+window withholds is not callable at all.
 
 Second pass: call tool_hydrate with no arguments to get the compact
 catalog (name, one-line description, group) of every tool in this
