@@ -131,12 +131,12 @@ const SHORTEST_FOLDABLE_HOME = 2;
 /**
  * What may NOT follow the home for the match to be the home.
  *
- * A plain prefix replacement run as `/home/dev` would clip
- * `/home/developer` into `~eloper`: a mangled path is worse than either
- * the raw one or the folded one, because it names a file that does not
- * exist. The home matches only where the next character cannot continue
- * a directory name - a separator, punctuation, whitespace, or the end of
- * the sentence.
+ * A plain prefix replacement run under a home named `dev` would clip a
+ * sibling named `developer` in the same sentence into `~eloper`: a
+ * mangled path is worse than either the raw one or the folded one,
+ * because it names a file that does not exist. The home matches only
+ * where the next character cannot continue a directory name - a
+ * separator, punctuation, whitespace, or the end of the sentence.
  */
 const NAME_CHARACTER = "[A-Za-z0-9._-]";
 

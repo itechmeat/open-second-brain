@@ -386,9 +386,9 @@ describe("view=hosts", () => {
   });
 
   test("a sibling home that extends this one is left alone", () => {
-    // A plain prefix replacement run as `/home/dev` clips
-    // `/home/developer` into `~eloper` - a path that names no file,
-    // which is worse than either the raw one or the folded one.
+    // A plain prefix replacement run under a home named `dev` clips a
+    // sibling named `developer` into `~eloper` - a path that names no
+    // file, which is worse than either the raw one or the folded one.
     const home = join(sandbox.root, "dev");
     const sibling = `${home}eloper/.codex/config.toml`;
     const folded = foldHostHome(`${home}/.codex/config.toml and ${sibling}`, home, {
