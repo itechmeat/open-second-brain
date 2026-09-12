@@ -3465,15 +3465,18 @@ function unresolvedField(err) {
   return { error: err.message };
 }
 var VAULT_PATH_OUTPUT_SCHEMA = Object.freeze({});
-function vaultPathField(ctx) {
-  const configPath = ctx.configPath ?? undefined;
+function hostPathReference(path, source) {
+  const configPath = source.configPath ?? undefined;
   try {
-    return resolveExposeHostPaths(configPath) ? ctx.vault : vaultStoreReference(ctx.vault, configPath);
+    return resolveExposeHostPaths(configPath) ? path : vaultStoreReference(path, configPath);
   } catch (err) {
     if (err instanceof ConfigReadError)
       return unresolvedField(err);
     throw err;
   }
+}
+function vaultPathField(ctx) {
+  return hostPathReference(ctx.vault, ctx);
 }
 
 // src/openclaw/index.ts
