@@ -290,7 +290,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 101;
-export const PROBE_RECIPE_COUNT = 230;
+export const PROBE_RECIPE_COUNT = 231;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -1071,7 +1071,10 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
   { name: "second_brain_status", calls: one({}, REASON.aggregateOnly) },
   {
     name: "second_brain_wiring",
-    calls: [{ args: { view: "projects" }, reason: REASON.catalog }],
+    calls: [
+      { args: { view: "projects" }, reason: REASON.catalog },
+      { args: { view: "hosts" }, reason: REASON.catalog },
+    ],
   },
   { name: "skills_attach", calls: one({ query: QUERY }, REASON.catalog) },
   { name: "tool_hydrate", calls: one({}, REASON.catalog) },

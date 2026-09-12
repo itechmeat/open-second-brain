@@ -37,7 +37,15 @@ import {
   linkedProjectsStatus,
   type LinkedProjectStatus,
 } from "../core/brain/portability/pointer.ts";
+import { defaultConfigPath } from "../core/config.ts";
+import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../core/install/env.ts";
+import { defaultRegistry } from "../core/install/registry.ts";
+// The canonical adapter set registers itself into `defaultRegistry` at
+// module-load time through this barrel, exactly as the CLI verb does.
+import "../core/install/adapters/all.ts";
+import type { VerifyResult } from "../core/install/types.ts";
 import { dispatchByView } from "./brain/shared.ts";
+import { INVALID_PARAMS, MCPError } from "./protocol.ts";
 import type { ServerContext, ToolDefinition } from "./tool-contract.ts";
 import { VAULT_PATH_OUTPUT_SCHEMA, hostPathReference, vaultPathField } from "./vault-path-field.ts";
 
@@ -47,8 +55,11 @@ export const WIRING_TOOL_NAME = "second_brain_wiring";
 /** The view this tool answers about linked projects. */
 const PROJECTS_VIEW = "projects";
 
+/** The view this tool answers about the hosts this install wrote into. */
+const HOSTS_VIEW = "hosts";
+
 /** Membership list of the accepted `view` values, in schema order. */
-export const WIRING_VIEWS: ReadonlyArray<string> = Object.freeze([PROJECTS_VIEW]);
+export const WIRING_VIEWS: ReadonlyArray<string> = Object.freeze([PROJECTS_VIEW, HOSTS_VIEW]);
 
 /** One registered project link, rendered under the path policy. */
 function projectEntry(status: LinkedProjectStatus, ctx: ServerContext): Record<string, unknown> {
@@ -78,10 +89,59 @@ function viewProjects(ctx: ServerContext): Record<string, unknown> {
   };
 }
 
+/**
+ * One adapter's verify answer, as the payload carries it.
+ *
+ * Exported for the test that drives a named probe SKIP through it. That
+ * branch is only reachable from an installed target verified against a
+ * specific host home, and `os.homedir()` in this runtime does not follow
+ * a later `process.env.HOME`, so an in-process test cannot redirect the
+ * home {@link viewHosts} resolves. It builds the `InstallEnv` by hand -
+ * exactly as the adapter suites do - and asserts this mapping over the
+ * real `verify()` answer instead of over a synthetic one.
+ */
+export function hostWiringEntry(result: VerifyResult): Record<string, unknown> {
+  return {
+    target: result.target,
+    status: result.status,
+    details: [...result.details],
+    fix_hint: result.fix_hint,
+  };
+}
+
+/**
+ * Every registered install target, verified.
+ *
+ * The same `verify()` call per adapter that `o2b install --check`
+ * makes, over the same registry and the same `InstallEnv`. Reusing it
+ * means one implementation of connector health rather than a second one
+ * that can come to disagree with the first.
+ *
+ * The vault is refused rather than defaulted. `verify()` reads the
+ * per-vault sidecar manifest, so an unset vault makes every adapter
+ * report `not-installed` off a bogus path - ten runtimes reported
+ * absent when the real condition is that nothing was configured. The
+ * refusal carries the sentence `runCheck` gives, from the one constant
+ * both surfaces read.
+ */
+function viewHosts(ctx: ServerContext): Record<string, unknown> {
+  if (ctx.vault.trim() === "") throw new MCPError(INVALID_PARAMS, VAULT_NOT_CONFIGURED_REASON);
+  const env = buildInstallEnv({
+    vault: ctx.vault,
+    configPath: ctx.configPath ?? defaultConfigPath(),
+  });
+  return {
+    vault_path: vaultPathField(ctx),
+    view: HOSTS_VIEW,
+    hosts: defaultRegistry.list().map((adapter) => hostWiringEntry(adapter.verify(env))),
+  };
+}
+
 const WIRING_VIEW_HANDLERS: Readonly<
   Record<string, (ctx: ServerContext) => Record<string, unknown>>
 > = Object.freeze({
   [PROJECTS_VIEW]: viewProjects,
+  [HOSTS_VIEW]: viewHosts,
 });
 
 function toolWiring(ctx: ServerContext, args: Record<string, unknown>): unknown {
@@ -92,14 +152,15 @@ export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: WIRING_TOOL_NAME,
     description:
-      "Report what this Open Second Brain install is wired into. view=projects lists every registered project link with its pointer state and whether the vault it names still exists. Paths are opaque references unless expose_host_paths is set. Read-only.",
+      "Report what this Open Second Brain install is wired into. view=projects lists every registered project link with its pointer state; view=hosts verifies every install target the way `o2b install --check` does and may ask host CLIs, with each wait bounded. Paths are opaque unless expose_host_paths is set. Read-only.",
     inputSchema: {
       type: "object",
       properties: {
         view: {
           type: "string",
           enum: [...WIRING_VIEWS],
-          description: "Which wiring to report. Required; there is no aggregate view.",
+          description:
+            "Which wiring to report. Required; there is no aggregate view, so a projects read never pays for a host probe.",
         },
       },
       required: ["view"],
@@ -128,6 +189,27 @@ export const WIRING_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
                 type: "boolean",
                 description: "Whether the vault directory the link names is still present.",
               },
+            },
+          },
+        },
+        hosts: {
+          type: "array",
+          description: "view=hosts: one entry per registered install target.",
+          items: {
+            type: "object",
+            required: ["target", "status", "details", "fix_hint"],
+            properties: {
+              target: { type: "string", description: "The install target id." },
+              status: {
+                type: "string",
+                description: "Verify status: ok, drift, not-installed, or mcp-unreachable.",
+              },
+              details: {
+                type: "array",
+                description: "What the adapter observed, one line per finding.",
+                items: { type: "string" },
+              },
+              fix_hint: {},
             },
           },
         },

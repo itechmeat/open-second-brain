@@ -18,11 +18,12 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { Writable } from "node:stream";
 import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
-import { WIRING_TOOL_NAME, WIRING_VIEWS } from "../../src/mcp/wiring-tools.ts";
+import { WIRING_TOOL_NAME, WIRING_VIEWS, hostWiringEntry } from "../../src/mcp/wiring-tools.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import {
   projectsRegistryPath,
@@ -31,6 +32,21 @@ import {
   VAULT_POINTER_FILE,
 } from "../../src/core/brain/portability/pointer.ts";
 import { INSTALLATION_SECRET_ENV_KEY, VAULT_STORE_REF_PREFIX } from "../../src/core/config.ts";
+import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../../src/core/install/env.ts";
+import { defaultRegistry } from "../../src/core/install/registry.ts";
+import "../../src/core/install/adapters/all.ts";
+import {
+  HOST_PROBE_RESULT,
+  resetHostProbeRunner,
+  setHostProbeRunner,
+} from "../../src/core/install/host-probe.ts";
+import { VERIFY_STATUSES, type InstallEnv } from "../../src/core/install/types.ts";
+import {
+  codexAdapter,
+  resetCodexRunner,
+  setCodexRunner,
+} from "../../src/core/install/adapters/codex.ts";
+import { buildPayload } from "../../src/core/install/payload.ts";
 
 /** Deterministic 32-hex key so `vault://<hex>` is stable across runs. */
 const SECRET = "0123456789abcdef0123456789abcdef";
@@ -222,5 +238,114 @@ describe("view=projects path policy", () => {
     // Same tolerance `listLinkedProjects` already has: an unreadable
     // registry is zero links, never a thrown handler.
     expect(payload!["projects"]).toEqual([]);
+  });
+});
+
+describe("view=hosts", () => {
+  test("reports one entry per registered adapter", async () => {
+    const { payload } = await callWiring({ view: "hosts" });
+    expect(payload!["view"]).toBe("hosts");
+    const hosts = payload!["hosts"] as Array<Record<string, unknown>>;
+    expect(hosts.map((h) => h["target"])).toEqual([...defaultRegistry.targets()]);
+    for (const host of hosts) {
+      expect([...VERIFY_STATUSES] as string[]).toContain(host["status"] as string);
+      expect(Array.isArray(host["details"])).toBe(true);
+      expect(host).toHaveProperty("fix_hint");
+    }
+  });
+
+  test("it is the same verify() answer `o2b install --check` renders", async () => {
+    // Not "an equivalent aggregate": the same call over the same
+    // registry with the same env, so one implementation of connector
+    // health cannot become two that disagree.
+    const env = buildInstallEnv({ vault: sandbox.vault, configPath: sandbox.configPath });
+    const direct = defaultRegistry.list().map((adapter) => adapter.verify(env));
+    const { payload } = await callWiring({ view: "hosts" });
+    const hosts = payload!["hosts"] as Array<Record<string, unknown>>;
+    expect(hosts).toEqual(
+      direct.map((r) => ({
+        target: r.target,
+        status: r.status,
+        details: [...r.details],
+        fix_hint: r.fix_hint,
+      })),
+    );
+  });
+
+  test("an unresolved vault is refused by name, not reported as ten clean targets", async () => {
+    const server = new MCPServer({ vault: "", configPath: sandbox.configPath });
+    await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "wiring-test", version: "0" },
+      },
+    });
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 2,
+      method: "tools/call",
+      params: { name: WIRING_TOOL_NAME, arguments: { view: "hosts" } },
+    })) as { result?: { content: ReadonlyArray<{ text: string }> }; error?: { message: string } };
+    expect(response.error?.message).toContain(VAULT_NOT_CONFIGURED_REASON);
+    expect(response.result).toBeUndefined();
+  });
+  test("a probe that cannot run reaches the payload as its named reason, not an ok", () => {
+    // The branch needs an INSTALLED target verified against a specific
+    // host home, and `os.homedir()` here does not follow a later
+    // `process.env.HOME`, so the home the view resolves cannot be
+    // redirected in-process. The env is therefore built by hand, as the
+    // adapter suites do, and the assertion is over the view's own
+    // mapping of the real `verify()` answer - the deep-equality test
+    // above is what ties that mapping to the env the view builds.
+    const home = mkdtempSync(join(sandbox.root, "home-"));
+    const installEnv: InstallEnv = {
+      vault: sandbox.vault,
+      home,
+      cwd: home,
+      env: { VAULT_AGENT_NAME: "wiring-test", VAULT_TIMEZONE: "UTC" },
+      now: new Date(),
+    };
+    const payload = buildPayload({
+      vault: sandbox.vault,
+      agent_name: "wiring-test",
+      timezone: "UTC",
+    });
+    // An absent binary sends `apply` down the file-writing path, so the
+    // registration exists as an artifact this build wrote.
+    setCodexRunner({
+      available: () => false,
+      run: () => {
+        throw new Error("the adapter must not spawn codex when it reported the binary absent");
+      },
+    });
+    const sink = new Writable({ write: (_c, _e, cb) => cb() }) as unknown as NodeJS.WriteStream;
+    codexAdapter.apply(codexAdapter.plan(payload, installEnv), payload, installEnv, {
+      dryRun: false,
+      force: false,
+      stdout: sink,
+      stderr: sink,
+    });
+    // The host binary answers, and refuses.
+    setHostProbeRunner({
+      available: () => true,
+      run: () => ({ exitCode: 4, stdout: "", stderr: "failed to load configuration\n" }),
+    });
+    try {
+      const entry = hostWiringEntry(codexAdapter.verify(installEnv));
+      const details = (entry["details"] as string[]).join("; ");
+      expect(details).toContain("exited 4");
+      expect(details).toContain("failed to load configuration");
+      // The skip is NAMED, so nothing here reads as a host-confirmed
+      // registration.
+      expect(details).not.toContain(HOST_PROBE_RESULT.answered);
+      expect(entry["target"]).toBe(codexAdapter.target);
+    } finally {
+      resetHostProbeRunner();
+      resetCodexRunner();
+    }
   });
 });

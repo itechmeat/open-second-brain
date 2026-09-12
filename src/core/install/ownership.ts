@@ -306,10 +306,11 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "runtime_config_blocks row the adapters already declare",
   ],
   [
-    "src/cli/install/install.ts",
+    "src/core/install/env.ts",
     "the only out-of-vault path it builds is `InstallEnv.home`, which it hands to the adapters; " +
-      "every file written from it belongs to the runtime_config_blocks row, and this verb writes " +
-      "nothing outside the vault on its own account",
+      "every file written from it belongs to the runtime_config_blocks row, and this constructor " +
+      "writes nothing at all. It is where the `o2b install` verb used to resolve the home, moved " +
+      "here so the MCP wiring view verifies the same machine the CLI does",
   ],
   [
     "src/cli/install/init-interactive.ts",

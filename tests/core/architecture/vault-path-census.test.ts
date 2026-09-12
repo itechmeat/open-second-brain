@@ -110,15 +110,15 @@ const VAULT_PATH_SCHEMA_DESCRIPTOR = "VAULT_PATH_OUTPUT_SCHEMA";
  * same commit, rather than a drift nobody sees. Re-measure it only after
  * deciding the move is intended.
  *
- * 44 to 45: `second_brain_wiring` joined the surface and emits the field
- * once, through the producer. Its two other path-bearing fields
+ * 44 to 46: `second_brain_wiring` joined the surface and emits the field
+ * once per view, through the producer. Its two other path-bearing fields
  * (`project_ref`, `vault_ref`) are not named `vault_path` and are
  * therefore outside this population by name; they render through
  * `hostPathReference`, the generalisation of the same producer, and the
  * tool's own tests assert the serialised payload carries no absolute
  * host path.
  */
-const EMITTING_SITES = 45;
+const EMITTING_SITES = 46;
 
 /** One `vault_path:` property found in the source. */
 interface FieldSite {
