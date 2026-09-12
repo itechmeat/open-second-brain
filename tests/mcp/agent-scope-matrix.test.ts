@@ -210,8 +210,10 @@ test("the matrix classifies every tool exactly once", () => {
   expect(classified.toSorted()).toEqual(actual);
 });
 
-test("the tool count is unchanged: an argument was added, never a tool", () => {
-  expect(TOOLS.length).toBe(114);
+test("the tool count is the measured surface, not a remembered one", () => {
+  // 114 to 115: `second_brain_wiring` joined the surface in the release
+  // that made the install's own wiring readable over MCP.
+  expect(TOOLS.length).toBe(115);
 });
 
 test("every argument-scoped surface declares agent_scope in its input schema", () => {

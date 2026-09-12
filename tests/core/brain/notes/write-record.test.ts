@@ -15,6 +15,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -100,6 +101,21 @@ describe("storeBeforeImage", () => {
   test("distinct content gets distinct files", () => {
     storeBeforeImage(vault, "one");
     storeBeforeImage(vault, "two");
+    expect(pruneWriteImages(vault, { olderThanDays: 0, dryRun: true }).removed).toHaveLength(2);
+  });
+
+  test("an image stamped in the future is zero days old, not minus one", () => {
+    // `nowMs` is sampled once before the sweep, and mtime granularity on
+    // a synced or networked filesystem can round a write made just
+    // before it up past it. Unfloored, `msToWholeDays` turns that -1ms
+    // into -1 whole day, which is below every window including zero, so
+    // the image is kept forever. This is the condition that flaked the
+    // `olderThanDays: 0` cases in CI on one image of two, staged here
+    // deterministically rather than waited for.
+    storeBeforeImage(vault, "one");
+    const ahead = storeBeforeImage(vault, "two");
+    const future = Date.now() / 1000 + 0.05;
+    utimesSync(ahead.path, future, future);
     expect(pruneWriteImages(vault, { olderThanDays: 0, dryRun: true }).removed).toHaveLength(2);
   });
 });

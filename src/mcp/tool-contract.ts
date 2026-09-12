@@ -89,9 +89,18 @@ export interface ToolCapabilityReport {
   readonly available_tool_count: number;
   /**
    * The tools a host actually LISTS: `available_tool_count` minus the
-   * ones marked `hidden`, which `tools/list` filters out. The two
-   * numbers are a hundred and three apart under the `catalog` surface,
-   * and it is this one the host's ceiling applies to.
+   * ones marked `hidden`, which `tools/list` filters out. Under the
+   * `catalog` surface it is seven whatever the tool table's size - the
+   * capability diagnostic, the five always-loaded Brain tools and
+   * `tool_hydrate` - and it is this number the host's ceiling applies
+   * to. Stated as the relation rather than as the gap, which was a
+   * figure that went stale on the next tool added and twice had.
+   *
+   * Seven is the NO-WINDOW count. `evaluateToolCapabilities` applies
+   * the runtime capability window before counting, so a window that
+   * withholds one of those seven lowers this number with it - the only
+   * exception being the capability diagnostic, which no window
+   * withholds.
    */
   readonly advertised_tool_count: number;
   readonly host_ceiling: HostCeilingReport;

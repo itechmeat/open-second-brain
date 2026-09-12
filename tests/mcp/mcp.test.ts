@@ -185,6 +185,9 @@ describe("tool listing", () => {
         "second_brain_capabilities",
         // Core read/health (writable legacy tools removed in v0.9.0).
         "second_brain_status",
+        // What this install is wired into: linked projects, verified
+        // install targets (what-this-install-knows).
+        "second_brain_wiring",
         "second_brain_query",
         "vault_health",
         // Preview-budget artifact fetch (added in v0.18.0).
@@ -767,7 +770,9 @@ describe("stdio loop", () => {
     //   t_c87644b4) = 113.
     // + brain_writes (recorded note writes, who-wrote-what Task A
     //   t_662f4e82) = 114.
-    expect(list.result.tools.length).toBe(114);
+    // + second_brain_wiring (linked projects and verified install targets,
+    //   what-this-install-knows t_49315346 + t_09d7e9e9) = 115.
+    expect(list.result.tools.length).toBe(115);
   });
 
   test("returns parse error for invalid JSON", async () => {
@@ -864,13 +869,29 @@ describe("serveStdioFromString respects scope+name", () => {
 });
 
 import { buildInstructions } from "../../src/mcp/instructions.ts";
-import { TOOL_SCOPE, TOOL_SCOPES } from "../../src/mcp/tool-contract.ts";
+import { evaluateToolCapabilities } from "../../src/mcp/capabilities.ts";
+import { buildToolTable } from "../../src/mcp/tools.ts";
+import { TOOL_SCOPE, TOOL_SCOPES, type ToolScope } from "../../src/mcp/tool-contract.ts";
+
+/**
+ * The capability report of a runtime that withholds nothing. The
+ * withheld cases have their own file
+ * (`tests/mcp/instruction-segments.test.ts`); these tests are about the
+ * identity line, which is the same on every runtime.
+ */
+function fullCapabilities(scope: ToolScope) {
+  return evaluateToolCapabilities(buildToolTable(scope), {
+    scope,
+    serverName: "open-second-brain-test",
+  }).report;
+}
 
 describe("buildInstructions writer mode", () => {
   test("writer instructions name both tools and point at the full server", () => {
     const text = buildInstructions({
       agent: "@agent",
       scope: TOOL_SCOPE.writer,
+      capabilities: fullCapabilities(TOOL_SCOPE.writer),
     });
     expect(text).toContain("brain_feedback");
     expect(text).toContain("brain_apply_evidence");
@@ -893,13 +914,21 @@ describe("buildInstructions states the identity on every scope", () => {
   // remembering to extend this loop.
   for (const scope of TOOL_SCOPES) {
     test(`${scope} scope names the resolved agent`, () => {
-      const text = buildInstructions({ agent: AGENT, scope });
+      const text = buildInstructions({
+        agent: AGENT,
+        scope,
+        capabilities: fullCapabilities(scope),
+      });
       expect(text).toContain(`You are @${AGENT} on this Open Second Brain vault.`);
     });
 
     test(`${scope} scope renders a refusal, never a name, when identity is unresolved`, () => {
       const reason = new Error("config unreadable: /etc/open-second-brain/config.yaml");
-      const text = buildInstructions({ agent: reason, scope });
+      const text = buildInstructions({
+        agent: reason,
+        scope,
+        capabilities: fullCapabilities(scope),
+      });
       expect(text).toContain("UNRESOLVED");
       expect(text).toContain(reason.message);
       expect(text).not.toContain("You are @");

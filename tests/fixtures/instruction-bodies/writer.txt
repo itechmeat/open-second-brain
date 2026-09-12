@@ -1,0 +1,28 @@
+Open Second Brain — always-loaded MCP surface.
+
+Five tools live here (four writers + one reader; the server's name is
+preserved for backward compatibility with existing client configs):
+  - brain_feedback        — record one new taste signal the user just expressed.
+  - brain_apply_evidence  — record applied | violated | outdated against an
+                            active preference for an artifact this turn produced.
+  - brain_note            — record one narrative milestone (release shipped,
+                            PR merged, fact discovered) that fits neither
+                            category.
+  - brain_pinned_context  — read/write/append/clear Brain/pinned.md for
+                            current-task facts that should survive context
+                            rotation without becoming permanent preferences.
+  - brain_context         — pull the current Brain/active.md body plus
+                            pinned context and active-preference counts.
+                            Read-only. Use at session
+                            start when the host runtime lacks a SessionStart
+                            hook (Cursor, Aider, raw Claude API). Runtimes that
+                            already inject active.md via a hook can skip this.
+
+The remaining Brain surface lives on the sibling "open-second-brain"
+MCP server (deferred), including additional read-only, analytics,
+maintenance, and workflow tools beyond the always-loaded writer set.
+Use ToolSearch to discover and reach it.
+
+Prefer the writer-server copies of brain_feedback / brain_apply_evidence /
+brain_note / brain_pinned_context over any duplicate exposed by the full server — both call the same
+handler, but the writer copy is always available without ToolSearch.

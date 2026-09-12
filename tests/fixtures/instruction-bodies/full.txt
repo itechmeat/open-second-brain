@@ -1,0 +1,5 @@
+Memory contract: call brain_feedback once per taste signal the user expresses; brain_apply_evidence right after producing a durable artifact a preference in `Brain/preferences/` scopes to (result: applied | violated | outdated); brain_note for narrative milestones that fit neither; brain_pinned_context for current-task facts that must survive context rotation. brain_context bootstraps a session when the host injects no active.md hook. Skip Brain calls for casual chat, exploration, and trivial edits - a misrecorded signal is worse than a missed one.
+
+Consolidated read views: brain_brief (view: morning | daily | weekly | monthly | operator | digest), brain_analytics (view: timeline | attention_flows | belief_evolution | concept_synthesis), schema_inspect (view: graph | lint | stats | orphans | explain_type | active_pack | packs). The per-view predecessor names still resolve via tools/call as deprecated aliases.
+
+Preview budget: a large result may arrive as a JSON envelope with `preview_truncated: true` and an `artifact_id`; fetch the full payload with brain_artifact_get only when the preview is not enough.

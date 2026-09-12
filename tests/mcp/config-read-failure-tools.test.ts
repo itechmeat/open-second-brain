@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
+import { CONFIG_UNREADABLE_REASON } from "../../src/mcp/vault-path-field.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\napi_key: "secret"\n`;
 
@@ -105,10 +106,13 @@ describe("vault_health reports the broken config instead of throwing on it", () 
     const payload = await callTool("vault_health");
     expect(payload).toHaveProperty("vault_path");
     const vaultPath = payload["vault_path"] as Record<string, unknown>;
-    expect(String(vaultPath["error"])).toContain(configPath);
+    expect(String(vaultPath["error"])).toBe(CONFIG_UNREADABLE_REASON);
     // The redaction contract holds even in the degraded shape: an
-    // unresolvable reference must not fall back to the raw host path.
+    // unresolvable reference must not fall back to the raw host path,
+    // and must not name the config file either - `config_writeable`
+    // above is the field that names it.
     expect(JSON.stringify(payload["vault_path"])).not.toContain(vault);
+    expect(JSON.stringify(payload["vault_path"])).not.toContain(configPath);
   });
 });
 

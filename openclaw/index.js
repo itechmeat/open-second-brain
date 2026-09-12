@@ -3461,19 +3461,20 @@ function deriveRuntimeAgentName(runtimeId, operatorName) {
 }
 
 // src/mcp/vault-path-field.ts
-function unresolvedField(err) {
-  return { error: err.message };
-}
 var VAULT_PATH_OUTPUT_SCHEMA = Object.freeze({});
-function vaultPathField(ctx) {
-  const configPath = ctx.configPath ?? undefined;
+var CONFIG_UNREADABLE_REASON = "the device-local config could not be read, so this reference cannot be " + "resolved; call second_brain_status for the file and the remedy";
+function hostPathReference(path, source) {
+  const configPath = source.configPath ?? undefined;
   try {
-    return resolveExposeHostPaths(configPath) ? ctx.vault : vaultStoreReference(ctx.vault, configPath);
+    return resolveExposeHostPaths(configPath) ? path : vaultStoreReference(path, configPath);
   } catch (err) {
     if (err instanceof ConfigReadError)
-      return unresolvedField(err);
+      return { error: CONFIG_UNREADABLE_REASON };
     throw err;
   }
+}
+function vaultPathField(ctx) {
+  return hostPathReference(ctx.vault, ctx);
 }
 
 // src/openclaw/index.ts

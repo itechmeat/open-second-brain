@@ -28,11 +28,10 @@
  * The two are not the same answer and no longer share a code.
  */
 
-import { homedir } from "node:os";
-
 import { parseFlags } from "../argparse.ts";
 import { defaultConfigPath, discoverConfig, resolveVault } from "../../core/config.ts";
 import { defaultRegistry } from "../../core/install/registry.ts";
+import { VAULT_NOT_CONFIGURED_REASON, buildInstallEnv } from "../../core/install/env.ts";
 // The canonical adapter set registers itself into `defaultRegistry` at
 // module-load time via this barrel (single source of the adapter list).
 import "../../core/install/adapters/all.ts";
@@ -163,34 +162,19 @@ export function resolveInstallVault(explicitVault: string | null, configPath: st
 }
 
 /**
- * The `InstallEnv` every adapter on this run is handed.
+ * The `InstallEnv` this run's adapters see.
  *
- * `OPEN_SECOND_BRAIN_CONFIG` is stamped from the resolved `--config` so
- * that ONE file parameterises the whole run. It did not used to be: the
- * agent name, timezone and vault came from `--config`, while
- * `install_hook_timeout_seconds` and `mcp_tool_profile` were read by
- * `installSettingsSource` out of `~/.config/open-second-brain/config.yaml`
- * because `InstallEnv` carried no config path and the resolver fell back
- * to the machine default. On a box with both files populated, `--apply`
- * generated from one and `--check` verified against the other. Publishing
- * the choice as the variable `resolveDefaultConfigPath` already consults
- * first keeps a single override in a single place, and keeps `InstallEnv`
- * the complete description of the run it is documented to be.
+ * The construction itself lives in `core/install/env.ts`, shared with
+ * the MCP `second_brain_wiring` hosts view so the two surfaces cannot
+ * describe different machines. This wrapper is the CLI's argument
+ * resolution: `--vault` then the canonical resolver, and the `--config`
+ * the whole run is parameterised by.
  */
-function buildInstallEnv(args: ParsedInstallArgs): InstallEnv {
-  const cfg = discoverConfig(args.config).data;
-  const vault = resolveInstallVault(args.vault, args.config);
-  const env = { ...process.env } as Record<string, string>;
-  env["OPEN_SECOND_BRAIN_CONFIG"] = args.config;
-  if (cfg["agent_name"]) env["VAULT_AGENT_NAME"] = cfg["agent_name"];
-  if (cfg["timezone"]) env["VAULT_TIMEZONE"] = cfg["timezone"];
-  return {
-    vault,
-    home: homedir(),
-    cwd: process.cwd(),
-    env,
-    now: new Date(),
-  };
+function installEnvForArgs(args: ParsedInstallArgs): InstallEnv {
+  return buildInstallEnv({
+    vault: resolveInstallVault(args.vault, args.config),
+    configPath: args.config,
+  });
 }
 
 function buildApplyOpts(
@@ -281,7 +265,7 @@ export async function cmdInstall(argv: string[]): Promise<number> {
 }
 
 function runDetect(args: ParsedInstallArgs): number {
-  const env = buildInstallEnv(args);
+  const env = installEnvForArgs(args);
   const results = defaultRegistry.detectAll(env);
   if (args.json) {
     process.stdout.write(renderDetectJson(results));
@@ -350,7 +334,7 @@ function runFriction(args: ParsedInstallArgs): number {
     if (value !== null && resolveTarget(value) === null) return refuseUnknownTarget(flag, value);
   }
 
-  const env = buildInstallEnv(args);
+  const env = installEnvForArgs(args);
   let payload;
   try {
     payload = loadPayload(args, env);
@@ -386,7 +370,7 @@ function runFriction(args: ParsedInstallArgs): number {
 function runTarget(args: ParsedInstallArgs): number {
   const adapter = defaultRegistry.get(args.target!);
   if (!adapter) return refuseUnknownTarget("--target", args.target!);
-  const env = buildInstallEnv(args);
+  const env = installEnvForArgs(args);
   let payload;
   try {
     payload = loadPayload(args, env);
@@ -450,14 +434,12 @@ function runTarget(args: ParsedInstallArgs): number {
 }
 
 function runCheck(args: ParsedInstallArgs): number {
-  const env = buildInstallEnv(args);
+  const env = installEnvForArgs(args);
   // `verify()` reads the per-vault sidecar manifest. With an unset vault,
   // every adapter would silently report "not-installed" off a bogus path
   // and the operator gets no signal that the vault is unconfigured.
   if (!env.vault) {
-    process.stderr.write(
-      "error: vault not configured. Pass --vault <path>, set VAULT_DIR, or run `o2b init`.\n",
-    );
+    process.stderr.write(`error: ${VAULT_NOT_CONFIGURED_REASON}\n`);
     return INSTALL_EXIT.usage;
   }
   const targets = args.target

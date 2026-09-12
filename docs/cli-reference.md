@@ -21,11 +21,35 @@ o2b mcp                       Run the MCP tool server (stdio by default; --trans
 o2b state status|migrate|rollback
                               Inventory the state this vault holds, move it to another directory, or put it back (see "State surfaces" below)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
+o2b version                   Print the installed Open Second Brain version; --version is a synonym
 o2b help --json               Print the command/flag manifest as JSON
 o2b completions --shell zsh   Print completions for bash|zsh|fish|elvish|nushell|powershell
 o2b uninstall                 Print uninstall plan; --apply-local cleans config; --remove-cli removes symlinks
 o2b update                    Update Open Second Brain across all detected runtimes; --target <name> / --dry-run / --force / --json
 ```
+
+### `o2b version` (since v1.56.0)
+
+`o2b version` prints the installed version and exits 0:
+
+```console
+$ o2b version
+1.56.0
+$ o2b version --json
+{"version":"1.56.0"}
+```
+
+`o2b --version` is a synonym and renders the same line, `--json` included -
+the flag is routed to the verb rather than printing a second line that could
+drift from it. Both are declared in the command manifest, so shell completions
+and `o2b help --json` offer them.
+
+The verb takes no positional argument. `o2b version latest` is a usage error
+rather than a print of the local version: nothing in this build learns what any
+other version is, and answering a question about the latest release with the
+installed one would be the wrong answer wearing the right shape. The MCP
+handshake has always carried the same fact as `serverInfo.version`, and both
+now read one constant.
 
 ### `o2b install` exit codes
 

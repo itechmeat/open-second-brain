@@ -193,5 +193,7 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
   //   t_c87644b4) = 113.
   // + brain_writes (recorded note writes, who-wrote-what Task A
   //   t_662f4e82) = 114.
-  expect(list.result.tools.length).toBe(114);
+  // + second_brain_wiring (linked projects and verified install targets,
+  //   what-this-install-knows t_49315346 + t_09d7e9e9) = 115.
+  expect(list.result.tools.length).toBe(115);
 });

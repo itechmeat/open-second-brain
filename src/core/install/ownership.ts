@@ -306,10 +306,17 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "runtime_config_blocks row the adapters already declare",
   ],
   [
-    "src/cli/install/install.ts",
+    "src/mcp/wiring-tools.ts",
+    "the only out-of-vault path it handles is `InstallEnv.home`, and it handles it in order to " +
+      "REMOVE it: `foldHostHome` folds that prefix out of the adapter sentences before they reach " +
+      "an MCP payload. The tool reads install state and writes nothing anywhere",
+  ],
+  [
+    "src/core/install/env.ts",
     "the only out-of-vault path it builds is `InstallEnv.home`, which it hands to the adapters; " +
-      "every file written from it belongs to the runtime_config_blocks row, and this verb writes " +
-      "nothing outside the vault on its own account",
+      "every file written from it belongs to the runtime_config_blocks row, and this constructor " +
+      "writes nothing at all. It is where the `o2b install` verb used to resolve the home, moved " +
+      "here so the MCP wiring view verifies the same machine the CLI does",
   ],
   [
     "src/cli/install/init-interactive.ts",
@@ -433,6 +440,12 @@ export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new M
     "the relocated index path comes from OPEN_SECOND_BRAIN_SEARCH_DB or search_db_path, an " +
       "operator-supplied absolute path; there is no home or XDG token in the source to match on. " +
       "Where it actually resolved IS measured per run and printed on the first line",
+  ],
+  [
+    "src/cli/aider.ts",
+    "the wrapper still writes the aider sidecar, but it no longer builds the home path it writes " +
+      "under: `InstallEnv` now arrives from `core/install/env.ts`, the one constructor the MCP " +
+      "wiring view shares, so there is no root token left in this file to match on",
   ],
   [
     "src/cli/brain/verbs/bench.ts",

@@ -375,6 +375,10 @@ export class MCPServer {
       instructions: buildInstructions({
         agent: identity,
         scope: this.scope,
+        // Computed in the constructor and held on the instance, so the
+        // handshake states what this runtime actually left callable
+        // without evaluating the window a second time.
+        capabilities: this.capabilityReport,
       }),
     };
   }

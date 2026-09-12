@@ -3,8 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
+import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
+import { WITHHELD_BLOCK_HEADING } from "../../src/mcp/instruction-segments.ts";
 import { runCli } from "../helpers/run-cli.ts";
+
+/** Any path: nothing in these tests reads the vault. */
+const VAULT = "/tmp/o2b-runtime-capability-test";
 
 describe("MCP runtime capability window", () => {
   test("runtime deny withholds a tool and reports the reason", async () => {
@@ -84,5 +88,51 @@ describe("MCP runtime capability window", () => {
     } finally {
       rmSync(vault, { recursive: true, force: true });
     }
+  });
+});
+
+describe("the handshake an actual host reads reflects the actual window", () => {
+  /** The tool whose guidance the window removes. */
+  const WITHHELD = "brain_note";
+
+  /** A server's `initialize.instructions`, as the host receives them. */
+  async function handshake(server: MCPServer): Promise<string> {
+    const response = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: { name: "window-test", version: "0" },
+      },
+    })) as { result: { instructions: string } };
+    return response.result.instructions;
+  }
+
+  test("a disabled writer loses its guidance and is named as withheld", async () => {
+    // Every other test of this rendering calls `buildInstructions` with
+    // a report it built itself, so the wire between the server's own
+    // capability report and the block it hands the host was unasserted:
+    // dropping the window on the way to `buildInstructions` compiled,
+    // shipped a handshake instructing a disabled tool, and failed
+    // nothing. This drives `initialize` on the server instead.
+    const windowed = await handshake(
+      new MCPServer(
+        { vault: VAULT },
+        { scope: "writer", capabilityWindow: { disabledTools: [WITHHELD] } },
+      ),
+    );
+    const open = await handshake(new MCPServer({ vault: VAULT }, { scope: "writer" }));
+
+    expect(open).toContain(`- ${WITHHELD}`);
+    const [body, withheldBlock] = windowed.split(WITHHELD_BLOCK_HEADING);
+    expect(body).not.toContain(WITHHELD);
+    expect(withheldBlock).toContain(WITHHELD);
+  });
+
+  test("an unwindowed server carries no withheld block at all", async () => {
+    const text = await handshake(new MCPServer({ vault: VAULT }, { scope: "writer" }));
+    expect(text).not.toContain(WITHHELD_BLOCK_HEADING);
   });
 });

@@ -56,6 +56,7 @@ import {
   uninstallCli,
 } from "./install-cli.ts";
 import { cmdUpdate } from "./update.ts";
+import { ROOT_VERSION_FLAG_TOKEN, cmdVersion } from "./version.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
 import { cmdInstall } from "./install/install.ts";
 import { cmdUninstallTarget } from "./install/uninstall-target.ts";
@@ -65,7 +66,7 @@ import {
   renderOnboardingChecklist,
   searchIndexExists,
 } from "./onboarding.ts";
-import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
+import { CLI_COMMAND_MANIFEST, ROOT_VERSION_FLAG, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { CLI_TRANSPORT_REACH } from "./transport-reach.ts";
@@ -972,6 +973,16 @@ function cmdCompletions(argv: ReadonlyArray<string>): number {
 const MCP_COMMAND = "mcp";
 
 /**
+ * The verb the root `--version` flag is a synonym of.
+ *
+ * Read off the flag declaration rather than spelled again, because the
+ * synonym is only a synonym while the two words agree. The dispatcher
+ * case itself stays a string literal, for the reason given there; that
+ * the two reach the same verb is what `tests/cli/version.test.ts` pins.
+ */
+const VERSION_COMMAND = ROOT_VERSION_FLAG.name;
+
+/**
  * Which origin channel this invocation is, derived from the command line
  * and from nothing else (Unit C, `src/core/origin-channel.ts`).
  *
@@ -1002,7 +1013,13 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     process.stdout.write(renderHelp());
     return 0;
   }
-  const command = argv[0]!;
+  // The synonym of `o2b version`, REWRITTEN to the verb rather than
+  // handled beside it. Routing it through the one dispatcher is what
+  // makes the two spellings answer identically: an arm of its own also
+  // skipped the `CliError` handler below, so `o2b version latest` said
+  // "error: version takes no positional arguments" and exited 2 while
+  // `o2b --version latest` printed a stack trace and exited 1.
+  const command = argv[0] === ROOT_VERSION_FLAG_TOKEN ? VERSION_COMMAND : argv[0]!;
   const rest = argv.slice(1);
 
   // Claim the origin channel for this process before anything can write.
@@ -1073,6 +1090,12 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return cmdHelp(rest);
       case "completions":
         return cmdCompletions(rest);
+      // A string literal like every sibling case, and not the constant
+      // above: `tests/cli/manifest-completeness.test.ts` reads this
+      // switch with `case "([^"]+)":`, so a case named through a
+      // constant is a case that census cannot see.
+      case "version":
+        return cmdVersion(rest);
       case "aider":
         return await handleAiderSubcommand(rest);
       case "brain":

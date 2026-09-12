@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
-import packageJson from "../../../package.json";
+import { OPEN_SECOND_BRAIN_VERSION } from "../version.ts";
 
 const PLUGIN_SOURCE_PATH = join(
   import.meta.dir,
@@ -36,7 +36,7 @@ export const OPENCODE_PLUGIN_FILENAME = "open-second-brain.ts";
 export function installedPluginContent(): string {
   const source = readFileSync(PLUGIN_SOURCE_PATH, "utf8");
   return (
-    `// open-second-brain plugin v${packageJson.version}` +
+    `// open-second-brain plugin v${OPEN_SECOND_BRAIN_VERSION}` +
     " (installed copy; re-apply `o2b install --target opencode --apply` after upgrades)\n" +
     source
   );

@@ -28,6 +28,7 @@ import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
+import { CONFIG_UNREADABLE_REASON } from "../../src/mcp/vault-path-field.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\nagent_name: "vps-agent"\n`;
 
@@ -157,11 +158,14 @@ describe("the read-only diagnostics answer through the request path", () => {
     expect(payload!["ok"]).toBe(false);
     // The same degraded field the handler-level test pins, now actually
     // reachable: an unresolvable store reference reports the reason and
-    // never falls back to the raw host path.
-    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toContain(
-      configPath,
+    // never falls back to the raw host path. The reason is path-safe -
+    // the config file is named by `config_writeable` above, which is a
+    // field that may name it; this one is not.
+    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
+      CONFIG_UNREADABLE_REASON,
     );
     expect(JSON.stringify(payload!["vault_path"])).not.toContain(vault);
+    expect(JSON.stringify(payload!["vault_path"])).not.toContain(configPath);
   });
 
   /**
@@ -177,8 +181,8 @@ describe("the read-only diagnostics answer through the request path", () => {
     const { payload, toolError, rpcError } = await callThroughServer("brain_mcp_landscape");
     expect(rpcError).toBeUndefined();
     expect(toolError).toBeUndefined();
-    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toContain(
-      configPath,
+    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
+      CONFIG_UNREADABLE_REASON,
     );
     expect(payload!["servers"]).toBeDefined();
   });

@@ -23,9 +23,20 @@ export const INHERITED_JSON_FLAG: CliFlagManifest = Object.freeze({
   inherited: true,
 });
 
+/**
+ * The root synonym for `o2b version`. It is declared here and not only
+ * handled in `main.ts` because the completion scripts and `o2b help
+ * --json` are built from this manifest: a flag the manifest never heard
+ * of is a flag no shell offers.
+ */
+export const ROOT_VERSION_FLAG: CliFlagManifest = Object.freeze({
+  name: "version",
+  type: "boolean",
+});
+
 export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
   command: "o2b",
-  flags: [INHERITED_JSON_FLAG],
+  flags: [INHERITED_JSON_FLAG, ROOT_VERSION_FLAG],
   commands: [
     command("status", "Show Open Second Brain configuration status", [
       flag("config", "string"),
@@ -66,6 +77,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       flag("disable-tool", "string-array"),
       flag("max-tools", "string"),
     ]),
+    command("version", "Print the installed Open Second Brain version"),
     command("help", "Print command help or the command manifest"),
     command("completions", "Print shell completion script for o2b", [flag("shell", "string")]),
     command("install-cli", "Create symlinks for o2b and vault-log"),
