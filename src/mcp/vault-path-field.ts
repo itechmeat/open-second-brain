@@ -15,6 +15,11 @@
  * the raw host path instead would breach the redaction contract this
  * function exists to enforce, so there is no value to fall back to.
  *
+ * The reason it reports is {@link CONFIG_UNREADABLE_REASON} rather than
+ * the error's own message, which names the config file - a path under
+ * the operator's home, in the one field written to keep host paths out
+ * of model context.
+ *
  * ## Why it is a module of its own
  *
  * It used to be a private function inside `./tools.ts`, where the ten
@@ -98,6 +103,29 @@ export interface VaultPathSource extends HostPathPolicySource {
  * sides of a project link through this, so there is one path policy on
  * this surface rather than a second one written for the second field.
  */
+/**
+ * What the degraded field says instead of {@link ConfigReadError}'s own
+ * message.
+ *
+ * That message names the config file twice - once in the condition and
+ * once in the `chmod` remedy - and it is right to, on the four channels
+ * it was written for: a CLI refusal, an MCP error envelope, a hook's
+ * stderr, and the two read-only diagnostics whose whole job is to name
+ * the broken file. This is none of those. It is the field forty-five
+ * tools emit into model context precisely so that an absolute host path
+ * does not travel there, and the config file lives under the operator's
+ * home. Reporting the condition by naming that path would reintroduce,
+ * in the degraded branch, the leak the resolved branch exists to
+ * prevent.
+ *
+ * Nothing is lost to the operator: `second_brain_status` and
+ * `vault_health` still name the file, from their own fields, under the
+ * contract that says those fields may.
+ */
+export const CONFIG_UNREADABLE_REASON =
+  "the device-local config could not be read, so this reference cannot be " +
+  "resolved; call second_brain_status for the file and the remedy";
+
 export function hostPathReference(
   path: string,
   source: HostPathPolicySource,
@@ -106,7 +134,7 @@ export function hostPathReference(
   try {
     return resolveExposeHostPaths(configPath) ? path : vaultStoreReference(path, configPath);
   } catch (err) {
-    if (err instanceof ConfigReadError) return unresolvedField(err);
+    if (err instanceof ConfigReadError) return { error: CONFIG_UNREADABLE_REASON };
     throw err;
   }
 }

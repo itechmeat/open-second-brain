@@ -415,7 +415,11 @@ response lands in model context, so `project_ref` and `vault_ref` follow the
 same `expose_host_paths` contract `vault_path` obeys: an opaque, stable
 `vault://<hex>` reference by default, the raw path when the operator sets the
 flag. A config that cannot be read renders `{ "error": "..." }` in the field
-rather than degrading to the path the reference exists to hide.
+rather than degrading to the path the reference exists to hide. That reason is
+path-safe: it does not name the config file either, because the file lives
+under the operator's home and this is the field that exists to keep host paths
+out of model context. `second_brain_status` and `vault_health` name it, from
+fields whose contract is to name it.
 
 ## Resources
 
