@@ -154,6 +154,9 @@ describe("a runtime that withholds everything instructs nothing", () => {
       const report = reportFor(scope, window);
       const text = buildInstructions({ agent: AGENT, scope, capabilities: report });
       const [body] = text.split(WITHHELD_BLOCK_HEADING);
+      // The loop below is vacuous over an empty set, and a window that
+      // stopped being honoured would produce exactly that.
+      expect(report.withheld.length).toBeGreaterThan(0);
       for (const entry of report.withheld) {
         expect(`${scope} body names ${entry.name}: ${body!.includes(entry.name)}`).toBe(
           `${scope} body names ${entry.name}: false`,
