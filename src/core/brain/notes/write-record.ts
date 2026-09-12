@@ -362,8 +362,19 @@ export function pruneWriteImages(
     // An unmeasurable age is not an old age: a file whose mtime this
     // process cannot read is kept, because "I could not tell" must never
     // resolve to "remove it".
+    //
+    // A NEGATIVE age is not a young age either, and it is floored here
+    // rather than in `fileAgeMs`, which documents that it does not clamp
+    // and has a test pinning the future-stamped case. A file stamped at
+    // or after `nowMs` is zero days old for retention. Unfloored,
+    // `msToWholeDays` takes -1ms to -1 whole day, which is below every
+    // window including zero, so the image is kept forever - and the
+    // condition is ordinary rather than exotic: `nowMs` is sampled once
+    // before the sweep, and mtime granularity on a synced or networked
+    // filesystem rounds a write made just before it up past it. This
+    // flaked the `olderThanDays: 0` cases in CI on one image of two.
     const ageMs = fileAgeMs(path, nowMs);
-    if (ageMs === null || msToWholeDays(ageMs) < olderThanDays) {
+    if (ageMs === null || msToWholeDays(Math.max(0, ageMs)) < olderThanDays) {
       kept += 1;
       continue;
     }
