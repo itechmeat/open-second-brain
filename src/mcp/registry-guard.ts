@@ -364,6 +364,8 @@ export const PREVIEW_BUDGET_EXEMPT: Readonly<Record<string, string>> = Object.fr
 
   // Bounded-by-construction reads.
   second_brain_capabilities: "fixed-size capability report",
+  second_brain_wiring:
+    "bounded by construction on both views: one small fixed-shape entry per registered project link (operator-curated) or per registered install adapter (a closed registry)",
   second_brain_status:
     "diagnostic contract; callers need full brain/search/config blocks, not a preview envelope",
   brain_context:

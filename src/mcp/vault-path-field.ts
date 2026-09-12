@@ -78,15 +78,27 @@ export interface VaultPathSource {
   readonly configPath?: string | null;
 }
 
-/** The contract above, as the one value every emitting site returns. */
-export function vaultPathField(ctx: VaultPathSource): string | UnresolvedField {
-  const configPath = ctx.configPath ?? undefined;
+/**
+ * The contract above, applied to any absolute host path.
+ *
+ * `vaultStoreReference` never required the path to be the vault - it
+ * keys an HMAC over whatever it is handed - and the redaction contract
+ * is about the response landing in model context, which is equally true
+ * of a linked project's directory. `second_brain_wiring` renders both
+ * sides of a project link through this, so there is one path policy on
+ * this surface rather than a second one written for the second field.
+ */
+export function hostPathReference(path: string, source: VaultPathSource): string | UnresolvedField {
+  const configPath = source.configPath ?? undefined;
   try {
-    return resolveExposeHostPaths(configPath)
-      ? ctx.vault
-      : vaultStoreReference(ctx.vault, configPath);
+    return resolveExposeHostPaths(configPath) ? path : vaultStoreReference(path, configPath);
   } catch (err) {
     if (err instanceof ConfigReadError) return unresolvedField(err);
     throw err;
   }
+}
+
+/** The contract above, as the one value every emitting site returns. */
+export function vaultPathField(ctx: VaultPathSource): string | UnresolvedField {
+  return hostPathReference(ctx.vault, ctx);
 }

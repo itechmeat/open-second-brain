@@ -340,7 +340,7 @@ describe("the capability report states the ceiling it runs under", () => {
 
   test("the advertised count is the one a host lists, not the registered one", () => {
     const evaluated = report("cursor");
-    expect(evaluated.available_tool_count).toBe(114);
+    expect(evaluated.available_tool_count).toBe(115);
     expect(evaluated.advertised_tool_count).toBe(7);
   });
 });

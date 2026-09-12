@@ -222,7 +222,8 @@ export const REASON = Object.freeze({
     "owner-taggable page, so `pageOwner` has no subject to read.",
   catalog:
     "a catalog of this server's own surface - the tool table, the skills manifest, the " +
-    "preset list - answered without opening a vault page, so no page's owner is reachable.",
+    "preset list, the install's own wiring - answered without opening a vault page, so no " +
+    "page's owner is reachable.",
   writerEcho:
     "a writer: the response echoes the artifact this very call created, planned or refused, " +
     "so the only ownership it can name is the one the caller supplied.",
@@ -288,8 +289,8 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * `docs/mcp.md` and the release notes. Equalities, not floors - see the
  * test that reads them.
  */
-export const PROBE_ENTRY_COUNT = 100;
-export const PROBE_RECIPE_COUNT = 229;
+export const PROBE_ENTRY_COUNT = 101;
+export const PROBE_RECIPE_COUNT = 230;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -1068,6 +1069,10 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
   },
   { name: "second_brain_capabilities", calls: one({}, REASON.catalog) },
   { name: "second_brain_status", calls: one({}, REASON.aggregateOnly) },
+  {
+    name: "second_brain_wiring",
+    calls: [{ args: { view: "projects" }, reason: REASON.catalog }],
+  },
   { name: "skills_attach", calls: one({ query: QUERY }, REASON.catalog) },
   { name: "tool_hydrate", calls: one({}, REASON.catalog) },
   { name: "vault_health", calls: one({}, REASON.aggregateOnly) },

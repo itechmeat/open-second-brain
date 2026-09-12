@@ -32,6 +32,7 @@ import { collectRuntimeNotices } from "../core/brain/runtime-notices.ts";
 import { probeVaultDirectory, type UnresolvedField } from "../core/vault-presence.ts";
 import { resolveVaultScope, walkVaultScope } from "../core/vault-scope/index.ts";
 import { BRAIN_TOOLS } from "./brain-tools.ts";
+import { WIRING_TOOLS } from "./wiring-tools.ts";
 import { SEARCH_TOOLS, buildSearchStatusBlock } from "./search-tools.ts";
 import { SCHEMA_TOOLS } from "./schema-tools.ts";
 import { WATCHDOG_TOOLS } from "./watchdog-tools.ts";
@@ -551,6 +552,7 @@ export function buildToolTable(scope: ToolScope = TOOL_SCOPE.full): ToolDefiniti
     ...SCHEMA_TOOLS,
     ...WATCHDOG_TOOLS,
     ...SKILL_TOOLS,
+    ...WIRING_TOOLS,
   ];
   if (scope === TOOL_SCOPE.writer) return all.filter((t) => WRITER_TOOL_NAMES.has(t.name));
   // The hydrate tool closes over the finished table (itself included)
