@@ -22,15 +22,14 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 import { parseFlags } from "./argparse.ts";
-import { defaultConfigPath, discoverConfig } from "../core/config.ts";
+import { defaultConfigPath } from "../core/config.ts";
 import { requireVault } from "./helpers.ts";
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
 import { buildPayload } from "../core/install/payload.ts";
-import type { InstallEnv } from "../core/install/types.ts";
+import { buildInstallEnv } from "../core/install/env.ts";
 import {
   bracketAiderSession,
   renderAiderSidecar,
@@ -79,7 +78,7 @@ async function cmdAiderWrap(argv: string[]): Promise<number> {
 
   const configPath = (flags["config"] as string | undefined) ?? defaultConfigPath();
   const vault = requireVault(flags["vault"] as string | undefined, configPath);
-  const env = buildEnv(vault, configPath);
+  const env = buildInstallEnv({ vault, configPath });
   const payload = buildPayload({
     vault,
     agent_name: env.env["VAULT_AGENT_NAME"] ?? null,
@@ -118,14 +117,6 @@ async function cmdAiderWrap(argv: string[]): Promise<number> {
   // Pass Aider's own exit code through so shell callers see the real result.
   if (result.exit.signal !== null) return 1;
   return result.exit.code ?? 1;
-}
-
-function buildEnv(vault: string, configPath: string): InstallEnv {
-  const cfg = discoverConfig(configPath).data;
-  const merged = { ...process.env } as Record<string, string>;
-  if (cfg["agent_name"]) merged["VAULT_AGENT_NAME"] = cfg["agent_name"];
-  if (cfg["timezone"]) merged["VAULT_TIMEZONE"] = cfg["timezone"];
-  return { vault, home: homedir(), cwd: process.cwd(), env: merged, now: new Date() };
 }
 
 function runAider(bin: string, sidecar: string, args: string[], cwd: string): AiderSpawnResult {

@@ -65,6 +65,23 @@ describe("o2b version", () => {
     expect(result.returncode).toBe(USAGE_EXIT);
     expect(result.stderr).toContain("--short");
   });
+
+  test("the two spellings answer a bad argument identically, not just a good one", async () => {
+    // The property in the docblock is about the SAME line, and a usage
+    // error is a line. Handling the root flag in an arm of its own put
+    // it outside the dispatcher's `CliError` handler, so the flag threw
+    // a stack trace and exited 1 where the verb printed a usage error
+    // and exited 2 - the divergence the synonym exists to prevent,
+    // visible only to whoever typed the wrong one.
+    for (const argv of [["latest"], ["--short"]]) {
+      const viaFlag = await runCli([VERSION_FLAG, ...argv]);
+      const viaVerb = await runCli([VERSION_COMMAND, ...argv]);
+      expect(viaFlag.returncode).toBe(USAGE_EXIT);
+      expect(viaFlag.returncode).toBe(viaVerb.returncode);
+      expect(viaFlag.stderr).toBe(viaVerb.stderr);
+      expect(viaFlag.stdout).toBe("");
+    }
+  });
 });
 
 describe("the manifest models both spellings", () => {

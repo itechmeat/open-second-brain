@@ -87,14 +87,21 @@ function projectEntry(status: LinkedProjectStatus, ctx: ServerContext): Record<s
 /**
  * Every project registered against THIS install's config.
  *
- * A server started without a config path has no registry to read, and
- * that is an empty list rather than an error: the registry lives beside
- * the config file, so "no config named" and "no links registered" are
- * the same observable fact from here.
+ * A server started without a config path falls back to the machine
+ * default, exactly as {@link viewHosts} does and exactly as the CLI verb
+ * this view mirrors (`o2b brain project status`) always has. It used to
+ * answer the empty list instead, which reported "nothing is linked" for
+ * a box whose registry was full - and disagreed with the sibling view in
+ * the same payload family about what an unnamed config means.
+ *
+ * The registry itself is read tolerantly (`listLinkedProjects` passes
+ * `tolerateParseError`), so a damaged `projects.json` reads as no links
+ * on this surface as it does on the CLI. That is core's contract, not
+ * this view's: a tool that refused where the verb tolerates would be the
+ * second answer this file exists to avoid.
  */
 function viewProjects(ctx: ServerContext): Record<string, unknown> {
-  const configPath = ctx.configPath;
-  const links = configPath === null ? [] : linkedProjectsStatus(configPath);
+  const links = linkedProjectsStatus(ctx.configPath ?? defaultConfigPath());
   return {
     vault_path: vaultPathField(ctx),
     view: PROJECTS_VIEW,

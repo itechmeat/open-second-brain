@@ -442,6 +442,12 @@ export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new M
       "Where it actually resolved IS measured per run and printed on the first line",
   ],
   [
+    "src/cli/aider.ts",
+    "the wrapper still writes the aider sidecar, but it no longer builds the home path it writes " +
+      "under: `InstallEnv` now arrives from `core/install/env.ts`, the one constructor the MCP " +
+      "wiring view shares, so there is no root token left in this file to match on",
+  ],
+  [
     "src/cli/brain/verbs/bench.ts",
     "the bench directory is a relative path resolved against the working directory, so it carries " +
       "no root token at all. A CWD-rooted write is invisible to this sweep by construction and " +

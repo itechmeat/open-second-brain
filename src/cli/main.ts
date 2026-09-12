@@ -66,7 +66,7 @@ import {
   renderOnboardingChecklist,
   searchIndexExists,
 } from "./onboarding.ts";
-import { CLI_COMMAND_MANIFEST, manifestForJson } from "./command-manifest.ts";
+import { CLI_COMMAND_MANIFEST, ROOT_VERSION_FLAG, manifestForJson } from "./command-manifest.ts";
 import { COMPLETION_SHELLS, isCompletionShell, renderCompletions } from "./completions.ts";
 import { MCPServer } from "../mcp/server.ts";
 import { CLI_TRANSPORT_REACH } from "./transport-reach.ts";
@@ -973,6 +973,14 @@ function cmdCompletions(argv: ReadonlyArray<string>): number {
 const MCP_COMMAND = "mcp";
 
 /**
+ * The verb the root `--version` flag is a synonym of.
+ *
+ * Read off the flag declaration rather than spelled again, because the
+ * synonym is only a synonym while the two words agree.
+ */
+const VERSION_COMMAND = ROOT_VERSION_FLAG.name;
+
+/**
  * Which origin channel this invocation is, derived from the command line
  * and from nothing else (Unit C, `src/core/origin-channel.ts`).
  *
@@ -1003,12 +1011,13 @@ export async function main(argv: ReadonlyArray<string>): Promise<number> {
     process.stdout.write(renderHelp());
     return 0;
   }
-  if (argv[0] === ROOT_VERSION_FLAG_TOKEN) {
-    // The synonym of `o2b version`, routed to the same renderer rather
-    // than printing a second line of its own.
-    return cmdVersion(argv.slice(1));
-  }
-  const command = argv[0]!;
+  // The synonym of `o2b version`, REWRITTEN to the verb rather than
+  // handled beside it. Routing it through the one dispatcher is what
+  // makes the two spellings answer identically: an arm of its own also
+  // skipped the `CliError` handler below, so `o2b version latest` said
+  // "error: version takes no positional arguments" and exited 2 while
+  // `o2b --version latest` printed a stack trace and exited 1.
+  const command = argv[0] === ROOT_VERSION_FLAG_TOKEN ? VERSION_COMMAND : argv[0]!;
   const rest = argv.slice(1);
 
   // Claim the origin channel for this process before anything can write.
@@ -1079,7 +1088,7 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return cmdHelp(rest);
       case "completions":
         return cmdCompletions(rest);
-      case "version":
+      case VERSION_COMMAND:
         return cmdVersion(rest);
       case "aider":
         return await handleAiderSubcommand(rest);

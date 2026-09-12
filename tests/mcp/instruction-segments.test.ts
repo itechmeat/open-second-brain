@@ -306,6 +306,23 @@ describe("the unresolved-identity branch is unchanged", () => {
   }
 });
 
+describe("two arguments that disagree are refused, not rendered", () => {
+  test("a report built for another scope names the mismatch", () => {
+    // Every segment is decided by the report's `available` set, so a
+    // writer report under the full scope deletes the whole body and
+    // then explains the deletion with reasons that are false of this
+    // server. The caller passed two arguments that describe different
+    // servers; that is the error, and it says so.
+    expect(() =>
+      buildInstructions({
+        agent: AGENT,
+        scope: TOOL_SCOPE.full,
+        capabilities: reportFor(TOOL_SCOPE.writer),
+      }),
+    ).toThrow(/writer scope, not full/);
+  });
+});
+
 describe("no segment can orphan its guidance on a renamed tool", () => {
   for (const scope of TOOL_SCOPES) {
     test(`every tool a ${scope} segment names is in the ${scope} tool table`, () => {

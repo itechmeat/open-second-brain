@@ -455,8 +455,21 @@ function renderWithheldBlock(scope: ToolScope, report: ToolCapabilityReport): st
  *
  * The identity line is not part of it: that is the caller's, because it
  * answers a different question and refuses for a different reason.
+ *
+ * Both arguments carry the scope, and a mismatch is refused BY NAME
+ * rather than rendered. The evaluator's `available` set is what decides
+ * every segment here, so a report built for another scope deletes every
+ * paragraph and then explains the deletion with reasons that are not
+ * true of this server - a confident wrong answer where the caller
+ * passed two arguments that disagree.
  */
 export function renderScopeBody(scope: ToolScope, report: ToolCapabilityReport): string {
+  if (report.scope !== scope) {
+    throw new Error(
+      `capability report is for the ${report.scope} scope, not ${scope}: ` +
+        "the instruction body and the availability it renders must describe one server",
+    );
+  }
   const available = new Set(report.available.map((entry) => entry.name));
   const isAvailable = (name: string): boolean => available.has(name);
   const blocks: string[] = [];

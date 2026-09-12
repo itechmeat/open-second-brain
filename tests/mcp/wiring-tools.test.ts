@@ -62,6 +62,9 @@ const SECRET = "0123456789abcdef0123456789abcdef";
 /** The escape hatch that restores raw host paths. */
 const EXPOSE_ENV = "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS";
 
+/** The override `defaultConfigPath` consults before the host home. */
+const CONFIG_PATH_ENV = "OPEN_SECOND_BRAIN_CONFIG";
+
 interface Sandbox {
   readonly root: string;
   readonly configPath: string;
@@ -101,11 +104,14 @@ afterEach(() => {
   rmSync(sandbox.root, { recursive: true, force: true });
 });
 
-async function callWiring(args: Record<string, unknown>): Promise<{
+/** `server` overrides the default context, for the tests about that context. */
+async function callWiring(
+  args: Record<string, unknown>,
+  server: MCPServer = new MCPServer({ vault: sandbox.vault, configPath: sandbox.configPath }),
+): Promise<{
   payload?: Record<string, unknown>;
   error?: { code: number; message: string };
 }> {
-  const server = new MCPServer({ vault: sandbox.vault, configPath: sandbox.configPath });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,
@@ -239,13 +245,33 @@ describe("view=projects path policy", () => {
     expect(projects[0]!["project_ref"]).toHaveProperty("error");
   });
 
-  test("a registry damaged by hand degrades to the entries it can read", async () => {
+  test("a registry damaged by hand reads as no links, exactly as the CLI verb does", async () => {
     registerLinkedProject(sandbox.configPath, sandbox.project, sandbox.vault);
     writeFileSync(projectsRegistryPath(sandbox.configPath), "{ broken", "utf8");
     const { payload } = await callWiring({ view: "projects" });
-    // Same tolerance `listLinkedProjects` already has: an unreadable
-    // registry is zero links, never a thrown handler.
+    // `listLinkedProjects` passes `tolerateParseError`, so this view
+    // answers what `o2b brain project status` answers. It is core's
+    // tolerance, not this view's: a tool that refused where the verb
+    // tolerates would be the second answer this file exists to avoid.
     expect(payload!["projects"]).toEqual([]);
+  });
+
+  test("a server given no config path reads the machine default, not an empty list", async () => {
+    // The view used to answer `[]` here, which reports "nothing is
+    // linked" for a box whose registry is full - and disagreed with
+    // `view=hosts` in the same tool, which has always defaulted. The
+    // default is redirected through the env override `defaultConfigPath`
+    // consults first, since `os.homedir()` cannot be moved in-process.
+    registerLinkedProject(sandbox.configPath, sandbox.project, sandbox.vault);
+    writeVaultPointer(sandbox.project, sandbox.vault);
+    process.env[CONFIG_PATH_ENV] = sandbox.configPath;
+    try {
+      const server = new MCPServer({ vault: sandbox.vault });
+      const { payload } = await callWiring({ view: "projects" }, server);
+      expect((payload!["projects"] as unknown[]).length).toBe(1);
+    } finally {
+      delete process.env[CONFIG_PATH_ENV];
+    }
   });
 });
 
