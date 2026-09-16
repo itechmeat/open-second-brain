@@ -1118,7 +1118,15 @@ async function reindexInto(
     progress.start(INDEX_STAGE.swap, 1);
     tryUnlink(bakPath);
     tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
-    renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
+    try {
+      await renameWithWindowsFallback(newPath, config.dbPath);
+    } catch (swapError) {
+      // Never leave the live index missing: the rename above already moved
+      // it to `.bak`. Restore it so the next reader sees the previous index
+      // rather than an absent one, then surface the swap failure.
+      tryRename(bakPath, config.dbPath);
+      throw swapError;
+    }
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
@@ -1192,6 +1200,51 @@ function tryRename(from: string, to: string): void {
     renameSync(from, to);
   } catch (e) {
     if (!isEnoent(e)) throw e;
+  }
+}
+
+/** Windows sharing violations: the file can be openable yet refuse a
+ * rename. Seen on the reindex swap (`brain.sqlite.new` written by THIS
+ * process fails `renameSync` against every target even after the staging
+ * Store is closed, while a fresh process renames the same file
+ * immediately - a runtime-held view of a just-written file without
+ * delete-share semantics, not antivirus: reproducible for 20+ seconds
+ * with no other process alive). */
+function isShareViolation(e: unknown): boolean {
+  const code = (e as { code?: string } | null)?.code;
+  return code === "EBUSY" || code === "EPERM" || code === "EACCES";
+}
+
+/**
+ * Rename with a fresh-process fallback for Windows sharing violations.
+ *
+ * Three in-process retries absorb the transient form (AV scanners,
+ * search indexers). When the violation is the process's own (the
+ * persisted reindex repro above), a detached child - which has never
+ * touched the file - performs the same same-directory rename and
+ * succeeds. POSIX never hits either path: the first `renameSync` wins.
+ */
+async function renameWithWindowsFallback(from: string, to: string): Promise<void> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (e) {
+      if (!isShareViolation(e)) throw e;
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+  const { spawnSync } = await import("node:child_process");
+  const script = `require("node:fs").renameSync(${JSON.stringify(from)}, ${JSON.stringify(to)})`;
+  const child = spawnSync(process.execPath, ["-e", script], {
+    stdio: ["ignore", "ignore", "pipe"],
+    timeout: 15_000,
+  });
+  if (child.status !== 0) {
+    throw new Error(
+      `rename of ${basename(from)} failed after in-process retries and a fresh-process rename: ` +
+        (child.stderr?.toString().trim() || `exit code ${child.status}`),
+    );
   }
 }
 

@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.56.1] - 2026-09-17
+
+`o2b search reindex` on Windows has never completed a rebuild on this machine: the swap's second rename — `brain.sqlite.new` over `brain.sqlite` — always failed EBUSY, leaving the live index renamed to `.bak`, the staging file stranded, and the index "missing" until the next Store.open restored the backup. The failure is not contention: it reproduces with the gateway stopped, zero other processes alive, and a staging store that has already closed cleanly, while a fresh process renames the same leftover file immediately. The fix replaces the bare swap renames with a rename ladder — three short in-process retries for the genuinely transient form (scanner races), then a fresh-process rename for the process's own held view, and a `.bak` restore on total failure so a failed swap never leaves the live index absent.
+
+### Fixed
+
+- **The reindex swap survives Windows sharing violations.** `reindexInto` renames through `renameWithWindowsFallback`: three in-process retries with short backoff absorb transient lockers; if the violation is the process's own, the same same-directory rename is re-executed by a detached child — which has never touched the file — and succeeds. On total failure the `.bak` is restored before the error propagates, so the failure mode degrades to "reindex refused, old index intact" instead of "live index missing until the next open". POSIX is unaffected: the first rename wins and no child is ever spawned.
+
+[1.56.1]: https://github.com/itechmeat/open-second-brain/compare/v1.56.0...v1.56.1
+
 ## [1.56.0] - 2026-09-12
 
 Open Second Brain answers a great deal about the vault it owns and, until this release, very little about itself. An operator with a shell could not ask which version was installed, though the MCP handshake had carried the same fact as `serverInfo.version` since the server existed. An agent on the MCP surface could not ask which projects point at this vault or whether the hosts this install wrote registrations into can still be reached, though both answers had shipped as typed readers with CLI-only consumers. And the first block of text every agent reads at connect time was three frozen strings chosen by scope alone, so a host that disabled a tool still received a paragraph instructing the agent to call it - a confident answer that was wrong before the session began. Nothing in this release computes a new fact. Four surfaces start reading what four readers already produce, and the machinery that made them unreachable is the whole of what changed.
