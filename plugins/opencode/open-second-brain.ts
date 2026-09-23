@@ -7,18 +7,21 @@
  * Bun globals opencode already provides) so the copy works standalone
  * inside opencode's plugin sandbox.
  *
- * Three behaviors, mirroring the Claude Code / Codex hook layer:
+ * Supports OpenCode V1 (server) and V2 (setup). Three behaviors mirror
+ * the Claude Code / Codex hook layer:
  *
- * 1. Active-context inject: `experimental.chat.system.transform`
+ * 1. Active-context inject: V1 `experimental.chat.system.transform` /
+ *    V2 `session.hook("context")`
  *    spawns the bundled `o2b-hook active-inject` PATH shim (override:
  *    `OSB_HOOK_BIN`) with a synthetic SessionStart payload and appends
  *    `hookSpecificOutput.additionalContext` to the system prompt.
  *    Vault resolution, budgeting, and quiet-failure semantics are
  *    inherited from the shim rather than reimplemented here.
  *
- * 2. Session capture: on `session.idle` / `session.compacted` /
- *    `session.deleted` the full message list is fetched through the
- *    SDK client and snapshotted as a deterministic JSONL spool under
+ * 2. Session capture: V1 snapshots the full message list on idle,
+ *    compaction, or deletion; V2 snapshots active context on idle and
+ *    before/after compaction, merging with earlier snapshots to retain
+ *    history. The deterministic JSONL spool lives under
  *    `${XDG_DATA_HOME:-~/.local/share}/open-second-brain/opencode/`
  *    (`%LOCALAPPDATA%\\open-second-brain\\opencode\\` on native Windows)
  *    (override: `OSB_OPENCODE_SPOOL_DIR`). The spool format is owned
@@ -27,21 +30,30 @@
  *    adapter. Snapshot-rewrite, not append: idempotent and
  *    self-healing after crashes.
  *
- * 3. Post-write reminder: `tool.execute.after` appends the standard
+ * 3. Post-write reminder: V1 `tool.execute.after` /
+ *    V2 `tool.hook("execute.after")` appends the standard
  *    logging nudge to the output of file-mutating tools so the model
  *    sees it, matching the Claude Code post-write-reminder contract.
  *
  * Every hook body is fail-soft: a missing vault, missing binary, or
- * SDK error must never break the operator's opencode session.
+ * session API error must never break the operator's opencode session.
  */
 
-import { mkdirSync, renameSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 
 const SPOOL_FORMAT = 1;
 const SPOOL_ORIGINATOR = "open-second-brain-opencode-plugin";
 const CAPTURE_EVENTS = new Set(["session.idle", "session.compacted", "session.deleted"]);
+const V2_CAPTURE_EVENTS = new Set([
+  "session.idle",
+  "session.compaction.started",
+  "session.compaction.ended",
+  "session.revert.committed",
+  "session.deleted",
+]);
 const MUTATING_TOOLS = new Set(["write", "edit", "multiedit", "patch", "apply_patch"]);
 const ACTIVE_CONTEXT_TTL_MS = 5 * 60 * 1000;
 /** A failed render retries sooner than a successful one expires. */
@@ -107,16 +119,17 @@ function extractSessionId(properties: unknown): string | null {
 }
 
 /**
- * Normalizes one SDK message (`{info, parts}`) into a spool turn.
+ * Normalizes a V1 SDK message (`{info, parts}`) or a V2 session message
+ * (`{id, type, text|content}`) into a spool turn.
  * Unknown roles and empty messages return null and are skipped: the
  * spool only carries what the session adapter understands.
  */
 function normalizeMessage(message: unknown): SpoolTurn | null {
   const m = asRecord(message);
   if (!m) return null;
-  const info = asRecord(m["info"]);
+  const info = asRecord(m["info"]) ?? m;
   if (!info || typeof info["id"] !== "string") return null;
-  const role = info["role"];
+  const role = info["role"] ?? info["type"];
   if (role !== "user" && role !== "assistant" && role !== "system") return null;
 
   const time = asRecord(info["time"]);
@@ -125,18 +138,29 @@ function normalizeMessage(message: unknown): SpoolTurn | null {
 
   const texts: string[] = [];
   const toolCalls: Array<{ name: string; id?: string; input: Record<string, unknown> }> = [];
-  const parts = Array.isArray(m["parts"]) ? m["parts"] : [];
+  if (typeof m["text"] === "string" && m["text"].length > 0) texts.push(m["text"]);
+  const parts = Array.isArray(m["parts"])
+    ? m["parts"]
+    : Array.isArray(m["content"])
+      ? m["content"]
+      : [];
   for (const rawPart of parts) {
     const part = asRecord(rawPart);
     if (!part) continue;
     if (part["type"] === "text" && typeof part["text"] === "string" && part["text"].length > 0) {
       texts.push(part["text"]);
-    } else if (part["type"] === "tool" && typeof part["tool"] === "string") {
+    } else if (part["type"] === "tool") {
+      const tool = typeof part["tool"] === "string" ? part["tool"] : part["name"];
+      if (typeof tool !== "string") continue;
       const state = asRecord(part["state"]);
       const input = state ? (asRecord(state["input"]) ?? {}) : {};
       toolCalls.push({
-        name: part["tool"],
-        ...(typeof part["callID"] === "string" ? { id: part["callID"] } : {}),
+        name: tool,
+        ...(typeof part["callID"] === "string"
+          ? { id: part["callID"] }
+          : typeof part["id"] === "string"
+            ? { id: part["id"] }
+            : {}),
         input,
       });
     }
@@ -157,7 +181,13 @@ function normalizeMessage(message: unknown): SpoolTurn | null {
  * file (no wall-clock fields), so repeated `session.idle` events are
  * no-ops for downstream content-hash dedup. Atomic via tmp + rename.
  */
-function writeSpool(sessionId: string, directory: string, messages: unknown[]): void {
+function writeSpool(
+  sessionId: string,
+  directory: string,
+  messages: unknown[],
+  preserveExisting = false,
+  revertTo?: string,
+): void {
   const name = sanitizeSessionId(sessionId);
   if (name === null) return;
   const meta = {
@@ -167,14 +197,60 @@ function writeSpool(sessionId: string, directory: string, messages: unknown[]): 
     session_id: sessionId,
     directory,
   };
-  const lines = [JSON.stringify(meta)];
-  for (const message of messages) {
-    const turn = normalizeMessage(message);
-    if (turn) lines.push(JSON.stringify(turn));
-  }
   const dir = spoolDir();
   mkdirSync(dir, { recursive: true });
   const target = join(dir, `${name}.jsonl`);
+  const turns = new Map<string, SpoolTurn | null>();
+  if (preserveExisting) {
+    try {
+      const lines = readFileSync(target, "utf8").trimEnd().split("\n");
+      const previous = asRecord(JSON.parse(lines[0]!));
+      if (previous?.["session_id"] === sessionId && previous["format"] === SPOOL_FORMAT) {
+        // Include control-message IDs so a revert can target a non-transcript boundary.
+        if (Array.isArray(previous["message_ids"])) {
+          for (const id of previous["message_ids"]) {
+            if (typeof id === "string") turns.set(id, null);
+          }
+        }
+        for (const line of lines.slice(1)) {
+          const turn = asRecord(JSON.parse(line));
+          if (turn?.["type"] === "turn" && typeof turn["turnId"] === "string") {
+            turns.set(turn["turnId"], turn as unknown as SpoolTurn);
+          }
+        }
+      }
+    } catch {
+      // A missing or incomplete previous snapshot must not block a fresh one.
+    }
+  }
+  if (revertTo !== undefined) {
+    const ids = Array.from(turns.keys());
+    const boundary = ids.indexOf(revertTo);
+    if (boundary === -1) {
+      // An older or missed snapshot cannot locate the boundary safely.
+      // Rebuild from authoritative context rather than reintroducing removed turns.
+      console.warn(
+        "Open Second Brain: revert boundary was not captured; rebuilding from active context",
+      );
+      turns.clear();
+    } else {
+      for (const id of ids.slice(boundary)) turns.delete(id);
+    }
+  }
+  for (const message of messages) {
+    const record = asRecord(message);
+    const info = asRecord(record?.["info"]) ?? record;
+    if (typeof info?.["id"] === "string") turns.set(info["id"], normalizeMessage(message));
+  }
+  const lines = [
+    JSON.stringify({
+      ...meta,
+      ...(preserveExisting ? { message_ids: Array.from(turns.keys()) } : {}),
+    }),
+    ...Array.from(turns.values())
+      .filter((turn) => turn !== null)
+      .map((turn) => JSON.stringify(turn)),
+  ];
   spoolWriteSeq += 1;
   const tmp = join(dir, `.${name}.jsonl.tmp-${process.pid}-${spoolWriteSeq}`);
   writeFileSync(tmp, lines.join("\n") + "\n", "utf8");
@@ -221,6 +297,19 @@ function renderActiveContext(cwd: string): string | null {
   }
 }
 
+/** Each loaded plugin instance has its own short-lived active-context cache. */
+function activeContextFor(cwd: string): () => string | null {
+  let cache: { value: string | null; at: number } | null = null;
+  return () => {
+    const now = Date.now();
+    const ttl = cache?.value === null ? ACTIVE_CONTEXT_NEGATIVE_TTL_MS : ACTIVE_CONTEXT_TTL_MS;
+    if (cache === null || now - cache.at > ttl) {
+      cache = { value: renderActiveContext(cwd), at: now };
+    }
+    return cache.value;
+  };
+}
+
 /**
  * How to start the `o2b-hook` shim `bin` (a bare name or a path), or null
  * when it cannot be found.
@@ -264,10 +353,9 @@ function hookCommand(bin: string): {
 }
 
 /**
- * Plugin entry point. opencode calls this once at startup with the SDK
- * client and project info, and wires the returned hooks.
+ * V1 entry point, called through the default export's server() method.
  */
-export const OpenSecondBrain = async (pluginInput: {
+const openSecondBrainV1 = async (pluginInput: {
   client: unknown;
   project?: unknown;
   directory?: string;
@@ -278,7 +366,7 @@ export const OpenSecondBrain = async (pluginInput: {
   // Anchor active-inject to the real project scope, not an arbitrary dir.
   const injectCwd = worktree || directory || process.cwd();
   const client = asRecord(pluginInput.client);
-  let activeContextCache: { value: string | null; at: number } | null = null;
+  const getActiveContext = activeContextFor(injectCwd);
 
   async function captureSession(sessionId: string): Promise<void> {
     const session = client ? asRecord(client["session"]) : null;
@@ -308,16 +396,9 @@ export const OpenSecondBrain = async (pluginInput: {
 
     "experimental.chat.system.transform": async (_input: unknown, output: { system: string[] }) => {
       try {
-        const now = Date.now();
-        const ttl =
-          activeContextCache?.value === null
-            ? ACTIVE_CONTEXT_NEGATIVE_TTL_MS
-            : ACTIVE_CONTEXT_TTL_MS;
-        if (activeContextCache === null || now - activeContextCache.at > ttl) {
-          activeContextCache = { value: renderActiveContext(injectCwd), at: now };
-        }
-        if (activeContextCache.value !== null && Array.isArray(output?.system)) {
-          output.system.push(activeContextCache.value);
+        const context = getActiveContext();
+        if (context !== null && Array.isArray(output?.system)) {
+          output.system.push(context);
         }
       } catch {
         // Inject is a nicety; the session works without it.
@@ -336,4 +417,126 @@ export const OpenSecondBrain = async (pluginInput: {
       }
     },
   };
+};
+
+interface V2Context {
+  location: { directory: string };
+  session: {
+    hook(
+      name: "context",
+      callback: (event: { system: Array<{ type: "text"; text: string }> }) => void,
+    ): Promise<unknown>;
+    get(input: { sessionID: string }): Promise<unknown>;
+    context(input: { sessionID: string }): Promise<unknown>;
+  };
+  tool: {
+    hook(
+      name: "execute.after",
+      callback: (event: {
+        tool: string;
+        status: string;
+        result?: { content: unknown[]; [key: string]: unknown };
+      }) => void,
+    ): Promise<unknown>;
+  };
+  event: {
+    subscribe(input: { signal: AbortSignal }): AsyncIterable<{
+      type?: string;
+      data?: unknown;
+      properties?: unknown;
+      location?: { directory?: string };
+    }>;
+  };
+}
+
+/** V2 reads this default definition; V1 calls server() on the same object. */
+export default {
+  id: "open-second-brain",
+  server: openSecondBrainV1,
+  async setup(ctx: V2Context) {
+    // V1's experimental V2 loader also calls setup(), but without these
+    // capabilities; its separate V1 loader still runs server().
+    if (
+      typeof ctx?.location?.directory !== "string" ||
+      typeof ctx.session?.hook !== "function" ||
+      typeof ctx.session?.get !== "function" ||
+      typeof ctx.session?.context !== "function" ||
+      typeof ctx.tool?.hook !== "function" ||
+      typeof ctx.event?.subscribe !== "function"
+    )
+      return;
+
+    const directory = ctx.location.directory;
+    const getActiveContext = activeContextFor(directory);
+
+    await ctx.session.hook("context", (event) => {
+      try {
+        const context = getActiveContext();
+        if (context !== null) event.system.push({ type: "text", text: context });
+      } catch {
+        // Context injection is best-effort.
+      }
+    });
+
+    await ctx.tool.hook("execute.after", (event) => {
+      try {
+        if (event.status !== "completed" || !MUTATING_TOOLS.has(event.tool.toLowerCase())) return;
+        if (!event.result || !Array.isArray(event.result.content)) return;
+        event.result = {
+          ...event.result,
+          content: [...event.result.content, { type: "text", text: POST_WRITE_NUDGE }],
+        };
+      } catch {
+        // Reminder is best-effort; tool results remain untouched on failure.
+      }
+    });
+
+    const controller = new AbortController();
+    void (async () => {
+      let retryDelay = 1_000;
+      while (!controller.signal.aborted) {
+        try {
+          for await (const event of ctx.event.subscribe({ signal: controller.signal })) {
+            retryDelay = 1_000;
+            try {
+              if (!event || !V2_CAPTURE_EVENTS.has(event.type ?? "")) continue;
+              const sessionID = extractSessionId(event.data ?? event.properties);
+              if (sessionID === null) continue;
+              // The event stream is server-wide, not scoped to this plugin's location.
+              const eventDirectory = event.location?.directory;
+              if (eventDirectory && eventDirectory !== directory) continue;
+              if (!eventDirectory) {
+                const session = asRecord(await ctx.session.get({ sessionID }));
+                const location = asRecord(session?.["location"]);
+                if (location?.["directory"] !== directory) continue;
+              }
+              const revertTo =
+                event.type === "session.revert.committed"
+                  ? asRecord(event.data ?? event.properties)?.["to"]
+                  : undefined;
+              if (event.type === "session.revert.committed" && typeof revertTo !== "string")
+                continue;
+              const messages = messageList(await ctx.session.context({ sessionID }));
+              if (messages !== null)
+                writeSpool(sessionID, directory, messages, true, revertTo as string | undefined);
+            } catch {
+              // A failed snapshot must not stop later session captures.
+            }
+          }
+        } catch {
+          // Subscriptions are live-only and do not reconnect automatically.
+        }
+        if (controller.signal.aborted) break;
+        console.warn(`Open Second Brain: capture stream ended; retrying in ${retryDelay}ms`);
+        try {
+          await sleep(retryDelay, undefined, { signal: controller.signal, ref: false });
+        } catch {
+          break; // Cleanup aborts a pending retry immediately.
+        }
+        retryDelay = Math.min(retryDelay * 2, 30_000);
+      }
+    })();
+
+    return () => controller.abort();
+  },
 };
