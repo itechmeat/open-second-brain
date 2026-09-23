@@ -17,6 +17,7 @@ import { join, dirname } from "node:path";
 import { Writable } from "node:stream";
 
 import { opencodeAdapter } from "../../../../src/core/install/adapters/opencode.ts";
+import { installedPluginContent } from "../../../../src/core/install/opencode-plugin-asset.ts";
 import { buildPayload } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 
@@ -236,7 +237,7 @@ describe("opencode adapter - bundled plugin installation", () => {
     expect(existsSync(pluginPath())).toBe(true);
     const content = readFileSync(pluginPath(), "utf8");
     expect(content.startsWith("// open-second-brain plugin v")).toBe(true);
-    expect(content).toContain("export const OpenSecondBrain");
+    expect(content).toContain("export default {");
   });
 
   test("manifest records the plugin file as an owned path", () => {
@@ -264,7 +265,7 @@ describe("opencode adapter - bundled plugin installation", () => {
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
     writeFileSync(pluginPath(), "// stale copy from an older release\n");
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
-    expect(readFileSync(pluginPath(), "utf8")).toContain("export const OpenSecondBrain");
+    expect(readFileSync(pluginPath(), "utf8")).toBe(installedPluginContent());
   });
 
   test("dry-run apply does not write the plugin file", () => {
@@ -286,7 +287,7 @@ describe("opencode adapter - bundled plugin installation", () => {
     mkdirSync(pluginPath(), { recursive: true });
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
     const content = readFileSync(pluginPath(), "utf8");
-    expect(content).toContain("export const OpenSecondBrain");
+    expect(content).toContain("export default {");
   });
 
   test("uninstall removes the plugin file", () => {
