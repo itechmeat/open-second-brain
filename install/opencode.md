@@ -25,6 +25,12 @@ o2b install --target opencode --apply
 
 Restart `opencode` to load the MCP servers and the plugin.
 
+The bundled plugin supports OpenCode V1 1.18.29+ and V2 from the same
+installed file: V1 calls `server()` and V2 calls `setup()`. Older V1
+releases do not support the shared object entrypoint. `--check` verifies
+the installed files and MCP configuration, not whether the running host
+loaded the plugin; on V2, check its state with `opencode api get /api/plugin`.
+
 opencode's Brain writes attribute to an **opencode-specific identity** derived
 from your configured `agent_name`: the host segment is kept and the vendor
 token is swapped to `opencode` (`claude-vps-agent` -> `opencode-vps-agent`; a
@@ -43,7 +49,8 @@ manual step is needed.
   the Claude Code and Codex hook layers; if the shim or the vault is
   missing the inject silently skips.
 - **Session capture** - on `session.idle` / `session.compacted` /
-  `session.deleted` the plugin snapshots the session as a JSONL spool
+  `session.deleted` (V1), or idle and before/after compaction (V2), the
+  plugin snapshots the session as a JSONL spool
   under `${XDG_DATA_HOME:-$HOME/.local/share}/open-second-brain/opencode/`.
   Import captured sessions with:
 
@@ -51,6 +58,10 @@ manual step is needed.
   o2b brain import-session ~/.local/share/open-second-brain/opencode/ \
     --vault /path/to/vault
   ```
+
+  V2 exposes only the active context to plugins, so snapshots merge
+  across compactions. Its event subscription is live-only: a session
+  already compacted before the plugin loads cannot recover older turns.
 
 - **Post-write reminder** - after file-mutating tools (`write`,
   `edit`, `multiedit`, `patch`, `apply_patch`) the standard logging
@@ -100,10 +111,10 @@ installed plugin file. User-authored config is untouched.
 - **No stop-log guardrail.** opencode exposes no blocking stop hook,
   so the guardrail that vetoes an unlogged artifact turn cannot be
   reproduced; the post-write reminder still fires.
-- **Context inject rides an experimental hook**
-  (`experimental.chat.system.transform`). If a future opencode release
-  changes it, the inject degrades to no-op while capture and the MCP
-  servers keep working.
+- **V1 context inject rides an experimental hook**
+  (`experimental.chat.system.transform`). V2 instead uses the session
+  `context` hook. If a future V1 release changes the experimental hook,
+  the inject degrades to no-op while capture and the MCP servers keep working.
 
 ## Notes
 
