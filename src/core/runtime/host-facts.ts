@@ -37,7 +37,12 @@ import {
   SESSION_FILE_EXTENSION,
   type SessionAdapterId,
 } from "../brain/sessions/types.ts";
-import { dataBaseDir, windowsRoamingAppData, type PlatformDirsEnv } from "../platform-dirs.ts";
+import {
+  APP_DIR_NAME,
+  dataBaseDir,
+  windowsRoamingAppData,
+  type PlatformDirsEnv,
+} from "../platform-dirs.ts";
 
 // ---------- The target vocabulary ----------
 
@@ -440,7 +445,7 @@ const OPENCODE_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
       envOr(
         ctx,
         "OSB_OPENCODE_SPOOL_DIR",
-        join(dataBaseDir(dirsEnv(ctx)), "open-second-brain", "opencode"),
+        join(dataBaseDir(dirsEnv(ctx)), APP_DIR_NAME, "opencode"),
       ),
     glob: "*.jsonl",
     adapter: SESSION_ADAPTER_ID.opencode,

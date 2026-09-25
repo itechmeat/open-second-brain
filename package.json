@@ -51,7 +51,7 @@
     "check:paths": "bun run scripts/check-hardcoded-paths.ts",
     "check:paths:strict": "bun run scripts/check-hardcoded-paths.ts --strict",
     "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
-    "prepare": "bun scripts/prepare.ts"
+    "prepare": "bun scripts/prepare.ts || exit 0"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"

@@ -1583,24 +1583,30 @@ var WINDOWS_RENAME_RETRY_BUDGET_MS = 2000;
 function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-function renameWithRetry(from, to) {
-  if (process.platform !== "win32") {
-    renameSync(from, to);
+function renameWithRetry(from, to, seams = {}) {
+  const rename = seams.rename ?? ((a, b) => renameSync(a, b));
+  withWindowsSharingRetry(() => rename(from, to), seams);
+}
+function withWindowsSharingRetry(op, seams) {
+  if ((seams.platform ?? process.platform) !== "win32") {
+    op();
     return;
   }
-  const deadline = Date.now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  const sleep = seams.sleep ?? sleepSync;
+  const now = seams.now ?? Date.now;
+  const deadline = now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
   let delay = 10;
   for (;; ) {
     try {
-      renameSync(from, to);
+      op();
       return;
     } catch (err) {
       const code = err?.code;
       if (code === undefined || !WINDOWS_TRANSIENT_RENAME_CODES.has(code))
         throw err;
-      if (Date.now() + delay > deadline)
+      if (now() + delay > deadline)
         throw err;
-      sleepSync(delay);
+      sleep(delay);
       delay = Math.min(delay * 2, 250);
     }
   }
@@ -1757,10 +1763,10 @@ class ConfigReadError extends Error {
 function resolveDefaultConfigPath(source) {
   const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
   if (override)
-    return expandTilde(override);
+    return expandTilde(override, source.platform, source.home);
   const xdg = source.env["XDG_CONFIG_HOME"];
   if (xdg)
-    return join3(expandTilde(xdg), "open-second-brain", "config.yaml");
+    return join3(expandTilde(xdg, source.platform, source.home), APP_DIR_NAME, "config.yaml");
   if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
     throw new UnsupportedPlatformError(source.platform);
   }
@@ -1915,13 +1921,13 @@ var PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY = "partner_codegraph_disabled";
 function resolvePartnerCodegraphDisabled(configPath) {
   return resolveConfigFlag(PARTNER_CODEGRAPH_DISABLED_ENV, PARTNER_CODEGRAPH_DISABLED_CONFIG_KEY, configPath);
 }
-function expandTilde(p) {
+function expandTilde(p, platform = process.platform, home = homedir2()) {
   if (p === "~")
-    return homedir2();
+    return home;
   if (p.startsWith("~/"))
-    return join3(homedir2(), p.slice(2));
-  if (process.platform === "win32" && p.startsWith("~\\"))
-    return join3(homedir2(), p.slice(2));
+    return join3(home, p.slice(2));
+  if (platform === "win32" && p.startsWith("~\\"))
+    return join3(home, p.slice(2));
   return p;
 }
 

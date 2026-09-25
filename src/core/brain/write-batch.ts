@@ -690,29 +690,6 @@ interface ExistingNote {
 const READ_EXISTING_NOTE_SITE = "brain.write-batch.read-existing-note";
 
 /**
- * Read and parse an existing note, or throw a typed error naming which
- * of the two ways it was unavailable. update and append only touch
- * notes that already exist.
- *
- * An UNREADABLE file raises rather than resolving to an empty note. The
- * two-tuple `parseFrontmatter` reports a read failure as `[{}, ""]` -
- * correct for the fail-soft walkers it was written for, and fatal here,
- * because this result is the base of a read-modify-write: an update
- * would write the caller's body under an empty frontmatter map and an
- * append would write its text over a body nobody read, both reporting
- * success. The projection runs before any commit, so raising leaves the
- * file byte-identical.
- *
- * A DROPPED frontmatter line raises for the same reason. The parse
- * succeeded, and the scanner reported by name a line it could not
- * express; the callers below re-serialise the parsed map with
- * `formatFrontmatter`, so that line would be deleted from disk by a
- * write the caller never asked to touch it - a frontmatter-only update
- * that answers `updated: true` while removing a field it never mentioned.
- * Both notices come off the same parse, and both mean the same thing:
- * part of the content this write would replace is unknown to it.
- */
-/**
  * Windows arm of the permission refusal. Windows has no POSIX mode bits:
  * `chmod` and Explorer's "Read-only" box both set the one read-only
  * attribute, which Node reports as a mode without any write bit. Such a
@@ -745,6 +722,29 @@ function refuseReadOnlyAttribute(abs: string, relPath: string, index: number): v
   );
 }
 
+/**
+ * Read and parse an existing note, or throw a typed error naming which
+ * of the two ways it was unavailable. update and append only touch
+ * notes that already exist.
+ *
+ * An UNREADABLE file raises rather than resolving to an empty note. The
+ * two-tuple `parseFrontmatter` reports a read failure as `[{}, ""]` -
+ * correct for the fail-soft walkers it was written for, and fatal here,
+ * because this result is the base of a read-modify-write: an update
+ * would write the caller's body under an empty frontmatter map and an
+ * append would write its text over a body nobody read, both reporting
+ * success. The projection runs before any commit, so raising leaves the
+ * file byte-identical.
+ *
+ * A DROPPED frontmatter line raises for the same reason. The parse
+ * succeeded, and the scanner reported by name a line it could not
+ * express; the callers below re-serialise the parsed map with
+ * `formatFrontmatter`, so that line would be deleted from disk by a
+ * write the caller never asked to touch it - a frontmatter-only update
+ * that answers `updated: true` while removing a field it never mentioned.
+ * Both notices come off the same parse, and both mean the same thing:
+ * part of the content this write would replace is unknown to it.
+ */
 function readExistingNote(abs: string, relPath: string, index: number): ExistingNote {
   if (!existsSync(abs)) {
     throw new WriteBatchError(

@@ -119,10 +119,10 @@ export interface ConfigPathEnv {
  */
 export function resolveDefaultConfigPath(source: ConfigPathEnv): string {
   const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
-  if (override) return expandTilde(override);
+  if (override) return expandTilde(override, source.platform, source.home);
 
   const xdg = source.env["XDG_CONFIG_HOME"];
-  if (xdg) return join(expandTilde(xdg), "open-second-brain", "config.yaml");
+  if (xdg) return join(expandTilde(xdg, source.platform, source.home), APP_DIR_NAME, "config.yaml");
 
   if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
     throw new UnsupportedPlatformError(source.platform);
@@ -1234,10 +1234,19 @@ export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
   return ids;
 }
 
-function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+/**
+ * `~` and `~/x` (and `~\x` on Windows) against `home`. The platform and
+ * home default to the running process; the injected-environment resolvers
+ * pass their own so a test for one platform does not read another's.
+ */
+function expandTilde(
+  p: string,
+  platform: string = process.platform,
+  home: string = homedir(),
+): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
   // Windows users write `~\vault` as naturally as `~/vault`.
-  if (process.platform === "win32" && p.startsWith("~\\")) return join(homedir(), p.slice(2));
+  if (platform === "win32" && p.startsWith("~\\")) return join(home, p.slice(2));
   return p;
 }

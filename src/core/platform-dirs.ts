@@ -3,8 +3,12 @@
  *
  * One place answers "where does Open Second Brain keep its config, data,
  * state and cache, and where does `o2b install-cli` put its launchers", so
- * the config resolver, the session spools, the cron stamps and the install
- * surfaces cannot disagree about a path.
+ * the config resolver, the session spools and the install surfaces cannot
+ * disagree about a path. Not everything reads it yet: the codegraph resync
+ * recipe (`cli/partner-codegraph-cron.ts`) emits a bash script that expands
+ * `${XDG_STATE_HOME:-$HOME/.local/state}` itself, at cron time on a POSIX
+ * host, where it agrees with the POSIX layout below by construction. The
+ * state and cache roots have no production caller yet.
  *
  * POSIX (Linux, macOS, the BSDs): the XDG Base Directory layout, with the
  * `XDG_*_HOME` variables honoured and `$HOME/.config`, `$HOME/.local/share`,
