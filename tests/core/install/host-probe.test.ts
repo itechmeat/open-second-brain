@@ -190,6 +190,22 @@ describe("the wait is bounded", () => {
     expect(result.stderr).toContain("200 ms");
   });
 
+  test("a host that answers in time keeps its answer", () => {
+    // The regression this pins: Bun leaves `signalCode` undefined, not
+    // null, on a normal exit, and a strict `!== null` check read every
+    // successful probe as killed and discarded its stdout. Driven against a
+    // real child because a stubbed runner cannot reproduce a runtime quirk.
+    const runner = createHostProbeRunner(HOST_PROBE_TIMEOUT_MS);
+    const result = runner.run(
+      process.execPath,
+      ["-e", `process.stdout.write(${JSON.stringify(realCodexListing())})`],
+      { PATH: process.env["PATH"] ?? "/usr/bin" },
+    );
+    expect(result.stderr).toBe("");
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(realCodexListing());
+  });
+
   test("a killed probe becomes a named skip, never an assumed answer", () => {
     setHostProbeRunner({
       available: () => true,

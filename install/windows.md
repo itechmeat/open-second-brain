@@ -85,6 +85,11 @@ carries the host.
   `.cmd` launchers set the same variable for their `bun` lookup. The
   install refuses a vault path containing `& | < > ^ % " !`, which cmd
   would split, expand or execute.
+- **Codex** runs plugin hooks through `cmd.exe`, so every hook in the Codex
+  plugin carries a `commandWindows` form that calls the `o2b-hook.cmd`
+  launcher `o2b install-cli` puts on PATH, never one from the current
+  directory. Git for Windows is not needed for them. Codex marks plugin
+  hooks untrusted until you approve them in `/hooks`.
 - **Grok Build** gets absolute `bun.exe run <repo>\src\cli\main.ts` MCP
   entries and hook commands. Unverified on Windows: xAI does not document
   which shell runs hook commands there (reports say PowerShell), and the

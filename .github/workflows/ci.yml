@@ -43,6 +43,11 @@ jobs:
       - name: Verify manifest version sync
         run: bun run sync-version:check
 
+      # Codex caches only `plugins/codex/` and drops symlinks, so the Codex
+      # plugin carries real copies of `skills/` and `hooks/hooks.json`.
+      - name: Codex plugin mirrors are in sync
+        run: bun run sync-plugin-mirrors:check
+
       - name: OpenClaw bundle is in sync with sources
         shell: bash
         run: |
@@ -144,6 +149,13 @@ jobs:
 
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
+
+      # The one validate-job check repeated here, because it is about the
+      # checkout: the mirrors must come out of a Windows clone as the same
+      # bytes (LF, per .gitattributes) and as real files, not as symlinks
+      # materialised as text.
+      - name: Codex plugin mirrors are in sync
+        run: bun run sync-plugin-mirrors:check
 
       - name: Typecheck
         run: bun run typecheck

@@ -48,3 +48,21 @@ maintainer can push the bump straight to `main` at release time; this repo
 cannot, so the bump belongs in the feature PR. The GitHub release
 (`gh release create vX.Y.Z`) is published AFTER that PR merges and only tags
 the already-bumped commit - it never changes the version.
+
+## Codex plugin mirrors
+
+Codex installs the plugin from `./plugins/codex` only, and its cache copy
+drops symlinks. So `plugins/codex/skills/` is a real, byte-identical copy of
+`skills/`, and `plugins/codex/hooks/hooks.json` is generated from
+`hooks/hooks.json` (SessionEnd timeouts capped at Codex's 3 s limit, and a
+`commandWindows` cmd.exe form added to every hook). Every hook command must
+end in the `o2b-hook <name>` fallback, or the sync refuses it. Never
+edit the copies and never turn them back into symlinks. After changing a
+skill or `hooks/hooks.json`, run:
+
+```
+bun run sync-plugin-mirrors
+```
+
+CI gates on `bun run sync-plugin-mirrors:check` (the `validate` and
+`windows` jobs), and the pre-commit hook runs the same check.

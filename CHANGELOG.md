@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.57.1] - 2026-09-25
+
+Two faults that surfaced while wiring Codex CLI 0.157.0 to this plugin. Neither was visible from inside the repository. Codex installs a plugin by copying its marketplace source, `plugins/codex/`, into `~/.codex/plugins/cache/`, and that copy drops symlinks. `plugins/codex/hooks` and `plugins/codex/skills` were both symlinks into the repository root, so every Codex install had no hooks and no skills. Every Codex run also warned `failed to read plugin hooks config .../hooks/hooks.json: No such file or directory`. Separately, `o2b install --check` reported a correctly registered Codex as `mcp-unreachable`, because the host probe discarded every successful answer.
+
+### Fixed
+
+- **The Codex plugin ships real files.**
+  - `plugins/codex/skills/` is a byte copy of `skills/`.
+  - `plugins/codex/hooks/hooks.json` is generated from `hooks/hooks.json`. SessionEnd timeouts are capped at the 3 s that Codex enforces anyway, and that it otherwise warns about on every run.
+  - Only `hooks.json` is mirrored, never the `hooks/*.ts` scripts. Codex exports `CLAUDE_PLUGIN_ROOT` as its cache dir. A cached script there would win `o2b-hook`'s resolution and then fail on its `../src` imports. Without one, resolution falls through to the real checkout, as before.
+  - Every mirrored hook also carries a `commandWindows`. On Windows Codex runs a hook as `%COMSPEC% /C "<command>"`, which cannot parse the POSIX form. The Windows form runs the PATH `o2b-hook.cmd` that `o2b install-cli` writes, sets `NoDefaultCurrentDirectoryInExePath` first and asks `where /q $PATH:o2b-hook` rather than a bare `where`, so a launcher planted in the project Codex opened never runs. It always exits 0. The sync refuses a hook command that does not end in the `o2b-hook <name>` fallback, rather than ship one that cmd.exe cannot run.
+  - The same change retires the only symlinks in the tree. A Windows checkout without Developer Mode or `core.symlinks` materialised them as text files holding the target path.
+  - Verified against Codex 0.157.0 in a throwaway `CODEX_HOME`: `codex plugin marketplace add` plus `codex plugin add` put `hooks/hooks.json` and all five skills in the cache. `hooks/list` reports 16 plugin hooks with no warnings or errors, and `skills/list` reports the five `open-second-brain:*` skills. Once trusted, the SessionStart, UserPromptSubmit and SessionEnd hooks fire through `o2b-hook`.
+- **`install/codex.md` looks for the launcher under `CODEX_HOME`.** Step 2 searched `~/.codex` whatever `CODEX_HOME` said, so a relocated Codex home stopped the install or picked a stale launcher. It now searches the marketplace clone in `${CODEX_HOME:-$HOME/.codex}/.tmp/marketplaces`.
+- **`o2b install --check` stops calling a working Codex `mcp-unreachable`.** The host probe tested `signalCode !== null` to detect a killed child. Bun leaves `signalCode` undefined, not null, on a normal exit, so every successful `codex mcp list` was treated as killed and its stdout was thrown away. The check is now `!= null`, and a test drives a real child that exits normally, since a stubbed runner cannot reproduce a runtime quirk. No other spawn site has the pattern: the `node:child_process` call sites get `null` from Bun, as Node documents.
+
+### Added
+
+- **`bun run sync-plugin-mirrors`** rebuilds the Codex mirrors. `bun run sync-plugin-mirrors:check` is gated in the pre-commit hook and in two CI jobs: `validate`, and `windows`, whose checkout is where a line-ending rewrite or a symlink materialised as a text file would show. It reports a missing, changed or extra mirrored file, and any symlink, by name. A test also asserts that the git index tracks no symlink under `plugins/` or `.agents/`.
+
 ## [1.57.0] - 2026-09-25
 
 Open Second Brain now runs natively on Windows 10 and 11. Until this release the resolver refused `win32` by name, and the refusal was the honest part: every entry point was a bash script, every durable path assumed `$HOME/.config`, and the code underneath had habits that POSIX forgives and Windows does not. A SQLite connection closed without finalizing its statements keeps its file locked. A rename onto a file another process holds fails. A tar walk follows `readdir` order, and that order differs between filesystems. A path split on `/` misses `\`. The first full test run under Windows Bun failed 2127 of 12,388 tests. This release closes those gaps, gives the platform its own layout, and ends with the same suite at 0 failures on Windows and on Linux. 162 tests are skipped on Windows, each with a stated reason; they assert something Windows cannot express, such as a chmod that denies reading. Several of the fixes were never Windows bugs. They are nondeterminism and leaks that every platform had, which a second platform happened to expose.
@@ -7574,6 +7594,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.57.1]: https://github.com/itechmeat/open-second-brain/compare/v1.57.0...v1.57.1
 [1.57.0]: https://github.com/itechmeat/open-second-brain/compare/v1.56.0...v1.57.0
 [1.56.0]: https://github.com/itechmeat/open-second-brain/compare/v1.55.0...v1.56.0
 [1.55.0]: https://github.com/itechmeat/open-second-brain/compare/v1.54.0...v1.55.0

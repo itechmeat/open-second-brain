@@ -23,5 +23,11 @@ if ! bun run fmt:check; then
   exit 1
 fi
 
+echo "pre-commit: bun run sync-plugin-mirrors:check" >&2
+if ! bun run sync-plugin-mirrors:check; then
+  echo "pre-commit: plugins/codex mirrors drifted - run 'bun run sync-plugin-mirrors' and re-stage." >&2
+  exit 1
+fi
+
 echo "pre-commit: bun run lint" >&2
 bun run lint

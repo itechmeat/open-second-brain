@@ -536,8 +536,8 @@ function walk(dir: string, out: string[]): string[] {
     } catch {
       // A dangling symlink is not a module, and a census that throws on one
       // reports nothing at all - which is strictly worse than reporting the
-      // rest of the tree. `plugins/codex/skills` is a symlink; a checkout
-      // that has not materialised it must not take the sweep down with it.
+      // rest of the tree. A symlink a checkout has not materialised (a
+      // Windows clone without `core.symlinks`) must not take the sweep down.
       continue;
     }
     if (isDir) walk(full, out);
