@@ -62,5 +62,5 @@ skill or `hooks/hooks.json`, run:
 bun run sync-plugin-mirrors
 ```
 
-CI gates on `bun run sync-plugin-mirrors:check` (the `validate` job), and
-the pre-commit hook runs the same check.
+CI gates on `bun run sync-plugin-mirrors:check` (the `validate` and
+`windows` jobs), and the pre-commit hook runs the same check.

@@ -150,6 +150,13 @@ jobs:
       - name: Install JS dependencies
         run: bun install --frozen-lockfile
 
+      # The one validate-job check repeated here, because it is about the
+      # checkout: the mirrors must come out of a Windows clone as the same
+      # bytes (LF, per .gitattributes) and as real files, not as symlinks
+      # materialised as text.
+      - name: Codex plugin mirrors are in sync
+        run: bun run sync-plugin-mirrors:check
+
       - name: Typecheck
         run: bun run typecheck
 
