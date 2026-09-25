@@ -615,24 +615,45 @@ export function tarPathArg(path: string, platform: NodeJS.Platform = process.pla
 
 /**
  * `rel` (vault-relative, `/`-separated) followed by everything beneath it,
- * depth-first with siblings in code-unit order. Symlinked directories are
- * listed but not entered - the same as tar's own default.
+ * depth-first with siblings in byte order. Symlinked directories are listed
+ * but not entered - the same as tar's own default. Exported for tests.
+ *
+ * Names are raw bytes (`Buffer`), not strings: a POSIX file name need not be
+ * UTF-8, and a latin1 `caf\xe9.md` decoded to a string comes back as
+ * `caf\uFFFD.md` - a name that does not exist, which GNU tar then refuses
+ * to archive. Bytes round-trip exactly (on Windows they are the UTF-8 of
+ * the UTF-16 name, which is what tar reads the list as).
+ *
+ * The walk is exhaustive or it fails. tar is told not to recurse, so a
+ * directory this walk could not read would be archived EMPTY, and bsdtar
+ * (macOS, Windows `tar.exe`) reports success for that - a recovery point
+ * silently missing data. An entry that vanished mid-walk (ENOENT) is simply
+ * not in the tree any more and is left out; any other error is thrown as a
+ * {@link BrainSnapshotError} naming the path.
  */
-function sortedMembers(vault: string, rel: string): string[] {
-  const out = [rel];
-  const abs = join(vault, ...rel.split("/"));
-  let entries: import("node:fs").Dirent[];
+export function sortedMembers(vault: string, rel: Buffer, runId: string): Buffer[] {
+  const abs = Buffer.concat([Buffer.from(vault), SLASH, rel]);
+  let entries: Buffer[];
   try {
-    if (!lstatSync(abs).isDirectory()) return out;
-    entries = readdirSync(abs, { withFileTypes: true });
-  } catch {
-    return out;
+    if (!lstatSync(abs).isDirectory()) return [rel];
+    entries = readdirSync(abs, { encoding: "buffer" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new BrainSnapshotError(
+      `cannot read ${rel.toString()} to archive it: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
   }
-  for (const name of entries.map((d) => d.name).toSorted()) {
-    out.push(...sortedMembers(vault, `${rel}/${name}`));
+  const out = [rel];
+  for (const name of entries.toSorted(Buffer.compare)) {
+    out.push(...sortedMembers(vault, Buffer.concat([rel, SLASH, name]), runId));
   }
   return out;
 }
+
+const SLASH = Buffer.from("/");
+const NUL = Buffer.from([0]);
 
 /**
  * Make `Brain/.snapshots/` exist, or say what is there instead.
@@ -747,9 +768,11 @@ export function createSnapshot(
   // List top-level entries of Brain/ that we want to capture. Sort the
   // result so the resulting archive's contents are deterministic
   // across filesystems (readdirSync's order is FS-dependent).
-  let topEntries: string[];
+  let topEntries: Buffer[];
   try {
-    topEntries = readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e));
+    topEntries = readdirSync(dirs.brain, { encoding: "buffer" }).filter(
+      (e) => !isSnapshotExcludedEntry(e.toString()),
+    );
   } catch (err) {
     discardStoreArchive(derivedStore, vault, runId);
     throw new BrainSnapshotError(
@@ -757,14 +780,15 @@ export function createSnapshot(
       runId,
     );
   }
-  topEntries.sort();
+  topEntries.sort(Buffer.compare);
 
   // Paths inside the archive start at `Brain/` — matching the rollback
   // contract that the archive is "the Brain/ tree". Every member is
   // listed explicitly, depth-first in sorted order, and tar is told not
   // to recurse: left to itself tar walks each directory in `readdir`
   // order, which differs between two copies of the same tree (ext4 hash
-  // order, NTFS, APFS), so identical content produced different bytes.
+  // order, NTFS, APFS). The member ORDER is therefore deterministic; the
+  // bytes are not (tar headers still carry mtime, owner and mode).
   // The list travels NUL-separated through a file (`--null -T`), which
   // GNU tar and bsdtar (macOS, Windows `tar.exe`) both accept and which
   // survives any character a filename can hold.
@@ -772,13 +796,10 @@ export function createSnapshot(
   const listPath = join(listDir, "members");
 
   try {
-    writeFileSync(
-      listPath,
-      topEntries
-        .flatMap((e) => sortedMembers(vault, `${BRAIN_ROOT_REL}/${e}`))
-        .map((m) => `${m}\0`)
-        .join(""),
+    const members = topEntries.flatMap((e) =>
+      sortedMembers(vault, Buffer.concat([Buffer.from(`${BRAIN_ROOT_REL}/`), e]), runId),
     );
+    writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
     const tarArgs = [
       "-c",
       "-C",
