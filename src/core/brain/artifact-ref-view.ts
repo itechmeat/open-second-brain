@@ -32,6 +32,7 @@
 import { join } from "node:path";
 import { existsSync } from "node:fs";
 
+import { toPosix } from "../path-safety.ts";
 import type { FrontmatterCache } from "../search/result-filters.ts";
 import { BRAIN_SOURCES_REL, brainDirs } from "./paths.ts";
 import { ANCHORED_WIKILINK_RE, stripWikilinkDecoration } from "./wikilink.ts";
@@ -158,7 +159,12 @@ function artifactPath(vault: string, id: string): string | null {
     dirs.entities,
   ]) {
     const abs = join(dir, `${id}${MARKDOWN_EXT}`);
-    if (existsSync(abs)) return abs.slice(vault.length + 1);
+    // The visibility predicate speaks vault-relative POSIX paths - the
+    // form a path-shaped reference already carries. Handing it the native
+    // `Brain\preferences\...` spelling on Windows would match no rule and
+    // let a hidden artifact through, the fail-open this view exists to
+    // prevent.
+    if (existsSync(abs)) return toPosix(abs.slice(vault.length + 1));
   }
   return null;
 }

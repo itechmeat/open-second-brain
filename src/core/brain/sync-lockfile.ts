@@ -86,6 +86,26 @@ function ensureExitHook(): void {
 }
 
 /**
+ * Whether a failed exclusive create is Windows reporting a lock that is
+ * mid-release rather than a real permission problem.
+ *
+ * Windows does not remove a file the moment another process unlinks it: the
+ * name stays in a "delete pending" state until the last handle closes, and
+ * any attempt to create that name meanwhile fails with `EPERM` (or `EACCES`)
+ * instead of `EEXIST`. Under a multi-process race - the exact case these
+ * locks exist for - a writer that loses by a few microseconds to a releasing
+ * holder then crashed with a raw `EPERM` instead of waiting its turn. On
+ * win32 that code is contention and goes through the same retry path as
+ * `EEXIST`; the original error rides along as `cause`, so a directory that
+ * genuinely refuses writes still names its real reason once the wait budget
+ * runs out. POSIX never reports a held lock this way, so there it stays an
+ * error.
+ */
+function isWindowsDeletePending(e: NodeJS.ErrnoException): boolean {
+  return process.platform === "win32" && (e.code === "EPERM" || e.code === "EACCES");
+}
+
+/**
  * Acquire an exclusive lock for `target`. Returns a handle whose
  * {@link LockHandle.release} method unlinks the underlying `.lock`
  * file. Throws `Error & { code: 'ELOCKED' }` if the lock is already
@@ -105,8 +125,8 @@ export function acquireLockSync(target: string): LockHandle {
     fd = openSync(lockPath, "wx", 0o644);
   } catch (err) {
     const e = err as NodeJS.ErrnoException;
-    if (e.code === "EEXIST") {
-      const collision: NodeJS.ErrnoException = new Error(`lock busy: ${lockPath}`);
+    if (e.code === "EEXIST" || isWindowsDeletePending(e)) {
+      const collision: NodeJS.ErrnoException = new Error(`lock busy: ${lockPath}`, { cause: e });
       collision.code = "ELOCKED";
       collision.path = lockPath;
       throw collision;

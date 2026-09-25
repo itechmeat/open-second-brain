@@ -54,6 +54,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
+import { pathIsInside } from "../../path-safety.ts";
 import {
   resolveSessionRootsFor,
   isSessionRuntimeId,
@@ -431,7 +432,11 @@ export function runtimeForPath(path: string, host?: HostContext): SessionRuntime
   const ctx = host ?? currentHost();
   for (const runtime of SESSION_RUNTIME_IDS) {
     for (const root of resolveSessionRootsFor(runtime, ctx)) {
-      if (path === root.path || path.startsWith(`${root.path}/`)) return runtime;
+      // `pathIsInside`, not a `${root}/` prefix test: on Windows the
+      // separator is `\` and the filesystem is case-insensitive, so a
+      // hand-rolled `/` prefix matched nothing and an explicit-path import
+      // was never recorded - discovery kept offering a log already imported.
+      if (pathIsInside(path, root.path)) return runtime;
     }
   }
   return null;

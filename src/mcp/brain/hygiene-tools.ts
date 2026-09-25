@@ -17,6 +17,8 @@
  * server execute an arbitrary command.
  */
 
+import { isAbsolute } from "node:path";
+
 import { resolveAgentName } from "../../core/config.ts";
 import { loadBrainConfig } from "../../core/brain/policy.ts";
 import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
@@ -84,10 +86,17 @@ function scanWithResolver(
  * The artifacts one finding would disclose, as the owner-scope view
  * spells references: an absolute path rendered vault-relative, anything
  * else left as the Brain artifact id it already is.
+ *
+ * `isAbsolute`, not a leading-`/` test: a Windows page path
+ * (`C:\vault\Brain\x.md`) failed that test, went out as a host path,
+ * and reached the owner-scope view in a spelling no visibility rule
+ * matches. Exported for unit tests.
+ *
+ * @internal
  */
-function findingRefs(vault: string, finding: HygieneFinding): ReadonlyArray<string> {
+export function findingRefs(vault: string, finding: HygieneFinding): ReadonlyArray<string> {
   return finding.targets.map((target) =>
-    target.startsWith("/") ? vaultRelativeSafe(vault, target) : target,
+    isAbsolute(target) ? vaultRelativeSafe(vault, target) : target,
   );
 }
 

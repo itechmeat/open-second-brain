@@ -26,6 +26,7 @@ import {
   type CaptureNote,
 } from "../../../core/brain/capture/capture-note.ts";
 import { isoSecond } from "../../../core/brain/time.ts";
+import { readStdinText } from "../../stdin.ts";
 import { CliError } from "../../argparse.ts";
 import {
   brainVerbContext,
@@ -90,7 +91,7 @@ export async function cmdBrainCapture(argv: string[]): Promise<number> {
   let body = positional.join(" ").trim();
   if (body.length === 0) {
     try {
-      body = (await Bun.stdin.text()).trim();
+      body = (await readStdinText()).trim();
     } catch (exc) {
       return refuse(
         `capture could not read the body from stdin: ${(exc as Error).message ?? String(exc)}`,

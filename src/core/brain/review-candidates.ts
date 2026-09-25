@@ -14,8 +14,9 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { posix } from "node:path";
 
+import { vaultRelative } from "../path-safety.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import { dream } from "./dream.ts";
 import type { DreamOptions } from "./dream-types.ts";
@@ -100,15 +101,20 @@ export interface BuildReviewCandidatesOptions {
   readonly onProgress?: DreamOptions["onProgress"];
 }
 
-/** Active inbox signal files as (id, relPath) refs. */
+/**
+ * Active inbox signal files as (id, relPath) refs. The relPath is the
+ * forward-slash vault-relative form the search index keys documents by, on
+ * every host: a Windows `relative`/`join` pair yields `Brain\inbox\...`,
+ * which matches no indexed document and silently scores every signal null.
+ */
 function listInboxSignalRefs(vault: string): Array<{ id: string; relPath: string }> {
   const inbox = brainDirs(vault).inbox;
   if (!existsSync(inbox)) return [];
-  const inboxRel = relative(vault, inbox);
+  const inboxRel = vaultRelative(inbox, vault);
   return readdirSync(inbox)
     .filter((n) => n.startsWith("sig-") && n.endsWith(".md"))
     .toSorted()
-    .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: join(inboxRel, n) }));
+    .map((n) => ({ id: n.replace(/\.md$/, ""), relPath: posix.join(inboxRel, n) }));
 }
 
 export async function buildReviewCandidates(

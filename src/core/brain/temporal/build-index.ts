@@ -16,12 +16,13 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 
 import type { BrainLogEntry } from "./../log.ts";
 import { listLogDates, readLogDay } from "./../log-jsonl.ts";
 import { brainDirs } from "./../paths.ts";
 import { parseFrontmatter } from "../../vault.ts";
+import { vaultRelative } from "../../path-safety.ts";
 import { parseWikilink } from "./../wikilink.ts";
 import {
   BRAIN_APPLY_RESULT,
@@ -182,7 +183,9 @@ function collectLogEvents(vault: string, window: TimelineWindow, out: TemporalEv
     // audit pointer stays accurate when the JSONL sidecar is
     // missing and the markdown fallback is used.
     const filePath = join(logDir, source === "markdown-fallback" ? `${date}.md` : `${date}.jsonl`);
-    const vaultPath = relative(vault, filePath);
+    // Forward-slash on every host: a Windows `relative()` would hand the
+    // timeline `Brain\log\...` pointers no other surface uses.
+    const vaultPath = vaultRelative(filePath, vault);
     for (let i = 0; i < entries.length; i++) {
       const entry = entries[i]!;
       if (entry.timestamp < window.since) continue;
@@ -362,7 +365,7 @@ function collectRetiredEvents(vault: string, window: TimelineWindow, out: Tempor
       Object.freeze({
         at: retiredAt,
         kind: BRAIN_LOG_EVENT_KIND.retire,
-        source: { path: relative(vault, path), line: null },
+        source: { path: vaultRelative(path, vault), line: null },
         prefId: id,
         ...(topic !== undefined ? { topic } : {}),
         ...(reason !== undefined ? { reason } : {}),

@@ -157,9 +157,11 @@ export interface ClaudeCodeRender {
 export function renderClaudeCode(
   rules: ReadonlyArray<ProtectRule>,
   vault: string = inferVault(rules),
+  platform: NodeJS.Platform = process.platform,
 ): ClaudeCodeRender {
-  const deny = rules.filter((r) => r.kind === "deny").map((r) => `${r.action}(${r.path})`);
-  const allow = rules.filter((r) => r.kind === "allow").map((r) => `${r.action}(${r.path})`);
+  const entry = (r: ProtectRule): string => `${r.action}(${claudeCodeRulePath(r.path, platform)})`;
+  const deny = rules.filter((r) => r.kind === "deny").map(entry);
+  const allow = rules.filter((r) => r.kind === "allow").map(entry);
   return Object.freeze({
     snippet: { permissions: { deny, allow } },
     manifest: {
@@ -170,6 +172,31 @@ export function renderClaudeCode(
       owned_allow: allow,
     },
   });
+}
+
+/**
+ * Spell an absolute forward-slash path the way a Claude Code
+ * Read/Edit/Write permission rule names a filesystem-absolute location.
+ * The rule syntax is gitignore-style with its own anchors: `//path` is
+ * absolute from the filesystem root, while a single leading `/` anchors
+ * at the settings source (the project root for `.claude/settings.json`),
+ * so `/home/me/vault/Brain/**` would silently match
+ * `<project>/home/me/vault/Brain/**` and protect nothing. On Windows the
+ * matcher first normalises the path to POSIX form, `C:\Users\alice`
+ * becoming `/c/Users/alice`, so a drive path is written `//c/Users/...`
+ * with the letter lower-cased. `platform` is a test seam.
+ */
+export function claudeCodeRulePath(
+  absPosixPath: string,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  if (platform === "win32") {
+    const drive = /^([A-Za-z]):\/(.*)$/.exec(absPosixPath);
+    if (drive) return `//${drive[1]!.toLowerCase()}/${drive[2]}`;
+  }
+  // Already filesystem-absolute (`//x`, a UNC-shaped path): keep as is.
+  if (absPosixPath.startsWith("//")) return absPosixPath;
+  return absPosixPath.startsWith("/") ? `/${absPosixPath}` : absPosixPath;
 }
 
 function inferVault(rules: ReadonlyArray<ProtectRule>): string {

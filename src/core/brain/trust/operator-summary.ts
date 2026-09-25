@@ -19,6 +19,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 import { runDoctor, type RunDoctorResult } from "../doctor.ts";
 import type { DreamRunSummary } from "../dream.ts";
@@ -221,7 +222,7 @@ function countMarkdownFiles(dir: string): number {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md")) continue;
       try {
-        const s = statSync(`${dir}/${name}`);
+        const s = statSync(join(dir, name));
         if (s.isFile()) n += 1;
       } catch {
         // Race: skip

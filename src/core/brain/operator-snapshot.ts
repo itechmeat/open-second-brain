@@ -16,6 +16,7 @@
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 import { resolveSearchConfig } from "../search/index.ts";
 import { FREEZE_NEXT_COMMAND, readFreezeMarker, type FreezeMarker } from "./freeze-marker.ts";
@@ -260,7 +261,7 @@ function countMarkdown(dir: string): number {
     for (const name of readdirSync(dir)) {
       if (!name.endsWith(".md")) continue;
       try {
-        if (statSync(`${dir}/${name}`).isFile()) n += 1;
+        if (statSync(join(dir, name)).isFile()) n += 1;
       } catch {
         /* race: skip */
       }

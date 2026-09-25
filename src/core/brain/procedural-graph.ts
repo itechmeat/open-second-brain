@@ -208,7 +208,7 @@ function listProposals(vault: string): ProceduralGraphNode[] {
     if (!existsSync(dir)) continue;
     for (const name of readDirSorted(dir)) {
       if (!name.endsWith(".md")) continue;
-      const absPath = `${dir}/${name}`;
+      const absPath = join(dir, name);
       // Unit F: unreachable `catch { continue }` removed - nothing in this
       // body throws (`parseFrontmatter` reads inside its own try, and the
       // rest is property reads and `basename`). A file whose frontmatter

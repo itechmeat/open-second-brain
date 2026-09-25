@@ -26,7 +26,7 @@
  * (temp file + rename), so no single target is ever left half-written.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 import type { FrontmatterMap } from "../types.ts";
@@ -142,7 +142,9 @@ export type WriteBatchErrorCode =
   // an update then wrote the caller's body over an empty frontmatter
   // map and reported `updated: true`, and an append wrote just the
   // appended text over a body it never saw. Read failure is now a
-  // refusal that names the path and the reason.
+  // refusal that names the path and the reason. On Windows it also
+  // covers a note carrying the read-only attribute, which the rewrite's
+  // rename could not replace (see `refuseReadOnlyAttribute`).
   | "target_unreadable"
   // nothing-writes-silently, unit B. The target was read and the
   // frontmatter scanner reported a line it could not express as a
@@ -710,6 +712,39 @@ const READ_EXISTING_NOTE_SITE = "brain.write-batch.read-existing-note";
  * Both notices come off the same parse, and both mean the same thing:
  * part of the content this write would replace is unknown to it.
  */
+/**
+ * Windows arm of the permission refusal. Windows has no POSIX mode bits:
+ * `chmod` and Explorer's "Read-only" box both set the one read-only
+ * attribute, which Node reports as a mode without any write bit. Such a
+ * note stays readable, so the unreadable-file notice never fires, but
+ * the commit's atomic rename onto it then fails with a raw `EPERM` after
+ * the before-image is already stored. Checking here keeps the POSIX
+ * contract on both hosts: a note the process cannot rewrite for a
+ * permission reason is refused as `target_unreadable` - the code the
+ * POSIX `EACCES` read already produces, and an operator fault either way
+ * - in the projection, before any commit. POSIX needs no arm: a 0444
+ * file in a writable directory is legitimately replaced by the rename.
+ */
+function refuseReadOnlyAttribute(abs: string, relPath: string, index: number): void {
+  if (process.platform !== "win32") return;
+  let mode: number;
+  try {
+    mode = statSync(abs).mode;
+  } catch {
+    // The parse that follows names a stat/read failure itself.
+    return;
+  }
+  if ((mode & 0o222) !== 0) return;
+  const reason = "the file has the Windows read-only attribute";
+  throw new WriteBatchError(
+    "target_unreadable",
+    index,
+    `operation ${index}: note ${relPath} cannot be rewritten (${reason}); ` +
+      "clear the attribute to let this write replace it",
+    { path: relPath, reason },
+  );
+}
+
 function readExistingNote(abs: string, relPath: string, index: number): ExistingNote {
   if (!existsSync(abs)) {
     throw new WriteBatchError(
@@ -719,6 +754,7 @@ function readExistingNote(abs: string, relPath: string, index: number): Existing
       { path: relPath },
     );
   }
+  refuseReadOnlyAttribute(abs, relPath, index);
   const [frontmatter, body, notices] = parseFrontmatterWithNotices(abs, {
     site: READ_EXISTING_NOTE_SITE,
   });

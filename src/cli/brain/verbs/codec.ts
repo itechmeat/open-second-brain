@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 
 import { compress, expand } from "../../../core/brain/portability/codec.ts";
 import { fail, parse } from "../helpers.ts";
+import { readStdinText } from "../../stdin.ts";
 
 /**
  * `o2b brain codec --compress|--expand [--in <file>]` - run the
@@ -21,7 +22,7 @@ export async function cmdBrainCodec(argv: string[]): Promise<number> {
   let input: string;
   try {
     input =
-      typeof flags["in"] === "string" ? readFileSync(flags["in"], "utf8") : await Bun.stdin.text();
+      typeof flags["in"] === "string" ? readFileSync(flags["in"], "utf8") : await readStdinText();
   } catch (exc) {
     return fail(`codec: failed to read input: ${(exc as Error).message ?? exc}`);
   }
