@@ -223,7 +223,7 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     note:
       "One empty file per session id. It records that a reminder was shown; it records nothing " +
       "that was said.",
-    sources: ["hooks/post-write-reminder.ts", "plugins/codex/hooks/post-write-reminder.ts"],
+    sources: ["hooks/post-write-reminder.ts"],
   },
   {
     id: "cron_recipe_artifacts",

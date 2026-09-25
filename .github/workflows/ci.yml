@@ -43,6 +43,11 @@ jobs:
       - name: Verify manifest version sync
         run: bun run sync-version:check
 
+      # Codex caches only `plugins/codex/` and drops symlinks, so the Codex
+      # plugin carries real copies of `skills/` and `hooks/hooks.json`.
+      - name: Codex plugin mirrors are in sync
+        run: bun run sync-plugin-mirrors:check
+
       - name: OpenClaw bundle is in sync with sources
         shell: bash
         run: |
