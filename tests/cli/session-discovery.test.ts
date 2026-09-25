@@ -195,6 +195,17 @@ function vaultTree(at: string): Record<string, string> {
 const WALL_CLOCK_STAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|(?<![.\d])\d{2}:\d{2}:\d{2}Z/g;
 
 /**
+ * The day log's hash chain (`"h"`, and `"prev"` on every later line) is
+ * computed over the whole line, stamp included, so a stamp that straddled
+ * a second re-keys the chain too - which failed this test on a loaded CI
+ * runner after the stamp itself had been neutralised. The chain fields are
+ * neutralised with the clock, for the same reason and no further: the
+ * chain has its own end-to-end integrity suites, and what this test
+ * asserts is that the two import paths write the same content.
+ */
+const LOG_CHAIN_HASH = /"(h|prev)":"[0-9a-f]{64}"/g;
+
+/**
  * Today in UTC, which is the date both writers stamp: storage timestamps
  * are canonical UTC everywhere and `present-time.ts` converts only at the
  * presentation boundary, so the signal filename and the daily log carry
@@ -220,7 +231,7 @@ function todayUtc(): string {
 function withoutWallClock(tree: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, body] of Object.entries(tree)) {
-    out[name] = body.replace(WALL_CLOCK_STAMP, "<clock>");
+    out[name] = body.replace(WALL_CLOCK_STAMP, "<clock>").replace(LOG_CHAIN_HASH, '"$1":"<chain>"');
   }
   return out;
 }
