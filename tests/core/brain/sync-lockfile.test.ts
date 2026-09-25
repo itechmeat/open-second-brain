@@ -22,6 +22,7 @@ import { fileURLToPath } from "node:url";
 import {
   acquireLockSync,
   acquireLockSyncWithRetry,
+  isWindowsDeletePending,
   LOCK_WAIT_BUDGET_MS,
   LOCK_WAIT_INTERACTIVE_MS,
   lockScanRoots,
@@ -102,6 +103,35 @@ describe("acquireLockSync", () => {
     } finally {
       handle.release();
     }
+  });
+});
+
+describe("isWindowsDeletePending", () => {
+  const eperm = Object.assign(new Error("EPERM"), { code: "EPERM" }) as NodeJS.ErrnoException;
+  const eacces = Object.assign(new Error("EACCES"), { code: "EACCES" }) as NodeJS.ErrnoException;
+  const eexist = Object.assign(new Error("EEXIST"), { code: "EEXIST" }) as NodeJS.ErrnoException;
+
+  test("win32 EPERM / EACCES on a name something holds is contention", () => {
+    expect(isWindowsDeletePending(eperm, "x.lock", "win32", () => true)).toBe(true);
+    expect(isWindowsDeletePending(eacces, "x.lock", "win32", () => true)).toBe(true);
+  });
+
+  test("win32 EPERM with nothing at the name is a directory that refuses creates", () => {
+    // An ACL or Controlled Folder Access: waiting the whole budget and then
+    // saying "lock busy" would hide the real reason for five seconds.
+    expect(isWindowsDeletePending(eperm, "x.lock", "win32", () => false)).toBe(false);
+  });
+
+  test("never on POSIX, and never for another code", () => {
+    expect(isWindowsDeletePending(eperm, "x.lock", "linux", () => true)).toBe(false);
+    expect(isWindowsDeletePending(eexist, "x.lock", "win32", () => true)).toBe(false);
+  });
+
+  test("the default probe reads the real filesystem", () => {
+    const held = join(tmpRoot, "held.lock");
+    writeFileSync(held, "");
+    expect(isWindowsDeletePending(eperm, held, "win32")).toBe(true);
+    expect(isWindowsDeletePending(eperm, join(tmpRoot, "absent.lock"), "win32")).toBe(false);
   });
 });
 

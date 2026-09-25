@@ -59,26 +59,62 @@ function sleepSync(ms: number): void {
  * retries with a short backoff for up to two seconds before rethrowing
  * the last error (the same policy graceful-fs applies, with a tighter
  * budget). Any other error is thrown at once.
+ *
+ * The wait blocks the thread (`Atomics.wait`, portable to the Node-targeted
+ * OpenClaw bundle where `Bun.sleepSync` does not exist), inside the MCP
+ * server too. A PERMANENT refusal - a read-only target, an ACL - carries the
+ * same errno as a sharing violation, so it also spends the whole budget
+ * before it is rethrown; two seconds is the price of not failing a write
+ * that a sync client would have released a moment later.
+ *
+ * `seams` exist for tests only: the platform, the rename, the sleep and the
+ * clock, so the retry policy is pinned on any host.
  */
-export function renameWithRetry(from: string, to: string): void {
-  if (process.platform !== "win32") {
-    renameSync(from, to);
+export function renameWithRetry(from: string, to: string, seams: RenameRetrySeams = {}): void {
+  const rename = seams.rename ?? ((a: string, b: string) => renameSync(a, b));
+  withWindowsSharingRetry(() => rename(from, to), seams);
+}
+
+/**
+ * `unlinkSync` with the same Windows retry as {@link renameWithRetry}: a
+ * delete fails with EPERM/EBUSY while another process holds the file open
+ * without `FILE_SHARE_DELETE`. POSIX: plain `unlinkSync`.
+ */
+export function unlinkWithRetry(path: string, seams: RenameRetrySeams = {}): void {
+  const unlink = seams.unlink ?? ((p: string) => unlinkSync(p));
+  withWindowsSharingRetry(() => unlink(path), seams);
+}
+
+function withWindowsSharingRetry(op: () => void, seams: RenameRetrySeams): void {
+  if ((seams.platform ?? process.platform) !== "win32") {
+    op();
     return;
   }
-  const deadline = Date.now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  const sleep = seams.sleep ?? sleepSync;
+  const now = seams.now ?? Date.now;
+  const deadline = now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
   let delay = 10;
   for (;;) {
     try {
-      renameSync(from, to);
+      op();
       return;
     } catch (err) {
       const code = (err as { code?: string } | null)?.code;
       if (code === undefined || !WINDOWS_TRANSIENT_RENAME_CODES.has(code)) throw err;
-      if (Date.now() + delay > deadline) throw err;
-      sleepSync(delay);
+      if (now() + delay > deadline) throw err;
+      sleep(delay);
       delay = Math.min(delay * 2, 250);
     }
   }
+}
+
+/** Test seams of {@link renameWithRetry}. */
+export interface RenameRetrySeams {
+  readonly platform?: NodeJS.Platform;
+  readonly rename?: (from: string, to: string) => void;
+  readonly unlink?: (path: string) => void;
+  readonly sleep?: (ms: number) => void;
+  readonly now?: () => number;
 }
 
 /**

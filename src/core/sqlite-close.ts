@@ -11,7 +11,8 @@
  *
  * `close(true)` finalizes the connection's statements and closes
  * immediately. If it throws (a statement still executing), fall back to
- * the lazy close so a caller's `finally` never turns into a new failure.
+ * the lazy close; if that throws too, the error is dropped, so a caller's
+ * `finally` never turns into a new failure that hides the original one.
  */
 
 import type { Database } from "bun:sqlite";
@@ -21,6 +22,10 @@ export function closeDatabase(db: Database | null | undefined): void {
   try {
     db.close(true);
   } catch {
-    db.close();
+    try {
+      db.close();
+    } catch {
+      // Nothing left to release that a throw here could help with.
+    }
   }
 }

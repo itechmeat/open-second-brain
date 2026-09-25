@@ -14,15 +14,7 @@
  * §13, §15.
  */
 
-import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-  unlinkSync,
-} from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 import {
@@ -111,7 +103,7 @@ import type {
 } from "./types.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
 import { closeDatabase } from "../sqlite-close.ts";
-import { renameWithRetry } from "../fs-atomic.ts";
+import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1178,10 +1170,13 @@ async function withStagingStore(
   }
 }
 
-/** `unlinkSync` that tolerates ENOENT (file already absent). */
+/** `unlinkWithRetry` that tolerates ENOENT (file already absent). */
 function tryUnlink(p: string): void {
   try {
-    unlinkSync(p);
+    // A stale `.bak` or `.new` held by an antivirus scan or a sync client
+    // is a Windows sharing violation that clears; ride it out like the
+    // renames beside it instead of failing the whole reindex.
+    unlinkWithRetry(p);
   } catch (e) {
     if (!isEnoent(e)) throw e;
   }

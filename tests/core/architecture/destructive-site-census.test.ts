@@ -237,11 +237,13 @@ const FS_DYNAMIC_IMPORT_RE =
  * same displacement, retried through transient Windows sharing
  * violations. Counted under the `node:fs` name so moving a site onto the
  * wrapper neither hides it from the census nor changes its declaration.
+ * `unlinkWithRetry` is `unlinkSync` under the same retry.
  */
 const FS_WRAPPER_IMPORT_RE =
   /\bimport\s+(?!type\b)\{([^}]*)\}\s*from\s*["'][^"']*\/fs-atomic(?:\.ts)?["']/g;
 const FS_WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
   ["renameWithRetry", "renameSync"],
+  ["unlinkWithRetry", "unlinkSync"],
 ]);
 
 /** The named import whose binding is a module object, not a function. */

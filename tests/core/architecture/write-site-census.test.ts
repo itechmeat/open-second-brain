@@ -1007,11 +1007,13 @@ interface FsImports {
 /**
  * `renameWithRetry` from `src/core/fs-atomic.ts` is `renameSync` retried
  * through transient Windows sharing violations: the same lifecycle move,
- * so it is counted under the `node:fs` name it wraps.
+ * so it is counted under the `node:fs` name it wraps. `unlinkWithRetry`
+ * is `unlinkSync` under the same retry.
  */
 const FS_WRAPPER_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*["'][^"']*\/fs-atomic(?:\.ts)?["']/g;
 const FS_WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
   ["renameWithRetry", "renameSync"],
+  ["unlinkWithRetry", "unlinkSync"],
 ]);
 
 /** What this module actually imported from `node:fs` / `node:fs/promises`. */
