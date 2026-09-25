@@ -25,11 +25,14 @@ import { fileURLToPath } from "node:url";
 import {
   CODEX_SESSION_END_TIMEOUT_CAP_SEC,
   codexHooksJson,
+  codexWindowsHookCommand,
   findDrift,
   writeMirrors,
 } from "../../scripts/sync-plugin-mirrors.ts";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+type HookGroups = Array<{ hooks: Array<{ command: string; commandWindows?: string }> }>;
 
 describe("the repository", () => {
   test("the Codex plugin mirrors are in sync with their sources", () => {
@@ -70,19 +73,73 @@ describe("the Codex hooks.json", () => {
       expect(hook.timeout).toBeLessThanOrEqual(CODEX_SESSION_END_TIMEOUT_CAP_SEC);
     }
 
-    // Apart from those timeouts, the Codex copy is the shared file.
+    // Apart from those timeouts and the added Windows commands, the Codex
+    // copy is the shared file.
     for (const group of src.hooks.SessionEnd) {
       for (const hook of group.hooks)
         hook.timeout = Math.min(hook.timeout, CODEX_SESSION_END_TIMEOUT_CAP_SEC);
     }
+    for (const groups of Object.values(out.hooks) as HookGroups[]) {
+      for (const group of groups) {
+        for (const hook of group.hooks) delete hook.commandWindows;
+      }
+    }
     expect(out).toEqual(src);
   });
 
-  test("keeps the source's formatting, so the mirror passes fmt:check", () => {
+  test("gives every hook a cmd.exe form that runs the same o2b-hook", () => {
+    // On Windows Codex runs `%COMSPEC% /C "<command>"`, which cannot parse
+    // the POSIX command, unless the hook carries `commandWindows`.
     const source = readFileSync(join(REPO_ROOT, "hooks/hooks.json"), "utf8");
-    expect(codexHooksJson(source.replace(/"timeout": 10/g, '"timeout": 2'))).toBe(
-      source.replace(/"timeout": 10/g, '"timeout": 2'),
+    const out = JSON.parse(codexHooksJson(source));
+    let count = 0;
+    for (const groups of Object.values(out.hooks) as HookGroups[]) {
+      for (const group of groups) {
+        for (const hook of group.hooks) {
+          const name = /exec o2b-hook ([a-z0-9-]+); exit 0$/.exec(hook.command)?.[1];
+          expect(name).toBeDefined();
+          expect(hook.commandWindows).toBe(codexWindowsHookCommand(name!));
+          const keys = Object.keys(hook);
+          expect(keys.indexOf("commandWindows")).toBe(keys.indexOf("command") + 1);
+          count++;
+        }
+      }
+    }
+    expect(count).toBeGreaterThan(0);
+  });
+
+  test("the cmd.exe form never looks in the current directory and never blocks", () => {
+    const cmd = codexWindowsHookCommand("session-capture");
+    // Set before the first bare command name, so neither `where` nor
+    // `o2b-hook` resolves from the project Codex opened.
+    expect(cmd.startsWith("set NoDefaultCurrentDirectoryInExePath=1&")).toBe(true);
+    // A bare `where` searches the current directory; `$PATH:` does not.
+    expect(cmd).toContain("where /q $PATH:o2b-hook && o2b-hook session-capture");
+    expect(cmd.endsWith("& exit /b 0")).toBe(true);
+    // Codex wraps the line in one pair of quotes, which cmd.exe strips
+    // cleanly only while the line holds no other quote; a `%` would expand.
+    expect(cmd).not.toMatch(/["%]/);
+  });
+
+  test("refuses a hook command whose Windows form it cannot derive", () => {
+    const source = JSON.stringify({
+      hooks: { Stop: [{ hooks: [{ type: "command", command: "echo hi", timeout: 5 }] }] },
+    });
+    expect(() => codexHooksJson(source)).toThrow(/cannot derive its Windows form/);
+  });
+
+  test("keeps the source's formatting, so the mirror passes fmt:check", () => {
+    // With the timeouts already within the cap, everything but the added
+    // commandWindows lines is the source, byte for byte.
+    const source = readFileSync(join(REPO_ROOT, "hooks/hooks.json"), "utf8").replace(
+      /"timeout": 10/g,
+      '"timeout": 2',
     );
+    const out = codexHooksJson(source)
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith('"commandWindows": '))
+      .join("\n");
+    expect(out).toBe(source);
   });
 });
 

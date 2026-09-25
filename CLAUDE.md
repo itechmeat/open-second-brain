@@ -54,7 +54,9 @@ the already-bumped commit - it never changes the version.
 Codex installs the plugin from `./plugins/codex` only, and its cache copy
 drops symlinks. So `plugins/codex/skills/` is a real, byte-identical copy of
 `skills/`, and `plugins/codex/hooks/hooks.json` is generated from
-`hooks/hooks.json` (SessionEnd timeouts capped at Codex's 3 s limit). Never
+`hooks/hooks.json` (SessionEnd timeouts capped at Codex's 3 s limit, and a
+`commandWindows` cmd.exe form added to every hook). Every hook command must
+end in the `o2b-hook <name>` fallback, or the sync refuses it. Never
 edit the copies and never turn them back into symlinks. After changing a
 skill or `hooks/hooks.json`, run:
 

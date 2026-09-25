@@ -19,10 +19,13 @@
  *
  * What is mirrored, and what is deliberately NOT:
  *   - `skills/**` -> `plugins/codex/skills/**`, every file, byte for byte.
- *   - `hooks/hooks.json` -> `plugins/codex/hooks/hooks.json`, with one
- *     Codex-specific change: SessionEnd timeouts are capped at
- *     {@link CODEX_SESSION_END_TIMEOUT_CAP_SEC}. Codex clamps them there
- *     anyway, and warns on every run while the file asks for more.
+ *   - `hooks/hooks.json` -> `plugins/codex/hooks/hooks.json`, with two
+ *     Codex-specific changes. SessionEnd timeouts are capped at
+ *     {@link CODEX_SESSION_END_TIMEOUT_CAP_SEC}: Codex clamps them there
+ *     anyway, and warns on every run while the file asks for more. And every
+ *     hook gets a `commandWindows` ({@link codexWindowsHookCommand}): on
+ *     Windows Codex runs a hook as `%COMSPEC% /C "<command>"`, where the
+ *     POSIX `command` cannot parse.
  *   - NOT `hooks/*.ts`. The hook commands run `o2b-hook <name>`, which
  *     resolves the checkout that holds `hooks/<name>.ts` (see
  *     `scripts/o2b-hook`). Codex exports `CLAUDE_PLUGIN_ROOT` as the cache
@@ -66,17 +69,69 @@ export interface MirrorSpec {
 }
 
 interface HookGroup {
-  hooks?: Array<{ timeout?: number }>;
+  hooks?: Array<{ command?: string; commandWindows?: string; timeout?: number }>;
+}
+
+/**
+ * The POSIX hook command, which ends by running the PATH `o2b-hook` shim
+ * with the hook's name. The name is the one thing the Windows form needs.
+ */
+const POSIX_HOOK_COMMAND =
+  /command -v o2b-hook >\/dev\/null 2>&1 && exec o2b-hook ([a-z][a-z0-9-]*); exit 0$/;
+
+/**
+ * The `commandWindows` form of a hook, which Codex runs through cmd.exe.
+ *
+ * It calls the PATH `o2b-hook` shim only, the same fallback the POSIX command
+ * reaches under Codex (`CLAUDE_PLUGIN_ROOT` is Codex's cache dir, which holds
+ * no scripts). `o2b install-cli` writes that shim as `o2b-hook.cmd`.
+ *   - `NoDefaultCurrentDirectoryInExePath` is set first: cmd.exe otherwise
+ *     looks for `where` and `o2b-hook` in the current directory before PATH,
+ *     and Codex runs hooks in the project it opened, so a repository could
+ *     ship its own `o2b-hook.cmd`.
+ *   - `where /q $PATH:o2b-hook` keeps a missing shim silent. The `$PATH:`
+ *     scope matters: a bare `where` searches the current directory too, and
+ *     would pass for a planted file that cmd.exe then refuses to run.
+ *   - `exit /b 0` keeps any outcome non-blocking, as `exit 0` does in the
+ *     POSIX form.
+ *   - No double quotes: cmd.exe then strips only the pair Codex wraps the
+ *     line in.
+ */
+export function codexWindowsHookCommand(hook: string): string {
+  return `set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook ${hook} & exit /b 0`;
 }
 
 /** `hooks/hooks.json` as Codex should read it. Formatting matches the source (oxfmt). */
 export function codexHooksJson(source: string): string {
   const doc = JSON.parse(source) as { hooks?: Record<string, HookGroup[]> };
-  for (const group of doc.hooks?.["SessionEnd"] ?? []) {
-    for (const hook of group.hooks ?? []) {
-      if (typeof hook.timeout === "number" && hook.timeout > CODEX_SESSION_END_TIMEOUT_CAP_SEC) {
-        hook.timeout = CODEX_SESSION_END_TIMEOUT_CAP_SEC;
-      }
+  for (const [event, groups] of Object.entries(doc.hooks ?? {})) {
+    for (const group of groups) {
+      group.hooks = (group.hooks ?? []).map((hook) => {
+        if (
+          event === "SessionEnd" &&
+          typeof hook.timeout === "number" &&
+          hook.timeout > CODEX_SESSION_END_TIMEOUT_CAP_SEC
+        ) {
+          hook.timeout = CODEX_SESSION_END_TIMEOUT_CAP_SEC;
+        }
+        if (hook.command === undefined) return hook;
+        const name = POSIX_HOOK_COMMAND.exec(hook.command)?.[1];
+        if (name === undefined) {
+          // Fail the sync rather than ship a hook that cmd.exe cannot run.
+          throw new Error(
+            `${event} hook command does not end in the o2b-hook fallback; ` +
+              `cannot derive its Windows form: ${hook.command}`,
+          );
+        }
+        // Rebuilt key by key, so that commandWindows sits right after command.
+        const out: Record<string, unknown> = {};
+        for (const [key, value] of Object.entries(hook)) {
+          if (key === "commandWindows") continue;
+          out[key] = value;
+          if (key === "command") out["commandWindows"] = codexWindowsHookCommand(name);
+        }
+        return out;
+      });
     }
   }
   return `${JSON.stringify(doc, null, 2)}\n`;

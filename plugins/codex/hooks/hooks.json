@@ -7,6 +7,7 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing brain_feedback lifecycle event"
           }
@@ -18,6 +19,7 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" post-write-reminder; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook post-write-reminder; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook post-write-reminder & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: reminding to log signals/evidence"
           }
@@ -31,18 +33,21 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" active-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook active-inject; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook active-inject & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: injecting active preferences"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" gap-agenda; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook gap-agenda; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook gap-agenda & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: injecting open recall-gap agenda (opt-in)"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session start"
           }
@@ -56,18 +61,21 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing prompt markers"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" recall-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook recall-inject; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook recall-inject & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: recalling bounded prompt context (opt-in)"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" nav-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook nav-inject; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook nav-inject & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: injecting structural navmap tier (opt-in)"
           }
@@ -81,6 +89,7 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" pretool-orient; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook pretool-orient; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook pretool-orient & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: strict read-block orientation gate (opt-in)"
           }
@@ -94,12 +103,14 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing session stop"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" stop-log-guardrail; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook stop-log-guardrail; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook stop-log-guardrail & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: checking stop log guardrail"
           }
@@ -113,6 +124,7 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing delegated sub-agent stop"
           }
@@ -126,12 +138,14 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 3,
             "statusMessage": "OSB: capturing session end"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" gap-promote; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook gap-promote; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook gap-promote & exit /b 0",
             "timeout": 3,
             "statusMessage": "OSB: promoting recurring recall gaps (opt-in)"
           }
@@ -145,12 +159,14 @@
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" active-inject; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook active-inject; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook active-inject & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: re-injecting active preferences after compact"
           },
           {
             "type": "command",
             "command": "r=\"$CLAUDE_PLUGIN_ROOT\"; if [ -n \"$r\" ] && [ -x \"$r/scripts/o2b-hook\" ]; then exec \"$r/scripts/o2b-hook\" session-capture; fi; command -v o2b-hook >/dev/null 2>&1 && exec o2b-hook session-capture; exit 0",
+            "commandWindows": "set NoDefaultCurrentDirectoryInExePath=1& where /q $PATH:o2b-hook && o2b-hook session-capture & exit /b 0",
             "timeout": 10,
             "statusMessage": "OSB: capturing post-compact lifecycle event"
           }
