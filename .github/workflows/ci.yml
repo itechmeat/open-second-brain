@@ -121,9 +121,11 @@ jobs:
   windows:
     name: windows
     runs-on: windows-latest
-    # The suite takes about 20 minutes here; a hung test must not hold a
-    # runner for GitHub's six-hour default.
-    timeout-minutes: 45
+    # The suite takes 20 minutes on a good day and has taken over 45 on a
+    # slow runner (every file about 2.5x slower, nothing hung); the bound is
+    # there so a hung test cannot hold a runner for GitHub's six-hour
+    # default, not to police the runner's speed.
+    timeout-minutes: 75
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
