@@ -28,6 +28,7 @@ import { doctor } from "../core/doctor.ts";
 import { checkHermesResolverParity } from "../core/doctor-hermes-parity.ts";
 import { runReadinessProbes, type ReadinessReport } from "../core/doctor-readiness.ts";
 import { listVaultPages, writeFrontmatter } from "../core/vault.ts";
+import { pathIsInside, vaultRelative } from "../core/path-safety.ts";
 import { CliError, parseFlags } from "./argparse.ts";
 import { installStdoutEpipeGuard, isEpipeError } from "./stdout-guard.ts";
 import { handleAiderSubcommand } from "./aider.ts";
@@ -590,7 +591,10 @@ async function cmdIndex(argv: string[]): Promise<number> {
     "",
   ];
   for (const p of pages) {
-    const rel = p.path.startsWith(vault) ? p.path.slice(vault.length).replace(/^\/+/, "") : p.path;
+    // `vaultRelative`, not a prefix strip: slicing off `vault` and a
+    // leading `/` left `\notes\a.md` on Windows, where the separator
+    // is a backslash and the listing wants the vault's POSIX form.
+    const rel = pathIsInside(p.path, vault) ? vaultRelative(p.path, vault) : p.path;
     lines.push(`- [[${p.title}]]  \`${rel}\``);
   }
   const indexPath = resolve(vault, BRAIN_INDEX_REL);
@@ -856,10 +860,32 @@ async function runMcpProbe(args: {
   }
 }
 
+/**
+ * On native Windows `~/.local/bin` is on PATH only when some other installer
+ * (Claude Code, uv) already put it there. Say so, with the one command that
+ * fixes it, instead of leaving `o2b` "not recognized" in the next shell.
+ */
+function windowsPathHint(bindir: string): string | null {
+  if (process.platform !== "win32") return null;
+  const onPath = (process.env["PATH"] ?? "")
+    .split(";")
+    .some(
+      (d) => d.replace(/[\\/]+$/, "").toLowerCase() === bindir.replace(/[\\/]+$/, "").toLowerCase(),
+    );
+  if (onPath) return null;
+  return (
+    `\n${bindir} is not on PATH. Add it for your user (then open a new terminal):\n` +
+    `  powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', ` +
+    `[Environment]::GetEnvironmentVariable('Path','User') + ';${bindir}', 'User')"\n`
+  );
+}
+
 async function cmdInstallCli(argv: string[]): Promise<number> {
   const { flags } = parseFlags(argv, { bindir: { type: "string" } });
   const result = installCli(flags["bindir"] as string | undefined);
   process.stdout.write(renderInstallResult(result));
+  const pathHint = windowsPathHint(result.bindir);
+  if (pathHint !== null) process.stdout.write(pathHint);
   return result.errors.length > 0 ? 1 : 0;
 }
 

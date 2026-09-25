@@ -30,8 +30,21 @@ export type JsonCommandBridgeResult =
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
- * Run `cmd` through `sh -c` with `input` serialized as JSON on stdin
- * and parse its stdout as JSON. Never throws.
+ * The shell an operator-configured command line runs under: `sh -c` on
+ * POSIX, `cmd.exe /d /s /c` on native Windows (the same invocation Node
+ * uses for `shell: true`; `/d` skips AutoRun, whose output would corrupt
+ * the JSON on stdout).
+ */
+function shellArgv(cmd: string): [string, string[]] {
+  if (process.platform === "win32") {
+    return [process.env["ComSpec"] ?? "cmd.exe", ["/d", "/s", "/c", `"${cmd}"`]];
+  }
+  return ["sh", ["-c", cmd]];
+}
+
+/**
+ * Run `cmd` through the platform shell with `input` serialized as JSON on
+ * stdin and parse its stdout as JSON. Never throws.
  */
 export function runJsonCommandBridge(
   cmd: string | undefined,
@@ -41,8 +54,10 @@ export function runJsonCommandBridge(
   if (cmd === undefined || cmd.trim() === "") return Object.freeze({ status: "skipped" });
   const label = opts.label ?? "command";
   try {
-    const proc = spawnSync("sh", ["-c", cmd], {
+    const [shell, argv] = shellArgv(cmd);
+    const proc = spawnSync(shell, argv, {
       input: JSON.stringify(input),
+      windowsVerbatimArguments: process.platform === "win32",
       encoding: "utf8",
       timeout: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     });

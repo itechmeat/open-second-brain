@@ -62,10 +62,12 @@ const NON_MEMBERS: ReadonlyArray<unknown> = Object.freeze([
 /** Two unrelated hosts, so a derivation that ignores its input is visible. */
 const ONE: HostContext = Object.freeze({
   home: "/home/one",
+  platform: "linux",
   env: Object.freeze({}),
 });
 const TWO: HostContext = Object.freeze({
   home: "/home/two",
+  platform: "linux",
   env: Object.freeze({
     GROK_HOME: "/home/two/grok-elsewhere",
     XDG_DATA_HOME: "/home/two/xdg-data",
@@ -365,6 +367,17 @@ describe("session roots", () => {
     ]);
   });
 
+  test("native Windows adds the %APPDATA% Cursor layout", () => {
+    const win = {
+      home: "C:\\Users\\one",
+      env: { APPDATA: "C:\\Users\\one\\AppData\\Roaming" },
+      platform: "win32",
+    };
+    expect(resolveSessionRoots(INSTALL_TARGET_ID.cursor, win).map((r) => r.id)).toContain(
+      "cursor-workspace-storage-windows",
+    );
+  });
+
   test("the cursor roots are the three layouts the transcript scanner already probes", () => {
     expect(resolveSessionRoots(INSTALL_TARGET_ID.cursor, ONE).map((r) => r.path)).toEqual([
       join("/home/one", ".config", "Cursor", "User", "workspaceStorage"),
@@ -384,6 +397,7 @@ describe("session roots", () => {
     ]);
     const relocated: HostContext = {
       home: "/home/two",
+      platform: "linux",
       env: { CODEX_HOME: "/home/two/codex-elsewhere" },
     };
     expect(resolveSessionRoots(INSTALL_TARGET_ID.codex, relocated).map((r) => r.path)).toEqual([
@@ -454,6 +468,7 @@ describe("the module stays a leaf that reads nothing", () => {
     // graph from.
     expect([...source.matchAll(/from\s+"(\.[^"]+)"/g)].map((m) => m[1]!)).toEqual([
       "../brain/sessions/types.ts",
+      "../platform-dirs.ts",
     ]);
   });
 });

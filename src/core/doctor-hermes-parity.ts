@@ -34,12 +34,61 @@ import type { CheckResult } from "./types.ts";
 
 const RESOLVER_PARITY = "hermes_resolver_parity";
 
+/** One way to start a Python 3 interpreter: the command plus its leading args. */
+interface PythonCandidate {
+  readonly bin: string;
+  readonly args: ReadonlyArray<string>;
+}
+
 /**
  * Interpreters tried, in order, to run the plugin's own resolver. Named rather
  * than discovered: `python` is ambiguous on installs that still ship a 2.x
  * under that name, so the versioned name is asked for first.
+ *
+ * Native Windows adds the `py` launcher (`py -3`), which the python.org
+ * installer puts on PATH even when "add python.exe to PATH" is left
+ * unticked - on many Windows machines it is the ONLY name that reaches a
+ * real interpreter.
  */
-const PYTHON_CANDIDATES: ReadonlyArray<string> = Object.freeze(["python3", "python"]);
+const PYTHON_CANDIDATES: ReadonlyArray<PythonCandidate> = Object.freeze(
+  process.platform === "win32"
+    ? [
+        { bin: "python3", args: [] },
+        { bin: "python", args: [] },
+        { bin: "py", args: ["-3"] },
+      ]
+    : [
+        { bin: "python3", args: [] },
+        { bin: "python", args: [] },
+      ],
+);
+
+/**
+ * Is `bin` the Microsoft Store "App Execution Alias" placeholder rather than
+ * an interpreter?
+ *
+ * A stock Windows install puts `python.exe` and `python3.exe` stubs in
+ * `%LOCALAPPDATA%\Microsoft\WindowsApps`. With no Store Python behind them
+ * they print "Python was not found ..." and exit non-zero, so the spawn
+ * SUCCEEDS where POSIX would answer ENOENT. Read as a crash, that stub would
+ * stop the candidate walk at the first name and report a broken interpreter
+ * on a machine that simply has none (or has one reachable only as `py`).
+ * Only a FAILED run from that directory is treated as absent: a real Store
+ * Python lives behind the same alias path and answers normally.
+ */
+function isWindowsStoreAliasStub(bin: string): boolean {
+  if (process.platform !== "win32") return false;
+  const bun = (
+    globalThis as {
+      Bun?: { which?: (cmd: string, opts?: { PATH?: string }) => string | null };
+    }
+  ).Bun;
+  // PATH passed explicitly: `Bun.which` otherwise searches the PATH this
+  // process started with, not the one the spawn above just used.
+  const found =
+    typeof bun?.which === "function" ? bun.which(bin, { PATH: process.env["PATH"] ?? "" }) : null;
+  return found !== null && /[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(found);
+}
 
 /**
  * Wall-clock budget for the plugin-side probe. The driver reads at most a few
@@ -121,8 +170,8 @@ function resolveCoreSide(configPath: string, cwd: string): ResolvedSide {
 function resolvePluginSide(resolver: string, configPath: string, cwd: string): ResolvedSide {
   const env = { ...process.env, OPEN_SECOND_BRAIN_CONFIG: configPath };
   let lastFailure = "no interpreter was tried";
-  for (const bin of PYTHON_CANDIDATES) {
-    const proc = spawnSync(bin, ["-c", PLUGIN_RESOLVER_DRIVER, resolver], {
+  for (const { bin, args } of PYTHON_CANDIDATES) {
+    const proc = spawnSync(bin, [...args, "-c", PLUGIN_RESOLVER_DRIVER, resolver], {
       cwd,
       env,
       encoding: "utf8",
@@ -137,6 +186,10 @@ function resolvePluginSide(resolver: string, configPath: string, cwd: string): R
         continue;
       }
       return { vault: null, undetermined: `${bin}: ${proc.error.message}` };
+    }
+    if (proc.status !== 0 && isWindowsStoreAliasStub(bin)) {
+      lastFailure = `${bin}: only the Microsoft Store alias placeholder is installed`;
+      continue;
     }
     if (proc.status !== 0) {
       const detail = (proc.stderr ?? "").trim().split("\n").at(-1) ?? "";

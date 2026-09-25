@@ -209,7 +209,10 @@ export function detectHookRuntime(
     return "grok";
   }
 
-  const tp = p["transcript_path"];
+  const raw = p["transcript_path"];
+  // On Windows the host sends a native path (`C:\Users\u\.claude\projects\…`);
+  // the needles are written with `/`, so fold separators before matching.
+  const tp = typeof raw === "string" ? raw.replaceAll("\\", "/") : raw;
   if (typeof tp === "string") {
     if (CLAUDE_TRANSCRIPT_NEEDLES.some((n) => tp.includes(n))) {
       return "claudecode";

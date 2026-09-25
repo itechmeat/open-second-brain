@@ -20,6 +20,7 @@
  *    `session.deleted` the full message list is fetched through the
  *    SDK client and snapshotted as a deterministic JSONL spool under
  *    `${XDG_DATA_HOME:-~/.local/share}/open-second-brain/opencode/`
+ *    (`%LOCALAPPDATA%\\open-second-brain\\opencode\\` on native Windows)
  *    (override: `OSB_OPENCODE_SPOOL_DIR`). The spool format is owned
  *    by Open Second Brain (`format: 1`); `o2b brain import-session`
  *    pointed at the spool dir ingests it via the `opencode` session
@@ -72,7 +73,18 @@ function spoolDir(): string {
   const override = process.env["OSB_OPENCODE_SPOOL_DIR"];
   if (override && override.length > 0) return override;
   const xdg = process.env["XDG_DATA_HOME"];
-  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".local", "share");
+  // Mirrors `dataBaseDir` in src/core/platform-dirs.ts (this file is copied
+  // into opencode's plugin directory and cannot import it): XDG wins, then
+  // %LOCALAPPDATA% on native Windows, then ~/.local/share.
+  const local = process.env["LOCALAPPDATA"];
+  const base =
+    xdg && xdg.length > 0
+      ? xdg
+      : process.platform === "win32"
+        ? local && local.length > 0
+          ? local
+          : join(homedir(), "AppData", "Local")
+        : join(homedir(), ".local", "share");
   return join(base, "open-second-brain", "opencode");
 }
 
@@ -190,11 +202,20 @@ function messageList(response: unknown): unknown[] | null {
 function renderActiveContext(cwd: string): string | null {
   try {
     const bin = process.env["OSB_HOOK_BIN"] ?? "o2b-hook";
-    const proc = Bun.spawnSync([bin, "active-inject"], {
+    // On native Windows the shim is `o2b-hook.cmd`, which Bun.spawn cannot
+    // resolve from a bare name (it looks for `.exe` only) - route it
+    // through `cmd /d /c`, which applies PATHEXT. The arguments are fixed
+    // literals, so cmd's metacharacter parsing has nothing to act on.
+    const argv =
+      process.platform === "win32"
+        ? ["cmd", "/d", "/c", bin, "active-inject"]
+        : [bin, "active-inject"];
+    const proc = Bun.spawnSync(argv, {
       stdin: Buffer.from(JSON.stringify({ hook_event_name: "SessionStart", cwd })),
       stdout: "pipe",
       stderr: "ignore",
       timeout: HOOK_TIMEOUT_MS,
+      windowsHide: true,
     });
     if (!proc.success) return null;
     const raw = proc.stdout.toString("utf8").trim();

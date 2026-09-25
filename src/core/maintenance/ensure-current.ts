@@ -33,6 +33,7 @@ import {
   SELF_HEAL_SPAWN,
   type SelfHealSpawnDecision,
 } from "./self-heal-reindex.ts";
+import { closeDatabase } from "../sqlite-close.ts";
 
 /**
  * The flag that tells the child to record its own terminal outcome. It
@@ -88,15 +89,24 @@ function indexNeedsRebuild(config: ResolvedSearchConfig): boolean {
   } catch {
     return true; // corrupt / non-OSB file -> rebuild
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
-/** Path to this checkout's `scripts/o2b` (current plugin version). */
-function o2bScriptPath(): string {
+/**
+ * argv prefix that runs this checkout's CLI (current plugin version).
+ *
+ * POSIX goes through `scripts/o2b`, which also applies the macOS SQLite
+ * setup. Native Windows cannot execute that bash launcher, so it runs the
+ * TypeScript entry point with the Bun that is running this process.
+ */
+function o2bCommand(): string[] {
   // src/core/maintenance/ensure-current.ts -> repo root
   const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
-  return join(repo, "scripts", "o2b");
+  if (process.platform === "win32") {
+    return [process.execPath, "run", join(repo, "src", "cli", "main.ts")];
+  }
+  return [join(repo, "scripts", "o2b")];
 }
 
 /**
@@ -172,7 +182,7 @@ function startSelfHealReindex(
   const runId = mintSelfHealRunId();
   const proc = Bun.spawn(
     [
-      o2bScriptPath(),
+      ...o2bCommand(),
       "search",
       "reindex",
       "--vault",
@@ -186,6 +196,15 @@ function startSelfHealReindex(
       stdin: "ignore",
       stdout: "ignore",
       stderr: "ignore",
+      // No console window flashing up on Windows for a background rebuild.
+      windowsHide: true,
+      // Bun hands a child spawned without `env` the environment this
+      // process STARTED with, not the live `process.env`. A config the
+      // process selected after start (`--config`, an embedding host, the
+      // test preload) would then be invisible to the rebuild, which would
+      // resolve the default config instead - another vault, and on a first
+      // run a device id minted into a config file nobody asked for.
+      env: { ...process.env },
     },
   );
   proc.unref();

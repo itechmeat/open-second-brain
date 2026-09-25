@@ -38,10 +38,10 @@ Three differences remain, named here rather than left as a false claim:
   collapses redundant separators, so a config value like ``~/a//b`` yields a
   byte-different (though equivalent) path on the two sides. Canonical values -
   everything ``o2b`` and the wizard write - are unaffected.
-- Windows has no mirror at all here. ``resolve_default_config_path`` in
-  TypeScript refuses unsupported platforms with a named error; this module is
-  only ever loaded by the Hermes gateway, which is POSIX, so it keeps the
-  POSIX-only layout without the refusal.
+- The platform default mirrors ``src/core/platform-dirs.ts``:
+  ``%LOCALAPPDATA%\\open-second-brain\\config.yaml`` on native Windows (Hermes
+  Agent runs there natively), ``~/.config/open-second-brain/config.yaml``
+  everywhere else. ``XDG_CONFIG_HOME`` wins on both.
 
 The parse itself is a mirror of ``parseSimpleYaml``: flat ``key: value`` lines,
 each line trimmed BEFORE the key is taken (so an indented key is still a key),
@@ -171,20 +171,28 @@ def expand_tilde(value: str) -> str:
     home = str(Path.home())
     if value == "~":
         return home
-    if value.startswith("~/"):
+    if value.startswith("~/") or (os.name == "nt" and value.startswith("~\\")):
         rest = value[2:]
         return home if rest == "" else os.path.join(home, rest)
     return value
 
 
+def _windows_local_app_data() -> Path:
+    """``%LOCALAPPDATA%``, or ``~/AppData/Local`` in a stripped environment."""
+    local = os.environ.get("LOCALAPPDATA")
+    return Path(local) if local else Path.home() / "AppData" / "Local"
+
+
 def config_path() -> Path:
-    """Resolve the plugin config path (``OPEN_SECOND_BRAIN_CONFIG`` -> XDG -> ~)."""
+    """Resolve the plugin config path (``OPEN_SECOND_BRAIN_CONFIG`` -> XDG -> platform default)."""
     override = os.environ.get(CONFIG_PATH_ENV)
     if override:
         return Path(expand_tilde(override))
     xdg = os.environ.get(XDG_CONFIG_HOME_ENV)
     if xdg:
         return Path(expand_tilde(xdg)) / PLUGIN_NAME / CONFIG_FILENAME
+    if os.name == "nt":
+        return _windows_local_app_data() / PLUGIN_NAME / CONFIG_FILENAME
     return Path.home() / ".config" / PLUGIN_NAME / CONFIG_FILENAME
 
 
