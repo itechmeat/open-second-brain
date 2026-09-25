@@ -78,6 +78,26 @@ function lower(xs: ReadonlyArray<string>): ReadonlyArray<string> {
   return xs.map((x) => x.toLowerCase());
 }
 
+/**
+ * The machine's own administrative principals. `/grant:r` replaces the
+ * current user's explicit entries and `/inheritance:r` drops inherited
+ * ones, but neither touches another principal's EXPLICIT entry - and on
+ * GitHub's Windows runners, where the suite runs as an elevated
+ * administrator, the fresh key directory already carries explicit
+ * SYSTEM and Administrators grants. Both can read the key whatever its
+ * ACL says (the threat model in `crypto.ts` already counts them), so
+ * the assertions below allow them and nobody else.
+ */
+const MACHINE_ADMINS: ReadonlySet<string> = new Set([
+  "nt authority\\system",
+  "builtin\\administrators",
+]);
+
+/** The entries left once the machine's administrative principals are set aside. */
+function withoutMachineAdmins(entries: ReadonlyArray<string>): ReadonlyArray<string> {
+  return lower(entries).filter((e) => !MACHINE_ADMINS.has(e.slice(0, e.indexOf(":"))));
+}
+
 describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
   let vault: string;
 
@@ -100,11 +120,17 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
     const principal = windowsAclPrincipal().toLowerCase();
     const dir = secretsDir(vault);
 
-    // Explicit, not inherited: no `(I)` and nothing but the one grant.
-    expect(lower(aclEntries(join(dir, "keyfile")))).toEqual([`${principal}:(f)`]);
-    expect(lower(aclEntries(dir))).toEqual([`${principal}:(oi)(ci)(f)`]);
-    // The store is not touched directly; it inherits the directory's entry.
-    expect(lower(aclEntries(join(dir, "secrets.json")))).toEqual([`${principal}:(i)(f)`]);
+    // Explicit, not inherited: no `(I)` and, beyond the machine's own
+    // administrators, nothing but the one grant.
+    const keyfile = aclEntries(join(dir, "keyfile"));
+    const directory = aclEntries(dir);
+    expect(lower([...keyfile, ...directory]).filter((e) => e.includes("(i)"))).toEqual([]);
+    expect(withoutMachineAdmins(keyfile)).toEqual([`${principal}:(f)`]);
+    expect(withoutMachineAdmins(directory)).toEqual([`${principal}:(oi)(ci)(f)`]);
+    // The store is not touched directly; it inherits the directory's entries.
+    const store = aclEntries(join(dir, "secrets.json"));
+    expect(lower(store).filter((e) => !e.includes("(i)"))).toEqual([]);
+    expect(withoutMachineAdmins(store)).toEqual([`${principal}:(i)(f)`]);
   });
 
   test("a failed icacls warns and leaves the caller running", () => {

@@ -143,8 +143,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # GitHub's Windows runners take about twice as long as Linux over the
+      # same suite (NTFS and Defender on every file the fixtures touch), so
+      # Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
+      # times out tests that pass locally. Tests with their own timeout keep it.
       - name: TypeScript test suite
-        run: bun test
+        run: bun test --timeout 30000
 
       - name: Publish o2b on PATH (the anti-drift test needs the live server)
         shell: bash
