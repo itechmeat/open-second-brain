@@ -19,8 +19,12 @@ enabled = true
 
 ## 2. Publish the `o2b` CLI on PATH
 
-Codex caches the plugin at a version-hashed path; locate the
-script:
+`codex plugin marketplace add` clones the whole repository into
+`$CODEX_HOME/.tmp/marketplaces/open-second-brain/`, and that clone holds
+the launcher. The installed plugin in `$CODEX_HOME/plugins/cache/` holds
+only the `plugins/codex` subtree (manifest, `hooks/hooks.json`, skills),
+not `scripts/`. The hooks run `o2b-hook` from PATH, so this step is also
+what turns them on. Locate the script:
 
 ```bash
 O2B_SCRIPT="$(find ~/.codex -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)"
