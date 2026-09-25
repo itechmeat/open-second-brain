@@ -116,7 +116,14 @@ async function raceRuns(scriptName: string): Promise<ReadonlyArray<RunReport>> {
   );
   const startAt = String(Date.now() + BARRIER_LEAD_MS);
   const procs = Array.from({ length: RUNNERS }, () =>
-    Bun.spawn(["bun", script, vault, project, startAt], { stdout: "pipe", stderr: "pipe" }),
+    Bun.spawn(["bun", script, vault, project, startAt], {
+      stdout: "pipe",
+      stderr: "pipe",
+      // Bun hands a child without `env` the environment this process STARTED
+      // with, not the live `process.env`: pass it so the child sees the
+      // throwaway config tests/setup.ts installs, not the operator's real one.
+      env: { ...process.env },
+    }),
   );
   const reports: RunReport[] = [];
   const failures: string[] = [];

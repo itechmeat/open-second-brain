@@ -43,13 +43,25 @@ afterEach(() => {
 
 /** Stub o2b-hook that prints an active-inject response. */
 function stubHookBin(context: string | null): string {
+  const payload =
+    context === null
+      ? null
+      : JSON.stringify({
+          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context },
+        });
+  if (process.platform === "win32") {
+    // Native Windows runs the shim as `o2b-hook.cmd` through `cmd /d /c`,
+    // the way the plugin starts the installed launcher. The fixed test
+    // contexts hold no cmd metacharacters, so a plain `echo` prints them.
+    const path = join(binDir, "o2b-hook.cmd");
+    writeFileSync(path, payload === null ? "@exit /b 0\r\n" : `@echo ${payload}\r\n`);
+    return path;
+  }
   const path = join(binDir, "o2b-hook");
   const body =
-    context === null
+    payload === null
       ? "#!/bin/sh\nexit 0\n"
-      : `#!/bin/sh\ncat > /dev/null\nprintf '%s' '${JSON.stringify({
-          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context },
-        })}'\n`;
+      : `#!/bin/sh\ncat > /dev/null\nprintf '%s' '${payload}'\n`;
   writeFileSync(path, body);
   chmodSync(path, 0o755);
   return path;

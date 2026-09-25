@@ -60,7 +60,9 @@ afterEach(() => {
   }
 });
 
-describe("o2b-hook resilience", () => {
+// The wrapper under test is a bash script; native Windows ships
+// `scripts/o2b-hook.cmd` instead, and `bash` there is WSL's, not a host shell.
+describe.skipIf(process.platform === "win32")("o2b-hook resilience", () => {
   test("resolves the hook via CLAUDE_PLUGIN_ROOT and runs it", () => {
     const root = freshRoot("probe");
     const r = runHook(WRAPPER, ["probe"], { CLAUDE_PLUGIN_ROOT: root });

@@ -54,6 +54,7 @@ import { listSnapshots } from "../../../../src/core/brain/snapshot.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
 import { sha256Hex } from "../../../../src/core/integrity/digest.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "../../../../src/core/brain/types.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 const SEED = "agent-seed";
 const A = "agent-a";
@@ -533,7 +534,9 @@ describe("a target the plan cannot resolve", () => {
    * gate and the second target appears in neither `applied` nor
    * `refused`, which reads as "it was not in the plan".
    */
-  test.skipIf(process.getuid?.() === 0)(
+  // Root ignores directory write bits, and a read-only Windows directory
+  // still accepts new files, so the restore cannot be made to throw.
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an entry that throws mid-apply is named, and the others still run",
     () => {
       seedWrite({ target: "notes/one/A.md", bytes: "v0", agent: SEED, at: at(1) });

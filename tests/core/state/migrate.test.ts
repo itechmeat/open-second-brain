@@ -39,7 +39,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { canonicalJson, sha256Hex } from "../../../src/core/integrity/digest.ts";
 import {
@@ -56,6 +56,7 @@ import {
   type MigrationPlan,
 } from "../../../src/core/state/migrate.ts";
 import { STATE_SURFACE_ID, STATE_SURFACES } from "../../../src/core/state/surfaces.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 const temps: string[] = [];
 
@@ -212,13 +213,15 @@ describe("state migration refuses before it commits", () => {
     expect(refusalCodes(p)).toContain(MIGRATION_REFUSAL.symlink);
     const refusal = p.refusals.find((r) => r.code === MIGRATION_REFUSAL.symlink)!;
     expect(refusal.path).toBe(link);
-    expect(refusal.found).toContain("/etc/hostname");
+    // The link target as the host reports it (`C:\etc\hostname` on Windows).
+    expect(refusal.found).toContain(resolve("/etc/hostname"));
     expectActionableRemedies(p.refusals);
     expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
     expect(existsSync(dest)).toBe(false);
   });
 
-  test("a special file in the source tree, by name", () => {
+  // Windows has no FIFOs (mkfifo), so the special-file refusal cannot be staged.
+  test.skipIf(IS_WINDOWS)("a special file in the source tree, by name", () => {
     const vault = seedVault();
     const fifo = join(surfacePath(vault, STATE_SURFACE_ID.metrics), "pipe");
     const made = Bun.spawnSync(["mkfifo", fifo]);
@@ -350,28 +353,32 @@ describe("state migration refuses before it commits", () => {
     expect(existsSync(dest)).toBe(false);
   });
 
-  test("a directory in the state tree that cannot be listed, as a refusal not a stack", () => {
-    const vault = seedVault();
-    const locked = surfacePath(vault, STATE_SURFACE_ID.metrics);
-    chmodSync(locked, 0o000);
-    try {
-      const p = plan(vault, join(tempDir(), "moved"), { writerLockHeldAt: () => true });
-      const refusal = p.refusals.find(
-        (r) => r.code === MIGRATION_REFUSAL.unreadableSurface && r.path === locked,
-      );
-      expect(refusal?.found).toContain("EACCES");
-      // The headline contract: an unreadable directory is one refusal
-      // among all of them, not a throw that leaves the rest uncomputed.
-      expectActionableRemedies(p.refusals);
-      expect(refusalCodes(p)).toContain(MIGRATION_REFUSAL.writerLockHeld);
-      expect(p.manifest.entries.map((e) => e.relative_path)).toContain(
-        ".open-second-brain/brain.sqlite",
-      );
-      expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
-    } finally {
-      chmodSync(locked, 0o755);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a directory in the state tree that cannot be listed, as a refusal not a stack",
+    () => {
+      const vault = seedVault();
+      const locked = surfacePath(vault, STATE_SURFACE_ID.metrics);
+      chmodSync(locked, 0o000);
+      try {
+        const p = plan(vault, join(tempDir(), "moved"), { writerLockHeldAt: () => true });
+        const refusal = p.refusals.find(
+          (r) => r.code === MIGRATION_REFUSAL.unreadableSurface && r.path === locked,
+        );
+        expect(refusal?.found).toContain("EACCES");
+        // The headline contract: an unreadable directory is one refusal
+        // among all of them, not a throw that leaves the rest uncomputed.
+        expectActionableRemedies(p.refusals);
+        expect(refusalCodes(p)).toContain(MIGRATION_REFUSAL.writerLockHeld);
+        expect(p.manifest.entries.map((e) => e.relative_path)).toContain(
+          ".open-second-brain/brain.sqlite",
+        );
+        expect(() => applyStateMigration(p)).toThrow(StateMigrationError);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
 
   test("a surface root that is a DANGLING symlink reaches the symlink refusal", () => {
     // `statSync` follows the link and reports the missing target as
@@ -492,29 +499,33 @@ describe("state migration apply", () => {
     }
   });
 
-  test("a source it cannot remove says the bytes are safe and names the manifest", () => {
-    const vault = seedVault();
-    const dest = join(tempDir(), "moved");
-    const p = plan(vault, dest);
-    // Readable and traversable, but not writable: every file lands and
-    // verifies, and the unlink pass is the thing that fails.
-    const metrics = surfacePath(vault, STATE_SURFACE_ID.metrics);
-    chmodSync(metrics, 0o500);
-    try {
-      let caught: unknown;
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a source it cannot remove says the bytes are safe and names the manifest",
+    () => {
+      const vault = seedVault();
+      const dest = join(tempDir(), "moved");
+      const p = plan(vault, dest);
+      // Readable and traversable, but not writable: every file lands and
+      // verifies, and the unlink pass is the thing that fails.
+      const metrics = surfacePath(vault, STATE_SURFACE_ID.metrics);
+      chmodSync(metrics, 0o500);
       try {
-        applyStateMigration(p);
-      } catch (error) {
-        caught = error;
+        let caught: unknown;
+        try {
+          applyStateMigration(p);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toBeInstanceOf(StateMigrationError);
+        expect((caught as Error).message).toContain(join(dest, MIGRATION_MANIFEST_FILE));
+        expect((caught as Error).message).toContain("rollback");
+        expect(readFileSync(join(dest, "Brain/metrics/recall.jsonl"), "utf8")).toBe("{}\n");
+      } finally {
+        chmodSync(metrics, 0o755);
       }
-      expect(caught).toBeInstanceOf(StateMigrationError);
-      expect((caught as Error).message).toContain(join(dest, MIGRATION_MANIFEST_FILE));
-      expect((caught as Error).message).toContain("rollback");
-      expect(readFileSync(join(dest, "Brain/metrics/recall.jsonl"), "utf8")).toBe("{}\n");
-    } finally {
-      chmodSync(metrics, 0o755);
-    }
-  });
+    },
+  );
 });
 
 describe("state rollback", () => {
@@ -716,7 +727,8 @@ describe("state rollback", () => {
  * the file is run whole.
  */
 describe("every declared refusal code is reachable", () => {
-  test("the migration codes, all seven, with a remedy each", () => {
+  // Windows has no FIFOs (mkfifo), so the special-file refusal cannot be staged.
+  test.skipIf(IS_WINDOWS)("the migration codes, all seven, with a remedy each", () => {
     // Six from one plan, because they are independent conditions and a
     // plan collects all of them; the seventh needs a probe that throws,
     // which would hide the surfaces the other six are read from.

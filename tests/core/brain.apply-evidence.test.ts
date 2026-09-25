@@ -124,7 +124,7 @@ describe("appendApplyEvidence — missing preference", () => {
       expect(err).toBeInstanceOf(BrainPreferenceNotFoundError);
       const e = err as BrainPreferenceNotFoundError;
       expect(e.prefId).toBe("pref-missing");
-      expect(e.searchedPath).toContain("Brain/preferences/pref-missing.md");
+      expect(e.searchedPath).toContain(join("Brain", "preferences", "pref-missing.md"));
     }
   });
 });

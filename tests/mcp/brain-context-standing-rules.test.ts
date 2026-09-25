@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { STANDING_RULES_HEADER } from "../../src/core/brain/standing-rules.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let tmp: string;
 let vault: string;
@@ -142,7 +143,8 @@ describe("brain_context standing_rules field", () => {
     expect(out["content"]).toContain("Standing rules truncated");
   });
 
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "the branch that reports Brain/ as absent still says why the rules are unavailable",
     async () => {
       // A vault directory the process cannot traverse makes `existsSync`
@@ -191,8 +193,6 @@ describe("brain_context standing_rules field", () => {
  * wire. Both layers now speak.
  */
 describe("brain_context surfaces vault-instruction read failures", () => {
-  const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
-
   test("a healthy vault reports no instruction error", async () => {
     writeFileSync(join(vault, "VAULT.md"), "# Project context\n");
     const out = await callContext();
@@ -206,7 +206,8 @@ describe("brain_context surfaces vault-instruction read failures", () => {
     expect("vault_instruction_error" in out).toBe(false);
   });
 
-  test.skipIf(RUNNING_AS_ROOT)(
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable instruction file is named, not reported as absent",
     async () => {
       const path = join(vault, "VAULT.md");

@@ -133,7 +133,7 @@ describe("copyStarterBundle", () => {
 
     // Anchor is the bundle's newest log day (05-16), so everything moves two
     // days - the nested directory's own name included.
-    expect(result.copied).toContain(join("Brain", "log", "2026-05-18.md"));
+    expect(result.copied).toContain("Brain/log/2026-05-18.md");
     expect(readdirSync(join(vault, "Brain", "preferences"))).toEqual(["2026-05-18-nested"]);
     expect(
       readFileSync(join(vault, "Brain", "preferences", "2026-05-18-nested", "pref-y.md"), "utf8"),

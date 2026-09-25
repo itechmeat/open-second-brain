@@ -111,3 +111,48 @@ jobs:
 
       - name: Python package compiles
         run: python -m compileall -q plugins/hermes
+
+  # Native Windows. The validate job above is the full gate (format, lint,
+  # manifests, link ratchet); this one proves the code paths that differ on
+  # Windows - config under %LOCALAPPDATA%, `.cmd` launchers, SQLite handles
+  # that must be closed before a rename, in-process gzip snapshots - on the
+  # platform they exist for. Checks that are platform-independent are not
+  # repeated here.
+  windows:
+    name: windows
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Set up Python (Hermes plugin tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: TypeScript test suite
+        run: bun test
+
+      - name: Publish o2b on PATH (the anti-drift test needs the live server)
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
+
+      - name: Python plugin tests
+        run: python -m unittest discover -s tests/python -v
+
+      - name: The .cmd launcher runs the CLI
+        shell: cmd
+        run: scripts\o2b.cmd --version

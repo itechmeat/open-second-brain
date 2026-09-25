@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { fileAgeMs, msToWholeDays, MS_PER_DAY } from "../../../src/core/brain/time.ts";
+import { IS_WINDOWS } from "../../helpers/platform.ts";
 
 /** Pinned clock; every expectation below is relative to this instant. */
 const NOW_MS = Date.parse("2026-05-29T12:00:00Z");
@@ -84,7 +85,9 @@ describe("fileAgeMs", () => {
     }
   });
 
-  test("returns null for a file that exists but cannot be stat'ed", () => {
+  // Windows has no traversal bit for chmod to remove, so the unstattable
+  // child cannot be built there.
+  test.skipIf(IS_WINDOWS)("returns null for a file that exists but cannot be stat'ed", () => {
     const dir = makeTempDir();
     // A file is unstattable when its PARENT denies traversal, which is the
     // portable POSIX construction: removing every mode bit from the

@@ -42,6 +42,7 @@ import { moveToRetired, writePreference } from "../../../../src/core/brain/prefe
 import { auditStaleDependencies } from "../../../../src/core/brain/stale-dependency.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -466,30 +467,38 @@ describe("readDecisionChangeReceipts separates an absent store from an unreadabl
     expect(readDecisionChangeReceipts(vault)).toEqual({ receipts: [], warnings: [] });
   });
 
-  test("a store that cannot be listed raises instead of reporting no decisions", () => {
-    mkdirSync(receiptsDir(vault), { recursive: true });
-    chmodSync(receiptsDir(vault), 0o300);
-    expect(() => readDecisionChangeReceipts(vault)).toThrow(ReceiptError);
-  });
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a store that cannot be listed raises instead of reporting no decisions",
+    () => {
+      mkdirSync(receiptsDir(vault), { recursive: true });
+      chmodSync(receiptsDir(vault), 0o300);
+      expect(() => readDecisionChangeReceipts(vault)).toThrow(ReceiptError);
+    },
+  );
 
-  test("an append whose idempotency probe cannot read the store refuses to duplicate", () => {
-    const input = {
-      subject: "Brain/decisions/decision-adopt-bun.md",
-      before: "undecided",
-      after: "adopted",
-      actor: "unit-test",
-      reasonCode: "decision-record",
-      ts: "2026-02-01T00:00:00Z",
-      configPath,
-    };
-    expect(appendDecisionChangeReceipt(vault, input).appended).toBe(true);
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an append whose idempotency probe cannot read the store refuses to duplicate",
+    () => {
+      const input = {
+        subject: "Brain/decisions/decision-adopt-bun.md",
+        before: "undecided",
+        after: "adopted",
+        actor: "unit-test",
+        reasonCode: "decision-record",
+        ts: "2026-02-01T00:00:00Z",
+        configPath,
+      };
+      expect(appendDecisionChangeReceipt(vault, input).appended).toBe(true);
 
-    // Writable, not listable: exactly the state in which the duplicate
-    // guard used to read "no prior receipt" and append a second copy.
-    chmodSync(receiptsDir(vault), 0o300);
-    expect(() => appendDecisionChangeReceipt(vault, input)).toThrow(ReceiptError);
+      // Writable, not listable: exactly the state in which the duplicate
+      // guard used to read "no prior receipt" and append a second copy.
+      chmodSync(receiptsDir(vault), 0o300);
+      expect(() => appendDecisionChangeReceipt(vault, input)).toThrow(ReceiptError);
 
-    chmodSync(receiptsDir(vault), 0o700);
-    expect(readDecisionChangeReceipts(vault).receipts.length).toBe(1);
-  });
+      chmodSync(receiptsDir(vault), 0o700);
+      expect(readDecisionChangeReceipts(vault).receipts.length).toBe(1);
+    },
+  );
 });

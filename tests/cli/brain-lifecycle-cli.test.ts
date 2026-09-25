@@ -38,14 +38,14 @@ function writeFact(slug: string): string {
   return rel;
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-brain-lifecycle-cli-"));
   configDir = mkdtempSync(join(tmpdir(), "o2b-brain-lifecycle-cli-cfg-"));
   vault = join(tmp, "vault");
   configPath = join(configDir, "config.yaml");
   mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
   mkdirSync(join(vault, "Brain", "log"), { recursive: true });
-  Bun.write(configPath, `vault: ${vault}\nagent_name: tester\n`);
+  await Bun.write(configPath, `vault: ${vault}\nagent_name: tester\n`);
 });
 
 afterEach(() => {

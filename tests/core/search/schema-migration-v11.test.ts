@@ -53,7 +53,7 @@ test("fresh migration reaches latest with all three event-anchor columns", () =>
   const db = new Database(dbPath);
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   for (const col of ANCHOR_COLUMNS) expect(hasColumn(db, "documents", col)).toBe(true);
-  db.close();
+  db.close(true);
 });
 
 test("a v10 index rewound and re-migrated preserves existing rows with the new columns null", () => {
@@ -107,7 +107,7 @@ test("a v10 index rewound and re-migrated preserves existing rows with the new c
     event_anchor_end_ms: null,
     event_anchor_source: null,
   });
-  db.close();
+  db.close(true);
 });
 
 test("re-running the migration over an already-migrated index is a no-op", () => {
@@ -118,5 +118,5 @@ test("re-running the migration over an already-migrated index is a no-op", () =>
   // columns still present must not raise "duplicate column name".
   expect(() => applyMigrations(db)).not.toThrow();
   expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
-  db.close();
+  db.close(true);
 });

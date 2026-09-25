@@ -28,6 +28,7 @@ import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 import { CONFIG_UNREADABLE_REASON } from "../../src/mcp/vault-path-field.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\napi_key: "secret"\n`;
 
@@ -91,48 +92,56 @@ async function callTool(name: string): Promise<Record<string, unknown>> {
   }
 }
 
-describe("vault_health reports the broken config instead of throwing on it", () => {
-  test("the report still names the failing check and its fix", async () => {
-    const payload = await callTool("vault_health");
-    const checks = payload["checks"] as Array<Record<string, unknown>>;
-    const configCheck = checks.find((c) => c["name"] === "config_writeable");
-    expect(configCheck).toBeDefined();
-    expect(configCheck!["ok"]).toBe(false);
-    expect(String(configCheck!["message"])).toContain(configPath);
-    expect(payload["ok"]).toBe(false);
-  });
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)(
+  "vault_health reports the broken config instead of throwing on it",
+  () => {
+    test("the report still names the failing check and its fix", async () => {
+      const payload = await callTool("vault_health");
+      const checks = payload["checks"] as Array<Record<string, unknown>>;
+      const configCheck = checks.find((c) => c["name"] === "config_writeable");
+      expect(configCheck).toBeDefined();
+      expect(configCheck!["ok"]).toBe(false);
+      expect(String(configCheck!["message"])).toContain(configPath);
+      expect(payload["ok"]).toBe(false);
+    });
 
-  test("vault_path carries the error rather than omitting itself", async () => {
-    const payload = await callTool("vault_health");
-    expect(payload).toHaveProperty("vault_path");
-    const vaultPath = payload["vault_path"] as Record<string, unknown>;
-    expect(String(vaultPath["error"])).toBe(CONFIG_UNREADABLE_REASON);
-    // The redaction contract holds even in the degraded shape: an
-    // unresolvable reference must not fall back to the raw host path,
-    // and must not name the config file either - `config_writeable`
-    // above is the field that names it.
-    expect(JSON.stringify(payload["vault_path"])).not.toContain(vault);
-    expect(JSON.stringify(payload["vault_path"])).not.toContain(configPath);
-  });
-});
+    test("vault_path carries the error rather than omitting itself", async () => {
+      const payload = await callTool("vault_health");
+      expect(payload).toHaveProperty("vault_path");
+      const vaultPath = payload["vault_path"] as Record<string, unknown>;
+      expect(String(vaultPath["error"])).toBe(CONFIG_UNREADABLE_REASON);
+      // The redaction contract holds even in the degraded shape: an
+      // unresolvable reference must not fall back to the raw host path,
+      // and must not name the config file either - `config_writeable`
+      // above is the field that names it.
+      expect(JSON.stringify(payload["vault_path"])).not.toContain(vault);
+      expect(JSON.stringify(payload["vault_path"])).not.toContain(configPath);
+    });
+  },
+);
 
-describe("second_brain_status reports the broken config instead of throwing on it", () => {
-  test("the config fields answer the question they exist to answer", async () => {
-    const payload = await callTool("second_brain_status");
-    expect(payload["config_path"]).toBe(configPath);
-    // Present, not absent: `false` here is the collapse the read split
-    // removed, and it would read as "this install was never configured".
-    expect(payload["config_exists"]).toBe(true);
-    expect(String((payload["config"] as Record<string, unknown>)["error"])).toContain(configPath);
-    expect(String((payload["config_keys"] as Record<string, unknown>)["error"])).toContain(
-      configPath,
-    );
-  });
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)(
+  "second_brain_status reports the broken config instead of throwing on it",
+  () => {
+    test("the config fields answer the question they exist to answer", async () => {
+      const payload = await callTool("second_brain_status");
+      expect(payload["config_path"]).toBe(configPath);
+      // Present, not absent: `false` here is the collapse the read split
+      // removed, and it would read as "this install was never configured".
+      expect(payload["config_exists"]).toBe(true);
+      expect(String((payload["config"] as Record<string, unknown>)["error"])).toContain(configPath);
+      expect(String((payload["config_keys"] as Record<string, unknown>)["error"])).toContain(
+        configPath,
+      );
+    });
 
-  test("the rest of the payload still arrives", async () => {
-    const payload = await callTool("second_brain_status");
-    expect(payload["vault_exists"]).toBe(true);
-    expect(payload).toHaveProperty("brain");
-    expect(payload).toHaveProperty("vault_path");
-  });
-});
+    test("the rest of the payload still arrives", async () => {
+      const payload = await callTool("second_brain_status");
+      expect(payload["vault_exists"]).toBe(true);
+      expect(payload).toHaveProperty("brain");
+      expect(payload).toHaveProperty("vault_path");
+    });
+  },
+);

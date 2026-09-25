@@ -114,9 +114,30 @@ describe("applyHygienePlan", () => {
       source: "[[note-b]]",
     });
     const report = runHygieneScan(vault, { detectors: ["conflicts"], now: NOW });
-    const withVerdicts = resolveConflictFindings(vault, report.findings, {
-      resolverCmd: `printf '{"verdicts": {"${report.findings[0]!.id}": {"action": "supersede", "winner_value": "Lisbon", "rationale": "later independent source"}}}'`,
-    });
+    // The resolver runs through the platform shell (`sh` or `cmd.exe`), so
+    // it is a Bun script invoked by double-quoted absolute paths - the one
+    // command spelling both shells parse the same way - rather than a
+    // `printf '...'` only `sh` understands.
+    const verdicts = {
+      verdicts: {
+        [report.findings[0]!.id]: {
+          action: "supersede",
+          winner_value: "Lisbon",
+          rationale: "later independent source",
+        },
+      },
+    };
+    const resolverDir = mkdtempSync(join(tmpdir(), "o2b-hygiene-resolver-"));
+    const resolverScript = join(resolverDir, "resolver.mjs");
+    writeFileSync(resolverScript, `console.log(${JSON.stringify(JSON.stringify(verdicts))});\n`);
+    let withVerdicts: ReturnType<typeof resolveConflictFindings>;
+    try {
+      withVerdicts = resolveConflictFindings(vault, report.findings, {
+        resolverCmd: `"${process.execPath}" "${resolverScript}"`,
+      });
+    } finally {
+      rmSync(resolverDir, { recursive: true, force: true });
+    }
     const plan = buildHygienePlan({ ...report, findings: withVerdicts });
     const result = await applyHygienePlan(vault, plan, { agent: "hygiene", now: NOW });
     expect(result.errors).toHaveLength(0);

@@ -47,6 +47,7 @@ import {
 } from "../../../src/core/brain/notes/write-record.ts";
 import { writeImagePath } from "../../../src/core/brain/paths.ts";
 import { sha256Hex } from "../../../src/core/integrity/digest.ts";
+import { CHMOD_CANNOT_DENY, IS_WINDOWS } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -363,21 +364,24 @@ describe("applyWriteBatch note operations", () => {
     expect(md).toContain("title: Fine");
   });
 
-  test("an unreadable-by-permission note is refused rather than blanked", () => {
-    // Running as root bypasses the permission bits this case needs.
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
-    const abs = seedNote("Notes/Secret.md", "the body that must survive", "title: Secret");
-    const before = readFileSync(abs, "utf8");
-    chmodSync(abs, 0o000);
-    try {
-      expect(() =>
-        applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Secret.md", body: "new" }]),
-      ).toThrow(WriteBatchError);
-    } finally {
-      chmodSync(abs, 0o600);
-    }
-    expect(readFileSync(abs, "utf8")).toBe(before);
-  });
+  // Root bypasses the permission bits this case needs, and on Windows chmod
+  // only sets the read-only attribute, which never makes a file unreadable.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable-by-permission note is refused rather than blanked",
+    () => {
+      const abs = seedNote("Notes/Secret.md", "the body that must survive", "title: Secret");
+      const before = readFileSync(abs, "utf8");
+      chmodSync(abs, 0o000);
+      try {
+        expect(() =>
+          applyWriteBatch(vault, [{ kind: "update_note", path: "Notes/Secret.md", body: "new" }]),
+        ).toThrow(WriteBatchError);
+      } finally {
+        chmodSync(abs, 0o600);
+      }
+      expect(readFileSync(abs, "utf8")).toBe(before);
+    },
+  );
 
   test("an unreadable target at op 1 aborts the batch before op 0 lands", () => {
     const kept = seedNote("Notes/A.md", "unchanged", "title: A");
@@ -392,10 +396,43 @@ describe("applyWriteBatch note operations", () => {
     expect(readFileSync(kept, "utf8")).toBe(before);
   });
 
-  test("a mid-write failure leaves the target byte-identical", () => {
-    // Running as root bypasses filesystem permission bits, so the
-    // read-only-directory injection cannot force a write failure there.
-    if (typeof process.getuid === "function" && process.getuid() === 0) return;
+  // The Windows counterpart of the two permission cases above: chmod sets
+  // the read-only attribute, the note stays readable, and the rewrite's
+  // rename onto it would fail with a raw EPERM mid-commit. It is refused
+  // in the projection instead, under the same named code.
+  test.skipIf(!IS_WINDOWS)(
+    "a note with the read-only attribute is refused as target_unreadable, untouched",
+    () => {
+      const abs = seedNote("Notes/Locked.md", "the body that must survive", "title: Locked");
+      const before = readFileSync(abs, "utf8");
+      chmodSync(abs, 0o444);
+      try {
+        for (const op of [
+          { kind: "update_note", path: "Notes/Locked.md", body: "new" },
+          { kind: "append_note", path: "Notes/Locked.md", content: "more" },
+        ] as const) {
+          let caught: unknown;
+          try {
+            applyWriteBatch(vault, [op]);
+          } catch (err) {
+            caught = err;
+          }
+          expect(caught).toBeInstanceOf(WriteBatchError);
+          expect((caught as WriteBatchError).code).toBe("target_unreadable");
+          expect((caught as WriteBatchError).details["path"]).toBe("Notes/Locked.md");
+        }
+      } finally {
+        chmodSync(abs, 0o644);
+      }
+      expect(readFileSync(abs, "utf8")).toBe(before);
+      expect(listNoteWrites(vault).writes).toHaveLength(0);
+    },
+  );
+
+  // Root bypasses filesystem permission bits, and a Windows directory marked
+  // read-only still accepts new files, so the read-only-directory injection
+  // cannot force a write failure on either.
+  test.skipIf(CHMOD_CANNOT_DENY)("a mid-write failure leaves the target byte-identical", () => {
     const dir = join(vault, "Notes");
     const abs = seedNote("Notes/Doc.md", "original body", "title: Doc");
     const before = readFileSync(abs, "utf8");

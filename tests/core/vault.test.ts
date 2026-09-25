@@ -25,6 +25,7 @@ import {
   writeFrontmatter,
 } from "../../src/core/vault.ts";
 import { TRANSPORT_REACH } from "../../src/core/graph/transport-reach.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let tmp: string;
 
@@ -436,24 +437,28 @@ describe("listVaultPages", () => {
     expect(notices).toEqual([]);
   });
 
-  test("a directory the walker cannot read is reported instead of vanishing", () => {
-    writeFileSync(join(tmp, "page.md"), "Content.");
-    const locked = join(tmp, "locked");
-    mkdirSync(locked);
-    writeFileSync(join(locked, "inner.md"), "Inner.");
-    chmodSync(locked, 0o000);
-    const notices: DegradationNotice[] = [];
-    try {
-      const pages = listVaultPages(tmp, { notices, reach: REACH_AGNOSTIC });
-      // Same control flow as before: the unreadable subtree is skipped.
-      expect(pages.length).toBe(1);
-      expect(notices).toHaveLength(1);
-      expect(notices[0]!.code).toBe(DEGRADATION_CODE.vaultWalkEntrySkipped);
-      expect(notices[0]!.path).toBe(locked);
-    } finally {
-      chmodSync(locked, 0o755);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a directory the walker cannot read is reported instead of vanishing",
+    () => {
+      writeFileSync(join(tmp, "page.md"), "Content.");
+      const locked = join(tmp, "locked");
+      mkdirSync(locked);
+      writeFileSync(join(locked, "inner.md"), "Inner.");
+      chmodSync(locked, 0o000);
+      const notices: DegradationNotice[] = [];
+      try {
+        const pages = listVaultPages(tmp, { notices, reach: REACH_AGNOSTIC });
+        // Same control flow as before: the unreadable subtree is skipped.
+        expect(pages.length).toBe(1);
+        expect(notices).toHaveLength(1);
+        expect(notices[0]!.code).toBe(DEGRADATION_CODE.vaultWalkEntrySkipped);
+        expect(notices[0]!.path).toBe(locked);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    },
+  );
 });
 
 describe("formatFrontmatter refuses a key the parser could not read back", () => {

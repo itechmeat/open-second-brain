@@ -43,6 +43,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { retargetWikilinks } from "../../../src/core/brain/page-dedup.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 let outside: string;
@@ -230,7 +231,8 @@ describe("code regions", () => {
 });
 
 describe("a write that fails", () => {
-  test("is reported rather than thrown, and the pass keeps going", () => {
+  // chmod cannot make a directory refuse new files on Windows (or as root).
+  test.skipIf(CHMOD_CANNOT_DENY)("is reported rather than thrown, and the pass keeps going", () => {
     note("A/Ref.md", "see [[Projects/Old]]\n");
     note("Z/Ref.md", "see [[Projects/Old]]\n");
     // A read-only directory: the atomic write cannot create its sibling

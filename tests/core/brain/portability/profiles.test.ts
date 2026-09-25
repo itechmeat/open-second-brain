@@ -161,6 +161,10 @@ describe("profile registry", () => {
       Bun.spawn(["bun", "run", script, configPath, name, vaultDir(name)], {
         stdout: "pipe",
         stderr: "pipe",
+        // Bun hands a child without `env` the environment this process STARTED
+        // with, not the live `process.env`: pass it so the child sees the
+        // throwaway config tests/setup.ts installs, not the operator's real one.
+        env: { ...process.env },
       });
     const alpha = spawn("alpha");
     const beta = spawn("beta");

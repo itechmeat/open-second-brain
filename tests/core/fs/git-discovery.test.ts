@@ -20,6 +20,7 @@ import {
   MAX_IGNORE_FILE_BYTES,
 } from "../../../src/core/fs/git-discovery.ts";
 import { IgnoreScope } from "../../../src/core/fs/ignore.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let root: string;
 
@@ -125,24 +126,32 @@ describe("extendWithDirectoryIgnore", () => {
 });
 
 describe("an ignore file that cannot be honoured is reported, never swallowed", () => {
-  test("an unreadable .gitignore comes back as a structured file-level warning", () => {
-    put(".gitignore", "secret.md\n");
-    chmodSync(join(root, ".gitignore"), 0o000);
-    const { scope, warnings } = buildRepositoryBaseScope(root, "");
-    // Nothing was filtered - and the operator is told why.
-    expect(scope.isIgnored("secret.md", false)).toBe(false);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]!.source).toBe(".gitignore");
-    expect(warnings[0]!.line).toBe(0);
-    expect(warnings[0]!.reason).toContain("EACCES");
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable .gitignore comes back as a structured file-level warning",
+    () => {
+      put(".gitignore", "secret.md\n");
+      chmodSync(join(root, ".gitignore"), 0o000);
+      const { scope, warnings } = buildRepositoryBaseScope(root, "");
+      // Nothing was filtered - and the operator is told why.
+      expect(scope.isIgnored("secret.md", false)).toBe(false);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]!.source).toBe(".gitignore");
+      expect(warnings[0]!.line).toBe(0);
+      expect(warnings[0]!.reason).toContain("EACCES");
+    },
+  );
 
-  test("an unreadable nested .gitignore names that directory's file", () => {
-    put("pkg/.gitignore", "drop.md\n");
-    chmodSync(join(root, "pkg", ".gitignore"), 0o000);
-    const { warnings } = extendWithDirectoryIgnore(IgnoreScope.empty(), join(root, "pkg"), "pkg");
-    expect(warnings.map((w) => w.source)).toEqual(["pkg/.gitignore"]);
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable nested .gitignore names that directory's file",
+    () => {
+      put("pkg/.gitignore", "drop.md\n");
+      chmodSync(join(root, "pkg", ".gitignore"), 0o000);
+      const { warnings } = extendWithDirectoryIgnore(IgnoreScope.empty(), join(root, "pkg"), "pkg");
+      expect(warnings.map((w) => w.source)).toEqual(["pkg/.gitignore"]);
+    },
+  );
 
   test("a symlinked .gitignore is refused with a warning, never followed", () => {
     put("outside/target.gitignore", "secret.md\n");

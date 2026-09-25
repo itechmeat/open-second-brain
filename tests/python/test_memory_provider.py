@@ -537,6 +537,9 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         """Create an executable stub at ``<home>/<relative>/<name>``."""
         directory = Path(home).joinpath(*relative)
         directory.mkdir(parents=True, exist_ok=True)
+        # Windows discovery matches PATHEXT suffixes, not a bare name.
+        if os.name == "nt" and not os.path.splitext(name)[1]:
+            name += ".exe"
         exe = directory / name
         exe.write_text("#!/bin/sh\n")
         os.chmod(exe, 0o755)
@@ -580,6 +583,20 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(command, (str(fake_o2b), "mcp"))
         self.assertTrue(Path(command[0]).is_absolute())
 
+    @unittest.skipUnless(os.name == "nt", "o2b.cmd launcher is Windows-only")
+    def test_windows_last_resort_resolves_the_o2b_cmd_launcher(self):
+        # CreateProcess appends only ``.exe`` to a bare name, so the bare
+        # ``("o2b", "mcp")`` fallback cannot start ``o2b.cmd`` on Windows.
+        with tempfile.TemporaryDirectory() as home:
+            fake_o2b = self._fake_bin(home, (".local", "bin"), "o2b.cmd")
+            with contextlib.ExitStack() as stack:
+                for ctx in self._sandboxed_scan(home, (".local", "bin")):
+                    stack.enter_context(ctx)
+                command = OpenSecondBrainMemoryProvider._resolve_command()
+
+        self.assertEqual(command[0].lower(), str(fake_o2b).lower())
+        self.assertEqual(command[1:], ("mcp",))
+
     @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
     def test_resolve_command_skips_o2b_wrapper_when_no_bun_is_discoverable(self):
         # The wrapper is a bash script that exits 127 when its own PATH has no
@@ -605,7 +622,6 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
         self.assertEqual(command, ("o2b", "mcp"))
         self.assertNotIn(str(entry), command)
 
-    @unittest.skipIf(os.name == "nt", "o2b bash wrapper is POSIX-only")
     def test_resolve_command_uses_bun_entry_when_only_bun_is_discoverable(self):
         with tempfile.TemporaryDirectory() as home:
             fake_bun = self._fake_bin(home, (".bun", "bin"), "bun")
@@ -621,7 +637,10 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
                 stack.enter_context(patch.object(Path, "is_file", return_value=True))
                 command = OpenSecondBrainMemoryProvider._resolve_command()
 
-        self.assertEqual(command[0], str(fake_bun))
+        # ``Path.is_file`` is patched to True, so on Windows the PATHEXT scan
+        # may settle on another suffix (bun.COM) in the same directory.
+        self.assertEqual(Path(command[0]).parent, fake_bun.parent)
+        self.assertEqual(Path(command[0]).stem, "bun")
         self.assertEqual(command[1], "run")
         self.assertEqual(command[-1], "mcp")
 
@@ -734,6 +753,8 @@ class CliTests(unittest.TestCase):
         # for the badge and useless here: a traceback would bury the one line
         # naming the remedy. The exit code separates "could not read the
         # config" from "read it, and it says not ready", which is exit 1.
+        if os.name == "nt":
+            self.skipTest("chmod 0o000 only sets read-only on Windows; the file stays readable")
         if os.getuid() == 0:
             self.skipTest("root ignores the mode bits this test relies on")
         with tempfile.TemporaryDirectory() as tmp:
@@ -1744,7 +1765,7 @@ class BridgeChildEnvironmentTests(unittest.TestCase):
 
     def test_default_spawn_passes_the_env_overlay_to_popen(self):
         proc = _FakeProcess(self._handshake_frames())
-        overlay = {"PATH": "/opt/bun/bin:/usr/bin", "HOME": "/home/agent"}
+        overlay = {"PATH": os.pathsep.join(("/opt/bun/bin", "/usr/bin")), "HOME": "/home/agent"}
         with patch.object(bridge_module.subprocess, "Popen", return_value=proc) as popen:
             McpBrainBridge(
                 vault="/v", command=("/home/agent/.local/bin/o2b", "mcp"), env=overlay
@@ -1996,6 +2017,15 @@ class BridgeRequestDeadlineTests(unittest.TestCase):
         with patch.dict(os.environ, {REQUEST_TIMEOUT_ENV: "soon"}):
             self.assertEqual(resolve_request_timeout(), DEFAULT_REQUEST_TIMEOUT_SECONDS)
 
+    @unittest.skipUnless(os.name == "nt", "Windows-only: no watchdog wrapping")
+    def test_windows_children_are_not_wrapped_and_nothing_is_logged(self):
+        McpBrainBridge._watchdog_absent_warned = False
+        argv = ["o2b", "mcp"]
+        with patch.object(bridge_module.logger, "warning") as warn:
+            self.assertEqual(McpBrainBridge._watchdog_argv(argv), argv)
+            warn.assert_not_called()
+
+    @unittest.skipIf(os.name == "nt", "the parent-death watchdog wraps POSIX children only")
     def test_a_missing_parent_death_watchdog_says_so_once(self):
         McpBrainBridge._watchdog_absent_warned = False
         argv = ["o2b", "mcp"]

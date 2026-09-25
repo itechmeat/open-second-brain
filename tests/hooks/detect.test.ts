@@ -261,6 +261,19 @@ describe("detectHookRuntime", () => {
     ).toBe("codex");
   });
 
+  test("native Windows transcript paths (backslashes) are recognised too", () => {
+    expect(
+      detectHookRuntime({
+        transcript_path: "C:\\Users\\x\\.claude\\projects\\C--proj\\abc.jsonl",
+      }),
+    ).toBe("claudecode");
+    expect(
+      detectHookRuntime({
+        transcript_path: "C:\\Users\\x\\.codex\\sessions\\2026-05-18.json",
+      }),
+    ).toBe("codex");
+  });
+
   test("Claude Code triple without transcript_path → claudecode", () => {
     expect(
       detectHookRuntime({

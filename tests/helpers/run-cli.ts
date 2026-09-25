@@ -72,6 +72,29 @@ export interface RunCliOptions {
 }
 
 /**
+ * The real `process.env` on Windows is case-insensitive: the variable the
+ * OS calls `Path` answers to `process.env.PATH`, which is how the product
+ * reads it. The in-process runner swaps in a plain object copy, which is
+ * case-SENSITIVE, so without this fold every `process.env["PATH"]` read in
+ * the CLI saw `undefined` (snapshot tooling then reported `tar` missing),
+ * and a caller's `PATH` override sat beside the inherited `Path` instead of
+ * replacing it. Rename inherited `Path` to `PATH`, and drop any inherited
+ * key that differs from a caller key only by case.
+ */
+function foldWindowsEnvCase(env: Record<string, string>, callerEnv: Record<string, string>): void {
+  for (const key of Object.keys(env)) {
+    if (key !== "PATH" && key.toUpperCase() === "PATH") {
+      if (!("PATH" in env)) env["PATH"] = env[key] as string;
+      delete env[key];
+    }
+  }
+  const callerUpper = new Set(Object.keys(callerEnv).map((k) => k.toUpperCase()));
+  for (const key of Object.keys(env)) {
+    if (callerUpper.has(key.toUpperCase()) && !(key in callerEnv)) delete env[key];
+  }
+}
+
+/**
  * Compute the child environment the caller's overrides produce, mirroring the
  * process-level resolution the CLI performs from `process.env`.
  */
@@ -83,7 +106,15 @@ function resolveEnv(callerEnv: Record<string, string>): {
   for (const key of RUNTIME_OVERRIDABLE_ENV) {
     if (!(key in callerEnv)) delete env[key];
   }
+  if (process.platform === "win32") foldWindowsEnvCase(env, callerEnv);
   Object.assign(env, callerEnv);
+  // A caller that sandboxes HOME means "the user's home directory". On
+  // Windows `os.homedir()` answers from USERPROFILE and ignores HOME, so
+  // without this mirror an install test wrote the operator's real
+  // `%USERPROFILE%\.cursor\mcp.json` instead of the temp home it named.
+  if (process.platform === "win32" && "HOME" in callerEnv && !("USERPROFILE" in callerEnv)) {
+    env["USERPROFILE"] = callerEnv["HOME"] as string;
+  }
   // `o2b doctor` consults the codegraph partner by spawning a third-party
   // CLI once per discovered project whenever that binary is on PATH. The
   // suite runs from this repo, which IS such a project, so the check ran

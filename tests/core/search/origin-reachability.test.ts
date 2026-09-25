@@ -34,6 +34,7 @@ import { searchAcrossVaults } from "../../../src/core/search/cross-vault.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { writeMd } from "../../helpers/search-fixtures.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let tmp: string;
 let active: string;
@@ -111,37 +112,41 @@ test("listSearchOrigins reports an unreachable origin rather than dropping it", 
   expect(origins.find((o) => o.label === "source/team")?.reason).toBeUndefined();
 });
 
-test("unreachable and unknown are different values, and neither reads as zero", async () => {
-  const holder = join(tmp, "holder");
-  const shielded = join(holder, "shielded-vault");
-  mkdirSync(join(shielded, "Brain"), { recursive: true });
-  addRecallSource(configPath, active, "shielded", shielded);
-  registerVanishedSource("gone");
-  // An unreadable parent makes the probe fail with something other than
-  // ENOENT: the origin may well be there, and nothing was learned about it.
-  chmodSync(holder, 0o000);
-  try {
-    const origins = listSearchOrigins(configPath, active);
-    const unknown = origins.find((o) => o.label === "source/shielded");
-    const missing = origins.find((o) => o.label === "source/gone");
-    expect(unknown?.reach).toBe(ORIGIN_REACH.unknown);
-    expect(missing?.reach).toBe(ORIGIN_REACH.unreachable);
-    expect(unknown?.reach).not.toBe(missing?.reach);
-    expect(unknown?.reason).toBe(ORIGIN_REACH_REASON.vaultUnreadable);
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "unreachable and unknown are different values, and neither reads as zero",
+  async () => {
+    const holder = join(tmp, "holder");
+    const shielded = join(holder, "shielded-vault");
+    mkdirSync(join(shielded, "Brain"), { recursive: true });
+    addRecallSource(configPath, active, "shielded", shielded);
+    registerVanishedSource("gone");
+    // An unreadable parent makes the probe fail with something other than
+    // ENOENT: the origin may well be there, and nothing was learned about it.
+    chmodSync(holder, 0o000);
+    try {
+      const origins = listSearchOrigins(configPath, active);
+      const unknown = origins.find((o) => o.label === "source/shielded");
+      const missing = origins.find((o) => o.label === "source/gone");
+      expect(unknown?.reach).toBe(ORIGIN_REACH.unknown);
+      expect(missing?.reach).toBe(ORIGIN_REACH.unreachable);
+      expect(unknown?.reach).not.toBe(missing?.reach);
+      expect(unknown?.reason).toBe(ORIGIN_REACH_REASON.vaultUnreadable);
 
-    const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
-    // Neither origin contributed a result, and neither is reported as a
-    // zero contribution: both are named, each with its own reason.
-    expect(outcome.warnings.some((w) => w.includes("source/shielded"))).toBe(true);
-    expect(outcome.warnings.some((w) => w.includes("source/gone"))).toBe(true);
-    const causes = (outcome.retrievalTrail?.degraded ?? [])
-      .filter((d) => d.code === RETRIEVAL_DEGRADATION.crossVaultOriginFailed)
-      .map((d) => d.detail?.["cause"]);
-    expect(causes).toContain(ORIGIN_REACH_REASON.vaultUnreadable);
-  } finally {
-    chmodSync(holder, 0o755);
-  }
-});
+      const outcome = await searchAcrossVaults(configPath, active, { query: "griffin", limit: 10 });
+      // Neither origin contributed a result, and neither is reported as a
+      // zero contribution: both are named, each with its own reason.
+      expect(outcome.warnings.some((w) => w.includes("source/shielded"))).toBe(true);
+      expect(outcome.warnings.some((w) => w.includes("source/gone"))).toBe(true);
+      const causes = (outcome.retrievalTrail?.degraded ?? [])
+        .filter((d) => d.code === RETRIEVAL_DEGRADATION.crossVaultOriginFailed)
+        .map((d) => d.detail?.["cause"]);
+      expect(causes).toContain(ORIGIN_REACH_REASON.vaultUnreadable);
+    } finally {
+      chmodSync(holder, 0o755);
+    }
+  },
+);
 
 test("the shared namespace is enumerable as a read origin", () => {
   const shared = join(tmp, "shared-vault");
@@ -160,23 +165,27 @@ test("a shared namespace pointing at the active vault is deduped, not listed twi
   expect(listSearchOrigins(configPath, active).map((o) => o.label)).toEqual(["local"]);
 });
 
-test("probeOriginReach splits absent, not-a-directory, and could-not-look", () => {
-  expect(probeOriginReach(active).reach).toBe(ORIGIN_REACH.reachable);
-  expect(probeOriginReach(join(tmp, "never-existed"))).toEqual({
-    reach: ORIGIN_REACH.unreachable,
-    reason: ORIGIN_REACH_REASON.vaultMissing,
-  });
-  const file = join(tmp, "a-file");
-  writeFileSync(file, "not a vault");
-  expect(probeOriginReach(file)).toEqual({
-    reach: ORIGIN_REACH.unreachable,
-    reason: ORIGIN_REACH_REASON.vaultNotDirectory,
-  });
-  expect(probeOriginReach(join(file, "under-a-file"))).toEqual({
-    reach: ORIGIN_REACH.unreachable,
-    reason: ORIGIN_REACH_REASON.vaultNotDirectory,
-  });
-});
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "probeOriginReach splits absent, not-a-directory, and could-not-look",
+  () => {
+    expect(probeOriginReach(active).reach).toBe(ORIGIN_REACH.reachable);
+    expect(probeOriginReach(join(tmp, "never-existed"))).toEqual({
+      reach: ORIGIN_REACH.unreachable,
+      reason: ORIGIN_REACH_REASON.vaultMissing,
+    });
+    const file = join(tmp, "a-file");
+    writeFileSync(file, "not a vault");
+    expect(probeOriginReach(file)).toEqual({
+      reach: ORIGIN_REACH.unreachable,
+      reason: ORIGIN_REACH_REASON.vaultNotDirectory,
+    });
+    expect(probeOriginReach(join(file, "under-a-file"))).toEqual({
+      reach: ORIGIN_REACH.unreachable,
+      reason: ORIGIN_REACH_REASON.vaultNotDirectory,
+    });
+  },
+);
 
 test("the reachability vocabulary is closed in both directions", () => {
   expect([...ORIGIN_REACHES]).toEqual([

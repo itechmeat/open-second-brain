@@ -220,40 +220,46 @@ describe("the HTTP transport drains before it closes", () => {
 });
 
 describe("a signal drains the transport", () => {
-  test("SIGTERM drains, then exits with the signal's code so the exit hooks run", async () => {
-    const handle = await startHttp({ vault: tempVault() }, { host: "127.0.0.1", port: 0 });
-    const held = await holdRequestOpen(handle);
-    const stderr: string[] = [];
-    const exits: number[] = [];
-    let settled: () => void = () => {};
-    const finished = new Promise<void>((resolve) => {
-      settled = resolve;
-    });
+  // Sends a real SIGTERM to this process. Windows has no POSIX signal
+  // delivery: `process.kill(pid, "SIGTERM")` terminates the process outright
+  // instead of dispatching the handler, which would kill the test runner.
+  test.skipIf(process.platform === "win32")(
+    "SIGTERM drains, then exits with the signal's code so the exit hooks run",
+    async () => {
+      const handle = await startHttp({ vault: tempVault() }, { host: "127.0.0.1", port: 0 });
+      const held = await holdRequestOpen(handle);
+      const stderr: string[] = [];
+      const exits: number[] = [];
+      let settled: () => void = () => {};
+      const finished = new Promise<void>((resolve) => {
+        settled = resolve;
+      });
 
-    const installed = installMcpSignalDrain({
-      close: () => handle.close(),
-      stderr: { write: (chunk: string) => void stderr.push(chunk) },
-      exit: (code) => {
-        exits.push(code);
-        settled();
-      },
-    });
-    try {
-      process.kill(process.pid, "SIGTERM");
-      // A signal handler is a callback dispatched from the event loop, so
-      // it runs a turn or more after delivery (`src/cli/interrupt.ts`
-      // measures exactly this). The request is still open when it does,
-      // which is the point of the test.
-      await until(() => handle.drain.draining, "the signal handler to start a drain");
-      expect((await health(handle)).status).toBe(DRAIN_STATE.draining);
-      held.complete();
-      await finished;
+      const installed = installMcpSignalDrain({
+        close: () => handle.close(),
+        stderr: { write: (chunk: string) => void stderr.push(chunk) },
+        exit: (code) => {
+          exits.push(code);
+          settled();
+        },
+      });
+      try {
+        process.kill(process.pid, "SIGTERM");
+        // A signal handler is a callback dispatched from the event loop, so
+        // it runs a turn or more after delivery (`src/cli/interrupt.ts`
+        // measures exactly this). The request is still open when it does,
+        // which is the point of the test.
+        await until(() => handle.drain.draining, "the signal handler to start a drain");
+        expect((await health(handle)).status).toBe(DRAIN_STATE.draining);
+        held.complete();
+        await finished;
 
-      expect(exits).toEqual([EXIT_TERMINATED]);
-      expect(stderr.join("")).toContain("SIGTERM");
-    } finally {
-      installed.release();
-      held.socket.destroy();
-    }
-  });
+        expect(exits).toEqual([EXIT_TERMINATED]);
+        expect(stderr.join("")).toContain("SIGTERM");
+      } finally {
+        installed.release();
+        held.socket.destroy();
+      }
+    },
+  );
 });

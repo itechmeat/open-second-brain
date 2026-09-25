@@ -57,3 +57,27 @@ if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
   writeFileSync(configPath, `vault: ${vault}\n`);
   process.env["OPEN_SECOND_BRAIN_CONFIG"] = configPath;
 }
+
+// Windows keeps the per-user config/state/cache roots under
+// `%LOCALAPPDATA%` (and a few host-agent roots, e.g. Cursor's sessions,
+// under `%APPDATA%`) - see `src/core/platform-dirs.ts`. Suites isolate
+// themselves the POSIX way, by pointing HOME or XDG_* at a temp dir; on
+// Windows a HOME-only redirect leaves `%LOCALAPPDATA%` naming the
+// operator's REAL profile, and a test that mints a device id or an
+// installation secret writes it into the real
+// `%LOCALAPPDATA%\open-second-brain\config.yaml`. Redirecting both roots to
+// a throwaway directory for the whole process gives Windows the same
+// safe default the XDG layout gets from a temp HOME. A test that needs a
+// specific root still sets the variable itself.
+//
+// Like every override in this file, it reaches only this process and
+// children spawned with an explicit `env: { ...process.env }`: Bun hands a
+// child without one the environment the process started with.
+if (process.platform === "win32") {
+  const appRoot = mkdtempSync(join(tmpdir(), "osb-test-appdata-"));
+  for (const name of ["LOCALAPPDATA", "APPDATA"] as const) {
+    const dir = join(appRoot, name);
+    mkdirSync(dir, { recursive: true });
+    process.env[name] = dir;
+  }
+}

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { FileAlreadyExistsError } from "../../src/core/fs-atomic.ts";
 import {
@@ -36,42 +36,42 @@ afterEach(() => {
 describe("brainDirs", () => {
   test("composes the canonical Brain/ layout", () => {
     const dirs = brainDirs("/vault");
-    expect(dirs.brain).toBe(join("/vault", "Brain"));
-    expect(dirs.inbox).toBe(join("/vault", "Brain", "inbox"));
-    expect(dirs.processed).toBe(join("/vault", "Brain", "inbox", "processed"));
-    expect(dirs.preferences).toBe(join("/vault", "Brain", "preferences"));
-    expect(dirs.retired).toBe(join("/vault", "Brain", "retired"));
-    expect(dirs.log).toBe(join("/vault", "Brain", "log"));
-    expect(dirs.snapshots).toBe(join("/vault", "Brain", ".snapshots"));
+    expect(dirs.brain).toBe(join(resolve("/vault"), "Brain"));
+    expect(dirs.inbox).toBe(join(resolve("/vault"), "Brain", "inbox"));
+    expect(dirs.processed).toBe(join(resolve("/vault"), "Brain", "inbox", "processed"));
+    expect(dirs.preferences).toBe(join(resolve("/vault"), "Brain", "preferences"));
+    expect(dirs.retired).toBe(join(resolve("/vault"), "Brain", "retired"));
+    expect(dirs.log).toBe(join(resolve("/vault"), "Brain", "log"));
+    expect(dirs.snapshots).toBe(join(resolve("/vault"), "Brain", ".snapshots"));
   });
 });
 
 describe("path constructors", () => {
   test("brainConfigPath / brainManualPath", () => {
-    expect(brainConfigPath("/v")).toBe(join("/v", "Brain", "_brain.yaml"));
-    expect(brainManualPath("/v")).toBe(join("/v", "Brain", "_BRAIN.md"));
+    expect(brainConfigPath("/v")).toBe(join(resolve("/v"), "Brain", "_brain.yaml"));
+    expect(brainManualPath("/v")).toBe(join(resolve("/v"), "Brain", "_BRAIN.md"));
   });
 
   test("signalPath, processedSignalPath", () => {
     expect(signalPath("/v", "2026-05-14", "no-internal-abbrev")).toBe(
-      join("/v", "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"),
+      join(resolve("/v"), "Brain", "inbox", "sig-2026-05-14-no-internal-abbrev.md"),
     );
     expect(processedSignalPath("/v", "2026-05-14", "no-internal-abbrev")).toBe(
-      join("/v", "Brain", "inbox", "processed", "sig-2026-05-14-no-internal-abbrev.md"),
+      join(resolve("/v"), "Brain", "inbox", "processed", "sig-2026-05-14-no-internal-abbrev.md"),
     );
   });
 
   test("preferencePath / retiredPath / logPath / snapshotsDir / snapshotPath", () => {
     expect(preferencePath("/v", "no-internal-abbrev")).toBe(
-      join("/v", "Brain", "preferences", "pref-no-internal-abbrev.md"),
+      join(resolve("/v"), "Brain", "preferences", "pref-no-internal-abbrev.md"),
     );
     expect(retiredPath("/v", "no-internal-abbrev")).toBe(
-      join("/v", "Brain", "retired", "ret-no-internal-abbrev.md"),
+      join(resolve("/v"), "Brain", "retired", "ret-no-internal-abbrev.md"),
     );
-    expect(logPath("/v", "2026-05-14")).toBe(join("/v", "Brain", "log", "2026-05-14.md"));
-    expect(snapshotsDir("/v")).toBe(join("/v", "Brain", ".snapshots"));
+    expect(logPath("/v", "2026-05-14")).toBe(join(resolve("/v"), "Brain", "log", "2026-05-14.md"));
+    expect(snapshotsDir("/v")).toBe(join(resolve("/v"), "Brain", ".snapshots"));
     expect(snapshotPath("/v", "dream-2026-05-14-104200")).toBe(
-      join("/v", "Brain", ".snapshots", "dream-2026-05-14-104200.tar.zst"),
+      join(resolve("/v"), "Brain", ".snapshots", "dream-2026-05-14-104200.tar.zst"),
     );
   });
 
@@ -202,7 +202,7 @@ describe("path-safety", () => {
 
 describe("brainVaultRelative", () => {
   test("renders posix-style relative path", () => {
-    const abs = join("/vault", "Brain", "preferences", "pref-x.md");
+    const abs = join(resolve("/vault"), "Brain", "preferences", "pref-x.md");
     expect(brainVaultRelative(abs, "/vault")).toBe("Brain/preferences/pref-x.md");
   });
 });

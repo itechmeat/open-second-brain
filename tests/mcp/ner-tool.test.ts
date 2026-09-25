@@ -19,6 +19,7 @@ import { getEntity, listEntities } from "../../src/core/brain/entities/registry.
 import { NER_TOOLS } from "../../src/mcp/brain/ner-tools.ts";
 import { MCPError } from "../../src/mcp/protocol.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -47,7 +48,6 @@ afterEach(() => {
 
 /** A directory this vault denies itself, so `stat` answers with an errno. */
 const LOCKED_DIR = "Locked";
-const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 const handler = NER_TOOLS[0]!.handler;
 
@@ -121,7 +121,8 @@ describe("brain_intake_entities", () => {
    * queried with a string the caller chose. The refusal is right; the
    * operator's path in the answer is not.
    */
-  test.skipIf(RUNNING_AS_ROOT)("an unreadable source fails without naming a path", async () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable source fails without naming a path", async () => {
     const locked = join(vault, LOCKED_DIR);
     mkdirSync(locked, { recursive: true });
     writeFileSync(join(locked, "note.md"), "bytes\n", "utf8");

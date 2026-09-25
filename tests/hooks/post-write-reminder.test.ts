@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -30,6 +30,10 @@ async function runHook(payload: unknown): Promise<RunResult> {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    // Bun hands a child without `env` the environment this process STARTED
+    // with, not the live `process.env`: pass it so the child sees the
+    // throwaway config tests/setup.ts installs, not the operator's real one.
+    env: { ...process.env },
   });
   proc.stdin.write(JSON.stringify(payload));
   await proc.stdin.end();
@@ -109,6 +113,10 @@ describe("post-write-reminder hook", () => {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
+      // Bun hands a child without `env` the environment this process STARTED
+      // with, not the live `process.env`: pass it so the child sees the
+      // throwaway config tests/setup.ts installs, not the operator's real one.
+      env: { ...process.env },
     });
     await proc.stdin.end();
     const stdout = await new Response(proc.stdout).text();
@@ -242,7 +250,12 @@ describe("post-write-reminder session cadence", () => {
   });
 
   test("unwritable state dir fails soft to the full reminder", async () => {
-    const env = { O2B_REMINDER_STATE_DIR: "/proc/definitely-not-writable/x" };
+    // A state dir nested under a regular file cannot be created on any
+    // platform (ENOTDIR); `/proc/...` was only unwritable on Linux, and on
+    // Windows it resolved to a real, writable `C:\proc`.
+    const blocker = join(tmp, "not-a-dir");
+    writeFileSync(blocker, "");
+    const env = { O2B_REMINDER_STATE_DIR: join(blocker, "x") };
     const r = await runHookEnv(claudePayload("/tmp/a.md"), env);
     expect(r.exit).toBe(0);
     const text = JSON.parse(r.stdout).hookSpecificOutput.additionalContext as string;

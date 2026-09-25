@@ -167,7 +167,8 @@ function brainDigest(vault: string): string {
 
 /** One summary as JSON, with the vault's own root elided. */
 function withoutVaultRoot(summary: unknown, vault: string): string {
-  return JSON.stringify(summary).replaceAll(vault, "<vault>");
+  // Match the root as JSON spells it: on Windows its backslashes are escaped.
+  return JSON.stringify(summary).replaceAll(JSON.stringify(vault).slice(1, -1), "<vault>");
 }
 
 test("with no threshold the gate reports itself absent and admits every fact", () => {

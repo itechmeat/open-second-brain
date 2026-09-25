@@ -41,7 +41,7 @@ test("fresh migration reaches v3 and links carries a relation column", () => {
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   // The relation column lands at v3 and persists through later versions.
   expect(linksColumns(db)).toContain("relation");
-  db.close();
+  db.close(true);
 });
 
 test("applyMigrations is idempotent at the latest version", () => {
@@ -50,7 +50,7 @@ test("applyMigrations is idempotent at the latest version", () => {
   // Re-running must not throw and must not double-add the column.
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(linksColumns(db).filter((c) => c === "relation")).toHaveLength(1);
-  db.close();
+  db.close(true);
 });
 
 test("a v2 index upgrades to v3, adding relation and preserving link rows", () => {
@@ -80,5 +80,5 @@ test("a v2 index upgrades to v3, adding relation and preserving link rows", () =
     .get();
   expect(row?.c).toBe(1);
   expect(row?.relation).toBeNull();
-  db.close();
+  db.close(true);
 });

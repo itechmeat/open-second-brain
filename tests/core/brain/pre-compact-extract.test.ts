@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { extractPreCompactRecords } from "../../../src/core/brain/pre-compact-extract.ts";
@@ -151,7 +152,7 @@ describe("the label recognizer is structural, not a natural-language word list",
 
   test("the module carries no natural-language word list", async () => {
     const source = await Bun.file(
-      new URL("../../../src/core/brain/pre-compact-extract.ts", import.meta.url).pathname,
+      fileURLToPath(new URL("../../../src/core/brain/pre-compact-extract.ts", import.meta.url)),
     ).text();
     // The shared census lexer. `withoutComments`, not `code`: a word list
     // would be written as string literals, and the code view would blank

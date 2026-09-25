@@ -51,7 +51,9 @@ describe("procedural graph projection", () => {
 
   test("returns null when projection file does not exist", () => {
     expect(readProceduralGraph(vault)).toBeNull();
-    expect(proceduralGraphPath(vault).endsWith("Brain/procedural-memory/graph.json")).toBe(true);
+    expect(
+      proceduralGraphPath(vault).endsWith(join("Brain", "procedural-memory", "graph.json")),
+    ).toBe(true);
   });
 });
 

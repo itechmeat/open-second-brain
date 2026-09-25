@@ -59,7 +59,9 @@ async function runShim(env: Record<string, string>): Promise<string> {
   return match ? match[1]! : "";
 }
 
-describe("_macos-sqlite.sh", () => {
+// Sources a bash script; native Windows has no such shell, and the shim only
+// ever runs on macOS hosts anyway.
+describe.skipIf(process.platform === "win32")("_macos-sqlite.sh", () => {
   test("Linux platform → no DYLD_LIBRARY_PATH export", async () => {
     const out = await runShim({ O2B_MACOS_FORCE_PLATFORM: "Linux" });
     expect(out).toBe("");

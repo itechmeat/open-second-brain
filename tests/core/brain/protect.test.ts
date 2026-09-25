@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import {
   applyProtect,
   BrainProtectError,
   buildProtectRules,
+  claudeCodeRulePath,
   printSnippet,
   PROTECT_SCHEMA_VERSION,
   readManifest,
@@ -17,6 +18,30 @@ import {
 } from "../../../src/core/brain/protect.ts";
 
 const tmpRoots: string[] = [];
+
+/**
+ * The rules carry the vault's ABSOLUTE path with forward slashes on every
+ * host (both permission matchers want POSIX-shaped paths), so a POSIX
+ * literal like `/vault` resolves to `C:/vault` on Windows. Expected values
+ * are derived the same way instead of being hardcoded.
+ */
+function abs(p: string): string {
+  return resolve(p).replaceAll("\\", "/");
+}
+const V = abs("/vault");
+const VS = abs("/v");
+
+/**
+ * The same absolute path as a Claude Code permission rule spells it:
+ * `//` anchors at the filesystem root (a single `/` would anchor at the
+ * project), and on Windows the drive becomes a lower-case POSIX segment
+ * (`C:/vault` -> `//c/vault`). Spelled out independently of the helper
+ * under test.
+ */
+function cc(absPosix: string): string {
+  const drive = /^([A-Za-z]):\/(.*)$/.exec(absPosix);
+  return drive ? `//${drive[1]!.toLowerCase()}/${drive[2]}` : `/${absPosix}`;
+}
 
 function mkVault(): string {
   const dir = mkdtempSync(join(tmpdir(), "osb-protect-"));
@@ -49,13 +74,13 @@ describe("buildProtectRules", () => {
     expect(rules[0]).toEqual({
       kind: "deny",
       action: "Write",
-      path: "/vault/Brain/preferences/**",
+      path: `${V}/Brain/preferences/**`,
     });
     const last = rules[rules.length - 1];
     expect(last).toEqual({
       kind: "allow",
       action: "Write",
-      path: "/vault/Brain/inbox/**",
+      path: `${V}/Brain/inbox/**`,
     });
   });
 
@@ -65,11 +90,11 @@ describe("buildProtectRules", () => {
       new Set(rules.filter((r) => r.kind === "deny").map((r) => r.path)),
     ).toSorted();
     expect(denyPaths).toEqual([
-      "/v/Brain/.snapshots/**",
-      "/v/Brain/_brain.yaml",
-      "/v/Brain/log/**",
-      "/v/Brain/preferences/**",
-      "/v/Brain/retired/**",
+      `${VS}/Brain/.snapshots/**`,
+      `${VS}/Brain/_brain.yaml`,
+      `${VS}/Brain/log/**`,
+      `${VS}/Brain/preferences/**`,
+      `${VS}/Brain/retired/**`,
     ]);
   });
 });
@@ -78,14 +103,53 @@ describe("renderClaudeCode", () => {
   test("emits a snippet with deny + allow arrays and a manifest", () => {
     const rules = buildProtectRules("/vault");
     const out = renderClaudeCode(rules, "/vault");
-    expect(out.snippet.permissions.deny).toContain("Write(/vault/Brain/preferences/**)");
-    expect(out.snippet.permissions.deny).toContain("Edit(/vault/Brain/preferences/**)");
-    expect(out.snippet.permissions.allow).toEqual(["Write(/vault/Brain/inbox/**)"]);
+    expect(out.snippet.permissions.deny).toContain(`Write(${cc(V)}/Brain/preferences/**)`);
+    expect(out.snippet.permissions.deny).toContain(`Edit(${cc(V)}/Brain/preferences/**)`);
+    expect(out.snippet.permissions.allow).toEqual([`Write(${cc(V)}/Brain/inbox/**)`]);
     expect(out.manifest.schema_version).toBe(PROTECT_SCHEMA_VERSION);
     expect(out.manifest.target).toBe("claudecode");
     expect(out.manifest.vault).toBe("/vault");
     expect(out.manifest.owned_deny).toHaveLength(10);
-    expect(out.manifest.owned_allow).toEqual(["Write(/vault/Brain/inbox/**)"]);
+    expect(out.manifest.owned_allow).toEqual([`Write(${cc(V)}/Brain/inbox/**)`]);
+  });
+});
+
+describe("claudeCodeRulePath", () => {
+  // Claude Code permissions docs (code.claude.com/docs/en/permissions):
+  // "`//path` | Absolute path from filesystem root" and "On Windows, paths
+  // are normalized to POSIX form before matching. `C:\Users\alice`
+  // becomes `/c/Users/alice`, so use `//c/**/.env` ...".
+  test("win32: a drive path becomes //<lower-case drive>/...", () => {
+    expect(claudeCodeRulePath("C:/vault/Brain/log/**", "win32")).toBe("//c/vault/Brain/log/**");
+    expect(claudeCodeRulePath("d:/Users/me/Brain/_brain.yaml", "win32")).toBe(
+      "//d/Users/me/Brain/_brain.yaml",
+    );
+  });
+
+  test("POSIX: an absolute path gains the second root slash", () => {
+    // `/home/me/vault/...` alone would anchor at the project directory.
+    expect(claudeCodeRulePath("/home/me/vault/Brain/log/**", "linux")).toBe(
+      "//home/me/vault/Brain/log/**",
+    );
+    expect(claudeCodeRulePath("/Users/me/vault/Brain/log/**", "darwin")).toBe(
+      "//Users/me/vault/Brain/log/**",
+    );
+  });
+
+  test("an already filesystem-absolute path is left alone", () => {
+    expect(claudeCodeRulePath("//server/share/Brain/**", "win32")).toBe("//server/share/Brain/**");
+    expect(claudeCodeRulePath("//srv/Brain/**", "linux")).toBe("//srv/Brain/**");
+  });
+
+  test("renderClaudeCode emits the win32 form for a Windows vault", () => {
+    const rules = buildProtectRules("C:\\vault").map((r) => ({
+      ...r,
+      path: r.path.replace(/^.*?\/Brain\//, "C:/vault/Brain/"),
+    }));
+    const out = renderClaudeCode(rules, "C:\\vault", "win32");
+    expect(out.snippet.permissions.deny).toContain("Write(//c/vault/Brain/preferences/**)");
+    expect(out.snippet.permissions.deny).toContain("Edit(//c/vault/Brain/_brain.yaml)");
+    expect(out.snippet.permissions.allow).toEqual(["Write(//c/vault/Brain/inbox/**)"]);
   });
 });
 
@@ -96,8 +160,8 @@ describe("renderCodex", () => {
     expect(out.body).toContain("# >>> open-second-brain managed >>>");
     expect(out.body).toContain("# <<< open-second-brain managed <<<");
     expect(out.body).toContain("[permissions.osb_protected.filesystem]");
-    expect(out.body).toContain('"/vault/Brain/preferences/**" = "none"');
-    expect(out.body).toContain('"/vault/Brain/inbox/**" = "write"');
+    expect(out.body).toContain(`"${V}/Brain/preferences/**" = "none"`);
+    expect(out.body).toContain(`"${V}/Brain/inbox/**" = "write"`);
     expect(out.body).toContain('default_permissions = "osb_protected"');
     expect(out.body).toContain(`schema_version = ${PROTECT_SCHEMA_VERSION}`);
   });
@@ -151,7 +215,7 @@ describe("applyProtect claudecode", () => {
     const r = applyProtect({ target: "claudecode", vault });
     expect(r.changed).toBe(true);
     const settings = JSON.parse(readFileSync(join(vault, ".claude", "settings.json"), "utf8"));
-    expect(settings.permissions.deny).toContain(`Write(${vault}/Brain/preferences/**)`);
+    expect(settings.permissions.deny).toContain(`Write(${cc(abs(vault))}/Brain/preferences/**)`);
   });
 
   test("idempotent: second apply produces byte-identical settings", () => {
@@ -173,7 +237,7 @@ describe("applyProtect claudecode", () => {
     applyProtect({ target: "claudecode", vault });
     const settings = JSON.parse(readFileSync(join(vault, ".claude", "settings.json"), "utf8"));
     expect(settings.permissions.deny).toContain("Bash(rm -rf /)");
-    expect(settings.permissions.deny).toContain(`Write(${vault}/Brain/preferences/**)`);
+    expect(settings.permissions.deny).toContain(`Write(${cc(abs(vault))}/Brain/preferences/**)`);
   });
 
   test("apply against unbootstrapped vault throws", () => {
@@ -213,7 +277,7 @@ describe("applyProtect codex", () => {
     const config = readFileSync(join(home, ".codex", "config.toml"), "utf8");
     expect(config).toContain("# >>> open-second-brain managed >>>");
     expect(config).toContain("[permissions.osb_protected.filesystem]");
-    expect(config).toContain(`"${vault}/Brain/preferences/**" = "none"`);
+    expect(config).toContain(`"${abs(vault)}/Brain/preferences/**" = "none"`);
   });
 
   test("idempotent on Codex too", () => {
@@ -271,8 +335,8 @@ describe("applyProtect codex", () => {
     applyProtect({ target: "codex", vault: vaultB, __homeOverride: home });
 
     const config = readFileSync(join(home, ".codex", "config.toml"), "utf8");
-    expect(config).toContain(`"${vaultA}/Brain/preferences/**" = "none"`);
-    expect(config).toContain(`"${vaultB}/Brain/preferences/**" = "none"`);
+    expect(config).toContain(`"${abs(vaultA)}/Brain/preferences/**" = "none"`);
+    expect(config).toContain(`"${abs(vaultB)}/Brain/preferences/**" = "none"`);
   });
 });
 
@@ -298,8 +362,8 @@ describe("unprotect codex", () => {
 
     unprotect({ target: "codex", vault: vaultA, __homeOverride: home });
     const after = readFileSync(join(home, ".codex", "config.toml"), "utf8");
-    expect(after).not.toContain(`${vaultA}/Brain/preferences/**`);
-    expect(after).toContain(`${vaultB}/Brain/preferences/**`);
+    expect(after).not.toContain(`${abs(vaultA)}/Brain/preferences/**`);
+    expect(after).toContain(`${abs(vaultB)}/Brain/preferences/**`);
     expect(after).toContain("# >>> open-second-brain managed >>>");
   });
 });
@@ -307,7 +371,7 @@ describe("unprotect codex", () => {
 describe("printSnippet", () => {
   test("claudecode prints the JSON shape (no manifest)", () => {
     const out = printSnippet({ target: "claudecode", vault: "/v" });
-    expect(out.body).toContain('"Write(/v/Brain/preferences/**)"');
+    expect(out.body).toContain(`"Write(${cc(VS)}/Brain/preferences/**)"`);
     expect(out.body).toContain("permissions");
     // Manifest fields stay internal — `--print` shows only the
     // file-shaped snippet a user would paste.

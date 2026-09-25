@@ -45,7 +45,7 @@ test("fresh migration reaches latest with the authored_at column", () => {
   const db = new Database(dbPath);
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasColumn(db, "documents", "authored_at")).toBe(true);
-  db.close();
+  db.close(true);
 });
 
 test("a v9 index upgrades to v10 and preserves existing rows (authored_at NULL)", () => {
@@ -68,5 +68,5 @@ test("a v9 index upgrades to v10 and preserves existing rows (authored_at NULL)"
     )
     .get();
   expect(row).toEqual({ id: 1, authored_at: null });
-  db.close();
+  db.close(true);
 });

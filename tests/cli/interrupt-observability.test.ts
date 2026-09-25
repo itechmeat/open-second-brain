@@ -59,7 +59,14 @@ async function runDriver(body: string): Promise<DriverResult> {
   try {
     const file = join(dir, "driver.ts");
     writeFileSync(file, body, "utf8");
-    const proc = Bun.spawn(["bun", "run", file], { stdout: "pipe", stderr: "pipe" });
+    const proc = Bun.spawn(["bun", "run", file], {
+      stdout: "pipe",
+      stderr: "pipe",
+      // Bun hands a child without `env` the environment this process STARTED
+      // with, not the live `process.env`: pass it so the child sees the
+      // throwaway config tests/setup.ts installs, not the operator's real one.
+      env: { ...process.env },
+    });
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -77,13 +84,16 @@ async function runDriver(body: string): Promise<DriverResult> {
 }
 
 describe("the platform fact the rules rest on", () => {
-  test("a delivered SIGINT is invisible to a fully synchronous checkpoint loop", async () => {
-    // `dreamRun`, `detectCommunitiesRun`, `discoverBridgesRun` and
-    // `generateRun` are all declared `function`, not `async`, and contain
-    // no `await`. This drives production `onInterrupt` and production
-    // `createSafeguard` through exactly that shape, with a real signal
-    // pending for most of it, and records what the checkpoint saw.
-    const result = await runDriver(`
+  // Needs a real POSIX SIGINT delivered by `kill -INT`; Windows has no such signal delivery.
+  test.skipIf(process.platform === "win32")(
+    "a delivered SIGINT is invisible to a fully synchronous checkpoint loop",
+    async () => {
+      // `dreamRun`, `detectCommunitiesRun`, `discoverBridgesRun` and
+      // `generateRun` are all declared `function`, not `async`, and contain
+      // no `await`. This drives production `onInterrupt` and production
+      // `createSafeguard` through exactly that shape, with a real signal
+      // pending for most of it, and records what the checkpoint saw.
+      const result = await runDriver(`
       import { onInterrupt } from ${JSON.stringify(join(SRC, "cli", "interrupt.ts"))};
       import { createSafeguard, SafeguardAbortError, OPERATION } from ${JSON.stringify(join(SRC, "core", "brain", "safeguard.ts"))};
 
@@ -105,16 +115,18 @@ describe("the platform fact the rules rest on", () => {
       interrupt.acknowledge();
       interrupt.release();
     `);
-    const seen = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
-    // Millions of checkpoints, every one of them past the moment the key
-    // was pressed, and not one of them saw it.
-    expect(seen["checkpoints"]).toBeGreaterThan(100_000);
-    expect(seen["stoppedByCtrlC"]).toBe(false);
-    expect(seen["duringRun"]).toBeNull();
-    // And it was never in doubt that the signal arrived: one turn of the
-    // event loop later, it is there.
-    expect(seen["afterOneEventLoopTurn"]).toBe("SIGINT");
-  }, 30_000);
+      const seen = JSON.parse(result.stdout.trim()) as Record<string, unknown>;
+      // Millions of checkpoints, every one of them past the moment the key
+      // was pressed, and not one of them saw it.
+      expect(seen["checkpoints"]).toBeGreaterThan(100_000);
+      expect(seen["stoppedByCtrlC"]).toBe(false);
+      expect(seen["duringRun"]).toBeNull();
+      // And it was never in doubt that the signal arrived: one turn of the
+      // event loop later, it is there.
+      expect(seen["afterOneEventLoopTurn"]).toBe("SIGINT");
+    },
+    30_000,
+  );
 });
 
 describe("a handle is opened only where the operation can observe it", () => {
@@ -202,12 +214,15 @@ describe("a verb that cannot observe the signal leaves it alone", () => {
 });
 
 describe("an interrupt nobody acted on still ends the run", () => {
-  test("release re-raises a signal the operation never observed", async () => {
-    // The window every one of the six verbs leaves open: `Store.open`, a
-    // proposal write, a report render - work inside the handle's lifetime
-    // that never consults the signal. Before this rule the controller
-    // aborted, nobody read it, and the verb returned 0.
-    const result = await runDriver(`
+  // Needs a real POSIX SIGINT delivered by `kill -INT`; Windows has no such signal delivery.
+  test.skipIf(process.platform === "win32")(
+    "release re-raises a signal the operation never observed",
+    async () => {
+      // The window every one of the six verbs leaves open: `Store.open`, a
+      // proposal write, a report render - work inside the handle's lifetime
+      // that never consults the signal. Before this rule the controller
+      // aborted, nobody read it, and the verb returned 0.
+      const result = await runDriver(`
       import { onInterrupt } from ${JSON.stringify(join(SRC, "cli", "interrupt.ts"))};
       import { OPERATION } from ${JSON.stringify(join(SRC, "core", "brain", "safeguard.ts"))};
 
@@ -222,20 +237,25 @@ describe("an interrupt nobody acted on still ends the run", () => {
       console.log("UNREACHABLE: the verb returned normally");
       process.exit(0);
     `);
-    expect(result.stdout).toContain("without ever reading the signal");
-    expect(result.stdout).not.toContain("UNREACHABLE");
-    expect(result.stderr).toContain("interrupted");
-    // The keystroke's own code, so a shell and a parent process read it
-    // the way they read any other Ctrl-C. Asserted as the code rather
-    // than as `signalCode`: Bun's default SIGINT disposition surfaces to
-    // a parent as `exitCode: 130, signalCode: null` where a re-raise under
-    // Node's would surface as the signal. What must hold is the number a
-    // caller gates on, and that it is not 0.
-    expect(result.code).toBe(130);
-  }, 30_000);
+      expect(result.stdout).toContain("without ever reading the signal");
+      expect(result.stdout).not.toContain("UNREACHABLE");
+      expect(result.stderr).toContain("interrupted");
+      // The keystroke's own code, so a shell and a parent process read it
+      // the way they read any other Ctrl-C. Asserted as the code rather
+      // than as `signalCode`: Bun's default SIGINT disposition surfaces to
+      // a parent as `exitCode: 130, signalCode: null` where a re-raise under
+      // Node's would surface as the signal. What must hold is the number a
+      // caller gates on, and that it is not 0.
+      expect(result.code).toBe(130);
+    },
+    30_000,
+  );
 
-  test("an acknowledged interrupt lets the verb report its own exit code", async () => {
-    const result = await runDriver(`
+  // Needs a real POSIX SIGINT delivered by `kill -INT`; Windows has no such signal delivery.
+  test.skipIf(process.platform === "win32")(
+    "an acknowledged interrupt lets the verb report its own exit code",
+    async () => {
+      const result = await runDriver(`
       import { onInterrupt, reportInterrupted, EXIT_INTERRUPTED } from ${JSON.stringify(join(SRC, "cli", "interrupt.ts"))};
       import { OPERATION, SafeguardAbortError } from ${JSON.stringify(join(SRC, "core", "brain", "safeguard.ts"))};
 
@@ -253,13 +273,15 @@ describe("an interrupt nobody acted on still ends the run", () => {
       console.log("verb returned " + code);
       process.exit(code);
     `);
-    // Reported, not re-raised: the verb's own answer stands, and the line
-    // after `reportInterrupted` still runs - which is the whole difference
-    // from the unacknowledged case above.
-    expect(result.stdout).toContain("verb returned 130");
-    expect(result.stderr).not.toContain("stopping now");
-    expect(result.code).toBe(130);
-  }, 30_000);
+      // Reported, not re-raised: the verb's own answer stands, and the line
+      // after `reportInterrupted` still runs - which is the whole difference
+      // from the unacknowledged case above.
+      expect(result.stdout).toContain("verb returned 130");
+      expect(result.stderr).not.toContain("stopping now");
+      expect(result.code).toBe(130);
+    },
+    30_000,
+  );
 
   test("a run nobody interrupted releases silently and exits 0", async () => {
     const result = await runDriver(`

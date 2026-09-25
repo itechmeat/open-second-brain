@@ -28,6 +28,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
+import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 // Every test here spawns `o2b`, and a test that overruns leaves its spawn
 // running past `afterEach`: the late `chmod` in `withUnreadableConfig`
@@ -69,7 +70,7 @@ async function runO2b(args: string[], env: Record<string, string> = {}): Promise
     stderr: "pipe",
     env: {
       PATH: process.env["PATH"] ?? "",
-      HOME: tmp,
+      ...homeEnv(tmp),
       OPEN_SECOND_BRAIN_CONFIG: configPath,
       ...env,
     },
@@ -118,77 +119,84 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("an unreadable plugin config is a named refusal, not a crash", () => {
-  /**
-   * `doctor` is the worst case and the reason this matters: its whole job
-   * is diagnosing this condition, and it can - see the companion test
-   * below. Only the unhandled raise on the way in destroyed the report.
-   */
-  test("doctor refuses by name instead of printing a stack", async () => {
-    const result = await withUnreadableConfig(["doctor"]);
-    expectFormattedRefusal(result);
-  });
-
-  test("status refuses by name instead of printing a stack", async () => {
-    const result = await withUnreadableConfig(["status"]);
-    expectFormattedRefusal(result);
-  });
-
-  test("secrets list refuses by name instead of printing a stack", async () => {
-    const result = await withUnreadableConfig(["secrets", "list"]);
-    expectFormattedRefusal(result);
-  });
-
-  test("export-config refuses by name instead of printing a stack", async () => {
-    const result = await withUnreadableConfig([
-      "export-config",
-      "--output",
-      join(tmp, "exported.json"),
-    ]);
-    expectFormattedRefusal(result);
-  });
-
-  /**
-   * The refusal is not merely formatted, it is actionable: it says the file
-   * is present (so its settings are NOT in force and were not read as
-   * absent) and names both ways out.
-   */
-  test("the refusal names the remedy, not only the failure", async () => {
-    const result = await withUnreadableConfig(["doctor"]);
-    expect(result.stderr).toContain("OPEN_SECOND_BRAIN_CONFIG");
-    expect(result.stderr).toContain("chmod");
-  });
-
-  /**
-   * The exit code is the environment-error code, matching `no vault
-   * configured` - a broken config file is a fact about the machine, not a
-   * mistake in the argv. 2 stays reserved for usage errors.
-   */
-  test("the exit code is the environment-error code, not the usage one", async () => {
-    const broken = await withUnreadableConfig(["doctor"]);
-    const noVault = await runO2b(["doctor"], {
-      OPEN_SECOND_BRAIN_CONFIG: join(tmp, "absent.yaml"),
+// The unreadable config is built with chmod 000, which root and Windows
+// both read straight through (see tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)(
+  "an unreadable plugin config is a named refusal, not a crash",
+  () => {
+    /**
+     * `doctor` is the worst case and the reason this matters: its whole job
+     * is diagnosing this condition, and it can - see the companion test
+     * below. Only the unhandled raise on the way in destroyed the report.
+     */
+    test("doctor refuses by name instead of printing a stack", async () => {
+      const result = await withUnreadableConfig(["doctor"]);
+      expectFormattedRefusal(result);
     });
-    const usage = await runO2b(["completions", "not-a-shell"]);
-    expect(broken.exit).toBe(noVault.exit);
-    expect(usage.exit).toBe(2);
-  });
 
-  /**
-   * The diagnosis the crash destroyed. With the vault supplied explicitly
-   * nothing resolves through the broken file on the way in, and `doctor`
-   * reports the condition as a check with a fix line - which is what the
-   * refusal above now points the operator at.
-   */
-  test("doctor --vault still diagnoses the same file as a failed check", async () => {
-    const result = await withUnreadableConfig(["doctor", "--vault", vault]);
-    expect(result.stdout).toContain("[FAIL] config_writeable");
-    expect(result.stdout).toContain(configPath);
-    expect(result.stdout).toContain("fix:");
-  });
-});
+    test("status refuses by name instead of printing a stack", async () => {
+      const result = await withUnreadableConfig(["status"]);
+      expectFormattedRefusal(result);
+    });
 
-describe("machine consumers get JSON, never empty stdout", () => {
+    test("secrets list refuses by name instead of printing a stack", async () => {
+      const result = await withUnreadableConfig(["secrets", "list"]);
+      expectFormattedRefusal(result);
+    });
+
+    test("export-config refuses by name instead of printing a stack", async () => {
+      const result = await withUnreadableConfig([
+        "export-config",
+        "--output",
+        join(tmp, "exported.json"),
+      ]);
+      expectFormattedRefusal(result);
+    });
+
+    /**
+     * The refusal is not merely formatted, it is actionable: it says the file
+     * is present (so its settings are NOT in force and were not read as
+     * absent) and names both ways out.
+     */
+    test("the refusal names the remedy, not only the failure", async () => {
+      const result = await withUnreadableConfig(["doctor"]);
+      expect(result.stderr).toContain("OPEN_SECOND_BRAIN_CONFIG");
+      expect(result.stderr).toContain("chmod");
+    });
+
+    /**
+     * The exit code is the environment-error code, matching `no vault
+     * configured` - a broken config file is a fact about the machine, not a
+     * mistake in the argv. 2 stays reserved for usage errors.
+     */
+    test("the exit code is the environment-error code, not the usage one", async () => {
+      const broken = await withUnreadableConfig(["doctor"]);
+      const noVault = await runO2b(["doctor"], {
+        OPEN_SECOND_BRAIN_CONFIG: join(tmp, "absent.yaml"),
+      });
+      const usage = await runO2b(["completions", "not-a-shell"]);
+      expect(broken.exit).toBe(noVault.exit);
+      expect(usage.exit).toBe(2);
+    });
+
+    /**
+     * The diagnosis the crash destroyed. With the vault supplied explicitly
+     * nothing resolves through the broken file on the way in, and `doctor`
+     * reports the condition as a check with a fix line - which is what the
+     * refusal above now points the operator at.
+     */
+    test("doctor --vault still diagnoses the same file as a failed check", async () => {
+      const result = await withUnreadableConfig(["doctor", "--vault", vault]);
+      expect(result.stdout).toContain("[FAIL] config_writeable");
+      expect(result.stdout).toContain(configPath);
+      expect(result.stdout).toContain("fix:");
+    });
+  },
+);
+
+// The unreadable config is built with chmod 000, which root and Windows
+// both read straight through (see tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)("machine consumers get JSON, never empty stdout", () => {
   /**
    * `status --json` renders its own payload, so it is never wrapped in the
    * `withJsonFallback` envelope: without a handler of its own a consumer
@@ -227,7 +235,9 @@ describe("machine consumers get JSON, never empty stdout", () => {
  * is minting a fresh device id and persisting it over a config we could
  * not read - and the operator has to be able to see why.
  */
-describe("identity resolution surfaces the same file, actionably", () => {
+// The unreadable config is built with chmod 000, which root and Windows
+// both read straight through (see tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)("identity resolution surfaces the same file, actionably", () => {
   test("brain truth ingest names the unreadable config and exits non-zero", async () => {
     const result = await withUnreadableConfig(
       [

@@ -27,7 +27,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { Writable } from "node:stream";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
@@ -429,7 +429,9 @@ describe("view=hosts", () => {
       const details = (entry["details"] as string[]).join("; ");
       // Staged, so the sentence names a file: the assertion below is
       // about WHICH form that name takes, not about its absence.
-      expect(details).toContain(`${FOLDED_HOME}/.codex/`);
+      // The folded name keeps the host separator (`~\\.codex\\` on Windows):
+      // only the home prefix is rewritten.
+      expect(details).toContain(`${FOLDED_HOME}${sep}.codex${sep}`);
       expect(details).not.toContain(home);
     } finally {
       resetHostProbeRunner();
@@ -467,7 +469,7 @@ describe("view=hosts", () => {
       const entry = hostWiringEntry(codexAdapter.verify(installEnv), home, {
         configPath: sandbox.configPath,
       });
-      expect((entry["details"] as string[]).join("; ")).toContain(`${home}/.codex/`);
+      expect((entry["details"] as string[]).join("; ")).toContain(`${home}${sep}.codex${sep}`);
     } finally {
       // `afterEach` restores EXPOSE_ENV from the snapshot; the runners
       // are process-global and have no snapshot, so they reset here.

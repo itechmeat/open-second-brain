@@ -135,22 +135,30 @@ describe("a caller-named path is read with this host's separator only", () => {
   // result renderer rewrote it to `/`, and the Brain-root and vault-scope
   // checks treated it as literal. The envelope refuses the path rather
   // than picking one reading.
-  for (const [label, path] of [
-    ["a backslash inside a segment", "Projects\\evil.md"],
-    ["a backslash traversal", "Projects\\..\\..\\..\\etc\\x.md"],
-    ["a backslash-hidden Brain root", "Brain\\x.md"],
+  //
+  // On Windows the backslash IS the host separator, so the ambiguity does
+  // not exist: `Projects\evil.md` has one reading (a note under Projects)
+  // and `Brain\x.md` is refused as the Brain root it plainly names. Only
+  // the traversal case keeps the same answer there.
+  for (const [label, path, windowsToo] of [
+    ["a backslash inside a segment", "Projects\\evil.md", false],
+    ["a backslash traversal", "Projects\\..\\..\\..\\etc\\x.md", true],
+    ["a backslash-hidden Brain root", "Brain\\x.md", false],
   ] as const) {
-    test(`${label} is refused, not reinterpreted`, () => {
-      let caught: CreateNoteError | null = null;
-      try {
-        createNote(vault, { path, content: "x" });
-      } catch (err) {
-        caught = err as CreateNoteError;
-      }
-      expect(caught).toBeInstanceOf(CreateNoteError);
-      expect(caught!.code).toBe("invalid_path");
-      expect(readdirSync(vault)).toEqual([]);
-    });
+    test.skipIf(process.platform === "win32" && !windowsToo)(
+      `${label} is refused, not reinterpreted`,
+      () => {
+        let caught: CreateNoteError | null = null;
+        try {
+          createNote(vault, { path, content: "x" });
+        } catch (err) {
+          caught = err as CreateNoteError;
+        }
+        expect(caught).toBeInstanceOf(CreateNoteError);
+        expect(caught!.code).toBe("invalid_path");
+        expect(readdirSync(vault)).toEqual([]);
+      },
+    );
   }
 
   test("a POSIX path with the same segments is still created", () => {

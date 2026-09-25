@@ -12,7 +12,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createHmac } from "node:crypto";
+import { join, resolve } from "node:path";
 
 import {
   INSTALLATION_SECRET_ENV_KEY,
@@ -112,11 +113,24 @@ describe("vaultStoreReference (keyed HMAC)", () => {
     );
   });
 
+  /**
+   * The pinned digest is HMAC over the POSIX absolute path `/tmp/vault-kat`.
+   * On Windows `resolve()` turns that into `<drive>:\tmp\vault-kat`, a
+   * different (and drive-dependent) input, so there the expectation is the
+   * same recipe computed over the host's absolute form: still a known answer
+   * for the recipe, just not a byte-pinned constant.
+   */
+  const KAT_REF =
+    process.platform === "win32"
+      ? `vault://${createHmac("sha256", "0123456789abcdef0123456789abcdef")
+          .update(resolve("/tmp/vault-kat"))
+          .digest("hex")
+          .slice(0, 32)}`
+      : "vault://c8bef611f8e689165309bdecffb0f292";
+
   test("known-answer: HMAC-SHA256(secret, abs path) with an injected key", () => {
     process.env[INSTALLATION_SECRET_ENV_KEY] = "0123456789abcdef0123456789abcdef";
-    expect(vaultStoreReference("/tmp/vault-kat", configPath)).toBe(
-      "vault://c8bef611f8e689165309bdecffb0f292",
-    );
+    expect(vaultStoreReference("/tmp/vault-kat", configPath)).toBe(KAT_REF);
   });
 
   test("reference does not depend on device id (device_id opt-out cannot weaken it)", () => {
@@ -126,6 +140,6 @@ describe("vaultStoreReference (keyed HMAC)", () => {
     process.env["O2B_DEVICE_ID"] = "abcd1234";
     const withRealDevice = vaultStoreReference("/tmp/vault-kat", configPath);
     expect(withEmptyDevice).toBe(withRealDevice);
-    expect(withEmptyDevice).toBe("vault://c8bef611f8e689165309bdecffb0f292");
+    expect(withEmptyDevice).toBe(KAT_REF);
   });
 });

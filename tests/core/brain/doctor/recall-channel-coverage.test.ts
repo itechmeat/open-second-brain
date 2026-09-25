@@ -34,6 +34,7 @@ import {
 } from "../../../../src/core/brain/recall-telemetry.ts";
 import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -164,7 +165,8 @@ describe("recall channel coverage", () => {
     expect(result.uncertain).toEqual([]);
   });
 
-  test("an unreadable install side is uncertain, never clean", () => {
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable install side is uncertain, never clean", () => {
     setRecallInject(true);
     const audit = hookAuditDir(vault);
     mkdirSync(audit, { recursive: true });
@@ -179,44 +181,52 @@ describe("recall channel coverage", () => {
     expect(entry!.message).toContain(RECALL_CHANNEL.hook);
   });
 
-  test("an unreadable delivery store is uncertain, and does not erase the whole check", () => {
-    // The delivery rollup used to run unguarded ahead of the per-channel
-    // loop, and the check is registered `failSoft`, so a store this pass
-    // could not open dropped EVERY finding - neither a silent channel nor
-    // an unmeasured one, which is exactly the undiagnosable silence this
-    // check exists to remove.
-    setRecallInject(true);
-    mkdirSync(hookAuditDir(vault), { recursive: true });
-    deliver(RECALL_CHANNEL.hook, 1);
-    chmodSync(continuityDir(), 0o000);
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable delivery store is uncertain, and does not erase the whole check",
+    () => {
+      // The delivery rollup used to run unguarded ahead of the per-channel
+      // loop, and the check is registered `failSoft`, so a store this pass
+      // could not open dropped EVERY finding - neither a silent channel nor
+      // an unmeasured one, which is exactly the undiagnosable silence this
+      // check exists to remove.
+      setRecallInject(true);
+      mkdirSync(hookAuditDir(vault), { recursive: true });
+      deliver(RECALL_CHANNEL.hook, 1);
+      chmodSync(continuityDir(), 0o000);
 
-    const result = run();
-    // Not a warning: a delivery count that could not be read cannot tell
-    // a silent channel from a working one.
-    expect(silentChannels(result)).toEqual([]);
-    const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
-    expect(entry).toBeDefined();
-    expect(entry!.message).toContain(RECALL_CHANNEL.hook);
-    expect(entry!.message.toLowerCase()).toContain("permission denied");
-  });
+      const result = run();
+      // Not a warning: a delivery count that could not be read cannot tell
+      // a silent channel from a working one.
+      expect(silentChannels(result)).toEqual([]);
+      const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
+      expect(entry).toBeDefined();
+      expect(entry!.message).toContain(RECALL_CHANNEL.hook);
+      expect(entry!.message.toLowerCase()).toContain("permission denied");
+    },
+  );
 
-  test("an install side that could not be read outranks a delivery side that could not either", () => {
-    // Both halves gone. The install reason is the one an operator acts
-    // on, and the entry must not claim the delivery count is readable.
-    setRecallInject(true);
-    const audit = hookAuditDir(vault);
-    mkdirSync(audit, { recursive: true });
-    deliver(RECALL_CHANNEL.hook, 1);
-    chmodSync(audit, 0o000);
-    chmodSync(continuityDir(), 0o000);
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an install side that could not be read outranks a delivery side that could not either",
+    () => {
+      // Both halves gone. The install reason is the one an operator acts
+      // on, and the entry must not claim the delivery count is readable.
+      setRecallInject(true);
+      const audit = hookAuditDir(vault);
+      mkdirSync(audit, { recursive: true });
+      deliver(RECALL_CHANNEL.hook, 1);
+      chmodSync(audit, 0o000);
+      chmodSync(continuityDir(), 0o000);
 
-    const result = run();
-    expect(silentChannels(result)).toEqual([]);
-    const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
-    expect(entry).toBeDefined();
-    expect(entry!.message).toContain(audit);
-    expect(entry!.message).not.toContain("delivery count is readable");
-  });
+      const result = run();
+      expect(silentChannels(result)).toEqual([]);
+      const entry = result.uncertain.find((e) => e.code === RECALL_CHANNEL_UNMEASURED_CODE);
+      expect(entry).toBeDefined();
+      expect(entry!.message).toContain(audit);
+      expect(entry!.message).not.toContain("delivery count is readable");
+    },
+  );
 
   test("both codes are classified on exactly one side of the exit census", () => {
     expect(DIAGNOSTIC_SIGNALS.has(RECALL_CHANNEL_SILENT_CODE)).toBe(true);

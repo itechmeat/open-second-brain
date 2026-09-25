@@ -53,6 +53,10 @@ async function runHook(payload: unknown): Promise<RunResult> {
     stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
+    // Bun hands a child without `env` the environment this process STARTED
+    // with, not the live `process.env`: pass it so the child sees the
+    // throwaway config tests/setup.ts installs, not the operator's real one.
+    env: { ...process.env },
   });
   proc.stdin.write(JSON.stringify(payload));
   await proc.stdin.end();

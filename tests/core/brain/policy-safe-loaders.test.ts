@@ -26,6 +26,7 @@ import { regenerateActiveQuiet, renderActive } from "../../../src/core/brain/act
 import { renderDigest } from "../../../src/core/brain/digest.ts";
 import { resolveNoteRoots } from "../../../src/core/brain/notes/note-walk.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import {
   BRAIN_GUARDRAIL_DEFAULTS,
   BRAIN_MAINTENANCE_DEFAULTS,
@@ -303,22 +304,26 @@ describe("load*ConfigSafe: present but unreadable config", () => {
       expect((caught as BrainConfigError).message).toContain("failed to read");
     });
 
-    test(`${loader.name}: an unreadable file raises rather than reading as absent`, () => {
-      writeFileSync(configPath, VALID_CONFIG, "utf8");
-      chmodSync(configPath, 0o000);
-      try {
-        let caught: unknown;
+    // chmod cannot make a file unreadable on Windows (or to root).
+    test.skipIf(CHMOD_CANNOT_DENY)(
+      `${loader.name}: an unreadable file raises rather than reading as absent`,
+      () => {
+        writeFileSync(configPath, VALID_CONFIG, "utf8");
+        chmodSync(configPath, 0o000);
         try {
-          loader.load(vault);
-        } catch (err) {
-          caught = err;
+          let caught: unknown;
+          try {
+            loader.load(vault);
+          } catch (err) {
+            caught = err;
+          }
+          expect(caught).toBeInstanceOf(BrainConfigError);
+          expect((caught as BrainConfigError).message).toContain("failed to read");
+        } finally {
+          chmodSync(configPath, 0o600);
         }
-        expect(caught).toBeInstanceOf(BrainConfigError);
-        expect((caught as BrainConfigError).message).toContain("failed to read");
-      } finally {
-        chmodSync(configPath, 0o600);
-      }
-    });
+      },
+    );
   }
 
   test("the raised message names the file the operator has to fix", () => {

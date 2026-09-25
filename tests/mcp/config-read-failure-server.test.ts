@@ -29,6 +29,7 @@ import { join } from "node:path";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { PARTNER_CODEGRAPH_DISABLED_ENV } from "../../src/core/config.ts";
 import { CONFIG_UNREADABLE_REASON } from "../../src/mcp/vault-path-field.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 const VALID_CONFIG = `vault: "/srv/example-vault"\nagent_name: "vps-agent"\n`;
 
@@ -113,7 +114,8 @@ function inboxSignalCount(): number {
   return readdirSync(join(vault, "Brain", "inbox")).filter((n) => n.startsWith("sig-")).length;
 }
 
-describe("the server survives a config it cannot read", () => {
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)("the server survives a config it cannot read", () => {
   test("construction does not raise on the route-metrics gate", () => {
     withUnreadableConfig(() => {
       expect(() => new MCPServer({ vault, configPath })).not.toThrow();
@@ -145,59 +147,66 @@ describe("the server survives a config it cannot read", () => {
   });
 });
 
-describe("the read-only diagnostics answer through the request path", () => {
-  test("vault_health returns the report naming the broken file", async () => {
-    const { payload, toolError, rpcError } = await callThroughServer("vault_health");
-    expect(rpcError).toBeUndefined();
-    expect(toolError).toBeUndefined();
-    const checks = payload!["checks"] as Array<Record<string, unknown>>;
-    const configCheck = checks.find((c) => c["name"] === "config_writeable");
-    expect(configCheck).toBeDefined();
-    expect(configCheck!["ok"]).toBe(false);
-    expect(String(configCheck!["message"])).toContain(configPath);
-    expect(payload!["ok"]).toBe(false);
-    // The same degraded field the handler-level test pins, now actually
-    // reachable: an unresolvable store reference reports the reason and
-    // never falls back to the raw host path. The reason is path-safe -
-    // the config file is named by `config_writeable` above, which is a
-    // field that may name it; this one is not.
-    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
-      CONFIG_UNREADABLE_REASON,
-    );
-    expect(JSON.stringify(payload!["vault_path"])).not.toContain(vault);
-    expect(JSON.stringify(payload!["vault_path"])).not.toContain(configPath);
-  });
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)(
+  "the read-only diagnostics answer through the request path",
+  () => {
+    test("vault_health returns the report naming the broken file", async () => {
+      const { payload, toolError, rpcError } = await callThroughServer("vault_health");
+      expect(rpcError).toBeUndefined();
+      expect(toolError).toBeUndefined();
+      const checks = payload!["checks"] as Array<Record<string, unknown>>;
+      const configCheck = checks.find((c) => c["name"] === "config_writeable");
+      expect(configCheck).toBeDefined();
+      expect(configCheck!["ok"]).toBe(false);
+      expect(String(configCheck!["message"])).toContain(configPath);
+      expect(payload!["ok"]).toBe(false);
+      // The same degraded field the handler-level test pins, now actually
+      // reachable: an unresolvable store reference reports the reason and
+      // never falls back to the raw host path. The reason is path-safe -
+      // the config file is named by `config_writeable` above, which is a
+      // field that may name it; this one is not.
+      expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
+        CONFIG_UNREADABLE_REASON,
+      );
+      expect(JSON.stringify(payload!["vault_path"])).not.toContain(vault);
+      expect(JSON.stringify(payload!["vault_path"])).not.toContain(configPath);
+    });
 
-  /**
-   * a-label-is-not-a-boundary, U11: forty-one sites started producing the
-   * degraded `{ error }` value here instead of the raw host path, and two
-   * of them DECLARE `vault_path` in an `outputSchema` the server asserts
-   * on the way out. A descriptor saying `type: "string"` turns the
-   * degraded value into an output-contract failure - the whole payload
-   * lost, on exactly the condition the field exists to report, which is
-   * the failure the degraded value was introduced to prevent.
-   */
-  test("a tool that declares vault_path in its outputSchema still answers", async () => {
-    const { payload, toolError, rpcError } = await callThroughServer("brain_mcp_landscape");
-    expect(rpcError).toBeUndefined();
-    expect(toolError).toBeUndefined();
-    expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
-      CONFIG_UNREADABLE_REASON,
-    );
-    expect(payload!["servers"]).toBeDefined();
-  });
+    /**
+     * a-label-is-not-a-boundary, U11: forty-one sites started producing the
+     * degraded `{ error }` value here instead of the raw host path, and two
+     * of them DECLARE `vault_path` in an `outputSchema` the server asserts
+     * on the way out. A descriptor saying `type: "string"` turns the
+     * degraded value into an output-contract failure - the whole payload
+     * lost, on exactly the condition the field exists to report, which is
+     * the failure the degraded value was introduced to prevent.
+     */
+    test("a tool that declares vault_path in its outputSchema still answers", async () => {
+      const { payload, toolError, rpcError } = await callThroughServer("brain_mcp_landscape");
+      expect(rpcError).toBeUndefined();
+      expect(toolError).toBeUndefined();
+      expect(String((payload!["vault_path"] as Record<string, unknown>)["error"])).toBe(
+        CONFIG_UNREADABLE_REASON,
+      );
+      expect(payload!["servers"]).toBeDefined();
+    });
 
-  test("second_brain_status reports the condition instead of collapsing to absent", async () => {
-    const { payload, toolError, rpcError } = await callThroughServer("second_brain_status");
-    expect(rpcError).toBeUndefined();
-    expect(toolError).toBeUndefined();
-    expect(payload!["config_path"]).toBe(configPath);
-    expect(payload!["config_exists"]).toBe(true);
-    expect(String((payload!["config"] as Record<string, unknown>)["error"])).toContain(configPath);
-  });
-});
+    test("second_brain_status reports the condition instead of collapsing to absent", async () => {
+      const { payload, toolError, rpcError } = await callThroughServer("second_brain_status");
+      expect(rpcError).toBeUndefined();
+      expect(toolError).toBeUndefined();
+      expect(payload!["config_path"]).toBe(configPath);
+      expect(payload!["config_exists"]).toBe(true);
+      expect(String((payload!["config"] as Record<string, unknown>)["error"])).toContain(
+        configPath,
+      );
+    });
+  },
+);
 
-describe("a write tool refuses by name", () => {
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+describe.skipIf(CHMOD_CANNOT_DENY)("a write tool refuses by name", () => {
   test("brain_feedback errors with the config named and records nothing", async () => {
     const { toolError, payload } = await callThroughServer("brain_feedback", {
       topic: "unreadable-plugin-config",

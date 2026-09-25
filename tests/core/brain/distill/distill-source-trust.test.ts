@@ -69,6 +69,7 @@ import {
   SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
   UNTRUSTED_SOURCE_FRONTMATTER_KEY,
 } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -80,7 +81,6 @@ const SOURCE = "Articles/restaking.md";
 const SOURCE_BYTES = "# Restaking\n\nBody text.\n";
 /** A directory this vault denies itself, so `stat` answers with an errno. */
 const LOCKED_DIR = "Locked";
-const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 const CLAIMS = [
   { text: "Restaking reuses staked capital.", block: "abc" },
@@ -230,7 +230,8 @@ describe("distillSource - the source read is bounded to the vault", () => {
 });
 
 describe("distillSource - a refusal the filesystem owns is not a trust verdict", () => {
-  test.skipIf(RUNNING_AS_ROOT)(
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable in-vault source refuses by identity and errno, writing nothing",
     () => {
       const rel = `${LOCKED_DIR}/note.md`;

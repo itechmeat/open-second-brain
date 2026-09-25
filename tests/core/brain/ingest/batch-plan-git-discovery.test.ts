@@ -17,6 +17,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { planBatches } from "../../../../src/core/brain/ingest/batch-plan.ts";
 import { computePlanId } from "../../../../src/core/brain/ingest/checkpoint.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -193,18 +194,22 @@ describe("a subpath cannot cross a nested repository boundary", () => {
 });
 
 describe("an ignore file that cannot be honoured reaches the plan", () => {
-  test("an unreadable .gitignore is a structured plan warning, not a silent pass", () => {
-    write("mono/secret.md");
-    write("mono/.gitignore", "secret.md\n");
-    chmodSync(join(vault, "mono", ".gitignore"), 0o000);
-    const plan = planBatches(vault, SOURCE, CAPS);
-    // The file the repository declared excluded is still queued - but never
-    // without a signal saying why the declaration was not applied.
-    expect(plannedPaths(plan)).toEqual(["mono/secret.md"]);
-    expect(plan.ignoreWarnings).toHaveLength(1);
-    expect(plan.ignoreWarnings[0]!.source).toBe("mono/.gitignore");
-    expect(plan.ignoreWarnings[0]!.reason).toContain("EACCES");
-  });
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable .gitignore is a structured plan warning, not a silent pass",
+    () => {
+      write("mono/secret.md");
+      write("mono/.gitignore", "secret.md\n");
+      chmodSync(join(vault, "mono", ".gitignore"), 0o000);
+      const plan = planBatches(vault, SOURCE, CAPS);
+      // The file the repository declared excluded is still queued - but never
+      // without a signal saying why the declaration was not applied.
+      expect(plannedPaths(plan)).toEqual(["mono/secret.md"]);
+      expect(plan.ignoreWarnings).toHaveLength(1);
+      expect(plan.ignoreWarnings[0]!.source).toBe("mono/.gitignore");
+      expect(plan.ignoreWarnings[0]!.reason).toContain("EACCES");
+    },
+  );
 
   test("a symlinked .gitignore is refused with a warning", () => {
     write("mono/secret.md");

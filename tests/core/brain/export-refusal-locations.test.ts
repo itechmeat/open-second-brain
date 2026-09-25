@@ -23,7 +23,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import {
   PreferenceParseError,
@@ -85,7 +85,8 @@ function seedUnparseable(vault: string, slug: string): string {
       "",
     ].join("\n"),
   );
-  return relative(vault, path);
+  // Vault-relative in the forward-slash form the refusal names it with.
+  return relative(vault, path).split(sep).join("/");
 }
 
 describe("the export refusal names a vault-relative location", () => {

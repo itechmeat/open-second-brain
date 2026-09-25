@@ -19,6 +19,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -50,7 +51,7 @@ interface RunResult {
 async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
     OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false",
     VAULT_DIR: vault,
   };

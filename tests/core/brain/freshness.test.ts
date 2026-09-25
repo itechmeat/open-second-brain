@@ -21,6 +21,7 @@ import {
   scanFreshness,
 } from "../../../src/core/brain/freshness.ts";
 import { writeHandoffNote } from "../../../src/core/brain/handoff.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -99,7 +100,8 @@ describe("checkPageFreshness", () => {
     expect(freshness?.missing_sources).toEqual(["notes/b.md"]);
   });
 
-  test("an unreadable source is stale, never orphaned", () => {
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable source is stale, never orphaned", () => {
     const src = writeSource("notes/locked.md", "alpha");
     const page = writeDerivedPage("Brain/derived/page.md", ["notes/locked.md"]);
     const { chmodSync } = require("node:fs") as typeof import("node:fs");

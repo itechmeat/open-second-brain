@@ -105,23 +105,27 @@ describe("classifySourceOrigin - an identity that establishes nothing is not tru
 });
 
 describe("classifySourceOrigin - a colon in a filename is not a scheme", () => {
-  test("a vault note whose name carries a colon stays trusted", () => {
-    for (const source of [
-      COLON_NOTE,
-      "Meetings/Meeting: Q3 planning.md",
-      "Meetings/Q3: planning/notes.md",
-    ]) {
-      seed(source);
-    }
-    for (const source of [
-      COLON_NOTE,
-      `[[${COLON_NOTE}]]`,
-      "Meetings/Meeting: Q3 planning.md",
-      "Meetings/Q3: planning/notes.md",
-    ]) {
-      expect(trustOf(source)).toBe(INTAKE_TRUST.trusted);
-    }
-  });
+  // Windows forbids `:` in file names, so these notes cannot be seeded there.
+  test.skipIf(process.platform === "win32")(
+    "a vault note whose name carries a colon stays trusted",
+    () => {
+      for (const source of [
+        COLON_NOTE,
+        "Meetings/Meeting: Q3 planning.md",
+        "Meetings/Q3: planning/notes.md",
+      ]) {
+        seed(source);
+      }
+      for (const source of [
+        COLON_NOTE,
+        `[[${COLON_NOTE}]]`,
+        "Meetings/Meeting: Q3 planning.md",
+        "Meetings/Q3: planning/notes.md",
+      ]) {
+        expect(trustOf(source)).toBe(INTAKE_TRUST.trusted);
+      }
+    },
+  );
 
   // These three identities used to be asserted trusted in a vault where none
   // of them existed, which is exactly the hole GitHub #160 reports: the shape

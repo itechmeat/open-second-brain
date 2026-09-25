@@ -64,15 +64,20 @@ describe("hooks.json command shape", () => {
     }
   });
 
-  test("a command never blocks when nothing resolves (exit 0)", () => {
-    const cmd = cmds[0]!;
-    const env = { ...process.env } as Record<string, string | undefined>;
-    delete env["CLAUDE_PLUGIN_ROOT"];
-    delete env["OSB_PLUGIN_ROOT"];
-    // Minimal PATH: sh + coreutils resolve, but the `o2b-hook` fallback
-    // (installed under ~/.local/bin) does not.
-    env["PATH"] = "/usr/bin:/bin";
-    const r = spawnSync("sh", ["-c", cmd], { env, encoding: "utf8" });
-    expect(r.status).toBe(0);
-  });
+  // Runs the command through `sh` with a POSIX PATH (/usr/bin:/bin); native
+  // Windows has neither, so the fixture cannot be built there.
+  test.skipIf(process.platform === "win32")(
+    "a command never blocks when nothing resolves (exit 0)",
+    () => {
+      const cmd = cmds[0]!;
+      const env = { ...process.env } as Record<string, string | undefined>;
+      delete env["CLAUDE_PLUGIN_ROOT"];
+      delete env["OSB_PLUGIN_ROOT"];
+      // Minimal PATH: sh + coreutils resolve, but the `o2b-hook` fallback
+      // (installed under ~/.local/bin) does not.
+      env["PATH"] = "/usr/bin:/bin";
+      const r = spawnSync("sh", ["-c", cmd], { env, encoding: "utf8" });
+      expect(r.status).toBe(0);
+    },
+  );
 });

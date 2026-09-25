@@ -78,7 +78,9 @@ afterEach(() => {
   }
 });
 
-describe("_bun-precheck.sh PATH repair", () => {
+// Sources a bash script under a controlled POSIX PATH; native Windows has no
+// such shell (its launchers are the scripts/*.cmd files).
+describe.skipIf(process.platform === "win32")("_bun-precheck.sh PATH repair", () => {
   test("adopts ~/.bun/bin when a minimal PATH hides an installed Bun", async () => {
     const home = freshHome();
     plantBun(home, "1.4.0");

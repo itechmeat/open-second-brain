@@ -39,6 +39,7 @@ import { writeSignal } from "../../src/core/brain/signal.ts";
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { vaultRelativeSafe } from "../../src/mcp/brain-tools.ts";
+import { findingRefs } from "../../src/mcp/brain/hygiene-tools.ts";
 
 let tmp: string;
 let vault: string;
@@ -122,7 +123,9 @@ describe("vaultRelativeSafe", () => {
   test("returns vault-relative path for an in-vault target", () => {
     const inVault = join(vault, "Brain", "inbox", "sig-x.md");
     const rel = vaultRelativeSafe(vault, inVault);
-    expect(rel).toBe(join("Brain", "inbox", "sig-x.md"));
+    // The answer is the vault's POSIX identity on every host, never the
+    // host's separator (`Brain\\inbox\\...` on Windows).
+    expect(rel).toBe("Brain/inbox/sig-x.md");
     // The returned path must NOT be absolute — that's the property
     // every downstream consumer (digest, JSON output) relies on.
     expect(rel.startsWith("/")).toBe(false);
@@ -130,6 +133,23 @@ describe("vaultRelativeSafe", () => {
 
   test("returns empty string when target equals the vault root", () => {
     expect(vaultRelativeSafe(vault, vault)).toBe("");
+  });
+});
+
+describe("hygiene findingRefs", () => {
+  test("an absolute page path is rendered vault-relative on every host", () => {
+    // A leading-`/` test let a Windows page path (`C:\\...`) through as a
+    // host path; `isAbsolute` recognises both spellings.
+    const refs = findingRefs(vault, {
+      id: "freshness:x",
+      detector: "freshness",
+      severity: "action",
+      title: "t",
+      targets: [join(vault, "Brain", "pages", "x.md"), "pref-abc", "entity#aspect"],
+      proposed_action: "recompile",
+      evidence: {},
+    });
+    expect(refs).toEqual(["Brain/pages/x.md", "pref-abc", "entity#aspect"]);
   });
 });
 

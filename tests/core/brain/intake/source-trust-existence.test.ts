@@ -49,6 +49,7 @@ import {
   INTAKE_TRUST,
   SOURCE_CONTENT_HASH_FRONTMATTER_KEY,
 } from "../../../../src/core/brain/trust/untrusted-provenance.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -59,7 +60,6 @@ const SOURCE = "Articles/primer.md";
 const SOURCE_BYTES = "the source bytes the extraction claims to come from\n";
 /** A directory this vault denies itself, so `stat` answers with an errno. */
 const LOCKED_DIR = "Locked";
-const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 function seed(rel: string, contents = SOURCE_BYTES): string {
   const abs = join(vault, rel);
@@ -115,7 +115,8 @@ describe("classifySourceOrigin - a shape without bytes is not a source", () => {
     expect(classifySourceOrigin(vault, "Articles").trust).toBe(INTAKE_TRUST.untrusted);
   });
 
-  test.skipIf(RUNNING_AS_ROOT)(
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a source that exists but cannot be read is an error, not a verdict",
     () => {
       seed(`${LOCKED_DIR}/note.md`);
@@ -134,22 +135,26 @@ describe("classifySourceOrigin - a shape without bytes is not a source", () => {
  * filesystem. The refusal stays; only the message is ours to compose.
  */
 describe("classifySourceOrigin - a refusal names the identity and the errno, nothing else", () => {
-  test.skipIf(RUNNING_AS_ROOT)("an unreadable source refuses without a path or a sentence", () => {
-    seed(`${LOCKED_DIR}/note.md`);
-    chmodSync(join(vault, LOCKED_DIR), 0o000);
-    let thrown: unknown;
-    try {
-      classifySourceOrigin(vault, `${LOCKED_DIR}/note.md`);
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(SourceTrustError);
-    const message = (thrown as Error).message;
-    expect(message).toContain(`${LOCKED_DIR}/note.md`);
-    expect(message).toContain("EACCES");
-    expect(message).not.toContain(vault);
-    expect(message).not.toContain("permission denied");
-  });
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable source refuses without a path or a sentence",
+    () => {
+      seed(`${LOCKED_DIR}/note.md`);
+      chmodSync(join(vault, LOCKED_DIR), 0o000);
+      let thrown: unknown;
+      try {
+        classifySourceOrigin(vault, `${LOCKED_DIR}/note.md`);
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(SourceTrustError);
+      const message = (thrown as Error).message;
+      expect(message).toContain(`${LOCKED_DIR}/note.md`);
+      expect(message).toContain("EACCES");
+      expect(message).not.toContain(vault);
+      expect(message).not.toContain("permission denied");
+    },
+  );
 
   test("a source past the read ceiling is refused rather than read for a lane", () => {
     seed(SOURCE, "x".repeat(SOURCE_HASH_MAX_BYTES + 1));

@@ -14,6 +14,7 @@ import {
   type RecallInjectDecision,
 } from "../../src/core/brain/recall-inject.ts";
 import { listRecallTelemetry, RECALL_CHANNEL } from "../../src/core/brain/recall-telemetry.ts";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -46,7 +47,7 @@ interface RunResult {
 async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
   };
   const proc = Bun.spawn(["bun", "run", HOOK], {
     stdin: "pipe",

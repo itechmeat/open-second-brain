@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
+
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -38,7 +40,7 @@ async function runHook(payload: unknown, env: Record<string, string> = {}): Prom
   // own toolchain on $PATH-only systems.
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
     // Isolate the active.md injection behaviour from the runtime-notice
     // channel by default; the dedicated notice test re-enables it.
     OPEN_SECOND_BRAIN_RUNTIME_NOTICES: "false",
@@ -160,7 +162,7 @@ describe("active-inject hook", () => {
       stderr: "pipe",
       env: {
         PATH: process.env["PATH"] ?? "",
-        HOME: configHome,
+        ...homeEnv(configHome),
         VAULT_DIR: vault,
       },
     });
@@ -358,19 +360,23 @@ describe("active-inject hook: _brain.yaml absent vs. unreadable", () => {
     expect(injected.indexOf(CONFIG_NOTICE)).toBeLessThan(injected.indexOf("pref-foo"));
   });
 
-  test("unopenable: a config the process cannot read is reported, not read as absent", async () => {
-    writeActive(ACTIVE_DOC);
-    writeFileSync(configPath(), "schema_version: 1\n", "utf8");
-    chmodSync(configPath(), 0o000);
-    try {
-      const injected = await inject(NOTICES_ON);
-      expect(injected).toContain("pref-foo");
-      expect(injected).toContain(CONFIG_NOTICE);
-      expect(injected).toContain(configPath());
-    } finally {
-      chmodSync(configPath(), 0o600);
-    }
-  });
+  // chmod 000 cannot deny a read to root or on Windows (see tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "unopenable: a config the process cannot read is reported, not read as absent",
+    async () => {
+      writeActive(ACTIVE_DOC);
+      writeFileSync(configPath(), "schema_version: 1\n", "utf8");
+      chmodSync(configPath(), 0o000);
+      try {
+        const injected = await inject(NOTICES_ON);
+        expect(injected).toContain("pref-foo");
+        expect(injected).toContain(CONFIG_NOTICE);
+        expect(injected).toContain(configPath());
+      } finally {
+        chmodSync(configPath(), 0o600);
+      }
+    },
+  );
 
   test("malformed: the budget falls back to the default rather than going unbounded", async () => {
     // The operator's `inject_budget_chars` is unreachable, so the read
@@ -531,7 +537,7 @@ describe("active-inject hook: operator standing rules", () => {
     expect(injected.indexOf("Runtime notices:")).toBeLessThan(injected.indexOf("pref-foo"));
   });
 
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable rules file is announced, never silently dropped",
     async () => {
       writeActive(ACTIVE_DOC);

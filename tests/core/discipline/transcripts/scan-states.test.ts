@@ -18,6 +18,7 @@ import { codexTranscript } from "../../../../src/core/discipline/transcripts/cod
 import { cursorTranscript } from "../../../../src/core/discipline/transcripts/cursor.ts";
 import { collectTranscriptActivity } from "../../../../src/core/discipline/transcripts/index.ts";
 import { TRANSCRIPT_SCAN } from "../../../../src/core/discipline/transcripts/types.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 const DAY_START = new Date("2026-05-19T00:00:00Z").getTime();
 const DAY_END = new Date("2026-05-20T00:00:00Z").getTime();
@@ -64,14 +65,18 @@ describe("claude-code — the three emptinesses are three answers", () => {
     expect(scan.unreadable).toEqual([]);
   });
 
-  test("a store that exists and cannot be read is unreadable, and names the path", () => {
-    const base = join(home, ".claude", "projects");
-    mkdirSync(base, { recursive: true });
-    makeUnreadable(base);
-    const scan = claudeCodeTranscript.scan(DAY_START, DAY_END, home);
-    expect(scan.state).toBe(TRANSCRIPT_SCAN.unreadable);
-    expect(scan.unreadable).toContain(base);
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a store that exists and cannot be read is unreadable, and names the path",
+    () => {
+      const base = join(home, ".claude", "projects");
+      mkdirSync(base, { recursive: true });
+      makeUnreadable(base);
+      const scan = claudeCodeTranscript.scan(DAY_START, DAY_END, home);
+      expect(scan.state).toBe(TRANSCRIPT_SCAN.unreadable);
+      expect(scan.unreadable).toContain(base);
+    },
+  );
 
   test("a readable store with nothing in the window is idle", () => {
     mkdirSync(join(home, ".claude", "projects", "proj"), { recursive: true });
@@ -90,22 +95,27 @@ describe("claude-code — the three emptinesses are three answers", () => {
     expect(scan.files).toHaveLength(1);
   });
 
-  test("a partial read reports the files it found AND the directory it could not", () => {
-    const good = join(home, ".claude", "projects", "good");
-    const bad = join(home, ".claude", "projects", "bad");
-    mkdirSync(good, { recursive: true });
-    mkdirSync(bad, { recursive: true });
-    writeInDay(join(good, "s.jsonl"));
-    makeUnreadable(bad);
-    const scan = claudeCodeTranscript.scan(DAY_START, DAY_END, home);
-    expect(scan.state).toBe(TRANSCRIPT_SCAN.collected);
-    expect(scan.files).toHaveLength(1);
-    expect(scan.unreadable).toContain(bad);
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a partial read reports the files it found AND the directory it could not",
+    () => {
+      const good = join(home, ".claude", "projects", "good");
+      const bad = join(home, ".claude", "projects", "bad");
+      mkdirSync(good, { recursive: true });
+      mkdirSync(bad, { recursive: true });
+      writeInDay(join(good, "s.jsonl"));
+      makeUnreadable(bad);
+      const scan = claudeCodeTranscript.scan(DAY_START, DAY_END, home);
+      expect(scan.state).toBe(TRANSCRIPT_SCAN.collected);
+      expect(scan.files).toHaveLength(1);
+      expect(scan.unreadable).toContain(bad);
+    },
+  );
 });
 
 describe("codex and cursor answer the same three ways", () => {
-  test("codex: absent store, unreadable store, idle store", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("codex: absent store, unreadable store, idle store", () => {
     expect(codexTranscript.scan(DAY_START, DAY_END, home).state).toBe(TRANSCRIPT_SCAN.rootAbsent);
 
     const sessions = join(home, ".codex", "sessions");
@@ -118,7 +128,8 @@ describe("codex and cursor answer the same three ways", () => {
     expect(scan.unreadable).toContain(sessions);
   });
 
-  test("cursor: absent store, unreadable store, idle store", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("cursor: absent store, unreadable store, idle store", () => {
     expect(cursorTranscript.scan(DAY_START, DAY_END, home).state).toBe(TRANSCRIPT_SCAN.rootAbsent);
 
     const root = join(home, ".config", "Cursor", "User", "workspaceStorage");
@@ -133,7 +144,8 @@ describe("codex and cursor answer the same three ways", () => {
 });
 
 describe("the aggregator carries the reason, not just the count", () => {
-  test("an unreadable runtime is not reported as a quiet one", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable runtime is not reported as a quiet one", () => {
     const base = join(home, ".claude", "projects");
     mkdirSync(base, { recursive: true });
     makeUnreadable(base);

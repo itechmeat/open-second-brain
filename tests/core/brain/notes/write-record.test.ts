@@ -35,6 +35,7 @@ import { writeImagePath, writeImagesDir } from "../../../../src/core/brain/paths
 import { readLogDay } from "../../../../src/core/brain/log-jsonl.ts";
 import { sha256Hex } from "../../../../src/core/integrity/digest.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../../../../src/core/brain/types.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 const AGENT = "agent-a";
 const TS = "2026-03-04T05:06:07Z";
@@ -175,29 +176,33 @@ describe("recordNoteWrite", () => {
     expect(readLogDay(vault, DATE).entries[0]!.body["target"]).toBe("Notes/A.md");
   });
 
-  test("a log-append failure returns a named audit_reason and never throws", () => {
-    // An unwritable log directory is the shape a full disk, a permission
-    // flip and a sync-locked tree all present as. The note is already on
-    // disk by the time this runs, so a throw here would report a failure
-    // for a write that succeeded.
-    const logDir = join(vault, "Brain", "log");
-    mkdirSync(logDir, { recursive: true });
-    chmodSync(logDir, 0o500);
-    try {
-      const receipt = recordNoteWrite(vault, {
-        op: NOTE_WRITE_OP.update,
-        target: "Notes/A.md",
-        before: { bytes: "old" },
-        after: { bytes: "new" },
-        timestamp: TS,
-        agent: AGENT,
-      });
-      expect(receipt.write_id).toBeNull();
-      expect(receipt.audit_reason).toContain("note-write event not recorded");
-    } finally {
-      chmodSync(logDir, 0o700);
-    }
-  });
+  // chmod cannot make a directory refuse new files on Windows (or as root).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a log-append failure returns a named audit_reason and never throws",
+    () => {
+      // An unwritable log directory is the shape a full disk, a permission
+      // flip and a sync-locked tree all present as. The note is already on
+      // disk by the time this runs, so a throw here would report a failure
+      // for a write that succeeded.
+      const logDir = join(vault, "Brain", "log");
+      mkdirSync(logDir, { recursive: true });
+      chmodSync(logDir, 0o500);
+      try {
+        const receipt = recordNoteWrite(vault, {
+          op: NOTE_WRITE_OP.update,
+          target: "Notes/A.md",
+          before: { bytes: "old" },
+          after: { bytes: "new" },
+          timestamp: TS,
+          agent: AGENT,
+        });
+        expect(receipt.write_id).toBeNull();
+        expect(receipt.audit_reason).toContain("note-write event not recorded");
+      } finally {
+        chmodSync(logDir, 0o700);
+      }
+    },
+  );
 });
 
 describe("pruneWriteImages", () => {

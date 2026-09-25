@@ -65,7 +65,7 @@ test("applyMigrations on a fresh db creates the v1 schema", () => {
   expect(tables.has("chunk_fts")).toBe(true);
 
   expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
-  db.close();
+  db.close(true);
 });
 
 test("applyMigrations is idempotent", () => {
@@ -76,13 +76,13 @@ test("applyMigrations is idempotent", () => {
   applyMigrations(db);
   expect(tableNames(db).size).toBe(first);
   expect(readSchemaVersion(db)).toBe(LATEST_SCHEMA_VERSION);
-  db.close();
+  db.close(true);
 });
 
 test("readSchemaVersion returns 0 when index_state is missing", () => {
   const db = new Database(dbPath);
   expect(() => readSchemaVersion(db)).toThrow(/no such table/);
-  db.close();
+  db.close(true);
 });
 
 test("applyMigrations throws SCHEMA_MISMATCH if db is newer than binary", () => {
@@ -102,7 +102,7 @@ test("applyMigrations throws SCHEMA_MISMATCH if db is newer than binary", () => 
   expect(err).not.toBeNull();
   expect(err?.code).toBe("SCHEMA_MISMATCH");
   expect(err?.message).toContain("reindex");
-  db.close();
+  db.close(true);
 });
 
 test("ensureVecTable + dropVecTable round-trip", () => {
@@ -115,7 +115,7 @@ test("ensureVecTable + dropVecTable round-trip", () => {
     const vec = require("sqlite-vec");
     db.loadExtension(vec.getLoadablePath());
   } catch {
-    db.close();
+    db.close(true);
     return;
   }
 
@@ -134,7 +134,7 @@ test("ensureVecTable + dropVecTable round-trip", () => {
 
   dropVecTable(db);
   expect(objectNames(db, "table").has("chunk_vec")).toBe(false);
-  db.close();
+  db.close(true);
 });
 
 test("ensureVecTable rejects non-positive dimension", () => {
@@ -142,5 +142,5 @@ test("ensureVecTable rejects non-positive dimension", () => {
   applyMigrations(db);
   expect(() => ensureVecTable(db, 0)).toThrow(/positive integer/);
   expect(() => ensureVecTable(db, -1)).toThrow(/positive integer/);
-  db.close();
+  db.close(true);
 });

@@ -30,6 +30,7 @@ import {
   REMEMBER_KEY_STATUS,
   rememberKey,
 } from "../../../src/core/brain/idempotency-ledger.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -208,7 +209,8 @@ describe("idempotency per-device shards", () => {
    * "never seen" for one turns a retried write into a first write, which
    * is the one outcome this ledger exists to prevent.
    */
-  test.skipIf(process.getuid?.() === 0)("an unreadable shard is refused, not read as empty", () => {
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable shard is refused, not read as empty", () => {
     const path = idempotencyLogPath(vault, "2026-05", "testdev1");
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(

@@ -120,20 +120,24 @@ test("module order is codepoint-stable, not collation-dependent", () => {
   expect(named).toEqual(["Zed", "api", "cli", "core"]);
 });
 
-test("a Mermaid-hostile module name is escaped and never becomes a node id", () => {
-  seed('src/a"b<c>#d/x.ts');
+// Windows forbids `"`, `<` and `>` in file names, so this module directory cannot exist there.
+test.skipIf(process.platform === "win32")(
+  "a Mermaid-hostile module name is escaped and never becomes a node id",
+  () => {
+    seed('src/a"b<c>#d/x.ts');
 
-  const block = moduleMap();
+    const block = moduleMap();
 
-  // The raw characters never reach the rendered label.
-  expect(block).not.toContain('a"b');
-  expect(block).not.toContain("<c>");
-  expect(block).toContain("a#quot;b#lt;c#gt;#35;d");
-  // Node ids are positional, so no name can produce an invalid one.
-  for (const edge of edges(block)) {
-    expect(edge).toMatch(/^root --> mod\d+\["/);
-  }
-});
+    // The raw characters never reach the rendered label.
+    expect(block).not.toContain('a"b');
+    expect(block).not.toContain("<c>");
+    expect(block).toContain("a#quot;b#lt;c#gt;#35;d");
+    // Node ids are positional, so no name can produce an invalid one.
+    for (const edge of edges(block)) {
+      expect(edge).toMatch(/^root --> mod\d+\["/);
+    }
+  },
+);
 
 test("the same facts render a byte-identical block", () => {
   expect(moduleMap("vault-b")).toBe(moduleMap("vault-a"));

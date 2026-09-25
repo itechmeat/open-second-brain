@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks", "nav-inject.ts");
 
@@ -44,7 +45,7 @@ interface RunResult {
 async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
   };
   const proc = Bun.spawn(["bun", "run", HOOK], {
     stdin: "pipe",
