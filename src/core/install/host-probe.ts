@@ -197,7 +197,11 @@ export function createHostProbeRunner(timeoutMs: number): HostProbeRunner {
           stderr: "pipe",
           timeout: timeoutMs,
         });
-        if (r.signalCode !== null) {
+        // `!= null`, not `!== null`: Bun leaves `signalCode` UNDEFINED on a
+        // normal exit, so the strict form read every successful probe as a
+        // kill and threw its stdout away - `o2b install --check` then called
+        // a correctly registered Codex `mcp-unreachable`.
+        if (r.signalCode != null) {
           // A killed child has no answer to report, and its partial stdout
           // must not be parsed as one. The signal is named because the
           // timeout kill and a host that crashed arrive the same way, and
