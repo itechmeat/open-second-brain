@@ -8,46 +8,68 @@
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  currentWindowsIdentity,
   ownerOnlyAclArgv,
+  parseWhoamiUser,
   restrictToOwner,
-  windowsAclPrincipal,
+  system32Tool,
 } from "../../../../src/core/brain/secrets/owner-acl.ts";
+import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
 import { secretsDir, setSecret } from "../../../../src/core/brain/secrets/store.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
+const SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
+
 describe("ownerOnlyAclArgv", () => {
-  test("a file: inheritance removed, one full-control grant", () => {
-    expect(ownerOnlyAclArgv("C:\\v\\keyfile", "HOST\\me", "file")).toEqual([
+  test("a file: inheritance removed, one full-control grant, by SID", () => {
+    expect(ownerOnlyAclArgv("C:\\v\\keyfile", SID, "file")).toEqual([
       "C:\\v\\keyfile",
       "/inheritance:r",
       "/grant:r",
-      "HOST\\me:F",
+      `*${SID}:F`,
     ]);
   });
 
   test("a directory: the grant is inheritable by what is created in it", () => {
-    expect(ownerOnlyAclArgv("C:\\v\\secrets", "HOST\\me", "directory")).toEqual([
+    expect(ownerOnlyAclArgv("C:\\v\\secrets", SID, "directory")).toEqual([
       "C:\\v\\secrets",
       "/inheritance:r",
       "/grant:r",
-      "HOST\\me:(OI)(CI)F",
+      `*${SID}:(OI)(CI)F`,
     ]);
   });
 });
 
-describe("windowsAclPrincipal", () => {
-  test("qualifies the user with the logon domain when one is set", () => {
-    expect(windowsAclPrincipal({ USERDOMAIN: "HOST" }, "me")).toBe("HOST\\me");
+describe("parseWhoamiUser", () => {
+  test("reads the account name and SID from whoami's CSV line", () => {
+    expect(parseWhoamiUser(`"host\\me","${SID}"\r\n`)).toEqual({ name: "host\\me", sid: SID });
+    expect(parseWhoamiUser(`"azuread\\first last","S-1-12-1-1-2-3-4"\r\n`)).toEqual({
+      name: "azuread\\first last",
+      sid: "S-1-12-1-1-2-3-4",
+    });
   });
 
-  test("falls back to the bare user name without a domain", () => {
-    expect(windowsAclPrincipal({}, "me")).toBe("me");
-    expect(windowsAclPrincipal({ USERDOMAIN: "  " }, "me")).toBe("me");
+  test("anything else is no identity, not a guess", () => {
+    expect(parseWhoamiUser("")).toBeNull();
+    expect(parseWhoamiUser("ERROR: Access is denied.\r\n")).toBeNull();
+    expect(parseWhoamiUser(`"host\\me","not-a-sid"`)).toBeNull();
+  });
+});
+
+describe("system32Tool", () => {
+  test("an absolute System32 path, never a bare name cmd would look up in the cwd", () => {
+    expect(system32Tool("icacls.exe", { SystemRoot: "D:\\Win" })).toBe(
+      "D:\\Win\\System32\\icacls.exe",
+    );
+    expect(system32Tool("icacls.exe", { windir: "E:\\W" })).toBe("E:\\W\\System32\\icacls.exe");
+    expect(system32Tool("icacls.exe", { SystemRoot: "" })).toBe(
+      "C:\\Windows\\System32\\icacls.exe",
+    );
   });
 });
 
@@ -63,7 +85,10 @@ describe("restrictToOwner off Windows", () => {
  * localised "Successfully processed" summary.
  */
 function aclEntries(path: string): ReadonlyArray<string> {
-  const proc = spawnSync("icacls.exe", [path], { encoding: "utf8", windowsHide: true });
+  const proc = spawnSync(system32Tool("icacls.exe"), [path], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
   expect(proc.status).toBe(0);
   const entries: string[] = [];
   for (const [i, line] of proc.stdout.split(/\r?\n/).entries()) {
@@ -117,7 +142,9 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
       agent: "tester",
       now: new Date("2026-06-05T10:00:00Z"),
     });
-    const principal = windowsAclPrincipal().toLowerCase();
+    const identity = currentWindowsIdentity();
+    expect(identity).not.toBeNull();
+    const principal = identity!.name.toLowerCase();
     const dir = secretsDir(vault);
 
     // Explicit, not inherited: no `(I)` and, beyond the machine's own
@@ -131,6 +158,31 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
     const store = aclEntries(join(dir, "secrets.json"));
     expect(lower(store).filter((e) => !e.includes("(i)"))).toEqual([]);
     expect(withoutMachineAdmins(store)).toEqual([`${principal}:(i)(f)`]);
+  });
+
+  test("a secrets directory that arrived with a copied vault is restricted on load", () => {
+    // Made by hand, the way a restore or a copy leaves it: inherited
+    // entries only, and a store file of its own.
+    const dir = secretsDir(vault);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "keyfile"), Buffer.alloc(32, 7));
+    writeFileSync(join(dir, "secrets.json"), JSON.stringify({ version: 1, secrets: {} }));
+    expect(lower(aclEntries(join(dir, "keyfile"))).some((e) => e.includes("(i)"))).toBe(true);
+
+    loadOrCreateKey(join(dir, "keyfile"));
+    setSecret(vault, {
+      name: "later",
+      value: "v",
+      agent: "tester",
+      now: new Date("2026-06-05T10:00:00Z"),
+    });
+
+    const principal = currentWindowsIdentity()!.name.toLowerCase();
+    expect(withoutMachineAdmins(aclEntries(join(dir, "keyfile")))).toEqual([`${principal}:(f)`]);
+    expect(withoutMachineAdmins(aclEntries(dir))).toEqual([`${principal}:(oi)(ci)(f)`]);
+    for (const e of withoutMachineAdmins(aclEntries(join(dir, "secrets.json")))) {
+      expect([`${principal}:(f)`, `${principal}:(i)(f)`]).toContain(e);
+    }
   });
 
   test("a failed icacls warns and leaves the caller running", () => {

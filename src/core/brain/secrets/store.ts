@@ -16,12 +16,13 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
+import { renameWithRetry } from "../../fs-atomic.ts";
 import { appendAuditRecord } from "../../reliability/audit.ts";
 import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
-import { renameWithRetry } from "../../fs-atomic.ts";
+import { restrictToOwner } from "./owner-acl.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
 
@@ -244,6 +245,9 @@ function toMetadata(name: string, stored: StoredSecret): SecretMetadata {
 function readStore(vault: string): SecretsFile {
   const path = storePath(vault);
   if (!existsSync(path)) return { version: SECRETS_SCHEMA_VERSION, secrets: {} };
+  // Windows: a store that came in with a copied vault may carry an ACL
+  // of its own; the ones this module writes inherit the directory's.
+  restrictToOwner(path, "file");
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (
     parsed === null ||

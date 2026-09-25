@@ -36,21 +36,25 @@ export interface EncryptedValue {
 
 /** Load the keyfile, creating it 0600 with 32 random bytes on first use. */
 export function loadOrCreateKey(keyPath: string): Buffer {
+  const keyDir = dirname(keyPath);
   if (existsSync(keyPath)) {
+    // On Windows the owner-only ACL is (re)applied on load too, not only
+    // at creation: a secrets directory that came in with a copied or
+    // restored vault carries whatever ACL it inherited at its new place.
+    // `restrictToOwner` is idempotent and runs once per path per process.
+    restrictToOwner(keyDir, "directory");
+    restrictToOwner(keyPath, "file");
     const key = readFileSync(keyPath);
     if (key.length !== KEY_BYTES) {
       throw new Error(`secrets keyfile is corrupt (expected ${KEY_BYTES} bytes): ${keyPath}`);
     }
     return key;
   }
-  // `mkdirSync` returns the first directory it created, so a defined
-  // result means this call made the key's directory - the same case in
-  // which the `0700` mode above takes effect on POSIX. Windows ignores
-  // the mode; `restrictToOwner` sets the equivalent ACL there.
-  const keyDir = dirname(keyPath);
-  if (mkdirSync(keyDir, { recursive: true, mode: 0o700 }) !== undefined) {
-    restrictToOwner(keyDir, "directory");
-  }
+  // The `0700` mode takes effect on POSIX only for a directory this call
+  // creates. Windows ignores the mode; `restrictToOwner` sets the
+  // equivalent ACL there, whoever created the directory.
+  mkdirSync(keyDir, { recursive: true, mode: 0o700 });
+  restrictToOwner(keyDir, "directory");
   const key = randomBytes(KEY_BYTES);
   // Exclusive create: two concurrent first-writers cannot truncate
   // each other's key; the loser re-reads the winner's file.
