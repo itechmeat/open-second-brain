@@ -62,6 +62,7 @@ import {
 import { RECOVERABILITY_STATE } from "../../../../src/core/brain/gates/recoverability.ts";
 import { CountGuardError } from "../../../../src/core/brain/count-guard.ts";
 import { atomicWriteFileSync } from "../../../../src/core/fs-atomic.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -136,39 +137,43 @@ describe("bytes that are not valid UTF-8 (2)", () => {
 });
 
 describe("a rewrite that cannot be written (3)", () => {
-  test("returns a result that names the split point instead of throwing", async () => {
-    note("Projects/Old.md", "x\n");
-    note("Aaa/Ref.md", "see [[Projects/Old]]\n");
-    note("Docs/Ref.md", "see [[Projects/Old]]\n");
-    chmodSync(join(vault, "Docs"), 0o500);
+  // chmod cannot make a directory refuse new files on Windows (or as root).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "returns a result that names the split point instead of throwing",
+    async () => {
+      note("Projects/Old.md", "x\n");
+      note("Aaa/Ref.md", "see [[Projects/Old]]\n");
+      note("Docs/Ref.md", "see [[Projects/Old]]\n");
+      chmodSync(join(vault, "Docs"), 0o500);
 
-    let res;
-    try {
-      res = await noteLifecycle(vault, {
-        action: NOTE_LIFECYCLE_ACTION.rename,
-        path: "Projects/Old.md",
-        to: "Projects/New.md",
-        apply: true,
-      });
-    } finally {
-      chmodSync(join(vault, "Docs"), 0o700);
-    }
+      let res;
+      try {
+        res = await noteLifecycle(vault, {
+          action: NOTE_LIFECYCLE_ACTION.rename,
+          path: "Projects/Old.md",
+          to: "Projects/New.md",
+          apply: true,
+        });
+      } finally {
+        chmodSync(join(vault, "Docs"), 0o700);
+      }
 
-    // The whole of the previous failure was that none of this existed.
-    expect(res.applied).toBe(true);
-    expect(res.from).toBe("Projects/Old.md");
-    expect(res.to).toBe("Projects/New.md");
-    expect(res.references.filesRewritten).toBe(1);
-    expect(res.references.rewriteFailures.map((f) => f.path)).toEqual(["Docs/Ref.md"]);
-    expect(res.references.rewriteFailures[0]!.reason.length).toBeGreaterThan(0);
-    expect(res.references.rewrittenSpellings.length).toBeGreaterThan(0);
-    expect(res.references.index.state).toBe(INDEX_EVIDENCE.absent);
+      // The whole of the previous failure was that none of this existed.
+      expect(res.applied).toBe(true);
+      expect(res.from).toBe("Projects/Old.md");
+      expect(res.to).toBe("Projects/New.md");
+      expect(res.references.filesRewritten).toBe(1);
+      expect(res.references.rewriteFailures.map((f) => f.path)).toEqual(["Docs/Ref.md"]);
+      expect(res.references.rewriteFailures[0]!.reason.length).toBeGreaterThan(0);
+      expect(res.references.rewrittenSpellings.length).toBeGreaterThan(0);
+      expect(res.references.index.state).toBe(INDEX_EVIDENCE.absent);
 
-    // And the vault is in exactly the state the result describes.
-    expect(existsSync(join(vault, "Projects/New.md"))).toBe(true);
-    expect(read("Aaa/Ref.md")).toContain("[[Projects/New]]");
-    expect(read("Docs/Ref.md")).toContain("[[Projects/Old]]");
-  });
+      // And the vault is in exactly the state the result describes.
+      expect(existsSync(join(vault, "Projects/New.md"))).toBe(true);
+      expect(read("Aaa/Ref.md")).toContain("[[Projects/New]]");
+      expect(read("Docs/Ref.md")).toContain("[[Projects/Old]]");
+    },
+  );
 
   test("a clean run reports no failures at all", async () => {
     note("Projects/Old.md", "x\n");

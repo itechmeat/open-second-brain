@@ -24,7 +24,10 @@ import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtu
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  for (const c of cleanups.splice(0)) c();
+  // Newest first: a raw connection opened on the temp index must close
+  // before the directory holding it is removed (Windows refuses to delete
+  // an open database file).
+  for (const c of cleanups.splice(0).toReversed()) c();
 });
 
 /** A real v9 index over two documents, built by the real indexer. */
@@ -42,7 +45,7 @@ async function indexedVault(): Promise<{ vault: string; dbPath: string }> {
 function openRaw(dbPath: string, opts: { readonly readOnly?: boolean } = {}): Database {
   const db =
     opts.readOnly === true ? new Database(dbPath, { readonly: true }) : new Database(dbPath);
-  cleanups.push(() => db.close());
+  cleanups.push(() => db.close(true));
   return db;
 }
 

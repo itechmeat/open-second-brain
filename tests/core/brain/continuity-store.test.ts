@@ -22,6 +22,7 @@ import {
   listContinuityRecords,
   paginateContinuityRecords,
 } from "../../../src/core/brain/continuity/store.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -402,17 +403,15 @@ describe("continuity per-device shards", () => {
    * that silently drops it reports a shorter history as if it were the
    * whole one.
    */
-  test.skipIf(process.getuid?.() === 0)(
-    "an unreadable shard is refused, not listed as absent",
-    () => {
-      writeShard("2026-06", "testdev1", ["1-mine"]);
-      const path = continuityLogPath(vault, "2026-06", "testdev1");
-      chmodSync(path, 0o000);
-      try {
-        expect(() => listContinuityRecords(vault, {})).toThrow(/EACCES|EPERM/);
-      } finally {
-        chmodSync(path, 0o600);
-      }
-    },
-  );
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable shard is refused, not listed as absent", () => {
+    writeShard("2026-06", "testdev1", ["1-mine"]);
+    const path = continuityLogPath(vault, "2026-06", "testdev1");
+    chmodSync(path, 0o000);
+    try {
+      expect(() => listContinuityRecords(vault, {})).toThrow(/EACCES|EPERM/);
+    } finally {
+      chmodSync(path, 0o600);
+    }
+  });
 });

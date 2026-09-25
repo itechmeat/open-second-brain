@@ -15,6 +15,7 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
+import { toPosix } from "../../src/core/path-safety.ts";
 
 let tmp: string;
 let vault: string;
@@ -350,7 +351,9 @@ describe("schema_inspect reports the malformed artifact instead of dying on it",
     // '/tmp/…/Brain/log/2026-08-15.md'`.
     const danglingRel = join("Brain", "log", "2026-08-15.md");
     symlinkSync(join(vault, "Brain", "log", "nothing-here.md"), join(vault, danglingRel));
-    return { retired: retiredRel, log: logRel, dangling: danglingRel };
+    // The report names artifacts by their vault identity, which is POSIX on
+    // every host; the fixture paths above are host-joined.
+    return { retired: toPosix(retiredRel), log: toPosix(logRel), dangling: toPosix(danglingRel) };
   }
 
   for (const view of ["lint", "orphans"] as const) {

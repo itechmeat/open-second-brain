@@ -23,7 +23,7 @@
  * knows where that point is.
  */
 
-import { existsSync, renameSync } from "node:fs";
+import { existsSync } from "node:fs";
 
 import { appendDecisionChangeReceipt } from "./decisions/receipts.ts";
 import { preferenceSlug, type PlanState } from "./dream-plan.ts";
@@ -48,6 +48,7 @@ import {
   type BrainPreference,
   type BrainRetiredReason,
 } from "./types.ts";
+import { renameWithRetry } from "../fs-atomic.ts";
 
 const DAY_MS = 24 * 3600 * 1000;
 
@@ -341,7 +342,7 @@ function moveConsumedSignals(vault: string, plan: PlanState): string[] {
   for (const sig of plan.signalsToMove.values()) {
     const dest = processedSignalPath(vault, sig.date, sig.slug);
     try {
-      renameSync(sig.path, dest);
+      renameWithRetry(sig.path, dest);
       moved.push(sig.id);
     } catch (err) {
       // Best-effort: a missing source signal (already moved) is

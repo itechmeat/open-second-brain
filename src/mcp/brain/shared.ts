@@ -5,6 +5,7 @@
  */
 
 import { isAbsolute, relative, resolve } from "node:path";
+import { toPosix } from "../../core/path-safety.ts";
 import { resolveTimezone } from "../../core/config.ts";
 import { RECALL_CHANNEL, type RecallTelemetryOptions } from "../../core/brain/recall-telemetry.ts";
 import { isoSecond } from "../../core/brain/time.ts";
@@ -307,15 +308,22 @@ export function telemetryOptionsFromArgs(
  * for output rendering). Exported for unit tests
  * — internal callers stay inside this module.
  *
+ * Contract: an in-vault answer is forward-slash on EVERY host, Windows
+ * included (`Brain/inbox/sig-x.md`). It is the note's portable,
+ * Obsidian-style vault identity, so devices sharing one vault return the
+ * same string whatever their OS. A target outside the vault comes back
+ * unchanged, in its host form. See "Vault-relative paths are
+ * forward-slash on every host" in `docs/mcp.md`.
+ *
  * @internal
  */
 export function vaultRelativeSafe(vault: string, target: string): string {
   const absVault = resolve(vault);
   const absTarget = resolve(target);
-  // Use Node's path.relative so the separator handling matches the host
-  // OS (forward-slashes on POSIX, back-slashes on Windows). The prior
-  // implementation hard-coded `"/"` and silently broke on Windows when
-  // the vault sat under e.g. `C:\Users\...`.
+  // Use Node's path.relative so containment is decided with the host's
+  // own separator and drive rules. The prior implementation hard-coded
+  // `"/"` and silently broke on Windows when the vault sat under e.g.
+  // `C:\Users\...`.
   const rel = relative(absVault, absTarget);
   if (rel === "") return "";
   // `relative()` returns a path starting with `..` (or, in rare drive-
@@ -324,7 +332,15 @@ export function vaultRelativeSafe(vault: string, target: string): string {
   // unchanged — callers treat that as "not under vault" and render it
   // as-is.
   if (rel.startsWith("..") || isAbsolute(rel)) return target;
-  return rel;
+  // The in-vault answer goes on the wire in the vault's own POSIX form
+  // (`Brain/inbox/sig-x.md`), whatever the host separator. It is a vault
+  // identity, not a host path: agents feed it back into tools, match it
+  // against wikilinks and compare it across a Syncthing peer set that
+  // mixes Windows and POSIX devices, and every core reader already keys
+  // notes by the forward-slash form (`vaultRelative`, `canonicalNotePath`).
+  // A Windows server answering `Brain\inbox\sig-x.md` would name a note
+  // no other surface recognises.
+  return toPosix(rel);
 }
 
 // ----- Tool registration ---------------------------------------------------

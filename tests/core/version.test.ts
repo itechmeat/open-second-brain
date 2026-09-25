@@ -46,6 +46,7 @@ import { join, relative, resolve } from "node:path";
 import { lexCode } from "../helpers/source-lexer.ts";
 import { OPEN_SECOND_BRAIN_VERSION } from "../../src/core/version.ts";
 import packageJson from "../../package.json" with { type: "json" };
+import { toPosix } from "../../src/core/path-safety.ts";
 
 /** The shipped source tree this census scans. */
 const SRC_ROOT = resolve(import.meta.dir, "..", "..", "src");
@@ -103,7 +104,7 @@ describe("manifest import census", () => {
     const holders: string[] = [];
     for (const file of modules(SRC_ROOT)) {
       const count = manifestImports(readFileSync(file, "utf8"));
-      for (let i = 0; i < count; i++) holders.push(relative(REPO_ROOT, file));
+      for (let i = 0; i < count; i++) holders.push(toPosix(relative(REPO_ROOT, file)));
     }
     expect(holders).toEqual([VERSION_MODULE]);
   });

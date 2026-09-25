@@ -260,10 +260,41 @@ def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> st
     a bare name and does not gate on the POSIX execute bit, which has no meaning
     there; on POSIX it matches the exact name and requires ``X_OK``.
     """
-    found = shutil.which(name)
+    found = _which_not_in_cwd(name)
     if found:
         return found
     dirs = tuple(search_dirs) if search_dirs is not None else _fallback_exe_dirs()
+    return _scan_dirs(name, dirs)
+
+
+def _which_not_in_cwd(name: str) -> str | None:
+    """``shutil.which``, minus the Windows current-directory lookup.
+
+    On Windows ``shutil.which`` looks in the current directory before
+    ``PATH`` (Python 3.12+ skips that only when
+    ``NoDefaultCurrentDirectoryInExePath`` is set), the same order cmd.exe
+    uses. Hermes runs in whatever project it was opened in, so a ``bun.cmd``
+    or ``o2b.cmd`` committed to that project would be the one started. A
+    hit in the current directory is therefore discarded, unless that
+    directory is itself on ``PATH``, and ``PATH`` is scanned instead.
+    """
+    found = shutil.which(name)
+    if not found or os.name != "nt":
+        return found
+    cwd = os.path.normcase(os.path.abspath(os.getcwd()))
+    if os.path.normcase(os.path.dirname(os.path.abspath(found))) != cwd:
+        return found
+    path_dirs = [p for p in os.environ.get("PATH", "").split(os.pathsep) if p and os.path.isabs(p)]
+    if any(os.path.normcase(os.path.abspath(p)) == cwd for p in path_dirs):
+        return found
+    return _scan_dirs(name, path_dirs)
+
+
+def _scan_dirs(name: str, dirs: Iterable[Path | str]) -> str | None:
+    """The first ``name`` (with ``PATHEXT`` suffixes on Windows) in ``dirs``.
+
+    ``os.path`` rather than ``pathlib``, so the scan does not depend on which
+    ``Path`` flavour the platform instantiates."""
     if os.name == "nt" and not os.path.splitext(name)[1]:
         exts = [e for e in os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep) if e]
         candidate_names = [name + ext for ext in exts]
@@ -271,11 +302,11 @@ def _find_executable(name: str, search_dirs: Iterable[Path] | None = None) -> st
         candidate_names = [name]
     for directory in dirs:
         for candidate_name in candidate_names:
-            candidate = directory / candidate_name
-            if not candidate.is_file():
+            candidate = os.path.join(str(directory), candidate_name)
+            if not os.path.isfile(candidate):
                 continue
             if os.name == "nt" or os.access(candidate, os.X_OK):
-                return str(candidate)
+                return candidate
     return None
 
 
@@ -400,7 +431,7 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
         Bun exists to point at, which keeps the common case inheriting exactly
         what it inherits today.
         """
-        if shutil.which("bun"):
+        if _which_not_in_cwd("bun"):
             return None
         bun = _find_executable("bun")
         if not bun:
@@ -442,6 +473,13 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
 
         # Last resort: hope o2b is reachable (e.g. npm global install on
         # Windows created an o2b.cmd shim, or the user's shell can run it).
+        # On Windows resolve it to an absolute path first: CreateProcess only
+        # appends ``.exe`` to a bare name, so ``Popen(["o2b", ...])`` cannot
+        # start an ``o2b.cmd`` launcher even when it is on PATH.
+        if os.name == "nt":
+            o2b = _find_executable("o2b")
+            if o2b:
+                return (o2b, "mcp")
         return ("o2b", "mcp")
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:

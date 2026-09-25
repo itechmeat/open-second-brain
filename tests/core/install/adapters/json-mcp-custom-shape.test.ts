@@ -16,7 +16,11 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { createJsonMcpAdapter } from "../../../../src/core/install/adapters/_json-mcp.ts";
-import { buildPayload } from "../../../../src/core/install/payload.ts";
+import {
+  WINDOWS_LAUNCHER_ENV,
+  buildPayload,
+  launcherCommand,
+} from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 import { deepJsonEquals } from "../../../../src/core/install/payload-equals.ts";
 import type { InstallEnv, McpServerEntry } from "../../../../src/core/install/types.ts";
@@ -94,8 +98,21 @@ describe("createJsonMcpAdapter with custom entry shape", () => {
     const parsed = JSON.parse(readFileSync(path, "utf8"));
     const full = parsed.mcp["open-second-brain"];
     expect(full.type).toBe("local");
-    expect(full.command).toEqual(["o2b", "mcp", "--vault", vault, "--host-target", "kiro"]);
-    expect(full.environment).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
+    const launcher = launcherCommand();
+    expect(full.command).toEqual([
+      launcher.command,
+      ...launcher.prefix,
+      "mcp",
+      "--vault",
+      vault,
+      "--host-target",
+      "kiro",
+    ]);
+    expect(full.environment).toEqual({
+      ...(process.platform === "win32" ? WINDOWS_LAUNCHER_ENV : {}),
+      VAULT_AGENT_NAME: "a",
+      VAULT_TIMEZONE: "UTC",
+    });
     expect(full.enabled).toBe(true);
     expect(full.args).toBeUndefined();
   });

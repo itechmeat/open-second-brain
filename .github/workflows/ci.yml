@@ -111,3 +111,75 @@ jobs:
 
       - name: Python package compiles
         run: python -m compileall -q plugins/hermes
+
+  # Native Windows. The validate job above is the full gate (format, lint,
+  # manifests, link ratchet); this one proves the code paths that differ on
+  # Windows - config under %LOCALAPPDATA%, `.cmd` launchers, SQLite handles
+  # that must be closed before a rename, in-process gzip snapshots - on the
+  # platform they exist for. Checks that are platform-independent are not
+  # repeated here.
+  windows:
+    name: windows
+    runs-on: windows-latest
+    # The suite takes 20 minutes on a good day and has taken over 45 on a
+    # slow runner (every file about 2.5x slower, nothing hung); the bound is
+    # there so a hung test cannot hold a runner for GitHub's six-hour
+    # default, not to police the runner's speed.
+    timeout-minutes: 75
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.0
+
+      - name: Set up Python (Hermes plugin tests)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install JS dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      # GitHub's Windows runners take about twice as long as Linux over the
+      # same suite (NTFS and Defender on every file the fixtures touch), so
+      # Bun's 5 s default - which also bounds beforeEach/afterEach hooks -
+      # times out tests that pass locally. Tests with their own timeout keep it.
+      - name: TypeScript test suite
+        run: bun test --timeout 30000
+
+      - name: Publish o2b on PATH (the anti-drift test needs the live server)
+        shell: bash
+        run: echo "$GITHUB_WORKSPACE/scripts" >> "$GITHUB_PATH"
+
+      - name: Python plugin tests
+        run: python -m unittest discover -s tests/python -v
+
+      # Same assertion as in the validate job: on Windows the anti-drift test
+      # reaches the server through `o2b.cmd`, a path of its own, and a skip
+      # would read as a pass here just as it did there.
+      - name: The anti-drift test actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest test_static_schemas -v 2>&1 \
+            | tee "$RUNNER_TEMP/anti-drift.log"
+          grep -q "test_static_schemas_match_live_tools_list" "$RUNNER_TEMP/anti-drift.log"
+          if grep -qE 'test_static_schemas_match_live_tools_list.* \.\.\. skipped' \
+            "$RUNNER_TEMP/anti-drift.log"; then
+            grep -E ' \.\.\. skipped' "$RUNNER_TEMP/anti-drift.log" >&2
+            echo "anti-drift skipped itself; the live server was not reachable" >&2
+            exit 1
+          fi
+        working-directory: tests/python
+
+      - name: The .cmd launcher runs the CLI
+        shell: cmd
+        run: scripts\o2b.cmd --version

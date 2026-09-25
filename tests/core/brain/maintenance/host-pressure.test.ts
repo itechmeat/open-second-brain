@@ -24,6 +24,7 @@ import {
   type HostPressureIo,
   type HostPressureProbe,
 } from "../../../../src/core/brain/maintenance/host-pressure.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 /** A POSIX host at half its capacity: 2 runnable tasks across 4 CPUs. */
 const POSIX_PROBE: HostPressureProbe = Object.freeze({
@@ -162,7 +163,8 @@ describe("probeCpuQuota reads the cgroup this process is in", () => {
     expect(probeCpuQuota(source())).toBe(false);
   });
 
-  test("a cgroup nobody could read is unknown, never 'no quota'", () => {
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)("a cgroup nobody could read is unknown, never 'no quota'", () => {
     writeFileSync(selfCgroupPath, "0::/user.slice/session-9028.scope\n");
     v2Interface("user.slice/session-9028.scope", "max 100000\n");
     const file = join(cgroupRoot, "user.slice/session-9028.scope", "cpu.max");

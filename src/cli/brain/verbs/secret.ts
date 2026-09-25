@@ -14,6 +14,7 @@ import { resolveAgentName } from "../../../core/config.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../../core/brain/secrets/exec.ts";
 import { listSecrets, removeSecret, setSecret } from "../../../core/brain/secrets/store.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
+import { readStdinText } from "../../stdin.ts";
 
 const USAGE =
   "usage: o2b brain secret set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] [--agent N] [--vault <path>] [--json] | " +
@@ -64,7 +65,7 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
           }
           value = fromEnvValue;
         } else {
-          value = (await Bun.stdin.text()).replace(/\r?\n$/, "");
+          value = (await readStdinText()).replace(/\r?\n$/, "");
           if (value.trim().length === 0) {
             process.stderr.write(
               `brain secret set: pipe the value via stdin or pass --from-env SRC\n`,

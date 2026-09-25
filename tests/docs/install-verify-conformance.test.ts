@@ -21,7 +21,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { Writable } from "node:stream";
 
 import { registerAllAdapters } from "../../src/core/install/adapters/all.ts";
@@ -71,6 +71,7 @@ const PIPELINE_HOSTED_DOCS: Readonly<Record<string, string>> = Object.freeze({
   "hermes.md": "provider-hosted; verified with `hermes memory status`, not an OSB adapter",
   "openclaw.md": "plugin-hosted; verified with `openclaw plugins inspect`, not an OSB adapter",
   "prerequisites.md": "shared setup, not a runtime document",
+  "windows.md": "shared setup for native Windows, not a runtime document",
 });
 
 interface Harness {
@@ -214,13 +215,16 @@ function applyInto(adapter: InstallAdapter, h: Harness): Harness {
 
 /** Replace machine-specific absolute paths with the documented placeholders. */
 function placeholders(text: string, h: Harness): string {
-  return text
+  const replaced = text
     .split(h.vault)
     .join(VAULT_PLACEHOLDER)
     .split(h.home)
     .join(HOME_PLACEHOLDER)
     .split(REPO_ROOT)
     .join(PLUGIN_PLACEHOLDER);
+  // The documents spell paths the POSIX way; on Windows the same paths are
+  // joined with backslashes, which is the only difference to fold away.
+  return sep === "/" ? replaced : replaced.split(sep).join("/");
 }
 
 /**

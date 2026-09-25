@@ -22,6 +22,7 @@ import {
   pruneSnapshots,
   restoreSnapshot,
   SNAPSHOT_ENTRY_SKIP_REASON,
+  tarPathArg,
 } from "../../src/core/brain/snapshot.ts";
 import { brainDirs, snapshotPath } from "../../src/core/brain/paths.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
@@ -32,6 +33,8 @@ import {
   readManifestSidecar,
 } from "../../src/core/brain/manifest.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../src/core/brain/types.ts";
+import { extractSnapshotArchive } from "../helpers/snapshot-archive.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 /**
  * The reason every fixture here takes its snapshot for. `createSnapshot`
@@ -85,19 +88,7 @@ describe("createSnapshot", () => {
     // Extract into a fresh tmp and inspect.
     const tmp = mkdtempSync(join(tmpdir(), "o2b-snap-verify-"));
     try {
-      // Use system tar+zstd for verification (mirror what restore does
-      // but in-test).
-      const { spawnSync } = require("node:child_process") as typeof import("node:child_process");
-      const zstd = spawnSync("zstd", ["-d", "-c", res.path], {
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      expect(zstd.status).toBe(0);
-      const tar = spawnSync("tar", ["-x", "-C", tmp], {
-        input: zstd.stdout,
-        stdio: ["pipe", "inherit", "pipe"],
-      });
-      expect(tar.status).toBe(0);
+      extractSnapshotArchive(res.path, tmp);
 
       const extracted = join(tmp, "Brain");
       expect(existsSync(extracted)).toBe(true);
@@ -207,7 +198,8 @@ describe("listSnapshots", () => {
     expect(listSnapshots(vault).skipped).toEqual([]);
   });
 
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a snapshots directory it cannot read throws instead of reading as empty",
     () => {
       // An empty history and a history nobody could enumerate are
@@ -377,5 +369,20 @@ describe("snapshot tooling absent", () => {
     } finally {
       process.env["PATH"] = originalPath;
     }
+  });
+});
+
+describe("tarPathArg - one spelling every Windows tar accepts", () => {
+  // Git for Windows' MSYS GNU tar, first on PATH inside Git Bash and on
+  // GitHub's Windows runners, cannot extract into a backslashed `-C C:\...`;
+  // bsdtar and GNU tar both accept forward slashes.
+  test("a Windows path is handed to tar with forward slashes", () => {
+    expect(tarPathArg("C:\\Users\\u\\AppData\\Local\\Temp\\o2b-x", "win32")).toBe(
+      "C:/Users/u/AppData/Local/Temp/o2b-x",
+    );
+  });
+
+  test("a POSIX path is unchanged, backslashes included", () => {
+    expect(tarPathArg("/tmp/o2b-x/odd\\name", "linux")).toBe("/tmp/o2b-x/odd\\name");
   });
 });

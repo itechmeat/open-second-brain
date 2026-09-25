@@ -35,7 +35,10 @@ import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtu
 
 const cleanups: Array<() => void> = [];
 afterEach(() => {
-  for (const c of cleanups.splice(0)) c();
+  // Newest first: a raw connection opened on the temp index must close
+  // before the directory holding it is removed (Windows refuses to delete
+  // an open database file).
+  for (const c of cleanups.splice(0).toReversed()) c();
 });
 
 /** A real index over two documents, built by the real indexer. */
@@ -54,7 +57,7 @@ async function indexedVault(prefix: string): Promise<{ vault: string; dbPath: st
  */
 function breakTrigramShadow(dbPath: string): void {
   const db = new Database(dbPath);
-  cleanups.push(() => db.close());
+  cleanups.push(() => db.close(true));
   db.exec("DROP TABLE chunk_trigram");
   db.exec("CREATE TABLE chunk_trigram (id INTEGER PRIMARY KEY, fts_content TEXT)");
 }

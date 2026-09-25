@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { Writable } from "node:stream";
 
 import { cursorAdapter } from "../../../../src/core/install/adapters/cursor.ts";
-import { buildPayload } from "../../../../src/core/install/payload.ts";
+import { buildPayload, launcherCommand } from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 import { InstallError } from "../../../../src/core/install/types.ts";
 
@@ -264,7 +264,7 @@ describe("cursor adapter", () => {
     const env2 = makeEnv(new Date("2026-05-20T13:05:00.000Z"));
     cursorAdapter.apply(cursorAdapter.plan(p, env2), p, env2, applyOpts({ force: true }));
     const after = JSON.parse(readFileSync(cursorConfigPath(), "utf8"));
-    expect(after.mcpServers["open-second-brain"].command).toBe("o2b");
+    expect(after.mcpServers["open-second-brain"].command).toBe(launcherCommand().command);
   });
 
   test("dryRun does not write the config file or manifest", () => {

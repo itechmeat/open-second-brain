@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { JSONRPC_VERSION, MCPServer } from "../../src/mcp/index.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 
 let tmp: string;
 /** Parent whose execute bit is dropped, hiding the vault beneath it. */
@@ -109,25 +110,33 @@ describe("the two answerable cases keep their exact answers", () => {
 });
 
 describe("a vault that cannot be examined is not a vault that is absent", () => {
-  test("vault_exists carries the reason instead of collapsing to false", async () => {
-    chmodSync(sealed, 0o000);
-    const payload = await status(sealedVault);
-    expect(payload["vault_exists"]).not.toBe(false);
-    const field = payload["vault_exists"] as Record<string, unknown>;
-    expect(typeof field["error"]).toBe("string");
-    expect(String(field["error"])).toContain(sealedVault);
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "vault_exists carries the reason instead of collapsing to false",
+    async () => {
+      chmodSync(sealed, 0o000);
+      const payload = await status(sealedVault);
+      expect(payload["vault_exists"]).not.toBe(false);
+      const field = payload["vault_exists"] as Record<string, unknown>;
+      expect(typeof field["error"]).toBe("string");
+      expect(String(field["error"])).toContain(sealedVault);
+    },
+  );
 
-  test("the three gated blocks are built and degraded, never skipped", async () => {
-    chmodSync(sealed, 0o000);
-    const payload = await status(sealedVault);
-    for (const key of ["brain", "search", "vault"]) {
-      expect(payload).toHaveProperty(key);
-      const block = payload[key] as Record<string, unknown>;
-      expect(typeof block["error"]).toBe("string");
-      expect(String(block["error"])).toContain(sealedVault);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the three gated blocks are built and degraded, never skipped",
+    async () => {
+      chmodSync(sealed, 0o000);
+      const payload = await status(sealedVault);
+      for (const key of ["brain", "search", "vault"]) {
+        expect(payload).toHaveProperty(key);
+        const block = payload[key] as Record<string, unknown>;
+        expect(typeof block["error"]).toBe("string");
+        expect(String(block["error"])).toContain(sealedVault);
+      }
+    },
+  );
 
   test("the config blocks still answer, since the config is fine", async () => {
     chmodSync(sealed, 0o000);
@@ -144,10 +153,14 @@ describe("second_brain_query separates the same two conditions", () => {
     expect(message).toContain("vault directory missing");
   });
 
-  test("an unexaminable vault is refused as unexaminable, not as missing", async () => {
-    chmodSync(sealed, 0o000);
-    const message = await queryError(sealedVault);
-    expect(message).not.toContain("vault directory missing");
-    expect(message).toContain(sealedVault);
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unexaminable vault is refused as unexaminable, not as missing",
+    async () => {
+      chmodSync(sealed, 0o000);
+      const message = await queryError(sealedVault);
+      expect(message).not.toContain("vault directory missing");
+      expect(message).toContain(sealedVault);
+    },
+  );
 });

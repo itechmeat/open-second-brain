@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { brainStandingRulesPath } from "../../../src/core/brain/paths.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 import {
   STANDING_RULES_HEADER,
   STANDING_RULES_MAX_CHARS_DEFAULT,
@@ -35,9 +36,6 @@ import {
 } from "../../../src/core/brain/standing-rules.ts";
 
 let vault: string;
-
-/** A mode change cannot make a file unreadable to uid 0. */
-const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
 beforeEach(() => {
   vault = mkdtempSync(join(tmpdir(), "o2b-standing-rules-"));
@@ -180,7 +178,8 @@ describe("readStandingRules: capping is loud and cut on a line boundary", () => 
 });
 
 describe("readStandingRules: an unreadable file throws rather than returning null", () => {
-  test.skipIf(RUNNING_AS_ROOT)("the throw names the path and the reason", () => {
+  // A mode change cannot make a file unreadable to uid 0, nor on Windows.
+  test.skipIf(CHMOD_CANNOT_DENY)("the throw names the path and the reason", () => {
     const path = writeRules("Never force-push.\n");
     chmodSync(path, 0o000);
     try {

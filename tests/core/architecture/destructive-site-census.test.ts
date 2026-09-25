@@ -232,6 +232,20 @@ const FS_STATIC_IMPORT_RE =
 const FS_DYNAMIC_IMPORT_RE =
   /\b(?:const|let|var)\s+(\{[^}]*\}|[A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:await\s+)?(?:import|require)\s*\(\s*["'](?:node:)?fs(?:\/promises)?["']\s*\)/g;
 
+/**
+ * `renameWithRetry` from `src/core/fs-atomic.ts` IS `renameSync` - the
+ * same displacement, retried through transient Windows sharing
+ * violations. Counted under the `node:fs` name so moving a site onto the
+ * wrapper neither hides it from the census nor changes its declaration.
+ * `unlinkWithRetry` is `unlinkSync` under the same retry.
+ */
+const FS_WRAPPER_IMPORT_RE =
+  /\bimport\s+(?!type\b)\{([^}]*)\}\s*from\s*["'][^"']*\/fs-atomic(?:\.ts)?["']/g;
+const FS_WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["renameWithRetry", "renameSync"],
+  ["unlinkWithRetry", "unlinkSync"],
+]);
+
 /** The named import whose binding is a module object, not a function. */
 const FS_NAMESPACE_MEMBER = "promises";
 
@@ -282,6 +296,17 @@ function fsImports(withoutComments: string): FsImports {
     const target = match[1]!.trim();
     if (target.startsWith("{")) readBraceClause(target, acc);
     else namespaces.add(target);
+  }
+  for (const match of withoutComments.matchAll(FS_WRAPPER_IMPORT_RE)) {
+    for (const raw of match[1]!.split(",")) {
+      const [imported, local] = raw
+        .trim()
+        .split(/\s+as\s+/)
+        .map((part) => part.trim());
+      const alias = imported === undefined ? undefined : FS_WRAPPER_ALIASES.get(imported);
+      if (alias === undefined) continue;
+      bindings.set(local !== undefined && local.length > 0 ? local : imported!, alias);
+    }
   }
   return { bindings, namespaces };
 }

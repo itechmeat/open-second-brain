@@ -47,6 +47,7 @@ import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
 import { SNAPSHOT_ARCHIVE_SUFFIX, snapshotsDir } from "../../../../src/core/brain/paths.ts";
 import type { DoctorIssue } from "../../../../src/core/brain/types.ts";
 import { lexCode } from "../../../helpers/source-lexer.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 let vault: string;
 
@@ -194,16 +195,20 @@ describe("recovery-point liveness", () => {
     expect(run().uncertain).toEqual([]);
   });
 
-  test("an unreadable snapshots directory is uncertain, never clean and never stale", () => {
-    archive("dream-20260101T000000Z", RECOVERY_POINT_LIVENESS_WINDOW_DAYS + 7);
-    chmodSync(snapshotsDir(vault), 0o000);
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable snapshots directory is uncertain, never clean and never stale",
+    () => {
+      archive("dream-20260101T000000Z", RECOVERY_POINT_LIVENESS_WINDOW_DAYS + 7);
+      chmodSync(snapshotsDir(vault), 0o000);
 
-    const result = run();
-    expect(stale(result)).toEqual([]);
-    const entry = result.uncertain.find((e) => e.code === RECOVERY_POINT_UNMEASURED_CODE);
-    expect(entry).toBeDefined();
-    expect(entry!.message).toContain(SCHEDULE_UNOBSERVABLE_CLAUSE);
-  });
+      const result = run();
+      expect(stale(result)).toEqual([]);
+      const entry = result.uncertain.find((e) => e.code === RECOVERY_POINT_UNMEASURED_CODE);
+      expect(entry).toBeDefined();
+      expect(entry!.message).toContain(SCHEDULE_UNOBSERVABLE_CLAUSE);
+    },
+  );
 });
 
 describe("the verdict comes from the injected clock, never from the wall", () => {

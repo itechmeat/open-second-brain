@@ -10,7 +10,7 @@
  * instead of deleting history.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { sanitiseTextField } from "../redactor.ts";
@@ -19,6 +19,7 @@ import type { FrontmatterMap } from "../types.ts";
 import { allocateAndCreate } from "./paths.ts";
 import { isoDate, isoSecond } from "./time.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { renameWithRetry } from "../fs-atomic.ts";
 
 /** Active dead-ends kept before overflow archives the oldest. */
 export const DEAD_END_MAX_ACTIVE = 100;
@@ -160,7 +161,7 @@ function trimActive(vault: string, maxActive: number): string[] {
   mkdirSync(archiveDir, { recursive: true });
   const archived: string[] = [];
   for (const entry of overflow) {
-    renameSync(entry.path, join(archiveDir, `${entry.id}.md`));
+    renameWithRetry(entry.path, join(archiveDir, `${entry.id}.md`));
     archived.push(entry.id);
   }
   return archived;

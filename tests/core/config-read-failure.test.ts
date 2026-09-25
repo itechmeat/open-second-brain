@@ -38,6 +38,7 @@ import {
 } from "../../src/core/config.ts";
 import { receiptShardPath } from "../../src/core/brain/decisions/receipts.ts";
 import { claimShardPath } from "../../src/core/brain/truth/store.ts";
+import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 
@@ -109,24 +110,28 @@ describe("discoverConfig: present but unreadable config", () => {
     expect((caught as ConfigReadError).message).toContain(path);
   });
 
-  test("a file that cannot be opened raises rather than reading as absent", () => {
-    const path = join(tmp, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(path, 0o000);
-    try {
-      let caught: unknown;
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a file that cannot be opened raises rather than reading as absent",
+    () => {
+      const path = join(tmp, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(path, 0o000);
       try {
-        discoverConfig(path);
-      } catch (err) {
-        caught = err;
+        let caught: unknown;
+        try {
+          discoverConfig(path);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(ConfigReadError);
+        expect((caught as ConfigReadError).path).toBe(path);
+        expect((caught as ConfigReadError).message).toContain(path);
+      } finally {
+        chmodSync(path, 0o600);
       }
-      expect(caught).toBeInstanceOf(ConfigReadError);
-      expect((caught as ConfigReadError).path).toBe(path);
-      expect((caught as ConfigReadError).message).toContain(path);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+    },
+  );
 
   /**
    * The condition an existence check cannot express. `existsSync` answers
@@ -136,44 +141,52 @@ describe("discoverConfig: present but unreadable config", () => {
    * to its default while the install looked like one that never ran
    * `o2b init`. Only ENOENT on the path itself is an absence.
    */
-  test("a config behind an untraversable directory raises, it is not absent", () => {
-    const dir = join(tmp, "locked");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(dir, 0o000);
-    try {
-      let caught: unknown;
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a config behind an untraversable directory raises, it is not absent",
+    () => {
+      const dir = join(tmp, "locked");
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(dir, 0o000);
       try {
-        discoverConfig(path);
-      } catch (err) {
-        caught = err;
+        let caught: unknown;
+        try {
+          discoverConfig(path);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(ConfigReadError);
+        expect((caught as ConfigReadError).path).toBe(path);
+        expect((caught as ConfigReadError).message).toContain(path);
+      } finally {
+        chmodSync(dir, 0o755);
       }
-      expect(caught).toBeInstanceOf(ConfigReadError);
-      expect((caught as ConfigReadError).path).toBe(path);
-      expect((caught as ConfigReadError).message).toContain(path);
-    } finally {
-      chmodSync(dir, 0o755);
-    }
-  });
+    },
+  );
 
   /**
    * Same reasoning at the gate: an untraversable parent must never resolve
    * a default-OFF flag to `false`, which is indistinguishable from the
    * operator never having set it.
    */
-  test("a flag gate behind an untraversable directory raises rather than answering `off`", () => {
-    const dir = join(tmp, "locked");
-    mkdirSync(dir, { recursive: true });
-    const path = join(dir, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(dir, 0o000);
-    try {
-      expect(() => resolveSkillAutoAttach(path)).toThrow(ConfigReadError);
-    } finally {
-      chmodSync(dir, 0o755);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a flag gate behind an untraversable directory raises rather than answering `off`",
+    () => {
+      const dir = join(tmp, "locked");
+      mkdirSync(dir, { recursive: true });
+      const path = join(dir, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(dir, 0o000);
+      try {
+        expect(() => resolveSkillAutoAttach(path)).toThrow(ConfigReadError);
+      } finally {
+        chmodSync(dir, 0o755);
+      }
+    },
+  );
 
   /**
    * A directory whose contents cannot be listed is still a directory in the
@@ -216,16 +229,20 @@ describe("call sites: an unreadable plugin config is surfaced, never read as `of
     expect(resolveSkillAutoAttach(join(tmp, "config.yaml"))).toBe(false);
   });
 
-  test("a flag gate on an unreadable config raises instead of answering `off`", () => {
-    const path = join(tmp, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(path, 0o000);
-    try {
-      expect(() => resolveSkillAutoAttach(path)).toThrow(ConfigReadError);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a flag gate on an unreadable config raises instead of answering `off`",
+    () => {
+      const path = join(tmp, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(path, 0o000);
+      try {
+        expect(() => resolveSkillAutoAttach(path)).toThrow(ConfigReadError);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 
   /**
    * The env twin is the escape hatch that makes the raise survivable: an
@@ -248,16 +265,20 @@ describe("call sites: an unreadable plugin config is surfaced, never read as `of
     expect(resolveVault(join(tmp, "config.yaml"), { cwd: tmp })).toBeNull();
   });
 
-  test("resolveVault on an unreadable config raises instead of reporting no vault", () => {
-    const path = join(tmp, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(path, 0o000);
-    try {
-      expect(() => resolveVault(path, { cwd: tmp })).toThrow(ConfigReadError);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "resolveVault on an unreadable config raises instead of reporting no vault",
+    () => {
+      const path = join(tmp, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(path, 0o000);
+      try {
+        expect(() => resolveVault(path, { cwd: tmp })).toThrow(ConfigReadError);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 
   /**
    * The write path is the one that made the collapse destructive: reading
@@ -265,26 +286,30 @@ describe("call sites: an unreadable plugin config is surfaced, never read as `of
    * persisting one key rewrote the operator's whole config down to that
    * single line.
    */
-  test("setConfigValue raises rather than overwriting a config it could not read", () => {
-    const path = join(tmp, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(path, 0o400);
-    let caught: unknown;
-    try {
-      // Readable-but-not-writable is not the condition under test; make the
-      // read itself fail, which is what the old catch absorbed.
-      chmodSync(path, 0o000);
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "setConfigValue raises rather than overwriting a config it could not read",
+    () => {
+      const path = join(tmp, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(path, 0o400);
+      let caught: unknown;
       try {
-        setConfigValue("agent_name", "someone", path);
-      } catch (err) {
-        caught = err;
+        // Readable-but-not-writable is not the condition under test; make the
+        // read itself fail, which is what the old catch absorbed.
+        chmodSync(path, 0o000);
+        try {
+          setConfigValue("agent_name", "someone", path);
+        } catch (err) {
+          caught = err;
+        }
+      } finally {
+        chmodSync(path, 0o600);
       }
-    } finally {
-      chmodSync(path, 0o600);
-    }
-    expect(caught).toBeInstanceOf(ConfigReadError);
-    expect(readFileSync(path, "utf8")).toBe(VALID_CONFIG);
-  });
+      expect(caught).toBeInstanceOf(ConfigReadError);
+      expect(readFileSync(path, "utf8")).toBe(VALID_CONFIG);
+    },
+  );
 });
 
 /**
@@ -310,7 +335,8 @@ describe("identity resolution refuses rather than minting a new identity", () =>
     return path;
   }
 
-  test("resolveDeviceId raises and persists nothing", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("resolveDeviceId raises and persists nothing", () => {
     const path = brokenConfig();
     try {
       expect(() => resolveDeviceId(path)).toThrow(ConfigReadError);
@@ -320,7 +346,8 @@ describe("identity resolution refuses rather than minting a new identity", () =>
     expect(readFileSync(path, "utf8")).toBe(IDENTITY_CONFIG);
   });
 
-  test("resolveInstallationSecret raises and persists nothing", () => {
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("resolveInstallationSecret raises and persists nothing", () => {
     const path = brokenConfig();
     try {
       expect(() => resolveInstallationSecret(path)).toThrow(ConfigReadError);
@@ -330,23 +357,31 @@ describe("identity resolution refuses rather than minting a new identity", () =>
     expect(readFileSync(path, "utf8")).toBe(IDENTITY_CONFIG);
   });
 
-  test("the claim shard path raises rather than silently choosing the legacy file", () => {
-    const path = brokenConfig();
-    try {
-      expect(() => claimShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the claim shard path raises rather than silently choosing the legacy file",
+    () => {
+      const path = brokenConfig();
+      try {
+        expect(() => claimShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 
-  test("the receipt shard path raises rather than silently choosing the legacy file", () => {
-    const path = brokenConfig();
-    try {
-      expect(() => receiptShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the receipt shard path raises rather than silently choosing the legacy file",
+    () => {
+      const path = brokenConfig();
+      try {
+        expect(() => receiptShardPath(join(tmp, "vault"), path)).toThrow(ConfigReadError);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 
   /**
    * The env escape hatch survives the raise, exactly as it does for the
@@ -383,7 +418,7 @@ describe("hooks stay fail-open on an unreadable plugin config", () => {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { PATH: process.env["PATH"] ?? "", HOME: tmp, ...env },
+      env: { PATH: process.env["PATH"] ?? "", ...homeEnv(tmp), ...env },
     });
     proc.stdin.write(JSON.stringify(payload));
     await proc.stdin.end();
@@ -417,33 +452,37 @@ describe("hooks stay fail-open on an unreadable plugin config", () => {
    * names the file - so the hook's silence is the hook's contract, not an
    * absent raise.
    */
-  test("the same gate outside the hook's catch exits non-zero, naming the file", async () => {
-    const path = join(tmp, "config.yaml");
-    writeFileSync(path, VALID_CONFIG, "utf8");
-    chmodSync(path, 0o000);
-    const configModule = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      "..",
-      "..",
-      "src",
-      "core",
-      "config.ts",
-    );
-    try {
-      const result = await run(
-        [
-          "bun",
-          "-e",
-          `const m = await import(${JSON.stringify(configModule)});
-m.resolveGapLoopEnabled(${JSON.stringify(path)});`,
-        ],
-        {},
-        { OPEN_SECOND_BRAIN_CONFIG: path },
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "the same gate outside the hook's catch exits non-zero, naming the file",
+    async () => {
+      const path = join(tmp, "config.yaml");
+      writeFileSync(path, VALID_CONFIG, "utf8");
+      chmodSync(path, 0o000);
+      const configModule = resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "..",
+        "src",
+        "core",
+        "config.ts",
       );
-      expect(result.exit).not.toBe(0);
-      expect(result.stderr).toContain(path);
-    } finally {
-      chmodSync(path, 0o600);
-    }
-  });
+      try {
+        const result = await run(
+          [
+            "bun",
+            "-e",
+            `const m = await import(${JSON.stringify(configModule)});
+m.resolveGapLoopEnabled(${JSON.stringify(path)});`,
+          ],
+          {},
+          { OPEN_SECOND_BRAIN_CONFIG: path },
+        );
+        expect(result.exit).not.toBe(0);
+        expect(result.stderr).toContain(path);
+      } finally {
+        chmodSync(path, 0o600);
+      }
+    },
+  );
 });

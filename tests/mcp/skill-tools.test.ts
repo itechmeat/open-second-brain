@@ -44,7 +44,7 @@ test("list_skills returns sorted names with descriptions and paths", async () =>
   expect(result.count).toBe(2);
   expect(result.skills.map((s) => s.name)).toEqual(["demo-skill", "other-skill"]);
   expect(result.skills[0]!.description).toBe("Demonstration skill.");
-  expect(result.skills[0]!.path).toContain("skills/demo-skill");
+  expect(result.skills[0]!.path).toContain(join("skills", "demo-skill"));
 });
 
 test("list_skills with no roots fails soft to an empty list", async () => {

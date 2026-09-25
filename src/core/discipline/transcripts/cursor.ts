@@ -24,6 +24,7 @@ import {
   type TranscriptRuntime,
   type TranscriptScanResult,
 } from "./types.ts";
+import { closeDatabase } from "../../sqlite-close.ts";
 
 /** Every layout a Cursor build has used, from the one declaration. */
 function workspaceStorageRoots(ctx: HostContext): ReadonlyArray<string> {
@@ -113,7 +114,7 @@ function queryCursorDb(
     return { sessionCount, messageCount };
   } finally {
     try {
-      db.close();
+      closeDatabase(db);
     } catch {
       // ignore close failures
     }

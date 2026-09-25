@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { TRANSPORT_REACH } from "../../../src/core/graph/transport-reach.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../../../src/core/graph/visibility.ts";
 import { listVaultPages } from "../../../src/core/vault.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -81,26 +82,34 @@ describe("a page whose file cannot be read", () => {
     return path;
   };
 
-  test("is withheld at remote reach, exactly as a reserved page is", () => {
-    const path = unreadable();
-    try {
-      const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
-      expect(walked).not.toContain("unreadable");
-      expect(walked).not.toContain("Unreadable");
-    } finally {
-      chmodSync(path, 0o644);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "is withheld at remote reach, exactly as a reserved page is",
+    () => {
+      const path = unreadable();
+      try {
+        const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.remote }).map((p) => p.title);
+        expect(walked).not.toContain("unreadable");
+        expect(walked).not.toContain("Unreadable");
+      } finally {
+        chmodSync(path, 0o644);
+      }
+    },
+  );
 
-  test("is kept at local reach, where the caller can open the file itself", () => {
-    const path = unreadable();
-    try {
-      const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
-      expect(walked).toContain("unreadable");
-    } finally {
-      chmodSync(path, 0o644);
-    }
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "is kept at local reach, where the caller can open the file itself",
+    () => {
+      const path = unreadable();
+      try {
+        const walked = listVaultPages(vault, { reach: TRANSPORT_REACH.local }).map((p) => p.title);
+        expect(walked).toContain("unreadable");
+      } finally {
+        chmodSync(path, 0o644);
+      }
+    },
+  );
 
   test("a readable untagged page is unaffected at both reaches", () => {
     for (const reach of [TRANSPORT_REACH.local, TRANSPORT_REACH.remote] as const) {

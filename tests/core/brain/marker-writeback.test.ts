@@ -19,6 +19,7 @@ import {
   applyMarkerWritebacks,
   MarkerWritebackGuardrailError,
 } from "../../../src/core/brain/marker-writeback.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 const NOW = new Date("2026-07-17T12:34:56Z");
 const LOG_DATE = "2026-07-17";
@@ -467,8 +468,9 @@ describe("apply mode - consumption failure surfaces applied-unconsumed", () => {
   // read-only directory, so `atomicWriteFileSync` cannot create its temp
   // file). The mutation stands while the marker stays live - the run must
   // report that honestly (applied-unconsumed), not as a clean `applied`.
-  // Skipped when running as root, which bypasses directory write bits.
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  // Skipped when running as root, which bypasses directory write bits, and
+  // on Windows, where chmod cannot make a directory refuse new files.
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a failed rewrite yields applied-unconsumed with the mutation intact and the marker live",
     async () => {
       writeConfig({ markerWriteback: true });

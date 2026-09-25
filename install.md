@@ -15,7 +15,8 @@ runtime you use and read the corresponding `install/<runtime>.md`.
 
 Read **`install/prerequisites.md`** first — Bun runtime, vault
 discovery, identity (agent name + timezone), and the verification
-pattern that every install path ends with.
+pattern that every install path ends with. On native Windows, read
+**`install/windows.md`** as well.
 
 ## Quick install
 

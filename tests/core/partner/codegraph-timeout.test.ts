@@ -22,7 +22,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { delimiter, join } from "node:path";
 
 import {
   checkCodegraph,
@@ -54,6 +54,17 @@ function makeIndexedRepo(dir: string): string {
 /** A `codegraph` on PATH that accepts every argument and never answers. */
 function makeHangingCodegraph(binDir: string): void {
   mkdirSync(binDir, { recursive: true });
+  if (process.platform === "win32") {
+    // Windows cannot run a shebang script; a `.cmd` shim is how a partner
+    // installed through npm appears there anyway. `ping -n N` is cmd's
+    // stdin-independent sleep (N-1 seconds).
+    writeFileSync(
+      join(binDir, `${CODEGRAPH_CLI.bin}.cmd`),
+      `@ping -n ${HANG_SECONDS + 1} 127.0.0.1 >nul\r\n`,
+      "utf8",
+    );
+    return;
+  }
   const script = join(binDir, CODEGRAPH_CLI.bin);
   writeFileSync(script, `#!/bin/sh\nsleep ${HANG_SECONDS}\n`, "utf8");
   chmodSync(script, 0o755);
@@ -68,7 +79,7 @@ beforeEach(() => {
   savedPath = process.env["PATH"];
   // PREPENDED rather than replaced: the fake shadows any real partner on
   // this machine, and `sh` still has to find `sleep`.
-  process.env["PATH"] = `${join(tmp, "bin")}:${savedPath ?? ""}`;
+  process.env["PATH"] = `${join(tmp, "bin")}${delimiter}${savedPath ?? ""}`;
 });
 
 afterEach(() => {

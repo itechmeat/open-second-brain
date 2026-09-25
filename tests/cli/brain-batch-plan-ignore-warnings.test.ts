@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import { INGEST_TOOLS } from "../../src/mcp/brain/ingest-tools.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let vault: string;
@@ -85,7 +86,8 @@ describe("o2b brain batch-plan ignore_warnings (t_4b2bd8f7 follow-through)", () 
     expect(res.stdout).not.toMatch(/malformed/i);
   });
 
-  test("an unreadable .gitignore reaches both CLI surfaces", async () => {
+  // chmod 000 denies nothing to root or on Windows (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)("an unreadable .gitignore reaches both CLI surfaces", async () => {
     write("mono/secret.md");
     write("mono/.gitignore", "secret.md\n");
     chmodSync(join(vault, "mono", ".gitignore"), 0o000);

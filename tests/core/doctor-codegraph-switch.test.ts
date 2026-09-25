@@ -52,6 +52,16 @@ function makeIndexedRepo(dir: string): string {
  */
 function makeFakeCodegraph(binDir: string, sentinelPath: string): void {
   mkdirSync(binDir, { recursive: true });
+  if (process.platform === "win32") {
+    // Windows cannot run a shebang script; a `.cmd` shim is how a partner
+    // installed through npm appears there anyway, and PATH lookup finds it.
+    writeFileSync(
+      join(binDir, "codegraph.cmd"),
+      ["@echo off", `echo %* >> "${sentinelPath}"`, 'echo {"initialized":true}', ""].join("\r\n"),
+      "utf8",
+    );
+    return;
+  }
   const script = join(binDir, "codegraph");
   writeFileSync(
     script,

@@ -173,16 +173,16 @@ describe("the wait is bounded", () => {
   });
 
   test("a host that never answers is killed and reported, not waited on", () => {
-    // Driven against `sleep`, which stands in for the real obstacle: a
-    // host CLI blocking on a network call or an interactive
-    // authentication prompt. Without the cap this call never returns.
-    const sleep = Bun.which("sleep");
-    expect(sleep === null ? "sleep is on PATH: false" : "sleep is on PATH: true").toBe(
-      "sleep is on PATH: true",
-    );
+    // Driven against a process that just waits, which stands in for the
+    // real obstacle: a host CLI blocking on a network call or an
+    // interactive authentication prompt. Without the cap this call never
+    // returns. The running Bun is the stand-in rather than `sleep`, which
+    // native Windows does not ship.
     const runner = createHostProbeRunner(200);
     const started = Date.now();
-    const result = runner.run("sleep", ["30"], { PATH: process.env["PATH"] ?? "/usr/bin" });
+    const result = runner.run(process.execPath, ["-e", "setTimeout(() => {}, 30000)"], {
+      PATH: process.env["PATH"] ?? "/usr/bin",
+    });
     const elapsed = Date.now() - started;
     expect(elapsed).toBeLessThan(10_000);
     expect(result.exitCode).not.toBe(0);

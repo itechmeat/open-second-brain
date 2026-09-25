@@ -519,7 +519,9 @@ test("every module that writes preference bytes reaches the ownership resolver",
     );
   const offenders: string[] = [];
   for (const abs of walk(root)) {
-    const rel = abs.slice(abs.indexOf("src/"));
+    // Forward slashes so the census keys match on Windows too.
+    const posixAbs = abs.replaceAll("\\", "/");
+    const rel = posixAbs.slice(posixAbs.indexOf("src/"));
     if (rel === "src/core/brain/preference.ts") continue; // the resolver's own home
     const code = lexSource(readFile(abs, "utf8")).code;
     const buildsPath = PREFERENCE_PATH_BUILDERS.some((p) => code.includes(p));

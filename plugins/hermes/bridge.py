@@ -334,6 +334,10 @@ class McpBrainBridge:
             bufsize=0,
             cwd=self._cwd,
             env=self._env,
+            # The Hermes desktop app is a GUI process: without this, Windows
+            # opens a console window for the Bun child and keeps it on screen
+            # for the life of the bridge. No-op flag value on POSIX.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         stderr_thread = threading.Thread(
             target=self._drain_stderr,

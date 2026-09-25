@@ -9,6 +9,7 @@
 import { statSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { toPosix } from "../../path-safety.ts";
 import { REMOVED_TOOLS } from "../../removed-surfaces.ts";
 import { brainDirs } from "../paths.ts";
 import type { DoctorCheck } from "./check.ts";
@@ -105,7 +106,9 @@ export const removedToolReferenceCheck: DoctorCheck = {
         severity: "warning",
         code: "removed-tool-reference",
         message:
-          `${relative(vault, path)} references tool(s) removed in 1.0.0: ` +
+          // Vault-relative, forward-slash on every host: the note is named the
+          // way Obsidian and every other vault path in the report spell it.
+          `${toPosix(relative(vault, path))} references tool(s) removed in 1.0.0: ` +
           `${replacements} (see docs/updating.md)`,
       });
       emitted += 1;

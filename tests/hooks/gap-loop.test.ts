@@ -23,6 +23,7 @@ import {
 } from "../../src/core/brain/gaps/gap-loop.ts";
 import { brainGapTasksDir } from "../../src/core/brain/paths.ts";
 import { writeFrontmatterAtomic } from "../../src/core/vault.ts";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "hooks");
 
@@ -51,7 +52,7 @@ async function runHook(
 ): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
   };
   const proc = Bun.spawn(["bun", "run", join(HOOKS_DIR, `${name}.ts`)], {
     stdin: "pipe",

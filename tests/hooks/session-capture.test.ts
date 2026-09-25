@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -38,7 +39,7 @@ async function runHook(
     stderr: "pipe",
     env: {
       PATH: process.env["PATH"] ?? "",
-      HOME: configHome,
+      ...homeEnv(configHome),
       VAULT_DIR: vault,
       ...env,
     },

@@ -1,5 +1,7 @@
 /**
  * Install (and remove) CLI symlinks for `o2b` and `vault-log` in `~/.local/bin`.
+ * On native Windows the same verbs write `.cmd` launchers instead - see
+ * `install-cli-windows.ts`.
  *
  * Mirrors `src/open_second_brain/install_cli.py`. Refuses to overwrite a
  * symlink that already points to a different repo's checkout — that's the
@@ -16,11 +18,12 @@ import {
   symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { userBinDir } from "../core/platform-dirs.ts";
 import type { InstallResult, UninstallResult } from "../core/types.ts";
+import { healCliWindows, installCliWindows, uninstallCliWindows } from "./install-cli-windows.ts";
 
 const CLI_SCRIPTS = ["o2b", "vault-log", "o2b-hook"] as const;
 
@@ -122,7 +125,8 @@ function canReclaimOnInstall(link: string, name: string): boolean {
 }
 
 export function installCli(bindir?: string): InstallResult {
-  const dir = bindir ?? join(homedir(), ".local", "bin");
+  const dir = bindir ?? userBinDir();
+  if (process.platform === "win32") return installCliWindows(CLI_SCRIPTS, scriptsDir(), dir);
   mkdirSync(dir, { recursive: true });
 
   const outcomes: Array<readonly [string, string]> = [];
@@ -198,7 +202,8 @@ export function installCli(bindir?: string): InstallResult {
  * so it heals even when the on-PATH `o2b` is the stale one.
  */
 export function healCliSymlinks(bindir?: string): InstallResult {
-  const dir = bindir ?? join(homedir(), ".local", "bin");
+  const dir = bindir ?? userBinDir();
+  if (process.platform === "win32") return healCliWindows(CLI_SCRIPTS, scriptsDir(), dir);
   const outcomes: Array<readonly [string, string]> = [];
   const errors: string[] = [];
 
@@ -230,7 +235,8 @@ export function healCliSymlinks(bindir?: string): InstallResult {
 }
 
 export function uninstallCli(bindir?: string): UninstallResult {
-  const dir = bindir ?? join(homedir(), ".local", "bin");
+  const dir = bindir ?? userBinDir();
+  if (process.platform === "win32") return uninstallCliWindows(CLI_SCRIPTS, scriptsDir(), dir);
   const repoScripts = scriptsDir();
   const outcomes: Array<readonly [string, string]> = [];
   const errors: string[] = [];

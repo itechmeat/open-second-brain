@@ -222,11 +222,16 @@ describe("the friction matrix is derived, not written", () => {
     for (const row of buildFrictionMatrix(input()).rows) {
       const facts = RUNTIME_FACTS[row.target];
       const roots = cell(row, FRICTION_DIMENSION.sessionTranscripts);
-      if (facts.sessionRoots.length === 0) {
+      // Declared for THIS platform: a root scoped to another platform (the
+      // %APPDATA% Cursor layout) is not a declaration a POSIX host answers.
+      const declared = facts.sessionRoots.filter(
+        (root) => root.platforms === undefined || root.platforms.includes(process.platform),
+      );
+      if (declared.length === 0) {
         expect(roots.detail).toBeNull();
       } else {
-        expect(roots.value).toContain(String(facts.sessionRoots.length));
-        for (const root of facts.sessionRoots) {
+        expect(roots.value).toContain(String(declared.length));
+        for (const root of declared) {
           expect(roots.detail ?? "").toContain(root.resolve({ home, env: {} }));
         }
       }

@@ -28,11 +28,12 @@
  * is byte-identical to one written before the field existed.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { createHash } from "node:crypto";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { atomicWriteText } from "../../fs-atomic.ts";
+import { atomicWriteText, renameWithRetry } from "../../fs-atomic.ts";
 import { parseFrontmatter, writeFrontmatterAtomic } from "../../vault.ts";
 import {
   BRAIN_CAPTURES_PROCESSED_REL,
@@ -317,7 +318,7 @@ function listCapturesIn(
   const out: CaptureNote[] = [];
   for (const name of readdirSync(dir)) {
     if (!name.endsWith(".md")) continue;
-    const abs = `${dir}/${name}`;
+    const abs = join(dir, name);
     const note = parseCaptureFile(abs, `${relRoot}/${name}`, staged);
     if (note !== null) out.push(note);
   }
@@ -372,7 +373,7 @@ export function archiveCapture(vault: string, id: string): CaptureNote {
   mkdirSync(dir, { recursive: true });
   const archive = captureArchivePath(vault, id);
   try {
-    renameSync(staging, archive);
+    renameWithRetry(staging, archive);
   } catch {
     // Cross-device rename fallback: copy then remove the source.
     atomicWriteText(archive, readFileSync(staging, "utf8"));

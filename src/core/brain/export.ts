@@ -19,6 +19,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 
+import { toPosix } from "../path-safety.ts";
 import { hostPathFreeReason } from "./host-path-free.ts";
 import { parsePreference } from "./preference.ts";
 import { brainDirs } from "./paths.ts";
@@ -231,8 +232,9 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     // failure is a permission or filesystem fault, not an empty Brain.
     // Returning `[]` here reported the second while the first was true.
     // Named vault-relative for the same reason the per-file failures are:
-    // this collector is reachable from an MCP error path.
-    const rel = relative(vault, dir);
+    // this collector is reachable from an MCP error path. Forward-slash on
+    // every host, the one spelling a vault-relative path has on the wire.
+    const rel = toPosix(relative(vault, dir));
     throw new Error(`cannot list ${rel}: ${hostPathFreeReason(err, vault, dir, rel)}`, {
       cause: err,
     });
@@ -241,7 +243,7 @@ export function collectPreferenceRows(vault: string): PreferenceCollection {
     if (!name.startsWith("pref-") || !name.endsWith(".md")) continue;
     const abs = join(dir, name);
     const record = (err: unknown): void => {
-      const rel = relative(vault, abs);
+      const rel = toPosix(relative(vault, abs));
       // The parser's own message carries the absolute host path
       // (`BrainParseError` composes `<detail> (<path>)`, and a raw `node:fs`
       // failure embeds it too), and this refusal is reachable from an MCP

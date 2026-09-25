@@ -1,16 +1,8 @@
-import {
-  closeSync,
-  existsSync,
-  openSync,
-  readSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { closeSync, existsSync, openSync, readSync, unlinkSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { atomicWriteFileSync } from "../../../core/fs-atomic.ts";
+import { atomicWriteFileSync, renameWithRetry } from "../../../core/fs-atomic.ts";
 import {
   EXPORT_FORMAT,
   EXPORT_FORMATS,
@@ -397,7 +389,7 @@ function deliverBody(body: string, outPath: string | undefined): number {
 function deliverSpool(spool: string, outPath: string | undefined): number {
   try {
     if (outPath !== undefined) {
-      renameSync(spool, outPath);
+      renameWithRetry(spool, outPath);
       ok(`wrote ${outPath}`);
       return 0;
     }

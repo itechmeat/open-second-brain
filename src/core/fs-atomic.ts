@@ -36,6 +36,88 @@ export interface AtomicWriteOptions {
 }
 
 /**
+ * Error codes Windows returns while another process holds the source or
+ * the target open without `FILE_SHARE_DELETE`: a sync client (Syncthing,
+ * OneDrive), an editor (Obsidian), an antivirus scan, or another `o2b`
+ * finishing its read. They clear within milliseconds to seconds.
+ */
+const WINDOWS_TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** Total time {@link renameWithRetry} keeps retrying on Windows. */
+const WINDOWS_RENAME_RETRY_BUDGET_MS = 2_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * `renameSync` that rides out transient Windows sharing violations.
+ *
+ * On POSIX this IS `renameSync`: `rename(2)` does not care who has the
+ * file open. On Windows a rename fails with EPERM/EACCES/EBUSY while any
+ * handle without `FILE_SHARE_DELETE` is open on either path, so the call
+ * retries with a short backoff for up to two seconds before rethrowing
+ * the last error (the same policy graceful-fs applies, with a tighter
+ * budget). Any other error is thrown at once.
+ *
+ * The wait blocks the thread (`Atomics.wait`, portable to the Node-targeted
+ * OpenClaw bundle where `Bun.sleepSync` does not exist), inside the MCP
+ * server too. A PERMANENT refusal - a read-only target, an ACL - carries the
+ * same errno as a sharing violation, so it also spends the whole budget
+ * before it is rethrown; two seconds is the price of not failing a write
+ * that a sync client would have released a moment later.
+ *
+ * `seams` exist for tests only: the platform, the rename, the sleep and the
+ * clock, so the retry policy is pinned on any host.
+ */
+export function renameWithRetry(from: string, to: string, seams: RenameRetrySeams = {}): void {
+  const rename = seams.rename ?? ((a: string, b: string) => renameSync(a, b));
+  withWindowsSharingRetry(() => rename(from, to), seams);
+}
+
+/**
+ * `unlinkSync` with the same Windows retry as {@link renameWithRetry}: a
+ * delete fails with EPERM/EBUSY while another process holds the file open
+ * without `FILE_SHARE_DELETE`. POSIX: plain `unlinkSync`.
+ */
+export function unlinkWithRetry(path: string, seams: RenameRetrySeams = {}): void {
+  const unlink = seams.unlink ?? ((p: string) => unlinkSync(p));
+  withWindowsSharingRetry(() => unlink(path), seams);
+}
+
+function withWindowsSharingRetry(op: () => void, seams: RenameRetrySeams): void {
+  if ((seams.platform ?? process.platform) !== "win32") {
+    op();
+    return;
+  }
+  const sleep = seams.sleep ?? sleepSync;
+  const now = seams.now ?? Date.now;
+  const deadline = now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  let delay = 10;
+  for (;;) {
+    try {
+      op();
+      return;
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code === undefined || !WINDOWS_TRANSIENT_RENAME_CODES.has(code)) throw err;
+      if (now() + delay > deadline) throw err;
+      sleep(delay);
+      delay = Math.min(delay * 2, 250);
+    }
+  }
+}
+
+/** Test seams of {@link renameWithRetry}. */
+export interface RenameRetrySeams {
+  readonly platform?: NodeJS.Platform;
+  readonly rename?: (from: string, to: string) => void;
+  readonly unlink?: (path: string) => void;
+  readonly sleep?: (ms: number) => void;
+  readonly now?: () => number;
+}
+
+/**
  * Atomic overwrite. Returns `true` when it wrote, `false` when
  * `skipIfUnchanged` short-circuited an identical write.
  */
@@ -48,7 +130,9 @@ export function atomicWriteFileSync(
   withTempFile(target, contents, (tmpPath) => {
     // POSIX `rename(2)` is atomic and clobbers an existing target — that's
     // exactly the "overwrite" semantic we want. No exclusivity guarantee.
-    renameSync(tmpPath, target);
+    // Windows `MoveFileEx(REPLACE_EXISTING)` is too, once no reader holds
+    // the target; renameWithRetry waits that out.
+    renameWithRetry(tmpPath, target);
   });
   return true;
 }
@@ -102,7 +186,7 @@ export function atomicWriteText(
     targetPath,
     candidate,
     (tmpPath) => {
-      renameSync(tmpPath, targetPath);
+      renameWithRetry(tmpPath, targetPath);
     },
     opts.mode ?? 0o600,
   );

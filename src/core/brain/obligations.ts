@@ -19,10 +19,10 @@
  *   - `remove` retires the page into `Brain/obligations/archive/`.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { slugify } from "../vault.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { obligationPath, obligationsArchiveDir, obligationsDir, validateIsoDate } from "./paths.ts";
@@ -363,7 +363,7 @@ export function removeObligation(vault: string, slug: string): RemoveObligationR
     archivePath = join(archiveDir, `${normalized}-${suffix}.md`);
   }
   try {
-    renameSync(activePath, archivePath);
+    renameWithRetry(activePath, archivePath);
   } catch {
     atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));
     rmSync(activePath, { force: true });

@@ -21,6 +21,7 @@
  */
 
 import { existsSync, mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
 import { atomicWriteText } from "../../fs-atomic.ts";
@@ -170,7 +171,7 @@ function planSource(vault: string, url: string, opts: DrainOptions): RoutePlan {
 function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan {
   const slug = slugify(body);
   const relPath = `${CAPTURED_NOTES_DIR_REL}/${slug}.md`;
-  const abs = ensureInsideVault(`${vault}/${relPath}`, vault);
+  const abs = ensureInsideVault(join(vault, relPath), vault);
   const merge = existsSync(abs);
   return {
     classification: "idea",
@@ -185,7 +186,11 @@ function planIdea(vault: string, body: string, opts: DrainOptions): RoutePlan {
 
 function writeIdeaNote(abs: string, body: string, opts: DrainOptions, merge: boolean): void {
   const stamp = isoSecond(opts.now);
-  mkdirSync(dirOf(abs), { recursive: true });
+  // `ensureInsideVault` hands back a native path, so the parent comes from
+  // `dirname`: a hand-rolled split on "/" found no separator in a Windows
+  // path and created the NOTE ITSELF as a directory, after which every
+  // idea route failed on the rename into it.
+  mkdirSync(dirname(abs), { recursive: true });
   if (!merge) {
     const meta: FrontmatterMap = {
       kind: CAPTURED_IDEA_KIND,
@@ -215,11 +220,6 @@ function bodyContainsBlock(body: string, block: string): boolean {
     .split(/\n{2,}/u)
     .map((b) => b.trim())
     .includes(block);
-}
-
-function dirOf(abs: string): string {
-  const idx = abs.lastIndexOf("/");
-  return idx < 0 ? abs : abs.slice(0, idx);
 }
 
 /** Classify and (in apply mode) route every staged capture. */

@@ -57,6 +57,7 @@ import { loadVecExtension } from "../../../core/search/store/vectors.ts";
 import { SearchError } from "../../../core/search/types.ts";
 import { info, ok } from "../../output.ts";
 import { flagBoolean, parseFlags, resolveConfig, VAULT_FLAGS } from "../helpers.ts";
+import { closeDatabase } from "../../../core/sqlite-close.ts";
 
 /** What one restamp run concluded, before it is rendered. */
 interface RestampResult {
@@ -88,7 +89,7 @@ function runtimeVecVersion(): string {
     }
     return version;
   } finally {
-    probe.close();
+    closeDatabase(probe);
   }
 }
 
@@ -124,7 +125,7 @@ async function applyRestamp(dbPath: string, version: string): Promise<void> {
     try {
       setState(db, EMBEDDING_VEC_VERSION_STATE_KEY, version);
     } finally {
-      db.close();
+      closeDatabase(db);
     }
   } finally {
     await release();

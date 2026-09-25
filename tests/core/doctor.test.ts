@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -16,6 +17,26 @@ import {
 } from "../../src/core/doctor.ts";
 import { checkHermesResolverParity } from "../../src/core/doctor-hermes-parity.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
+
+/**
+ * Whether a real Python 3 answers on this machine, under any name the check
+ * tries. The comparison cases below need the plugin side to actually RUN;
+ * Linux and macOS CI always have one, while a stock Windows box has only
+ * the Microsoft Store alias placeholders, which the check (correctly)
+ * reports as no interpreter at all.
+ */
+const HAS_PYTHON = [
+  ["python3"],
+  ["python"],
+  ...(process.platform === "win32" ? [["py", "-3"]] : []),
+].some(([bin, ...args]) => {
+  const proc = spawnSync(bin!, [
+    ...args,
+    "-c",
+    "import sys; sys.exit(0 if sys.version_info[0] == 3 else 1)",
+  ]);
+  return proc.error === undefined && proc.status === 0;
+});
 
 /** Env keys the resolver-parity tests must own outright. */
 const OWNED_ENV = ["VAULT_DIR", "OPEN_SECOND_BRAIN_CONFIG", "XDG_CONFIG_HOME", "PATH"] as const;
@@ -170,7 +191,8 @@ describe("checkHermesResolverParity", () => {
     );
   });
 
-  test("passes when both resolvers name the same vault", () => {
+  // Needs a real Python 3 to run the plugin side (see HAS_PYTHON).
+  test.skipIf(!HAS_PYTHON)("passes when both resolvers name the same vault", () => {
     const root = stubPluginResolver('def resolve_vault():\n    return "/agreed/vault"\n');
     const r = checkHermesResolverParity({
       repoRoot: root,
@@ -181,7 +203,8 @@ describe("checkHermesResolverParity", () => {
     expect(r?.message).toContain("/agreed/vault");
   });
 
-  test("passes when both resolvers agree no vault is configured", () => {
+  // Needs a real Python 3 to run the plugin side (see HAS_PYTHON).
+  test.skipIf(!HAS_PYTHON)("passes when both resolvers agree no vault is configured", () => {
     const root = stubPluginResolver("def resolve_vault():\n    return None\n");
     const cfg = join(tmp, "config.yaml");
     writeFileSync(cfg, "agent_name: solo\n");
@@ -190,7 +213,8 @@ describe("checkHermesResolverParity", () => {
     expect(r?.message.toLowerCase()).toContain("no vault");
   });
 
-  test("fails, naming both answers, when the resolvers disagree", () => {
+  // Needs a real Python 3 to run the plugin side (see HAS_PYTHON).
+  test.skipIf(!HAS_PYTHON)("fails, naming both answers, when the resolvers disagree", () => {
     const root = stubPluginResolver("def resolve_vault():\n    return None\n");
     const r = checkHermesResolverParity({
       repoRoot: root,
@@ -203,19 +227,23 @@ describe("checkHermesResolverParity", () => {
     expect(typeof r?.fix).toBe("string");
   });
 
-  test("an unmeasurable plugin side is reported as such, never as clean", () => {
-    const root = stubPluginResolver(
-      'def resolve_vault():\n    raise RuntimeError("resolver is broken")\n',
-    );
-    const r = checkHermesResolverParity({
-      repoRoot: root,
-      config: writeConfig("/core/vault"),
-      cwd: tmp,
-    });
-    expect(r?.ok).toBe(false);
-    expect(r?.message).toContain("could not be measured");
-    expect(r?.message).toContain("resolver is broken");
-  });
+  // Needs a real Python 3 to run the plugin side (see HAS_PYTHON).
+  test.skipIf(!HAS_PYTHON)(
+    "an unmeasurable plugin side is reported as such, never as clean",
+    () => {
+      const root = stubPluginResolver(
+        'def resolve_vault():\n    raise RuntimeError("resolver is broken")\n',
+      );
+      const r = checkHermesResolverParity({
+        repoRoot: root,
+        config: writeConfig("/core/vault"),
+        cwd: tmp,
+      });
+      expect(r?.ok).toBe(false);
+      expect(r?.message).toContain("could not be measured");
+      expect(r?.message).toContain("resolver is broken");
+    },
+  );
 
   test("an absent Python interpreter is a could-not-measure, never a pass", () => {
     const root = stubPluginResolver('def resolve_vault():\n    return "/agreed/vault"\n');
@@ -232,15 +260,19 @@ describe("checkHermesResolverParity", () => {
     expect(r?.message).toContain("no Python interpreter available");
   });
 
-  test("a core side that refuses the config is reported with its reason", () => {
-    const root = stubPluginResolver("def resolve_vault():\n    return None\n");
-    const cfg = join(tmp, "config.yaml");
-    mkdirSync(cfg);
-    const r = checkHermesResolverParity({ repoRoot: root, config: cfg, cwd: tmp });
-    expect(r?.ok).toBe(false);
-    expect(r?.message).toContain("could not determine");
-    expect(r?.message).toContain("not a regular file");
-  });
+  // Needs a real Python 3 to run the plugin side (see HAS_PYTHON).
+  test.skipIf(!HAS_PYTHON)(
+    "a core side that refuses the config is reported with its reason",
+    () => {
+      const root = stubPluginResolver("def resolve_vault():\n    return None\n");
+      const cfg = join(tmp, "config.yaml");
+      mkdirSync(cfg);
+      const r = checkHermesResolverParity({ repoRoot: root, config: cfg, cwd: tmp });
+      expect(r?.ok).toBe(false);
+      expect(r?.message).toContain("could not determine");
+      expect(r?.message).toContain("not a regular file");
+    },
+  );
 });
 
 describe("doctor aggregator", () => {

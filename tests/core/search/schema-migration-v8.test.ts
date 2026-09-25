@@ -58,7 +58,7 @@ test("fresh migration reaches latest with basename column and index", () => {
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasColumn(db, "documents", "basename")).toBe(true);
   expect(hasIndex(db, "idx_documents_basename")).toBe(true);
-  db.close();
+  db.close(true);
 });
 
 test("a v7 index upgrades to v8 and backfills basename from path", () => {
@@ -88,5 +88,5 @@ test("a v7 index upgrades to v8 and backfills basename from path", () => {
     { id: 1, basename: "alpha" },
     { id: 2, basename: "top" },
   ]);
-  db.close();
+  db.close(true);
 });

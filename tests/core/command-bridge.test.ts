@@ -14,6 +14,13 @@ import { describe, expect, test } from "bun:test";
 
 import { runJsonCommandBridge } from "../../src/core/reliability/command-bridge.ts";
 
+/**
+ * A shell command that copies stdin to stdout. The bridge runs commands
+ * under `cmd.exe` on Windows, which has no `cat`; `more` is its built-in
+ * pass-through (it appends a CRLF, which JSON.parse ignores).
+ */
+const ECHO_STDIN = process.platform === "win32" ? "more" : "cat";
+
 describe("runJsonCommandBridge", () => {
   test("skips when the command is undefined or blank", () => {
     expect(runJsonCommandBridge(undefined, { a: 1 })).toEqual({ status: "skipped" });
@@ -22,7 +29,7 @@ describe("runJsonCommandBridge", () => {
   });
 
   test("runs the command, passes input JSON on stdin, parses stdout JSON", () => {
-    const result = runJsonCommandBridge("cat", { questions: [1, 2] });
+    const result = runJsonCommandBridge(ECHO_STDIN, { questions: [1, 2] });
     expect(result.status).toBe("ran");
     if (result.status === "ran") {
       expect(result.output).toEqual({ questions: [1, 2] });
@@ -50,7 +57,7 @@ describe("runJsonCommandBridge", () => {
   });
 
   test("result objects are frozen", () => {
-    const result = runJsonCommandBridge("cat", {});
+    const result = runJsonCommandBridge(ECHO_STDIN, {});
     expect(Object.isFrozen(result)).toBe(true);
   });
 });

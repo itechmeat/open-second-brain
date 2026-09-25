@@ -22,16 +22,17 @@
  *     verifying the contents, then replacing every top-level entry
  *     under `Brain/` *except* `.snapshots/`.
  *
- *   - Tooling: we shell out to system `tar` and `zstd`. Both are
- *     ubiquitous on the deployment surface (Linux server, macOS dev
- *     workstations, every shared CI runner). Falling back to gzip
- *     when `zstd` is absent keeps the feature usable on minimal
- *     containers; falling back to nothing when `tar` is absent throws
+ *   - Tooling: we shell out to system `tar` (GNU tar on Linux, bsdtar
+ *     on macOS and in `System32\tar.exe` on Windows 10+) and use `zstd`
+ *     when it is on PATH. Without `zstd` the archive is gzip-compressed
+ *     in-process through `node:zlib`, so no `gzip` binary is needed -
+ *     native Windows has none. A missing `tar` throws
  *     {@link BrainSnapshotToolingMissingError} with an actionable
  *     message.
  *
  * No external dependencies. Everything is `node:child_process` +
- * `node:fs` so the cost is one subprocess per archive operation.
+ * `node:fs` + `node:zlib`, so the cost is one subprocess per archive
+ * operation.
  *
  * ## Derived-store coverage, and why it is off by default
  *
@@ -73,6 +74,7 @@
 
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
+import { gunzipSync, gzipSync } from "node:zlib";
 import {
   closeSync,
   cpSync,
@@ -84,7 +86,6 @@ import {
   readFileSync,
   readSync,
   readdirSync,
-  renameSync,
   rmSync,
   statSync,
   unlinkSync,
@@ -93,7 +94,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 
-import { FileAlreadyExistsError } from "../fs-atomic.ts";
+import { FileAlreadyExistsError, renameWithRetry } from "../fs-atomic.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { resolveConfiguredIndexPath } from "../search/paths.ts";
@@ -124,6 +125,7 @@ import { loadSnapshotDerivedStorePolicySafe, type BrainDerivedStorePolicy } from
 import { isoSecond } from "./time.ts";
 import { BRAIN_LOG_EVENT_KIND, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+import { closeDatabase } from "../sqlite-close.ts";
 
 // ----- Errors ---------------------------------------------------------------
 
@@ -554,7 +556,6 @@ export interface RestoreSnapshotOptions extends SnapshotStoreOptions {
 interface ToolAvailability {
   readonly tar: boolean;
   readonly zstd: boolean;
-  readonly gzip: boolean;
 }
 
 /**
@@ -588,11 +589,71 @@ function detectTooling(): ToolAvailability {
   return {
     tar: probe("tar"),
     zstd: probe("zstd"),
-    gzip: probe("gzip"),
   };
 }
 
+/**
+ * A filesystem path spelled for a `tar` argument on this host.
+ *
+ * On Windows two tars answer to the name `tar`: bsdtar in `System32`, and
+ * the MSYS GNU tar that Git for Windows puts on PATH - ahead of `System32`
+ * inside Git Bash (where hooks run) and on GitHub's Windows runners. GNU
+ * tar under MSYS fails to extract into a backslashed `-C C:\...`
+ * ("Cannot open: No such file or directory"). Both tars accept the same
+ * path with forward slashes, which Windows itself treats as separators, so
+ * every path this module hands to tar goes through here. POSIX paths are
+ * returned unchanged.
+ *
+ * Archives are always passed through stdin/stdout (`-f -`), never by name:
+ * GNU tar reads the drive colon in `-f C:\...` as a remote host.
+ */
+export function tarPathArg(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? path.replaceAll("\\", "/") : path;
+}
+
 // ----- createSnapshot ------------------------------------------------------
+
+/**
+ * `rel` (vault-relative, `/`-separated) followed by everything beneath it,
+ * depth-first with siblings in byte order. Symlinked directories are listed
+ * but not entered - the same as tar's own default. Exported for tests.
+ *
+ * Names are raw bytes (`Buffer`), not strings: a POSIX file name need not be
+ * UTF-8, and a latin1 `caf\xe9.md` decoded to a string comes back as
+ * `caf\uFFFD.md` - a name that does not exist, which GNU tar then refuses
+ * to archive. Bytes round-trip exactly (on Windows they are the UTF-8 of
+ * the UTF-16 name, which is what tar reads the list as).
+ *
+ * The walk is exhaustive or it fails. tar is told not to recurse, so a
+ * directory this walk could not read would be archived EMPTY, and bsdtar
+ * (macOS, Windows `tar.exe`) reports success for that - a recovery point
+ * silently missing data. An entry that vanished mid-walk (ENOENT) is simply
+ * not in the tree any more and is left out; any other error is thrown as a
+ * {@link BrainSnapshotError} naming the path.
+ */
+export function sortedMembers(vault: string, rel: Buffer, runId: string): Buffer[] {
+  const abs = Buffer.concat([Buffer.from(vault), SLASH, rel]);
+  let entries: Buffer[];
+  try {
+    if (!lstatSync(abs).isDirectory()) return [rel];
+    entries = readdirSync(abs, { encoding: "buffer" });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new BrainSnapshotError(
+      `cannot read ${rel.toString()} to archive it: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
+  }
+  const out = [rel];
+  for (const name of entries.toSorted(Buffer.compare)) {
+    out.push(...sortedMembers(vault, Buffer.concat([rel, SLASH, name]), runId));
+  }
+  return out;
+}
+
+const SLASH = Buffer.from("/");
+const NUL = Buffer.from([0]);
 
 /**
  * Make `Brain/.snapshots/` exist, or say what is there instead.
@@ -707,9 +768,11 @@ export function createSnapshot(
   // List top-level entries of Brain/ that we want to capture. Sort the
   // result so the resulting archive's contents are deterministic
   // across filesystems (readdirSync's order is FS-dependent).
-  let topEntries: string[];
+  let topEntries: Buffer[];
   try {
-    topEntries = readdirSync(dirs.brain).filter((e) => !isSnapshotExcludedEntry(e));
+    topEntries = readdirSync(dirs.brain, { encoding: "buffer" }).filter(
+      (e) => !isSnapshotExcludedEntry(e.toString()),
+    );
   } catch (err) {
     discardStoreArchive(derivedStore, vault, runId);
     throw new BrainSnapshotError(
@@ -717,14 +780,35 @@ export function createSnapshot(
       runId,
     );
   }
-  topEntries.sort();
+  topEntries.sort(Buffer.compare);
 
-  // Build `tar -c -C <vault> Brain/<entry> Brain/<entry>...` so paths
-  // inside the archive start at `Brain/` — matching the rollback
-  // contract that the archive is "the Brain/ tree".
-  const tarArgs = ["-c", "-C", vault, "--", ...topEntries.map((e) => `${BRAIN_ROOT_REL}/${e}`)];
+  // Paths inside the archive start at `Brain/` — matching the rollback
+  // contract that the archive is "the Brain/ tree". Every member is
+  // listed explicitly, depth-first in sorted order, and tar is told not
+  // to recurse: left to itself tar walks each directory in `readdir`
+  // order, which differs between two copies of the same tree (ext4 hash
+  // order, NTFS, APFS). The member ORDER is therefore deterministic; the
+  // bytes are not (tar headers still carry mtime, owner and mode).
+  // The list travels NUL-separated through a file (`--null -T`), which
+  // GNU tar and bsdtar (macOS, Windows `tar.exe`) both accept and which
+  // survives any character a filename can hold.
+  const listDir = mkdtempSync(join(tmpdir(), `o2b-snapshot-list-${runId}-`));
+  const listPath = join(listDir, "members");
 
   try {
+    const members = topEntries.flatMap((e) =>
+      sortedMembers(vault, Buffer.concat([Buffer.from(`${BRAIN_ROOT_REL}/`), e]), runId),
+    );
+    writeFileSync(listPath, Buffer.concat(members.flatMap((m) => [m, NUL])));
+    const tarArgs = [
+      "-c",
+      "-C",
+      tarPathArg(vault),
+      "--no-recursion",
+      "--null",
+      "-T",
+      tarPathArg(listPath),
+    ];
     compressInto(
       { kind: "buffer", bytes: runArchiveProducer("tar", tarArgs, runId) },
       outPath,
@@ -744,6 +828,8 @@ export function createSnapshot(
     // archives it can list.
     discardStoreArchive(derivedStore, vault, runId);
     throw err;
+  } finally {
+    rmSync(listDir, { recursive: true, force: true });
   }
 
   // Sidecar manifest. Failure is non-fatal: the archive is the
@@ -975,7 +1061,7 @@ function assertStoreIsSound(sourcePath: string, runId: string): void {
       );
     }
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
@@ -1012,7 +1098,7 @@ function writeStoreArchive(
     try {
       db.query("VACUUM INTO ?").run(vacuumed);
     } finally {
-      db.close();
+      closeDatabase(db);
     }
     compressInto({ kind: "file", path: vacuumed }, archivePath, tools, runId);
   } catch (err) {
@@ -1110,16 +1196,33 @@ function compressInto(
     runCompressor("zstd", args, payload, runId, null);
     return;
   }
-  if (tools.gzip) {
-    // gzip only writes to stdout, so the destination is ours to open.
-    const args = payload.kind === "file" ? ["-9", "-c", payload.path] : ["-9", "-c"];
-    runCompressor("gzip", args, payload, runId, outPath);
-    return;
+  // No zstd: gzip in-process. `node:zlib` ships with every runtime this
+  // tool supports, so a snapshot never depends on a `gzip` binary - which
+  // native Windows does not have. Level 9 matches the `gzip -9` this
+  // replaced, byte format included, so older readers restore it unchanged.
+  const raw = payload.kind === "buffer" ? payload.bytes : readFileSync(payload.path);
+  writeArchiveExclusive(outPath, gzipSync(raw, { level: 9 }), runId);
+}
+
+/**
+ * Exclusive create of a finished archive. `wx` is what makes the gzip path
+ * refuse an existing archive the way `zstd -o` always has; see
+ * {@link compressInto} for why that refusal is load-bearing rather than
+ * tidy. A torn write remains possible (worst case: a corrupt archive that
+ * fails on restore, the same outcome as any other interrupted snapshot) -
+ * what is no longer possible is silently replacing someone else's
+ * recovery point.
+ */
+function writeArchiveExclusive(outPath: string, bytes: Buffer, runId: string): void {
+  try {
+    writeFileSync(outPath, bytes, { flag: "wx" });
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
+      runId,
+      { cause: err },
+    );
   }
-  throw new BrainSnapshotToolingMissingError(
-    "zstd or gzip",
-    "install zstd (preferred) or gzip; we use the first available.",
-  );
 }
 
 /**
@@ -1193,22 +1296,7 @@ function runCompressor(
     );
   }
   if (outPath === null) return;
-  // Exclusive create. `wx` is what makes the gzip path refuse an
-  // existing archive the way `zstd -o` always has; see
-  // {@link compressInto} for why that refusal is load-bearing rather
-  // than tidy. A torn write remains possible (worst case: a corrupt
-  // archive that fails on restore, the same outcome as any other
-  // interrupted snapshot) - what is no longer possible is silently
-  // replacing someone else's recovery point.
-  try {
-    writeFileSync(outPath, r.stdout ?? Buffer.from(""), { flag: "wx" });
-  } catch (err) {
-    throw new BrainSnapshotError(
-      `failed to write ${outPath}: ${(err as Error).message ?? String(err)}`,
-      runId,
-      { cause: err },
-    );
-  }
+  writeArchiveExclusive(outPath, r.stdout ?? Buffer.from(""), runId);
 }
 
 /**
@@ -1516,12 +1604,6 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
         "archive is zstd-compressed; install zstd to restore it.",
       );
     }
-    if (decompressor === "gzip" && !tools.gzip) {
-      throw new BrainSnapshotToolingMissingError(
-        "gzip",
-        "archive is gzip-compressed; install gzip to restore it.",
-      );
-    }
 
     if (decompressor === "zstd") {
       const zstd = spawnSync("zstd", ["-d", "-c", archive], {
@@ -1538,7 +1620,7 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
       // `-f -` is explicit stdin: GNU tar defaults to stdin without
       // it, but BSD tar and busybox tar do not, so passing the flag
       // keeps the extraction portable across hosts.
-      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tmp], {
+      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
         input: zstd.stdout,
         stdio: ["pipe", "inherit", "pipe"],
       });
@@ -1547,8 +1629,21 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
         throw new BrainSnapshotError(`tar extract failed: ${tar.error?.message ?? stderr}`, runId);
       }
     } else {
-      const tar = spawnSync("tar", ["-x", "-z", "-f", archive, "-C", tmp], {
-        stdio: ["ignore", "inherit", "pipe"],
+      // gzip is inflated in-process and piped to `tar -f -`, like the zstd
+      // branch: no `gzip` binary needed (native Windows has none), and no
+      // reliance on `tar -z` spawning one.
+      let tarball: Buffer;
+      try {
+        tarball = gunzipSync(readFileSync(archive));
+      } catch (err) {
+        throw new BrainSnapshotError(
+          `gzip decompress failed: ${(err as Error).message ?? String(err)}`,
+          runId,
+        );
+      }
+      const tar = spawnSync("tar", ["-x", "-f", "-", "-C", tarPathArg(tmp)], {
+        input: tarball,
+        stdio: ["pipe", "inherit", "pipe"],
       });
       if (tar.error || tar.status !== 0) {
         const stderr = (tar.stderr ?? Buffer.from("")).toString("utf8").trim();
@@ -1861,8 +1956,8 @@ function swapDerivedStore(archive: string, target: string, runId: string): void 
     rmSync(incoming, { force: true });
     decompressArchiveTo(archive, incoming, runId);
     rmSync(outgoing, { force: true });
-    if (existsSync(target)) renameSync(target, outgoing);
-    renameSync(incoming, target);
+    if (existsSync(target)) renameWithRetry(target, outgoing);
+    renameWithRetry(incoming, target);
     for (const sidecar of WAL_SIBLING_SUFFIXES) {
       rmSync(`${target}${sidecar}`, { force: true });
     }
@@ -1901,12 +1996,6 @@ function decompressArchiveTo(archive: string, outPath: string, runId: string): v
       "archive is zstd-compressed; install zstd to restore it.",
     );
   }
-  if (compressor === "gzip" && !tools.gzip) {
-    throw new BrainSnapshotToolingMissingError(
-      "gzip",
-      "archive is gzip-compressed; install gzip to restore it.",
-    );
-  }
   if (compressor === "zstd") {
     // `zstd -o` opens the destination itself and refuses an existing one.
     runCompressor(
@@ -1918,10 +2007,18 @@ function decompressArchiveTo(archive: string, outPath: string, runId: string): v
     );
     return;
   }
-  // gzip only writes to stdout; `wx` keeps the destination exclusive.
-  writeFileSync(outPath, runArchiveProducer("gzip", ["-d", "-c", archive], runId), {
-    flag: "wx",
-  });
+  // gzip is inflated in-process (no `gzip` binary on native Windows);
+  // `wx` keeps the destination exclusive.
+  let bytes: Buffer;
+  try {
+    bytes = gunzipSync(readFileSync(archive));
+  } catch (err) {
+    throw new BrainSnapshotError(
+      `gzip decompress failed: ${(err as Error).message ?? String(err)}`,
+      runId,
+    );
+  }
+  writeArchiveExclusive(outPath, bytes, runId);
 }
 
 // ----- Helpers -------------------------------------------------------------

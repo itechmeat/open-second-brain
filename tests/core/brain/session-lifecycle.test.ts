@@ -39,7 +39,7 @@ describe("captureSessionLifecycleEvent", () => {
     expect(first.signals_created).toBe(1);
     expect(first.signals_deduped).toBe(0);
     expect(first.audit_path).toContain("session-lifecycle");
-    expect(first.log_path).toContain("Brain/log/2026-05-30.md");
+    expect(first.log_path).toContain(join("Brain", "log", "2026-05-30.md"));
     expect(second.signals_created).toBe(0);
     expect(second.signals_deduped).toBe(1);
 
@@ -121,7 +121,7 @@ describe("captureSessionLifecycleEvent", () => {
       expect(result.event).toBe(event);
       expect(result.signals_created).toBe(0);
       expect(result.signals_deduped).toBe(0);
-      expect(result.log_path).toContain("Brain/log/2026-05-30.md");
+      expect(result.log_path).toContain(join("Brain", "log", "2026-05-30.md"));
     },
   );
 });

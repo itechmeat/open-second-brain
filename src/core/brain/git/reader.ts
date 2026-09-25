@@ -264,6 +264,9 @@ const DETACHED_HEAD_REF = "HEAD";
 /** `user@host:path` - the scp-like remote syntax, which is not a URL. */
 const SCP_REMOTE_RE = /^(?<user>[^\s/@]+)@(?<host>[^\s/:]+):(?<path>(?!\/).+)$/;
 
+/** `C:\` or `C:/` - an absolute Windows drive path, which is not a URL. */
+const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
+
 /** A trailing `.git`, with or without trailing slashes already stripped. */
 const DOT_GIT_SUFFIX_RE = /\.git$/;
 
@@ -310,6 +313,14 @@ function parseRemote(value: string): URL | null {
   // An absolute filesystem path is a legitimate git remote and is not a
   // URL; give it the `file:` scheme so it lands in the same shape.
   if (value.startsWith("/")) return safeUrl(`file://${value}`);
+  // A Windows drive path (`C:\srv\git\x.git`, or git's own `C:/srv/...`
+  // spelling) is the same kind of remote. Left to `new URL` it parses as
+  // a `c:` scheme with no host and the identity is lost. Matched by shape
+  // rather than host platform, so the identity is the same on every
+  // device that reads the remote.
+  if (WINDOWS_DRIVE_PATH_RE.test(value)) {
+    return safeUrl(`file:///${value.replaceAll("\\", "/")}`);
+  }
   return safeUrl(value);
 }
 

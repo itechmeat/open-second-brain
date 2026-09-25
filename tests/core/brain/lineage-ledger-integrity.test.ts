@@ -534,6 +534,12 @@ describe("recordLineageObservation — genuinely concurrent writers", () => {
       Bun.spawn(["bun", script, tmp, `w${index}`, String(perWriter)], {
         stdout: "pipe",
         stderr: "pipe",
+        // Bun hands a child the environment the process STARTED with, not
+        // the live `process.env`, so without this the writers miss the
+        // throwaway config and `%LOCALAPPDATA%` that tests/setup.ts installs:
+        // the device-id lookup behind the shard path then mints an id into
+        // the operator's real config file.
+        env: { ...process.env },
       }),
     );
     const results = await Promise.all(

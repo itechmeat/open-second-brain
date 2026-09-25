@@ -5,6 +5,85 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.57.0] - 2026-09-25
+
+Open Second Brain now runs natively on Windows 10 and 11. Until this release the resolver refused `win32` by name, and the refusal was the honest part: every entry point was a bash script, every durable path assumed `$HOME/.config`, and the code underneath had habits that POSIX forgives and Windows does not. A SQLite connection closed without finalizing its statements keeps its file locked. A rename onto a file another process holds fails. A tar walk follows `readdir` order, and that order differs between filesystems. A path split on `/` misses `\`. The first full test run under Windows Bun failed 2127 of 12,388 tests. This release closes those gaps, gives the platform its own layout, and ends with the same suite at 0 failures on Windows and on Linux. 162 tests are skipped on Windows, each with a stated reason; they assert something Windows cannot express, such as a chmod that denies reading. Several of the fixes were never Windows bugs. They are nondeterminism and leaks that every platform had, which a second platform happened to expose.
+
+### Added
+
+- **Native Windows layout.** `src/core/platform-dirs.ts` answers one question for every surface that builds a path: where this tool keeps its config, data, state, cache and launchers.
+  - **Where things live on Windows:** `%LOCALAPPDATA%\open-second-brain\`, with `config.yaml`, the opencode session spool and the other per-user files under it. It is `%LOCALAPPDATA%` rather than the roaming `%APPDATA%` because those files are machine-bound: the vault path and an agent name that carries the host would be wrong on another machine. Hermes Agent makes the same choice.
+  - **Overrides and other platforms:** `XDG_*_HOME` and `OPEN_SECOND_BRAIN_CONFIG` still win on every platform, and POSIX is byte-identical.
+  - **Kept in step:** the Hermes plugin's Python resolver and the self-contained opencode plugin mirror the rule, and a `~\vault` config value expands like `~/vault`.
+- **`.cmd` launchers.** `scripts\o2b.cmd`, `o2b-mcp.cmd`, `o2b-hook.cmd`, `vault-log.cmd` and `o2b-aider.cmd` sit beside their bash twins.
+  - They resolve Bun the way `_bun-precheck.sh` does: PATH first, then `%USERPROFILE%\.bun\bin`.
+  - They never run a `bun` from the current directory. cmd.exe looks for a bare command name in the current directory before PATH, and an agent host starts them in the project it opened, so a repository that ships a `bun.cmd` would have run it. Each launcher sets `NoDefaultCurrentDirectoryInExePath=1` right after `setlocal`, and turns delayed expansion off so a `!` in the checkout path stays a character.
+  - The hook launcher keeps the fail-soft contract and always exits 0. It passes an empty `""` argument through instead of stopping at it, and reports a hook that exits with a negative code (a crash) as well as a positive one.
+  - A new `.gitattributes` pins them to CRLF and everything else to LF, so a Windows checkout (Git for Windows defaults to `core.autocrlf=true`) holds the same bytes as a POSIX one.
+- **`o2b install-cli` on Windows** writes `.cmd` launchers into `%USERPROFILE%\.local\bin`, because a symlink there needs Developer Mode or an elevated token.
+  - Each launcher carries an ownership marker, so install, heal and uninstall follow the same policy as the symlink path: repoint our own stale launcher, refuse a foreign file, heal only one that rotated out of a plugin cache, and remove only one that points into this checkout.
+  - A `%` in the checkout path is doubled on the launcher's command line, where cmd.exe would expand it. A launcher of ours whose command line is not the current body is rewritten and reported as `updated`.
+  - When the directory is not on PATH, the verb says so and names the Environment Variables dialog (`rundll32.exe sysdm.cpl,EditEnvironmentVariables`). It prints no command that rewrites the value: Windows PowerShell's `SetEnvironmentVariable` stores the user Path back as `REG_SZ` with its `%VAR%` entries expanded.
+- **MCP host configs on Windows** start the server as `cmd /d /c o2b mcp ...`, the `cmd /c <name>` form several hosts document for `npx`.
+  - Node refuses to spawn a `.cmd` without a shell since the 2024 BatBadBut fix, and Rust and Bun resolve only `.exe` from a bare name.
+  - `/d` skips cmd's AutoRun, whose output would corrupt the JSON-RPC stream.
+  - Every Windows entry carries `NoDefaultCurrentDirectoryInExePath=1` in its `env`. Without it cmd.exe resolves `o2b` in the current directory first, and a host starts its servers in the project it opened, so an `o2b.cmd` committed to any repository ran at MCP start. An absolute launcher path was the alternative; cmd's quote stripping breaks it for a profile or vault path with a space.
+  - Because hosts quote only arguments that contain whitespace, the Windows payload refuses a vault path containing `& | < > ^ % " !` by name, rather than writing a config that cmd would split, expand or execute at spawn time.
+  - Grok Build keeps its absolute `bun.exe run main.ts` entries, with the arguments now built without the `cmd` prefix.
+- **Cursor's Windows session root** (`%APPDATA%\Cursor\User\workspaceStorage`). Session roots can now be scoped to a platform, so a POSIX host is not handed a Windows-shaped path to probe.
+- **An owner-only ACL for the secrets keyfile on Windows.** `icacls /inheritance:r /grant:r` grants access to the current user only, on the key directory (inheritable), the keyfile and an existing `secrets.json`. It is the Windows counterpart of the POSIX 0700 and 0600 modes. The grant names the user by SID, read from the process token with `whoami /user`, not by `%USERDOMAIN%\name`, which a parent process can rewrite and `icacls` may not map. It is applied on every load, once per process, not only when the key is created, so a secrets directory restored or copied in with a vault is brought to the same ACL. `icacls.exe` and `whoami.exe` run from `System32` by absolute path. `icacls /reset` runs first, because `/inheritance:r` removes only inherited entries: an explicit entry for another account, which a directory restored with its ACL can carry, would otherwise survive. Where SYSTEM or Administrators entries remain, as they can on GitHub's elevated Windows runners, the threat model already counts administrators as able to read the key. It is best effort: a failed `icacls` warns and never fails the write.
+- **A `windows-latest` CI job** runs the typecheck, the full TypeScript suite, the Hermes plugin's Python tests and the `.cmd` launcher, with a 75-minute timeout. Like the Linux job, it asserts that the Hermes anti-drift test actually ran rather than skipped. The suite runs the generated and checked-in launchers through a real `cmd.exe`: end to end from the MCP payload's command, and with a `bun.cmd` and an `o2b.cmd` planted in the working directory, which must not run.
+- **`install/windows.md`,** plus Windows sections in `install/prerequisites.md`, `install/claudecode.md`, `install/hermes.md` and the README.
+
+### Changed
+
+- **Closing SQLite releases the file immediately.** `closeDatabase()` calls `close(true)`: Bun's plain `close()` turns a connection with unfinalized statements into a zombie that keeps `brain.sqlite` and its `-wal`/`-shm` open until garbage collection. POSIX never noticed. On Windows the open handle blocks every later delete and rename, which includes the index swap and snapshot restore. This one pattern caused more than half of the original Windows failures. All twenty close sites use the helper.
+- **Renames ride out transient sharing violations.** On Windows, `renameWithRetry` retries EPERM, EACCES and EBUSY for up to two seconds, which is the window in which Syncthing, an editor, an antivirus scan or another `o2b` holds a file. On POSIX it is plain `renameSync`. Atomic writes and every rename site use it. The destructive-site and write-site censuses count it as the `renameSync` it wraps.
+- **Snapshots need no `gzip` binary.** Without `zstd`, the archive is gzip-compressed in-process through `node:zlib`, and restore inflates in-process too, so the only external tool is `tar`. Windows 10 and later ship `tar` as `System32\tar.exe`. The byte format is unchanged, so older archives restore as before.
+- **Vault-relative paths in MCP responses use `/` on every host.** They are portable, Obsidian-style and identical across the devices that share a vault. Paths outside the vault are returned unchanged.
+- **The operator command bridge runs under `cmd.exe /d /s /c` on Windows** and under `sh -c` elsewhere.
+- **The self-heal reindex spawns `bun run main.ts` on Windows** without a console window, and it passes the live environment to the child: Bun otherwise gives a child the environment the process started with.
+- **The Hermes memory provider on Windows** starts the MCP bridge without a console window, which matters because the Hermes desktop app is a GUI process. Its last-resort branch resolves `o2b.cmd` to an absolute path, because `Popen(["o2b", ...])` cannot start a batch file. Its executable lookup ignores a `bun` or `o2b` that `shutil.which` finds in the current directory, which Windows searches before PATH, unless that directory is on PATH itself.
+- **`bun install` works on Windows.** The inline `sh` prepare script is now `scripts/prepare.ts`, run as `bun scripts/prepare.ts || exit 0`, so an `npm install` from a git URL on a machine without Bun still never fails on it.
+
+### Fixed
+
+- **Snapshot member order was not deterministic.** Tar walked each directory in `readdir` order, which is hash order on ext4 and name order on NTFS and APFS, so two copies of the same tree archived their members in different orders. Every member is now listed explicitly, depth-first in byte order, and handed to tar with `--no-recursion --null -T`, which GNU tar and bsdtar both accept. The member order is deterministic; the bytes are not, because tar headers still carry mtimes and owners.
+  - The walk fails the snapshot on any error other than a vanished entry. With `--no-recursion`, a directory it could not read would otherwise be archived empty, and bsdtar (macOS, Windows `tar.exe`) reports success for that.
+  - Member names travel as raw bytes, so a file name that is not valid UTF-8 (a latin1 `café.md` on Linux) is archived under its real name instead of failing GNU tar.
+- **The dream pass wrote filesystem-dependent output.** It listed inbox signals in `readdir` order, so `moved_to_processed` and the evidence list of a promoted preference differed between machines for the same corpus. The listing is now sorted by code unit.
+- **`o2b brain protect --target claudecode` protected nothing on any platform.** Claude Code reads a single leading `/` in a permission rule as relative to the settings source, not as the filesystem root. The rules are now written as `//abs/path` on POSIX and `//c/...` on Windows, the form the Claude Code permission docs give for each.
+- **Several paths were compared or split on `/` alone:**
+  - hidden artifact references were shown on Windows;
+  - inbox-drain created an idea note as a directory;
+  - an explicit session import was never recorded in the ledger;
+  - novelty scores were null;
+  - freshness findings leaked host paths past owner scope;
+  - `o2b index` listed `\notes\a.md`;
+  - a drive-letter git remote parsed as a URL scheme.
+
+  Each now uses `node:path` or the existing containment helpers, and each has a test.
+- **Snapshots failed under Git for Windows' tar.** Inside Git Bash, and on GitHub's Windows runners, the `tar` first on PATH is MSYS GNU tar, which cannot extract into a backslashed `C:\...` directory. Every path handed to tar is now written with forward slashes, which it and `System32\tar.exe` both accept.
+- **Updating a note with the Windows read-only attribute** failed with a raw EPERM after the before-image was stored. It is now refused up front as `target_unreadable`, the code POSIX already produces for EACCES.
+- **Piped stdin could be lost on Windows** (`capture`, `codec`, `secret`): the process exited before the pipe drained. It is now read through one helper that waits for EOF.
+- **A lock file being deleted by another process** reported EPERM on Windows, which failed a concurrent ingest instead of waiting. It is now treated as "lock busy". An EPERM with nothing at the lock's name is a directory that refuses to create files (an ACL, Controlled Folder Access), and it fails at once with its own error instead of waiting out the budget as "lock busy".
+- **The search index swap deletes its `.bak` and `.new` files with the same Windows retry as its renames,** so a stale file held by an antivirus scan no longer fails the reindex.
+- **`closeDatabase` never throws.** If the fallback lazy close throws too, the error is dropped, so a caller's `finally` cannot replace the original failure.
+- **Tests leaked into the real user profile.** A lineage test and the self-heal child could write into the operator's real config, on Linux as well as on Windows. The test preload now also redirects `LOCALAPPDATA` and `APPDATA`, and spawned children inherit the hermetic environment.
+- **The Hermes anti-drift test always skipped itself on Windows,** because `Popen(["o2b", ...])` cannot start `o2b.cmd`. It now resolves the launcher first and runs.
+
+### Notes
+
+- **Verified on a real Windows 11 machine,** not only in tests:
+  - **Claude Code 2.1.280:** the plugin's MCP servers connect. Claude Code starts the extensionless `scripts/o2b` through `cmd.exe`, which resolves `o2b.cmd` via PATHEXT, so `.mcp.json` needs no Windows variant.
+  - **Hooks:** they run under Git Bash and return valid JSON.
+  - **Hermes Agent:** its memory provider completes the MCP handshake with 115 tools, with Bun off PATH.
+  - **`install-cli`:** the launchers pass stdin through the exact `cmd /d /c` form hosts use.
+  - **The current-directory hijack:** before the fix, `cmd /d /c o2b --version` run from a directory holding a planted `o2b.cmd` ran the planted file, and the absolute `scripts\o2b.cmd` ran a planted `bun.cmd`. After it, both reach the real CLI.
+- **Claude Code hooks need Git for Windows.** Without it Claude Code runs hook commands through PowerShell, the POSIX command strings fail to parse, and the hooks are skipped without blocking the session; the MCP tools are unaffected. A PowerShell variant was not added because Claude Code has no per-platform hook command.
+- **Unverified:** Grok Build's hook execution on Windows. xAI does not document which shell runs it, and an unquoted absolute command breaks on a path containing a space.
+- **162 tests are skipped on Windows,** each with a one-line reason; a host without a real Python adds the five Hermes resolver-parity cases. More than half depend on chmod denying access or on an unreadable-file fixture; the rest need bash scripts, POSIX signals, FIFOs, file names Windows forbids, or deleting the process's working directory.
+
 ## [1.56.0] - 2026-09-12
 
 Open Second Brain answers a great deal about the vault it owns and, until this release, very little about itself. An operator with a shell could not ask which version was installed, though the MCP handshake had carried the same fact as `serverInfo.version` since the server existed. An agent on the MCP surface could not ask which projects point at this vault or whether the hosts this install wrote registrations into can still be reached, though both answers had shipped as typed readers with CLI-only consumers. And the first block of text every agent reads at connect time was three frozen strings chosen by scope alone, so a host that disabled a tool still received a paragraph instructing the agent to call it - a confident answer that was wrong before the session began. Nothing in this release computes a new fact. Four surfaces start reading what four readers already produce, and the machinery that made them unreachable is the whole of what changed.
@@ -7495,6 +7574,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.57.0]: https://github.com/itechmeat/open-second-brain/compare/v1.56.0...v1.57.0
 [1.56.0]: https://github.com/itechmeat/open-second-brain/compare/v1.55.0...v1.56.0
 [1.55.0]: https://github.com/itechmeat/open-second-brain/compare/v1.54.0...v1.55.0
 [1.54.0]: https://github.com/itechmeat/open-second-brain/compare/v1.53.1...v1.54.0

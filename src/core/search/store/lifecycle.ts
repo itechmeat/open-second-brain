@@ -8,7 +8,7 @@
  */
 
 import { Database } from "bun:sqlite";
-import { existsSync, mkdirSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 
 import {
@@ -33,6 +33,8 @@ import {
 } from "./state.ts";
 import { loadVecExtension } from "./vectors.ts";
 import { acquireWriterLock, acquireWriterLockSync } from "./writer-lock.ts";
+import { closeDatabase } from "../../sqlite-close.ts";
+import { renameWithRetry } from "../../fs-atomic.ts";
 
 /** A connection on the index, plus the vec ABI it opened under. */
 export interface OpenedDatabase {
@@ -90,7 +92,7 @@ export function restoreFromBakIfMissing(dbPath: string): void {
     // Re-check under the lock: the swap may have completed while we waited,
     // or another opener may have already restored.
     if (existsSync(dbPath) || !existsSync(bak)) return;
-    renameSync(bak, dbPath);
+    renameWithRetry(bak, dbPath);
     // eslint-disable-next-line no-console
     console.error(`restored search index from ${bak} (previous reindex crash)`);
   } catch {
@@ -346,7 +348,7 @@ export function openReadDatabase(config: ResolvedSearchConfig, loadVec: boolean)
     assertNoRecordedIntegrityFault(db, config.dbPath);
     return { db, vecVersion: loadVec ? loadVecExtension(db) : null };
   } catch (e) {
-    db.close();
+    closeDatabase(db);
     if (e instanceof SearchError) throw e;
     // `new Database()` above is lazy: a file that is not a SQLite database
     // at all only raises on the FIRST statement, which is `applyPragmas`.
@@ -370,7 +372,7 @@ export async function openWriteDatabase(
   mkdirSync(dirname(config.dbPath), { recursive: true });
   if (!existsSync(config.dbPath)) {
     const seed = new Database(config.dbPath);
-    seed.close();
+    closeDatabase(seed);
   }
 
   const release = await acquireWriterLock(config.dbPath);
@@ -402,7 +404,7 @@ export async function abandonWriteDatabase(
   release: () => Promise<void>,
 ): Promise<void> {
   try {
-    db.close();
+    closeDatabase(db);
   } catch {
     /* ignore close errors */
   }

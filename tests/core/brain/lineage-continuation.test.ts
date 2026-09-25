@@ -126,6 +126,13 @@ describe("canonicalizeGitRemote — a comparable identity, not a redaction", () 
     expect(canonicalizeGitRemote("/srv/git/thing.git/")).toBe("file:///srv/git/thing");
   });
 
+  test("a Windows drive-path remote becomes a file identity, either separator", () => {
+    // `new URL("C:\\srv\\...")` parses a `c:` scheme with no host, which
+    // the hostless guard turned into a null identity.
+    expect(canonicalizeGitRemote("C:\\srv\\git\\thing.git")).toBe("file:///C:/srv/git/thing");
+    expect(canonicalizeGitRemote("C:/srv/git/thing.git/")).toBe("file:///C:/srv/git/thing");
+  });
+
   test("blank or hostless input is null, never a placeholder", () => {
     expect(canonicalizeGitRemote("")).toBeNull();
     expect(canonicalizeGitRemote("   ")).toBeNull();

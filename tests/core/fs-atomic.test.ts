@@ -219,15 +219,20 @@ describe("atomicWriteText", () => {
     expect(readFileSync(target, "utf8")).toBe("schema_version: 1\nschema:\n");
   });
 
-  test("defaults to private 0o600 mode and honors a mode override", () => {
-    const strict = join(tmp, "strict.txt");
-    atomicWriteText(strict, "secret");
-    expect(statSync(strict).mode & 0o777).toBe(0o600);
+  // Windows has no POSIX permission bits: stat reports 0o666/0o444 from the
+  // read-only attribute alone, so a mode cannot be observed there.
+  test.skipIf(process.platform === "win32")(
+    "defaults to private 0o600 mode and honors a mode override",
+    () => {
+      const strict = join(tmp, "strict.txt");
+      atomicWriteText(strict, "secret");
+      expect(statSync(strict).mode & 0o777).toBe(0o600);
 
-    const open = join(tmp, "open.txt");
-    atomicWriteText(open, "public", { mode: 0o644 });
-    expect(statSync(open).mode & 0o777).toBe(0o644);
-  });
+      const open = join(tmp, "open.txt");
+      atomicWriteText(open, "public", { mode: 0o644 });
+      expect(statSync(open).mode & 0o777).toBe(0o644);
+    },
+  );
 
   test("overwrites an existing target", () => {
     const target = join(tmp, "x.yaml");

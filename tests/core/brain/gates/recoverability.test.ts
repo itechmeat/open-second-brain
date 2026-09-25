@@ -37,7 +37,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 
 import {
   classifyRecoverability,
@@ -73,7 +73,19 @@ const NOW = new Date("2026-06-01T00:00:00Z");
  * proof rather than a restatement of whatever the code now does.
  */
 function stablePayload(value: unknown, vaultRoot: string): string {
-  return JSON.stringify(value, null, 2).split(vaultRoot).join("<vault>");
+  // Host paths are native (`C:\...\Brain\x.md` on Windows); fold every
+  // string under the vault to `<vault>/...` so one expectation holds on
+  // every host.
+  return JSON.stringify(
+    value,
+    (_key, v: unknown) =>
+      typeof v === "string" && v.startsWith(vaultRoot)
+        ? `<vault>${v.slice(vaultRoot.length).split(sep).join("/")}`
+        : v,
+    2,
+  )
+    .split(vaultRoot)
+    .join("<vault>");
 }
 
 // ----- The three vocabularies ----------------------------------------------

@@ -26,6 +26,7 @@ import { manifestSidecarPath } from "../../src/core/brain/manifest.ts";
 import { brainDirs, snapshotPath } from "../../src/core/brain/paths.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../src/core/brain/types.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -201,7 +202,8 @@ describe("brain snapshot log", () => {
     expect(payload.skipped[0]!.reason).toBe(SNAPSHOT_ENTRY_SKIP_REASON.entryUnreadable);
   });
 
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  // chmod 000 denies nothing to root or on Windows (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "a snapshots directory it cannot read is a failure, not an empty history",
     async () => {
       seedSnapshots();
@@ -278,7 +280,8 @@ describe("brain rollback --list carries the reason", () => {
     ]);
   });
 
-  test.skipIf(typeof process.getuid === "function" && process.getuid() === 0)(
+  // chmod 000 denies nothing to root or on Windows (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
     "an unreadable snapshots directory is reported, not listed as empty",
     async () => {
       seedSnapshots();

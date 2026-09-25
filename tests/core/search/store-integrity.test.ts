@@ -36,6 +36,7 @@ import {
   INTEGRITY_FAULT_STATE_KEY,
 } from "../../../src/core/search/store/state.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 let dbPath: string;
@@ -296,34 +297,38 @@ test("a passing check clears a stale fault and stamps when it ran", async () => 
   await store.close();
 });
 
-test("a self-heal that fails reports why, instead of only the symptom", async () => {
-  // An unreadable index (not a sqlite file at all) in a directory the
-  // rebuild cannot write its staging database into: the repair fails, and
-  // the retry finds the same unreadable file it started with.
-  writeMd(vault, "Notes/foo.md", "# Foo\n\nfox");
-  const indexDir = dirname(dbPath);
-  mkdirSync(indexDir, { recursive: true });
-  writeFileSync(dbPath, "this is not a sqlite database");
-  const config = makeConfig({ vault, dbPath });
+// chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "a self-heal that fails reports why, instead of only the symptom",
+  async () => {
+    // An unreadable index (not a sqlite file at all) in a directory the
+    // rebuild cannot write its staging database into: the repair fails, and
+    // the retry finds the same unreadable file it started with.
+    writeMd(vault, "Notes/foo.md", "# Foo\n\nfox");
+    const indexDir = dirname(dbPath);
+    mkdirSync(indexDir, { recursive: true });
+    writeFileSync(dbPath, "this is not a sqlite database");
+    const config = makeConfig({ vault, dbPath });
 
-  chmodSync(indexDir, 0o500);
-  let failure: Error | null;
-  try {
-    failure = await openReadOrSelfHeal(config).then(
-      (store) => {
-        void store.close();
-        return null;
-      },
-      (e: unknown) => e as Error,
-    );
-  } finally {
-    chmodSync(indexDir, 0o700);
-  }
-  expect(failure).not.toBeNull();
-  // Both halves: what is wrong now, and why the repair did not happen.
-  expect(failure?.message).toMatch(/the automatic rebuild of/);
-  expect(failure?.message).toMatch(/also failed/);
-});
+    chmodSync(indexDir, 0o500);
+    let failure: Error | null;
+    try {
+      failure = await openReadOrSelfHeal(config).then(
+        (store) => {
+          void store.close();
+          return null;
+        },
+        (e: unknown) => e as Error,
+      );
+    } finally {
+      chmodSync(indexDir, 0o700);
+    }
+    expect(failure).not.toBeNull();
+    // Both halves: what is wrong now, and why the repair did not happen.
+    expect(failure?.message).toMatch(/the automatic rebuild of/);
+    expect(failure?.message).toMatch(/also failed/);
+  },
+);
 
 // ─── The recorded fault must be honoured wherever the store is opened ────────
 

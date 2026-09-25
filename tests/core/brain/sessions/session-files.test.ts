@@ -26,6 +26,7 @@ import {
   SESSION_FILE_EXTENSION,
   SessionImportError,
 } from "../../../../src/core/brain/sessions/types.ts";
+import { CHMOD_CANNOT_DENY } from "../../../helpers/platform.ts";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "o2b-session-files-"));
@@ -74,33 +75,36 @@ describe("sessionFilesUnder", () => {
     }
   });
 
-  test("an unreadable SUBDIRECTORY is a typed refusal naming it, not a raw errno", () => {
-    // The hole: the top-level `statSync` and the per-entry `lstatSync`
-    // were both wrapped, and the recursion between them was not. One
-    // mode-000 directory therefore took down the whole import and the
-    // whole export with an `EACCES` nobody had translated.
-    if (process.getuid?.() === 0) return; // root reads a 000 directory anyway
-    const dir = tempDir();
-    const locked = join(dir, "locked");
-    try {
-      touch(join(dir, "readable.jsonl"));
-      mkdirSync(locked);
-      touch(join(locked, "hidden.jsonl"));
-      chmodSync(locked, 0o000);
-      let caught: unknown = null;
+  // chmod cannot make a directory unreadable on Windows (or to root).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable SUBDIRECTORY is a typed refusal naming it, not a raw errno",
+    () => {
+      // The hole: the top-level `statSync` and the per-entry `lstatSync`
+      // were both wrapped, and the recursion between them was not. One
+      // mode-000 directory therefore took down the whole import and the
+      // whole export with an `EACCES` nobody had translated.
+      const dir = tempDir();
+      const locked = join(dir, "locked");
       try {
-        sessionFilesUnder(dir);
-      } catch (err) {
-        caught = err;
+        touch(join(dir, "readable.jsonl"));
+        mkdirSync(locked);
+        touch(join(locked, "hidden.jsonl"));
+        chmodSync(locked, 0o000);
+        let caught: unknown = null;
+        try {
+          sessionFilesUnder(dir);
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught).toBeInstanceOf(SessionImportError);
+        expect((caught as SessionImportError).code).toBe("IO");
+        expect((caught as SessionImportError).message).toContain(locked);
+      } finally {
+        chmodSync(locked, 0o700);
+        rmSync(dir, { recursive: true, force: true });
       }
-      expect(caught).toBeInstanceOf(SessionImportError);
-      expect((caught as SessionImportError).code).toBe("IO");
-      expect((caught as SessionImportError).message).toContain(locked);
-    } finally {
-      chmodSync(locked, 0o700);
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
+    },
+  );
 
   test("a tree deeper than the bound is refused rather than recursed into", () => {
     const dir = tempDir();

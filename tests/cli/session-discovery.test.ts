@@ -31,12 +31,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 
 import { brainDirs } from "../../src/core/brain/paths.ts";
 import { DEFAULT_BRAIN_CONFIG_YAML } from "../../src/core/brain/config-template.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { sessionLedgerPath } from "../../src/core/brain/sessions/discover.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -165,7 +166,9 @@ function vaultTree(at: string): Record<string, string> {
     )) {
       const full = join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else out[relative(at, full)] = readFileSync(full, "utf8");
+      // Keyed `/`-separated on every platform, so the expectations below
+      // (`Brain/inbox/...`) name the same file on Windows.
+      else out[relative(at, full).split(sep).join("/")] = readFileSync(full, "utf8");
     }
   };
   walk(at);
@@ -190,6 +193,17 @@ function vaultTree(at: string): Record<string, string> {
  * would hide a path that lost them.
  */
 const WALL_CLOCK_STAMP = /\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z|(?<![.\d])\d{2}:\d{2}:\d{2}Z/g;
+
+/**
+ * The day log's hash chain (`"h"`, and `"prev"` on every later line) is
+ * computed over the whole line, stamp included, so a stamp that straddled
+ * a second re-keys the chain too - which failed this test on a loaded CI
+ * runner after the stamp itself had been neutralised. The chain fields are
+ * neutralised with the clock, for the same reason and no further: the
+ * chain has its own end-to-end integrity suites, and what this test
+ * asserts is that the two import paths write the same content.
+ */
+const LOG_CHAIN_HASH = /"(h|prev)":"[0-9a-f]{64}"/g;
 
 /**
  * Today in UTC, which is the date both writers stamp: storage timestamps
@@ -217,7 +231,7 @@ function todayUtc(): string {
 function withoutWallClock(tree: Record<string, string>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [name, body] of Object.entries(tree)) {
-    out[name] = body.replace(WALL_CLOCK_STAMP, "<clock>");
+    out[name] = body.replace(WALL_CLOCK_STAMP, "<clock>").replace(LOG_CHAIN_HASH, '"$1":"<chain>"');
   }
   return out;
 }
@@ -400,28 +414,31 @@ describe("the ledger records what happened, and only what happened", () => {
     expect(res.stderr).not.toContain("import-session failed");
   });
 
-  test("a sweep whose ledger write fails still reports what it imported", async () => {
-    // The same defect one function over, and it was not even in a `try`:
-    // `--discover --all` imported the gap and then took the whole run's
-    // report down with the ledger write. A read-only derived store is the
-    // cheapest real cause - the ledger's lock file cannot be created -
-    // and stands in for the lock timeout and the read-only vault.
-    if (process.getuid?.() === 0) return; // root writes a 0o500 directory anyway
-    claudeLog("one.jsonl", "alpha");
-    const derived = dirname(sessionLedgerPath(vault));
-    mkdirSync(derived, { recursive: true });
-    chmodSync(derived, 0o500);
-    try {
-      const res = await run(["--discover", "--all", "--json"]);
-      expect(res.returncode).toBe(1);
-      const body = JSON.parse(res.stdout) as DiscoveryJson;
-      expect(body.files?.length).toBe(1);
-      expect(inboxSignals(vault).length).toBe(1);
-      expect(res.stderr).toContain("the import completed");
-    } finally {
-      chmodSync(derived, 0o700);
-    }
-  });
+  // Root, and any user on Windows, writes a 0o500 directory anyway.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a sweep whose ledger write fails still reports what it imported",
+    async () => {
+      // The same defect one function over, and it was not even in a `try`:
+      // `--discover --all` imported the gap and then took the whole run's
+      // report down with the ledger write. A read-only derived store is the
+      // cheapest real cause - the ledger's lock file cannot be created -
+      // and stands in for the lock timeout and the read-only vault.
+      claudeLog("one.jsonl", "alpha");
+      const derived = dirname(sessionLedgerPath(vault));
+      mkdirSync(derived, { recursive: true });
+      chmodSync(derived, 0o500);
+      try {
+        const res = await run(["--discover", "--all", "--json"]);
+        expect(res.returncode).toBe(1);
+        const body = JSON.parse(res.stdout) as DiscoveryJson;
+        expect(body.files?.length).toBe(1);
+        expect(inboxSignals(vault).length).toBe(1);
+        expect(res.stderr).toContain("the import completed");
+      } finally {
+        chmodSync(derived, 0o700);
+      }
+    },
+  );
 
   test("an entry whose file has been renamed away is pruned on the next write", async () => {
     // Entries were dropped only when the vanished path was re-submitted,
@@ -476,7 +493,7 @@ describe("the privacy posture is the one importSession already holds", () => {
       `Brain/inbox/sig-${today}-alpha.md`,
       `Brain/log/${today}.${PARITY_DEVICE_ID}.md`,
       `Brain/log/${today}.${PARITY_DEVICE_ID}.jsonl`,
-      relative(vault, sessionLedgerPath(vault)),
+      relative(vault, sessionLedgerPath(vault)).split(sep).join("/"),
     ]) {
       expect(`${required} written: ${namesOf(sweptTree).includes(required)}`).toBe(
         `${required} written: true`,

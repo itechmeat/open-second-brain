@@ -27,10 +27,8 @@ import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { DIAGNOSTIC_SIGNALS } from "../../src/core/brain/diagnostics.ts";
 import { indexVault } from "../../src/core/search/indexer.ts";
 import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
-
-/** Root ignores the directory mode bits the unwritable-log test drives. */
-const RUNNING_AS_ROOT = process.getuid?.() === 0;
 
 /** The registered exit for an index holding unexamined documents. */
 const PENDING_CODE = "event-anchors-pending";
@@ -177,7 +175,9 @@ test("--apply examines the pending documents and records a registered log event"
   expect(after.stdout).toContain("next: o2b search query");
 });
 
-test.skipIf(RUNNING_AS_ROOT)(
+// A 0o500 log directory still accepts writes for root and on Windows, where
+// chmod only toggles the read-only attribute (tests/helpers/platform.ts).
+test.skipIf(CHMOD_CANNOT_DENY)(
   "an unwritable Brain log surfaces on stderr rather than being swallowed",
   async () => {
     await indexThenDowngrade();

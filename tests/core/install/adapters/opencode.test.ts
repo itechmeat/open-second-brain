@@ -17,7 +17,11 @@ import { join, dirname } from "node:path";
 import { Writable } from "node:stream";
 
 import { opencodeAdapter } from "../../../../src/core/install/adapters/opencode.ts";
-import { buildPayload } from "../../../../src/core/install/payload.ts";
+import {
+  WINDOWS_LAUNCHER_ENV,
+  buildPayload,
+  launcherCommand,
+} from "../../../../src/core/install/payload.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
 
 let vault: string;
@@ -93,6 +97,9 @@ describe("opencode adapter - config path", () => {
   });
 });
 
+/** The launcher words ahead of `mcp`: `o2b` on POSIX, `cmd /d /c o2b` on Windows. */
+const LAUNCHER_ARGV = [launcherCommand().command, ...launcherCommand().prefix];
+
 describe("opencode adapter - apply", () => {
   test("clean home: writes opencode.json with both keys in the opencode entry schema", () => {
     opencodeAdapter.apply(opencodeAdapter.plan(payload(), env()), payload(), env(), applyOpts());
@@ -100,15 +107,19 @@ describe("opencode adapter - apply", () => {
     const full = parsed.mcp["open-second-brain"];
     expect(full).toEqual({
       type: "local",
-      command: ["o2b", "mcp", "--vault", vault, "--host-target", "opencode"],
+      command: [...LAUNCHER_ARGV, "mcp", "--vault", vault, "--host-target", "opencode"],
       // opencode keeps the operator host ("dev") but swaps the vendor to its
       // own, rather than inheriting the operator name "claude-dev-agent".
-      environment: { VAULT_AGENT_NAME: "opencode-dev-agent", VAULT_TIMEZONE: "UTC" },
+      environment: {
+        ...(process.platform === "win32" ? WINDOWS_LAUNCHER_ENV : {}),
+        VAULT_AGENT_NAME: "opencode-dev-agent",
+        VAULT_TIMEZONE: "UTC",
+      },
       enabled: true,
     });
     const writer = parsed.mcp["open-second-brain-writer"];
     expect(writer.command).toEqual([
-      "o2b",
+      ...LAUNCHER_ARGV,
       "mcp",
       "--writer-only",
       "--vault",
@@ -304,7 +315,7 @@ describe("opencode adapter - plan completeness", () => {
     expect(kinds).toContain("json-merge");
     expect(kinds).toContain("file-copy");
     expect(plan.steps.find((s) => s.kind === "file-copy")?.path).toContain(
-      "plugins/open-second-brain.ts",
+      join("plugins", "open-second-brain.ts"),
     );
   });
 

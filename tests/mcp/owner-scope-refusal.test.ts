@@ -42,6 +42,7 @@ import {
 } from "../../src/mcp/owner-scope-refusal.ts";
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
+import { toPosix } from "../../src/core/path-safety.ts";
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
@@ -302,7 +303,7 @@ test("the owner-scope argument has exactly one reader in src/mcp", () => {
   // One seam, named once. Before this unit four tools spelled the
   // argument themselves and would have kept the echo the seam removes;
   // a fifth is now a build failure rather than a silent opt-out.
-  expect(readers.map((p) => relative(repoRoot, p))).toEqual(["src/mcp/coerce.ts"]);
+  expect(readers.map((p) => toPosix(relative(repoRoot, p)))).toEqual(["src/mcp/coerce.ts"]);
 });
 
 test("every tool declaring agent_scope is covered by that one seam", () => {

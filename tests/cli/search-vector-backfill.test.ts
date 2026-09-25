@@ -29,6 +29,7 @@ import { createTempVault, makeConfig, writeMd } from "../helpers/search-fixtures
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { progressRecords, STAGE_IDENTIFIER } from "../helpers/progress-records.ts";
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
+import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 /**
@@ -51,9 +52,6 @@ const ALLOW_MISSING_VEC_ENV = "O2B_ALLOW_MISSING_SQLITE_VEC";
 
 /** Whether this environment has declared the extension optional. */
 const VEC_DECLARED_OPTIONAL = process.env[ALLOW_MISSING_VEC_ENV] !== undefined;
-
-/** Root ignores the directory mode bits the unwritable-log test drives. */
-const RUNNING_AS_ROOT = process.getuid?.() === 0;
 
 let vault: string;
 let dbPath: string;
@@ -282,7 +280,9 @@ test.skipIf(!VEC_LOADABLE)(
   },
 );
 
-test.skipIf(!VEC_LOADABLE || RUNNING_AS_ROOT)(
+// A 0o500 log directory still accepts writes for root and on Windows, where
+// chmod only toggles the read-only attribute (tests/helpers/platform.ts).
+test.skipIf(!VEC_LOADABLE || CHMOD_CANNOT_DENY)(
   "an unwritable Brain log surfaces on stderr rather than being swallowed",
   async () => {
     await indexWithoutVectors();

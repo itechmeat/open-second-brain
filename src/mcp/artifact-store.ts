@@ -27,6 +27,7 @@
 
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { join } from "node:path";
 
 import { artifactPath, artifactRunDir, brainArtifactsDir } from "../core/brain/paths.ts";
 import { atomicWriteFileSync } from "../core/fs-atomic.ts";
@@ -118,7 +119,7 @@ export class ArtifactStore {
       return 0;
     }
     for (const entry of entries) {
-      const dir = `${root}/${entry}`;
+      const dir = join(root, entry);
       try {
         const st = statSync(dir);
         if (!st.isDirectory()) continue;

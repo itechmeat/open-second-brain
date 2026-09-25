@@ -1,8 +1,10 @@
 import { test, expect } from "bun:test";
+import { join } from "node:path";
+
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
 
 test("default points under <vault>/.open-second-brain", () => {
-  expect(resolveIndexPath("/v", null)).toBe("/v/.open-second-brain/brain.sqlite");
+  expect(resolveIndexPath("/v", null)).toBe(join("/v", ".open-second-brain", "brain.sqlite"));
 });
 
 test("explicit override wins", () => {
@@ -10,5 +12,5 @@ test("explicit override wins", () => {
 });
 
 test("blank override falls back to default", () => {
-  expect(resolveIndexPath("/v", "")).toBe("/v/.open-second-brain/brain.sqlite");
+  expect(resolveIndexPath("/v", "")).toBe(join("/v", ".open-second-brain", "brain.sqlite"));
 });

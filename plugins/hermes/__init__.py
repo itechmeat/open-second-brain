@@ -40,7 +40,12 @@ def health(repo_root: str | Path | None = None) -> dict[str, Any]:
     """
     root = Path(repo_root) if repo_root is not None else Path(__file__).resolve().parents[2]
     checks = {
-        "o2b_script": _check_file(root / "scripts" / "o2b", executable=True),
+        # Native Windows runs the `.cmd` twin; the execute bit means nothing there.
+        "o2b_script": (
+            _check_file(root / "scripts" / "o2b.cmd")
+            if os.name == "nt"
+            else _check_file(root / "scripts" / "o2b", executable=True)
+        ),
         "openclaw_bundle": _check_file(root / "openclaw" / "index.js"),
         "package_json": _check_file(root / "package.json"),
     }

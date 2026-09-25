@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { readVaultInstructionFile } from "../../../src/core/brain/vault-instruction-file.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 
@@ -30,9 +31,8 @@ afterEach(() => {
  * nothing. Absence and failure are different answers.
  */
 describe("readVaultInstructionFile - an unreadable file is a failure, not an absence", () => {
-  const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
-
-  test.skipIf(RUNNING_AS_ROOT)("throws naming the path and the reason", () => {
+  // chmod cannot make a file unreadable to root, nor on Windows.
+  test.skipIf(CHMOD_CANNOT_DENY)("throws naming the path and the reason", () => {
     const path = join(vault, "VAULT.md");
     writeFileSync(path, "# Vault\n");
     chmodSync(path, 0o000);

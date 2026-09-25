@@ -81,12 +81,17 @@ def _live_memory_tool_projection(vault: str, diagnostics) -> list[dict]:
     it. A file rather than a pipe: nothing reads the pipe during the
     handshake, and a server that filled it would block on the write.
     """
+    # Resolve the launcher first: on Windows it is ``o2b.cmd``, which
+    # ``shutil.which`` finds through PATHEXT but CreateProcess does not, so a
+    # bare ``"o2b"`` argv fails with WinError 2 and the test skips silently.
+    o2b = shutil.which("o2b") or "o2b"
     proc = subprocess.Popen(  # noqa: S603 - fixed argv, test-only
-        ["o2b", "mcp"],
+        [o2b, "mcp"],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=diagnostics,
         text=True,
+        encoding="utf-8",
         bufsize=1,
         env={**os.environ, "VAULT_DIR": vault},
     )

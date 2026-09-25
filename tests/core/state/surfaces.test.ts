@@ -31,7 +31,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve, sep } from "node:path";
 
 import {
   brainArtifactsDir,
@@ -199,9 +199,12 @@ describe("the state-surface vocabulary", () => {
   });
 
   test("every derivation stays inside the vault it was handed", () => {
-    const vault = "/srv/vaults/example";
+    // Absolute on the host (`C:\srv\...` on Windows), so it is the form a
+    // resolver would hand back and the containment check uses the host
+    // separator.
+    const vault = resolve("/srv/vaults/example");
     const escaping = STATE_SURFACES.filter(
-      (surface) => !surface.derive(vault, null).startsWith(`${vault}/`),
+      (surface) => !surface.derive(vault, null).startsWith(`${vault}${sep}`),
     ).map((surface) => surface.id);
     expect(escaping.join("\n")).toBe("");
   });
@@ -416,7 +419,9 @@ const UNBOUND_ROW_COUNT = 0;
 const MIN_UNBOUND_REASON_LENGTH = 80;
 
 describe("each row is bound to the resolver that owns it", () => {
-  const vault = "/srv/vaults/example";
+  // Host-absolute: resolvers `resolve()` the vault, which on Windows adds
+  // the drive, while the row joins what it was handed.
+  const vault = resolve("/srv/vaults/example");
 
   for (const [id, resolver] of RESOLVER_BINDINGS) {
     test(`${id} derives what its resolver returns`, () => {

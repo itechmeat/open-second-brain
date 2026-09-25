@@ -70,15 +70,23 @@ describe("handleStdoutError", () => {
 });
 
 describe("closed stdout pipe regression", () => {
-  test("streaming many lines into an early-closed pipe exits 0 with no stderr", async () => {
-    // Drive the real guard in a fresh process: it writes far more than a pipe
-    // buffer can hold, and the downstream `head -c1` closes after one byte.
-    const proc = Bun.spawn(
-      ["bash", "-c", "bun run tests/helpers/epipe-stream-harness.ts | head -c1 >/dev/null"],
-      { cwd: ROOT, stdout: "pipe", stderr: "pipe" },
-    );
-    const [stderr, returncode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
-    expect(stderr).toBe("");
-    expect(returncode).toBe(0);
-  }, 20_000);
+  // Drives a `bash -c "... | head -c1"` pipeline; native Windows has no bash to run it.
+  test.skipIf(process.platform === "win32")(
+    "streaming many lines into an early-closed pipe exits 0 with no stderr",
+    async () => {
+      // Drive the real guard in a fresh process: it writes far more than a pipe
+      // buffer can hold, and the downstream `head -c1` closes after one byte.
+      const proc = Bun.spawn(
+        ["bash", "-c", "bun run tests/helpers/epipe-stream-harness.ts | head -c1 >/dev/null"],
+        { cwd: ROOT, stdout: "pipe", stderr: "pipe" },
+      );
+      const [stderr, returncode] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
+      expect(stderr).toBe("");
+      expect(returncode).toBe(0);
+    },
+    20_000,
+  );
 });

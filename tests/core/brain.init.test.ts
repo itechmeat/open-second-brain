@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { brainDirs } from "../../src/core/brain/paths.ts";
@@ -93,8 +93,8 @@ describe("bootstrapBrain — idempotent rerun", () => {
     const second = bootstrapBrain(vault, { configPath });
 
     // Brain-side: both files skipped, content intact.
-    expect(second.skipped).toContain(join("Brain", "_brain.yaml"));
-    expect(second.skipped).toContain(join("Brain", "_BRAIN.md"));
+    expect(second.skipped).toContain(posix.join("Brain", "_brain.yaml"));
+    expect(second.skipped).toContain(posix.join("Brain", "_BRAIN.md"));
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe("user: edited\n");
     expect(readFileSync(join(vault, "Brain", "_BRAIN.md"), "utf8")).toBe("user manual edits\n");
 
@@ -136,8 +136,8 @@ describe("bootstrapBrain — force overwrite", () => {
 
     const result = bootstrapBrain(vault, { configPath, force: true });
 
-    expect(result.overwritten).toContain(join("Brain", "_brain.yaml"));
-    expect(result.overwritten).toContain(join("Brain", "_BRAIN.md"));
+    expect(result.overwritten).toContain(posix.join("Brain", "_brain.yaml"));
+    expect(result.overwritten).toContain(posix.join("Brain", "_BRAIN.md"));
     expect(result.skipped.length).toBe(0);
 
     expect(readFileSync(join(vault, "Brain", "_brain.yaml"), "utf8")).toBe(
@@ -238,7 +238,7 @@ describe("bootstrapBrain — Bases view definitions", () => {
     for (const name of BASE_FILES) {
       const path = join(vault, "Brain", "bases", name);
       expect(existsSync(path)).toBe(true);
-      expect(result.created).toContain(join("Brain", "bases", name));
+      expect(result.created).toContain(posix.join("Brain", "bases", name));
     }
   });
 
@@ -259,7 +259,7 @@ describe("bootstrapBrain — Bases view definitions", () => {
 
     const second = bootstrapBrain(vault, { configPath });
 
-    expect(second.skipped).toContain(join("Brain", "bases", "projects.base"));
+    expect(second.skipped).toContain(posix.join("Brain", "bases", "projects.base"));
     expect(readFileSync(edited, "utf8")).toBe("user: edited\n");
   });
 
@@ -270,7 +270,7 @@ describe("bootstrapBrain — Bases view definitions", () => {
 
     const result = bootstrapBrain(vault, { configPath, force: true });
 
-    expect(result.overwritten).toContain(join("Brain", "bases", "daily.base"));
+    expect(result.overwritten).toContain(posix.join("Brain", "bases", "daily.base"));
     expect(readFileSync(stomped, "utf8")).toContain('file.inFolder("Brain/log")');
   });
 });

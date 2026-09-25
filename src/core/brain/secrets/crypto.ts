@@ -4,8 +4,8 @@
  * Per-value AES-256-GCM from node:crypto - random 12-byte IV per
  * encryption, authentication tag verified on every decrypt, so a
  * tampered ciphertext fails closed instead of decoding garbage. The
- * 32-byte key lives in a 0600 keyfile beside the ciphertext store;
- * both stay under the vault-local state dir that never syncs as
+ * 32-byte key lives in a 0600 keyfile beside the ciphertext store (an
+ * owner-only ACL on Windows, see `owner-acl.ts`); both stay under the vault-local state dir that never syncs as
  * vault content.
  *
  * Honest threat model (documented, not implied): this protects
@@ -18,6 +18,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+
+import { restrictToOwner } from "./owner-acl.ts";
 
 const ALGORITHM = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -34,14 +36,25 @@ export interface EncryptedValue {
 
 /** Load the keyfile, creating it 0600 with 32 random bytes on first use. */
 export function loadOrCreateKey(keyPath: string): Buffer {
+  const keyDir = dirname(keyPath);
   if (existsSync(keyPath)) {
+    // On Windows the owner-only ACL is (re)applied on load too, not only
+    // at creation: a secrets directory that came in with a copied or
+    // restored vault carries whatever ACL it inherited at its new place.
+    // `restrictToOwner` is idempotent and runs once per path per process.
+    restrictToOwner(keyDir, "directory");
+    restrictToOwner(keyPath, "file");
     const key = readFileSync(keyPath);
     if (key.length !== KEY_BYTES) {
       throw new Error(`secrets keyfile is corrupt (expected ${KEY_BYTES} bytes): ${keyPath}`);
     }
     return key;
   }
-  mkdirSync(dirname(keyPath), { recursive: true, mode: 0o700 });
+  // The `0700` mode takes effect on POSIX only for a directory this call
+  // creates. Windows ignores the mode; `restrictToOwner` sets the
+  // equivalent ACL there, whoever created the directory.
+  mkdirSync(keyDir, { recursive: true, mode: 0o700 });
+  restrictToOwner(keyDir, "directory");
   const key = randomBytes(KEY_BYTES);
   // Exclusive create: two concurrent first-writers cannot truncate
   // each other's key; the loser re-reads the winner's file.
@@ -57,6 +70,7 @@ export function loadOrCreateKey(keyPath: string): Buffer {
   } finally {
     closeSync(fd);
   }
+  restrictToOwner(keyPath, "file");
   return key;
 }
 

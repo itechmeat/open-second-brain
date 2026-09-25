@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { listScanTargets } from "../../../src/core/hygiene/scan-repo.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let root: string;
 
@@ -136,21 +137,25 @@ describe("malformed patterns", () => {
 });
 
 describe("unusable ignore files", () => {
-  test("an unreadable .gitignore warns on stderr instead of passing silently", () => {
-    put("src/a.ts");
-    put("src/secret.ts");
-    put(".gitignore", "secret.ts\n");
-    chmodSync(join(root, ".gitignore"), 0o000);
-    let targets: string[] = [];
-    const printed = captureStderr(() => {
-      targets = listScanTargets(root);
-    });
-    // The declaration could not be applied, so the file is still scanned - and
-    // the operator is told why rather than being left to guess.
-    expect(targets).toContain("src/secret.ts");
-    expect(printed).toContain(".gitignore");
-    expect(printed).toContain("EACCES");
-  });
+  // chmod cannot deny access on Windows or as root (tests/helpers/platform.ts).
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "an unreadable .gitignore warns on stderr instead of passing silently",
+    () => {
+      put("src/a.ts");
+      put("src/secret.ts");
+      put(".gitignore", "secret.ts\n");
+      chmodSync(join(root, ".gitignore"), 0o000);
+      let targets: string[] = [];
+      const printed = captureStderr(() => {
+        targets = listScanTargets(root);
+      });
+      // The declaration could not be applied, so the file is still scanned - and
+      // the operator is told why rather than being left to guess.
+      expect(targets).toContain("src/secret.ts");
+      expect(printed).toContain(".gitignore");
+      expect(printed).toContain("EACCES");
+    },
+  );
 
   test("a symlinked .gitignore is refused with a stderr warning", () => {
     put("src/a.ts");

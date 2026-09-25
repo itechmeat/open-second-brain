@@ -16,6 +16,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import { registerAllAdapters } from "../../../src/core/install/adapters/all.ts";
 import { sessionPathsFor } from "../../../src/core/install/session-paths.ts";
@@ -128,12 +129,9 @@ describe("every adapter answers where its sessions live", () => {
   test("the answer follows the injected environment, not this machine", () => {
     const relocated = sessionPathsFor("codex", envFor({ CODEX_HOME: "/mnt/elsewhere/codex" }));
     expect(relocated).not.toBeNull();
-    expect(relocated!.roots.map((r) => r.path)).toEqual([
-      "/mnt/elsewhere/codex/sessions",
-      "/mnt/elsewhere/codex/session",
-      "/mnt/elsewhere/codex/history",
-      "/mnt/elsewhere/codex/.tmp",
-    ]);
+    expect(relocated!.roots.map((r) => r.path)).toEqual(
+      ["sessions", "session", "history", ".tmp"].map((leaf) => join("/mnt/elsewhere/codex", leaf)),
+    );
   });
 
   test("cursor answers the runtime whose logs no adapter in this build reads", () => {

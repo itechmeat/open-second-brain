@@ -83,6 +83,10 @@ async function runWriters(scriptName: string, lines: readonly string[]): Promise
     Bun.spawn(["bun", script, vault, `w${index}`, String(PER_WRITER), startAt], {
       stdout: "pipe",
       stderr: "pipe",
+      // Bun hands a child without `env` the environment this process STARTED
+      // with, not the live `process.env`: pass it so the child sees the
+      // throwaway config tests/setup.ts installs, not the operator's real one.
+      env: { ...process.env },
     }),
   );
   const failures: string[] = [];

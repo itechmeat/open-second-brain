@@ -95,6 +95,7 @@ export {
   formatEmbedderRecordContradiction,
   readEmbedderRecordCensusSync,
 } from "./store/embedder-audit.ts";
+import { closeDatabase } from "../sqlite-close.ts";
 
 export { normalizeAlias } from "./store/aliases.ts";
 
@@ -163,7 +164,7 @@ export class Store {
         store.resolveEmbeddingAbi();
         return store;
       } catch (e) {
-        opened.db.close();
+        closeDatabase(opened.db);
         throw e;
       }
     }
@@ -257,7 +258,7 @@ export class Store {
     unregisterWriterDb(this.db);
     try {
       if (this.release) lifecycle.consolidateWal(this.db);
-      this.db.close();
+      closeDatabase(this.db);
     } finally {
       if (this.release) await this.release();
     }

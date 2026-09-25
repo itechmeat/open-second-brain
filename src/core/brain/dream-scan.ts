@@ -79,11 +79,18 @@ interface DirectoryWalk {
   step(): void;
 }
 
-/** Absolute paths of the `.md` files directly inside `dir`, or nothing when it does not exist. */
+/**
+ * Absolute paths of the `.md` files directly inside `dir`, or nothing when it
+ * does not exist. Sorted by name in code-unit order: `readdirSync` returns the
+ * filesystem's storage order (hash order on ext4, name order on NTFS and
+ * APFS), and every list the dream pass writes - `moved_to_processed`, the
+ * evidence a promoted preference cites - inherits this order, so an unsorted
+ * walk made the same corpus write different bytes on different machines.
+ */
 function markdownFilesIn(dir: string): string[] {
   if (!existsSync(dir)) return [];
   const out: string[] = [];
-  for (const name of readdirSync(dir)) {
+  for (const name of readdirSync(dir).toSorted()) {
     if (name.endsWith(MARKDOWN_EXT)) out.push(join(dir, name));
   }
   return out;

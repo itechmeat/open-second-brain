@@ -63,7 +63,7 @@ function registeredHooks(hooksJson: string): ReadonlySet<string> {
  * `<bun> run <repo>/hooks/<name>.ts`.
  */
 function hookScriptName(command: string): string {
-  const viaFile = /\/hooks\/([a-z0-9-]+)\.ts\b/.exec(command);
+  const viaFile = /[\\/]hooks[\\/]([a-z0-9-]+)\.ts\b/.exec(command);
   if (viaFile?.[1] !== undefined) return viaFile[1];
   const viaLauncher = /o2b-hook\s+([a-z0-9-]+)/.exec(command);
   if (viaLauncher?.[1] !== undefined) return viaLauncher[1];

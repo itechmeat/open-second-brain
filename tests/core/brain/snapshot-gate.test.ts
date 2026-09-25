@@ -30,7 +30,6 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -51,6 +50,7 @@ import { brainDirs, snapshotPath, validateRunId } from "../../../src/core/brain/
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { BRAIN_SNAPSHOT_REASON } from "../../../src/core/brain/types.ts";
 import { FileAlreadyExistsError, atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
+import { extractSnapshotArchive } from "../../helpers/snapshot-archive.ts";
 
 let vault: string;
 let configHome: string;
@@ -198,16 +198,7 @@ describe("withDestructiveSnapshot", () => {
     // Extract and confirm the seeded signal is present.
     const tmp = mkdtempSync(join(tmpdir(), "o2b-gate-verify-"));
     try {
-      const zstd = spawnSync("zstd", ["-d", "-c", out.snapshot.path], {
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      expect(zstd.status).toBe(0);
-      const tar = spawnSync("tar", ["-x", "-C", tmp], {
-        input: zstd.stdout,
-        stdio: ["pipe", "inherit", "pipe"],
-      });
-      expect(tar.status).toBe(0);
+      extractSnapshotArchive(out.snapshot.path, tmp);
       expect(existsSync(join(tmp, "Brain", "inbox", "sig-2026-05-14-foo.md"))).toBe(true);
     } finally {
       rmSync(tmp, { recursive: true, force: true });

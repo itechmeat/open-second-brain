@@ -14,16 +14,7 @@
  * §13, §15.
  */
 
-import {
-  accessSync,
-  constants,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  unlinkSync,
-} from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname } from "node:path";
 
 import {
@@ -111,6 +102,8 @@ import type {
   VisibilityHonestyFinding,
 } from "./types.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
+import { closeDatabase } from "../sqlite-close.ts";
+import { renameWithRetry, unlinkWithRetry } from "../fs-atomic.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1118,7 +1111,7 @@ async function reindexInto(
     progress.start(INDEX_STAGE.swap, 1);
     tryUnlink(bakPath);
     tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
-    renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
+    renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
@@ -1177,10 +1170,13 @@ async function withStagingStore(
   }
 }
 
-/** `unlinkSync` that tolerates ENOENT (file already absent). */
+/** `unlinkWithRetry` that tolerates ENOENT (file already absent). */
 function tryUnlink(p: string): void {
   try {
-    unlinkSync(p);
+    // A stale `.bak` or `.new` held by an antivirus scan or a sync client
+    // is a Windows sharing violation that clears; ride it out like the
+    // renames beside it instead of failing the whole reindex.
+    unlinkWithRetry(p);
   } catch (e) {
     if (!isEnoent(e)) throw e;
   }
@@ -1189,7 +1185,7 @@ function tryUnlink(p: string): void {
 /** `renameSync` that tolerates ENOENT on the source. */
 function tryRename(from: string, to: string): void {
   try {
-    renameSync(from, to);
+    renameWithRetry(from, to);
   } catch (e) {
     if (!isEnoent(e)) throw e;
   }
@@ -1526,7 +1522,7 @@ export async function indexCheck(
         warnings.push(`sqlite-vec unavailable: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    db.close();
+    closeDatabase(db);
   } catch (e) {
     fatal.push(`bun:sqlite open failed: ${e instanceof Error ? e.message : String(e)}`);
   }

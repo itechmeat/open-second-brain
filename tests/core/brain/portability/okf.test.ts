@@ -232,7 +232,7 @@ describe("round-trip", () => {
       mkdirSync(join(staged, ".."), { recursive: true });
       writeFileSync(staged, "PREEXISTING\n", "utf8");
       const result = importOkfBundle(dest, readOkfBundle(dir));
-      expect(result.skipped).toContain(join(OKF_REVIEW_REL, "Notes/Alpha.md"));
+      expect(result.skipped).toContain(`${OKF_REVIEW_REL}/Notes/Alpha.md`);
       expect(readFileSync(staged, "utf8")).toBe("PREEXISTING\n");
     } finally {
       rmSync(dir, { recursive: true, force: true });

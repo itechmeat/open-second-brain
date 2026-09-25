@@ -245,7 +245,7 @@ function countArtifacts(vault: string): BrainStatusCounts {
       if (!name.endsWith(".md")) continue;
       if (!name.startsWith("pref-")) continue;
       preferences++;
-      const status = readFrontmatterStatus(`${dirs.preferences}/${name}`);
+      const status = readFrontmatterStatus(join(dirs.preferences, name));
       preferences_by_status[status] = (preferences_by_status[status] ?? 0) + 1;
     }
   }

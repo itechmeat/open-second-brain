@@ -23,6 +23,7 @@ import { fileURLToPath } from "node:url";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
 import { captureSessionLifecycleEvent } from "../../src/core/brain/session-lifecycle.ts";
+import { homeEnv } from "../helpers/platform.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const HOOKS_JSON = join(REPO, "hooks", "hooks.json");
@@ -56,7 +57,7 @@ async function runHook(
     stderr: "pipe",
     env: {
       PATH: process.env["PATH"] ?? "",
-      HOME: configHome,
+      ...homeEnv(configHome),
       VAULT_DIR: vault,
       VAULT_AGENT_NAME: "claude-vps-agent",
     },

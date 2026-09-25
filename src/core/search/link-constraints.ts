@@ -15,6 +15,7 @@
 
 import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
+import { closeDatabase } from "../sqlite-close.ts";
 
 export type LinkConstraintMap = Readonly<Record<string, ReadonlyArray<string>>>;
 
@@ -104,6 +105,6 @@ export function readBlockedRelationRows(dbPath: string): ReadonlyArray<BlockedRe
   } catch {
     return [];
   } finally {
-    db?.close();
+    closeDatabase(db);
   }
 }

@@ -20,6 +20,7 @@
  *    `session.deleted` the full message list is fetched through the
  *    SDK client and snapshotted as a deterministic JSONL spool under
  *    `${XDG_DATA_HOME:-~/.local/share}/open-second-brain/opencode/`
+ *    (`%LOCALAPPDATA%\\open-second-brain\\opencode\\` on native Windows)
  *    (override: `OSB_OPENCODE_SPOOL_DIR`). The spool format is owned
  *    by Open Second Brain (`format: 1`); `o2b brain import-session`
  *    pointed at the spool dir ingests it via the `opencode` session
@@ -72,7 +73,18 @@ function spoolDir(): string {
   const override = process.env["OSB_OPENCODE_SPOOL_DIR"];
   if (override && override.length > 0) return override;
   const xdg = process.env["XDG_DATA_HOME"];
-  const base = xdg && xdg.length > 0 ? xdg : join(homedir(), ".local", "share");
+  // Mirrors `dataBaseDir` in src/core/platform-dirs.ts (this file is copied
+  // into opencode's plugin directory and cannot import it): XDG wins, then
+  // %LOCALAPPDATA% on native Windows, then ~/.local/share.
+  const local = process.env["LOCALAPPDATA"];
+  const base =
+    xdg && xdg.length > 0
+      ? xdg
+      : process.platform === "win32"
+        ? local && local.length > 0
+          ? local
+          : join(homedir(), "AppData", "Local")
+        : join(homedir(), ".local", "share");
   return join(base, "open-second-brain", "opencode");
 }
 
@@ -190,11 +202,16 @@ function messageList(response: unknown): unknown[] | null {
 function renderActiveContext(cwd: string): string | null {
   try {
     const bin = process.env["OSB_HOOK_BIN"] ?? "o2b-hook";
-    const proc = Bun.spawnSync([bin, "active-inject"], {
+    const command = hookCommand(bin);
+    if (command === null) return null;
+    const proc = Bun.spawnSync(command.argv, {
       stdin: Buffer.from(JSON.stringify({ hook_event_name: "SessionStart", cwd })),
       stdout: "pipe",
       stderr: "ignore",
       timeout: HOOK_TIMEOUT_MS,
+      windowsHide: true,
+      windowsVerbatimArguments: command.verbatim,
+      env: command.env,
     });
     if (!proc.success) return null;
     const raw = proc.stdout.toString("utf8").trim();
@@ -206,6 +223,48 @@ function renderActiveContext(cwd: string): string | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * How to start the `o2b-hook` shim `bin` (a bare name or a path), or null
+ * when it cannot be found.
+ *
+ * POSIX: `bin` itself - `execvp` searches PATH only.
+ *
+ * Native Windows: the shim is `o2b-hook.cmd`, which Bun.spawn cannot start
+ * from a bare name (it resolves `.exe` only), so it runs through cmd.exe.
+ * But cmd.exe looks for a bare name in the current directory before PATH,
+ * and opencode runs in the project it opened: `cmd /c o2b-hook` would run
+ * an `o2b-hook.cmd` that repository ships. So the name is resolved to an
+ * absolute path here first, with `Bun.which` (PATH only, never the
+ * current directory), and cmd gets that path - quoted as a whole with
+ * `/s`, the form Node uses for `shell: true`, so spaces and parentheses in
+ * it survive. `NoDefaultCurrentDirectoryInExePath` covers the launcher's
+ * own `bun` lookup as well. `OSB_HOOK_BIN` is operator-controlled; the
+ * resolved path is the only non-literal in the command line.
+ */
+function hookCommand(bin: string): {
+  readonly argv: string[];
+  readonly verbatim: boolean;
+  readonly env: Record<string, string | undefined> | undefined;
+} | null {
+  if (process.platform !== "win32")
+    return { argv: [bin, "active-inject"], verbatim: false, env: undefined };
+  const resolved = Bun.which(bin, { PATH: process.env["PATH"] ?? "" });
+  if (resolved === null) return null;
+  const comspec = process.env["ComSpec"];
+  const systemRoot = process.env["SystemRoot"] || "C:\\Windows";
+  return {
+    argv: [
+      comspec && comspec.length > 0 ? comspec : join(systemRoot, "System32", "cmd.exe"),
+      "/d",
+      "/s",
+      "/c",
+      `""${resolved}" active-inject"`,
+    ],
+    verbatim: true,
+    env: { ...process.env, NoDefaultCurrentDirectoryInExePath: "1" },
+  };
 }
 
 /**

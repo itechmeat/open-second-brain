@@ -81,7 +81,9 @@ describe("init", () => {
     expect(r.stdout).toContain("vault path persisted to:");
     const text = readFileSync(config, "utf8");
     expect(text).toContain("vault");
-    expect(text).toContain(resolve(vault));
+    // `init` stores the path with forward slashes: the config writer refuses
+    // a backslash, and Windows accepts `C:/...` everywhere a path is read.
+    expect(text).toContain(resolve(vault).replace(/\\/g, "/"));
   });
 
   test("with timezone persists to plugin config", async () => {
@@ -359,6 +361,8 @@ describe("index", () => {
     mkdirSync(join(vault, BRAIN_ROOT_REL), { recursive: true });
     writeFileSync(join(vault, "Concept.md"), "---\ntitle: Concept\n---\n\nBody.");
     writeFileSync(join(vault, "Other.md"), "No frontmatter.");
+    mkdirSync(join(vault, "notes", "deep"), { recursive: true });
+    writeFileSync(join(vault, "notes", "deep", "Nested.md"), "---\ntitle: Nested\n---\n\nBody.");
     const r = await runCli(["index", "--vault", vault]);
     expect(r.returncode).toBe(0);
     const indexPath = join(vault, BRAIN_INDEX_REL);
@@ -366,6 +370,11 @@ describe("index", () => {
     const content = readFileSync(indexPath, "utf8");
     expect(content).toContain("[[Concept]]");
     expect(content).toContain("[[Other]]");
+    // The listed path is vault-relative and forward-slash on every host:
+    // stripping the vault prefix by hand left `\notes\deep\Nested.md`
+    // on Windows.
+    expect(content).toContain("[[Nested]]  `notes/deep/Nested.md`");
+    expect(content).toContain("[[Concept]]  `Concept.md`");
   });
 });
 

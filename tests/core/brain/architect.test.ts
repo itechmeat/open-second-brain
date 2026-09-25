@@ -21,6 +21,7 @@ import { ArchWriteError, generateArchDocs } from "../../../src/core/brain/archit
 import { ARCHITECT_STAGE, scanProject } from "../../../src/core/brain/architect/scan.ts";
 import { PROGRESS_KIND } from "../../../src/core/brain/progress.ts";
 import { RegionError } from "../../../src/core/brain/regions.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let tmp: string;
 let project: string;
@@ -252,43 +253,47 @@ test("a corrupted note aborts the run before any note is written", () => {
  * cannot be created there. The overview lives one directory up and is
  * written first, so exactly one note is refreshed before the loop stops.
  */
-test("a write that fails part-way through reports the prefix it already refreshed", () => {
-  const first = generateArchDocs(vault, project);
-  const coreNote = first.modulePaths.find((p) => p.endsWith("core.md"))!;
-  const coreBefore = readFileSync(coreNote, "utf8");
-  const overviewBefore = readFileSync(first.overviewPath, "utf8");
-  seed("src/core/added.ts"); // overview.md AND core.md must both change
+// chmod cannot deny access on Windows (read-only attribute only) or to root.
+test.skipIf(CHMOD_CANNOT_DENY)(
+  "a write that fails part-way through reports the prefix it already refreshed",
+  () => {
+    const first = generateArchDocs(vault, project);
+    const coreNote = first.modulePaths.find((p) => p.endsWith("core.md"))!;
+    const coreBefore = readFileSync(coreNote, "utf8");
+    const overviewBefore = readFileSync(first.overviewPath, "utf8");
+    seed("src/core/added.ts"); // overview.md AND core.md must both change
 
-  chmodSync(join(first.dir, "modules"), 0o555);
-  let caught: unknown = null;
-  try {
-    generateArchDocs(vault, project);
-  } catch (error) {
-    caught = error;
-  }
-  chmodSync(join(first.dir, "modules"), 0o755);
+    chmodSync(join(first.dir, "modules"), 0o555);
+    let caught: unknown = null;
+    try {
+      generateArchDocs(vault, project);
+    } catch (error) {
+      caught = error;
+    }
+    chmodSync(join(first.dir, "modules"), 0o755);
 
-  expect(caught).toBeInstanceOf(ArchWriteError);
-  const failure = caught as ArchWriteError;
-  expect(failure.path).toBe(coreNote);
-  // The overview is on disk; `core.md` and nothing after it are not.
-  expect(failure.written).toBe(1);
-  expect(failure.pending).toBe(1);
-  expect(failure.message).toContain("re-run");
-  expect(failure.cause).toBeDefined();
+    expect(caught).toBeInstanceOf(ArchWriteError);
+    const failure = caught as ArchWriteError;
+    expect(failure.path).toBe(coreNote);
+    // The overview is on disk; `core.md` and nothing after it are not.
+    expect(failure.written).toBe(1);
+    expect(failure.pending).toBe(1);
+    expect(failure.message).toContain("re-run");
+    expect(failure.cause).toBeDefined();
 
-  // The half-refreshed tree the counts describe, observed directly.
-  expect(readFileSync(first.overviewPath, "utf8")).not.toBe(overviewBefore);
-  expect(readFileSync(coreNote, "utf8")).toBe(coreBefore);
-  // A failed write is not a leaked lock.
-  expect(existsSync(`${first.dir}.lock`)).toBe(false);
+    // The half-refreshed tree the counts describe, observed directly.
+    expect(readFileSync(first.overviewPath, "utf8")).not.toBe(overviewBefore);
+    expect(readFileSync(coreNote, "utf8")).toBe(coreBefore);
+    // A failed write is not a leaked lock.
+    expect(existsSync(`${first.dir}.lock`)).toBe(false);
 
-  // And the repair the message promises is real: with the cause gone, one
-  // ordinary re-run rewrites the suffix the failure left stale.
-  const repaired = generateArchDocs(vault, project);
-  expect(repaired.updated).toBe(1);
-  expect(readFileSync(coreNote, "utf8")).toContain("added.ts");
-});
+    // And the repair the message promises is real: with the cause gone, one
+    // ordinary re-run rewrites the suffix the failure left stale.
+    const repaired = generateArchDocs(vault, project);
+    expect(repaired.updated).toBe(1);
+    expect(readFileSync(coreNote, "utf8")).toContain("added.ts");
+  },
+);
 
 test("module_paths follows the scan's module order, not the write order", () => {
   const res = generateArchDocs(vault, project);

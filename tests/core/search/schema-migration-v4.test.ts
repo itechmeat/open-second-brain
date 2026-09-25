@@ -50,14 +50,14 @@ test("fresh migration reaches latest and creates query_cache", () => {
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(hasTable(db, "query_cache")).toBe(true);
   expect(hasColumn(db, "chunks", "fts_content")).toBe(true);
-  db.close();
+  db.close(true);
 });
 
 test("applyMigrations is idempotent at latest", () => {
   const db = new Database(dbPath);
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
   expect(applyMigrations(db)).toBe(LATEST_SCHEMA_VERSION);
-  db.close();
+  db.close(true);
 });
 
 test("a v3 index upgrades to latest preserving prior data", () => {
@@ -78,7 +78,7 @@ test("a v3 index upgrades to latest preserving prior data", () => {
   expect(hasColumn(db, "chunks", "fts_content")).toBe(true);
   const row = db.query<{ c: number }, []>("SELECT count(*) AS c FROM documents").get();
   expect(row?.c).toBe(1);
-  db.close();
+  db.close(true);
 });
 
 test("a newer-than-latest index still raises SCHEMA_MISMATCH", () => {
@@ -86,5 +86,5 @@ test("a newer-than-latest index still raises SCHEMA_MISMATCH", () => {
   applyMigrations(db);
   db.run("UPDATE index_state SET value = '999' WHERE key = 'schema_version'");
   expect(() => applyMigrations(db)).toThrow(/newer than this binary/);
-  db.close();
+  db.close(true);
 });

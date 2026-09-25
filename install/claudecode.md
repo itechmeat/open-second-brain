@@ -46,6 +46,16 @@ claude mcp list
 `plugin:open-second-brain:open-second-brain` with `✓ Connected`.
 Run the daily-identity check from `install/prerequisites.md`.
 
+## Native Windows
+
+`claude.exe` on Windows starts the plugin's MCP servers from
+`scripts\o2b.cmd`. Step 2 above is `bun run src\cli\main.ts install-cli`
+from the plugin directory, and it writes `.cmd` launchers into
+`%USERPROFILE%\.local\bin`. The lifecycle hooks are POSIX shell commands:
+they run when Git for Windows is installed (Claude Code then uses Git
+Bash) and are skipped under the PowerShell fallback. See
+[`windows.md`](windows.md).
+
 ## Lifecycle hooks (auto-enabled)
 
 The bundled `hooks/hooks.json` registers a `PostToolUse` hook

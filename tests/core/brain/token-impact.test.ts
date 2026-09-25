@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
 import {
@@ -323,7 +324,7 @@ describe("the ledger no longer claims exactness over caller-supplied integers", 
 
   test("no executable line still labels a caller's integers exact", async () => {
     const source = await Bun.file(
-      new URL("../../../src/core/brain/token-impact.ts", import.meta.url).pathname,
+      fileURLToPath(new URL("../../../src/core/brain/token-impact.ts", import.meta.url)),
     ).text();
     // Comments may (and do) explain the retired label; code may not use it
     // for anything but the documented legacy read.

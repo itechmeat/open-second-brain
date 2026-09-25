@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
 import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../../../src/core/brain/policy/blocks/install.ts";
 import { grokHooksJson, grokMcpServers } from "../../../src/core/install/grok-asset.ts";
@@ -31,7 +32,7 @@ describe("grokMcpServers", () => {
     expect(full.command).toBe(process.execPath);
     expect(full.args).toEqual([
       "run",
-      expect.stringContaining("src/cli/main.ts"),
+      expect.stringContaining(join("src", "cli", "main.ts")),
       "mcp",
       "--vault",
       "/v",

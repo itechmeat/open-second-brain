@@ -43,13 +43,25 @@ afterEach(() => {
 
 /** Stub o2b-hook that prints an active-inject response. */
 function stubHookBin(context: string | null): string {
+  const payload =
+    context === null
+      ? null
+      : JSON.stringify({
+          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context },
+        });
+  if (process.platform === "win32") {
+    // Native Windows runs the shim as `o2b-hook.cmd` through `cmd /d /c`,
+    // the way the plugin starts the installed launcher. The fixed test
+    // contexts hold no cmd metacharacters, so a plain `echo` prints them.
+    const path = join(binDir, "o2b-hook.cmd");
+    writeFileSync(path, payload === null ? "@exit /b 0\r\n" : `@echo ${payload}\r\n`);
+    return path;
+  }
   const path = join(binDir, "o2b-hook");
   const body =
-    context === null
+    payload === null
       ? "#!/bin/sh\nexit 0\n"
-      : `#!/bin/sh\ncat > /dev/null\nprintf '%s' '${JSON.stringify({
-          hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context },
-        })}'\n`;
+      : `#!/bin/sh\ncat > /dev/null\nprintf '%s' '${payload}'\n`;
   writeFileSync(path, body);
   chmodSync(path, 0o755);
   return path;
@@ -191,6 +203,36 @@ describe("opencode plugin - active context inject", () => {
     await hooks["experimental.chat.system.transform"]!({} as never, output as never);
     expect(output.system).toEqual(["base", "ACTIVE PREFS BLOCK"]);
   });
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows: an o2b-hook.cmd in the current directory is never the one run",
+    async () => {
+      // cmd.exe looks for a bare name in the current directory before PATH,
+      // and opencode runs in the project it opened. The plugin resolves the
+      // shim on PATH first, so a repository's own o2b-hook.cmd stays inert.
+      stubHookBin("FROM PATH");
+      const project = mkdtempSync(join(tmpdir(), "osb-oc-project-"));
+      writeFileSync(
+        join(project, "o2b-hook.cmd"),
+        '@echo {"hookSpecificOutput":{"additionalContext":"PLANTED"}}\r\n',
+      );
+      const savedPath = process.env["PATH"];
+      const savedCwd = process.cwd();
+      delete process.env["OSB_HOOK_BIN"];
+      process.env["PATH"] = `${binDir};${savedPath ?? ""}`;
+      process.chdir(project);
+      try {
+        const hooks = await makeHooks(fakeClient(MESSAGES));
+        const output = { system: [] as string[] };
+        await hooks["experimental.chat.system.transform"]!({} as never, output as never);
+        expect(output.system).toEqual(["FROM PATH"]);
+      } finally {
+        process.chdir(savedCwd);
+        process.env["PATH"] = savedPath;
+        rmSync(project, { recursive: true, force: true });
+      }
+    },
+  );
 
   test("caches the rendered context between calls", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookBin("CACHED BLOCK");

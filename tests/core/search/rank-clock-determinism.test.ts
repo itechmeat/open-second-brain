@@ -138,9 +138,10 @@ test("one search() call reads the wall clock only where the request is resolved"
   const record = (): void => {
     if (!capturing) return;
     for (const frame of (new Error().stack ?? "").split("\n").slice(1)) {
-      const match = /\((\/.*?\/(src\/core\/.*?\.ts)):\d+:\d+\)/.exec(frame);
+      // Either separator: Windows stack frames name `C:\...\src\core\...`.
+      const match = /\((.*?[\\/](src[\\/]core[\\/].*?\.ts)):\d+:\d+\)/.exec(frame);
       if (match) {
-        sites.add(match[2]!);
+        sites.add(match[2]!.replaceAll("\\", "/"));
         return;
       }
     }

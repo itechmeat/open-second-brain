@@ -14,9 +14,10 @@
  */
 
 import { existsSync, readdirSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 
 import { brainDirs } from "./../paths.ts";
+import { vaultRelative } from "../../path-safety.ts";
 import { parsePreference } from "./../preference.ts";
 import { parseSignal } from "./../signal.ts";
 import { fileAgeMs, msToWholeDays } from "./../time.ts";
@@ -106,7 +107,7 @@ function scanPreferences(
       Object.freeze({
         prefId: pref.id,
         topic: pref.topic,
-        path: relative(vault, path),
+        path: vaultRelative(path, vault),
         lastSeenAt,
         ageDays,
       }),
@@ -137,7 +138,7 @@ function scanSignals(vault: string, thresholdDays: number, nowMs: number): Stale
       Object.freeze({
         signalId: signal.id,
         topic: signal.topic,
-        path: relative(vault, path),
+        path: vaultRelative(path, vault),
         lastSeenAt: signal.created_at,
         ageDays,
       }),
@@ -173,7 +174,7 @@ function scanLogFiles(vault: string, thresholdDays: number, nowMs: number): Stal
     if (ageDays < thresholdDays) continue;
     out.push(
       Object.freeze({
-        path: relative(vault, path),
+        path: vaultRelative(path, vault),
         mtime: new Date(mtimeMs).toISOString(),
         ageDays,
       }),

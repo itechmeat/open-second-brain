@@ -37,6 +37,12 @@ import {
   SESSION_FILE_EXTENSION,
   type SessionAdapterId,
 } from "../brain/sessions/types.ts";
+import {
+  APP_DIR_NAME,
+  dataBaseDir,
+  windowsRoamingAppData,
+  type PlatformDirsEnv,
+} from "../platform-dirs.ts";
 
 // ---------- The target vocabulary ----------
 
@@ -151,6 +157,8 @@ export type ToolCeiling = DeclaredToolCeiling | UnboundedToolCeiling | UnknownTo
 export interface HostContext {
   readonly home: string;
   readonly env: Readonly<Record<string, string | undefined>>;
+  /** `process.platform`; absent means the running process's. */
+  readonly platform?: string;
 }
 
 /**
@@ -218,6 +226,13 @@ export interface SessionRootSpec {
   readonly adapter: SessionAdapterId | null;
   /** The on-disk format, named even where no adapter reads it. */
   readonly format: string;
+  /**
+   * The `process.platform` values this layout exists on; absent means
+   * every platform. Set only where the root is meaningless elsewhere
+   * (a `%APPDATA%` path has no POSIX counterpart), so a POSIX host is
+   * not handed a Windows-shaped path to probe.
+   */
+  readonly platforms?: ReadonlyArray<string>;
 }
 
 /** One {@link SessionRootSpec} against a concrete host. */
@@ -285,6 +300,16 @@ export interface RuntimeFacts {
   readonly hostProbe: HostProbeSpec | null;
 }
 
+/** True when `root` exists on the context's platform. */
+function onPlatform(root: SessionRootSpec, ctx: HostContext): boolean {
+  return root.platforms === undefined || root.platforms.includes(dirsEnv(ctx).platform);
+}
+
+/** The context as the platform-dirs resolvers read it. */
+function dirsEnv(ctx: HostContext): PlatformDirsEnv {
+  return { platform: ctx.platform ?? process.platform, home: ctx.home, env: ctx.env };
+}
+
 /** `env[key]` when it holds something, else `fallback`. */
 function envOr(ctx: HostContext, key: string, fallback: string): string {
   const value = ctx.env[key];
@@ -313,6 +338,15 @@ const CURSOR_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
     id: "cursor-workspace-storage-macos",
     resolve: (ctx: HostContext) =>
       join(ctx.home, "Library", "Application Support", "Cursor", "User", "workspaceStorage"),
+    glob: CURSOR_STATE_GLOB,
+    adapter: null,
+    format: CURSOR_STATE_FORMAT,
+  }),
+  Object.freeze({
+    id: "cursor-workspace-storage-windows",
+    platforms: ["win32"],
+    resolve: (ctx: HostContext) =>
+      join(windowsRoamingAppData(dirsEnv(ctx)), "Cursor", "User", "workspaceStorage"),
     glob: CURSOR_STATE_GLOB,
     adapter: null,
     format: CURSOR_STATE_FORMAT,
@@ -411,11 +445,7 @@ const OPENCODE_SESSION_ROOTS: ReadonlyArray<SessionRootSpec> = Object.freeze([
       envOr(
         ctx,
         "OSB_OPENCODE_SPOOL_DIR",
-        join(
-          envOr(ctx, "XDG_DATA_HOME", join(ctx.home, ".local", "share")),
-          "open-second-brain",
-          "opencode",
-        ),
+        join(dataBaseDir(dirsEnv(ctx)), APP_DIR_NAME, "opencode"),
       ),
     glob: "*.jsonl",
     adapter: SESSION_ADAPTER_ID.opencode,
@@ -669,7 +699,9 @@ export function resolveSessionRoots(
   target: InstallTargetId,
   ctx: HostContext,
 ): ReadonlyArray<ResolvedSessionRoot> {
-  return RUNTIME_FACTS[target].sessionRoots.map((root) => resolveRoot(root, ctx));
+  return RUNTIME_FACTS[target].sessionRoots
+    .filter((root) => onPlatform(root, ctx))
+    .map((root) => resolveRoot(root, ctx));
 }
 
 /**
@@ -683,5 +715,7 @@ export function resolveSessionRootsFor(
   runtime: SessionRuntimeId,
   ctx: HostContext,
 ): ReadonlyArray<ResolvedSessionRoot> {
-  return SESSION_ROOTS[runtime].map((root) => resolveRoot(root, ctx));
+  return SESSION_ROOTS[runtime]
+    .filter((root) => onPlatform(root, ctx))
+    .map((root) => resolveRoot(root, ctx));
 }

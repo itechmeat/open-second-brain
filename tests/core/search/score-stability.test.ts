@@ -28,7 +28,7 @@
  */
 
 import { test, expect, beforeAll, afterAll, describe } from "bun:test";
-import { cpSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -160,6 +160,14 @@ let config: ResolvedSearchConfig;
 beforeAll(async () => {
   vault = mkdtempSync(join(tmpdir(), "o2b-score-pin-"));
   cpSync(join(FIXTURE, "vault"), vault, { recursive: true });
+  // The recency layer reads mtime. On POSIX `cpSync` stamps the copies
+  // "now"; on Windows it keeps the checkout's timestamps (CopyFile carries
+  // them over), which ages every note and shifts every pinned score. Stamp
+  // them explicitly so the corpus is equally fresh on every host.
+  const now = new Date();
+  for (const entry of readdirSync(vault, { recursive: true, withFileTypes: true })) {
+    if (entry.isFile()) utimesSync(join(entry.parentPath, entry.name), now, now);
+  }
   config = makeConfig({
     vault,
     dbPath: join(vault, "index.sqlite"),

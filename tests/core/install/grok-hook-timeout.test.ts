@@ -23,7 +23,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { Writable } from "node:stream";
 
 import { grokAdapter } from "../../../src/core/install/adapters/grok.ts";
@@ -66,6 +66,11 @@ function golden(): string {
   );
 }
 
+/** A path as it appears inside a JSON string literal. */
+function jsonEscaped(path: string): string {
+  return JSON.stringify(path).slice(1, -1);
+}
+
 /**
  * A generated hooks file reduced to the form the golden is stored in.
  *
@@ -75,7 +80,19 @@ function golden(): string {
  * would be the golden agreeing not to look at it.
  */
 function normalize(json: string): string {
-  return json.split(process.execPath).join("<BUN>").split(REPO_ROOT).join("<REPO>");
+  // The paths appear JSON-escaped in the rendered file, which only differs
+  // from the raw path where it holds backslashes (Windows). Hook paths are
+  // then joined with the platform separator, so fold that back to `/` too.
+  const replaced = json
+    .split(jsonEscaped(process.execPath))
+    .join("<BUN>")
+    .split(jsonEscaped(REPO_ROOT))
+    .join("<REPO>");
+  if (sep === "/") return replaced;
+  return replaced.replace(
+    /<REPO>((?:\\\\[\w.-]+)+)/g,
+    (_, rest: string) => `<REPO>${rest.split("\\\\").join("/")}`,
+  );
 }
 
 function hookEntries(json: string): ReadonlyArray<HookEntry> {

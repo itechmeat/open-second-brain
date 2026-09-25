@@ -1,22 +1,14 @@
 /**
  * Platform boundary for the plugin config path.
  *
- * `defaultConfigPath()` ends in `$HOME/.config/open-second-brain/…`.
- * That layout is a POSIX convention; Windows does not use it, and this
- * project has no Windows support - no adapter, no install document, no
- * path handling beyond three incidental `win32` branches. Returning a
- * `C:\Users\…\.config\…` path there is a plausible-looking answer to a
- * question this build cannot answer, so the resolver refuses by name
- * instead.
- *
- * The refusal is reachable ONLY on an unsupported platform AND only
- * after both explicit overrides have been checked, so every supported
- * platform is byte-identical.
+ * POSIX platforms resolve to `$HOME/.config/open-second-brain/config.yaml`;
+ * native Windows resolves to `%LOCALAPPDATA%\open-second-brain\config.yaml`
+ * (see `src/core/platform-dirs.ts`). Both explicit overrides win on every
+ * platform, so an operator can always say where the file lives.
  */
 
 import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 
 import {
   defaultConfigPath,
@@ -24,6 +16,7 @@ import {
   UnsupportedPlatformError,
   type ConfigPathEnv,
 } from "../../src/core/config.ts";
+import { configBaseDir, processDirsEnv } from "../../src/core/platform-dirs.ts";
 
 const HOME = "/home/tester";
 
@@ -70,7 +63,7 @@ describe("resolveDefaultConfigPath — supported platforms", () => {
     delete process.env["XDG_CONFIG_HOME"];
     try {
       expect(defaultConfigPath()).toBe(
-        join(homedir(), ".config", "open-second-brain", "config.yaml"),
+        join(configBaseDir(processDirsEnv()), "open-second-brain", "config.yaml"),
       );
     } finally {
       if (saved.config === undefined) delete process.env["OPEN_SECOND_BRAIN_CONFIG"];
@@ -81,24 +74,21 @@ describe("resolveDefaultConfigPath — supported platforms", () => {
   });
 });
 
-describe("resolveDefaultConfigPath — unsupported platform", () => {
-  test("win32 raises a named error that names the platform", () => {
-    let thrown: unknown;
-    try {
-      resolveDefaultConfigPath(envFor("win32"));
-    } catch (err) {
-      thrown = err;
-    }
-    expect(thrown).toBeInstanceOf(UnsupportedPlatformError);
-    const error = thrown as UnsupportedPlatformError;
-    expect(error.name).toBe("UnsupportedPlatformError");
-    expect(error.platform).toBe("win32");
-    expect(error.message).toContain("win32");
+describe("resolveDefaultConfigPath — native Windows", () => {
+  test("win32 resolves under %LOCALAPPDATA%", () => {
+    expect(
+      resolveDefaultConfigPath(envFor("win32", { LOCALAPPDATA: "C:\\Users\\t\\AppData\\Local" })),
+    ).toBe(join("C:\\Users\\t\\AppData\\Local", "open-second-brain", "config.yaml"));
   });
 
-  test("the refusal names both escape hatches", () => {
-    expect(() => resolveDefaultConfigPath(envFor("win32"))).toThrow(/OPEN_SECOND_BRAIN_CONFIG/);
-    expect(() => resolveDefaultConfigPath(envFor("win32"))).toThrow(/XDG_CONFIG_HOME/);
+  test("win32 without LOCALAPPDATA falls back to the profile's AppData\\Local", () => {
+    expect(resolveDefaultConfigPath(envFor("win32"))).toBe(
+      join(win32.join(HOME, "AppData", "Local"), "open-second-brain", "config.yaml"),
+    );
+  });
+
+  test("win32 no longer raises UnsupportedPlatformError", () => {
+    expect(() => resolveDefaultConfigPath(envFor("win32"))).not.toThrow(UnsupportedPlatformError);
   });
 
   test("an explicit override is still honoured on win32", () => {

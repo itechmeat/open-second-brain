@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "1.56.0",
+  "version": "1.57.0",
   "private": false,
   "description": "Second brain for AI agents using Obsidian-compatible Markdown vaults. Works with Hermes, Claude Code, Codex, and OpenClaw.",
   "keywords": [
@@ -51,7 +51,7 @@
     "check:paths": "bun run scripts/check-hardcoded-paths.ts",
     "check:paths:strict": "bun run scripts/check-hardcoded-paths.ts --strict",
     "hooks:install": "git config core.hooksPath .githooks && echo 'git hooks enabled (core.hooksPath=.githooks)'",
-    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
+    "prepare": "bun scripts/prepare.ts || exit 0"
   },
   "dependencies": {
     "proper-lockfile": "^4.1.2"

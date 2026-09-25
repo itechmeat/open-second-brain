@@ -11,6 +11,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homeEnv } from "../helpers/platform.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -43,7 +44,7 @@ interface RunResult {
 async function runHook(payload: unknown, env: Record<string, string> = {}): Promise<RunResult> {
   const inherited: Record<string, string> = {
     PATH: process.env["PATH"] ?? "",
-    HOME: configHome,
+    ...homeEnv(configHome),
   };
   const proc = Bun.spawn(["bun", "run", HOOK], {
     stdin: "pipe",
@@ -186,7 +187,7 @@ describe("pretool-orient hook", () => {
       stdin: "pipe",
       stdout: "pipe",
       stderr: "pipe",
-      env: { PATH: process.env["PATH"] ?? "", HOME: configHome, ...ON, VAULT_DIR: vault },
+      env: { PATH: process.env["PATH"] ?? "", ...homeEnv(configHome), ...ON, VAULT_DIR: vault },
     });
     await proc.stdin.end(); // empty stdin
     const stdout = await new Response(proc.stdout).text();

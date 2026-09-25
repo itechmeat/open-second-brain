@@ -12,7 +12,10 @@
  * `tools/call` and the CLI bridge pass through.
  */
 
-import { describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import {
   assertKnownArguments,
@@ -145,7 +148,13 @@ describe("assertKnownArguments", () => {
 });
 
 describe("the seam every caller passes through", () => {
-  const server = new MCPServer({ vault: "/nonexistent-vault" });
+  // A vault path that does not exist, under a private temp root. A bare
+  // `/nonexistent-vault` resolves to the drive root on Windows, where an
+  // ordinary user may create it - so `brain_write_batch` below would write
+  // a real Brain/log there, outside anything the suite cleans up.
+  const scratch = mkdtempSync(join(tmpdir(), "osb-arg-guard-"));
+  afterAll(() => rmSync(scratch, { recursive: true, force: true }));
+  const server = new MCPServer({ vault: join(scratch, "nonexistent-vault") });
 
   async function call(name: string, args: Record<string, unknown>) {
     return server.handleRequest({

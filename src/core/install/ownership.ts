@@ -64,6 +64,10 @@
  */
 
 import { probeVaultBacking, VAULT_BACKING, type VaultBackingVerdict } from "../vault-backing.ts";
+import { describeBaseDir } from "../platform-dirs.ts";
+
+/** Locations below are printed for the platform that reads them. */
+const WINDOWS = process.platform === "win32";
 
 // ----- The enumeration ------------------------------------------------------
 
@@ -126,8 +130,9 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
   {
     id: "opencode_session_spool",
     label: "opencode session spool",
-    location:
-      "${OSB_OPENCODE_SPOOL_DIR:-${XDG_DATA_HOME:-~/.local/share}}/open-second-brain/opencode/",
+    location: WINDOWS
+      ? "%OSB_OPENCODE_SPOOL_DIR% if set, else (%XDG_DATA_HOME% if set, else %LOCALAPPDATA%)\\open-second-brain\\opencode\\"
+      : "${OSB_OPENCODE_SPOOL_DIR:-${XDG_DATA_HOME:-~/.local/share}}/open-second-brain/opencode/",
     carries_memory: true,
     created_by: "the bundled opencode plugin, on every opencode session it observes",
     removed_by: "deleting that directory yourself - no verb in this tool prunes or removes it",
@@ -153,8 +158,9 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
   {
     id: "machine_config",
     label: "machine-local plugin config",
-    location:
-      "$OPEN_SECOND_BRAIN_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/open-second-brain/config.yaml",
+    location: WINDOWS
+      ? `%OPEN_SECOND_BRAIN_CONFIG%, else (${describeBaseDir("config", "win32")})\\open-second-brain\\config.yaml`
+      : "$OPEN_SECOND_BRAIN_CONFIG, else ${XDG_CONFIG_HOME:-~/.config}/open-second-brain/config.yaml",
     carries_memory: false,
     created_by: "`o2b init`, and any verb that writes a config key",
     removed_by: "`o2b uninstall --apply-local`",
@@ -163,7 +169,7 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
       "attributed to, and the installation_secret that keys every vault://<hex> reference MCP " +
       "tools have already handed out. A vault copied without it keeps every memory and loses " +
       "those references.",
-    sources: ["src/core/config.ts"],
+    sources: ["src/core/config.ts", "src/core/platform-dirs.ts"],
   },
   {
     id: "vault_profiles",
@@ -192,14 +198,16 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
   {
     id: "cli_symlinks",
     label: "CLI symlinks",
-    location: "~/.local/bin/o2b, ~/.local/bin/vault-log, ~/.local/bin/o2b-hook",
+    location: WINDOWS
+      ? "%USERPROFILE%\\.local\\bin\\o2b.cmd, vault-log.cmd, o2b-hook.cmd (.cmd launchers, not symlinks)"
+      : "~/.local/bin/o2b, ~/.local/bin/vault-log, ~/.local/bin/o2b-hook",
     carries_memory: false,
     created_by: "`o2b install-cli`",
     removed_by: "`o2b uninstall --remove-cli`",
     note:
       "Re-pointed automatically at SessionStart when a plugin update rotates the checkout they " +
       "name, so they follow the installation rather than rotting with it.",
-    sources: ["src/cli/install-cli.ts", "hooks/active-inject.ts"],
+    sources: ["src/cli/install-cli.ts", "src/cli/install-cli-windows.ts", "hooks/active-inject.ts"],
   },
   {
     id: "codex_instruction_fence",
@@ -389,12 +397,6 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
       "inventory, whose rows are enumerated in their own census",
   ],
   [
-    "src/core/runtime/host-facts.ts",
-    "it DECLARES where each agent runtime keeps its own session logs, as pure functions of an " +
-      "injected home and environment. The runtimes wrote those files and own them; this module " +
-      "opens nothing, writes nothing, and resolves no path until a caller hands it a machine",
-  ],
-  [
     "src/core/install/session-paths.ts",
     "it answers `InstallAdapter.sessionPaths` by resolving the session roots `host-facts.ts` " +
       "declares against the home and environment already carried on `InstallEnv`. The agent " +
@@ -435,6 +437,18 @@ export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Ma
  * claim about a census.
  */
 export const SOURCES_INVISIBLE_TO_THE_SWEEP: ReadonlyMap<string, string> = new Map([
+  [
+    "src/cli/install-cli.ts",
+    "it still writes the launchers, but the bin directory it writes into now comes from " +
+      "`userBinDir()` in `core/platform-dirs.ts` (so POSIX and native Windows agree on it), which " +
+      "leaves no home or `.local` token in this file for the sweep to match on",
+  ],
+  [
+    "src/cli/install-cli-windows.ts",
+    "the native-Windows half of `install-cli`: it writes `.cmd` launchers into whichever bin " +
+      "directory its caller hands it and builds no root of its own, so there is no home or XDG " +
+      "token in the source to match on",
+  ],
   [
     "src/core/search/paths.ts",
     "the relocated index path comes from OPEN_SECOND_BRAIN_SEARCH_DB or search_db_path, an " +

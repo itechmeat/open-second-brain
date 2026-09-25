@@ -15,6 +15,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import lockfile from "proper-lockfile";
 
 import { atomicWriteFileSync } from "./fs-atomic.ts";
+import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
 import {
@@ -28,19 +29,19 @@ import type { ConfigDiscovery } from "./types.ts";
 const CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", "\n", "\r"] as const;
 
 /**
- * The one platform whose per-user configuration root is NOT
- * `$HOME/.config`. Named rather than inferred: the list of platforms
- * this build serves is a support decision, not a runtime discovery.
+ * Platforms whose per-user configuration root this build cannot derive.
+ * Empty since native Windows gained its own layout (`%LOCALAPPDATA%`, see
+ * `platform-dirs.ts`); kept as a named list so adding a platform without
+ * a layout is a visible decision rather than a silent POSIX fallback.
  */
-const UNSUPPORTED_CONFIG_PLATFORMS: ReadonlyArray<string> = Object.freeze(["win32"]);
+const UNSUPPORTED_CONFIG_PLATFORMS: ReadonlyArray<string> = Object.freeze([]);
 
 /**
  * Raised when the config path cannot be derived on the running
- * platform. Named and specific because the alternative - returning
- * `C:\Users\…\.config\open-second-brain\config.yaml` - is a
- * plausible-looking answer to a question this build cannot answer: the
- * layout is a POSIX convention, and nothing here (no adapter, no
- * install document, no path handling) targets Windows.
+ * platform. Named and specific because the alternative - a POSIX path on
+ * a platform that does not use one - is a plausible-looking answer to a
+ * question this build cannot answer. No platform reaches it today; the
+ * class stays exported for callers that still distinguish it.
  */
 export class UnsupportedPlatformError extends Error {
   readonly platform: string;
@@ -48,8 +49,7 @@ export class UnsupportedPlatformError extends Error {
   constructor(platform: string) {
     super(
       `open-second-brain has no configuration layout for platform '${platform}': ` +
-        "the default path $HOME/.config/open-second-brain/config.yaml is a POSIX " +
-        "convention and this build does not implement the Windows one. Set " +
+        "this build does not know where per-user configuration lives there. Set " +
         "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " +
         "to a configuration root, to choose the location yourself.",
     );
@@ -108,32 +108,33 @@ export interface ConfigPathEnv {
  * Resolve the location of the plugin config file from an injected
  * environment.
  *
- * Order: `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, then
- * `$HOME/.config/open-second-brain/config.yaml`. Only the last step is
- * platform-bound, so an operator on an unsupported platform still has
- * two ways to say where the file lives; the refusal fires exactly when
- * they have said nothing and the convention does not apply.
+ * Order: `OPEN_SECOND_BRAIN_CONFIG`, `XDG_CONFIG_HOME`, then the
+ * platform default: `%LOCALAPPDATA%\open-second-brain\config.yaml` on
+ * Windows, `$HOME/.config/open-second-brain/config.yaml` everywhere else.
+ * Only the last step is platform-bound, so an operator on an unsupported
+ * platform still has two ways to say where the file lives.
  *
- * @throws {@link UnsupportedPlatformError} on a platform whose per-user
- *   configuration root is not `$HOME/.config`.
+ * @throws {@link UnsupportedPlatformError} on a platform listed in
+ *   `UNSUPPORTED_CONFIG_PLATFORMS` (none today).
  */
 export function resolveDefaultConfigPath(source: ConfigPathEnv): string {
   const override = source.env["OPEN_SECOND_BRAIN_CONFIG"];
-  if (override) return expandTilde(override);
+  if (override) return expandTilde(override, source.platform, source.home);
 
   const xdg = source.env["XDG_CONFIG_HOME"];
-  if (xdg) return join(expandTilde(xdg), "open-second-brain", "config.yaml");
+  if (xdg) return join(expandTilde(xdg, source.platform, source.home), APP_DIR_NAME, "config.yaml");
 
   if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
     throw new UnsupportedPlatformError(source.platform);
   }
-  return join(source.home, ".config", "open-second-brain", "config.yaml");
+  return join(configBaseDir(source), APP_DIR_NAME, "config.yaml");
 }
 
 /**
  * Resolve the location of the plugin config file for this process.
  *
- * Order: `OPEN_SECOND_BRAIN_CONFIG` env, `XDG_CONFIG_HOME`, `~/.config/open-second-brain/config.yaml`.
+ * Order: `OPEN_SECOND_BRAIN_CONFIG` env, `XDG_CONFIG_HOME`, then the
+ * platform default (see {@link resolveDefaultConfigPath}).
  */
 export function defaultConfigPath(): string {
   return resolveDefaultConfigPath({
@@ -1233,8 +1234,19 @@ export function resolveTelegramCaptureAllowlist(configPath?: string): string[] {
   return ids;
 }
 
-function expandTilde(p: string): string {
-  if (p === "~") return homedir();
-  if (p.startsWith("~/")) return join(homedir(), p.slice(2));
+/**
+ * `~` and `~/x` (and `~\x` on Windows) against `home`. The platform and
+ * home default to the running process; the injected-environment resolvers
+ * pass their own so a test for one platform does not read another's.
+ */
+function expandTilde(
+  p: string,
+  platform: string = process.platform,
+  home: string = homedir(),
+): string {
+  if (p === "~") return home;
+  if (p.startsWith("~/")) return join(home, p.slice(2));
+  // Windows users write `~\vault` as naturally as `~/vault`.
+  if (platform === "win32" && p.startsWith("~\\")) return join(home, p.slice(2));
   return p;
 }

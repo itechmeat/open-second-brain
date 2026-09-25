@@ -27,7 +27,7 @@ import {
 } from "node:fs";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import { dream } from "../../../src/core/brain/dream.ts";
 import { applyDreamPlan } from "../../../src/core/brain/dream-apply.ts";
@@ -47,6 +47,7 @@ import { writeSignal } from "../../../src/core/brain/signal.ts";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { maskLogChainDigests } from "../../helpers/vault-digest.ts";
+import { CHMOD_CANNOT_DENY } from "../../helpers/platform.ts";
 
 let vault: string;
 let configHome: string;
@@ -161,12 +162,12 @@ function treeDigest(root: string): string {
     for (const name of readdirSync(dir).toSorted()) {
       const full = join(dir, name);
       const rel = relative(root, full);
-      if (DIGEST_EXCLUSIONS.some((v) => rel === v || rel.startsWith(`${v}/`))) continue;
+      if (DIGEST_EXCLUSIONS.some((v) => rel === v || rel.startsWith(`${v}${sep}`))) continue;
       if (statSync(full).isDirectory()) {
         walk(full);
         continue;
       }
-      const content = rel.startsWith(`${NORMALISED_SUBTREE}/`)
+      const content = rel.startsWith(`${NORMALISED_SUBTREE}${sep}`)
         ? // The chain hash covers `size_bytes`, so the field this
           // comparison cannot ask to be reproducible propagates into
           // every row's `h` - see `maskLogChainDigests`.
@@ -200,36 +201,40 @@ function makeNotes(target: string = vault): { refPath: string } {
 // ----- 1. Truthful workrun checkpoints -------------------------------------
 
 describe("dream workrun checkpoints are truthful", () => {
-  test("a run interrupted mid-write claims only work that genuinely completed", () => {
-    seedPromotion();
-    const prefs = brainDirs(vault).preferences;
-    // Inject the failure between close and synthesize: the preferences
-    // directory is read-only, so the first preference write throws and the
-    // run dies with the mutation loops half-run.
-    chmodSync(prefs, 0o555);
-    try {
-      expect(() => dream(vault, { now: NOW })).toThrow();
-    } finally {
-      chmodSync(prefs, 0o700);
-    }
+  // chmod cannot deny access on Windows (read-only attribute only) or to root.
+  test.skipIf(CHMOD_CANNOT_DENY)(
+    "a run interrupted mid-write claims only work that genuinely completed",
+    () => {
+      seedPromotion();
+      const prefs = brainDirs(vault).preferences;
+      // Inject the failure between close and synthesize: the preferences
+      // directory is read-only, so the first preference write throws and the
+      // run dies with the mutation loops half-run.
+      chmodSync(prefs, 0o555);
+      try {
+        expect(() => dream(vault, { now: NOW })).toThrow();
+      } finally {
+        chmodSync(prefs, 0o700);
+      }
 
-    const phases = workrunPhases();
-    // Only the phases whose durable output was already on disk may appear.
-    expect(phases).toEqual(["started", "cluster_complete", "close_complete"]);
-    // Every marker for work that never ran must be absent - most sharply
-    // `reconcile_complete`, whose audit events are written in the log phase
-    // this run never reached.
-    for (const absent of [
-      "reconcile_complete",
-      "promote_complete",
-      "synthesize_complete",
-      "retire_complete",
-      "heal_complete",
-      "finalized",
-    ]) {
-      expect(phases).not.toContain(absent);
-    }
-  });
+      const phases = workrunPhases();
+      // Only the phases whose durable output was already on disk may appear.
+      expect(phases).toEqual(["started", "cluster_complete", "close_complete"]);
+      // Every marker for work that never ran must be absent - most sharply
+      // `reconcile_complete`, whose audit events are written in the log phase
+      // this run never reached.
+      for (const absent of [
+        "reconcile_complete",
+        "promote_complete",
+        "synthesize_complete",
+        "retire_complete",
+        "heal_complete",
+        "finalized",
+      ]) {
+        expect(phases).not.toContain(absent);
+      }
+    },
+  );
 
   test("a complete run records every phase, reconcile after its audit events", () => {
     seedPromotion();

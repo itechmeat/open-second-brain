@@ -29,6 +29,7 @@ import { Database } from "bun:sqlite";
 import { existsSync } from "node:fs";
 
 import { FRONTMATTER_TIERS, type FrontmatterTier, type SchemaPack } from "./schema-pack.ts";
+import { closeDatabase } from "../sqlite-close.ts";
 
 export { FRONTMATTER_TIERS };
 export type { FrontmatterTier };
@@ -229,6 +230,6 @@ export function readTierDriftCount(dbPath: string): number {
   } catch {
     return 0;
   } finally {
-    db?.close();
+    closeDatabase(db);
   }
 }

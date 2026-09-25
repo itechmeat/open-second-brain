@@ -15,24 +15,23 @@ fallback exists.
 
 ## Supported platforms
 
-Linux, macOS and the other POSIX hosts Bun runs on. The default
-configuration path is `$HOME/.config/open-second-brain/config.yaml`,
-a POSIX convention; **Windows is not supported** and the resolver
-refuses by name there (`UnsupportedPlatformError`) rather than
-returning a path that no part of this build would look in. WSL is a
-Linux host and works normally.
+Linux, macOS and the other POSIX hosts Bun runs on, plus native
+Windows 10/11 (x64). WSL is a Linux host and follows the Linux
+instructions.
 
-To run on an unsupported platform anyway, name the file yourself:
+| Platform | Default config path |
+|---|---|
+| Linux, macOS, BSD | `$HOME/.config/open-second-brain/config.yaml` |
+| Windows | `%LOCALAPPDATA%\open-second-brain\config.yaml` |
 
-```bash
-export OPEN_SECOND_BRAIN_CONFIG=/explicit/path/to/config.yaml
-# or point the whole configuration root somewhere:
-export XDG_CONFIG_HOME=/explicit/config/root
-```
+`OPEN_SECOND_BRAIN_CONFIG` (an explicit file) and `XDG_CONFIG_HOME`
+(a configuration root) override the default on every platform.
 
-Both are honoured before the platform check, so nothing else in the
-CLI changes. Everything beyond the config path — path handling, the
-lifecycle hooks, the install adapters — is untested on Windows.
+On Windows, install Bun with
+`powershell -c "irm bun.sh/install.ps1 | iex"` and follow
+[`windows.md`](windows.md): the CLI is published as `.cmd` launchers,
+MCP hosts start it through `cmd /d /c`, and Claude Code's hooks need
+Git for Windows.
 
 ## Identity (agent name + timezone)
 
@@ -47,7 +46,7 @@ lifecycle hooks, the install adapters — is untested on Windows.
 
 If the vault was initialized previously, check the registry first:
 
-- `~/.config/open-second-brain/config.yaml` `agent_name` (authoritative)
+- the config file above (`agent_name`, authoritative)
 - `<vault>/Brain/_brain.yaml` `primary_agent` (when set)
 - `<vault>/Brain/log/*.{md,jsonl}` (recurring `agent` field)
 
