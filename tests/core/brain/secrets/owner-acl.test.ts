@@ -104,14 +104,12 @@ function lower(xs: ReadonlyArray<string>): ReadonlyArray<string> {
 }
 
 /**
- * The machine's own administrative principals. `/grant:r` replaces the
- * current user's explicit entries and `/inheritance:r` drops inherited
- * ones, but neither touches another principal's EXPLICIT entry - and on
- * GitHub's Windows runners, where the suite runs as an elevated
- * administrator, the fresh key directory already carries explicit
- * SYSTEM and Administrators grants. Both can read the key whatever its
- * ACL says (the threat model in `crypto.ts` already counts them), so
- * the assertions below allow them and nobody else.
+ * The machine's own administrative principals. `restrictToOwner` resets
+ * the ACL before restricting it, but on GitHub's Windows runners, where
+ * the suite runs as an elevated administrator, SYSTEM and Administrators
+ * entries have been seen on the key directory. Both can read the key
+ * whatever its ACL says (the threat model in `crypto.ts` already counts
+ * them), so the assertions below allow them and nobody else.
  */
 const MACHINE_ADMINS: ReadonlySet<string> = new Set([
   "nt authority\\system",
@@ -161,13 +159,26 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
   });
 
   test("a secrets directory that arrived with a copied vault is restricted on load", () => {
-    // Made by hand, the way a restore or a copy leaves it: inherited
-    // entries only, and a store file of its own.
+    // Made by hand, the way a restore or a copy leaves it: an ACL of its
+    // own that also lets Everyone (S-1-1-0) read the key and the store.
+    // (Granted explicitly: on an elevated runner a new file inherits
+    // nothing, so "inherited entries" is not a portable fixture.)
     const dir = secretsDir(vault);
     mkdirSync(dir, { recursive: true });
     writeFileSync(join(dir, "keyfile"), Buffer.alloc(32, 7));
     writeFileSync(join(dir, "secrets.json"), JSON.stringify({ version: 1, secrets: {} }));
-    expect(lower(aclEntries(join(dir, "keyfile"))).some((e) => e.includes("(i)"))).toBe(true);
+    const icacls = system32Tool("icacls.exe");
+    for (const [p, rights] of [
+      [dir, "(OI)(CI)R"],
+      [join(dir, "keyfile"), "R"],
+      [join(dir, "secrets.json"), "R"],
+    ] as const) {
+      expect(spawnSync(icacls, [p, "/grant", `*S-1-1-0:${rights}`]).status).toBe(0);
+    }
+    const principal = currentWindowsIdentity()!.name.toLowerCase();
+    const others = (p: string) =>
+      withoutMachineAdmins(aclEntries(p)).filter((e) => !e.startsWith(`${principal}:`));
+    expect(others(join(dir, "keyfile")).length).toBeGreaterThan(0);
 
     loadOrCreateKey(join(dir, "keyfile"));
     setSecret(vault, {
@@ -177,12 +188,9 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
       now: new Date("2026-06-05T10:00:00Z"),
     });
 
-    const principal = currentWindowsIdentity()!.name.toLowerCase();
     expect(withoutMachineAdmins(aclEntries(join(dir, "keyfile")))).toEqual([`${principal}:(f)`]);
     expect(withoutMachineAdmins(aclEntries(dir))).toEqual([`${principal}:(oi)(ci)(f)`]);
-    for (const e of withoutMachineAdmins(aclEntries(join(dir, "secrets.json")))) {
-      expect([`${principal}:(f)`, `${principal}:(i)(f)`]).toContain(e);
-    }
+    expect(others(join(dir, "secrets.json"))).toEqual([]);
   });
 
   test("a failed icacls warns and leaves the caller running", () => {

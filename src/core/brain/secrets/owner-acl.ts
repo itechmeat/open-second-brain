@@ -127,11 +127,23 @@ export function restrictToOwner(
     if (identity === null) {
       detail = "the current user's SID could not be read (whoami /user)";
     } else {
-      const proc = spawnSync(
-        system32Tool("icacls.exe"),
-        [...ownerOnlyAclArgv(path, identity.sid, kind)],
-        { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS },
-      );
+      // `/reset` first: `/inheritance:r` and `/grant:r` leave another
+      // account's EXPLICIT entry in place, and a directory restored with its
+      // ACL (robocopy /COPYALL, a backup tool) can carry one - an explicit
+      // Everyone:R would survive the restriction. Resetting replaces every
+      // explicit entry with the inherited ones, which the second call drops.
+      let proc = spawnSync(system32Tool("icacls.exe"), [path, "/reset"], {
+        encoding: "utf8",
+        windowsHide: true,
+        timeout: TOOL_TIMEOUT_MS,
+      });
+      if (proc.error === undefined && proc.status === 0) {
+        proc = spawnSync(
+          system32Tool("icacls.exe"),
+          [...ownerOnlyAclArgv(path, identity.sid, kind)],
+          { encoding: "utf8", windowsHide: true, timeout: TOOL_TIMEOUT_MS },
+        );
+      }
       if (proc.error === undefined && proc.status === 0) {
         restricted.add(key);
         return true;
