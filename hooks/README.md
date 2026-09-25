@@ -108,9 +108,11 @@ r="$CLAUDE_PLUGIN_ROOT"; if [ -n "$r" ] && [ -x "$r/scripts/o2b-hook" ]; then ex
 - **Claude Code** sets `CLAUDE_PLUGIN_ROOT` to the *active* plugin
   version directory, so the command runs `scripts/o2b-hook` from the
   version Claude Code just loaded — never a stale copy.
-- **Codex** does not export a plugin-root env var, so it falls through
-  to the PATH `o2b-hook` shim (`o2b install-cli` puts it on PATH; on a
-  server it points at the stable checkout, which never rotates).
+- **Codex** exports `CLAUDE_PLUGIN_ROOT` too, but as its plugin cache
+  dir, which holds only the Codex plugin subtree (`hooks.json` and the
+  skills) and no `scripts/o2b-hook`. So the command falls through to the
+  PATH `o2b-hook` shim (`o2b install-cli` puts it on PATH; on a server it
+  points at the stable checkout, which never rotates).
 - If neither resolves, the command `exit 0`s — a missing launcher is a
   no-op, never a blocked turn.
 
