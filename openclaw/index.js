@@ -1561,8 +1561,8 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 var import_proper_lockfile2 = __toESM(require_proper_lockfile(), 1);
 import { mkdirSync as mkdirSync2, readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
 import { createHmac, randomBytes } from "node:crypto";
-import { homedir } from "node:os";
-import { dirname as dirname2, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { dirname as dirname2, isAbsolute, join as join3, resolve as resolve2 } from "node:path";
 
 // src/core/fs-atomic.ts
 import {
@@ -1578,11 +1578,38 @@ import {
   writeSync
 } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+var WINDOWS_TRANSIENT_RENAME_CODES = new Set(["EPERM", "EACCES", "EBUSY"]);
+var WINDOWS_RENAME_RETRY_BUDGET_MS = 2000;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function renameWithRetry(from, to) {
+  if (process.platform !== "win32") {
+    renameSync(from, to);
+    return;
+  }
+  const deadline = Date.now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  let delay = 10;
+  for (;; ) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = err?.code;
+      if (code === undefined || !WINDOWS_TRANSIENT_RENAME_CODES.has(code))
+        throw err;
+      if (Date.now() + delay > deadline)
+        throw err;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 250);
+    }
+  }
+}
 function atomicWriteFileSync(target, contents, opts = {}) {
   if (opts.skipIfUnchanged && isUnchanged(target, contents))
     return false;
   withTempFile(target, contents, (tmpPath) => {
-    renameSync(tmpPath, target);
+    renameWithRetry(tmpPath, target);
   });
   return true;
 }
@@ -1637,6 +1664,46 @@ function withTempFile(target, contents, commit, mode = 420) {
   }
 }
 
+// src/core/platform-dirs.ts
+import { homedir } from "node:os";
+import { join as join2, win32 } from "node:path";
+var APP_DIR_NAME = "open-second-brain";
+function processDirsEnv() {
+  return { platform: process.platform, home: homedir(), env: process.env };
+}
+function isWindows(source = process) {
+  return source.platform === "win32";
+}
+function nonEmpty(value) {
+  return value !== undefined && value.length > 0 ? value : null;
+}
+function windowsLocalAppData(source) {
+  return nonEmpty(source.env["LOCALAPPDATA"]) ?? win32.join(source.home, "AppData", "Local");
+}
+var XDG_VARIABLE = Object.freeze({
+  config: "XDG_CONFIG_HOME",
+  data: "XDG_DATA_HOME",
+  state: "XDG_STATE_HOME",
+  cache: "XDG_CACHE_HOME"
+});
+var POSIX_DEFAULT = Object.freeze({
+  config: [".config"],
+  data: [".local", "share"],
+  state: [".local", "state"],
+  cache: [".cache"]
+});
+function baseDir(kind, source) {
+  const xdg = nonEmpty(source.env[XDG_VARIABLE[kind]]);
+  if (xdg)
+    return xdg;
+  if (isWindows(source))
+    return windowsLocalAppData(source);
+  return join2(source.home, ...POSIX_DEFAULT[kind]);
+}
+function configBaseDir(source = processDirsEnv()) {
+  return baseDir("config", source);
+}
+
 // src/core/brain/portability/profiles.ts
 var import_proper_lockfile = __toESM(require_proper_lockfile(), 1);
 
@@ -1668,12 +1735,12 @@ var SUFFIX_INDEX_MEMO = new WeakMap;
 // src/core/config.ts
 var CONFIG_VALUE_REJECTED_CHARS = ['"', "\\", `
 `, "\r"];
-var UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze(["win32"]);
+var UNSUPPORTED_CONFIG_PLATFORMS = Object.freeze([]);
 
 class UnsupportedPlatformError extends Error {
   platform;
   constructor(platform) {
-    super(`open-second-brain has no configuration layout for platform '${platform}': ` + "the default path $HOME/.config/open-second-brain/config.yaml is a POSIX " + "convention and this build does not implement the Windows one. Set " + "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " + "to a configuration root, to choose the location yourself.");
+    super(`open-second-brain has no configuration layout for platform '${platform}': ` + "this build does not know where per-user configuration lives there. Set " + "OPEN_SECOND_BRAIN_CONFIG to an explicit config file, or XDG_CONFIG_HOME " + "to a configuration root, to choose the location yourself.");
     this.name = "UnsupportedPlatformError";
     this.platform = platform;
   }
@@ -1693,16 +1760,16 @@ function resolveDefaultConfigPath(source) {
     return expandTilde(override);
   const xdg = source.env["XDG_CONFIG_HOME"];
   if (xdg)
-    return join2(expandTilde(xdg), "open-second-brain", "config.yaml");
+    return join3(expandTilde(xdg), "open-second-brain", "config.yaml");
   if (UNSUPPORTED_CONFIG_PLATFORMS.includes(source.platform)) {
     throw new UnsupportedPlatformError(source.platform);
   }
-  return join2(source.home, ".config", "open-second-brain", "config.yaml");
+  return join3(configBaseDir(source), APP_DIR_NAME, "config.yaml");
 }
 function defaultConfigPath() {
   return resolveDefaultConfigPath({
     platform: process.platform,
-    home: homedir(),
+    home: homedir2(),
     env: process.env
   });
 }
@@ -1850,9 +1917,11 @@ function resolvePartnerCodegraphDisabled(configPath) {
 }
 function expandTilde(p) {
   if (p === "~")
-    return homedir();
+    return homedir2();
   if (p.startsWith("~/"))
-    return join2(homedir(), p.slice(2));
+    return join3(homedir2(), p.slice(2));
+  if (process.platform === "win32" && p.startsWith("~\\"))
+    return join3(homedir2(), p.slice(2));
   return p;
 }
 
@@ -2313,11 +2382,11 @@ import {
   writeSync as writeSync2,
   closeSync as closeSync2
 } from "node:fs";
-import { dirname as dirname4, join as join4 } from "node:path";
+import { dirname as dirname4, join as join5 } from "node:path";
 
 // src/core/partner/codegraph.ts
 import { existsSync as existsSync2, readdirSync, realpathSync } from "node:fs";
-import { dirname as dirname3, join as join3, resolve as resolve3 } from "node:path";
+import { dirname as dirname3, join as join4, resolve as resolve3 } from "node:path";
 
 // src/core/partner/codegraph-health.ts
 var GRAPH_HEALTH_CODES = Object.freeze({
@@ -2402,9 +2471,9 @@ function isCodeProject(dir) {
   try {
     if (!existsSync2(dir))
       return false;
-    if (!isDir(join3(dir, ".git")))
+    if (!isDir(join4(dir, ".git")))
       return false;
-    return CODE_MANIFESTS.some((m) => existsSync2(join3(dir, m)));
+    return CODE_MANIFESTS.some((m) => existsSync2(join4(dir, m)));
   } catch {
     return false;
   }
@@ -2440,7 +2509,7 @@ function findCodeProjects(opts) {
     for (const name of entries) {
       if (scanned >= limit)
         break;
-      consider(join3(vaultParent, name));
+      consider(join4(vaultParent, name));
     }
   }
   for (const extra of opts.scanExtraPaths ?? []) {
@@ -2582,7 +2651,7 @@ function codegraphDisabledResult() {
   };
 }
 function evaluateProjectStatus(project, deps) {
-  const indexDir = join3(project, ".codegraph");
+  const indexDir = join4(project, ".codegraph");
   let indexed;
   try {
     indexed = statOrAbsent(indexDir)?.isDirectory() === true;
@@ -2669,7 +2738,7 @@ function checkVaultWriteable(vault) {
       fix: `mkdir -p "${vault}"`
     };
   }
-  const probe = join4(vault, ".open-second-brain-doctor-test");
+  const probe = join5(vault, ".open-second-brain-doctor-test");
   try {
     const fd = openSync2(probe, "w");
     closeSync2(fd);
@@ -2905,7 +2974,7 @@ function checkOpenclawManifest(path) {
 }
 function checkOpenclawInstallability(repoRoot) {
   const results = [];
-  const pkgPath = join4(repoRoot, "package.json");
+  const pkgPath = join5(repoRoot, "package.json");
   const { result, data } = loadJsonManifest(pkgPath, "openclaw_package_json");
   results.push(result);
   if (!data)
@@ -2936,7 +3005,7 @@ function checkOpenclawInstallability(repoRoot) {
       });
       continue;
     }
-    const entryPath = join4(repoRoot, entry);
+    const entryPath = join5(repoRoot, entry);
     const problem = manifestFileProblem(entryPath);
     if (problem === null) {
       results.push({
@@ -2972,10 +3041,10 @@ function doctor(opts) {
     results.push(checkConfigWriteable(opts.config));
   if (opts.repoRoot) {
     const root = opts.repoRoot;
-    results.push(checkClaudeManifest(join4(root, ".claude-plugin", "plugin.json")));
-    results.push(checkCodexManifest(join4(root, ".codex-plugin", "plugin.json")));
-    results.push(checkHermesManifest(join4(root, "plugins", "hermes", "plugin.yaml")));
-    results.push(checkOpenclawManifest(join4(root, "openclaw.plugin.json")));
+    results.push(checkClaudeManifest(join5(root, ".claude-plugin", "plugin.json")));
+    results.push(checkCodexManifest(join5(root, ".codex-plugin", "plugin.json")));
+    results.push(checkHermesManifest(join5(root, "plugins", "hermes", "plugin.yaml")));
+    results.push(checkOpenclawManifest(join5(root, "openclaw.plugin.json")));
     results.push(...checkOpenclawInstallability(root));
   }
   const cg = checkCodegraph({
@@ -3063,7 +3132,7 @@ function buildReminder(agent, target) {
 
 // src/core/vault.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname7, join as join5, relative as relative2 } from "node:path";
+import { dirname as dirname7, join as join6, relative as relative2 } from "node:path";
 
 // src/core/integrity/degradation.ts
 var DEGRADATION_CODE = Object.freeze({
@@ -3296,7 +3365,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
     return;
   }
   for (const entry of entries) {
-    const full = join5(dir, entry.name);
+    const full = join6(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;
