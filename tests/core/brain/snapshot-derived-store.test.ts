@@ -18,6 +18,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -28,9 +29,8 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import {
@@ -53,6 +53,7 @@ import { sha256Hex } from "../../../src/core/integrity/digest.ts";
 import { indexVault } from "../../../src/core/search/indexer.ts";
 import { resolveIndexPath } from "../../../src/core/search/paths.ts";
 import { makeConfig } from "../../helpers/search-fixtures.ts";
+import { listSnapshotArchive } from "../../helpers/snapshot-archive.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 
 let vault: string;
@@ -152,9 +153,7 @@ describe("createSnapshot — derived-store coverage on", () => {
     const runId = "dream-store-sibling";
     createSnapshot(vault, runId, { reason: DREAM, derivedStore: COVERED });
 
-    const listing = execFileSync("tar", ["-tf", snapshotPath(vault, runId)], {
-      encoding: "utf8",
-    });
+    const listing = listSnapshotArchive(snapshotPath(vault, runId));
     // Every member starts at `Brain/`; the extractor and the restore
     // both depend on that being the only top-level name in the tar.
     for (const line of listing.split("\n").filter((l) => l.trim() !== "")) {
@@ -430,9 +429,7 @@ describe("the artifact directory documented as never backed up", () => {
     const runId = "dream-artifacts-excluded";
     createSnapshot(vault, runId, { reason: DREAM });
 
-    const listing = execFileSync("tar", ["-tf", snapshotPath(vault, runId)], {
-      encoding: "utf8",
-    });
+    const listing = listSnapshotArchive(snapshotPath(vault, runId));
     expect(listing).not.toContain(BRAIN_ARTIFACTS_DIR);
 
     const manifest = readManifestSidecar(vault, runId);
@@ -486,17 +483,38 @@ describe("a host with gzip but no zstd", () => {
   });
 });
 
-/** A PATH directory holding `tar` and `gzip` but deliberately not `zstd`. */
+/**
+ * A PATH directory holding `tar` (and `gzip` where the host has one) but
+ * deliberately not `zstd`. POSIX links the real binaries in; Windows copies
+ * them, since creating a symlink there needs an elevated or developer-mode
+ * shell. The gzip fallback compresses in-process, so `tar` is the only tool
+ * the snapshot actually spawns.
+ */
 function gzipOnlyPath(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "o2b-gzip-only-bin-"));
   for (const tool of ["tar", "gzip"]) {
-    symlinkSync(which(tool), join(dir, tool));
+    const found = process.platform === "win32" ? windowsSystemTool(tool) : Bun.which(tool);
+    if (found === null) {
+      if (tool === "tar") throw new Error("test prerequisite missing from this machine: tar");
+      continue;
+    }
+    const link = join(dir, basename(found));
+    if (process.platform === "win32") copyFileSync(found, link);
+    else symlinkSync(found, link);
   }
   return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
 }
 
-function which(tool: string): string {
-  return execFileSync("which", [tool], { encoding: "utf8" }).trim();
+/**
+ * A `System32` tool, or null. The copy above has to run on its own, and
+ * the tar Git for Windows puts first on PATH (GitHub's Windows runners,
+ * Git Bash) is an MSYS binary that dies without the DLLs beside it;
+ * `System32\tar.exe` needs only system libraries. There is no gzip there,
+ * which the in-process fallback does not need.
+ */
+function windowsSystemTool(tool: string): string | null {
+  const candidate = join(process.env["SystemRoot"] ?? "C:\\Windows", "System32", `${tool}.exe`);
+  return existsSync(candidate) ? candidate : null;
 }
 
 /** Whether the post-snapshot marker table is present in the store. */

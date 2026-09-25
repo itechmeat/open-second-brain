@@ -20,7 +20,6 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -31,6 +30,7 @@ import { writePreference } from "../../../src/core/brain/preference.ts";
 import { listContinuityRecords } from "../../../src/core/brain/continuity/store.ts";
 import { deleteBySource, searchBySourceFile } from "../../../src/core/brain/source-cleanup.ts";
 import { listSnapshots } from "../../../src/core/brain/snapshot.ts";
+import { extractSnapshotArchive } from "../../helpers/snapshot-archive.ts";
 
 let vault: string;
 
@@ -276,16 +276,7 @@ describe("deleteBySource - D1 snapshot gate", () => {
     // The archive is restorable: it contains the files that were deleted.
     const tmp = mkdtempSync(join(tmpdir(), "o2b-src-snap-verify-"));
     try {
-      const zstd = spawnSync("zstd", ["-d", "-c", plan.snapshotPath!], {
-        stdio: ["ignore", "pipe", "pipe"],
-        maxBuffer: 64 * 1024 * 1024,
-      });
-      expect(zstd.status).toBe(0);
-      const tar = spawnSync("tar", ["-x", "-C", tmp], {
-        input: zstd.stdout,
-        stdio: ["pipe", "inherit", "pipe"],
-      });
-      expect(tar.status).toBe(0);
+      extractSnapshotArchive(plan.snapshotPath!, tmp);
       // Every deleted derived path is recoverable from the archive.
       for (const rel of derivedPaths) {
         expect(existsSync(join(tmp, rel))).toBe(true);
