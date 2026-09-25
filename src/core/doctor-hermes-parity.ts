@@ -76,18 +76,30 @@ const PYTHON_CANDIDATES: ReadonlyArray<PythonCandidate> = Object.freeze(
  * Only a FAILED run from that directory is treated as absent: a real Store
  * Python lives behind the same alias path and answers normally.
  */
-function isWindowsStoreAliasStub(bin: string): boolean {
-  if (process.platform !== "win32") return false;
+export function isWindowsStoreAliasStub(
+  bin: string,
+  platform: NodeJS.Platform = process.platform,
+  which: (cmd: string) => string | null = whichOnCurrentPath,
+): boolean {
+  if (platform !== "win32") return false;
+  const found = which(bin);
+  return found !== null && /[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(found);
+}
+
+/**
+ * `Bun.which` over the CURRENT `PATH`, passed explicitly: `Bun.which`
+ * otherwise searches the PATH this process started with, not the one the
+ * spawn above just used. Null where there is no Bun (the Node bundle).
+ */
+function whichOnCurrentPath(cmd: string): string | null {
   const bun = (
     globalThis as {
       Bun?: { which?: (cmd: string, opts?: { PATH?: string }) => string | null };
     }
   ).Bun;
-  // PATH passed explicitly: `Bun.which` otherwise searches the PATH this
-  // process started with, not the one the spawn above just used.
-  const found =
-    typeof bun?.which === "function" ? bun.which(bin, { PATH: process.env["PATH"] ?? "" }) : null;
-  return found !== null && /[\\/]Microsoft[\\/]WindowsApps[\\/]/i.test(found);
+  return typeof bun?.which === "function"
+    ? bun.which(cmd, { PATH: process.env["PATH"] ?? "" })
+    : null;
 }
 
 /**

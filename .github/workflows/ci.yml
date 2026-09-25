@@ -121,6 +121,9 @@ jobs:
   windows:
     name: windows
     runs-on: windows-latest
+    # The suite takes about 20 minutes here; a hung test must not hold a
+    # runner for GitHub's six-hour default.
+    timeout-minutes: 45
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -156,6 +159,24 @@ jobs:
 
       - name: Python plugin tests
         run: python -m unittest discover -s tests/python -v
+
+      # Same assertion as in the validate job: on Windows the anti-drift test
+      # reaches the server through `o2b.cmd`, a path of its own, and a skip
+      # would read as a pass here just as it did there.
+      - name: The anti-drift test actually ran
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m unittest test_static_schemas -v 2>&1 \
+            | tee "$RUNNER_TEMP/anti-drift.log"
+          grep -q "test_static_schemas_match_live_tools_list" "$RUNNER_TEMP/anti-drift.log"
+          if grep -qE 'test_static_schemas_match_live_tools_list.* \.\.\. skipped' \
+            "$RUNNER_TEMP/anti-drift.log"; then
+            grep -E ' \.\.\. skipped' "$RUNNER_TEMP/anti-drift.log" >&2
+            echo "anti-drift skipped itself; the live server was not reachable" >&2
+            exit 1
+          fi
+        working-directory: tests/python
 
       - name: The .cmd launcher runs the CLI
         shell: cmd
