@@ -696,6 +696,34 @@ class ProviderStaticSchemaFallbackTests(unittest.TestCase):
                 resolved = _find_executable("bun", search_dirs=[bindir_path])
         self.assertEqual(resolved, str(shim))
 
+    def test_find_executable_ignores_a_copy_in_the_current_directory_on_windows(self):
+        # shutil.which on Windows looks in the current directory before PATH,
+        # and Hermes runs in the project it was opened in: a bun.cmd that
+        # project ships must not be the Bun the bridge starts.
+        with tempfile.TemporaryDirectory() as project, tempfile.TemporaryDirectory() as bindir:
+            planted = os.path.join(project, "bun.cmd")
+            real = os.path.join(bindir, "bun.CMD")
+            for p in (planted, real):
+                with open(p, "w") as fh:
+                    fh.write("@echo off\n")
+            with (
+                patch("os.name", "nt"),
+                patch("os.pathsep", ";"),
+                patch("os.getcwd", return_value=project),
+                patch.dict(os.environ, {"PATHEXT": ".COM;.EXE;.BAT;.CMD", "PATH": bindir}),
+                patch("shutil.which", return_value=planted),
+            ):
+                self.assertEqual(_find_executable("bun", search_dirs=[]), real)
+            # A current directory the user put on PATH on purpose is honoured.
+            with (
+                patch("os.name", "nt"),
+                patch("os.pathsep", ";"),
+                patch("os.getcwd", return_value=project),
+                patch.dict(os.environ, {"PATHEXT": ".CMD", "PATH": f"{project};{bindir}"}),
+                patch("shutil.which", return_value=planted),
+            ):
+                self.assertEqual(_find_executable("bun", search_dirs=[]), planted)
+
 
 class CliTests(unittest.TestCase):
     _ENV_KEYS = _CONFIG_ENV_KEYS

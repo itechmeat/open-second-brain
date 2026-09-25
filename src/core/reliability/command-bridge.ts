@@ -37,7 +37,7 @@ const DEFAULT_TIMEOUT_MS = 60_000;
  */
 function shellArgv(cmd: string): [string, string[]] {
   if (process.platform === "win32") {
-    return [process.env["ComSpec"] ?? "cmd.exe", ["/d", "/s", "/c", `"${cmd}"`]];
+    return [process.env["ComSpec"] || "cmd.exe", ["/d", "/s", "/c", `"${cmd}"`]];
   }
   return ["sh", ["-c", cmd]];
 }

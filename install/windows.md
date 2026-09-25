@@ -32,8 +32,9 @@ bun run src\cli\main.ts install-cli
 `install-cli` writes `o2b.cmd`, `vault-log.cmd` and `o2b-hook.cmd` into
 `%USERPROFILE%\.local\bin` - small launchers, not symlinks (a symlink needs
 Developer Mode or an elevated token). If that directory is not on your PATH
-the command prints the one PowerShell line that adds it; open a new terminal
-afterwards. Claude Code's native installer already puts it on PATH.
+the command says so and names the Environment Variables dialog to add it in
+(`rundll32.exe sysdm.cpl,EditEnvironmentVariables` opens it); open a new
+terminal afterwards. Claude Code's native installer already puts it on PATH.
 
 ## 3. Initialize
 
@@ -75,10 +76,15 @@ carries the host.
   work. Install Git for Windows to get the hooks.
 - **opencode, Cursor, Gemini CLI, Copilot CLI, kiro, Codex** -
   `o2b install --target <name> --apply` writes the MCP entry as
-  `cmd /d /c o2b mcp ...`, the form every MCP host documents for batch-file
-  launchers on Windows (`/d` skips cmd's AutoRun, whose output would corrupt
-  the JSON-RPC stream). The install refuses a vault path containing
-  `& | < > ^ % "`, which cmd would split or execute.
+  `cmd /d /c o2b mcp ...`, the `cmd /c <name>` form several hosts document
+  for `npx` on Windows (`/d` skips cmd's AutoRun, whose output would corrupt
+  the JSON-RPC stream). The entry also sets
+  `NoDefaultCurrentDirectoryInExePath=1`: cmd.exe otherwise looks for `o2b`
+  in the current directory before PATH, and a host runs its servers in the
+  project it opened, so a repository could ship its own `o2b.cmd`. The
+  `.cmd` launchers set the same variable for their `bun` lookup. The
+  install refuses a vault path containing `& | < > ^ % " !`, which cmd
+  would split, expand or execute.
 - **Grok Build** gets absolute `bun.exe run <repo>\src\cli\main.ts` MCP
   entries and hook commands. Unverified on Windows: xAI does not document
   which shell runs hook commands there (reports say PowerShell), and the

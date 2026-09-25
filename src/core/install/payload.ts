@@ -32,10 +32,19 @@ const COMMAND = "o2b";
  * Windows: `cmd /d /c o2b` - the launcher there is `o2b.cmd`, and a batch
  * file is not something every host can spawn directly (Node refuses `.cmd`
  * without a shell since the 2024 BatBadBut fix; Rust and Bun resolve only
- * `.exe` from a bare name). `cmd /c <name>` is the form every MCP host's
+ * `.exe` from a bare name). `cmd /c <name>` is the form several MCP hosts'
  * Windows docs give for `npx`, and it resolves `o2b.cmd` through PATH and
  * PATHEXT. `/d` skips cmd's AutoRun, whose output would corrupt the
  * JSON-RPC stream on stdout.
+ *
+ * cmd.exe looks for a bare name in the current directory BEFORE PATH, and
+ * an MCP host starts its servers in the project it opened - so a repository
+ * that ships an `o2b.cmd` would run it. The Windows payload therefore
+ * carries {@link WINDOWS_LAUNCHER_ENV}, which turns that lookup off for
+ * this cmd.exe and everything it starts (the launcher's own `bun` lookup
+ * included). An absolute launcher path was the alternative, but cmd's
+ * quote stripping (`cmd /c "<path with a space>" ... "<vault>"`) breaks it
+ * for any profile or vault path with a space in it.
  */
 export function launcherCommand(platform: string = process.platform): {
   readonly command: string;
@@ -52,7 +61,16 @@ export function launcherCommand(platform: string = process.platform): {
  * payload refuses it by name instead of writing a config that breaks - or
  * runs something - at spawn time.
  */
-const CMD_METACHARACTERS = /[&|<>^%"]/;
+const CMD_METACHARACTERS = /[&|<>^%"!]/;
+
+/**
+ * Environment every Windows payload entry carries: cmd.exe and the Win32
+ * search it drives stop looking in the current directory for a bare
+ * command name (see {@link launcherCommand}).
+ */
+export const WINDOWS_LAUNCHER_ENV: Readonly<Record<string, string>> = Object.freeze({
+  NoDefaultCurrentDirectoryInExePath: "1",
+});
 
 export function buildPayload(cfg: PayloadConfig, platform: string = process.platform): McpPayload {
   if (!cfg.vault || typeof cfg.vault !== "string") {
@@ -61,11 +79,11 @@ export function buildPayload(cfg: PayloadConfig, platform: string = process.plat
   if (platform === "win32" && CMD_METACHARACTERS.test(cfg.vault)) {
     throw new PayloadError(
       `buildPayload: the vault path ${cfg.vault} contains a character cmd.exe interprets ` +
-        '(& | < > ^ % "); MCP hosts on Windows start o2b through `cmd /c`, which would split ' +
+        '(& | < > ^ % " !); MCP hosts on Windows start o2b through `cmd /c`, which would split ' +
         "or execute it. Move or rename the vault so its path has none of them.",
     );
   }
-  const env = buildEnv(cfg);
+  const env = buildEnv(cfg, platform);
   const { command, prefix } = launcherCommand(platform);
   const full: McpServerEntry = {
     command,
@@ -98,8 +116,8 @@ export function cliArgs(entry: McpServerEntry): ReadonlyArray<string> {
   return hasPrefix ? entry.args.slice(win.prefix.length) : entry.args;
 }
 
-function buildEnv(cfg: PayloadConfig): Record<string, string> | undefined {
-  const env: Record<string, string> = {};
+function buildEnv(cfg: PayloadConfig, platform: string): Record<string, string> | undefined {
+  const env: Record<string, string> = platform === "win32" ? { ...WINDOWS_LAUNCHER_ENV } : {};
   if (cfg.agent_name) env["VAULT_AGENT_NAME"] = cfg.agent_name;
   if (cfg.timezone) env["VAULT_TIMEZONE"] = cfg.timezone;
   return Object.keys(env).length > 0 ? env : undefined;

@@ -18,27 +18,32 @@ describe("buildPayload", () => {
   });
 
   test("includes env when agent_name + timezone present", () => {
-    const { full, writer } = buildPayload({
-      vault: "/v",
-      agent_name: "a",
-      timezone: "UTC",
-    });
+    // POSIX: the Windows entry adds its launcher environment on top
+    // (tests/core/install/payload-windows.test.ts).
+    const { full, writer } = buildPayload(
+      {
+        vault: "/v",
+        agent_name: "a",
+        timezone: "UTC",
+      },
+      "linux",
+    );
     expect(full.env).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
     expect(writer.env).toEqual({ VAULT_AGENT_NAME: "a", VAULT_TIMEZONE: "UTC" });
   });
 
   test("omits env entirely when both agent_name and timezone are null", () => {
-    const { full } = buildPayload({ vault: "/v", agent_name: null, timezone: null });
+    const { full } = buildPayload({ vault: "/v", agent_name: null, timezone: null }, "linux");
     expect(full.env).toBeUndefined();
   });
 
   test("partial env: only agent_name", () => {
-    const { full } = buildPayload({ vault: "/v", agent_name: "a", timezone: null });
+    const { full } = buildPayload({ vault: "/v", agent_name: "a", timezone: null }, "linux");
     expect(full.env).toEqual({ VAULT_AGENT_NAME: "a" });
   });
 
   test("partial env: only timezone", () => {
-    const { full } = buildPayload({ vault: "/v", agent_name: null, timezone: "UTC" });
+    const { full } = buildPayload({ vault: "/v", agent_name: null, timezone: "UTC" }, "linux");
     expect(full.env).toEqual({ VAULT_TIMEZONE: "UTC" });
   });
 
