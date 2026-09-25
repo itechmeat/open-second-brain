@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.57.1] - 2026-09-25
+
+Two faults that surfaced while wiring Codex CLI 0.157.0 to this plugin. Neither was visible from inside the repository. Codex installs a plugin by copying its marketplace source, `plugins/codex/`, into `~/.codex/plugins/cache/`, and that copy drops symlinks. `plugins/codex/hooks` and `plugins/codex/skills` were both symlinks into the repository root, so every Codex install had no hooks and no skills. Every Codex run also warned `failed to read plugin hooks config .../hooks/hooks.json: No such file or directory`. Separately, `o2b install --check` reported a correctly registered Codex as `mcp-unreachable`, because the host probe discarded every successful answer.
+
+### Fixed
+
+- **The Codex plugin ships real files.**
+  - `plugins/codex/skills/` is a byte copy of `skills/`.
+  - `plugins/codex/hooks/hooks.json` is generated from `hooks/hooks.json`. SessionEnd timeouts are capped at the 3 s that Codex enforces anyway, and that it otherwise warns about on every run.
+  - Only `hooks.json` is mirrored, never the `hooks/*.ts` scripts. Codex exports `CLAUDE_PLUGIN_ROOT` as its cache dir. A cached script there would win `o2b-hook`'s resolution and then fail on its `../src` imports. Without one, resolution falls through to the real checkout, as before.
+  - The same change retires the only symlinks in the tree. A Windows checkout without Developer Mode or `core.symlinks` materialised them as text files holding the target path.
+  - Verified against Codex 0.157.0 in a throwaway `CODEX_HOME`: `codex plugin marketplace add` plus `codex plugin add` put `hooks/hooks.json` and all five skills in the cache. `hooks/list` reports 16 plugin hooks with no warnings or errors, and `skills/list` reports the five `open-second-brain:*` skills. Once trusted, the SessionStart, UserPromptSubmit and SessionEnd hooks fire through `o2b-hook`.
+- **`o2b install --check` stops calling a working Codex `mcp-unreachable`.** The host probe tested `signalCode !== null` to detect a killed child. Bun leaves `signalCode` undefined, not null, on a normal exit, so every successful `codex mcp list` was treated as killed and its stdout was thrown away. The check is now `!= null`, and a test drives a real child that exits normally, since a stubbed runner cannot reproduce a runtime quirk. No other spawn site has the pattern: the `node:child_process` call sites get `null` from Bun, as Node documents.
+
+### Added
+
+- **`bun run sync-plugin-mirrors`** rebuilds the Codex mirrors. `bun run sync-plugin-mirrors:check` is gated in CI (the `validate` job) and in the pre-commit hook. It reports a missing, changed or extra mirrored file, and any symlink, by name. A test also asserts that the git index tracks no symlink under `plugins/` or `.agents/`.
+
+### Notes
+
+- Numbered to land after 1.57.0 (native Windows, #191), which is still open. Both branch from `main`, so whichever merges second resolves the version lines and this heading's position. The two share no code hunk.
+
 ## [1.56.0] - 2026-09-12
 
 Open Second Brain answers a great deal about the vault it owns and, until this release, very little about itself. An operator with a shell could not ask which version was installed, though the MCP handshake had carried the same fact as `serverInfo.version` since the server existed. An agent on the MCP surface could not ask which projects point at this vault or whether the hosts this install wrote registrations into can still be reached, though both answers had shipped as typed readers with CLI-only consumers. And the first block of text every agent reads at connect time was three frozen strings chosen by scope alone, so a host that disabled a tool still received a paragraph instructing the agent to call it - a confident answer that was wrong before the session began. Nothing in this release computes a new fact. Four surfaces start reading what four readers already produce, and the machinery that made them unreachable is the whole of what changed.
@@ -7495,6 +7517,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.57.1]: https://github.com/itechmeat/open-second-brain/compare/v1.57.0...v1.57.1
 [1.56.0]: https://github.com/itechmeat/open-second-brain/compare/v1.55.0...v1.56.0
 [1.55.0]: https://github.com/itechmeat/open-second-brain/compare/v1.54.0...v1.55.0
 [1.54.0]: https://github.com/itechmeat/open-second-brain/compare/v1.53.1...v1.54.0
