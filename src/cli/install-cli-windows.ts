@@ -3,7 +3,7 @@
  *
  * A symlink on Windows needs Developer Mode or an elevated token, and
  * `cmd.exe` cannot run the bash launchers a POSIX symlink would point at.
- * So each CLI name gets a two-line batch file in the bin directory that
+ * So each CLI name gets a three-line batch file in the bin directory that
  * hands over to the checkout's own `scripts\<name>.cmd`:
  *
  *     @echo off
@@ -34,9 +34,21 @@ export function launcherFileName(name: string): string {
   return `${name}.cmd`;
 }
 
-/** The launcher body that hands over to `target`. CRLF: it is a batch file. */
+/**
+ * The launcher body that hands over to `target`. CRLF: it is a batch file.
+ *
+ * cmd.exe expands `%` on every line it runs, quotes or not, so a `%` in
+ * the checkout path is doubled on the command line (`%%` is a literal
+ * `%`). The marker line keeps the path as it is: `rem` runs nothing, and
+ * the marker is read back as text by {@link launcherTarget}.
+ */
 export function launcherBody(target: string): string {
-  return ["@echo off", `${LAUNCHER_MARKER}${target}`, `"${target}" %*`, ""].join("\r\n");
+  return [
+    "@echo off",
+    `${LAUNCHER_MARKER}${target}`,
+    `"${target.replaceAll("%", "%%")}" %*`,
+    "",
+  ].join("\r\n");
 }
 
 /**
@@ -57,6 +69,18 @@ export function launcherTarget(file: string): string | null {
     }
   }
   return null;
+}
+
+/**
+ * Whether `file` holds exactly the body this version writes for `target`.
+ * The marker names the target; the command line below it is what runs.
+ */
+function isCurrentBody(file: string, target: string): boolean {
+  try {
+    return readFileSync(file, "utf8") === launcherBody(target);
+  } catch {
+    return false;
+  }
 }
 
 function samePath(a: string, b: string): boolean {
@@ -108,8 +132,13 @@ export function installCliWindows(
     }
     const current = launcherTarget(file);
     try {
-      if (current !== null && samePath(current, source)) {
+      if (current !== null && samePath(current, source) && isCurrentBody(file, current)) {
         outcomes.push([name, `exists: ${file} → ${source}`]);
+      } else if (current !== null && samePath(current, source)) {
+        // Ours and pointing here, but not the body this version writes (an
+        // older format, or a hand-edited command line): rewrite it.
+        write(file, source);
+        outcomes.push([name, `updated: ${file} → ${source}`]);
       } else if (
         current !== null &&
         (!existsSync(current) || looksLikeOsbLauncherTarget(current, name))

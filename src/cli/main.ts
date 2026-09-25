@@ -56,6 +56,7 @@ import {
   renderUninstallResult,
   uninstallCli,
 } from "./install-cli.ts";
+import { windowsPathHint } from "./windows-path-hint.ts";
 import { cmdUpdate } from "./update.ts";
 import { ROOT_VERSION_FLAG_TOKEN, cmdVersion } from "./version.ts";
 import { planUninstall, renderPlan } from "./uninstall.ts";
@@ -858,26 +859,6 @@ async function runMcpProbe(args: {
     process.stdout.write(`mcp probe FAIL: ${(e as Error).message}\n`);
     return 1;
   }
-}
-
-/**
- * On native Windows `~/.local/bin` is on PATH only when some other installer
- * (Claude Code, uv) already put it there. Say so, with the one command that
- * fixes it, instead of leaving `o2b` "not recognized" in the next shell.
- */
-function windowsPathHint(bindir: string): string | null {
-  if (process.platform !== "win32") return null;
-  const onPath = (process.env["PATH"] ?? "")
-    .split(";")
-    .some(
-      (d) => d.replace(/[\\/]+$/, "").toLowerCase() === bindir.replace(/[\\/]+$/, "").toLowerCase(),
-    );
-  if (onPath) return null;
-  return (
-    `\n${bindir} is not on PATH. Add it for your user (then open a new terminal):\n` +
-    `  powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('Path', ` +
-    `[Environment]::GetEnvironmentVariable('Path','User') + ';${bindir}', 'User')"\n`
-  );
 }
 
 async function cmdInstallCli(argv: string[]): Promise<number> {

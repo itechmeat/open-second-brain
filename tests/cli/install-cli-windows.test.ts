@@ -2,8 +2,9 @@
  * `.cmd` launchers written by `o2b install-cli` on native Windows.
  *
  * The functions take the scripts directory and the bin directory as
- * arguments, so the ownership policy is pinned on any host; the launcher
- * itself is exercised end-to-end only where `cmd.exe` exists.
+ * arguments, so the ownership policy is pinned on any host. The launchers
+ * they write are run end to end through a real `cmd.exe` on Windows by
+ * `tests/scripts/windows-launchers.test.ts`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -50,6 +51,14 @@ describe("launcher format", () => {
     );
   });
 
+  test("a % in the target is doubled on the command line, kept as-is in the marker", () => {
+    const body = launcherBody("C:\\100%\\scripts\\o2b.cmd");
+    expect(body.split("\r\n")[1]).toBe(
+      "rem open-second-brain launcher -> C:\\100%\\scripts\\o2b.cmd",
+    );
+    expect(body.split("\r\n")[2]).toBe('"C:\\100%%\\scripts\\o2b.cmd" %*');
+  });
+
   test("the marker is read back; a foreign file has none", () => {
     const file = join(root, "x.cmd");
     writeFileSync(file, launcherBody("C:\\a\\scripts\\o2b.cmd"));
@@ -69,6 +78,20 @@ describe("install", () => {
     }
     const second = installCliWindows(NAMES, scripts, bin);
     expect(second.outcomes.every(([, m]) => m.startsWith("exists:"))).toBe(true);
+  });
+
+  test("rewrites our launcher when its command line is not the current body", () => {
+    installCliWindows(NAMES, scripts, bin);
+    const file = join(bin, "o2b.cmd");
+    const target = join(scripts, "o2b.cmd");
+    // Ours by the marker, but an older or hand-edited command line.
+    writeFileSync(
+      file,
+      `@echo off\r\nrem open-second-brain launcher -> ${target}\r\necho stale\r\n`,
+    );
+    const res = installCliWindows(NAMES, scripts, bin);
+    expect(res.outcomes.find(([n]) => n === "o2b")?.[1]).toStartWith("updated:");
+    expect(readFileSync(file, "utf8")).toBe(launcherBody(target));
   });
 
   test("repoints our own launcher from another checkout", () => {
