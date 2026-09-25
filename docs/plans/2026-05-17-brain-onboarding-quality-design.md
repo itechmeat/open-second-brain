@@ -44,7 +44,7 @@ o2b brain unprotect --target {claudecode|codex} [--vault <path>]
 
 | Target | Config file | Mechanism |
 |---|---|---|
-| `claudecode` | `<vault>/.claude/settings.json` (project scope) | `permissions.deny: ["Write(<vault>/Brain/preferences/**)", "Edit(<vault>/Brain/preferences/**)", … ]` |
+| `claudecode` | the vault's `.claude/settings.json` (project scope) | `permissions.deny: ["Write(<vault>/Brain/preferences/**)", "Edit(<vault>/Brain/preferences/**)", … ]` |
 | `codex` | `~/.codex/config.toml` (user scope) | `[permissions.osb_protected.filesystem]` block with `":project_roots" = { "Brain/preferences/**" = "none", … }` plus `default_permissions = "osb_protected"` |
 
 Project-scope `.claude/settings.json` is chosen over user-scope `~/.claude/settings.json` because the vault is unique per host; a user-scope deny would forbid writes globally and break work in other projects. Project scope applies only when Claude Code runs from inside the vault.

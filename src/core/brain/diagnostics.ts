@@ -505,6 +505,17 @@ export const DIAGNOSTIC_SIGNALS: ReadonlyMap<string, DiagnosticSignal> = new Map
         autoRepairable: false,
       },
       {
+        // A payload file nothing in the vault references. Spelled as a
+        // literal for the same reason `vault-frozen` above is. The exit
+        // is the gc verb, which is dry-run by default: the operator
+        // reads what would go before `--apply` removes it behind a
+        // recovery point, so `autoRepairable` stays false.
+        code: "payload-orphan",
+        issueClass: "payload file referenced by nothing in the vault",
+        nextCommand: "o2b brain payload gc",
+        autoRepairable: false,
+      },
+      {
         code: "recovery-point-stale",
         issueClass: "newest recovery point older than the liveness window",
         nextCommand: "o2b brain snapshot log",

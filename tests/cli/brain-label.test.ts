@@ -17,14 +17,15 @@ let vault: string;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-cli-label-"));
   vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  mkdirSync(join(vault, "Notes"), { recursive: true });
   writeFileSync(
     join(vault, "Brain", "_brain.yaml"),
     ["schema_version: 1", "schema:", "  labels:", "    - priority=low", "    - priority=high"].join(
       "\n",
     ) + "\n",
   );
-  writeFileSync(join(vault, "Brain", "notes", "rollout.md"), "# Rollout\n\nCanary first.\n");
+  writeFileSync(join(vault, "Notes", "rollout.md"), "# Rollout\n\nCanary first.\n");
 });
 
 afterEach(() => {
@@ -35,7 +36,7 @@ test("assign writes the label, show renders it, remove drops it", async () => {
   const assign = await runCli([
     "brain",
     "label",
-    "Brain/notes/rollout.md",
+    "Notes/rollout.md",
     "priority=high",
     "--vault",
     vault,
@@ -45,14 +46,12 @@ test("assign writes the label, show renders it, remove drops it", async () => {
   const assigned = JSON.parse(assign.stdout) as { ok: boolean; labels: string[] };
   expect(assigned.ok).toBe(true);
   expect(assigned.labels).toEqual(["priority/high"]);
-  expect(readFileSync(join(vault, "Brain", "notes", "rollout.md"), "utf8")).toContain(
-    "priority/high",
-  );
+  expect(readFileSync(join(vault, "Notes", "rollout.md"), "utf8")).toContain("priority/high");
 
   const show = await runCli([
     "brain",
     "label",
-    "Brain/notes/rollout.md",
+    "Notes/rollout.md",
     "--show",
     "--vault",
     vault,
@@ -61,14 +60,14 @@ test("assign writes the label, show renders it, remove drops it", async () => {
   expect(show.returncode).toBe(0);
   expect(JSON.parse(show.stdout)).toEqual({
     ok: true,
-    path: "Brain/notes/rollout.md",
+    path: "Notes/rollout.md",
     labels: ["priority/high"],
   });
 
   const remove = await runCli([
     "brain",
     "label",
-    "Brain/notes/rollout.md",
+    "Notes/rollout.md",
     "--remove",
     "priority",
     "--vault",
@@ -85,7 +84,7 @@ test("an out-of-vocabulary value is a usage error carrying the allowed list", as
   const result = await runCli([
     "brain",
     "label",
-    "Brain/notes/rollout.md",
+    "Notes/rollout.md",
     "priority=urgent",
     "--vault",
     vault,
@@ -95,12 +94,12 @@ test("an out-of-vocabulary value is a usage error carrying the allowed list", as
 });
 
 test("missing mode or conflicting modes are usage errors", async () => {
-  const none = await runCli(["brain", "label", "Brain/notes/rollout.md", "--vault", vault]);
+  const none = await runCli(["brain", "label", "Notes/rollout.md", "--vault", vault]);
   expect(none.returncode).toBe(2);
   const both = await runCli([
     "brain",
     "label",
-    "Brain/notes/rollout.md",
+    "Notes/rollout.md",
     "priority=high",
     "--show",
     "--vault",

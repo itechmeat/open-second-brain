@@ -6,7 +6,7 @@ The prompt fed to the consultant is at `cli-output/prompt.md`. The raw consultan
 
 ## Consultant: Claude Code
 
-Invocation: `claude -p "$(cat cli-output/prompt.md)" 2>&1 | tee cli-output/claude.md`
+Invocation: `claude -p` in print mode, with the contents of `cli-output/prompt.md` as the prompt; stdout and stderr were captured to `cli-output/claude.md`.
 
 ### Variant 1: Bottom-up primitives, feature-by-feature wiring
 

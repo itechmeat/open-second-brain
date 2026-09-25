@@ -31,7 +31,8 @@ import {
 import { decomposeNoteHistory } from "../../core/brain/note-history.ts";
 import { coerceStringOptional } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
-import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
+import { contextReach, type ServerContext, type ToolDefinition } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 
 const SUMMARY_TOOL = "brain_session_summary";
@@ -285,7 +286,16 @@ function toolBrainIdeaLineage(
   }
   try {
     return serializeLineage(
-      traceIdeaLineage(ctx.vault, { id: idRaw.trim() }, maxDepth !== undefined ? { maxDepth } : {}),
+      traceIdeaLineage(
+        ctx.vault,
+        { id: idRaw.trim() },
+        {
+          ...(maxDepth !== undefined ? { maxDepth } : {}),
+          // A private continuity row is withheld from a remote caller as
+          // if it did not exist, as in the session recall tools.
+          ...(contextReach(ctx) === TRANSPORT_REACH.local ? {} : { withholdPrivate: true }),
+        },
+      ),
     );
   } catch (error) {
     if (error instanceof IdeaLineageError) {

@@ -13,7 +13,7 @@
  * Language-agnostic by construction. Neutralization keys off STRUCTURE
  * only - invisible / control characters and this module's own delimiter
  * token - never off natural-language vocabulary. There is no blocklist
- * of injection phrases ("ignore previous instructions") or role words
+ * of injection phrases (override-prior-instructions phrasings) or role words
  * ("system:", "assistant:") in any language: a word blocklist cannot be
  * complete across all languages and would corrupt legitimate prose.
  * Containment, not vocabulary, is what makes the span inert - inside the

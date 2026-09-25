@@ -9,17 +9,19 @@
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, writeFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildTimelineIndex } from "../../../../src/core/brain/temporal/build-index.ts";
 import { findStaleEntries } from "../../../../src/core/brain/temporal/stale-watch.ts";
 import { BRAIN_TEMPORAL_DEFAULTS } from "../../../../src/core/brain/policy.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function makeVault(): string {
-  const dir = mkdtempSync(join(tmpdir(), "o2b-temporal-stale-"));
+  const dir = mkTemp("o2b-temporal-stale-");
   mkdirSync(join(dir, "Brain", "log"), { recursive: true });
   mkdirSync(join(dir, "Brain", "preferences"), { recursive: true });
   mkdirSync(join(dir, "Brain", "inbox"), { recursive: true });

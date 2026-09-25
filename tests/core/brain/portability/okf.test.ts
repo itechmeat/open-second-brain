@@ -312,6 +312,225 @@ describe("foreign provenance", () => {
   });
 });
 
+/**
+ * Hand-built single-page bundles for the recorded-path trust walls
+ * (t_sec_okf_lane): `..` can never escape the review lane, Brain
+ * machinery is writable only by this producer's own trusted round-trip,
+ * and foreign pages do not arrive speaking in this system's voice.
+ */
+describe("import path lanes (t_sec_okf_lane)", () => {
+  function singlePageBundle(
+    dir: string,
+    producer: string,
+    pagePath: string,
+    pageFrontmatter: string,
+  ): void {
+    mkdirSync(join(dir, "concepts"), { recursive: true });
+    const manifest = {
+      schema: OKF_SCHEMA_VERSION,
+      producer,
+      generated_at: "2026-06-01T00:00:00Z",
+      vault_basename: "Lane",
+      log_days: 0,
+      pages: [
+        {
+          id: "Topic",
+          path: pagePath,
+          class: "concept",
+          bundle_path: "concepts/Topic.md",
+          kind: "note",
+          citations: [],
+          aliases: [],
+          freshness: null,
+          foreign_type: null,
+          producer_meta: {},
+        },
+      ],
+    };
+    writeFileSync(join(dir, "okf.json"), JSON.stringify(manifest), "utf8");
+    writeFileSync(join(dir, "concepts/Topic.md"), `---\n${pageFrontmatter}---\nBody.\n`, "utf8");
+  }
+
+  test("review mode refuses a '..' recorded path instead of staging into Brain", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(dir, OKF_PRODUCER, "../Brain/standing-rules.md", "title: S\n");
+      const result = importOkfBundle(vault, readOkfBundle(dir));
+      expect(result.written).toEqual([]);
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0]?.message).toContain("'..'");
+      // Neither the live machinery file nor a staging-prefixed copy exists.
+      expect(existsSync(join(vault, "Brain/standing-rules.md"))).toBe(false);
+      expect(existsSync(join(vault, OKF_REVIEW_REL, "Brain/standing-rules.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trusted import of a foreign bundle refuses Brain machinery paths", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(dir, "some-other-wiki", "Brain/standing-rules.md", "title: S\n");
+      const result = importOkfBundle(vault, readOkfBundle(dir), { trusted: true });
+      expect(result.written).toEqual([]);
+      expect(result.errors[0]?.message).toContain("Brain machinery");
+      expect(existsSync(join(vault, "Brain/standing-rules.md"))).toBe(false);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trusted own-producer round-trip still writes the Brain sources lane", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(dir, OKF_PRODUCER, "Brain/sources/src-paper.md", "title: Paper\n");
+      const result = importOkfBundle(vault, readOkfBundle(dir), { trusted: true });
+      expect(result.errors).toEqual([]);
+      expect(result.written).toEqual(["Brain/sources/src-paper.md"]);
+      expect(existsSync(join(vault, "Brain/sources/src-paper.md"))).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trusted own-producer round-trip refuses Brain machinery outside the page lanes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(dir, OKF_PRODUCER, "Brain/standing-rules.md", "title: S\n");
+      const result = importOkfBundle(vault, readOkfBundle(dir), { trusted: true });
+      expect(result.written).toEqual([]);
+      expect(result.errors[0]?.message).toContain("Brain machinery");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a foreign staged page arrives without machinery frontmatter keys", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(
+        dir,
+        "some-other-wiki",
+        "Concepts/Topic.md",
+        "title: Topic\n_status: confirmed\n_confidence: high\nowner: someone\norigin_channel: cli\n_revision: 99\n",
+      );
+      const result = importOkfBundle(vault, readOkfBundle(dir), {
+        trusted: true,
+        now: new Date(0),
+      });
+      expect(result.errors).toEqual([]);
+      const written = readFileSync(join(vault, "Concepts/Topic.md"), "utf8");
+      expect(written).not.toContain("_status:");
+      expect(written).not.toContain("_confidence:");
+      expect(written).not.toContain("owner:");
+      expect(written).not.toContain("origin_channel:");
+      expect(written).not.toContain("_revision:");
+      expect(written).toContain("okf_producer: some-other-wiki");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("this producer's own round-trip stays lossless (machinery keys survive)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(
+        dir,
+        OKF_PRODUCER,
+        "Notes/Topic.md",
+        "title: Topic\n_status: confirmed\nowner: someone\n",
+      );
+      const result = importOkfBundle(vault, readOkfBundle(dir), { trusted: true });
+      expect(result.errors).toEqual([]);
+      const written = readFileSync(join(vault, "Notes/Topic.md"), "utf8");
+      expect(written).toContain("_status: confirmed");
+      expect(written).toContain("owner: someone");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a forged own-producer claim does not carry machinery keys into review", () => {
+    // `producer` is bundle-supplied: any bundle can claim to be this
+    // system. Without the operator's --trusted the claim buys nothing.
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(
+        dir,
+        OKF_PRODUCER,
+        "Notes/Topic.md",
+        "title: Topic\n_status: confirmed\n_force_confirmed_via: cli\nowner: someone\norigin_channel: cli\n",
+      );
+      const result = importOkfBundle(vault, readOkfBundle(dir));
+      expect(result.errors).toEqual([]);
+      const written = readFileSync(join(vault, OKF_REVIEW_REL, "Notes/Topic.md"), "utf8");
+      expect(written).not.toContain("_status:");
+      expect(written).not.toContain("_force_confirmed_via:");
+      expect(written).not.toContain("owner:");
+      expect(written).not.toContain("origin_channel:");
+      expect(written).toContain("okf_review: pending");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a staged page keeps its visibility: stripping it could only widen reach", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(
+        dir,
+        OKF_PRODUCER,
+        "Notes/Secret.md",
+        "title: Secret\nvisibility: private\n",
+      );
+      importOkfBundle(vault, readOkfBundle(dir));
+      const written = readFileSync(join(vault, OKF_REVIEW_REL, "Notes/Secret.md"), "utf8");
+      expect(written).toContain("visibility: private");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("trusted import compares the Brain segment case-insensitively", () => {
+    const dir = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      singlePageBundle(dir, OKF_PRODUCER, "brain/_brain.yaml", "title: S\n");
+      const result = importOkfBundle(vault, readOkfBundle(dir), { trusted: true });
+      expect(result.written).toEqual([]);
+      expect(result.errors[0]?.message).toContain("Brain machinery");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the Brain page lanes open on the operator's --trusted, not on the producer claim", () => {
+    const own = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    const other = mkdtempSync(join(tmpdir(), "o2b-okf-lane-"));
+    try {
+      // Claiming this producer without --trusted: staged, lane untouched.
+      singlePageBundle(own, OKF_PRODUCER, "Brain/sources/src-paper.md", "title: Paper\n");
+      const review = importOkfBundle(vault, readOkfBundle(own));
+      expect(review.written).toEqual([`${OKF_REVIEW_REL}/Brain/sources/src-paper.md`]);
+      expect(existsSync(join(vault, "Brain/sources/src-paper.md"))).toBe(false);
+      // Declaring a foreign producer with --trusted: the operator vouched,
+      // so the lane opens - with machinery keys still stripped.
+      singlePageBundle(
+        other,
+        "some-other-wiki",
+        "Brain/reports/2026-06-01-r.md",
+        "title: R\n_status: confirmed\n",
+      );
+      const trusted = importOkfBundle(vault, readOkfBundle(other), { trusted: true });
+      expect(trusted.written).toEqual(["Brain/reports/2026-06-01-r.md"]);
+      const written = readFileSync(join(vault, "Brain/reports/2026-06-01-r.md"), "utf8");
+      expect(written).not.toContain("_status:");
+    } finally {
+      rmSync(own, { recursive: true, force: true });
+      rmSync(other, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("readOkfBundle validation", () => {
   test("rejects a missing manifest", () => {
     const dir = mkdtempSync(join(tmpdir(), "o2b-okf-empty-"));

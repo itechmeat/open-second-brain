@@ -72,7 +72,10 @@ async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<{ result?: Record<string, unknown>; error?: string }> {
-  const server = new MCPServer({ vault, configPath });
+  // Local reach: the operator's own transport, where the error names the
+  // config path verbatim so the remediation can be pasted. A remote caller
+  // gets it with the host roots redacted (see error-redaction.ts).
+  const server = new MCPServer({ vault, configPath }, { reach: "local" });
   await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
     id: 1,

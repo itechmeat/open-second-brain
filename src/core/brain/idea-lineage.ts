@@ -69,6 +69,11 @@ export interface TraceIdeaLineageInput {
 export interface TraceIdeaLineageOptions {
   /** Maximum backward hops from the queried artifact. Default 8. */
   readonly maxDepth?: number;
+  /**
+   * Leave out continuity rows flagged `private`, as if they did not exist.
+   * Set for a caller at remote reach.
+   */
+  readonly withholdPrivate?: boolean;
 }
 
 const DEFAULT_MAX_DEPTH = 8;
@@ -84,13 +89,25 @@ export function traceIdeaLineage(
   if (id.startsWith("pref-") || id.startsWith("ret-")) {
     return preferenceLineage(vault, id);
   }
-  return continuityLineage(vault, id, Math.max(1, opts.maxDepth ?? DEFAULT_MAX_DEPTH));
+  return continuityLineage(
+    vault,
+    id,
+    Math.max(1, opts.maxDepth ?? DEFAULT_MAX_DEPTH),
+    opts.withholdPrivate === true,
+  );
 }
 
 // ----- continuity source graph ---------------------------------------------
 
-function continuityLineage(vault: string, id: string, maxDepth: number): IdeaLineageResult {
-  const records = listContinuityRecords(vault);
+function continuityLineage(
+  vault: string,
+  id: string,
+  maxDepth: number,
+  withholdPrivate: boolean,
+): IdeaLineageResult {
+  const records = listContinuityRecords(vault).filter(
+    (record) => !(withholdPrivate && record.private),
+  );
   const byId = new Map<string, ContinuityRecord>();
   const byTurnId = new Map<string, ContinuityRecord>();
   const bySessionTurnId = new Map<string, ContinuityRecord>();

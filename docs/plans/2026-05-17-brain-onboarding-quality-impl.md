@@ -792,8 +792,8 @@ Expected: 1 pass.
 
 ### Task 14: Renderer for Claude Code
 
-**Objective:** Pure function: rules → JSON snippet shape that
-`<vault>/.claude/settings.json` would receive. Includes the managed
+**Objective:** Pure function: rules → JSON snippet shape that the
+vault's `.claude/settings.json` would receive. Includes the managed
 manifest payload separately.
 
 **Files:**
@@ -1105,8 +1105,8 @@ Expected: 6 passes.
 
 ### Task 17: `applyClaudeCode` — write settings.json + manifest
 
-**Objective:** Idempotent `--apply` for Claude Code. Reads existing
-`<vault>/.claude/settings.json`, merges OSB-owned entries (replacing
+**Objective:** Idempotent `--apply` for Claude Code. Reads the existing
+vault's `.claude/settings.json`, merges OSB-owned entries (replacing
 any owned-by-prior-manifest), writes manifest, backs up old file.
 
 **Files:**

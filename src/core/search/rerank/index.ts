@@ -125,6 +125,7 @@ export async function applyCrossEncoderRerank(
           envKey: config.envKey,
           apiKey: config.apiKey,
           env: opts.env,
+          ...(config.allowInsecureHttp === true ? { allowInsecureHttp: true } : {}),
         },
         "search_rerank",
       );

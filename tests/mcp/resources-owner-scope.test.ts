@@ -23,8 +23,7 @@
  */
 
 import { beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
@@ -34,9 +33,12 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_PREFERENCE_STATUS } from "../../src/core/brain/types.ts";
 import { GATE_MODE } from "../../src/core/integrity/stamp.ts";
 import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
+import { pinHome, tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 /** HOME is pinned per file by convention; nothing pins it globally. */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-resources-scope-home-"));
+pinHome("o2b-resources-scope-home-");
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
@@ -47,7 +49,7 @@ const LOG_DATE = "2026-05-04";
 let vault: string;
 
 beforeEach(() => {
-  vault = mkdtempSync(join(tmpdir(), "o2b-resources-scope-vault-"));
+  vault = mkTemp("o2b-resources-scope-vault-");
   for (const sub of ["preferences", "retired", "inbox", "log"]) {
     mkdirSync(join(vault, "Brain", sub), { recursive: true });
   }

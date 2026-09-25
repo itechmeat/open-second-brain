@@ -74,6 +74,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import { appendMetric, listMetrics } from "../brain/metrics.ts";
 
@@ -205,6 +206,10 @@ export function recordSelfHealOutcome(
 }
 
 function append(vault: string, payload: Readonly<Record<string, unknown>>): void {
+  // The metrics writer creates `Brain/metrics` with `mkdir -p`. A child
+  // whose vault was moved or deleted after the spawn would otherwise
+  // recreate the vault directory just to hold this one row.
+  if (!existsSync(vault)) return;
   try {
     appendMetric(vault, {
       surface: SELF_HEAL_REINDEX_SURFACE,

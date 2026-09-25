@@ -9,7 +9,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  mkdirSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -17,6 +26,7 @@ import {
   exportVaultGraph,
   importVaultGraph,
 } from "../../../../src/core/brain/portability/graph.ts";
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 let vault: string;
 beforeEach(() => {
@@ -119,4 +129,97 @@ describe("importVaultGraph", () => {
     expect(existsSync(join(vault, "Notes", "Good.md"))).toBe(true);
     expect(existsSync(join(vault, "Notes", "BadLinks.md"))).toBe(false);
   });
+
+  test("the Brain machinery root is refused in every mode (t_sec_graph_brain_root)", () => {
+    // `skip` still CREATES a missing target and `overwrite` rewrites an
+    // existing one, so a bundle must not be able to plant or replace
+    // standing rules or the write binding's own config in either.
+    for (const mode of ["skip", "overwrite", "merge"] as const) {
+      const hostile = {
+        version: "1",
+        nodes: [
+          {
+            id: "Rules",
+            path: "Brain/standing-rules.md",
+            title: "Rules",
+            links: [],
+            relations: {},
+          },
+          { id: "Cfg", path: "Brain/_brain.yaml", title: "Cfg", links: [], relations: {} },
+        ],
+      };
+      const res = importVaultGraph(vault, hostile, { mode });
+      expect(res.rejected).toContain("Brain/standing-rules.md");
+      expect(res.rejected).toContain("Brain/_brain.yaml");
+      expect(res.created).toHaveLength(0);
+      expect(res.overwritten).toHaveLength(0);
+      expect(existsSync(join(vault, "Brain", "standing-rules.md"))).toBe(false);
+      expect(existsSync(join(vault, "Brain", "_brain.yaml"))).toBe(false);
+    }
+  });
+  test("every spelling that lands in Brain/ is refused, not just the canonical one", () => {
+    // Each of these opens the machinery root on some filesystem this
+    // project ships on: `.`/`..` collapse on every OS, a backslash is a separator
+    // on Windows, and case / trailing-dot variants open `Brain/` on the
+    // case-insensitive defaults of macOS and Windows.
+    mkdirSync(join(vault, "Brain"));
+    const spellings = [
+      "./Brain/standing-rules.md",
+      "x/../Brain/standing-rules.md",
+      "Notes/./../Brain/pinned.md",
+      "brain/standing-rules.md",
+      "BRAIN/pinned.md",
+      "Brain./pinned.md",
+      "Brain\\standing-rules.md",
+      "/Brain/standing-rules.md",
+    ];
+    const hostile = {
+      version: "1",
+      nodes: [
+        ...spellings.map((path) => ({ id: path, path, title: "x", links: [], relations: {} })),
+        { id: "Ok", path: "Brainstorm/Ok.md", title: "Ok", links: [], relations: {} },
+      ],
+    };
+    const res = importVaultGraph(vault, hostile, { mode: "overwrite" });
+    expect(res.rejected.toSorted()).toEqual(spellings.toSorted());
+    // A folder that merely starts with the letters is not the Brain root.
+    expect(res.created).toEqual(["Brainstorm/Ok.md"]);
+    expect(readdirSync(join(vault, "Brain"))).toEqual([]);
+    // Nothing was created beside it either: no `brain/`, no `x/`.
+    expect(readdirSync(vault).toSorted()).toEqual(["Brain", "Brainstorm"]);
+  });
+
+  test.skipIf(IS_WINDOWS)("a vault folder that is a symlink into Brain/ is refused", () => {
+    mkdirSync(join(vault, "Brain"));
+    symlinkSync(join(vault, "Brain"), join(vault, "Shortcut"));
+    const graph = {
+      version: "1",
+      nodes: [
+        { id: "R", path: "Shortcut/standing-rules.md", title: "R", links: [], relations: {} },
+      ],
+    };
+    const res = importVaultGraph(vault, graph, { mode: "overwrite" });
+    expect(res.rejected).toEqual(["Shortcut/standing-rules.md"]);
+    expect(readdirSync(join(vault, "Brain"))).toEqual([]);
+  });
+
+  test.skipIf(IS_WINDOWS)(
+    "a node whose landing path cannot be resolved is rejected, not fatal",
+    () => {
+      writeFileSync(join(vault, "existing.md"), "x\n");
+      symlinkSync(join(vault, "loop-b"), join(vault, "loop-a"));
+      symlinkSync(join(vault, "loop-a"), join(vault, "loop-b"));
+      const graph = {
+        version: "1",
+        nodes: [
+          { id: "F", path: "existing.md/x.md", title: "F", links: [], relations: {} },
+          { id: "L", path: "loop-a/x.md", title: "L", links: [], relations: {} },
+          { id: "Ok", path: "Notes/Ok.md", title: "Ok", links: [], relations: {} },
+        ],
+      };
+      const res = importVaultGraph(vault, graph, { mode: "overwrite" });
+      expect(res.rejected).toEqual(["existing.md/x.md", "loop-a/x.md"]);
+      expect(res.created).toEqual(["Notes/Ok.md"]);
+    },
+  );
 });

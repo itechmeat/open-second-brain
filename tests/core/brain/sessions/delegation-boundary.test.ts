@@ -37,9 +37,10 @@ import { importSession, importSessionPath } from "../../../../src/core/brain/ses
 import { SESSION_ADAPTERS } from "../../../../src/core/brain/sessions/registry.ts";
 import type { SessionTurn } from "../../../../src/core/brain/sessions/types.ts";
 import { parseSignal } from "../../../../src/core/brain/signal.ts";
+import { pinHome } from "../../../helpers/temp-dir.ts";
 
 /** Every test in this file pins HOME; nothing pins it globally. */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-delegation-home-"));
+pinHome("o2b-delegation-home-");
 
 const DELEGATION_DIR = resolve("tests/fixtures/sessions/delegation");
 const PARENT_FIXTURE = join(DELEGATION_DIR, "parent-session.jsonl");

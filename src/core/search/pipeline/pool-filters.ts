@@ -173,6 +173,7 @@ export function applyPoolFilters(
     filters.reach,
     ctx.vault,
     ctx.frontmatterCache,
+    ctx.store,
   );
   const visible = applyVisibilityScope(
     reachable,

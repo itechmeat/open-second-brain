@@ -88,6 +88,7 @@ test("the claude adapter is byte-identical to the claude-memory modules", () => 
     body: parsed.body,
     memoryPath: "/home/u/.claude/projects/-x/memory/no_shouting.md",
     importedAt: "2026-06-04T10:00:00Z",
+    unconfirmedUntil: "2026-06-18T10:00:00Z",
     bodySha256: parsed.bodySha256,
   };
   expect(claudeMemoryBackend.renderPreference(renderInput)).toBe(

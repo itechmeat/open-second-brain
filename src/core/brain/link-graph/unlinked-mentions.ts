@@ -22,7 +22,8 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { parseFrontmatter } from "../../vault.ts";
-import { ownerScopeView, type OwnerScopeView } from "../owner-scope-view.ts";
+import { ownerScopeView } from "../owner-scope-view.ts";
+import { UNFILTERED_ARTIFACT_REFS, type ArtifactRefView } from "../artifact-ref-view.ts";
 import { brainDirs } from "../paths.ts";
 
 /** One unlinked-mention occurrence. */
@@ -52,6 +53,14 @@ export interface FindUnlinkedMentionsOptions {
    * caller gets.
    */
   readonly ownerScope?: string | null;
+  /**
+   * The transport-reach view (`../reach-view.ts`). A mention carries its
+   * source's id and a line of its body, and its `term` is the target's
+   * title or alias, so both the target and every source are asked.
+   * A withheld target answers as an absent one (no mentions). Absent
+   * means no reach filtering.
+   */
+  readonly reachView?: ArtifactRefView;
 }
 
 const DEFAULT_LIMIT = 100;
@@ -78,12 +87,15 @@ export function findUnlinkedMentions(
 ): ReadonlyArray<MentionRef> {
   const limit = opts.limit ?? DEFAULT_LIMIT;
   const dirs = brainDirs(vault);
+  const reach = opts.reachView ?? UNFILTERED_ARTIFACT_REFS;
+  if (!reach.visible(targetId)) return Object.freeze([]) as ReadonlyArray<MentionRef>;
 
   // Resolve the target's title + aliases from frontmatter.
   const terms = resolveSearchTerms(vault, targetId);
   if (terms.length === 0) return Object.freeze([]) as ReadonlyArray<MentionRef>;
 
-  const view = ownerScopeView(vault, opts.ownerScope ?? null);
+  const owner = ownerScopeView(vault, opts.ownerScope ?? null);
+  const view = (source: string): boolean => owner.visible(source) && reach.visible(source);
   const collected: MentionRef[] = [];
   scanDir(dirs.preferences, targetId, terms, collected, limit, view);
   if (collected.length < limit) {
@@ -143,7 +155,7 @@ function scanDir(
   terms: ReadonlyArray<string>,
   out: MentionRef[],
   limit: number,
-  view: OwnerScopeView,
+  visible: (source: string) => boolean,
 ): void {
   if (!existsSync(dir)) return;
   for (const name of readdirSync(dir)) {
@@ -153,7 +165,7 @@ function scanDir(
     if (source === targetId) continue;
     // A mention discloses its source artifact's id and one line of its
     // body, so the source decides visibility before the file is read.
-    if (!view.visible(source)) continue;
+    if (!visible(source)) continue;
     let text: string;
     try {
       text = readFileSync(join(dir, name), "utf8");

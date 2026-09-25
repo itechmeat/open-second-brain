@@ -19,6 +19,7 @@
  */
 
 import { SearchError } from "../types.ts";
+import { assertHttpEgressEndpoint } from "../embeddings/http-util.ts";
 import type { OpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
 import type { RerankProvider } from "./contract.ts";
 
@@ -71,7 +72,13 @@ export class CrossEncoderRerankProvider implements RerankProvider {
   constructor(endpoint: OpenAiCompatEndpoint, opts?: { readonly timeoutMs?: number }) {
     this.endpoint = endpoint;
     this.model = endpoint.model;
-    this.url = `${endpoint.baseUrl}/rerank`;
+    // Same endpoint rule the embedding providers answer to: the vault
+    // query text and the bearer key both travel to this host.
+    const base = assertHttpEgressEndpoint(endpoint.baseUrl, "search_rerank_base_url", {
+      allowInsecureHttp: endpoint.allowInsecureHttp === true,
+      key: "search_rerank_allow_insecure_http",
+    });
+    this.url = `${base.replace(/\/+$/, "")}/rerank`;
     this.timeoutMs = opts?.timeoutMs ?? DEFAULT_RERANK_TIMEOUT_MS;
   }
 
@@ -93,6 +100,9 @@ export class CrossEncoderRerankProvider implements RerankProvider {
           query,
           documents: [...documents],
         }),
+        // No cross-host redirect may take the bearer key - or the query -
+        // somewhere the operator did not configure.
+        redirect: "error",
         signal: controller.signal,
       });
     } catch (e) {

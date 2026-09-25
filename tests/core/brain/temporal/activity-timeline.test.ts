@@ -18,16 +18,18 @@
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildActivityTimeline } from "../../../../src/core/brain/temporal/activity-timeline.ts";
 import { buildTimelineIndex } from "../../../../src/core/brain/temporal/build-index.ts";
 import type { TemporalEvent, TimelineIndex } from "../../../../src/core/brain/temporal/types.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function makeVault(): string {
-  const dir = mkdtempSync(join(tmpdir(), "o2b-activity-timeline-"));
+  const dir = mkTemp("o2b-activity-timeline-");
   mkdirSync(join(dir, "Brain", "log"), { recursive: true });
   mkdirSync(join(dir, "Brain", "preferences"), { recursive: true });
   mkdirSync(join(dir, "Brain", "retired"), { recursive: true });

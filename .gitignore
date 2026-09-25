@@ -28,10 +28,17 @@ sandbox-vault/
 .claude/settings.local.json
 .open-second-brain/bench-runs/
 
-# Local Kanban/git worktrees (never committed; exclude from lint/fmt)
+# Local Kanban/git worktrees (never committed; exclude from lint/fmt).
+# `.claude/worktrees/` is where Claude Code puts agent worktrees: each is a
+# full checkout, so repo-wide lint and fmt must not descend into them.
 .worktrees/
+.claude/worktrees/
 .code-ranker/
 
 # Agentic-playbooks runner artifacts (never committed; exclude from lint/fmt)
 .apb/runs/
 .apb/tmp/
+
+# Local zg (zvec-grep) index. Listed here, not in .git/info/exclude, because
+# oxfmt reads .gitignore only and would otherwise format its manifest.
+.zvec-grep/

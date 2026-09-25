@@ -1,15 +1,17 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 import { MCPServer } from "../../src/mcp/server.ts";
+import { tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function ctx(): ServerContext {
   return {
-    vault: mkdtempSync(join(tmpdir(), "osb-catalog-")),
+    vault: mkTemp("osb-catalog-"),
     configPath: null,
     repoRoot: null,
   };
@@ -79,7 +81,7 @@ test("tool_hydrate with names returns full schemas and reports unknowns", async 
 });
 
 test("catalog-scope server lists the compact surface but calls hidden tools", async () => {
-  const vault = mkdtempSync(join(tmpdir(), "osb-catalog-srv-"));
+  const vault = mkTemp("osb-catalog-srv-");
   const server = new MCPServer({ vault }, { scope: "catalog" });
   const listResponse = (await server.handleRequest({
     jsonrpc: "2.0",
@@ -102,7 +104,7 @@ test("catalog-scope server lists the compact surface but calls hidden tools", as
 });
 
 test("initialize instructions for catalog scope explain the hydration contract", async () => {
-  const vault = mkdtempSync(join(tmpdir(), "osb-catalog-ins-"));
+  const vault = mkTemp("osb-catalog-ins-");
   const server = new MCPServer({ vault }, { scope: "catalog" });
   const response = (await server.handleRequest({
     jsonrpc: "2.0",

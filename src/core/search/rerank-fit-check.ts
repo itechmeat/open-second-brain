@@ -206,6 +206,7 @@ function resolveProbeProvider(
         envKey: config.rerank.envKey,
         apiKey: config.rerank.apiKey,
         env: deps.env,
+        ...(config.rerank.allowInsecureHttp === true ? { allowInsecureHttp: true } : {}),
       },
       "search_rerank",
     );

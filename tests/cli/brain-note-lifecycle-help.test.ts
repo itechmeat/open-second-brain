@@ -10,26 +10,22 @@
  * files.
  *
  * The manifest half is the same defect on the machine surface: both
- * entries declared no flags at all while the verbs accept --apply,
- * --confirm, --expect, --strict, --path, --source, --if-exists and
- * --limit, so `o2b help --json` described a command that does not exist.
- * `help-surface-parity.test.ts` compares the human and JSON surfaces to
- * each other; this file compares them to the verbs.
+ * entries once declared no flags at all while the verbs accepted them,
+ * so `o2b help --json` described a command that did not exist. The
+ * ratchet below reads the schema each verb hands its parser and requires
+ * the manifest to model exactly that set, with the same types - the
+ * direction `search-query-flag-manifest.test.ts` uses, so a flag added to
+ * the verb alone turns this red.
  */
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 
+import { nestedCommand } from "../../src/cli/command-manifest.ts";
+import { parsedFlagSchema } from "../helpers/parsed-flag-schema.ts";
 import { runCli } from "../helpers/run-cli.ts";
-import { CLI_COMMAND_MANIFEST, type CliCommandManifest } from "../../src/cli/command-manifest.ts";
 
 const VERBS = ["note-lifecycle", "scaffold-stub"] as const;
-
-/** The manifest node for `o2b brain <verb>`. */
-function brainVerb(verb: string): CliCommandManifest | undefined {
-  return CLI_COMMAND_MANIFEST.commands
-    .find((item) => item.name === "brain")
-    ?.commands?.find((item) => item.name === verb);
-}
 
 describe("verb help", () => {
   for (const verb of VERBS) {
@@ -50,22 +46,45 @@ describe("verb help", () => {
   });
 });
 
-describe("the manifest declares the flags the verbs actually accept", () => {
-  test("note-lifecycle", () => {
-    const declared = (brainVerb("note-lifecycle")?.flags ?? []).map((f) => f.name).toSorted();
-    expect(declared).toEqual([
-      "apply",
-      "config",
-      "confirm",
-      "delete-linked",
-      "expect",
-      "strict",
-      "vault",
-    ]);
-  });
+const VERBS_DIR = join(import.meta.dir, "..", "..", "src", "cli", "brain", "verbs");
 
-  test("scaffold-stub", () => {
-    const declared = (brainVerb("scaffold-stub")?.flags ?? []).map((f) => f.name).toSorted();
-    expect(declared).toEqual(["apply", "config", "if-exists", "limit", "path", "source", "vault"]);
-  });
+/** Where each verb declares its parser schema, and one flag it must carry. */
+const PARSED = [
+  {
+    verb: "note-lifecycle",
+    source: "note-lifecycle.ts",
+    marker: "export async function cmdBrainNoteLifecycle",
+    witness: ["delete-linked", "boolean"],
+  },
+  {
+    verb: "scaffold-stub",
+    source: "scaffold-stub.ts",
+    marker: "export async function cmdBrainScaffoldStub",
+    witness: ["if-exists", "string"],
+  },
+] as const;
+
+/** Stated once in the help header, not repeated on each entry. */
+const INHERITED_FLAG_NAME = "json";
+
+function sortedEntries(schema: ReadonlyMap<string, string>): Array<[string, string]> {
+  return [...schema].filter(([name]) => name !== INHERITED_FLAG_NAME).toSorted();
+}
+
+describe("the manifest models exactly the flags each verb parses", () => {
+  for (const entry of PARSED) {
+    test(entry.verb, () => {
+      const parsed = parsedFlagSchema({
+        file: join(VERBS_DIR, entry.source),
+        marker: entry.marker,
+        callOpen: "parse(argv, {",
+      });
+      // Not vacuous: a dead regex would compare two empty sets.
+      expect(parsed.get(entry.witness[0])).toBe(entry.witness[1]);
+      const modelled = new Map(
+        (nestedCommand("brain", entry.verb)?.flags ?? []).map((f) => [f.name, f.type]),
+      );
+      expect(sortedEntries(modelled)).toEqual(sortedEntries(parsed));
+    });
+  }
 });

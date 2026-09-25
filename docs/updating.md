@@ -47,6 +47,95 @@ instruction files such as `CLAUDE.md`/`AGENTS.md`, installed
 `.claude/skills/`) and warns with the exact replacement for any stale
 reference it finds (`removed-tool-reference`).
 
+## Upgrading to 1.58.0
+
+No step below is required for a vault that uses none of the named
+features. Each one refuses something an earlier release accepted, so a
+script, a config or an agent routine that relied on it stops with a named
+error rather than a silent change.
+
+**Plain-http embedding and rerank endpoints are refused.** The embedding and
+rerank base URLs must be `https`, except for a loopback host. A local server
+on another machine (LM Studio on the Windows host seen from WSL, Ollama on
+the LAN, a tailnet address) needs the per-endpoint opt-out in the operator
+config or environment:
+
+```yaml
+embedding_allow_insecure_http: true        # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
+search_rerank_allow_insecure_http: true    # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
+```
+
+Both default to false, apply only to a base URL from the config or the
+environment (never to one from the in-vault provider registry), and warn
+once per endpoint. The refusal names the switch.
+
+**An unknown tool profile stops the server.** `o2b mcp` with a
+`--tool-profile` or `mcp_tool_profile` naming a profile that does not exist
+exits `2`, naming the value, where it came from and the known profiles. It
+used to serve the full tool surface. **Fix:** correct the profile name.
+
+**`bank-import` resets every preference row by default.** Untrusted is the
+default: each row lands `unconfirmed`, unpinned, at low confidence, on a
+fresh trial window dated from the restore, including a row the bundle
+already marked unconfirmed, and the run names every row it reset. **Fix:**
+for a backup you vouch for, pass `--trusted-restore`.
+
+**OKF import strips machinery frontmatter unless `--trusted`.** The bundle's
+`producer` field no longer decides it. Without `--trusted`, `_status`,
+`owner`, `origin_channel` and the other machinery keys are stripped, and only
+`--trusted` admits the `Brain/sources/` and `Brain/reports/` lanes. A
+round trip of your own export needs `--trusted` to stay lossless.
+
+**Labels and attributes refuse `Brain/` machinery and non-Markdown files.**
+`o2b brain label`, `o2b brain attr`, `brain_labels` and marker write-back
+accept a Markdown note, and under `Brain/` only pages in `sources/`,
+`reports/` and `distillations/`. A marker whose target is refused is reported
+as `refused` and left unconsumed.
+
+**Write sessions commit only into agent page lanes.** `brain_write_session`
+and `o2b brain session open --target` accept a target under
+`Brain/sources/`, `Brain/reports/`, `Brain/distillations/`, `Brain/notes/`
+or `Brain/decisions/panels/`. Any other path under `Brain/` is refused with
+`target-reserved`, and the commit refuses a target that a symbolic link
+carries outside those lanes. **Fix:** point the session at one of those
+lanes.
+
+**A folder named `brain` in any letter case is treated as `Brain/`.** Note
+writes and graph import compare the first path segment case-folded, the way
+macOS and Windows resolve it, and refuse it as they refuse the machinery root.
+On a case-sensitive filesystem a separate top-level user folder spelled
+`brain` or `BRAIN` is refused for writes. **Fix:** rename that folder.
+
+**Remote callers no longer see private session rows.** Over a remote
+transport, `brain_session_grep`, `brain_session_describe`,
+`brain_session_expand` and `brain_idea_lineage` answer a continuity row
+flagged `private` as if it did not exist, and the three session recall
+tools do the same for a session summary built from one. Local callers are unchanged. **Fix:** read those rows from a local
+session.
+
+**Every search index is rebuilt once.** The chunker now counts Chinese,
+Japanese, Korean, Thai and similar text per character, and the index records
+the `chunker_version` it was cut under. The first start after the update
+rebuilds each existing index in the background, as described under
+[Vault state migrates itself](#vault-state-migrates-itself). Short notes in
+any language chunk as before. A note long enough to span several chunks may
+split at slightly different points in every language, because the overlap
+between chunks now counts toward the chunk cap. With embeddings on, the
+chunks that changed are re-embedded, so expect one round of embedding calls
+for multi-chunk notes and for text in the scripts above. Nothing to run by
+hand.
+
+**`brain_secrets run` allowlist patterns match the argv element by element.**
+Each space-separated token of an `--allow` pattern matches one argument, a `*`
+inside a token globs within that argument, and a trailing `*` token stands
+for one or more further arguments. A pattern that relied on matching across
+the joined command line, such as `tool*` for `tool sub --flag`, now matches
+only a single-element argv. **Fix:** write it as `tool *`.
+
+**`brain_update_note` refuses `visibility` and `origin_channel`.** A
+frontmatter update carrying either key fails with `reserved_frontmatter_key`.
+Edit them in the file.
+
 ## Upgrading to 1.50.0
 
 Nothing below needs a migration step. Two of the four change what an
@@ -238,7 +327,14 @@ hands-off:
   user content untouched);
 - a stale-schema or missing search index is rebuilt in the **background** (a
   detached reindex), so startup never blocks; and as a safety net the search
-  read path self-heals a stale/missing index on first query.
+  read path self-heals a stale/missing index on first query;
+- an index whose chunks were cut by older chunking rules (its `index_state`
+  `chunker_version` is missing or older than the running chunker's) is rebuilt
+  the same way, once. Unchanged notes are otherwise never re-chunked, so
+  without it a chunking fix would never reach them. The first start after the
+  update that introduced the stamp (the #186 fix for Chinese, Japanese, Korean,
+  Thai and similar text) rebuilds every existing index once; with embeddings
+  on, that re-embeds whichever chunks changed.
 
 A schema bump makes every session that starts afterwards find the index stale
 at once, so the spawn is checked against the index writer lock first: a rebuild
@@ -250,8 +346,10 @@ surface (`docs/metrics.md`), because the child runs with its streams pointed at
 nothing and a failure would otherwise be reported nowhere.
 
 It is **state-driven, not version-stamped.** Each step keys off actual on-disk
-state - the search index `schema_version`, the `_brain.yaml` pending-changes
-plan, directory existence - rather than a "last version" marker. This is
+state - the search index `schema_version` and `chunker_version`, the
+`_brain.yaml` pending-changes plan, directory existence - rather than a "last
+version" marker (both index cells live in the per-device index, not the
+vault, and describe what that index holds). This is
 deliberate: a vault is often synced across devices (Syncthing), so a stamp
 written into the vault would let one device mark the work done and make another
 skip its own per-device step (the search index is per-device). State checks are

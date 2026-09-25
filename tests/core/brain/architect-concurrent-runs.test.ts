@@ -53,6 +53,14 @@ const SPAWN_TIMEOUT_MS = 60_000;
  */
 const BARRIER_LEAD_MS = 1_500;
 
+/**
+ * How many named refusals one racer absorbs before its run counts as a
+ * failure. Each refusal costs one lock budget of waiting, so this is a
+ * bound on a stuck lock, not a pacing knob: two holds is the most a racer
+ * can queue behind.
+ */
+const MAX_REFUSALS = 5;
+
 const GENERATE = join(import.meta.dir, "../../../src/core/brain/architect/generate.ts");
 
 let tmp: string;
@@ -107,7 +115,20 @@ async function raceRuns(scriptName: string): Promise<ReadonlyArray<RunReport>> {
       `const { generateArchDocs } = await import(${JSON.stringify(GENERATE)});`,
       "const [vaultArg, projectArg, startAt] = process.argv.slice(2);",
       "while (Date.now() < Number(startAt)) Bun.sleepSync(1);",
-      "const res = generateArchDocs(vaultArg, projectArg);",
+      // A run that waits out LOCK_WAIT_INTERACTIVE_MS is refused by name
+      // (ELOCKED) - the product's answer to a second run over one repo,
+      // and not a lost update. How often that happens is a function of
+      // the runner, not the lock: the third racer queues behind two whole
+      // plan-and-write holds, which a slow Windows runner stretched past
+      // the one-second budget. So the racer does what an operator would,
+      // and runs again. Only a refusal is retried, so a run that read
+      // outside the lock still reports what it read, and the tally below
+      // still catches it.
+      "let res;",
+      `for (let attempt = 1; ; attempt += 1) {`,
+      "  try { res = generateArchDocs(vaultArg, projectArg); break; }",
+      `  catch (e) { if (e?.code !== "ELOCKED" || attempt >= ${MAX_REFUSALS}) throw e; }`,
+      "}",
       "process.stdout.write(JSON.stringify({",
       "  created: res.created, updated: res.updated, unchanged: res.unchanged,",
       "}));",

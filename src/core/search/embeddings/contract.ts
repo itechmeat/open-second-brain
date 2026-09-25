@@ -49,7 +49,7 @@ export interface EmbeddingProvider {
    * Optional read-and-reset of provider-internal retry tally. The
    * indexer consumes this after each `embed()` to populate
    * `IndexStats.embeddingsRetries`. Providers that never retry
-   * (NullProvider, MockEmbeddingProvider) leave this undefined.
+   * (NullProvider) leave this undefined.
    */
   consumeRetryCount?(): number;
   /**

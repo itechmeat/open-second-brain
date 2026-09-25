@@ -357,14 +357,23 @@ async function toolBrainWrites(
     ...(until !== null ? { until } : {}),
     ...(rawOp !== null ? { op: rawOp } : {}),
   });
+  // The log never opens the notes it names, so the reach rule is asked
+  // per target here: at remote reach a write to a page reserved against
+  // remote reads (or one whose file is gone - an unreadable claim fails
+  // closed) is dropped before counting, so neither its path nor the
+  // total betrays it. At local reach the view is the shared no-op.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const writes = view.filtersNothing
+    ? result.writes
+    : result.writes.filter((w) => view.visible(w.target));
   // `total_matched` beside `returned` so a truncated answer is legible as
   // one: a list capped at the limit and a list that IS the whole history
   // are otherwise the same shape.
   return {
     action: BRAIN_WRITES_ACTION.list,
-    total_matched: result.writes.length,
-    returned: Math.min(result.writes.length, limit),
-    writes: result.writes.slice(0, limit).map((w) => ({ ...w })),
+    total_matched: writes.length,
+    returned: Math.min(writes.length, limit),
+    writes: writes.slice(0, limit).map((w) => ({ ...w })),
     warnings: result.warnings.map((w) => ({
       path: w.path,
       line: w.lineNumber,
@@ -401,10 +410,18 @@ function planRevert(ctx: ServerContext, args: Record<string, unknown>): Record<s
     }
     throw err;
   }
+  // Same reach rule as `list`. The digest still seals the WHOLE plan -
+  // it is applied at the operator's terminal, where the full plan is
+  // shown - so a remote caller sees the entries it may read and a digest
+  // that names none of the others.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const entries = view.filtersNothing
+    ? plan.entries
+    : plan.entries.filter((entry) => view.visible(entry.target));
   return {
     action: BRAIN_WRITES_ACTION.planRevert,
     selector: { ...plan.selector },
-    entries: plan.entries.map((entry) => ({ ...entry })),
+    entries: entries.map((entry) => ({ ...entry })),
     digest: plan.digest,
     planned_at: plan.planned_at,
     next_command: `o2b brain writes revert --apply ${plan.digest}`,
@@ -629,6 +646,7 @@ async function toolBrainUnlinkedMentions(
   const mentions = findUnlinkedMentions(ctx.vault, targetId, {
     ...(limit !== undefined ? { limit } : {}),
     ownerScope: gatedOwnerScopeView(ctx.vault, ctx.agentName).scope,
+    reachView: reachView(ctx.vault, contextReach(ctx)),
   });
   return {
     vault_path: vaultPathField(ctx),

@@ -77,14 +77,10 @@ function spoolDir(): string {
   // into opencode's plugin directory and cannot import it): XDG wins, then
   // %LOCALAPPDATA% on native Windows, then ~/.local/share.
   const local = process.env["LOCALAPPDATA"];
-  const base =
-    xdg && xdg.length > 0
-      ? xdg
-      : process.platform === "win32"
-        ? local && local.length > 0
-          ? local
-          : join(homedir(), "AppData", "Local")
-        : join(homedir(), ".local", "share");
+  let base: string;
+  if (xdg && xdg.length > 0) base = xdg;
+  else if (process.platform !== "win32") base = join(homedir(), ".local", "share");
+  else base = local && local.length > 0 ? local : join(homedir(), "AppData", "Local");
   return join(base, "open-second-brain", "opencode");
 }
 

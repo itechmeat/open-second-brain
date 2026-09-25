@@ -73,12 +73,18 @@
  */
 
 import { realpathSync, statSync } from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { relative, resolve } from "node:path";
 
-import { brainConfigPath } from "../brain/paths.ts";
+import {
+  BRAIN_PAGE_LANES_REL,
+  BRAIN_ROOT_REL,
+  brainConfigPath,
+  isInBrainLane,
+  isUnderBrainRoot,
+} from "../brain/paths.ts";
 import { requireNextStep } from "../brain/next-step.ts";
 import { loadBrainConfig } from "../brain/policy.ts";
-import { toPosix } from "../path-safety.ts";
+import { realVaultRelative, toPosix } from "../path-safety.ts";
 import { normaliseWriteBindingPrefix, writeBindingPrefixCovers } from "./prefix.ts";
 
 export { normaliseWriteBindingPrefix, writeBindingPrefixCovers };
@@ -224,43 +230,6 @@ export function writeBindingAdmits(binding: WriteBinding, relPath: string): bool
 }
 
 /**
- * The realpath of `target`, resolving every symlink in the components
- * that exist and re-appending the components that do not yet.
- *
- * A write target is normally the LAST component and does not exist yet,
- * so `realpathSync` on it alone would only ever raise; what matters is
- * the directory chain above it, which does exist and is where a symlink
- * redirects the write. ENOENT walks one level up; any other errno is
- * raised, because a directory we cannot examine is not a directory we
- * know to be safe.
- */
-function realpathOfDeepestExisting(target: string): string {
-  try {
-    return realpathSync(target);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
-    const parent = dirname(target);
-    if (parent === target) return target;
-    return join(realpathOfDeepestExisting(parent), basename(target));
-  }
-}
-
-/**
- * Where `relPath` actually lands, as a vault-relative POSIX path, or
- * `null` when it lands outside the vault altogether.
- */
-function resolveRealVaultRelative(vault: string, relPath: string): string | null {
-  const realVault = realpathOfDeepestExisting(resolve(vault));
-  const realTarget = realpathOfDeepestExisting(resolve(join(vault, relPath)));
-  const rel = relative(realVault, realTarget);
-  // `relative` emits the platform separator, so the "climbs out of the
-  // root" test uses it too. An empty result means the target IS the
-  // vault root, which is not a place a note can be written either.
-  if (rel === "" || rel === ".." || rel.startsWith(".." + sep)) return null;
-  return toPosix(rel);
-}
-
-/**
  * The refusal for a caller-named write to `relPath`, or `null` when the
  * write is admitted — including when no binding is declared at all.
  *
@@ -277,9 +246,145 @@ export function checkWriteBinding(vault: string, relPath: string): WriteBindingR
   const binding = resolveWriteBinding(vault);
   if (binding === null) return null;
   if (!writeBindingAdmits(binding, relPath)) return writeBindingRefusal(binding, relPath, relPath);
-  const resolved = resolveRealVaultRelative(vault, relPath);
+  let resolved: string | null;
+  try {
+    resolved = realVaultRelative(vault, relPath);
+  } catch (exc) {
+    // A destination that cannot be resolved is not one the binding can
+    // be shown to admit: refuse, naming why, rather than raise an I/O
+    // error out of a policy check.
+    const refusal = writeBindingRefusal(binding, relPath, null);
+    const code = (exc as NodeJS.ErrnoException)?.code ?? "unknown";
+    return Object.freeze({
+      ...refusal,
+      message: `${refusal.relPath} cannot be resolved on disk (${code}); ${REFUSED_EXIT}`,
+    });
+  }
   if (resolved !== null && writeBindingAdmits(binding, resolved)) return null;
   return writeBindingRefusal(binding, relPath, resolved);
+}
+
+/** Refusal raised by {@link governCallerNamedWritePath}. */
+export class GovernedPathWriteRefusedError extends Error {
+  /** The surface name its caller gave itself, for audit symmetry with `StandingRulesWriteRefusedError`. */
+  readonly surface: string;
+  constructor(surface: string, message: string) {
+    super(`${surface} refused: ${message}`);
+    this.name = "GovernedPathWriteRefusedError";
+    this.surface = surface;
+  }
+}
+
+/**
+ * The governance walls the note-target envelope applies that a
+ * caller-named write reaching through a weaker resolver (labels,
+ * attributes, marker write-back - containment only) must apply itself,
+ * because containment alone says nothing about WHICH file is being
+ * rewritten:
+ *
+ * 1. The write binding's own authority is refused by name -
+ *    `Brain/_brain.yaml` - lexically and canonically, so a symlink to it
+ *    is the same target. (Wall 2 refuses it too; the named refusal
+ *    keeps the operator-facing message about what the file IS.)
+ * 2. The target must be a Markdown note, and not Brain machinery. These
+ *    surfaces rewrite a note's frontmatter; pointed at anything else they
+ *    corrupt it - `Brain/vault-id.json` (which disables the vault
+ *    identity guard), `Brain/search/embedding-providers.json`,
+ *    `_vault-map.yaml`. Under `Brain/`, only the page lanes
+ *    ({@link BRAIN_PAGE_LANES_REL}: sources, reports, distillations) hold
+ *    notes; everything else there is owned by the Brain's own writers.
+ *    Checked on the caller's spelling AND on where the bytes actually
+ *    land, so a vault note that is a symlink into `Brain/` is refused.
+ *    Holds whether or not a write binding is declared.
+ * 3. The operator's declared write binding (`write_binding.path_prefixes`)
+ *    admits the target before any byte is read. Absent declaration the
+ *    check is inert, exactly as on the note path.
+ *
+ * Lives beside {@link checkWriteBinding} rather than beside the resolver
+ * on purpose: the guard is the binding boundary extended to writers that
+ * bypass the note envelope, and keeping it here keeps the resolver
+ * module free of the binding's config-loading dependency graph.
+ *
+ * Returns the vault-relative POSIX path the walls read, so a caller that
+ * wants to reuse it resolves the same segments these checks saw. POSIX
+ * because the binding matcher splits on `/`: handing it the native
+ * `relative()` form refused every write on Windows once a binding was
+ * declared.
+ */
+export function governCallerNamedWritePath(
+  vault: string,
+  relPath: string,
+  surface: string,
+): string {
+  const vaultRoot = resolve(vault);
+  const candidate = resolve(vaultRoot, relPath);
+  const normalized = toPosix(relative(vaultRoot, candidate));
+  const configPath = brainConfigPath(vault);
+  if (candidate === configPath || canonicalPath(candidate) === canonicalPath(configPath)) {
+    throw new GovernedPathWriteRefusedError(
+      surface,
+      `${normalized} is the write binding's own config, which this surface does not rewrite`,
+    );
+  }
+  const namedRefusal = callerNamedTargetRefusal(normalized);
+  if (namedRefusal !== null) throw new GovernedPathWriteRefusedError(surface, namedRefusal);
+  let landsAt: string | null;
+  try {
+    landsAt = realVaultRelative(vault, normalized);
+  } catch (exc) {
+    const code = (exc as NodeJS.ErrnoException)?.code ?? "unknown";
+    throw new GovernedPathWriteRefusedError(
+      surface,
+      `${normalized} cannot be resolved on disk (${code})`,
+    );
+  }
+  if (landsAt !== null && landsAt !== normalized) {
+    const landedRefusal = callerNamedTargetRefusal(landsAt);
+    if (landedRefusal !== null) {
+      throw new GovernedPathWriteRefusedError(
+        surface,
+        `${normalized} resolves to ${landsAt}: ${landedRefusal}`,
+      );
+    }
+  }
+  const bindingRefusal = checkWriteBinding(vault, normalized);
+  if (bindingRefusal !== null) {
+    throw new GovernedPathWriteRefusedError(surface, bindingRefusal.message);
+  }
+  return normalized;
+}
+
+/**
+ * Wall 2 of {@link governCallerNamedWritePath} for one vault-relative
+ * POSIX path: the refusal message, or `null` when the path names a
+ * Markdown note outside Brain machinery.
+ */
+function callerNamedTargetRefusal(relPath: string): string | null {
+  if (!relPath.toLowerCase().endsWith(".md")) {
+    return `${relPath} is not a Markdown note, and this surface only rewrites note frontmatter`;
+  }
+  if (isUnderBrainRoot(relPath) && !isInBrainLane(relPath, BRAIN_PAGE_LANES_REL)) {
+    return (
+      `${relPath} is Brain machinery; under ${BRAIN_ROOT_REL}/ this surface writes only the ` +
+      `page lanes (${BRAIN_PAGE_LANES_REL.map((lane) => `${lane}/`).join(", ")})`
+    );
+  }
+  return null;
+}
+
+/**
+ * Canonical form of `path`, or the path itself when it cannot be
+ * canonicalized - the same total comparison
+ * `assertStandingRulesNotTargeted` runs, for the same reason: a symlink
+ * pointing at the config file is the same target, and a missing file
+ * must not make the guard fail open.
+ */
+function canonicalPath(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 /**

@@ -13,6 +13,10 @@
 import { resolveAgentName } from "../../../core/config.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../../core/brain/secrets/exec.ts";
 import { listSecrets, removeSecret, setSecret } from "../../../core/brain/secrets/store.ts";
+import {
+  formatSecretsSyncExposure,
+  secretsSyncExposure,
+} from "../../../core/brain/secrets/sync-exposure.ts";
 import { brainVerbContext, fail, ok, okJson, parse } from "../helpers.ts";
 import { readStdinText } from "../../stdin.ts";
 
@@ -81,6 +85,13 @@ export async function cmdBrainSecret(argv: string[]): Promise<number> {
           agent,
           now,
         });
+        // Stored, but say so if a Syncthing folder will carry the keyfile
+        // to its peers: the directory's .gitignore does not reach
+        // Syncthing, and the operator's .stignore is theirs to edit.
+        const exposure = secretsSyncExposure(vault);
+        if (exposure !== null) {
+          process.stderr.write(`warning: ${formatSecretsSyncExposure(exposure)}\n`);
+        }
         if (asJson) okJson({ ...metadata });
         else ok(`secret stored: ${metadata.name} (env: ${metadata.env_var})`);
         return 0;

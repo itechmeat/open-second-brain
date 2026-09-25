@@ -133,5 +133,10 @@ export { BRAIN_HEALTH_DEFAULTS, resolveHealth } from "./policy/blocks/health.ts"
 export { BRAIN_TEMPORAL_DEFAULTS, resolveTemporal } from "./policy/blocks/temporal.ts";
 export { BRAIN_LINK_GRAPH_DEFAULTS, resolveLinkGraph } from "./policy/blocks/link-graph.ts";
 export { BRAIN_NOTES_DEFAULTS, resolveNotes } from "./policy/blocks/notes.ts";
-export { BRAIN_SESSIONS_DEFAULTS, resolveSessions } from "./policy/blocks/sessions.ts";
+export {
+  BRAIN_SESSION_PAYLOAD_DEFAULTS,
+  BRAIN_SESSIONS_DEFAULTS,
+  resolveSessionPayloadPolicy,
+  resolveSessions,
+} from "./policy/blocks/sessions.ts";
 export { resolveEmbeddingSunsetDeclaration } from "./policy/blocks/embeddings.ts";

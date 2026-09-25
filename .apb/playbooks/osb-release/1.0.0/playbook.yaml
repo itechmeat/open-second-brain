@@ -1,0 +1,234 @@
+schema: 2
+id: osb-release
+name: OSB release
+description: 'Publish one Open Second Brain GitHub release covering everything merged since the last published release, even when that spans several versions. The tag and title take the version in package.json at the target commit (default origin/main HEAD). Refuses by name when that version is already released or tagged, or when a CHANGELOG entry or link reference in scope is missing. The body is built from the CHANGELOG entries and the merged PR descriptions in the house style (v1.54.0 to v1.56.0), with the canonical terminal-style interaction-diagram GIF rendered deterministically (sharp plus ffmpeg, the pipeline of every image since v1.0.0). The draft is staged as a GitHub DRAFT release for an operator gate (approve, revise, abort) before anything is public; publishing tags the exact target commit and verifies every asset downloads. Never touches the kanban board.'
+version: 1.0.0
+params:
+- name: brief
+  type: text
+  label: Standing brief for release publication (override to change the rules)
+  default: 'Open Second Brain is a PUBLIC repository and a release is irreversible. Every artifact is English, uses the full name "Open Second Brain" in prose, " - " as the separator (never an em dash) and no exclamation marks; AI-authorship markers follow the osb-developer profile (none in release notes). Every claim in the release must be true to the CHANGELOG entries in scope and the merged PR descriptions; numbers come from real CI runs or the PRs'' own verification sections, never estimates. Security fixes are described only in the neutral terms the CHANGELOG already uses. Never touch the kanban board, never push commits, never create or move tags by hand: the publish node does the one irreversible step after the operator approves. Long commands: wait with ONE blocking call, never a polling loop; never end a reply while a command you started is still running, and never end with a progress report.'
+- name: target
+  type: text
+  label: Target commit or ref on main (an explicit target in the instruction wins)
+  default: origin/main
+defaults:
+  profile: osb-developer
+  on_failure: failed
+trigger:
+  when:
+  - publish a GitHub release for open-second-brain after a release-bearing PR merged
+  - release everything merged since the last open-second-brain release
+  - draft and publish the open-second-brain release notes and release image
+  avoid_when:
+  - the version bump has not merged to main yet (prepare the PR first with osb-pr-prepare)
+  - moving kanban cards (the parent osb-feature-release does that)
+  examples:
+  - publish the release for what is on main now
+  - release 1.57.1, it covers 1.57.0 too
+requires:
+  files:
+  - CLAUDE.md
+  - CHANGELOG.md
+  - package.json
+  commands:
+  - bun
+  - git
+  - gh
+  - python3
+  - curl
+goal:
+  statement: One public GitHub release, tagged at the exact target commit, covers every version merged since the last release, in the house style with the canonical animated interaction-diagram image, after the operator approved the staged draft.
+  criteria:
+  - description: The tag points at the target commit, the title is `vX.Y.Z - <Tagline>` for the package.json version there, and all four image assets download intact.
+    check:
+      type: manual
+  - description: Every claim in the body is backed by a CHANGELOG entry in scope or a merged PR description, and the operator approved the draft before publication.
+    check:
+      type: manual
+effects:
+- fs_read
+- fs_write
+- network
+- external
+- irreversible
+nodes:
+- id: start
+  type: start
+
+- id: intake
+  title: Resolve the target commit
+  type: agent_task
+  expected_duration: 5m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Target parameter: {{params.target}}
+    Run input: {{run.instruction}}
+
+    Resolve the one commit to release. An explicit commit, tag-less ref
+    or "main" in the run input wins; else the target parameter. Run
+    `git fetch origin main --tags` first; "main" means origin/main.
+    Do not decide whether it is releasable - the scope node does that.
+    Write `OSB_TARGET_SHA=<full 40-hex sha>` as the only line of
+    "$(git rev-parse --path-format=absolute --git-path osb-release)/context.env"
+    (mkdir -p the directory).
+
+    Write your verdict to $APB_STATUS_FILE with outputs
+    {target_sha, target_ref, hints: <release kind, tagline or notes
+    hints from the run input, verbatim, or "">}.
+  max_retries: 1
+
+- id: scope
+  title: Scope and refusal checks
+  type: script
+  script: scripts/scope.sh
+  runner: sh
+  timeout_seconds: 600
+  expected_duration: 1m
+
+- id: draft
+  title: Draft the notes and the release image
+  type: agent_task
+  expected_duration: 50m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Target and hints: {{nodes.intake.output}}
+    Scope: {{nodes.scope.output}}
+    Operator note from the gate (empty on the first pass): {{nodes.gate.review_note}}
+    Last render verdict (empty on the first pass): {{nodes.render.output}}
+
+    Read the canon first: `.apb/playbooks/osb-release/$(cat
+    .apb/playbooks/osb-release/current)/scripts/release-image-style.md`
+    (the image and body rules), then the three most recent release
+    bodies (`gh release view v1.56.0`, `v1.55.0`, `v1.54.0`).
+    Sources of truth: `git show <target>:CHANGELOG.md` for every version
+    in scope, and `gh pr view <n>` for every PR in scope. One release
+    covers all versions in scope; tag and title use the newest.
+
+    Write into the work dir from the scope output:
+    - `slug.txt`: kebab-case slug of the tagline;
+    - `title.txt`: `vX.Y.Z - <Tagline In Title Case>`;
+    - `body.md`: the body per the canon, embedding
+      `https://github.com/itechmeat/open-second-brain/releases/download/vX.Y.Z/vX.Y.Z-<slug>.gif`;
+    - `vX.Y.Z-<slug>-source.svg`: the interaction diagram, built from the
+      canon SVG the scope node downloaded (chrome and defs verbatim).
+    If an operator note or a render verdict is present, address it and
+    change only what it asks.
+
+    Then render it yourself: `sh .apb/playbooks/osb-release/$(cat
+    .apb/playbooks/osb-release/current)/scripts/render.sh`, and LOOK at
+    `assets/vX.Y.Z-<slug>.png` (open the image). Verify the layout:
+    arrows straight or orthogonal and anchored on box edges, no text
+    overflowing a box, nothing overlapping, facts readable. Iterate
+    until it reads well. If render.sh exits 2 (toolchain), stop and fail
+    with its message: never produce an image any other way.
+
+    Wrap ONLY the result in <node_output> and </node_output>: the title,
+    the full body.md text, the local paths of the four assets, and a
+    claim-to-source list (each claim in What ships -> CHANGELOG version
+    or PR number).
+  outputs:
+    extract: node_output
+
+- id: render
+  title: Validate and render (deterministic)
+  type: script
+  script: scripts/render.sh
+  runner: sh
+  timeout_seconds: 900
+  expected_duration: 2m
+
+- id: render_check
+  title: Render verdict
+  type: condition
+  max_loops: 3
+
+- id: stage
+  title: Stage as a GitHub draft release
+  type: script
+  script: scripts/stage.sh
+  runner: sh
+  timeout_seconds: 600
+  expected_duration: 1m
+
+- id: gate
+  title: Operator approves the release
+  type: human_review
+  options: [approve, revise, abort]
+  prompt: 'Open the DRAFT release on GitHub (Releases page; the stage output has its URL): the title, body and animated GIF appear exactly as they will publish. The draft node output lists each claim with its source. approve publishes it now - public and irreversible, the tag is created at the target commit. revise returns to the draft with your note. abort deletes the draft and stops without publishing.'
+
+- id: publish
+  title: Publish and verify
+  type: script
+  script: scripts/publish.sh
+  runner: sh
+  timeout_seconds: 600
+  expected_duration: 2m
+
+- id: discard
+  title: Delete the draft
+  type: script
+  script: scripts/discard.sh
+  runner: sh
+  timeout_seconds: 300
+  expected_duration: 1m
+
+- id: released
+  type: finish
+  outcome: success
+  expected_duration: 2m
+  prompt: |
+    Compose the final answer from the run context. First line exactly as
+    the publish output has it: `RELEASE: <url>`. Then the tag and target
+    commit, the versions and PRs covered, the four asset names, and one
+    sentence of what the release ships. Plain text, English.
+
+- id: refused
+  type: finish
+  outcome: failure
+  expected_duration: 2m
+  prompt: |
+    The release was refused before anything was drafted. Answer with the
+    `SCOPE: refused - <reason>` line from the scope output verbatim, then
+    what would make it releasable (for example: merge the PR that bumps
+    package.json and adds the CHANGELOG entry). Plain text, English.
+
+- id: aborted
+  type: finish
+  outcome: failure
+  expected_duration: 1m
+  prompt: |
+    The operator aborted at the gate. Answer with the operator's note
+    from the gate, the discard output (the draft is deleted, no tag was
+    created) and the local work dir where the draft stays. Plain text.
+
+- id: failed
+  type: finish
+  outcome: failure
+  expected_duration: 2m
+  prompt: |
+    The release run failed. Answer with the node that failed and its
+    `ERROR:` line or last output verbatim, whether anything public
+    changed (a draft is not public; a published release is), and the
+    exact next step for a human. Plain text, English.
+
+edges:
+- { from: start, to: intake }
+- { from: intake, to: scope }
+- { from: scope, to: draft, condition: { type: node_status, node: scope, equals: success } }
+- { from: scope, to: refused, condition: { type: output_match, node: scope, pattern: 'SCOPE: refused' } }
+- { from: scope, to: failed, fallback: true }
+- { from: draft, to: render }
+- { from: render, to: render_check }
+- { from: render_check, to: stage, condition: { type: node_status, node: render, equals: success } }
+- { from: render_check, to: draft, condition: { type: output_match, node: render, pattern: 'RENDER: invalid' } }
+# A missing toolchain (exit 2), or still invalid after the loop budget: a named failure, never a fake image.
+- { from: render_check, to: failed, fallback: true }
+- { from: stage, to: gate }
+- { from: gate, to: publish, condition: { type: review_status, equals: approve } }
+- { from: gate, to: draft, condition: { type: review_status, equals: revise }, max_traversals: 3 }
+- { from: gate, to: discard, condition: { type: review_status, equals: abort } }
+# A fourth revise after three revisions: stop cleanly instead of looping.
+- { from: gate, to: discard, fallback: true }
+- { from: publish, to: released }
+- { from: discard, to: aborted }

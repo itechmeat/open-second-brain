@@ -4,6 +4,13 @@ export interface RenderMemoryInput {
   readonly body: string;
   readonly memoryPath: string;
   readonly importedAt: string; // ISO Z
+  /**
+   * The trial deadline the imported rule lands under (ISO Z). The
+   * orchestrator derives it from the vault's
+   * `dream.unconfirmed_window_days`, so the renderer stays a pure
+   * function of its input.
+   */
+  readonly unconfirmedUntil: string;
   readonly bodySha256: string;
   /** Owner token for the rendered page; omitted renders no `owner:`. */
   readonly owner?: string | undefined;
@@ -57,29 +64,34 @@ export function renderPreferenceFromMemory(input: RenderMemoryInput): string {
   const prefId = `pref-${slug}`;
   const topic = slug;
   const scope = extractScope(input.body);
+  // The import lands UNDER TRIAL, not confirmed. MEMORY.md is
+  // session-derived - agent-writable from conversation content - so a
+  // poisoned entry must not become a live rule on landing; it gets the
+  // same trial window every first-party write observes, and the dream
+  // pass reviews it like any other candidate. Provenance is carried by
+  // the `_imported_*` fields below; the old `_force_confirmed_via`
+  // marker is gone because its claim would now be false.
   const fm = [
     "---",
     "kind: brain-preference",
     `id: ${prefId}`,
     `created_at: "${input.importedAt}"`,
-    `_confirmed_at: "${input.importedAt}"`,
-    `unconfirmed_until: "${input.importedAt}"`,
+    `unconfirmed_until: "${input.unconfirmedUntil}"`,
     `tags: [brain, brain/preference, brain/topic/${topic}, brain/scope/${scope}]`,
     `topic: ${topic}`,
-    "_status: confirmed",
+    "_status: unconfirmed",
     `principle: ${JSON.stringify(input.description)}`,
     "_evidenced_by: []",
     "_applied_count: 0",
     "_violated_count: 0",
     "_last_evidence_at: null",
-    "_confidence: high",
+    "_confidence: low",
     "pinned: false",
     `scope: ${scope}`,
     // Ownership, on the same terms every other preference writer uses.
     // Absent when the gate is off, so a vault that never opted in keeps
     // byte-identical imports.
     ...(input.owner === undefined ? [] : [`owner: ${input.owner}`]),
-    "_force_confirmed_via: claude-memory",
     `_imported_from: ${JSON.stringify(input.memoryPath)}`,
     `_imported_sha256: ${input.bodySha256}`,
     `_imported_at: "${input.importedAt}"`,

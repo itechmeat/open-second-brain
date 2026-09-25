@@ -47,6 +47,7 @@ import {
   BRAIN_INTEGRITY_DEFAULTS,
   BRAIN_LINK_GRAPH_DEFAULTS,
   BRAIN_NOTES_DEFAULTS,
+  BRAIN_SESSION_PAYLOAD_DEFAULTS,
   BRAIN_SESSIONS_DEFAULTS,
   BRAIN_TEMPORAL_DEFAULTS,
   DEFAULT_BRAIN_CONFIG,
@@ -561,12 +562,18 @@ export const BRAIN_CONFIG_TEMPLATE: ReadonlyArray<BrainTemplateBlock> = Object.f
     doc: [
       "Session-capture filters. Session patterns are anchored globs;",
       "message patterns are regexes. Empty lists capture everything.",
+      "The payload_* keys bound recalled turns: a data URI or base64 run",
+      "longer than payload_max_inline_chars, and turn text still longer",
+      "than payload_max_text_chars, move to Brain/.payloads/ and leave a",
+      "[payload: osb-payload://<sha256> chars=N] placeholder behind.",
     ],
     emit: "commented-default",
     keys: [
       def("ignore_patterns", BRAIN_SESSIONS_DEFAULTS.ignore_patterns),
       def("stateless_patterns", BRAIN_SESSIONS_DEFAULTS.stateless_patterns),
       def("ignore_message_patterns", BRAIN_SESSIONS_DEFAULTS.ignore_message_patterns),
+      def("payload_max_inline_chars", BRAIN_SESSION_PAYLOAD_DEFAULTS.max_inline_chars),
+      def("payload_max_text_chars", BRAIN_SESSION_PAYLOAD_DEFAULTS.max_text_chars),
     ],
   },
   {

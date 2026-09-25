@@ -8,8 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import {
@@ -18,9 +17,12 @@ import {
   type StateInventory,
 } from "../../src/core/state/surfaces.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function tempVault(): string {
-  const vault = mkdtempSync(join(tmpdir(), "osb-state-cli-"));
+  const vault = mkTemp("osb-state-cli-");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   return vault;
 }

@@ -69,6 +69,24 @@ describe("reference spellings the rule must resolve", () => {
   });
 });
 
+describe("the vault path as the caller spelled it", () => {
+  // A bare id is resolved to a file under the vault and then handed to the
+  // rule as a vault-relative path. The vault a surface was configured with
+  // is not always canonical; the relative path must not depend on that.
+  const SPELLINGS: ReadonlyArray<{ readonly spell: () => string; readonly why: string }> = [
+    { spell: () => `${vault}/`, why: "a trailing separator" },
+    { spell: () => join(vault, "Brain") + "/..", why: "a `..` segment" },
+    { spell: () => `${vault}/./`, why: "a `.` segment" },
+  ];
+
+  for (const { spell, why } of SPELLINGS) {
+    test(`a bare id under a vault spelled with ${why} is still withheld`, () => {
+      const view = artifactRefView(spell(), (rel) => rel !== HIDDEN_REL);
+      expect(view.visible(HIDDEN_ID)).toBe(false);
+    });
+  }
+});
+
 describe("what a log entry offers the rule", () => {
   const entry = (body: Record<string, unknown>): BrainLogEntry =>
     ({

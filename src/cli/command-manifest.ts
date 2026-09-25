@@ -427,6 +427,28 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("profile", "Materialize the compact Brain/profile.md digest"),
         command("sgrep", "Grep-shaped semantic Brain search (path:line: output)"),
         command("continuity", "Export continuity records as ATOF/ATIF trajectories"),
+        command(
+          "payload",
+          "Read, list, and collect externalized session payloads",
+          [],
+          [
+            command("get", "Page the exact content of one payload ref", [
+              flag("vault", "string"),
+              flag("offset", "string"),
+              flag("limit", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("list", "List stored and missing payloads with reference counts", [
+              flag("vault", "string"),
+              flag("json", "boolean"),
+            ]),
+            command("gc", "Remove unreferenced payloads (dry-run by default)", [
+              flag("vault", "string"),
+              flag("apply", "boolean"),
+              flag("json", "boolean"),
+            ]),
+          ],
+        ),
         command("bench", "Memory quality benchmark over a disposable fixture vault"),
         command("git", "Git history as project memory: ingest, status, find, mine"),
         command("architect", "Deterministic architecture notes for a code project"),
@@ -552,6 +574,10 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command(
           "okf-import",
           "Import an Open Knowledge Format bundle (staged for review by default)",
+        ),
+        command(
+          "knowledge-pack",
+          "Export, preview, install, uninstall and list portable knowledge packs",
         ),
         command("page-dedup", "Detect, and optionally merge, near-duplicate vault pages"),
         command("token-footprint", "Report per-category vault token size against a warn threshold"),

@@ -53,6 +53,7 @@ function renderEntryLine(entry: MarkerWritebackEntry): string {
   if (
     entry.status === "invalid-target" ||
     entry.status === "invalid-field" ||
+    entry.status === "refused" ||
     entry.status === "applied-unconsumed"
   ) {
     const code = entry.errorCode !== null ? ` [${entry.errorCode}]` : "";

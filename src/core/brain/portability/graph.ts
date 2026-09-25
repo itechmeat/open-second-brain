@@ -32,7 +32,8 @@ import {
   normalizeRelationTarget,
 } from "../../graph/frontmatter-relations.ts";
 import { REDACTION_PLACEHOLDER } from "../../redactor.ts";
-import { BRAIN_ROOT_REL, ensureInsideVault } from "../paths.ts";
+import { BRAIN_ROOT_REL, ensureInsideVault, isUnderBrainRoot } from "../paths.ts";
+import { realVaultRelative } from "../../path-safety.ts";
 import { loadVaultMap, resolveTokens } from "./role-tokens.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { MAINTENANCE_LANE_REACH } from "../../graph/transport-reach.ts";
@@ -278,10 +279,41 @@ export function importVaultGraph(
     // Resolve `{{role}}` tokens in the target path via the vault-map so a
     // portable graph can address user folders abstractly (v0.22.0).
     const relPath = resolveTokens(vaultMap, node.path);
+    // The `Brain/` machinery root is not addressable from an untrusted
+    // graph bundle, in any mode. `skip` would still CREATE a missing
+    // target and `overwrite` rewrites existing files, so without this
+    // refusal a bundle could plant or replace standing rules, vault
+    // identity, or the write binding's own config - the same wall the
+    // note-target envelope applies to every caller-named note write.
+    //
+    // The wall reads the path the way the filesystem will: separators
+    // normalized (`\` is one on Windows), `.`/`..` collapsed
+    // (`./Brain/x`, `x/../Brain/x`), and the Brain segment compared
+    // case-insensitively (`brain/x` opens `Brain/` on macOS and
+    // Windows). A second read after containment checks where the bytes
+    // actually land, so a vault folder that is a symlink into `Brain/`
+    // does not carry the write past the lexical check.
+    if (isUnderBrainRoot(relPath)) {
+      result.rejected.push(node.path);
+      continue;
+    }
     let path: string;
     try {
       path = ensureInsideVault(join(vault, relPath), vault);
     } catch {
+      result.rejected.push(node.path);
+      continue;
+    }
+    // A landing path that cannot be resolved (a note used as a folder, a
+    // link loop, an unreadable folder) is rejected like any other bad
+    // node rather than aborting the rest of the import.
+    let landsAt: string | null;
+    try {
+      landsAt = realVaultRelative(vault, relative(vault, path));
+    } catch {
+      landsAt = null;
+    }
+    if (landsAt === null || isUnderBrainRoot(landsAt)) {
       result.rejected.push(node.path);
       continue;
     }

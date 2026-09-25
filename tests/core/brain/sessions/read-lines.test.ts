@@ -13,8 +13,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import {
@@ -23,9 +22,12 @@ import {
   readLines,
   resetLineReaderRetainedBytes,
 } from "../../../../src/core/brain/sessions/read-lines.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function fixture(content: string | Uint8Array): string {
-  const dir = mkdtempSync(join(tmpdir(), "osb-read-lines-"));
+  const dir = mkTemp("osb-read-lines-");
   const path = join(dir, "session.jsonl");
   writeFileSync(path, content);
   return path;

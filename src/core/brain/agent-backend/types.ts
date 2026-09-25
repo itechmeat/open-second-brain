@@ -38,6 +38,12 @@ export interface MemoryRenderInput {
   readonly body: string;
   readonly memoryPath: string;
   readonly importedAt: string;
+  /**
+   * The trial deadline the imported rule lands under (ISO Z). The
+   * importer derives it from the vault's `dream.unconfirmed_window_days`;
+   * the backend forwards it into the render verbatim.
+   */
+  readonly unconfirmedUntil: string;
   readonly bodySha256: string;
   /**
    * Owner token the rendered frontmatter must carry, or `undefined` for

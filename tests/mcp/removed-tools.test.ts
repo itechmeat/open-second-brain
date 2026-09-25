@@ -138,62 +138,8 @@ test("the shadow surface is gone: no hidden tools, removed names unlisted", asyn
     method: "tools/list",
     params: {},
   })) as { result: { tools: Array<{ name: string }> } };
-  // 76 + brain_create_note (Brain Portability & Interop Suite) = 77.
-  // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
-  // + brain_session_summary, brain_idea_lineage, brain_note_history
-  //   (Session Knowledge Synthesis Suite) = 81.
-  // + brain_codegraph_report (CodeGraph & MCP Operational Readability) = 82.
-  // + brain_generation_reports (Hindsight brain-loop ops) = 83.
-  // + brain_obligation, brain_agenda (Calendar integration) = 85.
-  // + brain_memory_bridge (Hermes on_memory_write host bridge) = 86.
-  // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
-  // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
-  // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
-  // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
-  // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
-  // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
-  // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
-  // + brain_search_by_source / brain_delete_by_source (delete & search by exact
-  //   source file, memory-signal-provenance-lifecycle C6) = 95.
-  // + brain_ingest_batch_plan (large-folder ingest planner,
-  //   memory-signal-provenance-lifecycle A3) = 96.
-  // + brain_distill_source (source distillation into atomic claims,
-  //   ingestion-import-robustness t_2e2e959f) = 97.
-  // + brain_observed_use (observed-use verdict feeding recall ranking,
-  //   retrieval-ranking-quality t_65588d8b) = 98.
-  // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
-  //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
-  // + brain_claims (claim-graph query surface,
-  //   belief-lifecycle-decision-memory t_6916369f) = 100.
-  // + brain_decision (decision-record note family,
-  //   belief-lifecycle-decision-memory t_ac03214d) = 101.
-  // + brain_tension (persisted-contradiction lifecycle,
-  //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
-  // + brain_status (unified operator status snapshot,
-  //   source-pipeline-integrity O3 t_9f9c5466) = 103.
-  // + brain_update_note / brain_append_note (single-operation batches over
-  //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
-  // + brain_write_batch (general all-or-nothing multi-op write surface,
-  //   recall-trust-and-write-surface W2) = 106.
-  // + brain_diarize (subject diarization,
-  //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
-  // + brain_retrieval_plan (shadow-only retrieval advisor,
-  //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
-  // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
-  //   wiring-what-exists B2 t_ae62fabd) = 109.
-  // + brain_scaffold_stub (materialise a note for an unresolved wikilink
-  //   target, wiring-what-exists B3 t_783b37f8) = 110.
-  // + brain_expire (set / change / clear a signal's or preference's
-  //   expiration_date by id, salience-lifecycle-enrichment unit 3c
-  //   t_5e338af1) = 111.
-  // + brain_extract_signals (model-mined session signals,
-  //   salience-lifecycle-enrichment t_1dace26d) = 112.
-  // + brain_design_note (one-shot design note grounded in tension,
-  //   decision and truth records, salience-lifecycle-enrichment
-  //   t_c87644b4) = 113.
-  // + brain_writes (recorded note writes, who-wrote-what Task A
-  //   t_662f4e82) = 114.
-  // + second_brain_wiring (linked projects and verified install targets,
-  //   what-this-install-knows t_49315346 + t_09d7e9e9) = 115.
-  expect(list.result.tools.length).toBe(115);
+  // The live server advertises exactly the full-scope table: with no
+  // hidden layer left, listed and callable are the same set.
+  const advertised = list.result.tools.map((t) => t.name).toSorted();
+  expect(advertised).toEqual(all.map((t) => t.name).toSorted());
 });

@@ -675,104 +675,15 @@ describe("stdio loop", () => {
     const list = JSON.parse(lines[1]!);
     expect(init.id).toBe(1);
     expect(list.id).toBe(2);
-    // v0.17.0: 3 core + 27 Brain (brain_health added in v0.14.0
-    // Semantic Brain Health; brain_review_candidates added in v0.12.0
-    // Brain Integrity Suite; brain_timeline / brain_belief_evolution /
-    // brain_stale_scan / brain_daily_brief / brain_weekly_synthesis
-    // added v0.10.18; brain_agent_query / brain_agent_diff added in
-    // v0.15.0; brain_pinned_context added in v0.16.0; lifecycle review
-    // tools added in v0.17.0) + 1 Search
-    // + brain_artifact_get (v0.18.0) = 32.
-    // + brain_mcp_landscape (typed graph semantics) = 33.
-    // + brain_pre_compress_pack (v0.20.0) = 34.
-    // + brain_audit (v0.21.0) = 35.
-    // + brain_morning_brief (v0.21.0) = 36.
-    // + brain_sources + brain_switch_vault (v0.22.0) = 38.
-    // + second_brain_capabilities (v0.23.0) = 39.
-    // + 9 schema admin tools + brain_watchdog = 49.
-    // + brain_recall_gate (v0.27.0) = 50.
-    // + 7 context continuity/session recall tools (v0.29.0) = 57.
-    // + 3 procedural-learning tools (v0.30.0) = 60.
-    // + brain_procedural_graph (v0.31.0) = 61.
-    // + brain_attention_flows (v0.31.0) = 62.
-    // + brain_recall_feedback (recall-trust-suite) = 63,
-    // + brain_brief / brain_analytics / schema_inspect (token-diet) = 66
-    // - 18 predecessors hidden as deprecated aliases (callable via
-    //   tools/call, not advertised) = 48 (+1 capability diagnostic = 49).
-    // + list_skills / get_skill / skills_attach / tool_hydrate /
-    //   brain_intention (Agent Surface Suite) = 54.
-    // + brain_trigger / brain_deep_synthesis / brain_idea_discovery
-    //   (Workspace Insight Suite) = 57.
-    // + brain_write_session (Agent Write Contract Suite) = 58.
-    // + brain_truth / brain_dead_ends / brain_foresight
-    //   (Entity Truth & Self-Improving Dream Suite) = 61.
-    // + brain_labels / brain_tiers / brain_secrets / brain_maintenance
-    //   (Write-Time Integrity & Governance Suite) = 65.
-    // + brain_hygiene / brain_anticipatory_context
-    //   (continuity-hygiene-freshness suite, v1.3.0) = 71.
-    // + brain_eval (Search & Recall Quality Suite) = 72.
-    // + brain_intake_entities / brain_ingest_source / brain_research_report
-    //   / brain_derive_fact (Knowledge Provenance Suite, v1.7.0) = 76.
-    // + brain_create_note (Brain Portability & Interop Suite) = 77.
-    // + brain_file_context (Recall & Working-Memory Quality Suite) = 78.
-    // + brain_session_summary / brain_idea_lineage / brain_note_history
-    //   (Session Knowledge Synthesis Suite, v1.11.0) = 81.
-    // + brain_codegraph_report (CodeGraph & MCP Operational Readability,
-    //   v1.12.0) = 82.
-    // + brain_generation_reports (Hindsight brain-loop ops) = 83.
-    // + brain_obligation / brain_agenda (Calendar integration) = 85.
-    // + brain_memory_bridge (Hermes on_memory_write host bridge,
-    //   memory-subsystem-alignment) = 86.
-    // + brain_event_trace (dashboard-context-trace: event→trace join) = 87.
-    // + brain_search_expand (progressive disclosure: search→expand→transcript) = 88.
-    // + brain_knowledge_gaps (cross-query demand log, t_97091fff) = 89.
-    // + brain_route_metrics (route-level MCP latency, context-pack-economics-observability) = 90.
-    // + brain_token_impact (durable token-impact ledger, context-pack-economics-observability) = 91.
-    // + brain_context_pack_outcome (agent-operable outcome loop, context-pack-economics-observability) = 92.
-    // + brain_session_checkpoint (batch checkpoint save, memory-signal-provenance-lifecycle C4) = 93.
-    // + brain_search_by_source / brain_delete_by_source (delete & search by exact
-    //   source file, memory-signal-provenance-lifecycle C6) = 95.
-    // + brain_ingest_batch_plan (large-folder ingest planner,
-    //   memory-signal-provenance-lifecycle A3) = 96.
-    // + brain_distill_source (source distillation into atomic claims,
-    //   ingestion-import-robustness t_2e2e959f) = 97.
-    // + brain_observed_use (session-end observed-use verdict feeding recall
-    //   ranking, retrieval-ranking-quality t_65588d8b) = 98.
-    // + brain_lifecycle (cross-type tombstone + supersede lifecycle,
-    //   belief-lifecycle-decision-memory t_7d5a3589) = 99.
-    // + brain_claims (claim-graph query surface,
-    //   belief-lifecycle-decision-memory t_6916369f) = 100.
-    // + brain_decision (decision-record note family,
-    //   belief-lifecycle-decision-memory t_ac03214d) = 101.
-    // + brain_tension (persisted-contradiction lifecycle,
-    //   belief-lifecycle-decision-memory t_0e3f2bee) = 102.
-    // + brain_status (unified operator status snapshot,
-    //   source-pipeline-integrity O3 t_9f9c5466) = 103.
-    // + brain_update_note / brain_append_note (single-operation batches over
-    //   the atomic write-batch core, recall-trust-and-write-surface W1) = 105.
-    // + brain_write_batch (general all-or-nothing multi-op write surface,
-    //   recall-trust-and-write-surface W2) = 106.
-    // + brain_diarize (subject diarization,
-    //   knowledge-intake-and-consolidation t_28ba3fc4) = 107.
-    // + brain_retrieval_plan (shadow-only retrieval advisor,
-    //   retrieval-quality-and-context-delivery t_3ffb021c) = 108.
-    // + brain_note_lifecycle (rename / move / archive / delete for note FILES,
-    //   wiring-what-exists B2 t_ae62fabd) = 109.
-    // + brain_scaffold_stub (materialise a note for an unresolved wikilink
-    //   target, wiring-what-exists B3 t_783b37f8) = 110.
-    // + brain_expire (set / change / clear a signal's or preference's
-    //   expiration_date by id, salience-lifecycle-enrichment unit 3c
-    //   t_5e338af1) = 111.
-    // + brain_extract_signals (model-mined session signals,
-    //   salience-lifecycle-enrichment t_1dace26d) = 112.
-    // + brain_design_note (one-shot design note grounded in tension,
-    //   decision and truth records, salience-lifecycle-enrichment
-    //   t_c87644b4) = 113.
-    // + brain_writes (recorded note writes, who-wrote-what Task A
-    //   t_662f4e82) = 114.
-    // + second_brain_wiring (linked projects and verified install targets,
-    //   what-this-install-knows t_49315346 + t_09d7e9e9) = 115.
-    expect(list.result.tools.length).toBe(115);
+    // The stdio loop advertises exactly the full-scope table minus hidden
+    // entries: nothing withheld without a capability window, nothing
+    // duplicated, nothing hidden leaking into the paid-for list.
+    const advertised = (list.result.tools as Array<{ name: string }>).map((t) => t.name).toSorted();
+    const expected = buildToolTable("full")
+      .filter((t) => t.hidden !== true)
+      .map((t) => t.name)
+      .toSorted();
+    expect(advertised).toEqual(expected);
   });
 
   test("returns parse error for invalid JSON", async () => {

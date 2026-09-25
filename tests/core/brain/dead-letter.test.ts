@@ -24,8 +24,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { existsSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
 import {
@@ -41,6 +40,9 @@ import {
 } from "../../../src/core/brain/dead-letter.ts";
 import { DERIVED_STORE_DIR } from "../../../src/core/brain/path-constants.ts";
 import { buildReconciliationReport } from "../../../src/core/reconciliation-report.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const NOW = new Date("2026-08-23T10:15:00Z");
 
@@ -52,7 +54,7 @@ const ENVELOPE: DeadLetterEnvelopeIdentity = Object.freeze({
 });
 
 function vault(): string {
-  return mkdtempSync(join(tmpdir(), "o2b-dead-letter-"));
+  return mkTemp("o2b-dead-letter-");
 }
 
 function report(missing: ReadonlyArray<string>, found = 1) {
@@ -239,7 +241,7 @@ describe("the recorder used inside a catch block cannot throw", () => {
   test("a write it cannot perform is reported, not raised", () => {
     // A vault path that is a FILE, not a directory: the write has nowhere
     // to land, and the caller is mid-catch holding the real error.
-    const parent = mkdtempSync(join(tmpdir(), "o2b-dead-letter-"));
+    const parent = mkTemp("o2b-dead-letter-");
     const notAVault = join(parent, "file-not-a-dir");
     writeFileSync(notAVault, "");
     const outcome = tryRecordDeadLetter(notAVault, {

@@ -330,7 +330,7 @@ function buildRecord(
     createdAt: input.createdAt,
     sourceRefs,
     payload: payloadResult.payload,
-    private: payloadResult.private,
+    private: payloadResult.private || ("private" in input && input.private === true),
     redacted: payloadResult.redacted,
   });
 }

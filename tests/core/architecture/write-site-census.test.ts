@@ -648,6 +648,15 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
       "destructive-site census holds it rather than an exclusion of its own, and the bytes it " +
       "removes are kept as a before-image first, which is what makes the delete revertible.",
   },
+  "src/core/brain/payload-inventory.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "removes payload files under `Brain/.payloads/` that nothing in the vault references " +
+      "(`o2b brain payload gc --apply`). A removal has no shared-writer form; the rmSync runs " +
+      "inside `withDestructiveSnapshot`, which the destructive-site census holds, and the " +
+      "plan is re-measured inside that recovery point so a newly referenced payload survives.",
+  },
   "src/core/brain/notes/write-record.ts": {
     categories: [C.retentionDelete],
     calls: ["unlinkSync"],
@@ -670,6 +679,13 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     categories: [C.retentionDelete],
     calls: ["rmSync"],
     reason: "deletes pages belonging to a removed source, each re-checked by `ensureInsideVault`.",
+  },
+  "src/core/brain/portability/knowledge-pack.ts": {
+    categories: [C.retentionDelete],
+    calls: ["rmSync"],
+    reason:
+      "`knowledge-pack uninstall --confirm` removes the entries one pack stamped, each " +
+      "re-checked by `ensureInsideVault`, inside the destructive-snapshot gate.",
   },
   "src/core/brain/watchdog.ts": {
     categories: [C.retentionDelete],
@@ -756,18 +772,26 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
   },
   "src/core/brain/secrets/crypto.ts": {
     categories: [C.machineArtifact],
-    calls: ["writeSync"],
+    calls: ["chmodSync", "writeFileSync", "writeSync"],
     reason:
       "writes key bytes into a descriptor opened `wx` at mode 0600. The exclusivity " +
-      "and the mode are the point, and no shared writer takes a mode.",
+      "and the mode are the point, and no shared writer takes a mode. The two additions " +
+      "serve the same custody boundary: `chmodSync` re-applies the owner-only modes on " +
+      "load (the POSIX mirror of the Windows ACL re-application, for a keyfile that " +
+      "arrived with a copied or restored vault), and `writeFileSync` plants the " +
+      "`.gitignore` that keeps the keyfile and the ciphertext out of a vault commit " +
+      "(a Syncthing peer reads only its own .stignore) - both machine-artifact writes inside the same state dir, " +
+      "best-effort and warned when they fail.",
   },
   "src/core/brain/secrets/store.ts": {
     categories: [C.machineArtifact],
-    calls: ["renameSync", "writeFileSync"],
+    calls: ["chmodSync", "renameSync", "writeFileSync"],
     reason:
       "hand-rolled tmp-plus-rename because it must write at mode 0600, which " +
       "`atomicWriteFileSync` cannot express. Routing it through the shared writer " +
-      "would leave the secrets file world-readable for the length of the swap.",
+      "would leave the secrets file world-readable for the length of the swap. " +
+      "`chmodSync` re-applies that 0600 on load to a store that arrived with a copied " +
+      "or restored vault, the same custody repair the keyfile beside it gets.",
   },
   "src/core/brain/truth/store.ts": {
     categories: [C.appendOnlyLedger, C.machineArtifact, C.retentionDelete],
@@ -899,6 +923,14 @@ const DIRECT_WRITE_EXCLUSIONS: Readonly<Record<string, WriteExclusion>> = Object
     reason:
       "narrows non-owner permission bits on an existing file or directory. No bytes " +
       "are written, so there is nothing for a writer to make atomic.",
+  },
+  "src/core/brain/payload-registry.ts": {
+    categories: [C.metadataOnly],
+    calls: ["utimesSync"],
+    reason:
+      "touches a content-addressed payload that a new row is about to reference again, so the " +
+      "gc's grace period restarts for it. No bytes are written; the payload itself is written " +
+      "through `atomicWriteFileSync` in the same `put()`.",
   },
 
   // --- Write probes: bytes written to learn whether writing works --------
@@ -1139,8 +1171,20 @@ const DIRECT_ROWS = ROWS.filter((row) => row.directCalls.length > 0);
  * 70 -> 71: `src/core/brain/notes/revert.ts` unlinks the note a reverted
  * create brought into existence; its restore half writes the recorded
  * before-image through `atomicWriteFileSync`.
+ *
+ * 71 -> 72: `src/core/brain/portability/knowledge-pack.ts` removes the
+ * entries one pack stamped (`knowledge-pack uninstall --confirm`); its
+ * install half writes through the OKF import and the preference txn.
+ *
+ * 72 -> 73: `src/core/brain/payload-inventory.ts` removes unreferenced
+ * payload files for `o2b brain payload gc --apply`, inside the
+ * destructive gate.
+ *
+ * 73 -> 74: `src/core/brain/payload-registry.ts` touches a payload that
+ * is about to be referenced again (`utimesSync`), restarting the gc grace
+ * period; metadata only.
  */
-const DIRECT_WRITE_ROWS = 71;
+const DIRECT_WRITE_ROWS = 74;
 
 /**
  * Measured modules reaching a write through a shared helper. An equality.
@@ -1177,8 +1221,19 @@ const DIRECT_WRITE_ROWS = 71;
  * through `atomicWriteFileSync` and, like the record module beside it,
  * sits in both classes - the delete arm unlinks directly and carries its
  * own written exclusion.
+ *
+ * Attribution note: `src/core/brain/payload-registry.ts` holds one of
+ * these sites (the `atomicWriteFileSync` in `put()`, which externalizes an
+ * oversized payload into `Brain/.payloads/`). `src/core/brain/packs/pack.ts`
+ * holds none - it only builds a preview. A test-audit pass once deleted
+ * both and blamed the 103 -> 102 move on pack.ts; the move was the
+ * registry's, and restoring both put the count back at 103.
+ *
+ * 103 -> 104: `src/core/brain/portability/knowledge-pack.ts` records each
+ * staged page's install fingerprint through `atomicWriteFileSync`. Its
+ * uninstall removal keeps its direct-class exclusion.
  */
-const SHARED_HELPER_ROWS = 103;
+const SHARED_HELPER_ROWS = 104;
 
 // ----- Origin-channel coverage boundary (Unit C) ----------------------------
 
@@ -1243,16 +1298,22 @@ const STAMPED_PATHS: ReadonlySet<string> = new Set(
  * the swept tree; the one excused site that IS stamped is the continuity
  * ledger, which appends its own record shape and carries the channel on
  * the record rather than in frontmatter.
+ *
+ * 70 -> 71: the knowledge-pack uninstall's removal (a delete stamps nothing).
+ * 71 -> 72: the payload gc's removal (a delete stamps nothing).
+ * 72 -> 73: the payload registry's touch (metadata only).
  */
-const UNSTAMPED_DIRECT_ROWS = 70;
+const UNSTAMPED_DIRECT_ROWS = 73;
 
 /**
  * Shared-helper write sites the stamp does not reach, measured the same
  * way. The three stamped writers that route through the shared helpers -
  * the log pair through `atomicWriteFileSync`, signals and notes through
  * `writeFrontmatterAtomic` - are the ones missing from this count.
+ * The payload registry's `put()` is one of the unstamped sites counted, and
+ * so is the knowledge-pack install fingerprint (100 -> 101).
  */
-const UNSTAMPED_SHARED_ROWS = 100;
+const UNSTAMPED_SHARED_ROWS = 101;
 
 describe("in-vault write-site census", () => {
   test("every direct-fs write site carries a written exclusion", () => {

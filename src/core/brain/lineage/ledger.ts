@@ -73,7 +73,7 @@ import {
   type DegradationNotice,
   degradationNotice,
 } from "../../integrity/degradation.ts";
-import type { GitWorkspaceIdentity } from "../git/reader.ts";
+import { canonicalizeGitRemote, type GitWorkspaceIdentity } from "../git/reader.ts";
 import { computePayloadHash } from "../idempotency-ledger.ts";
 import {
   listShardedFiles,
@@ -452,9 +452,20 @@ function declared(value: string | undefined): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
-/** Inverse of {@link workspaceFields}; `undefined` when nothing was attested. */
+/**
+ * Inverse of {@link workspaceFields}; `undefined` when nothing was attested.
+ *
+ * The recorded repo is re-canonicalized on the way in. The canonical form
+ * is a remote in its own right and canonicalizes to itself, so a line
+ * written by this version reads back unchanged, while one written before
+ * a canonicalization rule was added (the drive letter's case) reads in
+ * today's form and still matches the same checkout. A value that no
+ * longer canonicalizes is kept verbatim: it attests something, and
+ * dropping it would turn a disagreement into an absence.
+ */
 function readWorkspace(line: LedgerLine): GitWorkspaceIdentity | undefined {
-  const repo = typeof line.repo === "string" ? line.repo : null;
+  const repo =
+    typeof line.repo === "string" ? (canonicalizeGitRemote(line.repo) ?? line.repo) : null;
   const branch = typeof line.branch === "string" ? line.branch : null;
   const commit = typeof line.commit === "string" ? line.commit : null;
   if (repo === null && branch === null && commit === null) return undefined;

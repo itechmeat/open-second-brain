@@ -167,4 +167,8 @@ For session JSONLs (Claude / Codex / Hermes exports) the equivalent
 operator command is `o2b brain import-session <path>` — it replays
 both `@osb` markers in message text and live `brain_feedback`
 tool_use calls. Useful for back-filling sessions where the agent
-didn't make the call.
+didn't make the call. With `--recall` it also stores the turns for
+session recall; oversized content there (data URIs, base64, giant tool
+output) reads as `[payload: osb-payload://<sha256> chars=N]` - page the
+exact bytes with `brain_session_expand` `{payload: "<ref>"}` or
+`o2b brain payload get <ref>` rather than guessing what was elided.

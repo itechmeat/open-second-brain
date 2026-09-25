@@ -161,7 +161,7 @@ export async function expandHit(
     if (agentScope !== null && !ownerVisible(config, hit.path, agentScope)) {
       throw notFound(input.chunkId);
     }
-    if (!reachReadable(config, hit.path, reach)) {
+    if (!reachReadable(config, store, hit.path, reach)) {
       throw notFound(input.chunkId);
     }
     // Document chunks in `chunkIndex` order: the fuller note (layer 2) is
@@ -222,9 +222,19 @@ function notFound(chunkId: number): SearchError {
  * on EVERY call rather than only when the caller supplied an argument -
  * the reach is never a caller argument, and a boundary a caller opts into
  * is not a boundary.
+ *
+ * The drill-down serves the INDEXED chunks, so what the index measured of
+ * the page's visibility is honoured beside the file's - see
+ * {@link isPathReadableAtReach}.
  */
-function reachReadable(config: ResolvedSearchConfig, path: string, reach: TransportReach): boolean {
-  return isPathReadableAtReach(config.vault, path, reach, new Map());
+function reachReadable(
+  config: ResolvedSearchConfig,
+  store: Store,
+  path: string,
+  reach: TransportReach,
+): boolean {
+  const indexed = store.indexedVisibilityByPaths([path]).get(path);
+  return isPathReadableAtReach(config.vault, path, reach, new Map(), indexed);
 }
 
 /**

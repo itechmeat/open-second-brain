@@ -75,6 +75,9 @@ export interface DocumentInput {
    * - that is the live frontmatter check at the three read roots
    * (`isPathReadableAtReach`), which reads the file rather than a
    * snapshot of it and is therefore never stale by a whole index run.
+   * Those roots additionally honour this column when they serve indexed
+   * text, so a stale private chunk stays private (see
+   * {@link indexedVisibilityByPaths}).
    */
   readonly visibility?: ReadonlyArray<string>;
 }
@@ -109,6 +112,43 @@ export function listDocuments(db: Database): Map<string, DocumentSummary> {
     });
   }
   return map;
+}
+
+/**
+ * The visibility tokens the index MEASURED for each of `paths`, keyed by
+ * path. A path with no row, a NULL (unmeasured) column, or a value that
+ * does not decode to a string array is absent from the map: only a
+ * measurement is a statement the page made.
+ *
+ * Read by the reach boundary because a search result serves the INDEXED
+ * bytes, not the file's: when a page reserved at index time has since
+ * been deleted or moved and a public page written at its path, the file
+ * says "public" while the snippet is the private body. See
+ * `isPathReadableAtReach`.
+ */
+export function indexedVisibilityByPaths(
+  db: Database,
+  paths: ReadonlyArray<string>,
+): Map<string, ReadonlyArray<string>> {
+  const out = new Map<string, ReadonlyArray<string>>();
+  if (paths.length === 0) return out;
+  const query = db.query<{ visibility: string | null }, [string]>(
+    `SELECT ${DOCUMENT_VISIBILITY_COLUMN} AS visibility FROM documents WHERE path = ?`,
+  );
+  for (const path of new Set(paths)) {
+    const raw = query.get(path)?.visibility ?? null;
+    if (raw === null) continue;
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(raw);
+    } catch {
+      continue;
+    }
+    if (Array.isArray(decoded) && decoded.every((t) => typeof t === "string")) {
+      out.set(path, Object.freeze([...(decoded as string[])]));
+    }
+  }
+  return out;
 }
 
 export function getDocumentIdByPath(db: Database, path: string): number | null {

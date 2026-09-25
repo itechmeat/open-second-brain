@@ -35,6 +35,15 @@ describe("visibility rule (pure)", () => {
     expect(isVisible(tags, normalizeVisibilityScope(["private"]))).toBe(true);
     expect(isVisible(tags, normalizeVisibilityScope(["team"]))).toBe(false);
   });
+
+  test("the reserved token dominates a co-tag: asking for the co-tag does not lift it", () => {
+    const tags = pageVisibility({ visibility: ["team", "private"] });
+    expect(isVisible(tags, normalizeVisibilityScope(["team"]))).toBe(false);
+    expect(isVisible(tags, normalizeVisibilityScope(["team", "private"]))).toBe(true);
+    // A co-tag without the reserved token keeps any-tag semantics.
+    const shared = pageVisibility({ visibility: ["team", "ops"] });
+    expect(isVisible(shared, normalizeVisibilityScope(["ops"]))).toBe(true);
+  });
 });
 
 describe("visibility scoping in search", () => {
@@ -71,6 +80,30 @@ describe("visibility scoping in search", () => {
     });
     const scopedPaths = scoped.results.map((r) => r.path).toSorted();
     expect(scopedPaths).toEqual(["public.md", "secret.md"]);
+  });
+
+  test("a co-tagged private page is not lifted by asking for its other tag", async () => {
+    writeMd(vault, "public.md", "# Public\n\nshared lattice notes about widgets");
+    writeMd(
+      vault,
+      "team.md",
+      "---\nvisibility: [team]\n---\n# Team\n\nteam lattice notes about widgets",
+    );
+    writeMd(
+      vault,
+      "secret.md",
+      "---\nvisibility: [private, team]\n---\n# Secret\n\nclassified lattice notes about widgets",
+    );
+    const cfg = makeConfig({ vault, dbPath });
+    await indexVault(cfg);
+
+    const asked = await search(cfg, {
+      query: "lattice widgets",
+      limit: 10,
+      visibility: ["team"],
+      transportReach: TRANSPORT_REACH.local,
+    });
+    expect(asked.results.map((r) => r.path).toSorted()).toEqual(["public.md", "team.md"]);
   });
 
   test("the caller argument narrows only: it cannot lift the reserved token", async () => {

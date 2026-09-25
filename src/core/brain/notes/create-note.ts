@@ -47,7 +47,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import { dirname, join, posix, sep, win32 } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { ensureInsideVault } from "../../path-safety.ts";
+import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
 import {
   ORIGIN_CHANNEL_FIELD,
   originChannelStamp,
@@ -61,7 +61,7 @@ import {
   type InspectResult,
   type VaultScope,
 } from "../../vault-scope/index.ts";
-import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL } from "../paths.ts";
+import { BRAIN_CONFIG_FILE, BRAIN_ROOT_REL, isUnderBrainRoot } from "../paths.ts";
 import { requireNextStep } from "../next-step.ts";
 import { BrainConfigError } from "../policy.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
@@ -378,12 +378,35 @@ export function resolveNoteTarget(vault: string, path: string): ResolvedNoteTarg
 
   // The Brain machinery root is owned by the brain's own writers; a
   // free-form note tool must never author into it (default vault-scope
-  // rules ignore Brain/.snapshots only, not the whole Brain root).
-  const firstSegment = relPath.split(posix.sep)[0];
-  if (firstSegment === BRAIN_ROOT_REL) {
+  // rules ignore Brain/.snapshots only, not the whole Brain root). The
+  // segment is compared case-insensitively: `brain/standing-rules.md`
+  // opens the same file on the case-insensitive macOS and Windows
+  // defaults, so a case-sensitive compare let an update rewrite it there.
+  if (isUnderBrainRoot(relPath)) {
     throw new CreateNoteError(
       "excluded",
       `the Brain machinery root is not writable via create_note: ${relPath}`,
+    );
+  }
+  // The lexical check reads the path as spelled; a vault folder or note
+  // that is a symbolic link into `Brain/` carries the bytes there anyway.
+  // Re-read where they land. A path that cannot be resolved (a file used
+  // as a folder, a link loop, an unreadable folder) is refused, never
+  // guessed at, and so is one that lands outside the vault.
+  let landsAt: string | null;
+  try {
+    landsAt = realVaultRelative(vault, relPath);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code ?? "unknown";
+    throw new CreateNoteError("invalid_path", `note path cannot be resolved (${code}): ${relPath}`);
+  }
+  if (landsAt === null) {
+    throw new CreateNoteError("outside_vault", `note path resolves outside the vault: ${relPath}`);
+  }
+  if (isUnderBrainRoot(landsAt)) {
+    throw new CreateNoteError(
+      "excluded",
+      `the Brain machinery root is not writable via create_note: ${relPath} resolves to ${landsAt}`,
     );
   }
 

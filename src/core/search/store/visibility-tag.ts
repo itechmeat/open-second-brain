@@ -30,7 +30,11 @@
  * three read roots (`isPathReadableAtReach`), which reads the FILE. A
  * column is a snapshot of the last index run, and a page reserved a
  * minute ago must be reserved now rather than at the next run - so the
- * column reports, and the file decides.
+ * file decides for the page as it is now. The column still binds the
+ * surfaces that serve INDEXED text (ranked snippets, the chunk
+ * drill-down): bytes captured while the page was reserved stay reserved
+ * until the next run replaces them, even if a public page has since been
+ * written at that path (`indexedVisibilityByPaths`).
  */
 
 import { Database } from "bun:sqlite";

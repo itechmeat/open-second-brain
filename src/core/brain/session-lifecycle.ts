@@ -145,8 +145,15 @@ export async function captureSessionLifecycleEvent(
 ): Promise<CaptureSessionLifecycleResult> {
   const now = opts.now ?? new Date();
   const normalized = normalizePayload(payload);
+  // The dedup index is a walk of every `Brain/inbox/sig-*.md` (a read and
+  // a frontmatter parse per file). On a vault with thousands of signals
+  // behind a slow filesystem (WSL's 9p mount of a Windows drive) that walk
+  // alone outlasted the UserPromptSubmit hook's host timeout, and it ran
+  // for every prompt although almost none carries a marker or a fact.
+  // So it is built on first USE - when there is a signal to dedup - and
+  // shared by every capture in this event after that.
   let dedup: Map<string, DedupIndexEntry> | undefined;
-  const ensureDedup = (): Map<string, DedupIndexEntry> => {
+  const ensureDedup: DedupSource = () => {
     dedup ??= buildDedupIndex(vault);
     return dedup;
   };
@@ -284,19 +291,22 @@ export async function captureSessionLifecycleEvent(
   }
 
   if (mayWrite && promptText !== undefined) {
-    captureMarkers(vault, normalized, promptText, captureOpts, now, ensureDedup(), counters);
+    captureMarkers(vault, normalized, promptText, captureOpts, now, ensureDedup, counters);
     // Fact extraction runs strictly AFTER the boundary: only captured,
     // unsuppressed user text reaches the pattern table.
-    const routed = routeExtractedFacts(vault, {
-      facts: extractFacts(promptText),
-      agent: capturingAgent,
-      now,
-      sessionRef: sessionReference(normalized),
-      dedup: ensureDedup(),
-      ...(opts.dryRun ? { dryRun: true } : {}),
-    });
-    counters.facts_extracted += routed.created;
-    counters.facts_deduped += routed.deduped;
+    const facts = extractFacts(promptText);
+    if (facts.length > 0) {
+      const routed = routeExtractedFacts(vault, {
+        facts,
+        agent: capturingAgent,
+        now,
+        sessionRef: sessionReference(normalized),
+        dedup: ensureDedup(),
+        ...(opts.dryRun ? { dryRun: true } : {}),
+      });
+      counters.facts_extracted += routed.created;
+      counters.facts_deduped += routed.deduped;
+    }
   }
 
   // A call the host reported as FAILED is not replayed: `brain_feedback`
@@ -308,7 +318,7 @@ export async function captureSessionLifecycleEvent(
     if (isToolResponseError(normalized.toolResponse)) {
       toolCallsFailed++;
     } else {
-      captureToolFeedback(vault, normalized, captureOpts, now, ensureDedup(), counters);
+      captureToolFeedback(vault, normalized, captureOpts, now, ensureDedup, counters);
     }
   }
 
@@ -362,9 +372,11 @@ export async function captureSessionLifecycleEvent(
             counters.suppressed_messages++;
             continue;
           }
-          captureMarkers(vault, normalized, turn.text, captureOpts, now, ensureDedup(), counters);
+          captureMarkers(vault, normalized, turn.text, captureOpts, now, ensureDedup, counters);
+          const facts = extractFacts(turn.text);
+          if (facts.length === 0) continue;
           const routed = routeExtractedFacts(vault, {
-            facts: extractFacts(turn.text),
+            facts,
             agent: capturingAgent,
             now,
             sessionRef: sessionReference(normalized),
@@ -648,7 +660,7 @@ function captureMarkers(
   text: string,
   opts: CaptureSessionLifecycleOptions,
   now: Date,
-  dedup: Map<string, DedupIndexEntry>,
+  dedup: DedupSource,
   counters: MutableCounters,
 ): void {
   const discovery = discoverMarkersDetailed(text);
@@ -680,7 +692,7 @@ function captureToolFeedback(
   payload: NormalizedPayload,
   opts: CaptureSessionLifecycleOptions,
   now: Date,
-  dedup: Map<string, DedupIndexEntry>,
+  dedup: DedupSource,
   counters: MutableCounters,
 ): void {
   const validated = validateBrainFeedbackInput(payload.toolInput);
@@ -707,6 +719,9 @@ function captureToolFeedback(
   });
 }
 
+/** The event's shared dedup index, built on first call (see `ensureDedup`). */
+type DedupSource = () => Map<string, DedupIndexEntry>;
+
 interface SignalPayload {
   readonly topic: string;
   readonly signal: "positive" | "negative";
@@ -732,11 +747,12 @@ function emitSignal(
   payload: NormalizedPayload,
   opts: CaptureSessionLifecycleOptions,
   now: Date,
-  dedup: Map<string, DedupIndexEntry>,
+  dedup: DedupSource,
   counters: MutableCounters,
   signal: SignalPayload,
 ): void {
-  if (dedup.has(signal.dedupHash)) {
+  const index = dedup();
+  if (index.has(signal.dedupHash)) {
     counters.signals_deduped++;
     return;
   }
@@ -757,7 +773,7 @@ function emitSignal(
     session_ref: sessionRef,
     ...(signal.raw ? { raw: signal.raw } : {}),
   });
-  dedup.set(signal.dedupHash, { id: result.id, path: result.path });
+  index.set(signal.dedupHash, { id: result.id, path: result.path });
   counters.signals_created++;
 }
 

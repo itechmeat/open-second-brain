@@ -15,9 +15,21 @@
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveNotePath } from "./note-path.ts";
+import { governCallerNamedWritePath } from "../write-binding/index.ts";
+import { assertStandingRulesNotTargeted } from "./standing-rules.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import type { SchemaPack } from "./schema-pack.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
+
+/**
+ * Surfaces for the caller-named governance refusal. The CLI `brain attr`
+ * verb and marker write-back both reach the file through
+ * `resolveNotePath`, so the operator's standing rules, the write
+ * binding's own config, and the declared write binding are enforced at
+ * the shared seam rather than inherited from the note-target envelope.
+ */
+const ATTR_ASSIGN_SURFACE = "attribute assignment";
+const ATTR_REMOVE_SURFACE = "attribute removal";
 
 export class AttributeVocabularyError extends Error {
   readonly type: string;
@@ -134,6 +146,13 @@ export function assignNoteAttribute(
 ): NoteAttributeResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // The note-target envelope's walls, applied at this seam because the
+  // file is reached through the weaker `resolveNotePath`: the operator's
+  // standing rules and the write binding's own config are refused by
+  // name, the declared write binding is enforced. Run before the type
+  // read so a refused target performs no I/O at all.
+  assertStandingRulesNotTargeted(vault, relPath, ATTR_ASSIGN_SURFACE);
+  governCallerNamedWritePath(vault, relPath, ATTR_ASSIGN_SURFACE);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);
   const rawType = metadata["type"];
@@ -161,6 +180,10 @@ export function removeNoteAttribute(
 ): RemoveNoteAttributeResult {
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
+  // Removal rewrites the same frontmatter with the same overwrite, so it
+  // is the same write and takes the same refusals.
+  assertStandingRulesNotTargeted(vault, relPath, ATTR_REMOVE_SURFACE);
+  governCallerNamedWritePath(vault, relPath, ATTR_REMOVE_SURFACE);
   const field = normalizeSchemaToken(opts.field);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);

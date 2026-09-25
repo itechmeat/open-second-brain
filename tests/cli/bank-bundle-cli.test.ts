@@ -17,7 +17,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -137,6 +137,10 @@ describe("o2b brain bank-export / bank-import", () => {
     // export projection has. The rule is confirmed, so the window is inert
     // and derivable from the row's own `confirmed_at`: refusing it would
     // exit 1 on a backup that is the only copy left of these rules.
+    // `--trusted-restore` keeps the subject on the derivation report - the
+    // UNTRUSTED default demotes the row instead (next test), and a demoted
+    // row deliberately reports no derivation, because the window it grants
+    // came from the restore, not from anything the bundle carried.
     await bootstrap();
     const row = preferenceRow();
     delete row["unconfirmed_until"];
@@ -146,12 +150,44 @@ describe("o2b brain bank-export / bank-import", () => {
       bundleFile,
       JSON.stringify({ schema: "1", graph: { nodes: [] }, preferences: [row] }),
     );
-    const imp = await runCli(["brain", "bank-import", bundleFile], {
+    const imp = await runCli(["brain", "bank-import", bundleFile, "--trusted-restore"], {
       env: { OPEN_SECOND_BRAIN_CONFIG: config },
     });
     expect(imp.returncode).toBe(0);
     expect(imp.stdout).toContain("unconfirmed_until derived from confirmed_at");
     expect(existsSync(join(vault, "Brain", "preferences", "pref-carried-rule.md"))).toBe(true);
+  });
+
+  test("bank-import's untrusted default demotes a confirmed row and names it (t_sec_bank_demote)", async () => {
+    // Same legacy bundle, no vouching: the row lands `unconfirmed` on a
+    // fresh window, the verb says so per row, and no derivation is
+    // claimed for a window the restore invented.
+    await bootstrap();
+    const row = preferenceRow();
+    delete row["unconfirmed_until"];
+    delete row["revision"];
+    const bundleFile = join(tmp, "legacy-prefs-untrusted.json");
+    writeFileSync(
+      bundleFile,
+      JSON.stringify({ schema: "1", graph: { nodes: [] }, preferences: [row] }),
+    );
+    const imp = await runCli(["brain", "bank-import", bundleFile], {
+      env: { OPEN_SECOND_BRAIN_CONFIG: config },
+    });
+    expect(imp.returncode).toBe(0);
+    expect(imp.stdout).toContain("demoted to unconfirmed: 1");
+    expect(imp.stdout).toContain(
+      "pref-carried-rule: restored unconfirmed (trial window restarted)",
+    );
+    expect(imp.stdout).not.toContain("derived from");
+    const landed = readFileSync(
+      join(vault, "Brain", "preferences", "pref-carried-rule.md"),
+      "utf8",
+    );
+    expect(landed).toContain("_status: unconfirmed");
+    // The writer renders "never confirmed" as an explicit null - the same
+    // shape every first-party unconfirmed rule carries.
+    expect(landed).toContain("_confirmed_at: null");
   });
 
   test("bank-import exits non-zero when a carried preference cannot be restored", async () => {

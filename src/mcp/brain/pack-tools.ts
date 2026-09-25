@@ -8,6 +8,8 @@
  * BRAIN_TOOLS surface.
  */
 
+import { isAbsolute, relative } from "node:path";
+
 import {
   resolveDensityRankingContextPack,
   resolveRecallAdequacyThresholds,
@@ -54,6 +56,9 @@ import { gatedOwnerScopeView } from "../../core/brain/owner-scope-view.ts";
 import { BRAIN_LOG_EVENT_KIND_SET, type BrainLogEventKind } from "../../core/brain/types.ts";
 import { INTERNAL_ERROR, INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach } from "../tool-contract.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { vaultPathField } from "../vault-path-field.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import {
@@ -88,6 +93,10 @@ const RECALL_SCORES_ARG_NAME = "recall_scores";
  * Bounded-token vault slice ordered by importance tier then recency.
  * Lets an agent prime its context window under a strict budget.
  */
+function vaultRelative(vault: string, absOrRel: string): string {
+  return isAbsolute(absOrRel) ? relative(vault, absOrRel) : absOrRel;
+}
+
 async function toolBrainContextPack(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -191,7 +200,20 @@ async function toolBrainContextPack(
   // so the default pack stays byte-identical to the tier → recency order.
   const densityRanking = resolveDensityRankingContextPack(ctx.configPath ?? undefined);
   const agentScope = coerceAgentScope(ctx, args, true);
+  // Root closure (t_sec_pack_reach): the pack reads page bodies by path,
+  // outside the three read roots, so the reserved-token rule is asked per
+  // candidate - the same shape `brain_clusters`/`brain_bridges` apply. It
+  // is asked INSIDE the core, before ranking and budgeting, because every
+  // other member of the report (`lanes`, `skipped`, tension `warnings`,
+  // `deduped_from`, the receipt) is derived from the candidate set: a
+  // filter over `items` alone left a reserved page's path and body in
+  // `lanes` and its id in `skipped`. At local reach the view is the shared
+  // no-op, so an operator's own transports see a byte-identical pack. The
+  // core holds absolute paths; the view answers over vault-relative ones.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  const remote = view.reach !== TRANSPORT_REACH.local;
   const report = packContext(ctx.vault, {
+    ...(remote ? { visible: (abs: string) => view.visible(vaultRelative(ctx.vault, abs)) } : {}),
     maxTokens,
     ...(agentScope !== undefined ? { agentScope } : {}),
     ...(densityRanking ? { densityRanking: true } : {}),
@@ -215,7 +237,10 @@ async function toolBrainContextPack(
       ? { degradation: configuredDegradation(ctx.vault)! }
       : {}),
     ...(telemetry !== undefined ? { telemetry } : {}),
-    ...(attentionFlowIds.length > 0 ? { attentionFlowIds } : {}),
+    // The synthesized attention-flow block has no page of its own to ask
+    // the reach view about, so a remote caller does not get it (fail
+    // closed, as the per-item filter this replaced did).
+    ...(attentionFlowIds.length > 0 && !remote ? { attentionFlowIds } : {}),
   });
   return {
     vault_path: vaultPathField(ctx),

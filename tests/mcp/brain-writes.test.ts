@@ -216,3 +216,52 @@ describe("brain_writes action plan_revert", () => {
     expect(Object.keys(schema.properties)).not.toContain("digest");
   });
 });
+
+describe("brain_writes at remote reach", () => {
+  const RESERVED = "notes/zzreservedzz.md";
+  const OPEN = "notes/open.md";
+
+  /** Record a write to each note: one reserved against remote reads, one not. */
+  function seedBoth(): void {
+    for (const [target, bytes] of [
+      [OPEN, "open body"],
+      [RESERVED, "---\nvisibility: [private]\n---\n\nreserved body"],
+    ] as const) {
+      const abs = join(vault, target);
+      mkdirSync(dirname(abs), { recursive: true });
+      atomicWriteFileSync(abs, bytes);
+      recordNoteWrite(vault, {
+        op: "create",
+        target,
+        before: null,
+        after: { bytes },
+        timestamp: "2026-03-04T01:00:00Z",
+        agent: "claude",
+      });
+    }
+  }
+
+  const callAt = async (reach: "local" | "remote", args: Record<string, unknown>) =>
+    (await tool("brain_writes").handler({ ...ctx, reach }, args)) as Record<string, unknown>;
+
+  test("list names a reserved note locally and withholds it remotely", async () => {
+    seedBoth();
+    const local = (await callAt("local", {})) as unknown as WritesReply;
+    expect(local.writes.map((w) => w["target"]).toSorted()).toEqual([OPEN, RESERVED].toSorted());
+
+    const remote = (await callAt("remote", {})) as unknown as WritesReply;
+    expect(remote.writes.map((w) => w["target"])).toEqual([OPEN]);
+    // The total counts only what the caller may see.
+    expect(remote.total_matched).toBe(1);
+  });
+
+  test("plan_revert names a reserved note locally and withholds it remotely", async () => {
+    seedBoth();
+    const args = { action: "plan_revert", agent: "claude" };
+    expect(JSON.stringify(await callAt("local", args))).toContain("zzreservedzz");
+    const remote = await callAt("remote", args);
+    expect(JSON.stringify(remote)).not.toContain("zzreservedzz");
+    const entries = remote["entries"] as ReadonlyArray<Record<string, unknown>>;
+    expect(entries.map((e) => e["target"])).toEqual([OPEN]);
+  });
+});

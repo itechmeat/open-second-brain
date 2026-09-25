@@ -5,7 +5,7 @@
  * txn layer maps that to a `BrainCollisionError({ kind: 'SourceLock' })`.
  */
 
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   existsSync,
   mkdirSync,
@@ -35,7 +35,7 @@ beforeEach(() => {
   tmpRoot = mkdtempSync(join(tmpdir(), "osb-sync-lock-"));
 });
 
-afterAll(() => {
+afterEach(() => {
   if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
 });
 
@@ -234,6 +234,7 @@ describe("every module that takes a lock is under a scanned root", () => {
     ["core/brain/idempotency-ledger.ts", "Brain"],
     ["core/brain/ingest/content-manifest.ts", ".open-second-brain"],
     ["core/brain/lineage/ledger.ts", "Brain"],
+    ["core/brain/payload-registry.ts", "Brain"],
     ["core/brain/preference-txn.ts", "Brain"],
     ["core/brain/query-demand.ts", "Brain"],
     ["core/brain/sessions/discover.ts", ".open-second-brain"],

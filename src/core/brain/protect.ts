@@ -13,7 +13,7 @@
  *     legitimately drops signals here through `brain_feedback`)
  *
  * Targets:
- *   - **claudecode** — patches `<vault>/.claude/settings.json` with a
+ *   - **claudecode** — patches the vault's Claude Code settings file with a
  *     `permissions.deny` / `permissions.allow` array, tracking
  *     OSB-owned entries through a sidecar manifest at
  *     `<vault>/.open-second-brain/protect.lock.json`.
@@ -149,7 +149,7 @@ export interface ClaudeCodeRender {
 
 /**
  * Render rules into the Claude Code shape. The `snippet` shape mirrors
- * the projected `<vault>/.claude/settings.json` permissions block; the
+ * the projected permissions block of the vault's Claude Code settings file; the
  * `manifest` is the authoritative record of which entries OSB owns,
  * persisted separately so `unprotect` can remove exactly those without
  * touching user-authored rules.

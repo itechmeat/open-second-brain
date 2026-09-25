@@ -42,12 +42,47 @@ export interface RunWithSecretResult {
   readonly stderr: string;
 }
 
-/** Glob match: `*` is the only metacharacter, everything else literal. */
-export function matchesAllowlist(allow: ReadonlyArray<string>, command: string): boolean {
+/**
+ * Glob match over ARGV segments, not the joined command line.
+ *
+ * The pattern is whitespace-split into tokens; each token globs against
+ * the argv element at its position (`*` is the only metacharacter, and a
+ * trailing standalone `*` matches one-or-more remaining elements, which
+ * is the historical "this binary, any arguments" intent). Matching
+ * segments rather than `argv.join(" ")` matters because a joined string
+ * cannot see argument boundaries: the pattern `curl * https://internal`
+ * would be satisfied by the single argument `https://evil https://internal`,
+ * and the curl that actually spawns would fetch both URLs. The spawn
+ * itself is safe (argv array, no shell) - this guard is about which argv
+ * shapes the operator meant to allow.
+ */
+export function matchesAllowlist(
+  allow: ReadonlyArray<string>,
+  argv: ReadonlyArray<string>,
+): boolean {
   return allow.some((pattern) => {
-    const re = new RegExp("^" + pattern.split("*").map(escapeRegex).join(".*") + "$");
-    return re.test(command);
+    const tokens = pattern
+      .trim()
+      .split(/\s+/)
+      .filter((token) => token.length > 0);
+    if (tokens.length === 0) return false;
+    const trailingStar = tokens[tokens.length - 1] === "*";
+    if (trailingStar) tokens.pop();
+    // Fixed tokens must align element-for-element; a trailing `*` then
+    // needs at least one element left to consume.
+    if (argv.length < tokens.length) return false;
+    if (trailingStar && argv.length === tokens.length) return false;
+    if (!trailingStar && argv.length !== tokens.length) return false;
+    for (let i = 0; i < tokens.length; i++) {
+      if (!globElement(tokens[i]!, argv[i]!)) return false;
+    }
+    return true;
   });
+}
+
+function globElement(pattern: string, element: string): boolean {
+  const re = new RegExp("^" + pattern.split("*").map(escapeRegex).join(".*") + "$");
+  return re.test(element);
 }
 
 /**
@@ -98,7 +133,7 @@ export async function runWithSecret(
     maxInput: Number.POSITIVE_INFINITY,
   });
   const resolved = resolveSecretForExec(vault, name, ctx);
-  if (!matchesAllowlist(resolved.allow, command)) {
+  if (!matchesAllowlist(resolved.allow, argv)) {
     appendAuditRecord(join(brainDirsForWrite(vault).log, "secret-custody"), {
       timestamp: ctx.now.toISOString(),
       actor: ctx.agent,
@@ -136,9 +171,15 @@ export async function runWithSecret(
     proc.exited,
   ]);
   const literals = [resolved.value];
+  // The returned output rides into model context, where a literal scrub
+  // alone only stops the exact spelling: `printf '%s' "$KEY" | base64`
+  // returns a transformed echo of the secret. The bare-token pass also
+  // runs here, on the same reasoning the audit record above already
+  // applies - the allowlist bounds what the child may be, not what it
+  // may echo.
   return {
     exitCode,
-    stdout: redactRawOutput(stdout, { literals }),
-    stderr: redactRawOutput(stderr, { literals }),
+    stdout: redactRawOutput(stdout, { literals, redactTokens: true }),
+    stderr: redactRawOutput(stderr, { literals, redactTokens: true }),
   };
 }

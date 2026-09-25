@@ -26,7 +26,9 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { atomicWriteFileSync } from "../../fs-atomic.ts";
-import { ensureInsideVault } from "../../path-safety.ts";
+import { ensureInsideVault, realVaultRelative } from "../../path-safety.ts";
+import { checkWriteBinding } from "../../write-binding/index.ts";
+import { assertStandingRulesNotTargeted } from "../standing-rules.ts";
 import { appendLogEvent } from "../log.ts";
 import { loadSchemaPack } from "../schema-pack.ts";
 import { BRAIN_LOG_EVENT_KIND } from "../types.ts";
@@ -36,6 +38,7 @@ import {
   inspectExistingTarget,
   validateArtifact,
   validateTargetPath,
+  writeSessionLaneRefusal,
 } from "./validate.ts";
 import {
   isTerminalWriteSessionStatus,
@@ -349,6 +352,7 @@ export function commitArtifact(
   // target that lands outside the vault - e.g. `Brain/<symlink>/x.md`
   // whose ancestor links out - is rejected before any mkdir/read/write.
   const absolute = ensureInsideVault(join(vault, session.targetPath), vault);
+  assertCommitTargetGoverned(vault, session.targetPath);
   // Last-line-of-defense collision guard: submit-time checks cannot
   // cover the window between a needs-review park and the operator's
   // approve - if the target appeared meanwhile, `create` must still
@@ -389,6 +393,61 @@ export function commitArtifact(
   saveWriteSession(vault, done);
   auditTerminal(vault, done, now);
   return sessionEnvelope(done);
+}
+
+/**
+ * The governance walls a commit re-runs at the write chokepoint, on top of
+ * containment. The open-time lane check reads the path as spelled; a
+ * symlinked folder can still carry the bytes somewhere else under
+ * `Brain/`, and the session record outlives the check. So: the standing
+ * rules file is refused by identity (a symlink to it is the same file),
+ * the real landing path must sit in a write-session lane too, and the
+ * operator's write binding must admit it. A landing path that cannot be
+ * resolved (a file used as a folder, a symlink loop, an unreadable
+ * folder) is refused rather than guessed at.
+ */
+function assertCommitTargetGoverned(vault: string, targetPath: string): void {
+  assertStandingRulesNotTargeted(vault, targetPath, "brain_write_session");
+  let landsAt: string | null;
+  try {
+    landsAt = realVaultRelative(vault, targetPath);
+  } catch (exc) {
+    const code = (exc as NodeJS.ErrnoException)?.code ?? "unknown";
+    const error = Object.freeze({
+      code: "target-unresolvable",
+      path: "target",
+      message: `${targetPath} cannot be resolved on disk (${code}); nothing was written`,
+    });
+    throw new WriteSessionRequestError(error.message, [error]);
+  }
+  if (landsAt === null) {
+    const error = Object.freeze({
+      code: "target-outside-brain",
+      path: "target",
+      message: `${targetPath} resolves outside the vault; nothing was written`,
+    });
+    throw new WriteSessionRequestError(error.message, [error]);
+  }
+  const landedRefusal = writeSessionLaneRefusal(landsAt);
+  if (landedRefusal !== null) {
+    const error = Object.freeze({
+      ...landedRefusal,
+      message:
+        landsAt === targetPath
+          ? landedRefusal.message
+          : `${targetPath} resolves to ${landsAt}: ${landedRefusal.message}`,
+    });
+    throw new WriteSessionRequestError(error.message, [error]);
+  }
+  const bindingRefusal = checkWriteBinding(vault, targetPath);
+  if (bindingRefusal !== null) {
+    const error = Object.freeze({
+      code: bindingRefusal.code,
+      path: "target",
+      message: bindingRefusal.message,
+    });
+    throw new WriteSessionRequestError(error.message, [error]);
+  }
 }
 
 function buildArtifactPrompt(targetPath: string, schemaType: string | null): string {

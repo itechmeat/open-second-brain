@@ -71,7 +71,7 @@
  * orders of magnitude, which a review found by measuring it.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -118,7 +118,15 @@ import {
 } from "../helpers/tool-probe-catalogue.ts";
 
 /** HOME is pinned per file by convention; nothing pins it globally. */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-vis-matrix-home-"));
+const SAVED_HOME = process.env["HOME"];
+const PINNED_HOME = mkdtempSync(join(tmpdir(), "o2b-vis-matrix-home-"));
+process.env["HOME"] = PINNED_HOME;
+afterAll(() => {
+  // Bun runs many files in one process: hand HOME back and drop the pin.
+  if (SAVED_HOME === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = SAVED_HOME;
+  rmSync(PINNED_HOME, { recursive: true, force: true });
+});
 
 /**
  * The string this probe hunts for. It appears ONLY inside artifacts that
@@ -443,7 +451,13 @@ const RECIPES_REACHING_RESERVED_CONTENT: ReadonlyArray<{
   readonly name: string;
   readonly args: Record<string, unknown>;
 }> = [
-  { name: "brain_search", args: { query: QUERY, visibility: [REMOTE_DENY_VISIBILITY_TOKEN] } },
+  // `brain_search` + `visibility: [private]` used to be the fourth recipe
+  // here; the reserved scope is now refused at the argument gate (see
+  // `visibility-scope.test.ts`), so the anchor below moved to a
+  // key-addressed read - the surface class that still grants local
+  // callers a reserved page by name, which is the documented operator
+  // access the argument gate deliberately leaves alone.
+  { name: "brain_file_context", args: { file_path: `notes/${RESERVED_MARKER}-r.md` } },
   { name: "brain_query", args: { since: "2026-05-01" } },
   { name: "brain_backlinks", args: { id: SHARED_ID } },
   { name: "second_brain_query", args: {} },
@@ -511,7 +525,6 @@ const STILL_NAMED_AT_REMOTE: ReadonlySet<string> = new Set([
   "brain_trigger operation=history",
   "brain_trigger operation=list",
   "brain_trigger operation=scan",
-  "brain_unlinked_mentions",
 ]);
 
 /**
@@ -615,14 +628,33 @@ test("a federated caller is bound by the same rule on every origin", async () =>
   await indexVault(resolveSearchConfig({ vault: external, configPath }), { force: true });
   addRecallSource(configPath, vault, "team", external);
 
-  const args = { query: QUERY, global: true, visibility: [REMOTE_DENY_VISIBILITY_TOKEN] };
-  // The union must reach the foreign origin at all, or the assertion
-  // below is clean because nothing federated.
-  const local = await drive(TRANSPORT_REACH.local, "brain_search", args);
-  expect(local).toContain("external-shared.md");
-  expect(local).toContain(RESERVED_MARKER);
+  // The argument gate binds BEFORE federation: the reserved scope is
+  // refused as a caller argument, so there is no option spread that could
+  // carry it onto any origin leg - at a reach that would otherwise have
+  // granted it or not.
+  const gated = await drive(TRANSPORT_REACH.local, "brain_search", {
+    query: QUERY,
+    global: true,
+    visibility: [REMOTE_DENY_VISIBILITY_TOKEN],
+  });
+  expect(gated).toContain("reserved token");
 
-  expect(await drive(TRANSPORT_REACH.remote, "brain_search", args)).not.toContain(RESERVED_MARKER);
+  // The union still reaches the foreign origin at the default scope, or
+  // the assertions below would be clean because nothing federated.
+  const local = await drive(TRANSPORT_REACH.local, "brain_search", {
+    query: QUERY,
+    global: true,
+  });
+  expect(local).toContain("external-shared.md");
+
+  // The external origin's reserved page stays withheld at remote reach:
+  // each leg carries the reach the transport minted.
+  const remote = await drive(TRANSPORT_REACH.remote, "brain_search", {
+    query: QUERY,
+    global: true,
+  });
+  expect(remote).toContain("external-shared.md");
+  expect(remote).not.toContain(RESERVED_MARKER);
 });
 
 test("the _meta channel is live on these probes, so the sweep covers it", async () => {

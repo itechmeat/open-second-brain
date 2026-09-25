@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { CHMOD_CANNOT_DENY, homeEnv } from "../helpers/platform.ts";
+import { waitForSelfHealChildren } from "../helpers/self-heal-children.ts";
 
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -23,7 +24,10 @@ beforeEach(() => {
   mkdirSync(join(vault, "Brain"), { recursive: true });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // A SessionStart on an initialised vault spawns a detached reindex that
+  // would otherwise recreate the directories removed below.
+  await waitForSelfHealChildren(vault);
   rmSync(vault, { recursive: true, force: true });
   rmSync(configHome, { recursive: true, force: true });
 });

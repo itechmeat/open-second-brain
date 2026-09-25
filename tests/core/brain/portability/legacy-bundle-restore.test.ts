@@ -95,7 +95,7 @@ describe("a legacy bundle restores what can be honestly restored", () => {
     seedConfirmed("alpha-rule");
     const rows = collectExportRows(src).map(legacyRow);
 
-    const result = restorePreferences(dest, rows, { agent: "bank-import" });
+    const result = restorePreferences(dest, rows, { agent: "bank-import", trustedRestore: true });
 
     expect(result.restored).toEqual(["pref-alpha-rule"]);
     expect(result.failed).toEqual([]);
@@ -115,7 +115,7 @@ describe("a legacy bundle restores what can be honestly restored", () => {
     seedConfirmed("alpha-rule");
     const rows = collectExportRows(src).map(legacyRow);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.derived.length).toBe(1);
     expect(result.derived[0]!.id).toBe("pref-alpha-rule");
@@ -129,7 +129,7 @@ describe("a legacy bundle restores what can be honestly restored", () => {
     seedConfirmed("alpha-rule");
     const rows = collectExportRows(src);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual(["pref-alpha-rule"]);
     expect(result.derived).toEqual([]);
@@ -146,7 +146,7 @@ describe("a legacy bundle restores what can be honestly restored", () => {
       return legacy;
     });
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual(["pref-alpha-rule"]);
     expect(result.derived[0]!.derivedFrom).toBe(TRIAL_WINDOW_DERIVED_FROM.createdAt);
@@ -163,7 +163,7 @@ describe("a legacy bundle restores what can be honestly restored", () => {
       return legacy;
     });
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual(["pref-alpha-rule"]);
     expect(result.failed).toEqual([]);
@@ -183,7 +183,7 @@ describe("what genuinely cannot be reconstructed is still refused", () => {
     });
     const rows = collectExportRows(src).map(legacyRow);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual([]);
     expect(result.failed.length).toBe(1);
@@ -217,7 +217,7 @@ describe("a restored topic that folds onto a topic the vault already has", () =>
     seedConfirmed("imported-rule", "Api-Key");
     const rows = collectExportRows(src);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual(["pref-imported-rule"]);
     expect(result.failed).toEqual([]);
@@ -237,7 +237,7 @@ describe("a restored topic that folds onto a topic the vault already has", () =>
     seedConfirmed("two-rule", "API-KEY");
     const rows = collectExportRows(src);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored.length).toBe(2);
     expect(result.topicKeyCollisions.length).toBe(1);
@@ -285,9 +285,124 @@ describe("a restored topic that folds onto a topic the vault already has", () =>
     });
     const rows = collectExportRows(src).map(legacyRow);
 
-    const result = restorePreferences(dest, rows);
+    const result = restorePreferences(dest, rows, { trustedRestore: true });
 
     expect(result.restored).toEqual([]);
     expect(result.topicKeyCollisions).toEqual([]);
+  });
+});
+
+/**
+ * The untrusted default (t_sec_bank_demote): the `<file>` argument of
+ * `bank-import` is not a vouching for its contents, so a row that
+ * arrives past its trial does not land live. It lands `unconfirmed` on a
+ * fresh trial window dated from the restore clock, and the result names
+ * every row it did that to.
+ */
+describe("an untrusted restore demotes past-trial rows to a fresh trial", () => {
+  const RESTORE_NOW = new Date("2026-06-01T00:00:00Z");
+  /** The vault's standard window (`dream.unconfirmed_window_days`, 14). */
+  const RESTORE_WINDOW_END = "2026-06-15T00:00:00Z";
+
+  test("a confirmed row lands unconfirmed on a window dated from the restore instant", () => {
+    seedConfirmed("alpha-rule");
+    const rows = collectExportRows(src);
+
+    const result = restorePreferences(dest, rows, { now: () => RESTORE_NOW });
+
+    expect(result.restored).toEqual(["pref-alpha-rule"]);
+    expect(result.demotedToUnconfirmed).toEqual(["pref-alpha-rule"]);
+    const written = parsePreference(preferencePath(dest, "alpha-rule"));
+    expect(written.status).toBe(BRAIN_PREFERENCE_STATUS.unconfirmed);
+    expect(written.unconfirmed_until).toBe(RESTORE_WINDOW_END);
+    // The carried promotion instant did not survive the demotion: a rule
+    // under trial has no confirmed_at, by the same shape every
+    // first-party unconfirmed rule is written with.
+    expect(written.confirmed_at ?? null).toBeNull();
+  });
+
+  test("the carried confidence and pin do not survive the demotion either", () => {
+    seedConfirmed("alpha-rule");
+    const rows = collectExportRows(src).map((row) => ({
+      ...row,
+      confidence: "high",
+      pinned: true,
+    }));
+
+    restorePreferences(dest, rows, { now: () => RESTORE_NOW });
+
+    const written = parsePreference(preferencePath(dest, "alpha-rule"));
+    expect(written.confidence).toBe("low");
+    expect(written.pinned).toBe(false);
+  });
+
+  test("a trusted restore keeps the carried status and demotes nothing", () => {
+    seedConfirmed("alpha-rule");
+    const rows = collectExportRows(src).map((row) => ({
+      ...row,
+      confidence: "high",
+      pinned: true,
+    }));
+
+    const result = restorePreferences(dest, rows, {
+      trustedRestore: true,
+      now: () => RESTORE_NOW,
+    });
+
+    expect(result.demotedToUnconfirmed).toEqual([]);
+    const written = parsePreference(preferencePath(dest, "alpha-rule"));
+    expect(written.status).toBe(BRAIN_PREFERENCE_STATUS.confirmed);
+    expect(written.confidence).toBe("high");
+    expect(written.pinned).toBe(true);
+  });
+
+  test("a row already under trial gets a fresh trial too, not the window it carried (M4)", () => {
+    writePreference(src, {
+      slug: "trial-rule",
+      topic: "writing",
+      principle: "the rule still under trial",
+      created_at: "2026-05-01T00:00:00Z",
+      // Already over at the restore instant: carried verbatim, the rule
+      // would be promotable the moment it landed.
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+      evidenced_by: ["[[sig-2026-05-01-alpha]]"],
+    });
+    const rows = collectExportRows(src).map((row) => ({
+      ...row,
+      confidence: "high",
+      pinned: true,
+    }));
+
+    const result = restorePreferences(dest, rows, { now: () => RESTORE_NOW });
+
+    expect(result.restored).toEqual(["pref-trial-rule"]);
+    // Named, like every other reset the untrusted default applies.
+    expect(result.demotedToUnconfirmed).toEqual(["pref-trial-rule"]);
+    const written = parsePreference(preferencePath(dest, "trial-rule"));
+    expect(written.status).toBe(BRAIN_PREFERENCE_STATUS.unconfirmed);
+    expect(written.unconfirmed_until).toBe(RESTORE_WINDOW_END);
+    expect(written.confidence).toBe("low");
+    expect(written.pinned).toBe(false);
+  });
+
+  test("a trusted restore keeps an under-trial row's carried window", () => {
+    writePreference(src, {
+      slug: "trial-rule",
+      topic: "writing",
+      principle: "the rule still under trial",
+      created_at: "2026-05-01T00:00:00Z",
+      unconfirmed_until: "2026-05-08T00:00:00Z",
+      status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+      evidenced_by: ["[[sig-2026-05-01-alpha]]"],
+    });
+    const result = restorePreferences(dest, collectExportRows(src), {
+      trustedRestore: true,
+      now: () => RESTORE_NOW,
+    });
+    expect(result.demotedToUnconfirmed).toEqual([]);
+    expect(parsePreference(preferencePath(dest, "trial-rule")).unconfirmed_until).toBe(
+      "2026-05-08T00:00:00Z",
+    );
   });
 });

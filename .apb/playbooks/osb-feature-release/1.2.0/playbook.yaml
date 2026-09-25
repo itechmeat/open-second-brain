@@ -1,0 +1,326 @@
+schema: 2
+id: osb-feature-release
+name: OSB feature release wave
+description: 'Run one full release wave for Open Second Brain: scan the kanban triage column, propose argued scope options to the operator, then drive the feature-release-playbook in order - reconnaissance and design (phases 0-1), TDD implementation (phase 2), PR preparation as the osb-pr-prepare sub-playbook (phases 3-7: self-review, test and security audit of the diff, architecture and QA gates, docs and the version bump, PR with a verified mermaid, CI and bot review; never merges), the operator merge gate, the GitHub release as the osb-release sub-playbook (phases 8-9, with its own approval gate before publishing), and the tracker tick that moves the shipped cards to done. The operator brief rides as a default parameter any run may override.'
+version: 1.2.0
+params:
+- name: brief
+  type: text
+  label: Standing engineering brief (override to change the rules of the cycle)
+  options: null
+  default: 'Work as a senior backend developer: SOLID, KISS, DRY, repeated values hoisted into named constants. Forbidden: fallbacks that silently do nothing and mislead (errors surface explicitly, by name), stubs, hardcoded values that belong in constants, and hardcoded natural-language phrases in any language - everything is English and other-language cases are handled abstractly. Follow the feature-release-playbook skill through ALL its phases in order; merging or skipping phases is forbidden. Phases 0-2 run in this playbook; phases 3-7 (self-review against the base, QA, docs and the version bump inside the PR per CLAUDE.md, the PR with a verified mermaid, CI and review handling) run in the osb-pr-prepare sub-playbook; phases 8-9 (the GitHub release) run in the osb-release sub-playbook; phase 10 runs here. Never move the selected triage cards until the finale (moving them early triggers the hermes agents); after the release move them to done with handoff summaries. Reply to the operator in the operator''s chat language; write every artifact in English. A node attempt is one uninterrupted job: never end your reply while a command you started is still running - wait for it and finish the whole task; a partial progress report is not a node result.'
+- name: cycle_focus
+  type: text
+  label: What this cycle should optimize for (override per run)
+  options: null
+  default: Pick one or several RELATED triage cards by priority, reading the validator comments on each. Propose two or three options and argue them properly; usefulness to the project is the supreme criterion. A pull request around 50-70 changed files with at most 10 features is the target shape, and hitting that target is the weakest signal of all - never trade usefulness for it.
+- name: board_access
+  type: text
+  label: How this machine reaches the board the kanban script talks to (operator setup, shown to the agent)
+  default: 'The script reaches the board endpoint configured in it. A connection error means that endpoint is unreachable from this machine, not that the board is empty.'
+defaults:
+  profile:
+    name: osb-developer
+    scope: auto
+  max_retries: null
+  timeout_seconds: null
+supervisor: null
+trigger:
+  when:
+  - start a new open-second-brain release cycle from the kanban board
+  - implement a batch of related triage tasks end to end and release them
+  - run the feature-release-playbook as a full wave with an operator scope gate
+  avoid_when:
+  - validating or triaging cards without implementing (use osb-triage-validator)
+  - a single trivial fix that does not warrant a release wave
+  examples:
+  - начинаем новый цикл
+  - take a big scope of related low-priority tasks and ship a release
+requires:
+  files:
+  - .ai-notes/kanban.ts
+  - CLAUDE.md
+  commands:
+  - bun
+  - git
+  - gh
+  - zg
+  - code-ranker
+  - python3
+  - curl
+goal:
+  statement: A scope the operator chose is implemented, merged into main, released on GitHub with an interaction-diagram image, and every shipped card on the kanban board reads done with a handoff summary.
+  criteria:
+  - description: Every phase of the feature-release-playbook ran in order, none merged and none skipped; phases 3-7 ran as osb-pr-prepare (self-review of the full branch against main included) and phases 8-9 as osb-release.
+    check:
+      type: manual
+  - description: The version was bumped inside the feature PR, the release is published with a rendered interaction diagram, and the shipped cards are in done while refused or reshaped cards carry their verdicts.
+    check:
+      type: manual
+effects:
+- fs_read
+- fs_write
+- network
+- external
+- irreversible
+nodes:
+- id: start
+  title: Start
+  expected_duration: null
+  inputs: null
+  outputs: null
+  cache: null
+  type: start
+- id: scope_scan
+  title: Scan the board and build scope options
+  expected_duration: 20m
+  inputs: null
+  outputs:
+    files: []
+    extract: node_output
+  cache: null
+  type: agent_task
+  prompt: |
+    Standing brief: {{params.brief}}
+    Cycle focus: {{params.cycle_focus}}
+
+    Run `bun .ai-notes/kanban.ts triage --json` from the project root
+    (operator-local, credential-bearing script: run it, never copy it
+    or any token). Board access: {{params.board_access}}
+    If the board is unreachable, fail this node with
+    that reason instead of proposing options from memory. Read every
+    card WITH its comments - validator
+    comments carry verdicts and corrected scopes. Build TWO or THREE
+    candidate scope options. For each option: the card ids and
+    titles, the unifying spine that makes them one coherent PR, the
+    argued usefulness to the project right now, a rough size
+    estimate, and the main risk. Recommend one option and say why.
+
+    Wrap ONLY the final proposal in <node_output> and </node_output>
+    tags: first a compact human-readable summary of the options
+    (this is what the operator will read at the review gate), then a
+    line `JSON:` followed by the options as compact JSON
+    [{option, cards: [ids], spine, why, size, risk}].
+  profile: null
+  max_retries: null
+  timeout_seconds: null
+  workdir: null
+  isolation: null
+  connectors: []
+  interactive: false
+- id: choose_scope
+  title: Operator picks the scope
+  expected_duration: null
+  inputs: null
+  outputs: null
+  cache: null
+  type: human_review
+  options:
+  - option-1
+  - option-2
+  - option-3
+  - revise
+  prompt: Read the scope options in the scope_scan output. Pick option-1, option-2, or option-3 to start the wave on that scope, or "revise" with a note describing what to change - the scan will run again with your note.
+- id: design
+  title: 'Phases 0-1: reconnaissance, brainstorm, design'
+  expected_duration: 60m
+  inputs: null
+  outputs:
+    files: []
+    extract: node_output
+  cache: null
+  type: agent_task
+  prompt: |
+    Standing brief: {{params.brief}}
+    The run context below carries the scope options and the
+    operator's review decision (which option was picked, plus any
+    note). Honor the picked option exactly.
+    {{run.context}}
+
+    Invoke the feature-release-playbook skill and run its phases 0
+    and 1 for the chosen option, with one strengthening this project
+    has proven necessary: BEFORE the consultant brainstorm, verify
+    every selected card's premise against the live source (open the
+    anchors, grep for mechanisms the card claims are missing, check
+    the kernel invariants). Past waves found a third to two thirds
+    of premises corrected or refuted by this reading. A refuted card
+    gets its verdict recorded in the design doc rather than being
+    built.
+
+    Deliverables committed on a new feat/<slug> branch: the
+    docs/brainstorm/<slug>/ set (design.md, plan.md, variants.md,
+    cli-output/) per the playbook's own templates, with the plan
+    broken into TDD-ready tasks.
+
+    Wrap ONLY a completion summary in <node_output> and
+    </node_output> tags: branch name, slug, task list from plan.md,
+    any premise corrections or refusals, commit sha.
+  profile: null
+  max_retries: null
+  timeout_seconds: null
+  workdir: null
+  isolation: null
+  connectors: []
+  interactive: false
+- id: implement
+  title: 'Phase 2: TDD implementation'
+  expected_duration: 4h
+  inputs: null
+  outputs:
+    files: []
+    extract: node_output
+  cache: null
+  type: agent_task
+  prompt: |
+    Standing brief: {{params.brief}}
+    Design summary: {{nodes.design.output}}
+
+    Run phase 2 of the feature-release-playbook on the branch the
+    design phase created: implement plan.md task by task, strict
+    TDD - failing test first, run it and see the expected failure,
+    implement to green, refactor green, one conventional commit per
+    atomic unit, formatted and linted before every commit. Test runs
+    use a throwaway HOME (`env HOME=$(mktemp -d) bun test <paths>`).
+    Improve defects you find in code you touch and name them in the
+    commit bodies. Stage files by name, never `git add -A` or
+    `git add .`: ignored runtime state (.apb/runs/, .zvec-grep/) and
+    the committed .apb/ playbooks and profiles are not part of any
+    feature.
+
+    Wrap ONLY a completion summary in <node_output> and
+    </node_output> tags: commits (sha + title), per-task status,
+    failing-first evidence snippets, suites run with counts.
+  profile: null
+  max_retries: null
+  timeout_seconds: null
+  workdir: null
+  isolation: null
+  connectors: []
+  interactive: false
+- id: pr_prepare
+  title: 'Phases 3-7: prepare the PR (osb-pr-prepare)'
+  type: playbook
+  playbook: osb-pr-prepare
+  expected_duration: 4h
+  instruction: |
+    Kind: feature, or fix when every change in the design summary repairs
+    existing behavior without adding capability. Base: main. The PR ships a
+    release (the kind decides the bump). The implementation is committed on
+    the branch the design phase created.
+    Kanban cards in scope are context only: do not move, comment on or
+    mention them in public text. GitHub issues, if the design names any,
+    are referenced in the PR.
+    Operator scope decision and note: {{nodes.choose_scope.review_note}}
+    Design summary: {{nodes.design.output}}
+    Implementation summary: {{nodes.implement.output}}
+- id: pr_blocked
+  title: Operator decides on a blocked PR preparation
+  type: human_review
+  options:
+  - retry
+  - abandon
+  prompt: The osb-pr-prepare sub-run ended without a PR with green CI (its run answer names the node, the reason and the next step). Fix what it names if needed, then pick "retry" to run the PR preparation again on the same branch (it updates the same PR), or "abandon" to stop the wave without merging or releasing.
+- id: merge_gate
+  title: Operator merge gate
+  type: human_review
+  options:
+  - merged
+  - abandon
+  prompt: Review the PR on GitHub (the pr_prepare output has its URL, CI state and what is left for a human). Auto-merge is NOT armed and no agent merges; approve and squash-merge it yourself, then pick "merged". Pick "abandon" only to stop the wave without releasing.
+- id: release
+  title: 'Phases 8-9: publish the release (osb-release)'
+  type: playbook
+  playbook: osb-release
+  expected_duration: 1h15m
+  instruction: |
+    Target: the squash-merge commit of the PR named in the first line of
+    the PR preparation answer below (`gh pr view <n> --json
+    state,mergeCommit`; it must be MERGED); fail if it is not merged.
+    The release covers everything merged since the last published
+    release. Kanban cards are not yours to touch.
+    Operator note at the merge gate: {{nodes.merge_gate.review_note}}
+    PR preparation answer: {{nodes.pr_prepare.output}}
+    Design summary (for the release narrative): {{nodes.design.output}}
+- id: tracker
+  title: 'Phase 10: tracker tick'
+  expected_duration: 20m
+  inputs: null
+  outputs:
+    files: []
+    extract: node_output
+  cache: null
+  type: agent_task
+  prompt: |
+    Standing brief: {{params.brief}}
+    Release answer (first line `RELEASE: <url>`): {{nodes.release.output}}
+    Design summary (for refusals): {{nodes.design.output}}
+
+    Run phase 10: move every shipped card to done via
+    `bun .ai-notes/kanban.ts done <id> "<handoff summary pointing at
+    the release URL>"`. Cards whose premise was refused or reshaped
+    get a verdict comment and an appropriate parked priority instead
+    of a dishonest done. Nothing in the scope is left open without
+    either a done or a recorded verdict. Re-read the board after
+    writing and report the actual status of every card in scope.
+
+    Wrap ONLY the final wave summary in <node_output> and
+    </node_output> tags: per-card disposition as read back from the
+    board, release URL, version.
+  profile: null
+  max_retries: null
+  timeout_seconds: null
+  workdir: null
+  isolation: null
+  connectors: []
+  interactive: false
+- id: done
+  title: null
+  expected_duration: null
+  inputs: null
+  outputs: null
+  cache: null
+  type: finish
+  outcome: success
+  prompt: null
+  profile: null
+- id: abandoned
+  title: null
+  expected_duration: null
+  inputs: null
+  outputs: null
+  cache: null
+  type: finish
+  outcome: failure
+  prompt: null
+  profile: null
+- id: release_failed
+  title: null
+  expected_duration: 2m
+  type: finish
+  outcome: failure
+  prompt: |
+    The osb-release sub-run did not publish a release (refused, aborted at
+    its gate, or failed). Say so plainly, name the PR that merged
+    ({{nodes.pr_prepare.output}}), and state that no kanban card was moved:
+    the shipped cards stay where they are until a release exists.
+  profile: null
+edges:
+- { from: start, to: scope_scan }
+- { from: scope_scan, to: choose_scope }
+- { from: choose_scope, to: design, condition: { type: review_status, equals: option-1 } }
+- { from: choose_scope, to: design, condition: { type: review_status, equals: option-2 } }
+- { from: choose_scope, to: design, condition: { type: review_status, equals: option-3 } }
+- { from: choose_scope, to: scope_scan, condition: { type: review_status, equals: revise }, max_traversals: 3 }
+- { from: design, to: implement }
+- { from: implement, to: pr_prepare }
+- { from: pr_prepare, to: merge_gate, condition: { type: node_status, node: pr_prepare, equals: success } }
+- { from: pr_prepare, to: pr_blocked, condition: { type: node_status, node: pr_prepare, equals: failure } }
+- { from: pr_blocked, to: pr_prepare, condition: { type: review_status, equals: retry }, max_traversals: 2 }
+- { from: pr_blocked, to: abandoned, condition: { type: review_status, equals: abandon } }
+# A third retry request: stop instead of looping.
+- { from: pr_blocked, to: abandoned, fallback: true }
+- { from: merge_gate, to: release, condition: { type: review_status, equals: merged } }
+- { from: merge_gate, to: abandoned, condition: { type: review_status, equals: abandon } }
+- { from: release, to: tracker, condition: { type: node_status, node: release, equals: success } }
+- { from: release, to: release_failed, condition: { type: node_status, node: release, equals: failure } }
+- { from: tracker, to: done }

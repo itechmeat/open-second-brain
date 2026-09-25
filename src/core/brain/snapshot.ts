@@ -86,13 +86,16 @@ import {
   readFileSync,
   readSync,
   readdirSync,
+  readlinkSync,
+  realpathSync,
   rmSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  type Dirent,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { FileAlreadyExistsError, renameWithRetry } from "../fs-atomic.ts";
 import { classifyRecoverability, type RecoverabilityVerdict } from "./gates/recoverability.ts";
@@ -1655,10 +1658,86 @@ export function extractSnapshotToTemp(vault: string, runId: string): ExtractSnap
     if (!existsSync(extractedBrain)) {
       throw new BrainSnapshotError(`archive does not contain a ${BRAIN_ROOT_REL}/ root`, runId);
     }
+    refuseEscapingSymlinks(extractedBrain, runId);
     return Object.freeze({ tmpRoot: tmp, brainRoot: extractedBrain, cleanup });
   } catch (err) {
     cleanup();
     throw err;
+  }
+}
+
+/**
+ * Refuse an extracted tree that carries a symlink pointing outside it.
+ *
+ * The archive is vault content - agent-writable, and in a peer-replicated
+ * vault writable by every peer - so its members are untrusted input, and
+ * the restore step after this sweep copies top-level entries into the
+ * live tree with `dereference` off, which would re-plant such a link
+ * verbatim into `Brain/`. Symlinks that stay INSIDE the extracted tree
+ * are kept: the member walk that builds an archive lists symlinked files
+ * and directories as members without following them, so a vault that
+ * legitimately uses in-tree links produces archives carrying them, and a
+ * restore must not break on its own output.
+ *
+ * Every link is checked twice. Its recorded target, read with
+ * `readlink` and resolved against the link's own directory, must stay
+ * inside the tree - this is the only check a DANGLING link can get, and
+ * it is the one that matters for it: a link to a file that does not
+ * exist yet outside the vault is restored verbatim into `Brain/` and
+ * becomes a write-through escape the moment anything creates that file.
+ * When the target does resolve, its real path must stay inside too, so
+ * a chain through another link cannot leave the tree either.
+ *
+ * Both comparisons accept the tree under its resolved AND unresolved
+ * root: the tmpdir this tree extracts into may itself sit behind a
+ * platform symlink (macOS `/var`), and a compare against only one
+ * spelling would refuse the tree's own honest links.
+ */
+function refuseEscapingSymlinks(root: string, runId: string): void {
+  const realRoot = realpathSync(root);
+  const lexicalRoot = resolve(root);
+  const inside = (p: string): boolean =>
+    p === realRoot ||
+    p.startsWith(realRoot + sep) ||
+    p === lexicalRoot ||
+    p.startsWith(lexicalRoot + sep);
+  const stack: string[] = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop()!;
+    let entries: Dirent[];
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (err) {
+      throw new BrainSnapshotError(
+        `cannot inspect the extracted tree at ${dir}: ${(err as Error).message ?? String(err)}`,
+        runId,
+        { cause: err },
+      );
+    }
+    for (const entry of entries) {
+      const abs = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        const recorded = resolve(dirname(abs), readlinkSync(abs));
+        let target: string | null;
+        try {
+          target = realpathSync(abs);
+        } catch {
+          // Dangling (or a loop): only the recorded target can be judged.
+          target = null;
+        }
+        for (const candidate of target === null ? [recorded] : [recorded, target]) {
+          if (!inside(candidate)) {
+            throw new BrainSnapshotError(
+              `snapshot contains a symlink that escapes the extracted tree: ` +
+                `${relative(root, abs)} -> ${candidate}`,
+              runId,
+            );
+          }
+        }
+        continue;
+      }
+      if (entry.isDirectory()) stack.push(abs);
+    }
   }
 }
 
@@ -1770,14 +1849,17 @@ export function restoreSnapshot(
         );
       }
     }
-    // Copy in each extracted entry. `cpSync({ recursive: true })` is
-    // available in Node 18+ and Bun, which is the target runtime.
+    // Copy in each extracted entry. `verbatimSymlinks` is load-bearing:
+    // without it `cpSync` rewrites every relative link to the ABSOLUTE
+    // path of its target inside the temp extraction, which the cleanup
+    // below deletes - the in-tree links the containment sweep kept would
+    // all restore dangling, pointing outside the vault.
     let restoredFiles = 0;
     mkdirSync(dirs.brain, { recursive: true });
     for (const name of replacementEntries) {
       const from = join(ext.brainRoot, name);
       const to = join(dirs.brain, name);
-      cpSync(from, to, { recursive: true });
+      cpSync(from, to, { recursive: true, verbatimSymlinks: true });
       restoredFiles += countFiles(to);
     }
     const derivedStore = restoreDerivedStore(vault, runId, opts);

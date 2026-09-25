@@ -67,6 +67,7 @@ Brain verbs (observing memory):
                    (--format json|llms-txt|transcripts-jsonl [--out <path>])
   okf-export       Write a portable Open Knowledge Format bundle (--out <dir> [--force])
   okf-import       Import an OKF bundle (<dir>; staged as review candidates, --trusted writes direct)
+  knowledge-pack   Portable knowledge subsets: export (--select), preview, install, uninstall, list
   explorer         Launch the loopback HTML explorer; --export <path> writes a single offline file
   snapshot         Inspect recovery points: log (newest-first, --reason filter),
                    diff (two snapshots, or a snapshot vs live)
@@ -170,6 +171,7 @@ Brain verbs (observing memory):
   design-note         One-shot design note grounded in tensions, decisions and truth records
   ideas               Ranked next-direction candidates from open loops (--triggers to enqueue)
   continuity          Export continuity records as ATOF/ATIF trajectories (read-only)
+  payload             Externalized session payloads: get (paged), list, gc (dry-run by default)
   bench               Memory quality benchmark over a disposable fixture vault
   git                 Git history as project memory: ingest, status, find, mine
   architect           Deterministic architecture notes for a code project
@@ -670,7 +672,31 @@ export const VERB_HELP: Record<string, string> = {
     "Import an OKF bundle. By default pages are staged under 'OKF Review/'\n" +
     "with okf_review: pending (review candidates); --trusted writes each\n" +
     "page directly to its recorded path. Foreign-producer bundles get\n" +
-    "producer + raw type provenance stamped and x-* frontmatter preserved.\n",
+    "producer + raw type provenance stamped and x-* frontmatter preserved.\n" +
+    "The manifest's producer is never trusted: without --trusted, machinery\n" +
+    "frontmatter (_status, _confidence, owner, origin_channel, ...) is\n" +
+    "stripped even from a bundle that claims to be open-second-brain. Pass\n" +
+    "--trusted only for a bundle you exported yourself: it keeps that\n" +
+    "frontmatter for an open-second-brain bundle and admits the\n" +
+    "Brain/sources/ and Brain/reports/ lanes (other Brain/ paths are always\n" +
+    "refused).\n",
+  "knowledge-pack":
+    "usage: o2b brain knowledge-pack export --name <name> --select <sel>[,<sel>...] --out <dir>\n" +
+    "                                       [--version <v>] [--force] [--json]\n" +
+    "       o2b brain knowledge-pack preview <pack-dir> [--json]\n" +
+    "       o2b brain knowledge-pack install <pack-dir> [--agent <name>] [--json]\n" +
+    "       o2b brain knowledge-pack uninstall <name> [--confirm] [--json]\n" +
+    "       o2b brain knowledge-pack list [--json]\n" +
+    "A knowledge pack is an OKF bundle of selected pages plus selected preference\n" +
+    "rows, sealed with a sha256 per file. Selectors: pref-<slug>, a page id or\n" +
+    "path, topic:<topic>, tag:<tag>. Export blocks pages with visibility:, entries\n" +
+    "with owner:, and unreviewed OKF Review/ candidates, and redacts the rest.\n" +
+    "Preview shows the manifest, samples, integrity, conflicts and privacy\n" +
+    "warnings (exit 1 on an integrity failure). Install refuses a pack that fails\n" +
+    "its integrity check; preferences land unconfirmed on a fresh trial window,\n" +
+    "pages stage under 'OKF Review/', each stamped knowledge_pack: <name>@<sha>.\n" +
+    "Uninstall is a dry run without --confirm and removes behind a snapshot;\n" +
+    "entries that gained local evidence or were promoted are kept and named.\n",
   "morning-brief":
     "usage: o2b brain morning-brief [--vault <path>] [--json] [--top-k <n>]\n" +
     "  [--lookback-days <n>] [--max-chars-per-memory <n>] [--max-total-chars <n>]\n" +
@@ -972,7 +998,10 @@ export const VERB_HELP: Record<string, string> = {
     "and requires the guardrails.marker_writeback flag in _brain.yaml; with the\n" +
     "flag off, --apply refuses and writes nothing. Applied markers are consumed\n" +
     "(annotated) so a re-run is idempotent. Unresolvable or invalid targets are\n" +
-    "reported with an error code and candidates and left unconsumed. Source files\n" +
+    "reported with an error code and candidates and left unconsumed; a target a\n" +
+    "governance wall refuses (standing rules, Brain machinery, a non-note file,\n" +
+    "the declared write binding) is reported as refused, in report mode too,\n" +
+    "and the run continues with the next marker. Source files\n" +
     "come from --path (repeatable) or notes.read_paths.\n",
   pending:
     "usage: o2b brain pending list [--vault <path>] [--json]\n" +
@@ -1177,6 +1206,16 @@ export const VERB_HELP: Record<string, string> = {
     "Read-only trajectory export of the continuity store. atof renders one\n" +
     "JSONL event stream; atif renders one trajectory document per session.\n" +
     "Records flagged private are dropped; redacted text stays masked.\n",
+  payload:
+    "usage: o2b brain payload get <osb-payload://sha256> [--offset N] [--limit N] [--json]\n" +
+    "       o2b brain payload list [--json]\n" +
+    "       o2b brain payload gc [--apply] [--json]\n" +
+    "Session import (--recall) moves data URIs, long base64 runs and turn text past\n" +
+    "sessions.payload_max_text_chars into Brain/.payloads/<sha256>.txt, leaving a\n" +
+    "[payload: osb-payload://<sha256> chars=N] placeholder. get pages the exact\n" +
+    "stored (redacted) content (default 4000 chars; raw to stdout without --json).\n" +
+    "list shows stored payloads, reference counts and missing refs. gc names payloads\n" +
+    "nothing in the vault references; --apply removes them behind a recovery point.\n",
   session:
     "usage: o2b brain session <open|submit|approve|abandon|status|list|sweep> [<session-id>] [flags]\n" +
     "open --target <Brain/...md> [--schema-type S] [--intent create|overwrite|merge]\n" +

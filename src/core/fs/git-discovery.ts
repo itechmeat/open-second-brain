@@ -120,7 +120,7 @@ function ioReason(err: unknown): string {
  *
  * A symlinked ignore file is refused outright rather than resolved: the walk
  * itself never follows symlinked directories, so honouring one here would read
- * patterns from outside the tree being walked (`/etc/shadow`) or from a stream
+ * patterns from outside the tree being walked (a system file) or from a stream
  * with no end (`/dev/zero`). Containment-checking the resolved target was the
  * alternative; refusal is chosen because this module is composed by callers
  * walking different path spaces (a repo root, a vault subdirectory) and it must

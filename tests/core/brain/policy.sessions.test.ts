@@ -14,8 +14,10 @@ import { join } from "node:path";
 import { bootstrapBrain } from "../../../src/core/brain/init.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import {
+  BRAIN_SESSION_PAYLOAD_DEFAULTS,
   BRAIN_SESSIONS_DEFAULTS,
   loadBrainConfigDetailed,
+  resolveSessionPayloadPolicy,
   resolveSessions,
 } from "../../../src/core/brain/policy.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
@@ -88,5 +90,23 @@ describe("sessions block parsing", () => {
     appendConfig(["sessions:", "  shiny_future_knob: 5"].join("\n"));
     const { warnings } = loadBrainConfigDetailed(vault);
     expect(warnings.some((w) => w.message.includes("shiny_future_knob"))).toBe(true);
+  });
+
+  test("payload thresholds default, parse, and reject non-positive values", () => {
+    expect(resolveSessionPayloadPolicy(loadBrainConfigDetailed(vault).config)).toEqual(
+      BRAIN_SESSION_PAYLOAD_DEFAULTS,
+    );
+    appendConfig(["sessions:", "  payload_max_text_chars: 9000"].join("\n"));
+    const loaded = loadBrainConfigDetailed(vault);
+    expect(loaded.warnings).toHaveLength(0);
+    expect(resolveSessionPayloadPolicy(loaded.config)).toEqual({
+      max_inline_chars: BRAIN_SESSION_PAYLOAD_DEFAULTS.max_inline_chars,
+      max_text_chars: 9000,
+    });
+    atomicWriteFileSync(
+      brainConfigPath(vault),
+      readFileSync(brainConfigPath(vault), "utf8").replace("9000", "0"),
+    );
+    expect(() => loadBrainConfigDetailed(vault)).toThrow(/payload_max_text_chars/);
   });
 });

@@ -52,6 +52,14 @@ import { appendLogEvent } from "./log.ts";
 import { discoverMarkers, type ParsedMarker } from "./inline.ts";
 import { rewriteMarkers, type RewriteOp } from "./inline-rewrite.ts";
 import { resolveNotePath } from "./note-path.ts";
+import {
+  governCallerNamedWritePath,
+  GovernedPathWriteRefusedError,
+} from "../write-binding/index.ts";
+import {
+  assertStandingRulesNotTargeted,
+  StandingRulesWriteRefusedError,
+} from "./standing-rules.ts";
 import { NoteTitleResolutionError, resolveNoteTarget } from "./notes/note-title-resolver.ts";
 import { loadGuardrailsConfigSafe } from "./policy.ts";
 import { loadSchemaPack } from "./schema-pack.ts";
@@ -60,6 +68,31 @@ import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 
 /** The `marker_writeback` guardrail flag name, surfaced in refusals. */
 export const MARKER_WRITEBACK_GUARDRAIL = "marker_writeback";
+
+/** Surface name the governance walls quote in a `refused` row. */
+const MARKER_WRITEBACK_SURFACE = "marker write-back";
+
+/**
+ * The governance refusal for writing `relPath`, or `null` when the
+ * walls admit it: the same walls `assignNoteAttribute` applies, run as a
+ * per-marker verdict so a refused target is one `refused` row rather
+ * than an exception that aborts every marker after it.
+ */
+function governanceRefusal(vault: string, relPath: string): string | null {
+  try {
+    assertStandingRulesNotTargeted(vault, relPath, MARKER_WRITEBACK_SURFACE);
+    governCallerNamedWritePath(vault, relPath, MARKER_WRITEBACK_SURFACE);
+    return null;
+  } catch (err) {
+    if (
+      err instanceof GovernedPathWriteRefusedError ||
+      err instanceof StandingRulesWriteRefusedError
+    ) {
+      return err.message;
+    }
+    throw err;
+  }
+}
 
 /**
  * Max length for `prior_value` / `new_value` as sanitised onto the
@@ -97,13 +130,22 @@ const ATTRIBUTE_LOG_VALUE_MAX_LEN = 4096;
  *                        schema validation (undeclared type/field,
  *                        empty/multi-line/comma value, or an untyped
  *                        note). The marker is left unconsumed.
+ *   - `refused`        - the target resolved but a governance wall
+ *                        refused it: the operator's standing rules, the
+ *                        write binding's own config, Brain machinery or a
+ *                        non-note file, or a declared write binding that
+ *                        does not admit it. Checked in report mode too, so
+ *                        a dry run never promises a write apply refuses.
+ *                        The marker is left unconsumed and the run
+ *                        continues with the next one.
  */
 export type MarkerWritebackStatus =
   | "would-apply"
   | "applied"
   | "applied-unconsumed"
   | "invalid-target"
-  | "invalid-field";
+  | "invalid-field"
+  | "refused";
 
 /** One per-marker result row. Frozen. */
 export interface MarkerWritebackEntry {
@@ -142,7 +184,7 @@ export interface MarkerWritebackReport {
   readonly appliedCount: number;
   /** Count of `would-apply` rows. */
   readonly pendingCount: number;
-  /** Count of `invalid-target` + `invalid-field` rows. */
+  /** Count of `invalid-target` + `invalid-field` + `refused` rows. */
   readonly failedCount: number;
   /**
    * Count of `applied-unconsumed` rows: mutations that landed but whose
@@ -248,6 +290,30 @@ export async function applyMarkerWritebacks(
         throw err;
       }
 
+      // ---- 1b. Governance walls, in report AND apply mode. -------------
+      // Before any read of the target: a refused target is reported, not
+      // thrown, so one marker naming Brain machinery or a path outside the
+      // declared write binding cannot abort the markers after it.
+      const refusal = governanceRefusal(vault, resolvedPath);
+      if (refusal !== null) {
+        entries.push(
+          makeEntry({
+            status: "refused",
+            sourcePath: file,
+            sourceLine: marker.originLine,
+            rawTarget,
+            field: rawField,
+            value: rawValue,
+            resolvedPath,
+            priorValue: null,
+            error: refusal,
+            errorCode: null,
+            candidates: [],
+          }),
+        );
+        continue;
+      }
+
       // ---- 2. Validate the assignment against the schema pack. ---------
       // Read the target's own type; `validateAttributeAssignment` (the
       // shared entry point `assignNoteAttribute` uses) fail-closes on an
@@ -327,11 +393,40 @@ export async function applyMarkerWritebacks(
       // ---- 4. Apply mode: write, audit, mark for consumption. ----------
       // The frontmatter WRITE itself still propagates on failure - a
       // mutation that never landed is a hard error, not a partial state.
-      assignNoteAttribute(vault, resolvedPath, {
-        field: normalizedField,
-        value: normalizedValue,
-        pack,
-      });
+      // The one exception is a governance refusal: the walls ran in step
+      // 1b, but the filesystem or the binding can change between that
+      // check and this write, and a refusal here is still a verdict about
+      // THIS marker, not a reason to abandon the rest of the run.
+      try {
+        assignNoteAttribute(vault, resolvedPath, {
+          field: normalizedField,
+          value: normalizedValue,
+          pack,
+        });
+      } catch (err) {
+        if (
+          !(err instanceof GovernedPathWriteRefusedError) &&
+          !(err instanceof StandingRulesWriteRefusedError)
+        ) {
+          throw err;
+        }
+        entries.push(
+          makeEntry({
+            status: "refused",
+            sourcePath: file,
+            sourceLine: marker.originLine,
+            rawTarget,
+            field: normalizedField,
+            value: normalizedValue,
+            resolvedPath,
+            priorValue,
+            error: err.message,
+            errorCode: null,
+            candidates: [],
+          }),
+        );
+        continue;
+      }
       // Post-write steps are hardened per marker. Once the attribute is on
       // disk, an audit-append failure must NOT throw the whole run: the
       // mutation already stands, so we surface an honest `applied-unconsumed`
@@ -485,7 +580,7 @@ export async function applyMarkerWritebacks(
         unconsumedCount++;
         break;
       default:
-        // invalid-target, invalid-field
+        // invalid-target, invalid-field, refused
         failedCount++;
     }
   }

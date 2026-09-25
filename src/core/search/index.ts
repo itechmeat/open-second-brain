@@ -556,6 +556,20 @@ export function resolveSearchConfig(opts: {
   );
   // Explicit config/env always wins over the registry profile's fields.
   const baseUrl = explicitBaseUrl ?? registryExpansion?.baseUrl ?? null;
+  // The plain-http opt-out binds to the URL the operator wrote down: the
+  // registry file lives inside the vault, so a URL it supplies never
+  // inherits an opt-out granted in config.
+  const embeddingAllowInsecureHttp =
+    parseBool(
+      envOrConfig(
+        env,
+        config,
+        "OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP",
+        "embedding_allow_insecure_http",
+      ),
+      false,
+      "embedding_allow_insecure_http",
+    ) && explicitBaseUrl !== null;
   const model = explicitModel ?? registryExpansion?.model ?? null;
   const apiKey = explicitApiKey ?? registryExpansion?.apiKey ?? null;
   // Multi-key failover list: an explicit key is single-valued; otherwise
@@ -632,6 +646,7 @@ export function resolveSearchConfig(opts: {
     model,
     apiKey,
     apiKeys: Object.freeze(apiKeys),
+    ...(embeddingAllowInsecureHttp ? { allowInsecureHttp: true } : {}),
     dimension,
     timeoutMs,
     concurrency,
@@ -662,15 +677,26 @@ export function resolveSearchConfig(opts: {
     rerankProviderName !== null
       ? expandRegisteredRerankProvider(rerankProviderName, loadRerankRegistry(opts.vault))
       : null;
-  const rerankBaseUrl =
-    envOrConfig(
-      env,
-      config,
-      "OPEN_SECOND_BRAIN_SEARCH_RERANK_BASE_URL",
-      "search_rerank_base_url",
-    ) ??
-    rerankProfile?.baseUrl ??
-    null;
+  const explicitRerankBaseUrl = envOrConfig(
+    env,
+    config,
+    "OPEN_SECOND_BRAIN_SEARCH_RERANK_BASE_URL",
+    "search_rerank_base_url",
+  );
+  const rerankBaseUrl = explicitRerankBaseUrl ?? rerankProfile?.baseUrl ?? null;
+  // Same binding as the embedding opt-out: a registry-supplied URL never
+  // inherits it.
+  const rerankAllowInsecureHttp =
+    parseBool(
+      envOrConfig(
+        env,
+        config,
+        "OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP",
+        "search_rerank_allow_insecure_http",
+      ),
+      false,
+      "search_rerank_allow_insecure_http",
+    ) && explicitRerankBaseUrl !== null;
   const rerankModel =
     envOrConfig(env, config, "OPEN_SECOND_BRAIN_SEARCH_RERANK_MODEL", "search_rerank_model") ??
     rerankProfile?.model ??
@@ -716,6 +742,7 @@ export function resolveSearchConfig(opts: {
     model: rerankModel,
     envKey: rerankEnvKey,
     apiKey: rerankApiKey !== null && rerankApiKey !== "" ? rerankApiKey : null,
+    ...(rerankAllowInsecureHttp ? { allowInsecureHttp: true } : {}),
     topK: rerankTopK,
     minScore: rerankMinScore,
   });

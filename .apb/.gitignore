@@ -1,0 +1,5 @@
+workspace.local
+runs/
+trash/
+tmp/
+secrets.env

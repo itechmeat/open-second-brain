@@ -71,7 +71,20 @@ async function callPack(
     method: "tools/call",
     params: { name: "brain_context_pack", arguments: args },
   })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
-  return JSON.parse(r.result.content[0]!.text);
+  const parsed = JSON.parse(r.result.content[0]!.text) as Record<string, unknown>;
+  // The tool carries the MCP preview budget, and every item echoes its
+  // absolute vault path: under a long temp root the same pack crosses the
+  // budget and arrives as a preview envelope. Follow it the way a client
+  // does, so a test reads the pack and not the length of `tmpdir()`.
+  if (parsed["preview_truncated"] !== true) return parsed;
+  const full = (await server.handleRequest({
+    jsonrpc: JSONRPC_VERSION,
+    id: 10,
+    method: "tools/call",
+    params: { name: "brain_artifact_get", arguments: { artifact_id: parsed["artifact_id"] } },
+  })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
+  const stored = JSON.parse(full.result.content[0]!.text) as { content: string };
+  return JSON.parse(stored.content) as Record<string, unknown>;
 }
 
 describe("brain_context_pack tool registration", () => {
@@ -439,5 +452,98 @@ describe("brain_context_pack tool — warnings", () => {
     await initialize(server);
     const out = await callPack(server, { max_tokens: 10_000 });
     expect(out["warnings"]).toBeUndefined();
+  });
+});
+
+/**
+ * Remote reach withholds a reserved page from EVERY member of the pack.
+ *
+ * Filtering `items` alone left the reserved page's path and body in
+ * `lanes`, its id in `skipped`, the tension `warnings` naming it and the
+ * `deduped_from` pointer of a public duplicate - all derived from the
+ * candidate set the core ranked before the projection filtered it.
+ */
+describe("brain_context_pack tool — remote reach", () => {
+  const MARKER = "zzpackreservedzz";
+
+  function seedReservedPack(): void {
+    const prefs = join(vault, "Brain", "preferences");
+    // A shared body, so `dedup_repeated` would point the public copy at the
+    // reserved one (the reserved page is newer and ranks first).
+    const repeated = "Deploy only on weekdays.";
+    writeFileSync(
+      join(prefs, "pref-public.md"),
+      `---\nid: pref-public\ntopic: t\nprinciple: public rule\ntier: core\ncreated_at: 2026-05-01T00:00:00Z\n---\n\n${repeated}\n`,
+    );
+    writeFileSync(
+      join(prefs, `pref-${MARKER}-small.md`),
+      `---\nid: pref-${MARKER}-small\ntopic: t\nprinciple: reserved rule\ntier: core\nvisibility: [private]\ncreated_at: 2026-05-03T00:00:00Z\n---\n\n${repeated}\n`,
+    );
+    writeFileSync(
+      join(prefs, `pref-${MARKER}-big.md`),
+      `---\nid: pref-${MARKER}-big\ntopic: t\nprinciple: reserved big\ntier: core\nvisibility: [private]\ncreated_at: 2026-05-02T00:00:00Z\n---\n\n${"word ".repeat(4000)}\n`,
+    );
+    persistTension(
+      vault,
+      {
+        aId: "pref-public",
+        bId: `pref-${MARKER}-small`,
+        subject: "deploy weekdays",
+        jaccard: 0.6,
+        aSign: "positive",
+        bSign: "negative",
+        aQuote: "Deploy only on weekdays.",
+        bQuote: "Deploy only on weekdays.",
+        action: "ask_user",
+      },
+      { agent: "tester" },
+    );
+  }
+
+  const ARGS = { max_tokens: 200, lanes: true, dedup_repeated: true };
+
+  /** The full payload, following a preview envelope the way a client does. */
+  async function callFullPack(server: MCPServer): Promise<Record<string, unknown>> {
+    const parsed = await callPack(server, ARGS);
+    if (parsed["preview_truncated"] !== true) return parsed;
+    const full = (await server.handleRequest({
+      jsonrpc: JSONRPC_VERSION,
+      id: 10,
+      method: "tools/call",
+      params: { name: "brain_artifact_get", arguments: { artifact_id: parsed["artifact_id"] } },
+    })) as { result: { content: ReadonlyArray<{ type: string; text: string }> } };
+    const envelope = JSON.parse(full.result.content[0]!.text) as { content: string };
+    return JSON.parse(envelope.content) as Record<string, unknown>;
+  }
+
+  test("the local caller sees the reserved pages in every member", async () => {
+    seedReservedPack();
+    const server = new MCPServer({ vault, configPath }, { reach: "local" });
+    await initialize(server);
+    const out = await callFullPack(server);
+    const skipped = out["skipped"] as ReadonlyArray<{ id: string }>;
+    expect(skipped.map((s) => s.id)).toContain(`pref-${MARKER}-big`);
+    expect(JSON.stringify(out["lanes"])).toContain(MARKER);
+    expect(JSON.stringify(out["warnings"])).toContain(MARKER);
+    expect(JSON.stringify(out["items"])).toContain(`"deduped_from":"pref-${MARKER}-small"`);
+  });
+
+  test("a remote caller sees none of them, in any member", async () => {
+    seedReservedPack();
+    const server = new MCPServer({ vault, configPath }, { reach: "remote" });
+    await initialize(server);
+    const out = await callFullPack(server);
+    expect(JSON.stringify(out)).not.toContain(MARKER);
+    // The public page is still packed, undeduplicated, with its lanes.
+    const items = out["items"] as ReadonlyArray<{ id: string; body: string; tokens: number }>;
+    expect(items.map((i) => i.id)).toEqual(["pref-public"]);
+    expect(items[0]!.body).toContain("Deploy only on weekdays.");
+    expect(out["lanes"]).toBeDefined();
+    // Still flagged as contested, just without the tension id that names
+    // the reserved counterpart.
+    expect(out["warnings"]).toEqual([
+      "unresolved tension (open) involves injected memory pref-public",
+    ]);
+    expect(out["tokens_used"]).toBe(items.reduce((n, i) => n + i.tokens, 0));
   });
 });

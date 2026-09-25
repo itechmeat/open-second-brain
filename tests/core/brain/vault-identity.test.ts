@@ -267,14 +267,14 @@ describe("the guard fires on Brain write paths", () => {
     now: NOW,
   } as const;
 
-  const GUARD_PAGE_REL = posix.join("Brain", "notes", "guard-page.md");
+  const GUARD_PAGE_REL = posix.join("notes", "guard-page.md");
 
   function guardPagePath(vaultRoot: string): string {
-    return join(vaultRoot, "Brain", "notes", "guard-page.md");
+    return join(vaultRoot, "notes", "guard-page.md");
   }
 
   function writeGuardPage(vaultRoot: string): void {
-    mkdirSync(join(vaultRoot, "Brain", "notes"), { recursive: true });
+    mkdirSync(join(vaultRoot, "notes"), { recursive: true });
     writeFileSync(guardPagePath(vaultRoot), "---\ntitle: Guard\n---\n\nGuarded page.\n", "utf8");
   }
 

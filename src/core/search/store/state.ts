@@ -56,6 +56,20 @@ export const LAST_INDEXED_AT_STATE_KEY = "last_indexed_at";
 export const LAST_FULL_INDEX_AT_STATE_KEY = "last_full_index_at";
 
 /**
+ * `index_state` key recording the `CHUNKER_VERSION` (chunker.ts) every
+ * chunk in this index was cut under. Chunks are only recomputed when a
+ * file changes, so an index whose value differs - or is absent, which is
+ * every index built before the key existed - still holds chunks cut by
+ * older rules, and the self-heal rebuild (ensure-current.ts) replaces it.
+ *
+ * Written only when it is true: at the start of a run over an EMPTY index
+ * (nothing older in it to be wrong) and at the end of a completed forced
+ * run (every document re-chunked). An incremental run over a stale index
+ * does not write it, because the documents it skipped are still stale.
+ */
+export const CHUNKER_VERSION_STATE_KEY = "chunker_version";
+
+/**
  * `index_state` keys behind the store-integrity gate (what-the-index-
  * already-knew, unit K).
  *

@@ -15,7 +15,7 @@
  * canonicalises). The predicate is pure and does no I/O.
  */
 
-import { BRAIN_STATE_REL } from "../brain/paths.ts";
+import { BRAIN_PAYLOADS_REL, BRAIN_STATE_REL } from "../brain/paths.ts";
 import { pathCovers } from "./defaults.ts";
 
 export interface AdmissionVerdict {
@@ -39,6 +39,14 @@ const ADMIT: AdmissionVerdict = Object.freeze({ admit: true });
 export function admitToIndex(relPath: string): AdmissionVerdict {
   if (pathCovers(BRAIN_STATE_REL, relPath)) {
     return Object.freeze({ admit: false, reason: "exact-state-lane" });
+  }
+  // The payload registry's store holds the raw blobs session import
+  // externalized precisely so recall would see a placeholder instead;
+  // indexing the store would put the blobs straight back. Its files are
+  // `.txt` today, which the `.md` walkers skip anyway - this makes the
+  // exclusion a stated rule rather than an accident of the extension.
+  if (pathCovers(BRAIN_PAYLOADS_REL, relPath)) {
+    return Object.freeze({ admit: false, reason: "payload-store" });
   }
   return ADMIT;
 }

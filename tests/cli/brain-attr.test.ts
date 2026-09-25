@@ -18,7 +18,8 @@ let vault: string;
 beforeEach(() => {
   tmp = mkdtempSync(join(tmpdir(), "o2b-cli-attr-"));
   vault = join(tmp, "vault");
-  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  mkdirSync(join(vault, "Brain"), { recursive: true });
+  mkdirSync(join(vault, "Notes"), { recursive: true });
   writeFileSync(
     join(vault, "Brain", "_brain.yaml"),
     [
@@ -29,10 +30,7 @@ beforeEach(() => {
       "    - paper.status=reading status, e.g. queued or finished",
     ].join("\n") + "\n",
   );
-  writeFileSync(
-    join(vault, "Brain", "notes", "paper.md"),
-    "---\ntype: paper\n---\n\n# Paper\n\nbody\n",
-  );
+  writeFileSync(join(vault, "Notes", "paper.md"), "---\ntype: paper\n---\n\n# Paper\n\nbody\n");
 });
 
 afterEach(() => {
@@ -43,7 +41,7 @@ test("assign writes the attribute, show renders it, remove drops it", async () =
   const assign = await runCli([
     "brain",
     "attr",
-    "Brain/notes/paper.md",
+    "Notes/paper.md",
     "status=queued",
     "--vault",
     vault,
@@ -53,14 +51,12 @@ test("assign writes the attribute, show renders it, remove drops it", async () =
   const assigned = JSON.parse(assign.stdout) as { ok: boolean; attributes: string[] };
   expect(assigned.ok).toBe(true);
   expect(assigned.attributes).toEqual(["status=queued"]);
-  expect(readFileSync(join(vault, "Brain", "notes", "paper.md"), "utf8")).toContain(
-    "status=queued",
-  );
+  expect(readFileSync(join(vault, "Notes", "paper.md"), "utf8")).toContain("status=queued");
 
   const show = await runCli([
     "brain",
     "attr",
-    "Brain/notes/paper.md",
+    "Notes/paper.md",
     "--show",
     "--vault",
     vault,
@@ -69,14 +65,14 @@ test("assign writes the attribute, show renders it, remove drops it", async () =
   expect(show.returncode).toBe(0);
   expect(JSON.parse(show.stdout)).toEqual({
     ok: true,
-    path: "Brain/notes/paper.md",
+    path: "Notes/paper.md",
     attributes: { status: "queued" },
   });
 
   const remove = await runCli([
     "brain",
     "attr",
-    "Brain/notes/paper.md",
+    "Notes/paper.md",
     "--remove",
     "status",
     "--vault",
@@ -90,14 +86,7 @@ test("assign writes the attribute, show renders it, remove drops it", async () =
 });
 
 test("an undeclared field is a usage error teaching the vocabulary", async () => {
-  const result = await runCli([
-    "brain",
-    "attr",
-    "Brain/notes/paper.md",
-    "rating=5",
-    "--vault",
-    vault,
-  ]);
+  const result = await runCli(["brain", "attr", "Notes/paper.md", "rating=5", "--vault", vault]);
   expect(result.returncode).toBe(2);
   expect(result.stderr).toContain(
     "declared fields: status (reading status, e.g. queued or finished)",
@@ -105,12 +94,12 @@ test("an undeclared field is a usage error teaching the vocabulary", async () =>
 });
 
 test("missing mode or conflicting modes are usage errors", async () => {
-  const none = await runCli(["brain", "attr", "Brain/notes/paper.md", "--vault", vault]);
+  const none = await runCli(["brain", "attr", "Notes/paper.md", "--vault", vault]);
   expect(none.returncode).toBe(2);
   const both = await runCli([
     "brain",
     "attr",
-    "Brain/notes/paper.md",
+    "Notes/paper.md",
     "status=queued",
     "--show",
     "--vault",

@@ -19,8 +19,7 @@
  */
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { appendLogEvent } from "../../src/core/brain/log.ts";
@@ -38,9 +37,12 @@ import { readResource, type ResourceContext } from "../../src/mcp/resources.ts";
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
 import { listRecallTelemetry } from "../../src/core/brain/recall-telemetry.ts";
 import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.ts";
+import { pinHome, tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 /** HOME is pinned per file by convention; nothing pins it globally. */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-vis-parity-home-"));
+pinHome("o2b-vis-parity-home-");
 
 /** Appears only inside artifacts carrying the reserved token. */
 const MARKER = "zzreservedmarkerzz";
@@ -54,8 +56,8 @@ let vault: string;
 let dbPath: string;
 
 beforeEach(async () => {
-  vault = mkdtempSync(join(tmpdir(), "o2b-vis-parity-vault-"));
-  dbPath = join(mkdtempSync(join(tmpdir(), "o2b-vis-parity-db-")), "brain.sqlite");
+  vault = mkTemp("o2b-vis-parity-vault-");
+  dbPath = join(mkTemp("o2b-vis-parity-db-"), "brain.sqlite");
   for (const sub of ["preferences", "retired", "inbox", "log"]) {
     mkdirSync(join(vault, "Brain", sub), { recursive: true });
   }

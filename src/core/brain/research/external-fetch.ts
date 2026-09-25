@@ -26,9 +26,16 @@
 
 import { canonicalJson } from "../../integrity/digest.ts";
 import { redactRawOutput } from "../../redactor.ts";
+import { assertHttpEgressEndpoint } from "../../search/embeddings/http-util.ts";
 
 /** Distinct failure kinds a keyed fetch can produce. */
-export type ExternalFetchErrorKind = "disabled" | "network" | "auth" | "http" | "payload";
+export type ExternalFetchErrorKind =
+  | "disabled"
+  | "refused"
+  | "network"
+  | "auth"
+  | "http"
+  | "payload";
 
 /** A typed failure of a keyed external fetch. Carries the HTTP status when one exists. */
 export class ExternalFetchError extends Error {
@@ -164,6 +171,52 @@ function messageOf(err: unknown): string {
 }
 
 /**
+ * The URL's host when it is an IPv4 or IPv6 literal in a private,
+ * link-local, carrier-grade-NAT or unspecified range, else null. Loopback
+ * is left to {@link assertHttpEgressEndpoint}, which admits it as the
+ * local-server case.
+ */
+export function privateIpLiteral(rawUrl: string): string | null {
+  let host: string;
+  try {
+    host = new URL(rawUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  const v6 = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : null;
+  if (v6 !== null) {
+    // IPv4-mapped: the URL parser normalises `::ffff:10.0.0.1` to the
+    // hex form `::ffff:a00:1`, so both spellings are read back to dotted.
+    const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(v6);
+    if (mapped) return isPrivateV4(mapped[1]!) ? host : null;
+    const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(v6);
+    if (mappedHex) {
+      const hi = Number.parseInt(mappedHex[1]!, 16);
+      const lo = Number.parseInt(mappedHex[2]!, 16);
+      const dotted = `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+      return isPrivateV4(dotted) ? host : null;
+    }
+    if (v6 === "::") return host;
+    // fc00::/7 unique-local, fe80::/10 link-local.
+    if (/^f[cd][0-9a-f]{0,2}:/.test(v6) || /^fe[89ab][0-9a-f]?:/.test(v6)) return host;
+    return null;
+  }
+  return /^\d+\.\d+\.\d+\.\d+$/.test(host) && isPrivateV4(host) ? host : null;
+}
+
+function isPrivateV4(dotted: string): boolean {
+  const [a, b] = dotted.split(".").map(Number) as [number, number];
+  return (
+    a === 0 ||
+    a === 10 ||
+    (a === 100 && b >= 64 && b <= 127) ||
+    (a === 169 && b === 254) ||
+    (a === 172 && b >= 16 && b <= 31) ||
+    (a === 192 && b === 168)
+  );
+}
+
+/**
  * Perform a keyed external fetch through the injected transport. Enforces the
  * env gate, applies auth, consults and populates the cache, and maps every
  * failure to a typed {@link ExternalFetchError}. The API key is redacted from
@@ -176,6 +229,33 @@ export async function keyedFetch(
   const key = config.apiKey;
   if (key === null || key.trim().length === 0) {
     throw new ExternalFetchError("disabled", "external fetch is disabled: no API key configured");
+  }
+
+  // The key rides every request as a bearer credential, so the URL the
+  // request names is validated BEFORE the key is attached to it: https
+  // only, with plain http allowed for loopback hosts (the local-server
+  // case). The two named providers use constant https endpoints today;
+  // this wall is for the day a caller does not - a URL harvested from
+  // content must not become a cleartext or internal-network bearer drop.
+  try {
+    assertHttpEgressEndpoint(req.url, "external fetch url");
+  } catch (err) {
+    throw new ExternalFetchError("refused", messageOf(err));
+  }
+  // The scheme rule admits `https://169.254.169.254/` and every other
+  // private address, and `extractPage` takes a URL harvested from content
+  // (audit L2). An IP literal in a private, link-local, carrier-grade NAT
+  // or unspecified range is refused before the key is attached: a bearer
+  // credential has no business on the metadata service or the LAN. A
+  // name that RESOLVES to such an address is not caught here (no DNS is
+  // done); the constant provider endpoints are public names.
+  const privateHost = privateIpLiteral(req.url);
+  if (privateHost !== null) {
+    throw new ExternalFetchError(
+      "refused",
+      `external fetch url names a private or link-local address (${privateHost}); ` +
+        `a keyed request is never sent there`,
+    );
   }
 
   const cacheKey = normalizeRequestKey(req);
@@ -223,14 +303,19 @@ export async function keyedFetch(
 }
 
 /**
- * The real `fetch`-backed transport. Built only by callers that reach the
- * network; never constructed in tests, so no test path touches the network.
+ * The real `fetch`-backed transport. Built by callers that reach the
+ * network; its tests drive it against a loopback server only.
+ *
+ * `redirect: "error"`, like the three search-provider transports: the
+ * request carries the key, and the fetch default would follow a 3xx to
+ * any host it names, key and all.
  */
 export function createFetchTransport(): ExternalFetchTransport {
   return async (input) => {
     const res = await fetch(input.url, {
       method: input.method,
       headers: input.headers,
+      redirect: "error",
       ...(input.body !== null ? { body: input.body } : {}),
     });
     return {

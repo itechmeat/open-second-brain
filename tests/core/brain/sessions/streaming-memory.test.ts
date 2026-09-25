@@ -47,8 +47,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { claudeAdapter } from "../../../../src/core/brain/sessions/claude.ts";
@@ -61,6 +60,9 @@ import {
   resetLineReaderRetainedBytes,
 } from "../../../../src/core/brain/sessions/read-lines.ts";
 import type { SessionAdapter } from "../../../../src/core/brain/sessions/types.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 /** Turn count per synthetic file. Sized so every file clears 8 MB. */
 const TURNS = 12_000;
@@ -78,7 +80,7 @@ interface Fixture {
 }
 
 function write(name: string, lines: readonly string[]): Fixture {
-  const dir = mkdtempSync(join(tmpdir(), "osb-streaming-"));
+  const dir = mkTemp("osb-streaming-");
   const path = join(dir, name);
   writeFileSync(path, `${lines.join("\n")}\n`);
   return {

@@ -240,20 +240,98 @@ test("unknown session id is a structured error", () => {
 });
 
 test("commit refuses a target whose Brain ancestor is a symlink out of the vault", () => {
-  // `validateTargetPath` runs at open time and is purely lexical: a
-  // path like `Brain/escape/adr.md` is clean, so the session opens.
-  // Only the write chokepoint can see that `Brain/escape` is a symlink
+  // `validateTargetPath` runs at open time and reads the path as spelled:
+  // `Brain/notes/escape/adr.md` is clean, so the session opens. Only the
+  // write chokepoint can see that `Brain/notes/escape` is a symlink
   // pointing outside the vault. The containment guard must reject the
   // commit before any mkdir/write lands the file on the symlink target.
   const outside = join(tmp, "outside");
   mkdirSync(outside, { recursive: true });
-  symlinkSync(outside, join(vault, "Brain", "escape"), "dir");
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  symlinkSync(outside, join(vault, "Brain", "notes", "escape"), "dir");
 
-  const opened = open({ targetPath: "Brain/escape/adr.md" });
+  const opened = open({ targetPath: "Brain/notes/escape/adr.md" });
   expect(() =>
     submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW }),
   ).toThrow(/escapes vault/);
 
   // Fail-closed: nothing was written through the symlink.
   expect(existsSync(join(outside, "adr.md"))).toBe(false);
+});
+
+test("open refuses Brain machinery targets, case-folded", () => {
+  for (const targetPath of [
+    "Brain/standing-rules.md",
+    "Brain/active.md",
+    "Brain/Preferences/x.md",
+    "Brain/log./x.md",
+  ]) {
+    expect(() => open({ targetPath })).toThrow(WriteSessionRequestError);
+  }
+  expect(existsSync(join(vault, "Brain", "standing-rules.md"))).toBe(false);
+  expect(existsSync(join(vault, "Brain", "active.md"))).toBe(false);
+});
+
+test("commit refuses a lane folder that is a symlink into Brain machinery", () => {
+  // The spelled target sits in a session lane; the bytes would land in
+  // Brain/preferences/. The commit re-reads where the bytes land.
+  mkdirSync(join(vault, "Brain", "preferences"), { recursive: true });
+  symlinkSync(join(vault, "Brain", "preferences"), join(vault, "Brain", "notes"), "dir");
+
+  const opened = open({ targetPath: "Brain/notes/pref-forged.md" });
+  try {
+    submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW });
+    throw new Error("expected WriteSessionRequestError");
+  } catch (exc) {
+    expect(exc).toBeInstanceOf(WriteSessionRequestError);
+    expect((exc as WriteSessionRequestError).errors.map((e) => e.code)).toEqual([
+      "target-reserved",
+    ]);
+    expect((exc as Error).message).toContain("Brain/preferences/pref-forged.md");
+  }
+  expect(existsSync(join(vault, "Brain", "preferences", "pref-forged.md"))).toBe(false);
+});
+
+test("commit refuses a lane note that is a symlink to the standing rules", () => {
+  const rules = join(vault, "Brain", "standing-rules.md");
+  writeFileSync(rules, "Operator rules.\n");
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  symlinkSync(rules, join(vault, "Brain", "notes", "adr.md"));
+
+  const opened = open({ intent: "overwrite" });
+  expect(() =>
+    submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW }),
+  ).toThrow(/standing-rules/);
+  expect(readFileSync(rules, "utf8")).toBe("Operator rules.\n");
+});
+
+test("commit refuses a target the write binding does not admit", () => {
+  writeFileSync(
+    join(vault, "Brain", "_brain.yaml"),
+    "schema_version: 1\nwrite_binding:\n  path_prefixes:\n    - Brain/reports/\n",
+  );
+  const opened = open();
+  try {
+    submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW });
+    throw new Error("expected WriteSessionRequestError");
+  } catch (exc) {
+    expect(exc).toBeInstanceOf(WriteSessionRequestError);
+    expect((exc as Error).message).toContain("outside the write binding");
+  }
+  expect(existsSync(join(vault, "Brain", "notes", "adr.md"))).toBe(false);
+});
+
+test("commit refuses, without crashing, a target under a file used as a folder", () => {
+  mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
+  writeFileSync(join(vault, "Brain", "notes", "existing.md"), "x\n");
+  const opened = open({ targetPath: "Brain/notes/existing.md/x.md" });
+  try {
+    submitToSession(vault, { sessionId: opened.session_id, artifact: GOOD, now: NOW });
+    throw new Error("expected WriteSessionRequestError");
+  } catch (exc) {
+    expect(exc).toBeInstanceOf(WriteSessionRequestError);
+    expect((exc as WriteSessionRequestError).errors.map((e) => e.code)).toEqual([
+      "target-unresolvable",
+    ]);
+  }
 });

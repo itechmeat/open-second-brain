@@ -142,9 +142,14 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "packContext() (core/brain/context-pack.ts) draws candidates only from Brain/preferences " +
-      "and Brain/retired via collectPreferencePages, filtered by isTombstoned and ownerScope - " +
-      "never by visibility. A Brain preference page tagged visibility: private is returned " +
-      "verbatim, path and body both.",
+      "and Brain/retired via collectPreferencePages, and the MCP tool hands packContext a " +
+      "reachView predicate that drops a reserved candidate before ranking and budgeting - so a " +
+      "page tagged visibility: private contributes nothing to items, lanes, skipped, warnings, " +
+      "deduped_from or the receipt at remote reach (t_sec_pack_reach). It stays " +
+      "EXCLUDED because the slice also injects the bodies of pages that ARE readable, and a " +
+      "readable hub page's body can name a reserved page in a wikilink - second-hand text no " +
+      "per-page gate can rewrite, which is true of every content-returning surface and is why " +
+      "`search check` still reports this surface to operators.",
   },
   {
     surface: "brain_query",
@@ -172,11 +177,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_unlinked_mentions",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "findUnlinkedMentions (core/brain/link-graph/unlinked-mentions.ts) walks the vault the same " +
-      "way backlinks.ts does - readdirSync + parseFrontmatter, ownerScopeView only - and surfaces " +
-      "the mentioning page's path regardless of any visibility tag on it.",
+      "findUnlinkedMentions (core/brain/link-graph/unlinked-mentions.ts) walks Brain/preferences " +
+      "and Brain/retired itself, so the MCP handler passes reachView alongside the owner scope: " +
+      "a reserved SOURCE is skipped before its body is read, and a reserved TARGET answers with " +
+      "no mentions - the reply an absent target gets - because each mention's `term` is the " +
+      "target's title or alias.",
   },
   {
     surface: "brain_sources",
@@ -284,8 +291,10 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
     category: C.excluded,
     reason:
       "show reads a caller-named page with parseFrontmatter and returns the caller's own path " +
-      "plus its label set - no title or body crosses this surface, and no visibility check runs " +
-      "over the read either way.",
+      "plus its label set; at remote reach it asks reachView first and answers a reserved page " +
+      "with the same refusal an absent one gets. It stays EXCLUDED because assign and remove " +
+      "are write operations whose reply also carries the resulting label set, and they run no " +
+      "visibility check.",
   },
   {
     surface: "brain_tiers",
@@ -355,14 +364,13 @@ export const VISIBILITY_SURFACE_REGISTRY: ReadonlyArray<VisibilitySurfaceEntry> 
   {
     surface: "brain_writes",
     kind: K.mcpTool,
-    category: C.excluded,
+    category: C.covered,
     reason:
-      "listNoteWrites (core/brain/notes/write-log.ts) projects `note-write` events out of the " +
-      "Brain log and never opens the notes they name, so no `visibility:` is on the path to be " +
-      "consulted. It returns a target PATH and two content digests rather than any note body - " +
-      "which bounds the exposure to the existence of a page and its name, not its prose - but " +
-      "the path of a note marked private is still reported, so this is excluded rather than " +
-      "covered.",
+      "listNoteWrites / planNoteRevert (core/brain/notes/) project `note-write` events out of " +
+      "the Brain log and never open the notes they name, so the MCP handler asks reachView over " +
+      "every row's target before counting: at remote reach a write to a reserved page - or to " +
+      "a file that can no longer be read, which fails closed - is dropped from both `list` and " +
+      "`plan_revert`, and `total_matched` counts only what the caller may see.",
   },
   {
     surface: "brain_agent_diff",

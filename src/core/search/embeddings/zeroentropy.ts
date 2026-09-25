@@ -27,6 +27,7 @@ import type { ResolvedEmbeddingConfig } from "../types.ts";
 import type { EmbeddingProvider, PingResult } from "./contract.ts";
 import {
   RETRYABLE_STATUSES,
+  assertHttpEgressEndpoint,
   chunkArrayByTokenBudget,
   jittered,
   sleep,
@@ -61,7 +62,10 @@ function resolveHttp(config: ResolvedEmbeddingConfig): ResolvedHttp {
       "embedding_api_key is required when semantic is enabled",
     );
   }
-  const base = config.baseUrl.replace(/\/+$/, "");
+  const base = assertHttpEgressEndpoint(config.baseUrl, "embedding_base_url", {
+    allowInsecureHttp: config.allowInsecureHttp === true,
+    key: "embedding_allow_insecure_http",
+  }).replace(/\/+$/, "");
   return { url: `${base}/models/embed`, apiKey: config.apiKey };
 }
 
@@ -210,6 +214,9 @@ export class ZeroEntropyProvider implements EmbeddingProvider {
           encoding_format: "float",
           ...(this._dimension !== null ? { dimensions: this._dimension } : {}),
         }),
+        // No cross-host redirect may take the bearer key - or the chunk
+        // bodies - somewhere the operator did not configure.
+        redirect: "error",
         signal: controller.signal,
       });
     } catch (e) {

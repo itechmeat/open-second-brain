@@ -7,6 +7,7 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { buildToolTable } from "../../src/mcp/tools.ts";
 import { appendContinuityRecord } from "../../src/core/brain/continuity/store.ts";
 import { appendSessionSummary } from "../../src/core/brain/session-summary.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../../src/core/graph/transport-reach.ts";
 
 let vault: string;
 
@@ -32,8 +33,11 @@ async function initialize(server: MCPServer): Promise<void> {
   await server.handleRequest({ jsonrpc: JSONRPC_VERSION, method: "notifications/initialized" });
 }
 
-async function call(args: Record<string, unknown>): Promise<{ result?: unknown; error?: unknown }> {
-  const server = new MCPServer({ vault, configPath: null });
+async function call(
+  args: Record<string, unknown>,
+  reach: TransportReach = TRANSPORT_REACH.local,
+): Promise<{ result?: unknown; error?: unknown }> {
+  const server = new MCPServer({ vault, configPath: null }, { reach });
   await initialize(server);
   return (await server.handleRequest({
     jsonrpc: JSONRPC_VERSION,
@@ -72,6 +76,27 @@ describe("brain_idea_lineage tool", () => {
     expect(nodes.some((n) => n["kind"] === "session_turn" && n["stage"] === "observation")).toBe(
       true,
     );
+  });
+
+  test("a private source turn is left out at remote reach only", async () => {
+    appendContinuityRecord(vault, {
+      kind: "session_turn",
+      createdAt: "2026-06-14T09:00:00.000Z",
+      private: true,
+      payload: { session_id: "s1", turn_id: "t1", role: "user", text: "hidden detail" },
+    });
+    const digest = appendSessionSummary(vault, {
+      sessionId: "s1",
+      decisions: ["d"],
+      sourceTurnIds: ["t1"],
+      createdAt: "2026-06-14T10:00:00.000Z",
+    });
+    const turnNodes = (out: Record<string, unknown>) =>
+      (out["nodes"] as Array<Record<string, unknown>>).filter((n) => n["kind"] === "session_turn");
+    expect(turnNodes(payload(await call({ id: digest.id })))).toHaveLength(1);
+    const remote = payload(await call({ id: digest.id }, TRANSPORT_REACH.remote));
+    expect(turnNodes(remote)).toHaveLength(0);
+    expect(JSON.stringify(remote)).not.toContain("hidden detail");
   });
 
   test("missing id is an invalid-params error", async () => {

@@ -5,8 +5,8 @@
  * snapshot was taken at all.
  *
  * Symlinks are dropped via `lstatSync` — a malicious snapshot archive
- * planting a symlink under `Brain/` must not let the walker hash
- * `/etc/passwd`. Output is sorted by path so two runs against
+ * planting a symlink under `Brain/` must not let the walker hash a
+ * system file outside the vault. Output is sorted by path so two runs against
  * identical bytes produce byte-identical JSON on disk.
  */
 
@@ -16,7 +16,12 @@ import { join, relative } from "node:path";
 import { atomicWriteFileSync } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { pathCovers } from "../vault-scope/defaults.ts";
-import { BRAIN_ROOT_REL, BRAIN_SNAPSHOT_EXCLUDED_ENTRIES, brainDirs } from "./paths.ts";
+import {
+  BRAIN_ROOT_REL,
+  BRAIN_SNAPSHOT_EXCLUDED_ENTRIES,
+  brainDirs,
+  validateRunId,
+} from "./paths.ts";
 import { isoSecond } from "./time.ts";
 import { isBrainSnapshotReason, type BrainSnapshotReason } from "./types.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
@@ -419,7 +424,12 @@ export function renderManifestDriftJson(
  * operations stay symmetrical with the archive itself.
  */
 export function manifestSidecarPath(vault: string, runId: string): string {
-  return join(brainDirs(vault).snapshots, `${runId}.manifest.json`);
+  // Same validation the archive path applies (`snapshotPath`): the run
+  // id is caller-shaped input reaching `join`, and an unvalidated one
+  // could read a manifest outside the snapshots directory wherever a
+  // caller passed the id through before its own validation ran.
+  const id = validateRunId(runId);
+  return join(brainDirs(vault).snapshots, `${id}.manifest.json`);
 }
 
 /**

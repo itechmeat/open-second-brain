@@ -118,6 +118,16 @@ export interface AppendContinuityRecordInput {
   readonly createdAt: string;
   readonly sourceRefs?: ReadonlyArray<ContinuitySourceRef>;
   readonly payload?: ContinuityPayload;
+  /**
+   * Mark the record private even though its payload no longer shows why.
+   *
+   * The store flags a record private when it strips a `<private>` region
+   * from the payload. A caller that already stripped the region itself -
+   * the payload registry sanitises a turn before externalizing it - hands
+   * the store text with nothing left to detect, and says so here instead.
+   * It can only turn the flag ON; absent keeps the store's own verdict.
+   */
+  readonly private?: boolean;
 }
 
 export interface ContinuityRecordFilter {

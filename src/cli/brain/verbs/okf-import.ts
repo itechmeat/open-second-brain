@@ -8,7 +8,9 @@ import { brainVerbContext, fail, parse } from "../helpers.ts";
  * candidates); `--trusted` writes each page directly to its recorded
  * vault-relative path. Foreign-producer bundles get producer + raw type
  * provenance stamped, with producer-specific (`x-*`) frontmatter
- * preserved.
+ * preserved. The bundle's `producer` claim is never a credential:
+ * `--trusted` alone decides whether machinery frontmatter survives and
+ * whether the Brain page lanes are writable.
  */
 export async function cmdBrainOkfImport(argv: string[]): Promise<number> {
   const { positional, flags } = parse(argv, {

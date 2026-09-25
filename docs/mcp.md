@@ -368,6 +368,34 @@ All tool results contain both an unstructured `content` text block (a JSON
 serialization of the structured payload) and a `structuredContent` object so
 clients that prefer typed results can use it directly.
 
+### Paging externalized session payloads
+
+Session recall import moves oversized turn content into `Brain/.payloads/`
+and leaves `[payload: osb-payload://<sha256> chars=N]` in the recalled turn
+(see `o2b brain payload` in `docs/cli-reference.md`). `brain_session_expand`
+pages the exact stored content when it is called with `payload` instead of
+`id`: `{payload: "osb-payload://<sha256>", payload_chars?: n, cursor?: "<offset>"}`
+returns `{payload: {ref, offset, limit, total_chars, content}, next_cursor}`
+(4000 chars per page by default). `payload` cannot be combined with `id` or
+`raw_limit`, and a malformed ref is `INVALID_PARAMS` before any path is built.
+This rides the existing tool rather than adding one, so the tool count and
+every profile are unchanged.
+
+Reach follows the session data the payload came from. A local caller reads any
+stored payload. A remote caller reads one only when a non-private session turn
+references it, directly or through another remotely readable payload; a
+payload referenced only by a private turn, a page (the Brain log included) or
+nothing gets the same refusal. Pages and summary nodes keep a payload live for
+`o2b brain payload gc` but grant no remote read, because a page can be written
+by tools that a session turn is not.
+
+At remote reach `brain_session_grep`, `brain_session_describe`,
+`brain_session_expand` and `brain_idea_lineage` also withhold continuity rows
+flagged `private` (a `<private>` region was stripped from them), and the
+session recall tools withhold the summary nodes built from them. A withheld
+row is answered exactly like one that does not exist. Local callers see every
+row.
+
 ## Installation wiring (since v1.56.0)
 
 `second_brain_wiring` answers what this install is wired into. Both answers
@@ -509,7 +537,7 @@ Optional flags:
 - `--transport stdio|http` — choose stdio (default) or Streamable HTTP.
 - `--host HOST` — HTTP bind host (default `127.0.0.1`).
 - `--port PORT` — HTTP bind port (default `0`, choose an available port).
-- `--api-key KEY` — optional on the loopback default, REQUIRED when `--host` names a non-loopback interface; accepted as `Authorization: Bearer KEY` or `X-API-Key: KEY` on every request.
+- `--api-key KEY` — optional on the loopback default, REQUIRED when `--host` names a non-loopback interface; accepted as `Authorization: Bearer KEY` or `X-API-Key: KEY` on every request. A flag is visible in every process listing on the host, so prefer the environment: `OPEN_SECOND_BRAIN_MCP_API_KEY` supplies the same key (the flag wins when both are set).
 - `--json` — with `--probe`, print a machine-readable capability report.
 - `--allow-tool NAME` — expose only named tools from the static scope. Repeatable.
 - `--disable-tool NAME` — withhold named tools from the static scope. Repeatable.
@@ -517,7 +545,8 @@ Optional flags:
 
 The stdio server logs its banner to `stderr` and only writes JSON-RPC frames to
 `stdout`, so it is safe to use as a subprocess in any MCP client. HTTP refuses
-to start when `--host` is not loopback and no `--api-key` was given; with a key
+to start when `--host` is not loopback and no key was given (`--api-key` or
+`OPEN_SECOND_BRAIN_MCP_API_KEY`); with a key
 configured it checks that key on every request using a generic constant-time
 comparison, and returns the same `401 Unauthorized` body for a
 missing or wrong key. JSON responses are the default; clients that send
@@ -700,8 +729,11 @@ read/write surface, no admin tools), and `minimal` (writers + context +
 search). The `mcp_tool_profile` config key (env:
 `OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE`) selects one without flags; an
 explicit `--scope` or window flag wins over the profile's fields. An
-unknown profile name FAILS OPEN to the full surface with a stderr note -
-a typo can never lock an agent out. Hard-window profiles always retain
+unknown profile name FAILS CLOSED: `o2b mcp` exits `2` naming the known
+profiles and where the bad name came from, rather than serving the full
+surface - a typo in a profile meant to narrow an agent's tools must not
+widen them (changed in the security hardening release; earlier versions
+failed open with a stderr note). Hard-window profiles always retain
 `second_brain_capabilities`, so withheld tools stay discoverable with
 reasons.
 

@@ -190,6 +190,15 @@ function splitKeyValue(line: Line): KeyValue {
   if (!/^[A-Za-z_][A-Za-z0-9_-]*$/.test(key)) {
     throw new Error(`line ${line.lineNumber}: invalid key name: ${JSON.stringify(key)}`);
   }
+  // Prototype-pollution keys are refused even though the regex admits
+  // them: assigning an object to `__proto__` on the plain result maps
+  // below re-set ITS prototype instead of creating an own property, and
+  // every `in` duplicate-check after it would walk the injected chain.
+  // Config YAML is operator-authored today; this keeps a hostile file
+  // from becoming a parser defect tomorrow.
+  if (key === "__proto__" || key === "constructor" || key === "prototype") {
+    throw new Error(`line ${line.lineNumber}: reserved key name: ${JSON.stringify(key)}`);
+  }
   const value = line.content.slice(idx + 1).trim();
   return { key, value };
 }

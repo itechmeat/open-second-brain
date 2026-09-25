@@ -3,9 +3,11 @@
  *
  * The bundle is the actual artifact OpenClaw loads via `package.json`'s
  * `openclaw.extensions`. We can't import it directly because it imports the
- * SDK as an external — but we can verify file structure, that it bundled
- * the core logic (no leftover dynamic Python references), and that the
- * `package.json` extension entry actually points at it.
+ * SDK as an external. CI (and release) already rebuild the bundle and
+ * `diff -q` it against this committed file, so content assertions here
+ * would only re-assert what that gate enforces; what remains are the
+ * artifact's existence, the pointer that routes OpenClaw to it, and the
+ * retired-surface ratchets that must hold in every future rebuild.
  */
 
 import { beforeAll, describe, expect, test } from "bun:test";
@@ -31,21 +33,6 @@ describe("openclaw bundle", () => {
     expect(size).toBeGreaterThan(1000);
   });
 
-  test("declares the SDK import as external", () => {
-    expect(bundleText).toContain('from "openclaw/plugin-sdk/plugin-entry"');
-  });
-
-  test("bundles every Open Second Brain tool registration", () => {
-    for (const tool of [
-      // core
-      "second_brain_status",
-      "second_brain_query",
-      "vault_health",
-    ]) {
-      expect(bundleText).toContain(tool);
-    }
-  });
-
   test("does not register the retired event_log_append tool (§32G)", () => {
     // §32G (v0.10.8) removed `event_log_append` from every runtime.
     // The OpenClaw bundle must not contain the registration block.
@@ -64,33 +51,5 @@ describe("openclaw bundle", () => {
   test("package.json points to ./openclaw/index.js", () => {
     const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
     expect(pkg.openclaw.extensions).toEqual(["./openclaw/index.js"]);
-  });
-
-  test("codegraph partnering covers every workspace project (W1)", () => {
-    // The bundled checkCodegraph must iterate all discovered projects, probe
-    // per-query project_path support, and degrade with an explicit note when
-    // unsupported - not collapse the workspace to projects[0].
-    expect(bundleText).toContain("evaluateProjectStatus");
-    expect(bundleText).toContain("defaultDetectProjectPathSupport");
-    expect(bundleText).toContain("code projects:");
-    // "did not report", not "has no": the probe reads the partner's own
-    // usage text, so a probe that failed or ran out of time reads exactly
-    // like a partner without the feature, and the stronger wording was
-    // claiming something the check had not established. The phrase is
-    // asserted here because it is the distinctive string that proves the
-    // degrade path reached the bundle at all.
-    expect(bundleText).toContain("did not report per-query project_path support");
-  });
-
-  test("bundles before_prompt_build hook (per-turn identity reminder)", () => {
-    expect(bundleText).toContain("before_prompt_build");
-    expect(bundleText).toContain("prependContext");
-  });
-
-  test("derives OpenClaw's own host-qualified identity for the reminder", () => {
-    // The reminder must attribute to OpenClaw's own vendor token, not the
-    // operator name - it routes the operator name through the shared deriver
-    // with its own id. (Bundle is not minified, so the call survives verbatim.)
-    expect(bundleText).toContain('deriveRuntimeAgentName("openclaw", operator)');
   });
 });

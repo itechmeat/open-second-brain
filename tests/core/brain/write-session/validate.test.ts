@@ -61,6 +61,32 @@ test("reserved namespaces are denied with coded errors", () => {
   }
 });
 
+test("only the write-session lanes are writable under Brain/, however the path is spelled", () => {
+  for (const target of [
+    "Brain/sources/s.md",
+    "Brain/reports/r.md",
+    "Brain/distillations/d.md",
+    "Brain/notes/deep/n.md",
+    "Brain/decisions/panels/p.md",
+  ]) {
+    expect(validateTargetPath(target)).toEqual([]);
+  }
+  for (const target of [
+    "Brain/standing-rules.md",
+    "Brain/active.md",
+    "Brain/pinned.md",
+    "Brain/Preferences/x.md",
+    "Brain/PREFERENCES/x.md",
+    "Brain/log./x.md",
+    "Brain/Log/2026-06-04.md",
+    "Brain/inbox/sig-x.md",
+    "Brain/retired/x.md",
+    "Brain/decisions/d.md",
+  ]) {
+    expect(validateTargetPath(target).map((e) => e.code)).toEqual(["target-reserved"]);
+  }
+});
+
 // ----- artifact validation --------------------------------------------------
 
 test("a well-formed artifact with declared schema type validates cleanly", () => {

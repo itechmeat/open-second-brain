@@ -28,9 +28,8 @@
  * `absent` reads exactly like a healthy vault that has not been used yet.
  */
 
-import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 
 import {
@@ -96,12 +95,26 @@ import {
   STATE_TIERS,
   type StateSurfaceId,
 } from "../../../src/core/state/surfaces.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
+
+/**
+ * Writer locks a drive took to look at, released after each test.
+ * `proper-lockfile` keeps refreshing a held lock on a timer: one left held
+ * outlives its vault, and the refresh that then fails throws out of a timer
+ * into whatever test file happens to be running.
+ */
+const heldLocks: Array<() => void> = [];
+afterEach(() => {
+  for (const release of heldLocks.splice(0)) release();
+});
 
 const EMPTY_ENV: NodeJS.ProcessEnv = Object.freeze({});
 const EMPTY_CONFIG: Readonly<Record<string, string>> = Object.freeze({});
 
 function tempVault(): string {
-  return mkdtempSync(join(tmpdir(), "osb-state-surfaces-"));
+  return mkTemp("osb-state-surfaces-");
 }
 
 function row(id: StateSurfaceId) {
@@ -393,7 +406,7 @@ const DRIVEN_BINDINGS: ReadonlyArray<DrivenBinding> = Object.freeze([
     drive: (vault) => {
       const index = row(STATE_SURFACE_ID.searchIndex).derive(vault, null);
       mkdirSync(dirname(index), { recursive: true });
-      acquireWriterLockSync(index);
+      heldLocks.push(acquireWriterLockSync(index));
       return null;
     },
     artifact: (derived) => derived,
