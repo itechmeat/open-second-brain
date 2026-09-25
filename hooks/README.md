@@ -65,16 +65,18 @@ call would.
   field points at it (set in both `.codex-plugin/plugin.json` and
   `plugins/codex/.codex-plugin/plugin.json`).
 
-  Layout caveat: Codex's marketplace source is
-  `./plugins/codex/`, so the Codex side only sees what lives under
-  that subdirectory. The repo exposes the hooks tree there via a
-  `plugins/codex/hooks → ../../hooks` symlink (same pattern as
-  `plugins/codex/skills`). The symlink target is relative, so it
-  resolves correctly inside a cloned repo too — but it does assume
-  the consumer copies the whole repo, not just `plugins/codex/`. If
-  Codex ever switches to a "ship subtree only" extraction model, the
-  symlink will dangle and the hooks tree will need to move
-  physically under `plugins/codex/hooks/` (or be duplicated).
+  Layout: Codex's marketplace source is `./plugins/codex/`, and
+  `codex plugin add` copies only that subtree into its plugin cache,
+  dropping symlinks on the way. So `plugins/codex/hooks/hooks.json` is a
+  real file generated from this one by `bun run sync-plugin-mirrors`, and
+  CI gates it with `bun run sync-plugin-mirrors:check` (the same goes for
+  `plugins/codex/skills/`, which is a byte copy of `skills/`). The one
+  difference: SessionEnd timeouts are capped at Codex's 3 s limit, which
+  Codex enforces anyway and warns about on every run otherwise. Only
+  `hooks.json` is mirrored, never the `*.ts` scripts: Codex exports
+  `CLAUDE_PLUGIN_ROOT` as the cache dir, and `o2b-hook` would pick a
+  cached script there whose `../src` imports do not exist. Edit
+  `hooks/hooks.json`, then run the sync.
 
 - `session-capture.ts` — Bun entry script that handles lifecycle
   observations and immediate marker/tool-feedback capture. It emits

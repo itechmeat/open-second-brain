@@ -46,6 +46,8 @@
     "validate:fix": "bun run lint:fix && bun run fmt",
     "sync-version": "bun run scripts/sync-version.ts",
     "sync-version:check": "bun run scripts/sync-version.ts --check",
+    "sync-plugin-mirrors": "bun run scripts/sync-plugin-mirrors.ts",
+    "sync-plugin-mirrors:check": "bun run scripts/sync-plugin-mirrors.ts --check",
     "link-ratchet": "bun run scripts/link-ratchet.ts",
     "link-ratchet:check": "bun run scripts/link-ratchet.ts --check",
     "check:paths": "bun run scripts/check-hardcoded-paths.ts",
