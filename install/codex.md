@@ -24,11 +24,12 @@ enabled = true
 the launcher. The installed plugin in `$CODEX_HOME/plugins/cache/` holds
 only the `plugins/codex` subtree (manifest, `hooks/hooks.json`, skills),
 not `scripts/`. The hooks run `o2b-hook` from PATH, so this step is also
-what turns them on. Locate the script:
+what turns them on. Locate the script in the clone (under `CODEX_HOME`
+when it is set):
 
 ```bash
-O2B_SCRIPT="$(find ~/.codex -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)"
-[ -n "$O2B_SCRIPT" ] || { echo "o2b installer not found in Codex plugin cache" >&2; exit 1; }
+O2B_SCRIPT="$(find "${CODEX_HOME:-$HOME/.codex}/.tmp/marketplaces" -path '*open-second-brain*/scripts/o2b' -type f 2>/dev/null | head -1)"
+[ -n "$O2B_SCRIPT" ] || { echo "o2b launcher not found in the Codex marketplace clone" >&2; exit 1; }
 "$O2B_SCRIPT" install-cli
 ```
 
