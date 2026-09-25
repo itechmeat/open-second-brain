@@ -22,6 +22,11 @@ Or paste `https://github.com/itechmeat/open-second-brain` into the
 Hermes Dashboard -> Plugins -> Install from GitHub URL. Do not pin
 a tag - the CLI resolves to the latest released version on its own.
 
+On native Windows (Hermes desktop app or `install.ps1`), Hermes keeps its
+home in `%LOCALAPPDATA%\hermes`; the plugin, the provider and the steps
+below are the same, with the Windows paths from
+[`windows.md`](windows.md).
+
 ## 2. Publish the `o2b` CLI on PATH
 
 ```bash

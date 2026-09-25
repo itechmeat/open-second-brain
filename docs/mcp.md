@@ -48,6 +48,18 @@ schemas are out of scope for that audit - their vocabulary declares
 union-typed fields with no `type` on purpose, and responses are validated
 against them at request time instead.
 
+### Vault-relative paths are forward-slash on every host
+
+A vault-relative path a tool returns (`path`, `signal_path`, `page`,
+`log_path`, ...) is spelled with `/` on every operating system, including
+a server running natively on Windows: `Brain/inbox/sig-x.md`, never
+`Brain\inbox\sig-x.md`. The path names a note inside the vault, not a
+file on the host, so it takes the vault's own Obsidian-style form. That
+keeps the answer portable: an agent can feed it straight back into a tool,
+match it against a wikilink, and compare it with the answer another device
+sharing the same vault gives, whatever OS each device runs. A path outside
+the vault is returned unchanged in its host form.
+
 ### Progress notifications
 
 A client asks for liveness on a long call by putting a token on the
