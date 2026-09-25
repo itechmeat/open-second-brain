@@ -93,6 +93,14 @@ describe("grok adapter - config path", () => {
   });
 });
 
+/**
+ * How a path appears inside a TOML basic string: backslashes doubled. Only
+ * Windows paths hold any, so on POSIX this is the path itself.
+ */
+function tomlBody(path: string): string {
+  return path.replace(/\\/g, "\\\\");
+}
+
 describe("grok adapter - apply", () => {
   test("writes both MCP servers into config.toml with an absolute bun command", () => {
     apply();
@@ -105,9 +113,9 @@ describe("grok adapter - apply", () => {
     expect(toml).toContain("[mcp_servers.open-second-brain]");
     expect(toml).toContain("[mcp_servers.open-second-brain-writer]");
     // absolute command (the running bun), the repo entry point, and the vault.
-    expect(toml).toContain(process.execPath);
-    expect(toml).toContain("src/cli/main.ts");
-    expect(toml).toContain(vault);
+    expect(toml).toContain(tomlBody(process.execPath));
+    expect(toml).toContain(tomlBody(join("src", "cli", "main.ts")));
+    expect(toml).toContain(tomlBody(vault));
     expect(toml).not.toContain('command = "o2b"'); // not the bare PATH form
   });
 
@@ -183,7 +191,7 @@ describe("grok adapter - lifecycle", () => {
 
   test("verify reports drift when the MCP servers are edited", () => {
     apply();
-    const toml = readFileSync(configPath(), "utf8").replace(vault, "/somewhere/else");
+    const toml = readFileSync(configPath(), "utf8").replace(tomlBody(vault), "/somewhere/else");
     writeFileSync(configPath(), toml);
     expect(grokAdapter.verify(env()).status).toBe("drift");
   });

@@ -1,0 +1,10 @@
+# LF in every checkout, on every platform. Git for Windows (and the
+# windows-latest CI runner) defaults to core.autocrlf=true, which would
+# check sources, fixtures and the OpenClaw bundle out with CRLF - bytes the
+# suite never ran against. Binary files are still detected and left alone.
+* text=auto eol=lf
+
+# Windows launchers must keep CRLF: cmd.exe misparses labels and blocks in
+# LF-only batch files.
+*.cmd text eol=crlf
+*.bat text eol=crlf

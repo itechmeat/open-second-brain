@@ -42,7 +42,7 @@ import { runCli } from "../../helpers/run-cli.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { cursorAdapter } from "../../../src/core/install/adapters/cursor.ts";
-import { buildPayload } from "../../../src/core/install/payload.ts";
+import { buildPayload, launcherCommand } from "../../../src/core/install/payload.ts";
 import {
   carriesHostDimensions,
   HOST_TARGET_FLAG,
@@ -162,6 +162,7 @@ describe("the profile baked into the generated payload", () => {
   test("a capped host carries its profile on the full entry", () => {
     const payload = payloadForHost("cursor", makePayload(), makeEnv());
     expect(payload.full.args).toEqual([
+      ...launcherCommand().prefix,
       "mcp",
       "--vault",
       vault,
@@ -176,6 +177,7 @@ describe("the profile baked into the generated payload", () => {
     const payload = payloadForHost("cursor", makePayload(), makeEnv());
     expect(payload.writer.args).not.toContain(TOOL_PROFILE_FLAG);
     expect(payload.writer.args).toEqual([
+      ...launcherCommand().prefix,
       "mcp",
       "--writer-only",
       "--vault",
@@ -243,7 +245,10 @@ describe("the generated registration is an argv this CLI accepts", () => {
   }
 
   async function probe(args: ReadonlyArray<string>): Promise<ProbeJson> {
-    const res = await runCli([...args, "--probe", "--json"], { env: { VAULT_DIR: vault } });
+    // The host runs the launcher (`cmd /d /c o2b` on Windows) with these
+    // args; the CLI itself only ever sees what follows the launcher prefix.
+    const cliArgs = args.slice(launcherCommand().prefix.length);
+    const res = await runCli([...cliArgs, "--probe", "--json"], { env: { VAULT_DIR: vault } });
     expect(`exit ${res.returncode}\n${res.stderr}`).toBe("exit 0\n");
     return JSON.parse(res.stdout) as ProbeJson;
   }

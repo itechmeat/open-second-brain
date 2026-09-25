@@ -442,6 +442,13 @@ class OpenSecondBrainMemoryProvider(MemoryProvider):
 
         # Last resort: hope o2b is reachable (e.g. npm global install on
         # Windows created an o2b.cmd shim, or the user's shell can run it).
+        # On Windows resolve it to an absolute path first: CreateProcess only
+        # appends ``.exe`` to a bare name, so ``Popen(["o2b", ...])`` cannot
+        # start an ``o2b.cmd`` launcher even when it is on PATH.
+        if os.name == "nt":
+            o2b = _find_executable("o2b")
+            if o2b:
+                return (o2b, "mcp")
         return ("o2b", "mcp")
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:

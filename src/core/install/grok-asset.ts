@@ -23,7 +23,8 @@ import { INSTALL_HOOK_TIMEOUT_SECONDS_DEFAULT } from "../brain/policy/blocks/ins
 import { payloadWithRuntimeIdentity, runtimeAgentNameFromPayload } from "./identity.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "./json-merge.ts";
 import type { GrokMcpEntry } from "./grok-config.ts";
-import type { McpPayload } from "./types.ts";
+import { cliArgs } from "./payload.ts";
+import type { McpPayload, McpServerEntry } from "./types.ts";
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const MAIN_TS = join(REPO_ROOT, "src", "cli", "main.ts");
@@ -49,12 +50,9 @@ export const GROK_RUNTIME_ID = "grok";
  */
 export function grokMcpServers(payload: McpPayload): Record<string, GrokMcpEntry> {
   const identified = payloadWithRuntimeIdentity(payload, GROK_RUNTIME_ID);
-  const toEntry = (entry: {
-    args: ReadonlyArray<string>;
-    env?: Readonly<Record<string, string>>;
-  }) => ({
+  const toEntry = (entry: McpServerEntry) => ({
     command: bunBin(),
-    args: ["run", MAIN_TS, ...entry.args],
+    args: ["run", MAIN_TS, ...cliArgs(entry)],
     env: { ...entry.env },
   });
   return {

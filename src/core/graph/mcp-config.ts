@@ -56,7 +56,8 @@ export interface McpServerEntry {
 
 /** True when `path`'s basename is a recognised MCP config filename. */
 export function isMcpConfigFile(path: string): boolean {
-  const base = path.split("/").pop() ?? path;
+  // Either separator: a caller holding a Windows path gets the basename too.
+  const base = path.split(/[\\/]/).pop() ?? path;
   return FILENAME_SET.has(base);
 }
 

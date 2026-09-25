@@ -37,7 +37,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 import { registerAllAdapters } from "../../../src/core/install/adapters/all.ts";
 import { measureDataOwnership } from "../../../src/core/install/ownership-measure.ts";
@@ -555,7 +555,7 @@ function sweepOutOfVaultPathBuilders(): ReadonlyArray<string> {
     for (const file of walk(dir, [])) {
       const source = code(readFileSync(file, "utf8"));
       if (!OUT_OF_VAULT_ANCHOR_RE.test(source)) continue;
-      hits.push(relative(REPO_ROOT, file));
+      hits.push(relative(REPO_ROOT, file).split(sep).join("/"));
     }
   }
   return hits.toSorted();

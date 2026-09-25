@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { healCliSymlinks, installCli, uninstallCli } from "../../src/cli/install-cli.ts";
+import { IS_WINDOWS } from "../helpers/platform.ts";
+
+// These suites pin the POSIX symlink branch. On native Windows the same verbs
+// write `.cmd` launchers instead, pinned by tests/cli/install-cli-windows.test.ts.
+const describePosix = describe.skipIf(IS_WINDOWS);
 
 let tmp: string;
 
@@ -25,7 +30,7 @@ afterEach(() => {
   rmSync(tmp, { recursive: true, force: true });
 });
 
-describe("installCli", () => {
+describePosix("installCli", () => {
   test("creates symlinks for o2b, vault-log, and o2b-hook", () => {
     const result = installCli(tmp);
     expect(result.errors).toEqual([]);
@@ -57,7 +62,7 @@ describe("installCli", () => {
   });
 });
 
-describe("uninstallCli", () => {
+describePosix("uninstallCli", () => {
   test("removes only links pointing at this repo's scripts", () => {
     installCli(tmp);
     const result = uninstallCli(tmp);
@@ -93,7 +98,7 @@ function fakeOsbScript(root: string, name: string): string {
   return file;
 }
 
-describe("installCli (idempotent reclaim, no manual rm)", () => {
+describePosix("installCli (idempotent reclaim, no manual rm)", () => {
   test("reclaims a dangling symlink", () => {
     symlinkSync(join(tmp, "gone", "scripts", "o2b"), join(tmp, "o2b"));
     const result = installCli(tmp);
@@ -113,7 +118,7 @@ describe("installCli (idempotent reclaim, no manual rm)", () => {
   });
 });
 
-describe("healCliSymlinks", () => {
+describePosix("healCliSymlinks", () => {
   test("heals a dangling symlink that points into a plugin cache", () => {
     const cacheTarget = join(
       tmp,

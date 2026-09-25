@@ -3,11 +3,14 @@ import { buildPayload, PayloadError } from "../../../src/core/install/payload.ts
 
 describe("buildPayload", () => {
   test("returns full + writer entries with vault arg", () => {
-    const { full, writer } = buildPayload({
-      vault: "/home/u/vault",
-      agent_name: "claude-vps",
-      timezone: "Europe/Belgrade",
-    });
+    const { full, writer } = buildPayload(
+      {
+        vault: "/home/u/vault",
+        agent_name: "claude-vps",
+        timezone: "Europe/Belgrade",
+      },
+      "linux",
+    );
     expect(full.command).toBe("o2b");
     expect(full.args).toEqual(["mcp", "--vault", "/home/u/vault"]);
     expect(writer.command).toBe("o2b");

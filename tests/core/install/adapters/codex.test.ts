@@ -43,7 +43,7 @@ import {
 } from "../../../../src/core/install/host-probe.ts";
 import { OSB_KEY_FULL, OSB_KEY_WRITER } from "../../../../src/core/install/json-merge.ts";
 import { readManifest } from "../../../../src/core/install/manifest.ts";
-import { buildPayload } from "../../../../src/core/install/payload.ts";
+import { buildPayload, launcherCommand } from "../../../../src/core/install/payload.ts";
 import type { InstallEnv, McpPayload } from "../../../../src/core/install/types.ts";
 
 let vault: string;
@@ -230,8 +230,10 @@ describe("codex adapter — the CLI is present", () => {
     const adds = host.calls.filter((c) => c[1] === "add");
     expect(adds.map((c) => c[2]).toSorted()).toEqual([OSB_KEY_FULL, OSB_KEY_WRITER].toSorted());
     const full = adds.find((c) => c[2] === OSB_KEY_FULL)!;
+    const launcher = launcherCommand();
     expect(full.slice(full.indexOf("--") + 1)).toEqual([
-      "o2b",
+      launcher.command,
+      ...launcher.prefix,
       "mcp",
       "--vault",
       vault,
@@ -420,7 +422,10 @@ describe("codex adapter — verify", () => {
     stageProbe([OSB_KEY_FULL, OSB_KEY_WRITER]);
     writeFileSync(
       configPath(),
-      readFileSync(configPath(), "utf8").replace('command = "o2b"', 'command = "TAMPERED"'),
+      readFileSync(configPath(), "utf8").replace(
+        `command = "${launcherCommand().command}"`,
+        'command = "TAMPERED"',
+      ),
     );
     const result = codexAdapter.verify(env());
     expect(result.status).toBe("drift");

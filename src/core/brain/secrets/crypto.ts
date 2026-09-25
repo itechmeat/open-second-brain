@@ -4,8 +4,8 @@
  * Per-value AES-256-GCM from node:crypto - random 12-byte IV per
  * encryption, authentication tag verified on every decrypt, so a
  * tampered ciphertext fails closed instead of decoding garbage. The
- * 32-byte key lives in a 0600 keyfile beside the ciphertext store;
- * both stay under the vault-local state dir that never syncs as
+ * 32-byte key lives in a 0600 keyfile beside the ciphertext store (an
+ * owner-only ACL on Windows, see `owner-acl.ts`); both stay under the vault-local state dir that never syncs as
  * vault content.
  *
  * Honest threat model (documented, not implied): this protects
@@ -18,6 +18,8 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs";
 import { dirname } from "node:path";
+
+import { restrictToOwner } from "./owner-acl.ts";
 
 const ALGORITHM = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -41,7 +43,14 @@ export function loadOrCreateKey(keyPath: string): Buffer {
     }
     return key;
   }
-  mkdirSync(dirname(keyPath), { recursive: true, mode: 0o700 });
+  // `mkdirSync` returns the first directory it created, so a defined
+  // result means this call made the key's directory - the same case in
+  // which the `0700` mode above takes effect on POSIX. Windows ignores
+  // the mode; `restrictToOwner` sets the equivalent ACL there.
+  const keyDir = dirname(keyPath);
+  if (mkdirSync(keyDir, { recursive: true, mode: 0o700 }) !== undefined) {
+    restrictToOwner(keyDir, "directory");
+  }
   const key = randomBytes(KEY_BYTES);
   // Exclusive create: two concurrent first-writers cannot truncate
   // each other's key; the loser re-reads the winner's file.
@@ -57,6 +66,7 @@ export function loadOrCreateKey(keyPath: string): Buffer {
   } finally {
     closeSync(fd);
   }
+  restrictToOwner(keyPath, "file");
   return key;
 }
 

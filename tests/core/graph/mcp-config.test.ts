@@ -90,6 +90,7 @@ describe("isMcpConfigFile", () => {
     for (const name of MCP_CONFIG_FILENAMES) {
       expect(isMcpConfigFile(name)).toBe(true);
       expect(isMcpConfigFile(`nested/dir/${name}`)).toBe(true);
+      expect(isMcpConfigFile(`C:\\vault\\nested\\${name}`)).toBe(true);
     }
     expect(isMcpConfigFile("package.json")).toBe(false);
     expect(isMcpConfigFile("notes/foo.md")).toBe(false);

@@ -18,6 +18,7 @@ import {
   setSecret,
   secretsDir,
 } from "../../../../src/core/brain/secrets/store.ts";
+import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 const NOW = new Date("2026-06-05T10:00:00Z");
 
@@ -62,6 +63,9 @@ describe("setSecret / listSecrets / removeSecret", () => {
     const dir = secretsDir(vault);
     const storeRaw = readFileSync(join(dir, "secrets.json"), "utf8");
     expect(storeRaw).not.toContain("sk-super-secret-value");
+    // Windows has no POSIX mode bits (stat reports 0o666 for any writable
+    // file); access there is an owner-only ACL, pinned in owner-acl.test.ts.
+    if (IS_WINDOWS) return;
     const keyMode = statSync(join(dir, "keyfile")).mode & 0o777;
     expect(keyMode).toBe(0o600);
     const storeMode = statSync(join(dir, "secrets.json")).mode & 0o777;
