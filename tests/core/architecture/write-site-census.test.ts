@@ -1004,6 +1004,16 @@ interface FsImports {
   readonly namespaces: ReadonlySet<string>;
 }
 
+/**
+ * `renameWithRetry` from `src/core/fs-atomic.ts` is `renameSync` retried
+ * through transient Windows sharing violations: the same lifecycle move,
+ * so it is counted under the `node:fs` name it wraps.
+ */
+const FS_WRAPPER_IMPORT_RE = /import\s*\{([^}]*)\}\s*from\s*["'][^"']*\/fs-atomic(?:\.ts)?["']/g;
+const FS_WRAPPER_ALIASES: ReadonlyMap<string, string> = new Map([
+  ["renameWithRetry", "renameSync"],
+]);
+
 /** What this module actually imported from `node:fs` / `node:fs/promises`. */
 function fsImports(text: string): FsImports {
   const bindings = new Map<string, string>();
@@ -1021,6 +1031,17 @@ function fsImports(text: string): FsImports {
         .map((part) => part.trim());
       if (imported === undefined || imported.length === 0) continue;
       bindings.set(local !== undefined && local.length > 0 ? local : imported, imported);
+    }
+  }
+  for (const match of text.matchAll(FS_WRAPPER_IMPORT_RE)) {
+    for (const raw of match[1]!.split(",")) {
+      const [imported, local] = raw
+        .trim()
+        .split(/\s+as\s+/)
+        .map((part) => part.trim());
+      const alias = imported === undefined ? undefined : FS_WRAPPER_ALIASES.get(imported);
+      if (alias === undefined) continue;
+      bindings.set(local !== undefined && local.length > 0 ? local : imported!, alias);
     }
   }
   return { bindings, namespaces };

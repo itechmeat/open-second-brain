@@ -36,6 +36,52 @@ export interface AtomicWriteOptions {
 }
 
 /**
+ * Error codes Windows returns while another process holds the source or
+ * the target open without `FILE_SHARE_DELETE`: a sync client (Syncthing,
+ * OneDrive), an editor (Obsidian), an antivirus scan, or another `o2b`
+ * finishing its read. They clear within milliseconds to seconds.
+ */
+const WINDOWS_TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/** Total time {@link renameWithRetry} keeps retrying on Windows. */
+const WINDOWS_RENAME_RETRY_BUDGET_MS = 2_000;
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * `renameSync` that rides out transient Windows sharing violations.
+ *
+ * On POSIX this IS `renameSync`: `rename(2)` does not care who has the
+ * file open. On Windows a rename fails with EPERM/EACCES/EBUSY while any
+ * handle without `FILE_SHARE_DELETE` is open on either path, so the call
+ * retries with a short backoff for up to two seconds before rethrowing
+ * the last error (the same policy graceful-fs applies, with a tighter
+ * budget). Any other error is thrown at once.
+ */
+export function renameWithRetry(from: string, to: string): void {
+  if (process.platform !== "win32") {
+    renameSync(from, to);
+    return;
+  }
+  const deadline = Date.now() + WINDOWS_RENAME_RETRY_BUDGET_MS;
+  let delay = 10;
+  for (;;) {
+    try {
+      renameSync(from, to);
+      return;
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code === undefined || !WINDOWS_TRANSIENT_RENAME_CODES.has(code)) throw err;
+      if (Date.now() + delay > deadline) throw err;
+      sleepSync(delay);
+      delay = Math.min(delay * 2, 250);
+    }
+  }
+}
+
+/**
  * Atomic overwrite. Returns `true` when it wrote, `false` when
  * `skipIfUnchanged` short-circuited an identical write.
  */
@@ -48,7 +94,9 @@ export function atomicWriteFileSync(
   withTempFile(target, contents, (tmpPath) => {
     // POSIX `rename(2)` is atomic and clobbers an existing target — that's
     // exactly the "overwrite" semantic we want. No exclusivity guarantee.
-    renameSync(tmpPath, target);
+    // Windows `MoveFileEx(REPLACE_EXISTING)` is too, once no reader holds
+    // the target; renameWithRetry waits that out.
+    renameWithRetry(tmpPath, target);
   });
   return true;
 }
@@ -102,7 +150,7 @@ export function atomicWriteText(
     targetPath,
     candidate,
     (tmpPath) => {
-      renameSync(tmpPath, targetPath);
+      renameWithRetry(tmpPath, targetPath);
     },
     opts.mode ?? 0o600,
   );

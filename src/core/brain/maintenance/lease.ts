@@ -11,6 +11,7 @@
 import { Database } from "bun:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { closeDatabase } from "../../sqlite-close.ts";
 
 export const MAINTENANCE_LEASE_NAME = "maintenance";
 
@@ -78,7 +79,7 @@ export function acquireLease(vault: string, opts: AcquireLeaseOptions): boolean 
       .get(name);
     return row?.holder === opts.holder;
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
@@ -93,7 +94,7 @@ export function releaseLease(vault: string, opts: ReleaseLeaseOptions): boolean 
       .get(name);
     return (gone?.n ?? 0) === 0;
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }
 
@@ -114,6 +115,6 @@ export function currentLease(
     if (!row || row.expires_at < now.toISOString()) return null;
     return { name: row.name, holder: row.holder, expiresAt: row.expires_at };
   } finally {
-    db.close();
+    closeDatabase(db);
   }
 }

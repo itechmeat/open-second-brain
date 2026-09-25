@@ -12,7 +12,7 @@
  * whole plan with zero writes.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { basename, isAbsolute, join } from "node:path";
 
 import { appendAuditRecord } from "../reliability/audit.ts";
@@ -24,6 +24,7 @@ import { detectAdapter } from "./sessions/registry.ts";
 import type { SessionTurn } from "./sessions/types.ts";
 import { isoDate } from "./time.ts";
 import { parseFrontmatter } from "../vault.ts";
+import { renameWithRetry } from "../fs-atomic.ts";
 
 export type RecompileEntryKind = "rederive-handoff" | "cleanup" | "manual";
 
@@ -144,7 +145,7 @@ export function archivePage(vault: string, page: string, now: Date): string {
     target = join(dir, `${basename(page, ".md")}-${suffix}.md`);
     suffix++;
   }
-  renameSync(page, target);
+  renameWithRetry(page, target);
   return target;
 }
 

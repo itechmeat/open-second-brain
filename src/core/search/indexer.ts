@@ -20,7 +20,6 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  renameSync,
   statSync,
   unlinkSync,
 } from "node:fs";
@@ -111,6 +110,8 @@ import type {
   VisibilityHonestyFinding,
 } from "./types.ts";
 import { REMOTE_DENY_VISIBILITY_TOKEN, pageVisibility } from "../graph/visibility.ts";
+import { closeDatabase } from "../sqlite-close.ts";
+import { renameWithRetry } from "../fs-atomic.ts";
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1118,7 +1119,7 @@ async function reindexInto(
     progress.start(INDEX_STAGE.swap, 1);
     tryUnlink(bakPath);
     tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
-    renameSync(newPath, config.dbPath); // must succeed — `newPath` was just built
+    renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
@@ -1189,7 +1190,7 @@ function tryUnlink(p: string): void {
 /** `renameSync` that tolerates ENOENT on the source. */
 function tryRename(from: string, to: string): void {
   try {
-    renameSync(from, to);
+    renameWithRetry(from, to);
   } catch (e) {
     if (!isEnoent(e)) throw e;
   }
@@ -1526,7 +1527,7 @@ export async function indexCheck(
         warnings.push(`sqlite-vec unavailable: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    db.close();
+    closeDatabase(db);
   } catch (e) {
     fatal.push(`bun:sqlite open failed: ${e instanceof Error ? e.message : String(e)}`);
   }

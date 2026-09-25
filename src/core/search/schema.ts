@@ -12,6 +12,7 @@ import { Database } from "bun:sqlite";
 import { SearchError } from "./types.ts";
 import { pageVisibility } from "../graph/visibility.ts";
 import { parseFrontmatterText } from "../vault.ts";
+import { closeDatabase } from "../sqlite-close.ts";
 
 /**
  * Latest schema version this code understands. A DB with a value above
@@ -794,7 +795,7 @@ export function expectedSchemaObjects(): ReadonlyMap<string, ReadonlySet<string>
       `cannot build the reference schema for the index presence check: ${msg}`,
     );
   } finally {
-    reference.close();
+    closeDatabase(reference);
   }
 }
 

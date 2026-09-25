@@ -7,11 +7,12 @@
  * sweep on append, matching the activation-store discipline.
  */
 
-import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import type { HostPressureUnmeasurableReason } from "./host-pressure.ts";
+import { renameWithRetry } from "../../fs-atomic.ts";
 
 export const MAINTENANCE_JOURNAL_CAP = 500;
 
@@ -98,7 +99,7 @@ export function sweepJournal(vault: string, cap: number = MAINTENANCE_JOURNAL_CA
   const kept = lines.slice(lines.length - cap);
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, kept.join("\n") + "\n");
-  renameSync(tmp, path);
+  renameWithRetry(tmp, path);
 }
 
 /** Journal entries, newest first. Unparseable lines are skipped. */

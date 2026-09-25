@@ -33,10 +33,10 @@
  * surface because `failed_gates` flips).
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { appendMetric } from "./metrics.ts";
 import { brainDirs } from "./paths.ts";
@@ -481,7 +481,7 @@ export function applyDreamBundle(
       JSON.stringify({ ...manifest, applied_at: isoSecond(opts.now) }, null, 2) + "\n",
     );
   }
-  renameSync(dir, appliedDir);
+  renameWithRetry(dir, appliedDir);
 
   try {
     appendMetric(vault, {

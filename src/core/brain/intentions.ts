@@ -10,10 +10,10 @@
  * stays untouched as the scope-free scratchpad.
  */
 
-import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import { parseFrontmatter } from "../vault.ts";
 import { resolveSessionScope } from "./session-scope.ts";
 import { isoDate, isoSecond } from "./time.ts";
@@ -181,7 +181,7 @@ export function moveIntentionToHistory(
     archivePath = join(historyDir, `${base}-${suffix}.md`);
   }
   try {
-    renameSync(activePath, archivePath);
+    renameWithRetry(activePath, archivePath);
   } catch {
     // Cross-device fallback: copy then remove.
     atomicWriteFileSync(archivePath, readFileSync(activePath, "utf8"));

@@ -108,6 +108,7 @@ import {
   searchAdvisoryStream,
   VAULT_FLAGS,
 } from "../helpers.ts";
+import { closeDatabase } from "../../../core/sqlite-close.ts";
 
 /**
  * Every code this verb can return, named once so the docblock above, the
@@ -372,7 +373,7 @@ async function scanIntegrity(config: ResolvedSearchConfig): Promise<IntegrityRep
         exitCode: verdict.ok ? null : SEARCH_INDEX_CORRUPT_CODE,
       };
     } finally {
-      db.close();
+      closeDatabase(db);
     }
   } finally {
     await release();

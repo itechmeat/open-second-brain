@@ -14,6 +14,7 @@ import { existsSync } from "node:fs";
 import { computeCorpusGeneration } from "../corpus-generation.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../schema.ts";
 import { nowIso } from "./sql.ts";
+import { closeDatabase } from "../../sqlite-close.ts";
 
 /**
  * `index_state` keys for the active embedding instruction prefixes
@@ -186,7 +187,7 @@ export function peekReadonlyIndex<T>(
     return { kind: "unreadable", detail: e instanceof Error ? e.message : String(e) };
   } finally {
     try {
-      db.close();
+      closeDatabase(db);
     } catch {
       /* a close failure cannot change what was already read */
     }

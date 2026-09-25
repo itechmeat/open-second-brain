@@ -142,14 +142,13 @@ import {
   existsSync,
   linkSync,
   mkdirSync,
-  renameSync,
   statSync,
   unlinkSync,
   type Stats,
 } from "node:fs";
 import { dirname, join, posix } from "node:path";
 
-import { isFileAlreadyExists } from "../../fs-atomic.ts";
+import { isFileAlreadyExists, renameWithRetry } from "../../fs-atomic.ts";
 import { ensureInsideVault } from "../../path-safety.ts";
 import { pathCovers } from "../../vault-scope/defaults.ts";
 import { assertExpectedCount } from "../count-guard.ts";
@@ -805,7 +804,7 @@ function relocateBytes(
     // so the bytes outlive the name being dropped here. Declared for the
     // destructive-site census, which reads sites and not files.
     unlinkSync(source.abs);
-    renameSync(staged, destination.abs);
+    renameWithRetry(staged, destination.abs);
   } else {
     linkOneName(source.abs, destination.abs, destination.relPath);
     if (!existsSync(destination.abs)) {

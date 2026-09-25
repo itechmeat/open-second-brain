@@ -12,7 +12,7 @@
  * the vault.
  */
 
-import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
@@ -21,6 +21,7 @@ import { brainDirsForWrite } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
 import { decryptValue, encryptValue, loadOrCreateKey, type EncryptedValue } from "./crypto.ts";
+import { renameWithRetry } from "../../fs-atomic.ts";
 
 export const SECRETS_SCHEMA_VERSION = 1;
 
@@ -267,7 +268,7 @@ function writeStore(vault: string, file: SecretsFile): void {
   const path = storePath(vault);
   const tmp = `${path}.tmp`;
   writeFileSync(tmp, JSON.stringify(file, null, 2) + "\n", { mode: 0o600 });
-  renameSync(tmp, path);
+  renameWithRetry(tmp, path);
 }
 
 /**

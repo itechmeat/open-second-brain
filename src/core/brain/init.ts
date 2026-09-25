@@ -20,20 +20,12 @@
  *     never a torn hybrid.
  */
 
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  readdirSync,
-  readFileSync,
-  renameSync,
-  statSync,
-} from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { basename, dirname, join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { defaultConfigPath } from "../config.ts";
-import { atomicWriteFileSync } from "../fs-atomic.ts";
+import { atomicWriteFileSync, renameWithRetry } from "../fs-atomic.ts";
 import {
   BRAIN_BASES_REL,
   BRAIN_ROOT_REL,
@@ -123,7 +115,7 @@ function ageStarterEntry(abs: string, days: number): void {
       const childAbs = join(abs, child);
       ageStarterEntry(childAbs, days);
       const moved = child.replace(DATE_RE, (d) => shiftDay(d, days));
-      if (moved !== child) renameSync(childAbs, join(abs, moved));
+      if (moved !== child) renameWithRetry(childAbs, join(abs, moved));
     }
     return;
   }
@@ -163,8 +155,8 @@ function ageStarterCopy(
       renamed.push(rel);
       continue;
     }
-    const target = join(dirname(rel), moved);
-    renameSync(abs, join(vault, target));
+    const target = posix.join(dirname(rel), moved);
+    renameWithRetry(abs, join(vault, target));
     renamed.push(target);
   }
   return Object.freeze(renamed);
@@ -254,7 +246,10 @@ export function copyStarterBundle(
     // that we did not copy and should not surface as starter entries.
     for (const name of readdirSync(srcDir)) {
       if (name.startsWith(".")) continue;
-      copied.push(join(BRAIN_ROOT_REL, sub, name));
+      // Vault-relative and forward-slash on every host, like every other
+      // entry `bootstrapBrain` reports: callers compare these against
+      // `Brain/...` prefixes, and a Windows `join` would hand back `Brain\...`.
+      copied.push(posix.join(BRAIN_ROOT_REL, sub, name));
     }
   }
   const anchor = starterAnchorDay(src);
