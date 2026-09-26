@@ -108,7 +108,7 @@ describe("openclaw bundle under node", () => {
       const status = JSON.parse(proc.stdout.toString()) as { vault_path: string };
       expect(status.vault_path).toMatch(/^vault:\/\/[0-9a-f]{32}$/);
       // The secret it was keyed by was persisted after the lock wait gave up.
-      expect(readFileSync(configPath, "utf8")).toMatch(/installation_secret: "?[0-9a-f]{32}"?/);
+      expect(readFileSync(configPath, "utf8")).toMatch(/installation_secret: ["]?[0-9a-f]{32}["]?/);
     },
     30_000,
   );

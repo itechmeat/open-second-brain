@@ -28,6 +28,7 @@ import { ZeroEntropyProvider } from "../../../src/core/search/embeddings/zeroent
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 test("Semaphore hands a released permit to the waiter, not to a racing acquirer", async () => {
   const sem = new Semaphore(1);
@@ -248,7 +249,7 @@ function ceilingCfg(
     provider: "openai-compat",
     baseUrl,
     model: "fake-model",
-    apiKey: "test-key",
+    apiKey: FAKE_PROVIDER_KEY,
     dimension: 2,
     timeoutMs: 5_000,
     concurrency: 2,

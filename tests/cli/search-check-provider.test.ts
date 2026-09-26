@@ -48,6 +48,7 @@ import type { IndexCheckReport } from "../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../helpers/fake-http.ts";
 import { createTempVault, writeMd } from "../helpers/search-fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 
 /** Short enough for a test, long enough that a healthy loopback answer beats it. */
 const SHORT_REQUEST_TIMEOUT_MS = 120;
@@ -84,7 +85,7 @@ async function writeConfiguredProvider(extra: ReadonlyArray<string> = []): Promi
       "search_semantic_enabled: true",
       "embedding_provider: openai-compat",
       `embedding_base_url: "${server.url}"`,
-      'embedding_api_key: "test-key"',
+      `embedding_api_key: ${JSON.stringify(FAKE_PROVIDER_KEY)}`,
       'embedding_model: "fake-model"',
       ...extra,
       "",

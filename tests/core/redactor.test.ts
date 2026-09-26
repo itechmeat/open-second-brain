@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   PRIVATE_REGION_PLACEHOLDER,
+  REDACTION_PLACEHOLDER,
   SCAN_TRUNCATED_MARKER,
   normaliseTextField,
   redactRawOutput,
@@ -49,7 +50,9 @@ describe("redactRawOutput (cross-module backward compat)", () => {
     // Quoted: the placeholder opens with `*`, which YAML reads as an alias
     // node, so the bare form left a redacted mapping unparseable. See
     // tests/core/redactor-yaml-structure.test.ts.
-    expect(redactRawOutput("token: abcdef")).toContain('token: "***REDACTED***"');
+    expect(redactRawOutput("token: abcdef")).toContain(
+      `token: ${JSON.stringify(REDACTION_PLACEHOLDER)}`,
+    );
   });
 
   test("preserves `Bearer ` prefix while masking the token", () => {

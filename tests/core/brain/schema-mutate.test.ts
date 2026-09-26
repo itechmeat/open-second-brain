@@ -25,6 +25,14 @@ import {
 } from "../../../src/core/brain/schema-mutate.ts";
 import { loadSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 
+/** Schema tokens used by the cases below. */
+const DECISION = "decision";
+const RESEARCH = "research";
+const RESEARCH_NOTE = "research-note";
+const SUPPORTS = "supports";
+const CREDENTIAL_NOTE = "credential-note";
+const UNDECLARED = "undeclared";
+
 let vault: string;
 
 /**
@@ -83,24 +91,24 @@ afterEach(() => {
 describe("applySchemaMutations", () => {
   test("applies all schema mutation primitives through one atomic batch", async () => {
     const mutations: SchemaMutation[] = [
-      { op: "add_type", category: "preference_types", token: "decision" },
+      { op: "add_type", category: "preference_types", token: DECISION },
       {
         op: "update_type",
         category: "preference_types",
-        token: "research",
-        new_token: "research-note",
+        token: RESEARCH,
+        new_token: RESEARCH_NOTE,
       },
-      { op: "add_alias", token: "decision", alias: "choice" },
-      { op: "remove_alias", token: "decision", alias: "choice" },
-      { op: "add_prefix", prefix: "pref", token: "decision" },
+      { op: "add_alias", token: DECISION, alias: "choice" },
+      { op: "remove_alias", token: DECISION, alias: "choice" },
+      { op: "add_prefix", prefix: "pref", token: DECISION },
       { op: "remove_prefix", prefix: "pref" },
-      { op: "add_link_type", token: "supports" },
-      { op: "remove_link_type", token: "supports" },
-      { op: "set_extractable", token: "decision", enabled: true },
-      { op: "set_extractable", token: "decision", enabled: false },
-      { op: "set_expert_routing", token: "decision", expert: "schema-author" },
-      { op: "set_expert_routing", token: "decision", expert: null },
-      { op: "remove_type", category: "preference_types", token: "decision" },
+      { op: "add_link_type", token: SUPPORTS },
+      { op: "remove_link_type", token: SUPPORTS },
+      { op: "set_extractable", token: DECISION, enabled: true },
+      { op: "set_extractable", token: DECISION, enabled: false },
+      { op: "set_expert_routing", token: DECISION, expert: "schema-author" },
+      { op: "set_expert_routing", token: DECISION, expert: null },
+      { op: "remove_type", category: "preference_types", token: DECISION },
     ];
 
     const result = await applySchemaMutations(vault, mutations, {
@@ -158,7 +166,7 @@ describe("applySchemaMutations", () => {
         [
           {
             op: "set_expert_routing",
-            token: "research",
+            token: RESEARCH,
             expert: "schema-author\nother",
           },
         ],
@@ -170,7 +178,7 @@ describe("applySchemaMutations", () => {
   test("writes redacted mutation audit records", async () => {
     const result = await applySchemaMutations(
       vault,
-      [{ op: "add_type", category: "signal_types", token: "credential-note" }],
+      [{ op: "add_type", category: "signal_types", token: CREDENTIAL_NOTE }],
       {
         actor: "tester",
         now: new Date("2026-05-30T12:00:00.000Z"),
@@ -187,7 +195,7 @@ describe("applySchemaMutations", () => {
   test("records the resulting pack digest into the audit record it writes", async () => {
     const result = await applySchemaMutations(
       vault,
-      [{ op: "add_type", category: "preference_types", token: "decision" }],
+      [{ op: "add_type", category: "preference_types", token: DECISION }],
       { actor: "tester", now: new Date("2026-05-30T12:00:00.000Z") },
     );
 
@@ -207,7 +215,7 @@ describe("applySchemaMutations", () => {
   test("writes its audit shard under the shared audit-directory constant", async () => {
     const result = await applySchemaMutations(
       vault,
-      [{ op: "add_type", category: "preference_types", token: "decision" }],
+      [{ op: "add_type", category: "preference_types", token: DECISION }],
       { actor: "tester" },
     );
 
@@ -222,9 +230,9 @@ describe("previewSchemaMutations", () => {
     const snapshot = snapshotConfig(vault);
 
     const preview = previewSchemaMutations(vault, [
-      { op: "add_type", category: "preference_types", token: "decision" },
-      { op: "add_alias", token: "decision", alias: "choice" },
-      { op: "set_expert_routing", token: "decision", expert: "schema-author" },
+      { op: "add_type", category: "preference_types", token: DECISION },
+      { op: "add_alias", token: DECISION, alias: "choice" },
+      { op: "set_expert_routing", token: DECISION, expert: "schema-author" },
     ]);
 
     expect(preview.dry_run).toBe(true);
@@ -243,13 +251,13 @@ describe("previewSchemaMutations", () => {
   test("reports a scalar leaf whose value changed as a before/after pair", async () => {
     await applySchemaMutations(
       vault,
-      [{ op: "set_expert_routing", token: "research", expert: "first-expert" }],
+      [{ op: "set_expert_routing", token: RESEARCH, expert: "first-expert" }],
       { actor: "tester" },
     );
     const snapshot = snapshotConfig(vault);
 
     const preview = previewSchemaMutations(vault, [
-      { op: "set_expert_routing", token: "research", expert: "second-expert" },
+      { op: "set_expert_routing", token: RESEARCH, expert: "second-expert" },
     ]);
 
     expect(preview.diff).toEqual([
@@ -263,8 +271,8 @@ describe("previewSchemaMutations", () => {
       {
         op: "update_type",
         category: "preference_types",
-        token: "research",
-        new_token: "research-note",
+        token: RESEARCH,
+        new_token: RESEARCH_NOTE,
       },
     ]);
 
@@ -276,7 +284,7 @@ describe("previewSchemaMutations", () => {
 
   test("returns an empty diff for a batch that would change nothing", () => {
     const preview = previewSchemaMutations(vault, [
-      { op: "add_type", category: "preference_types", token: "research" },
+      { op: "add_type", category: "preference_types", token: RESEARCH },
     ]);
 
     expect(preview.would_apply).toBe(1);
@@ -288,7 +296,7 @@ describe("previewSchemaMutations", () => {
     rmSync(configPath);
 
     const preview = previewSchemaMutations(vault, [
-      { op: "add_type", category: "preference_types", token: "decision" },
+      { op: "add_type", category: "preference_types", token: DECISION },
     ]);
 
     expect(preview.diff).toEqual([
@@ -312,7 +320,7 @@ describe("previewSchemaMutations", () => {
     },
     {
       name: "a prefix pointing at an undeclared token",
-      mutations: [{ op: "add_prefix", prefix: "pref", token: "undeclared" }],
+      mutations: [{ op: "add_prefix", prefix: "pref", token: UNDECLARED }],
       message: "schema.prefixes.pref: token is not declared",
     },
     {

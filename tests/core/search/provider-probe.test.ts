@@ -34,6 +34,7 @@ import {
 } from "../../../src/core/search/provider-probe.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 /** A budget short enough to elapse inside a test, and long enough not to flake. */
 const SHORT_BUDGET_MS = 120;
@@ -50,7 +51,7 @@ function semanticConfig(overrides: Partial<ResolvedEmbeddingConfig> = {}): Resol
     provider: "openai-compat",
     baseUrl: server.url,
     model: "fake-model",
-    apiKey: "test-key",
+    apiKey: FAKE_PROVIDER_KEY,
     dimension: null,
     timeoutMs: 10_000,
     concurrency: 2,

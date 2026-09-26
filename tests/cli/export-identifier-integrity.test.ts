@@ -43,9 +43,10 @@ import { join } from "node:path";
 import { runCli } from "../helpers/run-cli.ts";
 import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
 
 /** A vendor-prefixed credential token: caught by shape, not by a word list. */
-const VENDOR_TOKEN = "sk-live-9f8e7d6c5b4a32100112";
+const VENDOR_TOKEN = FAKE_VENDOR_KEY;
 /** A content address: 64 hexadecimal characters, the shape of a digest. */
 const DIGEST = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 /** A canonical uuid - hexadecimal plus dashes, the shape of a container id. */

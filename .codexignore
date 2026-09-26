@@ -1,0 +1,25 @@
+# Local state, secrets and generated artifacts that must never ship with the
+# Codex plugin.
+.env
+.env.*
+!.env.example
+.open-second-brain.local.yaml
+.open-second-brain/
+sandbox-vault/
+node_modules/
+.bun/
+.venv/
+__pycache__/
+*.py[cod]
+build/
+dist/
+*.egg-info/
+.codegraph/
+.code-ranker/
+.zvec-grep/
+.worktrees/
+.claude/worktrees/
+.claude/settings.local.json
+.apb/runs/
+.apb/tmp/
+.DS_Store

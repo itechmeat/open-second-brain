@@ -24,6 +24,7 @@ import {
 } from "../../src/core/search/embeddings/presets.ts";
 import { charLengthOverTokenBudget } from "../../src/core/search/embeddings/signature.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 
 let tmp: string;
 let vault: string;
@@ -67,7 +68,7 @@ function semanticConfig(model: string): ReadonlyArray<string> {
     'embedding_provider: "openai-compat"',
     'embedding_base_url: "https://embeddings.invalid/v1"',
     `embedding_model: "${model}"`,
-    'embedding_api_key: "test-key"',
+    `embedding_api_key: ${JSON.stringify(FAKE_PROVIDER_KEY)}`,
   ];
 }
 

@@ -19,6 +19,8 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { buildToolTable, findTool } from "../../src/mcp/tools.ts";
 import type { ServerContext } from "../../src/mcp/tool-contract.ts";
 
+const UNKNOWN_TYPE = "no-such-token";
+
 let tmp: string;
 let vault: string;
 let configPath: string;
@@ -205,9 +207,9 @@ describe("schema_inspect", () => {
     // argument reaches the underlying handler.
     const result = (await run("schema_inspect", {
       view: "explain_type",
-      token: "no-such-token",
+      token: UNKNOWN_TYPE,
     })) as Record<string, unknown>;
-    expect(result["token"]).toBe("no-such-token");
+    expect(result["token"]).toBe(UNKNOWN_TYPE);
   });
 
   test("invalid view raises a clear error", async () => {

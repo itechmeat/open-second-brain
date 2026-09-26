@@ -27,6 +27,7 @@ import { ZeroEntropyProvider } from "../../../src/core/search/embeddings/zeroent
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { FAKE_PROVIDER_KEY, fakeCredential } from "../../helpers/fake-credentials.ts";
 
 // ── fixtures ─────────────────────────────────────────────────────────────────
 
@@ -45,7 +46,7 @@ function openAiCfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): ResolvedEm
     provider: "openai-compat",
     baseUrl: server.url,
     model: "fake-model",
-    apiKey: "test-key",
+    apiKey: FAKE_PROVIDER_KEY,
     dimension: 4,
     timeoutMs: 5_000,
     // Serial batches keep the captured request order deterministic.
@@ -63,7 +64,7 @@ function zeroEntropyCfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): Resol
     provider: "zeroentropy",
     baseUrl: server.url,
     model: "zembed-1",
-    apiKey: "ze-test-key",
+    apiKey: fakeCredential("ze-", "test-key"),
     dimension: 4,
     timeoutMs: 5_000,
     concurrency: 1,

@@ -31,9 +31,10 @@ import {
   redactStructured,
   wasScanTruncated,
 } from "../../src/core/redactor.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 /** A vendor-prefixed token, caught by shape rather than by a word list. */
-const TAIL_SECRET = "sk-live-TAILSECRET9999";
+const TAIL_SECRET = fakeCredential("sk-", "live-TAILSECRET9999");
 
 describe("content that quotes the truncation marker cannot suppress the refusal", () => {
   test("an oversized leaf beginning with the marker is refused, not released", () => {

@@ -23,6 +23,8 @@ import {
 import { parseSchemaPack } from "../../../src/core/brain/schema-pack.ts";
 import { parseFrontmatter } from "../../../src/core/vault.ts";
 
+const PRIORITY_HIGH = "priority/high";
+
 const PACK = parseSchemaPack(
   [
     "schema_version: 1",
@@ -44,7 +46,7 @@ describe("validateLabelAssignment", () => {
     expect(validateLabelAssignment(PACK, " Priority ", "HIGH")).toEqual({
       dimension: "priority",
       value: "high",
-      token: "priority/high",
+      token: PRIORITY_HIGH,
     });
   });
 

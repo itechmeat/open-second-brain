@@ -7,8 +7,8 @@ Guidance for agents working in this repository.
 `package.json` `version` is the single source of truth. The version is
 mirrored into several manifests (`plugin.yaml`, `plugins/hermes/plugin.yaml`,
 `.claude-plugin/plugin.json`, `.codex-plugin/plugin.json`,
-`plugins/codex/.codex-plugin/plugin.json`, `openclaw.plugin.json`) and
-`pyproject.toml`.
+`plugins/codex/.codex-plugin/plugin.json`, `openclaw.plugin.json`),
+`pyproject.toml` and `uv.lock`.
 
 Never hand-edit the version in those mirrored files. To bump the version,
 edit `package.json` only, then propagate with:
@@ -53,7 +53,8 @@ the already-bumped commit - it never changes the version.
 
 Codex installs the plugin from `./plugins/codex` only, and its cache copy
 drops symlinks. So `plugins/codex/skills/` is a real, byte-identical copy of
-`skills/`, and `plugins/codex/hooks/hooks.json` is generated from
+`skills/`, `LICENSE`, `README.md`, `SECURITY.md` and `.codexignore` in
+`plugins/codex/` are real copies generated from the repository root, and `plugins/codex/hooks/hooks.json` is generated from
 `hooks/hooks.json` (SessionEnd timeouts capped at Codex's 3 s limit, and a
 `commandWindows` cmd.exe form added to every hook). Every hook command must
 end in the `o2b-hook <name>` fallback, or the sync refuses it. Never

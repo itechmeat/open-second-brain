@@ -144,6 +144,7 @@ import {
   mkdirSync,
   statSync,
   unlinkSync,
+  type BigIntStats,
   type Stats,
 } from "node:fs";
 import { dirname, join, posix } from "node:path";
@@ -728,10 +729,23 @@ function statOrNull(target: string): Stats | null {
  * this shape.
  */
 function namesSameEntry(a: string, b: string): boolean {
-  const left = statOrNull(a);
-  const right = statOrNull(b);
+  const left = bigintStatOrNull(a);
+  const right = bigintStatOrNull(b);
   if (left === null || right === null) return false;
   return left.dev === right.dev && left.ino === right.ino;
+}
+
+/**
+ * `statSync` with exact `dev` and `ino`. NTFS file IDs are 64-bit, and as a
+ * `number` two distinct files can round to the same `ino` above 2^53, which
+ * made {@link namesSameEntry} take an occupied destination for the source.
+ */
+function bigintStatOrNull(target: string): BigIntStats | null {
+  try {
+    return statSync(target, { bigint: true });
+  } catch {
+    return null;
+  }
 }
 
 /**

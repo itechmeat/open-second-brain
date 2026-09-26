@@ -54,6 +54,7 @@ import type {
   ResolvedSearchConfig,
 } from "../../../src/core/search/types.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 let vault: string;
 let dbPath: string;
@@ -91,7 +92,7 @@ function cfg(
         // is ever made. The census is a read over already-indexed rows.
         baseUrl: "https://embeddings.invalid/v1",
         model: RECOMMENDED_EMBEDDING_MODEL,
-        apiKey: "test-key",
+        apiKey: FAKE_PROVIDER_KEY,
         dimension: 384,
         ...semantic,
       },

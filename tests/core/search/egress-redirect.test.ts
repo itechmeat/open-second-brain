@@ -19,6 +19,7 @@ import { ZeroEntropyProvider } from "../../../src/core/search/embeddings/zeroent
 import { CrossEncoderRerankProvider } from "../../../src/core/search/rerank/cross-encoder.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 
 let server: FakeHttp;
 let stolen: Array<{ path: string; auth: string }>;
@@ -45,7 +46,7 @@ function cfg(provider: "openai-compat" | "zeroentropy"): ResolvedEmbeddingConfig
     provider,
     baseUrl: server.url,
     model: "m",
-    apiKey: "redirect-test-key",
+    apiKey: fakeCredential("redirect-", "test-key"),
     dimension: null,
     timeoutMs: 5_000,
     concurrency: 1,
@@ -73,7 +74,7 @@ test("the cross-encoder reranker does not follow a redirect", async () => {
   const p = new CrossEncoderRerankProvider({
     baseUrl: server.url,
     model: "r",
-    apiKey: "redirect-test-key",
+    apiKey: fakeCredential("redirect-", "test-key"),
   });
   await expect(p.rerank("query", ["doc"])).rejects.toThrow();
   expect(server.callCount()).toBeGreaterThan(0);

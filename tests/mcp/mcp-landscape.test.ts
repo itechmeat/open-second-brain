@@ -10,6 +10,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { BRAIN_TOOLS } from "../../src/mcp/brain-tools.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+const LEAK_CANARY = fakeCredential("sk-", "leak-me-please-987");
 
 let vault: string;
 let ctx: { vault: string };
@@ -29,7 +32,7 @@ describe("brain_mcp_landscape", () => {
           memory: {
             command: "npx",
             args: ["-y", "@modelcontextprotocol/server-memory"],
-            env: { MEMORY_SECRET: "sk-leak-me-please-987" },
+            env: { MEMORY_SECRET: LEAK_CANARY },
           },
         },
       }),
@@ -44,7 +47,7 @@ describe("brain_mcp_landscape", () => {
     expect(out.servers[0]!.name).toBe("memory");
     expect(out.servers[0]!.packages).toEqual(["@modelcontextprotocol/server-memory"]);
     expect(out.servers[0]!.env).toEqual(["MEMORY_SECRET"]);
-    expect(JSON.stringify(out)).not.toContain("sk-leak-me-please-987");
+    expect(JSON.stringify(out)).not.toContain(LEAK_CANARY);
   });
 
   test("a vault with no MCP config files yields an empty server list", async () => {

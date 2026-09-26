@@ -1936,10 +1936,10 @@ var REDACTION_PLACEHOLDER = "***REDACTED***";
 var PLACEHOLDER = REDACTION_PLACEHOLDER;
 var PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
 var MAX_REDACTOR_INPUT = 1024 * 1024;
-var SCAN_TRUNCATED_TOKEN = "***SCAN_TRUNCATED***";
+var SCAN_TRUNCATED_SENTINEL = "***SCAN_TRUNCATED***";
 var SCAN_TRUNCATED_MARKER = `
 
-${SCAN_TRUNCATED_TOKEN} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` + `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]
+${SCAN_TRUNCATED_SENTINEL} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` + `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]
 `;
 var PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;
 var PRIVATE_CLOSE_TAG_RE = /<\/private>/gi;

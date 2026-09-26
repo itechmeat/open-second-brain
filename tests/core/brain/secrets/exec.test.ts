@@ -17,6 +17,7 @@ import {
   SecretExecDeniedError,
 } from "../../../../src/core/brain/secrets/exec.ts";
 import { setSecret } from "../../../../src/core/brain/secrets/store.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
 const NOW = new Date("2026-06-05T10:00:00Z");
 const CTX = { agent: "tester", now: NOW };
@@ -175,7 +176,7 @@ describe("runWithSecret", () => {
   });
 
   test("a transformed echo of the secret is scrubbed too, not only the literal (audit L3)", async () => {
-    const value = "sk-live-9f8e7d6c5b4a39281706f5e4d3c2b1a0";
+    const value = fakeCredential("sk-", "live-9f8e7d6c5b4a39281706f5e4d3c2b1a0");
     const encoded = Buffer.from(value).toString("base64");
     setSecret(vault, {
       name: "api-key",

@@ -25,6 +25,9 @@ import {
 import { applySchemaMutations } from "../../../src/core/brain/schema-mutate.ts";
 import { parseSchemaPack, readSchemaPackSource } from "../../../src/core/brain/schema-pack.ts";
 
+/** Schema tokens used by the cases below. */
+const SUPPORTS = "supports";
+
 let vault: string;
 
 const CONFIG_LINES: ReadonlyArray<string> = Object.freeze([
@@ -55,7 +58,7 @@ function writeConfig(text: string): void {
 
 /** Apply one harmless mutation so the vault carries a recorded expectation. */
 async function seal(): Promise<void> {
-  await applySchemaMutations(vault, [{ op: "add_link_type", token: "supports" }], {
+  await applySchemaMutations(vault, [{ op: "add_link_type", token: SUPPORTS }], {
     actor: "tester",
   });
 }
@@ -127,11 +130,9 @@ describe("assessSchemaPackIntegrity", () => {
   });
 
   test("the apply result carries the digest that was recorded", async () => {
-    const applied = await applySchemaMutations(
-      vault,
-      [{ op: "add_link_type", token: "supports" }],
-      { actor: "tester" },
-    );
+    const applied = await applySchemaMutations(vault, [{ op: "add_link_type", token: SUPPORTS }], {
+      actor: "tester",
+    });
 
     expect(applied.pack_digest).toBe(computeSchemaPackDigest(applied.pack));
     expect(assessSchemaPackIntegrity(vault).digest).toBe(applied.pack_digest);

@@ -2,7 +2,8 @@
  * Lock the contract that all manifests carry the same version.
  *
  * Single source of truth: `package.json` `version`. Other files (Hermes
- * plugin.yaml, OpenClaw manifest, Claude/Codex plugin manifests, pyproject.toml)
+ * plugin.yaml, OpenClaw manifest, Claude/Codex plugin manifests, pyproject.toml,
+ * uv.lock)
  * carry a synced copy and are kept aligned by `scripts/sync-version.ts`.
  */
 
@@ -37,6 +38,13 @@ function readPyprojectVersion(rel: string): string {
   return m![1]!;
 }
 
+function readUvLockVersion(rel: string): string {
+  const text = readFileSync(`${ROOT}/${rel}`, "utf8");
+  const m = text.match(/^\[\[package\]\]\r?\nname = "open-second-brain"\r?\nversion = "([^"]+)"/m);
+  expect(m).not.toBeNull();
+  return m![1]!;
+}
+
 describe("version resolution", () => {
   test("MCP SERVER_VERSION matches package.json", () => {
     expect(SERVER_VERSION).toBe(canonicalVersion());
@@ -51,6 +59,7 @@ describe("manifest version sync", () => {
     { kind: "json", rel: ".codex-plugin/plugin.json" },
     { kind: "json", rel: "openclaw.plugin.json" },
     { kind: "pyproject", rel: "pyproject.toml" },
+    { kind: "uvlock", rel: "uv.lock" },
   ] as const;
 
   for (const { kind, rel } of cases) {
@@ -59,7 +68,8 @@ describe("manifest version sync", () => {
       let actual: string;
       if (kind === "yaml") actual = readYamlVersion(rel);
       else if (kind === "json") actual = readJsonVersion(rel);
-      else actual = readPyprojectVersion(rel);
+      else if (kind === "pyproject") actual = readPyprojectVersion(rel);
+      else actual = readUvLockVersion(rel);
       expect(actual).toBe(expected);
     });
   }
