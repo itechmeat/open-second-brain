@@ -28,9 +28,10 @@
  * Every cron step field restarts at the head of its enclosing period, and
  * each unit is bounded so the rendered expression means what the operator
  * asked for INSIDE that period. The day bound is the strictest of the
- * three because its enclosing period varies: `*​/N` in the day-of-month
- * field means "the 1st, then every Nth day within each month", so at 28 -
- * the shortest month - and above it collapses to the 1st of every month.
+ * three because its enclosing period varies: a star-slash-N step in the
+ * day-of-month field means "the 1st, then every Nth day within each
+ * month", so at 28 - the shortest month - and above it collapses to the
+ * 1st of every month.
  * `--interval 90d` used to render exactly that and call it 90 days.
  *
  * Inputs outside those bounds raise a CronTemplateError naming what the
@@ -54,8 +55,8 @@ const HOURS_PER_DAY = 24;
 /**
  * The shortest month, and therefore the ceiling on a day-of-month step.
  *
- * A `*​/N` day step fires on the 1st and every Nth day after it WITHIN the
- * month; at 28 no month is long enough for a second firing, so the
+ * A star-slash-N day step fires on the 1st and every Nth day after it
+ * WITHIN the month; at 28 no month is long enough for a second firing, so the
  * expression is a monthly schedule whatever N says. Refusing at that
  * boundary is what keeps the rendered cadence and the requested cadence
  * the same claim.
