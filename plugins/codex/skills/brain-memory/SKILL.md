@@ -73,6 +73,17 @@ Optional:
 
 When a preference *might* apply but you are unsure, do not skip — record the event with `note: "speculative; <reason>"` so the dream pass sees the signal. A one-off speculative entry that does not recur is filtered out by dream; the cost of writing is one MCP call, the cost of missing is a silent gap in the evidence trail. The "do not call" list above is exhaustive on purpose: outside those four bullets, record.
 
+## End-of-turn check
+
+When a turn changed files (Write / Edit / MultiEdit / apply_patch) and none of `brain_feedback`, `brain_apply_evidence` or `brain_note` was called, the Stop hook continues the turn once with a single line: "Open Second Brain: this turn changed files but recorded no brain event. ..." Claude Code shows it as Stop hook feedback; Codex and other runtimes receive it as a continuation prompt. It is a prompt to decide, not an error:
+
+- a rule the user stated this turn → `brain_feedback`;
+- an active preference in `Brain/preferences/` applied, violated or made obsolete by the change → `brain_apply_evidence` with `result: applied | violated | outdated`;
+- a durable milestone that fits neither (release shipped, PR merged, fact discovered) → `brain_note`;
+- nothing worth recording (the four cases under "When NOT to call") → finish the reply without comment.
+
+It fires at most once per turn: the next stop passes whether or not you record anything. Do not mention the check to the user.
+
 ## Language
 
 The `principle` and `note` fields must match the **natural language the user has been speaking in this session**. Technical identifiers stay English regardless: `topic` slug, `scope`, `pref_id`, `result`, `agent` name, file paths, library names, error messages quoted from logs. This mirrors the policy from the `agent-event-log` skill.
