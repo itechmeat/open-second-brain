@@ -88,47 +88,41 @@ export function postWriteReminder({ toolName, filePath, runtime }: PostWriteRemi
   return parts.join("\n");
 }
 
-function stopGuardrailCadenceLine(runtime: HookRuntime): string {
-  switch (runtime) {
-    case "claudecode":
-      return "_This guardrail fires at most once per turn — send another reply (with or without a brain-event call) to clear it._";
-    case "codex":
-      return "_This `codex exec` is about to end — call `brain_feedback` / `brain_apply_evidence` / `brain_note` now or finish silently; no further guardrail will fire._";
-    case "grok":
-      return "_This guardrail fires at most once per turn — send another reply (with or without a brain-event call) to clear it._";
-    case "unknown":
-      return "";
-  }
-}
+/**
+ * End-of-turn guardrail text (v1.58.2). One line on purpose: Claude Code
+ * renders it in the user's transcript and Codex turns it into a
+ * continuation prompt, so every extra line is noise the operator reads
+ * on each guarded turn. The full contract lives in the `brain-memory`
+ * skill ("End-of-turn check") and in the PostToolUse reminder the model
+ * already received after the write.
+ */
+export const STOP_GUARDRAIL_TEXT =
+  "Open Second Brain: this turn changed files but recorded no brain event. " +
+  "Call brain_feedback, brain_apply_evidence or brain_note if one fits " +
+  "(brain-memory skill); otherwise just finish.";
 
-export function stopGuardrailReason(runtime: HookRuntime = "unknown"): string {
-  const cadence = stopGuardrailCadenceLine(runtime);
-  const parts: string[] = [
-    "Open Second Brain hook: this turn touched files",
-    "(Write / Edit / MultiEdit / apply_patch / search_replace) but did not call any of:",
-    "",
-    "- `brain_feedback` — new taste correction the user expressed in this",
-    "  turn (one signal per file, see the `brain-memory` skill)",
-    "- `brain_apply_evidence` — evidence trail when an active preference",
-    "  in `Brain/preferences/` scopes to the artifact you just produced",
-    "- `brain_note` — one-line narrative milestone (release shipped, PR",
-    "  merged, fact discovered) that fits neither of the first two",
-    "",
-  ];
-  if (cadence !== "") parts.push(cadence, "");
-  parts.push(
-    "Pick whichever fits this turn:",
-    "- a new rule the user just stated → `brain_feedback`",
-    "- an active preference applied, violated, or made obsolete by the",
-    "  change → `brain_apply_evidence` with",
-    "  `result: applied | violated | outdated`",
-    "- a durable narrative milestone → `brain_note`",
-    "",
-    "If the change is trivial and not worth recording, just send your",
-    "reply again — this guardrail fires at most once per turn and the",
-    "second Stop passes through silently.",
-  );
-  return parts.join("\n");
+export type StopGuardrailOutput =
+  | {
+      readonly hookSpecificOutput: {
+        readonly hookEventName: "Stop";
+        readonly additionalContext: string;
+      };
+    }
+  | { readonly decision: "block"; readonly reason: string };
+
+/**
+ * Hook output for the Stop guardrail. Claude Code gets the non-error
+ * `additionalContext` channel; every other runtime gets the portable
+ * `decision: "block"` shape. Both continue the turn once and carry the
+ * same one-line text.
+ */
+export function stopGuardrailOutput(runtime: HookRuntime): StopGuardrailOutput {
+  if (runtime === "claudecode") {
+    return {
+      hookSpecificOutput: { hookEventName: "Stop", additionalContext: STOP_GUARDRAIL_TEXT },
+    };
+  }
+  return { decision: "block", reason: STOP_GUARDRAIL_TEXT };
 }
 
 /**

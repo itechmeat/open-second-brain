@@ -245,6 +245,20 @@ describe("summarizeTurn", () => {
 });
 
 describe("detectHookRuntime", () => {
+  test("Claude Code Stop payload outside ~/.claude → claudecode; Codex Stop (turn_id) is not", () => {
+    const stop = {
+      hook_event_name: "Stop",
+      session_id: "s",
+      cwd: "/w",
+      transcript_path: "/custom/config/projects/-w/abc.jsonl",
+      stop_hook_active: false,
+      last_assistant_message: "done",
+    };
+    expect(detectHookRuntime(stop)).toBe("claudecode");
+    expect(detectHookRuntime({ ...stop, turn_id: "t1" })).toBe("unknown");
+    expect(detectHookRuntime({ ...stop, hook_event_name: "SubagentStop" })).toBe("unknown");
+  });
+
   test("Claude Code transcript path → claudecode", () => {
     expect(
       detectHookRuntime({

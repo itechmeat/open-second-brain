@@ -1,34 +1,36 @@
 #!/usr/bin/env -S bun
 /**
- * Stop hook: blocks the turn at most once when the agent produced a
+ * Stop hook: nudges the agent at most once per turn when it produced a
  * durable-looking artifact (Write / Edit / MultiEdit / apply_patch) but
- * never called `event_log_append`. Lets the agent decide whether to log
- * or finish — but forces the decision to be conscious.
+ * recorded no brain event (`brain_feedback` / `brain_apply_evidence` /
+ * `brain_note`). The agent decides whether to record or just finish.
  *
- * Decision shape (identical for Claude Code and Codex):
+ * Output channel per runtime (v1.58.2):
  *
- *   - On the first Stop of a turn (`stop_hook_active === false` and the
- *     artifact-without-log condition holds): emit
- *       {"decision": "block", "reason": "<text>"}
- *     so the runtime continues the agent loop with that reason injected
- *     as a developer message. The agent can then either call
- *     `event_log_append` or just finish; either way the next Stop sees
- *     `stop_hook_active === true` and passes through.
+ *   - Claude Code: `hookSpecificOutput.additionalContext` on the Stop
+ *     event. Claude Code (2.1.163+) continues the turn with it as
+ *     non-error feedback, labelled "Stop hook feedback", instead of the
+ *     red "Stop hook error" that `decision: "block"` renders with the
+ *     whole reason in the user's transcript.
  *
- *   - On any Stop where the guardrail already fired
- *     (`stop_hook_active === true`): exit 0 silently. No deadlocks.
+ *   - Codex, Grok Build and unrecognised runtimes:
+ *       {"decision": "block", "reason": "<one line>"}
+ *     Codex documents only this shape for Stop (the reason becomes the
+ *     continuation prompt), and it is the portable fallback.
  *
- *   - On any Stop where there was no artifact or a log was made: exit 0
- *     silently.
+ * Either way the text is one short line (`STOP_GUARDRAIL_TEXT`); the
+ * details live in the `brain-memory` skill.
  *
- * The guardrail never blocks twice in a row by design — that matches
- * the user's "agent decides what to log" requirement.
+ * Fires at most once per turn: when the runtime reports
+ * `stop_hook_active === true` (this turn was already continued by a
+ * Stop hook) the hook exits 0 silently. No artifact, or a recorded
+ * brain event, also exits 0 silently. Crashes exit 0 - never deadlock.
  */
 
 import { asHookPayload, readHookInput } from "./lib/stdin.ts";
 import { readTranscript } from "./lib/transcript.ts";
 import { detectHookRuntime, summarizeTurn } from "./lib/detect.ts";
-import { stopGuardrailReason } from "./lib/messages.ts";
+import { stopGuardrailOutput } from "./lib/messages.ts";
 
 async function main(): Promise<void> {
   let payload;
@@ -53,12 +55,7 @@ async function main(): Promise<void> {
   const summary = summarizeTurn(signal.toolCalls, signal.bashCommands);
   if (!summary.hadArtifact || summary.hadBrainEvent) return;
 
-  const runtime = detectHookRuntime(payload);
-  const out = {
-    decision: "block",
-    reason: stopGuardrailReason(runtime),
-  };
-  process.stdout.write(JSON.stringify(out) + "\n");
+  process.stdout.write(JSON.stringify(stopGuardrailOutput(detectHookRuntime(payload))) + "\n");
 }
 
 main().catch(() => {
