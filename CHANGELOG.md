@@ -77,6 +77,8 @@ These can change what an existing setup sees. `docs/updating.md` covers each one
 - **Git remote identities keep `#`, `?` and `%`.** Path remotes were placed into URLs unescaped, so two repositories whose paths differed after a `#` or `?` shared one identity. The drive letter of a `file:` identity is folded to upper case, and a UNC remote gets an identity instead of none. The session lineage ledger re-canonicalizes recorded remotes on read; an older line for a path holding one of those characters reads as a different repository, and continuation refuses it.
 - **Snapshot restore keeps in-tree links relative.** The restore copy rewrote every relative symbolic link to an absolute path inside the temporary extraction, which the cleanup then removed, so in-tree links restored dangling. Links now copy verbatim.
 - **Label and attribute writes work on Windows with a write binding declared.** The binding matcher received a backslash-separated path and refused every target.
+- **The startup search self-heal finishes on native Windows.** A rebuild started by a hook was ended together with the hook process, so it never ran and never recorded an outcome. The child is now detached on Windows; POSIX is unchanged.
+- **A note used as a folder is refused on Windows too.** Windows reports a path below a file as missing rather than as not a directory, so the landing-path check read `note.md/child.md` as a note still to be created. The shared path resolver now gives the POSIX answer on both.
 - **`brain_context_pack` stopped writing its item count to stderr,** which landed in MCP client logs on every call.
 
 ### Removed

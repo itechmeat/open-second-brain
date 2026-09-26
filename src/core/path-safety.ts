@@ -8,7 +8,7 @@
  * file outside the vault root.
  */
 
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 
 /**
@@ -134,8 +134,27 @@ function realpathOfDeepestExisting(target: string): string {
     if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
     const parent = dirname(target);
     if (parent === target) return target;
-    return join(realpathOfDeepestExisting(parent), basename(target));
+    const realParent = realpathOfDeepestExisting(parent);
+    assertNotAFile(realParent);
+    return join(realParent, basename(target));
   }
+}
+
+/**
+ * Refuse to append a component below an existing non-directory.
+ *
+ * POSIX `realpath` answers `ENOTDIR` for `note.md/child.md` when `note.md`
+ * is a file, but Windows answers `ENOENT`, which the walk above reads as
+ * "not created yet" and would resolve to a path no write can ever create.
+ * Raising the POSIX errno here gives both platforms the same answer.
+ */
+function assertNotAFile(path: string): void {
+  const stat = statSync(path, { throwIfNoEntry: false });
+  if (stat === undefined || stat.isDirectory()) return;
+  const err: NodeJS.ErrnoException = new Error(`ENOTDIR: not a directory, '${path}'`);
+  err.code = "ENOTDIR";
+  err.path = path;
+  throw err;
 }
 
 /**

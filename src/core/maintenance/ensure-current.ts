@@ -219,6 +219,12 @@ function startSelfHealReindex(
       stderr: "ignore",
       // No console window flashing up on Windows for a background rebuild.
       windowsHide: true,
+      // On Windows a child that is not detached is ended together with its
+      // parent, so a rebuild started by a short-lived hook process died the
+      // moment the hook exited and never recorded an outcome. POSIX already
+      // lets an `unref`ed child outlive its parent, and its process group is
+      // left as it was.
+      detached: process.platform === "win32",
       // Bun hands a child spawned without `env` the environment this
       // process STARTED with, not the live `process.env`. A config the
       // process selected after start (`--config`, an embedding host, the
