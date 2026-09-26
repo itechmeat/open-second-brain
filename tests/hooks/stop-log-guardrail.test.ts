@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { STOP_GUARDRAIL_TEXT } from "../../hooks/lib/messages.ts";
+
 const HOOK = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "..",
@@ -79,12 +81,10 @@ describe("stop-log-guardrail hook", () => {
     expect(r.exit).toBe(0);
     expect(r.stdout.endsWith("\n")).toBe(true);
     const out = JSON.parse(r.stdout);
-    expect(out.decision).toBe("block");
-    expect(out.reason).toContain("brain_feedback");
-    expect(out.reason).toContain("brain_apply_evidence");
-    expect(out.reason).toContain("brain_note");
-    // §32 (v0.10.8): event_log_append must not appear in the new
-    // guardrail body — the tool is retired across every runtime.
+    // An unrecognised runtime gets the portable one-line block.
+    expect(out).toEqual({ decision: "block", reason: STOP_GUARDRAIL_TEXT });
+    // §32 (v0.10.8): event_log_append must not appear in the guardrail
+    // body — the tool is retired across every runtime.
     expect(out.reason).not.toContain("event_log_append");
   });
 
@@ -271,7 +271,7 @@ describe("stop-log-guardrail hook", () => {
     expect(out.decision).toBe("block");
   });
 
-  test("Claude Code transcript path adds the claudecode cadence line", async () => {
+  test("Claude Code gets non-error additionalContext feedback, not a block", async () => {
     // Reuse the per-test `tmp` so afterEach cleans this up too.
     const transcript_path = join(tmp, ".claude", "projects", "session.jsonl");
     mkdirSync(dirname(transcript_path), { recursive: true });
@@ -287,11 +287,18 @@ describe("stop-log-guardrail hook", () => {
       stop_hook_active: false,
     });
     const out = JSON.parse(r.stdout);
-    expect(out.decision).toBe("block");
-    expect(out.reason as string).toContain("This guardrail fires");
+    // `decision: "block"` renders as a red "Stop hook error" with the whole
+    // reason in the user's transcript; additionalContext continues the turn
+    // as "Stop hook feedback".
+    expect(out.decision).toBeUndefined();
+    expect(out.reason).toBeUndefined();
+    expect(out.hookSpecificOutput).toEqual({
+      hookEventName: "Stop",
+      additionalContext: STOP_GUARDRAIL_TEXT,
+    });
   });
 
-  test("Codex transcript path adds the codex cadence line", async () => {
+  test("Codex transcript path gets the one-line block reason", async () => {
     // Reuse the per-test `tmp` so afterEach cleans this up too.
     const transcript_path = join(tmp, ".codex", "sessions", "session.jsonl");
     mkdirSync(dirname(transcript_path), { recursive: true });
@@ -323,29 +330,34 @@ describe("stop-log-guardrail hook", () => {
       stop_hook_active: false,
     });
     const out = JSON.parse(r.stdout);
-    expect(out.decision).toBe("block");
-    expect(out.reason as string).toContain("codex exec");
+    // Codex documents only decision/reason for Stop; the reason becomes the
+    // continuation prompt, so it stays one line.
+    expect(out).toEqual({ decision: "block", reason: STOP_GUARDRAIL_TEXT });
   });
 
-  test("unknown runtime omits the cadence line (v0.10.4 baseline)", async () => {
+  test("Grok Build payload gets the one-line block reason", async () => {
     const transcript_path = writeTranscript([
       ccUser("please add a file"),
       ccAssistantToolUse("Write", { file_path: "/tmp/x.md" }),
     ]);
     const r = await runHook({
-      hook_event_name: "Stop",
+      hookEventName: "Stop",
+      workspaceRoot: tmp,
       transcript_path,
       stop_hook_active: false,
     });
-    const out = JSON.parse(r.stdout);
-    expect(out.decision).toBe("block");
-    const reason = out.reason as string;
-    expect(reason).not.toContain("This guardrail fires");
-    expect(reason).not.toContain("codex exec");
-    // §32 (v0.10.8) — the unknown-runtime body still names the
-    // current trio of brain-event tools.
-    expect(reason).toContain("brain_feedback");
-    expect(reason).toContain("brain_apply_evidence");
-    expect(reason).toContain("brain_note");
+    expect(JSON.parse(r.stdout)).toEqual({ decision: "block", reason: STOP_GUARDRAIL_TEXT });
+  });
+});
+
+describe("STOP_GUARDRAIL_TEXT", () => {
+  test("is one short line that names the three brain-event tools", () => {
+    expect(STOP_GUARDRAIL_TEXT).not.toContain("\n");
+    expect(STOP_GUARDRAIL_TEXT.length).toBeLessThanOrEqual(200);
+    expect(STOP_GUARDRAIL_TEXT).toStartWith("Open Second Brain:");
+    expect(STOP_GUARDRAIL_TEXT).not.toContain("!");
+    for (const tool of ["brain_feedback", "brain_apply_evidence", "brain_note", "brain-memory"]) {
+      expect(STOP_GUARDRAIL_TEXT).toContain(tool);
+    }
   });
 });

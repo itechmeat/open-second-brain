@@ -25,7 +25,7 @@ hook payload shape, not on the runtime.
 | `PostToolUse`      | `brain_feedback`                      | Replays successful `brain_feedback` tool input immediately through the same signal/dedup boundary.                                                                                     |
 | `PostToolUse`      | `Write\|Edit\|MultiEdit\|apply_patch` | Emits `additionalContext` pointing at the three Brain writer tools. The full reminder is shown once per Claude Code session; later writes get a one-line nudge (Codex one-shot runs always get the full text).                                  |
 | `PostCompact`      | `manual\|auto`                        | Records a post-compact lifecycle observation only. Current Claude Code has no PostCompact hook event and rejects `additionalContext` under that name - re-injection moved to the SessionStart `compact` matcher; the registration stays as a silent no-op for older runtimes. |
-| `Stop`             | (every Stop)                          | If the turn produced a durable artifact and none of `brain_feedback` / `brain_apply_evidence` / `brain_note` landed, returns `decision: "block"` once, then lets the second Stop pass. |
+| `Stop`             | (every Stop)                          | If the turn produced a durable artifact and none of `brain_feedback` / `brain_apply_evidence` / `brain_note` landed, continues the turn once with a one-line reminder, then lets the second Stop pass. Claude Code gets `hookSpecificOutput.additionalContext` (shown as "Stop hook feedback", not a hook error); Codex, Grok Build and unrecognised runtimes get `decision: "block"` with the same line as `reason`. |
 | `SubagentStop`     | `*`                                   | Records a non-blocking lifecycle observation for a delegated sub-agent's close, attributed to `<delegator>-sub-<agent-id>` from the `agent_id` the event carries. The sibling `agent_transcript_path` is deliberately not persisted - it is a machine-local host path, and the sub-agent's turns reach memory through `o2b brain import-session`, which reads `isSidechain` and `agentId` off the transcript itself. |
 | `SessionEnd`       | `*`                                   | Records a non-blocking lifecycle observation for session close.                                                                                                                        |
 
@@ -33,6 +33,16 @@ The Stop guardrail respects the runtime-provided `stop_hook_active`
 flag: it fires at most once per turn, so the agent can deliberately
 decide that an edit was trivial and skip logging by just finishing
 again. No deadlocks.
+
+The reminder is one line on purpose (`STOP_GUARDRAIL_TEXT` in
+`lib/messages.ts`): Claude Code prints Stop hook output in the user's
+transcript, and until v1.58.2 a `decision: "block"` reason of about 25
+lines showed up there as a red "Stop hook error" on every guarded turn.
+What to do when it fires is documented for the model in the
+`brain-memory` skill ("End-of-turn check"). Stop hooks cannot use a
+channel that is hidden from the user entirely; the model-only channel is
+the PostToolUse `additionalContext` reminder that already follows each
+write.
 
 ## JSONL sidecar
 
@@ -191,7 +201,8 @@ codex exec --skip-git-repo-check 'create a tiny /tmp/x/note.md ...'
 
 Expect the stream to show `hook_started` / `hook_response` events
 around each Write and around the Stop event; the agent's first reply
-gets `decision: "block"` and it has to either log or send a second
+gets the one-line reminder (Claude Code: Stop `additionalContext`;
+Codex: `decision: "block"`) and it has to either log or send a second
 finishing message.
 
 ## Unit tests

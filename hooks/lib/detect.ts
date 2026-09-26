@@ -186,9 +186,13 @@ const CODEX_TRANSCRIPT_NEEDLE = "/.codex/sessions/";
  *   2. `transcript_path` substring (`/.claude/projects/`, `/.claude/sessions/`).
  *   3. `transcript_path` substring (`/.codex/sessions/`).
  *   4. Claude Code distinctive triple (`session_id` + `cwd` + `tool_use_id`).
- *   5. Codex apply_patch shape (`tool_name === "apply_patch"` with
+ *   5. Claude Code Stop shape: `hook_event_name === "Stop"` with
+ *      `stop_hook_active` and `last_assistant_message` but no `turn_id`
+ *      (Codex adds `turn_id` to every Stop payload). Catches a Claude Code
+ *      install whose transcripts live outside `~/.claude` (`CLAUDE_CONFIG_DIR`).
+ *   6. Codex apply_patch shape (`tool_name === "apply_patch"` with
  *      a patch body in `tool_input.input`).
- *   6. `"unknown"`.
+ *   7. `"unknown"`.
  *
  * `normalizeHookPayload` preserves grok's original camelCase keys, so this
  * works whether it runs before or after normalization. Malformed payloads
@@ -224,6 +228,15 @@ export function detectHookRuntime(
     typeof p["session_id"] === "string" &&
     typeof p["cwd"] === "string" &&
     typeof p["tool_use_id"] === "string"
+  ) {
+    return "claudecode";
+  }
+
+  if (
+    p["hook_event_name"] === "Stop" &&
+    typeof p["stop_hook_active"] === "boolean" &&
+    "last_assistant_message" in p &&
+    !("turn_id" in p)
   ) {
     return "claudecode";
   }

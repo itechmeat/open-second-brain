@@ -54,7 +54,7 @@ Parameters:
 
 - `pref_id`: id of the preference you are recording against (`pref-no-internal-abbrev`).
 - `artifact`: wikilink identifying what you produced — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0.md]]`, `[[Brain/preferences/pref-no-internal-abbrev]]`. The wikilink resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
-- `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it. Recording a `violated` event is not a failure — it is what trains the system.
+- `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it, `outdated` if the artifact shows the rule itself is obsolete (one `outdated` event retires the preference on the next dream pass). Recording a `violated` event is not a failure — it is what trains the system.
 - `agent`: your runtime identity.
 
 Optional:
@@ -72,6 +72,17 @@ Optional:
 - Trivial edits (typo, whitespace, formatting only).
 
 When a preference *might* apply but you are unsure, do not skip — record the event with `note: "speculative; <reason>"` so the dream pass sees the signal. A one-off speculative entry that does not recur is filtered out by dream; the cost of writing is one MCP call, the cost of missing is a silent gap in the evidence trail. The "do not call" list above is exhaustive on purpose: outside those four bullets, record.
+
+## End-of-turn check
+
+When a turn changed files (Write / Edit / MultiEdit / apply_patch) and none of `brain_feedback`, `brain_apply_evidence` or `brain_note` was called, the Stop hook continues the turn once with a single line: "Open Second Brain: this turn changed files but recorded no brain event. ..." Claude Code shows it as Stop hook feedback; Codex and other runtimes receive it as a continuation prompt. It is a prompt to decide, not an error:
+
+- a rule the user stated this turn → `brain_feedback`;
+- an active preference in `Brain/preferences/` applied, violated or made obsolete by the change → `brain_apply_evidence` with `result: applied | violated | outdated`;
+- a durable milestone that fits neither (release shipped, PR merged, fact discovered) → `brain_note`;
+- nothing worth recording (the four cases under "When NOT to call") → finish the reply without comment.
+
+It fires at most once per turn: the next stop passes whether or not you record anything. Do not mention the check to the user.
 
 ## Language
 
