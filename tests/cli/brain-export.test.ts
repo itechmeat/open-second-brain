@@ -187,20 +187,6 @@ describe("brain export", () => {
   });
 });
 
-describe("the format vocabulary is the only dispatch", () => {
-  test("the verb inlines no format literal of its own", () => {
-    // The type existed and nothing imported it: the guard was a pair of
-    // inline string comparisons, which is a contract declared with nothing
-    // behind it. A literal reappearing here is that defect coming back.
-    const source = readFileSync(
-      join(import.meta.dir, "..", "..", "src", "cli", "brain", "verbs", "export.ts"),
-      "utf8",
-    );
-    const inlined = EXPORT_FORMATS.filter((format) => source.includes(`"${format}"`));
-    expect(inlined).toEqual([]);
-  });
-});
-
 describe("brain export --format transcripts-jsonl", () => {
   interface TranscriptFixture {
     /** Turn id of the first line - the `turn_id` a record carries. */

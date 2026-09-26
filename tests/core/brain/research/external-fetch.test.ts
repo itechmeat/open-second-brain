@@ -10,6 +10,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   ExternalFetchError,
+  createFetchTransport,
   createMemoryResponseCache,
   keyedFetch,
   normalizeRequestKey,
@@ -71,6 +72,37 @@ describe("keyedFetch env gate", () => {
     } catch (err) {
       expect((err as ExternalFetchError).kind).toBe("disabled");
     }
+  });
+});
+
+describe("keyedFetch url gate (t_sec_keyedfetch_url)", () => {
+  test("a non-https, non-loopback URL is refused before the key is attached", async () => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, {}));
+    // The whole point of the ordering: the refusal carries no auth
+    // headers because the transport is never reached.
+    try {
+      await keyedFetch({ apiKey: API_KEY, transport }, { url: "http://internal.example/x" });
+      throw new Error("expected the plain-http URL to be refused");
+    } catch (err) {
+      expect(err).toBeInstanceOf(ExternalFetchError);
+      expect((err as ExternalFetchError).kind).toBe("refused");
+    }
+    expect(calls).toEqual([]);
+  });
+
+  test("a value that is not a URL is refused the same way", async () => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, {}));
+    await expect(
+      keyedFetch({ apiKey: API_KEY, transport }, { url: "not a url at all" }),
+    ).rejects.toMatchObject({ kind: "refused" });
+    expect(calls).toEqual([]);
+  });
+
+  test("https URLs pass to the transport unchanged", async () => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, { ok: true }));
+    await keyedFetch({ apiKey: API_KEY, transport }, { url: "https://api.example.com/x" });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.url).toBe("https://api.example.com/x");
   });
 });
 
@@ -233,6 +265,68 @@ describe("keyedFetch key hygiene (redactor)", () => {
       throw new Error("expected throw");
     } catch (err) {
       expect((err as ExternalFetchError).message).not.toContain(API_KEY);
+    }
+  });
+});
+
+/**
+ * A keyed request never goes to a private address (audit L2).
+ *
+ * The https-only rule admits `https://169.254.169.254/` and the LAN, and
+ * `extractPage` fetches a URL harvested from content, so an IP literal in a
+ * private, link-local or CGNAT range is refused before the key is attached.
+ */
+describe("keyedFetch private-address guard", () => {
+  test.each([
+    ["https://169.254.169.254/latest/meta-data/"],
+    ["https://10.0.0.5/x"],
+    ["https://172.20.1.1/x"],
+    ["https://192.168.1.10/x"],
+    ["https://100.64.0.5/x"],
+    ["https://0.0.0.0/x"],
+    ["https://[fe80::1]/x"],
+    ["https://[fd12:3456::1]/x"],
+    ["https://[::ffff:10.0.0.1]/x"],
+  ])("refuses %s without calling the transport", async (url) => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, {}));
+    const err = await keyedFetch({ apiKey: API_KEY, transport }, { url }).catch((e) => e);
+    expect(err).toBeInstanceOf(ExternalFetchError);
+    expect((err as ExternalFetchError).kind).toBe("refused");
+    expect(calls).toHaveLength(0);
+  });
+
+  test("a public name and a public address still go through", async () => {
+    const { transport, calls } = recordingTransport(jsonResponse(200, { ok: 1 }));
+    await keyedFetch({ apiKey: API_KEY, transport }, { url: "https://api.example.com/x" });
+    await keyedFetch({ apiKey: API_KEY, transport }, { url: "https://93.184.216.34/x" });
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe("createFetchTransport", () => {
+  test("does not follow a redirect with the key on it", async () => {
+    let stolen = 0;
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch(req) {
+        if (new URL(req.url).pathname === "/stolen") {
+          stolen += 1;
+          return new Response("{}");
+        }
+        return new Response(null, { status: 307, headers: { location: "/stolen" } });
+      },
+    });
+    try {
+      const err = await keyedFetch(
+        { apiKey: API_KEY, transport: createFetchTransport() },
+        { url: `http://127.0.0.1:${server.port}/api` },
+      ).catch((e) => e);
+      expect(err).toBeInstanceOf(ExternalFetchError);
+      expect((err as ExternalFetchError).kind).toBe("network");
+      expect(stolen).toBe(0);
+    } finally {
+      await server.stop(true);
     }
   });
 });

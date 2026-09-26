@@ -133,6 +133,60 @@ describe("canonicalizeGitRemote — a comparable identity, not a redaction", () 
     expect(canonicalizeGitRemote("C:/srv/git/thing.git/")).toBe("file:///C:/srv/git/thing");
   });
 
+  // A path remote is placed into a `file:`/`ssh:` URL to be parsed. `#`,
+  // `?` and `%` are legal in directory names and are URL syntax, so left
+  // raw they cut the path short (`c#1` and `c#2` both read as `c`) or a
+  // literal `%23` reads as the escape for `#`.
+  const DISTINCT_PATH_REMOTES: ReadonlyArray<{
+    readonly why: string;
+    readonly a: string;
+    readonly b: string;
+  }> = [
+    { why: "drive path, '#'", a: "C:\\repos\\c#1\\x.git", b: "C:\\repos\\c#2\\x.git" },
+    { why: "drive path, '%' vs '#'", a: "C:\\repos\\c%231\\x.git", b: "C:\\repos\\c#1\\x.git" },
+    { why: "POSIX path, '#'", a: "/srv/c#1/x.git", b: "/srv/c#2/x.git" },
+    { why: "POSIX path, '?'", a: "/srv/q?1/x.git", b: "/srv/q?2/x.git" },
+    { why: "POSIX path, '%20' vs space", a: "/srv/a%20b/x.git", b: "/srv/a b/x.git" },
+    { why: "scp path, '#'", a: "git@host.invalid:org/c#1.git", b: "git@host.invalid:org/c#2.git" },
+  ];
+
+  for (const { why, a, b } of DISTINCT_PATH_REMOTES) {
+    test(`URL syntax in a path remote stays part of the path (${why})`, () => {
+      const left = canonicalizeGitRemote(a);
+      const right = canonicalizeGitRemote(b);
+      expect(left).not.toBeNull();
+      expect(right).not.toBeNull();
+      expect(left).not.toBe(right!);
+    });
+  }
+
+  test("an escaped path remote reads back as its percent-encoded path", () => {
+    expect(canonicalizeGitRemote("C:\\repos\\c#1\\x.git")).toBe("file:///C:/repos/c%231/x");
+    expect(canonicalizeGitRemote("/srv/q?1/c%1.git")).toBe("file:///srv/q%3F1/c%251");
+    expect(canonicalizeGitRemote("git@host.invalid:org/c#1.git")).toBe(
+      "ssh://host.invalid/org/c%231",
+    );
+  });
+
+  test("the drive letter's case is one identity; the rest of the path keeps its case", () => {
+    const upper = canonicalizeGitRemote("C:\\Srv\\git\\thing.git");
+    expect(upper).toBe("file:///C:/Srv/git/thing");
+    expect(canonicalizeGitRemote("c:\\Srv\\git\\thing.git")).toBe(upper!);
+    expect(canonicalizeGitRemote("c:/Srv/git/thing.git")).toBe(upper!);
+    // The identity an older version recorded for a lower-case drive is
+    // itself a remote, and canonicalizes to the same identity.
+    expect(canonicalizeGitRemote("file:///c:/Srv/git/thing")).toBe(upper!);
+    expect(canonicalizeGitRemote("C:\\srv\\git\\thing.git")).not.toBe(upper!);
+  });
+
+  test("a UNC remote is a file identity on the server's host", () => {
+    const unc = canonicalizeGitRemote("\\\\server\\share\\repo.git");
+    expect(unc).toBe("file://server/share/repo");
+    expect(canonicalizeGitRemote("\\\\SERVER\\share\\repo.git\\")).toBe(unc!);
+    expect(canonicalizeGitRemote("\\\\server\\share\\c#1.git")).toBe("file://server/share/c%231");
+    expect(canonicalizeGitRemote("\\\\other\\share\\repo.git")).not.toBe(unc!);
+  });
+
   test("blank or hostless input is null, never a placeholder", () => {
     expect(canonicalizeGitRemote("")).toBeNull();
     expect(canonicalizeGitRemote("   ")).toBeNull();
@@ -423,6 +477,17 @@ describe("lineage ledger — workspace identity round-trip", () => {
     seed({ sessionId: "s-keep", atMs: T0 + 510_000, workspace: WS_MAIN });
     filler(511, 5); // crosses the cap and rewrites the file
     expect(readLineageLedger(tmp).get("s-keep")?.workspace).toEqual(WS_MAIN);
+  });
+
+  test("a repo recorded before the drive letter was folded still matches today's", () => {
+    // Earlier versions kept the drive letter as git reported it. Their
+    // lines are read back in today's canonical form, so a session in the
+    // same checkout is not refused over a case difference in `c:`.
+    const old: GitWorkspaceIdentity = { ...WS_MAIN, repo: "file:///c:/srv/git/thing" };
+    const today: GitWorkspaceIdentity = { ...WS_MAIN, repo: "file:///C:/srv/git/thing" };
+    seed({ sessionId: "s-old", workspace: old });
+    expect(readLineageLedger(tmp).get("s-old")?.workspace?.repo).toBe(today.repo);
+    expect(outcome("s-new", { workspace: today }).kind).toBe("linked");
   });
 });
 

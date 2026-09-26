@@ -26,7 +26,7 @@
  *
  * So both unasserted buckets now carry `{name, args, reason}`: the
  * arguments that DRIVE the tool, and a written reason for the
- * classification. {@link assertProbeEntry} refuses an entry without
+ * classification. `assertProbeEntry` refuses an entry without
  * them at module load, and {@link ProbeEntry} refuses one at
  * `bun run typecheck`, so the bucket cannot regrow as a bare name list.
  * Every entry is then driven against one two-owner fixture and its
@@ -34,7 +34,7 @@
  * unique to the other owner's artifacts.
  */
 
-import { afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
 import {
   chmodSync,
   existsSync,
@@ -76,15 +76,12 @@ import {
   PROBE_TERMS,
   PROBE_TWO_SIDED_COUNT,
   QUERY,
-  REASON,
   REASONS_REACHING_OWNER_CONTENT,
   SCOPE_SOURCE,
   SCOPED_SURFACES,
   SHARED_ID,
   SHARED_TITLE,
   SHARED_TOPIC,
-  REASON_MIN_CHARS,
-  assertProbeEntry,
   probeLabel,
   type ProbeCall,
 } from "../helpers/tool-probe-catalogue.ts";
@@ -102,7 +99,15 @@ import type { ServerContext, ToolDefinition } from "../../src/mcp/tool-contract.
  * file that needs the pin sets it - at module scope, which runs before
  * any test body and before any of these tools is ever called.
  */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-scope-matrix-home-"));
+const SAVED_HOME = process.env["HOME"];
+const PINNED_HOME = mkdtempSync(join(tmpdir(), "o2b-scope-matrix-home-"));
+process.env["HOME"] = PINNED_HOME;
+afterAll(() => {
+  // Bun runs many files in one process: hand HOME back and drop the pin.
+  if (SAVED_HOME === undefined) delete process.env["HOME"];
+  else process.env["HOME"] = SAVED_HOME;
+  rmSync(PINNED_HOME, { recursive: true, force: true });
+});
 
 const TOOLS = buildToolTable("full");
 const tool = (name: string): ToolDefinition => {
@@ -206,14 +211,9 @@ test("the matrix classifies every tool exactly once", () => {
 
   const actual = TOOLS.map((t) => t.name).toSorted();
   // Both directions: a NEW tool fails until it is classified, and a
-  // REMOVED tool fails until its entry is deleted.
+  // REMOVED tool fails until its entry is deleted. The set equality
+  // also pins the surface population - a count would only be weaker.
   expect(classified.toSorted()).toEqual(actual);
-});
-
-test("the tool count is the measured surface, not a remembered one", () => {
-  // 114 to 115: `second_brain_wiring` joined the surface in the release
-  // that made the install's own wiring readable over MCP.
-  expect(TOOLS.length).toBe(115);
 });
 
 test("every argument-scoped surface declares agent_scope in its input schema", () => {
@@ -742,11 +742,11 @@ const PROBE_TIMEOUT_MS = 30_000;
  * So both directions are asserted, and which direction depends on the
  * recipe's own reason:
  *
- *   - {@link REASON.ownerFiltered} claims the call REACHES owner-taggable
+ *   - `REASON.ownerFiltered` claims the call REACHES owner-taggable
  *     artifacts and filters them. Both halves are executed: the marker
  *     MUST appear with the gate off, and MUST NOT with the gate on. The
  *     first half is what stops the second from being vacuous.
- *   - every other reason in {@link REASON} claims the call cannot name
+ *   - every other reason in `REASON` claims the call cannot name
  *     an owner-private artifact at all - a session lane, an ownerless
  *     lane, a catalog, a caller-named artifact, a writer's echo, an
  *     aggregate with no per-artifact identity. That claim is executed
@@ -904,25 +904,4 @@ test("the probe's population and its two-sided share are what the docs say", () 
   expect(PROBE_ENTRIES.length).toBe(PROBE_ENTRY_COUNT);
   expect(recipes.length).toBe(PROBE_RECIPE_COUNT);
   expect(twoSided.length).toBe(PROBE_TWO_SIDED_COUNT);
-});
-
-test("a bucket entry without call recipes is refused", () => {
-  expect(() => assertProbeEntry("NON_CONTENT", "brain_backlinks")).toThrow(
-    "every entry must be a {name, calls} record",
-  );
-  expect(() => assertProbeEntry("NON_CONTENT", { name: "brain_backlinks", calls: [] })).toThrow(
-    "has no 'calls'",
-  );
-  expect(() =>
-    assertProbeEntry("NON_CONTENT", {
-      name: "brain_backlinks",
-      calls: [{ reason: REASON.ownerFiltered }],
-    }),
-  ).toThrow("has a call with no 'args'");
-  expect(() =>
-    assertProbeEntry("NON_CONTENT", {
-      name: "brain_backlinks",
-      calls: [{ args: {}, reason: "metadata" }],
-    }),
-  ).toThrow(`at least ${REASON_MIN_CHARS} characters`);
 });

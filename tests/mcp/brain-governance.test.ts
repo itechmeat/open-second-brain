@@ -11,6 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { freezeVault, unfreezeVault } from "../../src/core/brain/freeze.ts";
+import { resetFreezeMarkerCache } from "../../src/core/brain/freeze-marker.ts";
 import { setSecret } from "../../src/core/brain/secrets/store.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/index.ts";
@@ -157,6 +159,29 @@ test("brain_labels show names the argument that is actually wrong", async () => 
   );
 });
 
+test("brain_labels show answers a reserved note as an absent one at remote reach", async () => {
+  mkdirSync(join(vault, "notes"), { recursive: true });
+  writeFileSync(
+    join(vault, "notes", "secret.md"),
+    "---\nvisibility: [private]\nlabels: [priority/high]\n---\n\nSecret.\n",
+  );
+  const args = { operation: "show", path: "notes/secret.md" };
+
+  const local = new MCPServer({ vault, configPath }, { reach: "local" });
+  await initialize(local);
+  expect((await call(local, "brain_labels", args))["labels"]).toEqual(["priority/high"]);
+
+  const remote = new MCPServer({ vault, configPath }, { reach: "remote" });
+  await initialize(remote);
+  const reserved = await call(remote, "brain_labels", args).catch((e: Error) => e.message);
+  const absent = await call(remote, "brain_labels", {
+    operation: "show",
+    path: "notes/missing.md",
+  }).catch((e: Error) => e.message);
+  expect(reserved).toBe("brain_labels show: note does not exist: notes/secret.md");
+  expect(absent).toBe("brain_labels show: note does not exist: notes/missing.md");
+});
+
 test("brain_tiers check is empty on a fresh vault; restore demands apply", async () => {
   const server = new MCPServer({ vault, configPath });
   await initialize(server);
@@ -165,6 +190,27 @@ test("brain_tiers check is empty on a fresh vault; restore demands apply", async
   await expect(
     call(server, "brain_tiers", { operation: "restore", path: "Brain/x.md" }),
   ).rejects.toThrow(/apply=true/);
+});
+
+test("brain_tiers cannot write into a frozen vault (t_sec_tiers_freeze)", async () => {
+  // Both write operations answer to the freeze: `restore` rewrites a
+  // note's frontmatter, `accept` rewrites the tier snapshot. A repair
+  // surface is still a write surface.
+  freezeVault(vault, { agent: "tester", now: new Date("2026-06-05T10:00:00Z") });
+  resetFreezeMarkerCache();
+  try {
+    const server = new MCPServer({ vault, configPath });
+    await initialize(server);
+    await expect(
+      call(server, "brain_tiers", { operation: "restore", path: "notes/x.md", apply: true }),
+    ).rejects.toThrow(/frozen/i);
+    await expect(
+      call(server, "brain_tiers", { operation: "accept", path: "notes/x.md" }),
+    ).rejects.toThrow(/frozen/i);
+  } finally {
+    unfreezeVault(vault, { agent: "tester" });
+    resetFreezeMarkerCache();
+  }
 });
 
 test("brain_secrets lists metadata only and refuses a non-allowlisted run", async () => {

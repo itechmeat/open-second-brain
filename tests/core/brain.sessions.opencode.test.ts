@@ -9,11 +9,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import { opencodeAdapter } from "../../src/core/brain/sessions/opencode.ts";
+import { tempDirs } from "../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const FIXTURE = resolve("tests/fixtures/sessions/opencode-minimal.jsonl");
 
@@ -24,7 +26,7 @@ async function collect(path: string) {
 }
 
 function tmpSpool(lines: string[]): string {
-  const dir = mkdtempSync(join(tmpdir(), "osb-oc-adapter-"));
+  const dir = mkTemp("osb-oc-adapter-");
   const path = join(dir, "spool.jsonl");
   writeFileSync(path, lines.join("\n") + "\n");
   return path;

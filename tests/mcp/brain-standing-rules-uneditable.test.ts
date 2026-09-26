@@ -22,7 +22,15 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -165,6 +173,57 @@ describe("Brain/standing-rules.md is uneditable through every caller-named write
       }
     }
     expect(offenders).toEqual([]);
+  });
+});
+
+/**
+ * The lexical `Brain/` check reads the path as spelled. A vault folder
+ * that is a symbolic link to `Brain/` spells machinery as an ordinary
+ * note path, so the envelope has to re-read where the bytes land.
+ */
+describe("a vault folder symlinked into Brain/ does not carry a note write there", () => {
+  const VIA_LINK = `notes/${BRAIN_STANDING_RULES_FILE}`;
+  const LINK_ATTEMPTS: ReadonlyArray<{
+    readonly tool: string;
+    readonly args: Record<string, unknown>;
+  }> = Object.freeze([
+    { tool: "brain_create_note", args: { path: "notes/forged.md", content: "OVERWRITTEN" } },
+    { tool: "brain_update_note", args: { path: VIA_LINK, content: "OVERWRITTEN" } },
+    { tool: "brain_append_note", args: { path: VIA_LINK, content: "OVERWRITTEN" } },
+    {
+      tool: "brain_write_batch",
+      args: {
+        operations: [
+          { op: "update_note", path: VIA_LINK, content: "OVERWRITTEN" },
+          { op: "create_note", path: "notes/forged.md", content: "OVERWRITTEN" },
+        ],
+      },
+    },
+  ]);
+
+  beforeEach(() => {
+    symlinkSync(join(vault, "Brain"), join(vault, "notes"), "dir");
+  });
+
+  for (const { tool, args } of LINK_ATTEMPTS) {
+    test(`${tool} refuses and neither the rules nor a new Brain file change`, async () => {
+      const out = await callTool(tool, args);
+      expect(outcomeText(out)).toContain("Brain machinery root");
+      expect(onDiskBytes()).toBe(RULES_BYTES);
+      expect(existsSync(join(vault, "Brain", "forged.md"))).toBe(false);
+    });
+  }
+
+  test("the note-target resolver names where the path lands", () => {
+    let thrown: unknown;
+    try {
+      resolveNoteTarget(vault, VIA_LINK);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(CreateNoteError);
+    expect((thrown as CreateNoteError).code).toBe("excluded");
+    expect((thrown as CreateNoteError).message).toContain(RULES_REL);
   });
 });
 

@@ -195,6 +195,82 @@ describe("opencode plugin - session capture spool", () => {
   });
 });
 
+describe("opencode plugin - spool location without the override", () => {
+  // The plugin cannot import platform-dirs.ts (it is copied alone into
+  // opencode's plugin directory), so it restates the data-dir order: XDG,
+  // then ~/.local/share on POSIX, then %LOCALAPPDATA% on Windows. The core
+  // reader looks in the same place, so the two must agree.
+  //
+  // Each case runs in a child process: `os.homedir()` is fixed at process
+  // start, so re-pointing HOME in this process would spool into the real
+  // profile instead of the temp one.
+  let home: string;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), "osb-oc-home-"));
+  });
+
+  afterEach(() => {
+    rmSync(home, { recursive: true, force: true });
+  });
+
+  const PLUGIN = join(import.meta.dir, "..", "..", "plugins", "opencode", "open-second-brain.ts");
+  const DRIVER = `
+import { OpenSecondBrain } from ${JSON.stringify(PLUGIN)};
+const client = { session: { async messages() { return { data: [
+  { info: { id: "m1", role: "user", time: { created: 1765900000000 } },
+    parts: [{ type: "text", text: "hi" }] },
+] }; } } };
+const hooks = await OpenSecondBrain({ client, project: { id: "p" }, directory: "/w", worktree: "/w" });
+await hooks.event({ event: { type: "session.idle", properties: { sessionID: "sess-loc" } } });
+`;
+
+  function idle(extra: Record<string, string>): void {
+    const driver = join(home, "driver.ts");
+    writeFileSync(driver, DRIVER);
+    const env: Record<string, string> = {
+      PATH: process.env["PATH"] ?? "",
+      HOME: home,
+      USERPROFILE: home,
+      ...extra,
+    };
+    if (process.env["SYSTEMROOT"]) env["SYSTEMROOT"] = process.env["SYSTEMROOT"];
+    const proc = Bun.spawnSync({ cmd: [process.execPath, driver], env, stderr: "pipe" });
+    expect(proc.stderr.toString()).toBe("");
+    expect(proc.exitCode).toBe(0);
+  }
+
+  const SPOOL_TAIL = ["open-second-brain", "opencode", "sess-loc.jsonl"] as const;
+
+  test("XDG_DATA_HOME wins on every platform", () => {
+    const xdg = join(home, "xdg-data");
+    idle({ XDG_DATA_HOME: xdg, LOCALAPPDATA: join(home, "local-app-data") });
+    expect(existsSync(join(xdg, ...SPOOL_TAIL))).toBe(true);
+  });
+
+  test.skipIf(process.platform === "win32")(
+    "POSIX: ~/.local/share without XDG_DATA_HOME, LOCALAPPDATA ignored",
+    () => {
+      idle({ LOCALAPPDATA: join(home, "local-app-data") });
+      expect(existsSync(join(home, ".local", "share", ...SPOOL_TAIL))).toBe(true);
+    },
+  );
+
+  test.skipIf(process.platform !== "win32")("Windows: %LOCALAPPDATA% without XDG_DATA_HOME", () => {
+    const local = join(home, "local-app-data");
+    idle({ LOCALAPPDATA: local });
+    expect(existsSync(join(local, ...SPOOL_TAIL))).toBe(true);
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "Windows: the profile's AppData/Local when LOCALAPPDATA is empty",
+    () => {
+      idle({ LOCALAPPDATA: "" });
+      expect(existsSync(join(home, "AppData", "Local", ...SPOOL_TAIL))).toBe(true);
+    },
+  );
+});
+
 describe("opencode plugin - active context inject", () => {
   test("appends rendered context to the system array when o2b-hook responds", async () => {
     process.env["OSB_HOOK_BIN"] = stubHookBin("ACTIVE PREFS BLOCK");

@@ -14,7 +14,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 
 import lockfile from "proper-lockfile";
 
-import { atomicWriteFileSync } from "./fs-atomic.ts";
+import { atomicWriteFileSync, sleepSync } from "./fs-atomic.ts";
 import { APP_DIR_NAME, configBaseDir } from "./platform-dirs.ts";
 import { resolveActiveProfileVault } from "./brain/portability/profiles.ts";
 import { resolvePointerVault } from "./brain/portability/pointer.ts";
@@ -494,7 +494,7 @@ export function resolveDeviceId(configPath?: string): string {
         break;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;
-        Bun.sleepSync(50);
+        sleepSync(50);
       }
     }
     // Re-check under the lock: the racing process may have just won.
@@ -577,7 +577,7 @@ export function resolveInstallationSecret(configPath?: string): string {
         break;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code !== "ELOCKED") break;
-        Bun.sleepSync(50);
+        sleepSync(50);
       }
     }
     const won = read();

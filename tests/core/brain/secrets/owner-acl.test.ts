@@ -8,7 +8,16 @@
 
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,7 +29,12 @@ import {
   system32Tool,
 } from "../../../../src/core/brain/secrets/owner-acl.ts";
 import { loadOrCreateKey } from "../../../../src/core/brain/secrets/crypto.ts";
-import { secretsDir, setSecret } from "../../../../src/core/brain/secrets/store.ts";
+import {
+  custodyTargets,
+  listSecrets,
+  secretsDir,
+  setSecret,
+} from "../../../../src/core/brain/secrets/store.ts";
 import { IS_WINDOWS } from "../../../helpers/platform.ts";
 
 const SID = "S-1-5-21-1111111111-2222222222-3333333333-1001";
@@ -121,6 +135,43 @@ function withoutMachineAdmins(entries: ReadonlyArray<string>): ReadonlyArray<str
   return lower(entries).filter((e) => !MACHINE_ADMINS.has(e.slice(0, e.indexOf(":"))));
 }
 
+/**
+ * What `set` asks `icacls` to restrict before it stores material. Pinned
+ * on every host because the Windows-only suite below is the only other
+ * place the first-`set` path runs: a store that does not exist yet is not
+ * a target (an `icacls /reset` on a missing file exits non-zero, which
+ * made the first `secret set` in every fresh vault refuse), and one that
+ * does exist is.
+ */
+describe("the custody targets set restricts", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-secrets-targets-"));
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test("a fresh vault: the directory and the keyfile, never the store not yet written", () => {
+    const dir = secretsDir(vault);
+    loadOrCreateKey(join(dir, "keyfile"));
+    expect(custodyTargets(vault)).toEqual([
+      [dir, "directory"],
+      [join(dir, "keyfile"), "file"],
+    ]);
+  });
+
+  test("an existing store is a target too", () => {
+    setSecret(vault, { name: "k", value: "v", agent: "tester", now: new Date(0) });
+    expect(custodyTargets(vault).map(([p]) => p)).toContain(
+      join(secretsDir(vault), "secrets.json"),
+    );
+  });
+});
+
 describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
   let vault: string;
 
@@ -205,5 +256,60 @@ describe.skipIf(!IS_WINDOWS)("the secrets keyfile ACL on Windows", () => {
       spy.mockRestore();
     }
     expect(writes.join("")).toContain("warning: could not restrict secrets file");
+  });
+});
+
+/**
+ * The POSIX mirror of the Windows ACL re-application, plus the
+ * sync-exclusion marker (t_sec_secrets_atrest): the keyfile that came in
+ * with a copied or restored vault gets its owner-only modes re-applied
+ * on load, and the secrets directory carries the `.gitignore` that keeps
+ * it out of a vault commit and off a sync peer.
+ */
+describe.skipIf(IS_WINDOWS)("keyfile modes and the sync-exclusion marker on POSIX", () => {
+  let vault: string;
+
+  beforeEach(() => {
+    vault = mkdtempSync(join(tmpdir(), "o2b-secrets-posix-"));
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(vault, { recursive: true, force: true });
+  });
+
+  test("a keyfile restored with loose modes is tightened on the next load", () => {
+    const keyPath = join(secretsDir(vault), "keyfile");
+    loadOrCreateKey(keyPath);
+    // The copy/restore drift: whatever wrote the vault here wrote looser
+    // bits than creation did, and nothing else ever re-applies them.
+    chmodSync(keyPath, 0o644);
+    chmodSync(secretsDir(vault), 0o755);
+
+    loadOrCreateKey(keyPath);
+
+    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+    expect(statSync(secretsDir(vault)).mode & 0o777).toBe(0o700);
+  });
+
+  test("a ciphertext store restored with a loose mode is tightened on the next load", () => {
+    setSecret(vault, { name: "k", value: "v", agent: "tester", now: new Date(0) });
+    const store = join(secretsDir(vault), "secrets.json");
+    chmodSync(store, 0o644);
+
+    listSecrets(vault);
+
+    expect(statSync(store).mode & 0o777).toBe(0o600);
+  });
+
+  test("the secrets directory carries the sync-exclusion marker", () => {
+    loadOrCreateKey(join(secretsDir(vault), "keyfile"));
+    const marker = join(secretsDir(vault), ".gitignore");
+    expect(existsSync(marker)).toBe(true);
+    expect(readFileSync(marker, "utf8")).toBe("*\n!.gitignore\n");
+    // Idempotent: a second use does not churn the marker (same bytes, so
+    // this asserts the content is stable rather than the write count).
+    loadOrCreateKey(join(secretsDir(vault), "keyfile"));
+    expect(readFileSync(marker, "utf8")).toBe("*\n!.gitignore\n");
   });
 });

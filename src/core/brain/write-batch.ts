@@ -47,6 +47,7 @@ import {
   type AppendApplyEvidenceOptions,
 } from "./apply-evidence.ts";
 import { appendBrainNote, type AppendBrainNoteInput } from "./note.ts";
+import { ORIGIN_CHANNEL_FIELD } from "../origin-channel.ts";
 import { preferencePath, validateSlug } from "./paths.ts";
 import { assertVaultIdentityForWrite } from "./vault-identity.ts";
 import { BRAIN_APPLY_RESULT } from "./types.ts";
@@ -159,6 +160,15 @@ export type WriteBatchErrorCode =
   // that carries text with a blank one. See
   // {@link refuseBlankOverwrite}; `allowEmpty` is the way through.
   | "blank_overwrite_refused"
+  // The caller's frontmatter names a key the server owns. `visibility`
+  // is the read-boundary token field (private-is-not-a-suggestion), and
+  // `origin_channel` is the server-derived transport stamp that creation
+  // writes and mutation deliberately never re-stamps. The update merge
+  // is `{...existing, ...caller}` - caller wins - so leaving these keys
+  // free would let one update demote a private page out of the boundary
+  // or forge the creating channel. The operator edits them in the file,
+  // where the boundary's authority lives.
+  | "reserved_frontmatter_key"
   | "duplicate_target"
   | "too_many_operations"
   | "preference_not_found"
@@ -437,6 +447,29 @@ function projectCreateNote(
   };
 }
 
+/**
+ * Frontmatter keys a caller-named UPDATE may not set. Both are read as
+ * boundary state, not note content: `visibility` carries the page's
+ * read-scope tokens (the reserved `private` among them), and
+ * `origin_channel` is the server-derived stamp creation writes once and
+ * mutation never rewrites. Creation needs no guard - the server stamp is
+ * merged last there and wins - but the update merge inverts the order,
+ * so the guard lives at the merge.
+ */
+const RESERVED_UPDATE_FRONTMATTER_KEYS: ReadonlySet<string> = new Set([
+  "visibility",
+  ORIGIN_CHANNEL_FIELD,
+]);
+
+/** The first reserved key the caller's map names, or `null`. */
+function reservedFrontmatterKey(frontmatter: FrontmatterMap | undefined): string | null {
+  if (frontmatter === undefined) return null;
+  for (const key of Object.keys(frontmatter)) {
+    if (RESERVED_UPDATE_FRONTMATTER_KEYS.has(key)) return key;
+  }
+  return null;
+}
+
 function projectUpdateNote(
   vault: string,
   op: UpdateNoteOperation,
@@ -470,6 +503,19 @@ function projectUpdateNote(
       `operation ${index}: refusing to replace the body of ${target.relPath} with an empty ` +
         "one; pass allow_empty to clear the note deliberately",
       { path: target.relPath },
+    );
+  }
+  // The reserved-key guard rides the same seam: the merge below lets the
+  // caller's map win over the file's, so a boundary key arriving here
+  // would silently rewrite it.
+  const reservedKey = reservedFrontmatterKey(op.frontmatter);
+  if (reservedKey !== null) {
+    throw new WriteBatchError(
+      "reserved_frontmatter_key",
+      index,
+      `operation ${index}: frontmatter key "${reservedKey}" is reserved and cannot be set ` +
+        `through an update of ${target.relPath}; edit the note directly`,
+      { path: target.relPath, key: reservedKey },
     );
   }
   const frontmatter =

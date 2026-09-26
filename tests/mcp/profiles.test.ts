@@ -72,7 +72,7 @@ test("minimal profile is the floor: writers, context, search, diagnostic", () =>
   ]);
 });
 
-test("an unknown profile fails OPEN to the full surface and reports the name", () => {
+test("an unknown profile is reported by name for the caller to refuse", () => {
   const surface = resolveToolSurface({ profileName: "typo-profile" });
   expect(surface.scope).toBe("full");
   expect(surface.window).toBeUndefined();

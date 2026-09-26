@@ -659,6 +659,17 @@ export const BRAIN_SNAPSHOT_REASON = Object.freeze({
    * because the value doubles as the archive's filename prefix.
    */
   noteRevert: "note-revert",
+  /**
+   * Pre-deletion point taken before `o2b brain knowledge-pack uninstall
+   * --confirm` removes the entries one pack installed. Kebab-case like its
+   * siblings because the value doubles as the archive's filename prefix.
+   */
+  knowledgePackUninstall: "knowledge-pack-uninstall",
+  /**
+   * Pre-apply point taken before `o2b brain payload gc --apply` removes
+   * payload files nothing in the vault references any more (t_35440e83).
+   */
+  payloadGc: "payload-gc",
   /** Deferred: a session boundary. No producer in this release. */
   sessionBoundary: "session-boundary",
   /** Deferred: a plan boundary. No producer in this release. */
@@ -937,6 +948,13 @@ export interface BrainPreference {
    * Absent on never-refreshed files; readers treat absent as neutral.
    */
   readonly freshness_trend?: string;
+  /**
+   * Knowledge-pack provenance (`<name>@<digest12>`), present only on a
+   * preference a `knowledge-pack install` landed. Written by the installer,
+   * never by a bundle; `knowledge-pack uninstall <name>` keys on it.
+   * Absent on every other preference.
+   */
+  readonly knowledge_pack?: string;
   /** Optional wikilink to a retired pref this one replaces. */
   readonly supersedes?: string;
   /**
@@ -1940,6 +1958,24 @@ export interface BrainSessionsConfig {
   readonly ignore_patterns?: ReadonlyArray<string>;
   readonly stateless_patterns?: ReadonlyArray<string>;
   readonly ignore_message_patterns?: ReadonlyArray<string>;
+  /**
+   * Payload registry (t_35440e83): a data URI or base64 run longer than
+   * this many characters is externalized to `Brain/.payloads/` on
+   * session import instead of being stored inline.
+   */
+  readonly payload_max_inline_chars?: number;
+  /**
+   * Payload registry: a recalled turn whose text is still longer than
+   * this after blob externalization is externalized as a whole, leaving
+   * a bounded preview and a placeholder in the continuity row.
+   */
+  readonly payload_max_text_chars?: number;
+}
+
+/** Resolved payload-registry thresholds of the `sessions:` block. */
+export interface ResolvedSessionPayloadPolicy {
+  readonly max_inline_chars: number;
+  readonly max_text_chars: number;
 }
 
 export interface ResolvedBrainSessionsConfig {

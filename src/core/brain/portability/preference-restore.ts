@@ -79,6 +79,9 @@ import {
   writePreferenceTxn,
 } from "../preference-txn.ts";
 import type { WritePreferenceInput } from "../preference.ts";
+import { loadBrainConfig } from "../policy.ts";
+import { DEFAULT_BRAIN_CONFIG } from "../policy/defaults.ts";
+import { isoSecond } from "../time.ts";
 import {
   BRAIN_CONFIDENCE,
   BRAIN_PREFERENCE_STATUS,
@@ -260,6 +263,16 @@ export interface PreferenceRestoreResult {
    * partial answer and every surface that renders one must render this too.
    */
   readonly topicScanUnreadable: ReadonlyArray<PreferenceParseFailure>;
+  /**
+   * Ids whose bundled status was `confirmed` (or otherwise past its
+   * trial) but which landed `unconfirmed` because the restore ran
+   * untrusted - the default. Each one gets the vault's standard trial
+   * window (`dream.unconfirmed_window_days`) instead of its carried
+   * promotion state, so whoever controls the bundle file does not also
+   * control which rules the vault treats as live. Empty for a trusted
+   * restore.
+   */
+  readonly demotedToUnconfirmed: ReadonlyArray<string>;
 }
 
 export interface RestorePreferencesOptions {
@@ -267,7 +280,33 @@ export interface RestorePreferencesOptions {
   readonly agent?: string;
   /** Clock for the audit timestamp; defaults to wall-clock. */
   readonly now?: () => Date;
+  /**
+   * Restore rows with the status the bundle carries - a true round-trip
+   * of a bundle the operator vouches for. Default FALSE: the `<file>`
+   * argument of `bank-import` is untrusted input, and a row that arrived
+   * `confirmed` / `high` / `pinned` would otherwise dictate live agent
+   * rules on landing, bypassing the trial window every first-party write
+   * path observes. Untrusted restores demote such rows to `unconfirmed`
+   * and list them in {@link PreferenceRestoreResult.demotedToUnconfirmed}.
+   */
+  readonly trustedRestore?: boolean;
+  /**
+   * Restore as a KNOWLEDGE-PACK install carrying this provenance stamp
+   * (`<name>@<digest12>`). A pack is someone else's knowledge rather than
+   * this vault's backup, so nothing it carries about its source vault's
+   * lifecycle survives: EVERY row - an `unconfirmed` one included, whose
+   * carried deadline would otherwise be the bundle author's choice - lands
+   * `unconfirmed` on a fresh trial window dated from the install instant,
+   * with its evidence links, counters, revision and pin cleared, and the
+   * stamp written. Ignored together with `trustedRestore`: a pack install
+   * is never a trusted restore. The audit reason is
+   * {@link KNOWLEDGE_PACK_INSTALL_AUDIT_REASON}.
+   */
+  readonly knowledgePack?: string;
 }
+
+/** Audit reason a knowledge-pack install records on each preference it writes. */
+export const KNOWLEDGE_PACK_INSTALL_AUDIT_REASON = "knowledge_pack_install";
 
 /** Structural refusal carrying the field that failed the guard. */
 class RowShapeError extends Error {
@@ -554,6 +593,16 @@ export function restorePreferences(
   const priorTopics = new Map<string, string>();
   for (const existing of scan.rows) priorTopics.set(existing.id, existing.topic);
   const restoredTopics = new Map<string, string>();
+  const demotedToUnconfirmed: string[] = [];
+  const packStamp = opts.knowledgePack?.trim() ? opts.knowledgePack.trim() : null;
+  const trusted = packStamp === null && opts.trustedRestore === true;
+  const auditReason =
+    packStamp === null ? PREFERENCE_RESTORE_AUDIT_REASON : KNOWLEDGE_PACK_INSTALL_AUDIT_REASON;
+  const demotionWindowDays = unconfirmedWindowDays(vault);
+  // The demotion window is dated from the restore instant, not the row's
+  // own fields: a window derived from the bundle would let the bundle
+  // author choose when the demoted rule goes live.
+  const restoreInstant = opts.now !== undefined ? opts.now() : new Date();
 
   for (let index = 0; index < rows.length; index++) {
     const row = rows[index];
@@ -566,19 +615,46 @@ export function restorePreferences(
       continue;
     }
     const { input } = mapping;
+    // Untrusted default: no row arrives with live state the bundle chose.
+    // The carried status/confidence/pin, promotion instant and trial
+    // window are replaced with a fresh trial - same shape the first-party
+    // write path gives every new rule - and the reset is named in the
+    // result rather than applied in silence. That includes a row that is
+    // ALREADY unconfirmed: it used to pass through verbatim, keeping a
+    // carried `pinned: true`, `confidence: high` and an `unconfirmed_until`
+    // the bundle author picked - a past one ends the trial on arrival.
+    // A knowledge-pack install always lands the pack shape, trusted or not.
+    const effective =
+      packStamp !== null
+        ? packInstallInput(input, restoreInstant, demotionWindowDays, packStamp)
+        : trusted
+          ? input
+          : demoteToUnconfirmed(input, restoreInstant, demotionWindowDays);
     try {
       const result = writePreferenceTxn(
         vault,
-        input,
-        [noRevisionRewind(input.revision ?? 0)],
+        effective,
+        [noRevisionRewind(effective.revision ?? 0)],
         { overwrite: true },
         { agent, ...clock },
-        { agent, reason: PREFERENCE_RESTORE_AUDIT_REASON, ...clock },
+        { agent, reason: auditReason, ...clock },
       );
       restored.push(result.id);
-      restoredTopics.set(result.id, input.topic);
-      // Only a row that LANDED can have been restored on a derived value.
-      for (const d of mapping.derived) derived.push({ id: result.id, index, ...d });
+      restoredTopics.set(result.id, effective.topic);
+      if (packStamp !== null) {
+        // Only a row that arrived past its trial counts as demoted; an
+        // `unconfirmed` row's window was restarted, which the pack result
+        // states for every row at once.
+        if (input.status !== BRAIN_PREFERENCE_STATUS.unconfirmed) {
+          demotedToUnconfirmed.push(result.id);
+        }
+      } else if (effective !== input && liveStateChanged(input, effective)) {
+        demotedToUnconfirmed.push(result.id);
+      } else if (effective === input) {
+        // Only a row that LANDED AS MAPPED can report derived fields - a
+        // demoted row discarded the mapping's window with its status.
+        for (const d of mapping.derived) derived.push({ id: result.id, index, ...d });
+      }
     } catch (exc) {
       failed.push(failure(id, index, exc));
     }
@@ -592,7 +668,93 @@ export function restorePreferences(
     derived: Object.freeze(derived),
     topicKeyCollisions: collisionsAfterRestore(priorTopics, restoredTopics),
     topicScanUnreadable: Object.freeze(scan.failures),
+    demotedToUnconfirmed: Object.freeze(demotedToUnconfirmed),
   });
+}
+
+/**
+ * Replace a row's live-state fields with a fresh trial, dated from the
+ * restore instant. The revision is deliberately kept: the rewind guard
+ * still compares it against the destination, and lowering it would let a
+ * bundle with an old revision silently lose to a destination that has
+ * moved on - the opposite direction of the same forgery.
+ */
+function demoteToUnconfirmed(
+  input: WritePreferenceInput,
+  restoreInstant: Date,
+  windowDays: number,
+): WritePreferenceInput {
+  return {
+    ...input,
+    status: BRAIN_PREFERENCE_STATUS.unconfirmed,
+    confidence: BRAIN_CONFIDENCE.low,
+    pinned: false,
+    confirmed_at: undefined,
+    unconfirmed_until: isoSecond(addDays(restoreInstant, windowDays)),
+  };
+}
+
+/**
+ * A pack row as it lands: a fresh trial like {@link demoteToUnconfirmed},
+ * plus everything that described the SOURCE vault's relationship with the
+ * rule cleared. Evidence links name signals that exist only there, the
+ * applied/violated counters count work done there, and the revision
+ * numbers that vault's edits - carrying any of them would let the pack
+ * author choose how established the rule looks here. Revision 0 also
+ * means the rewind guard refuses a row whose id this vault already holds
+ * at a later revision rather than overwriting it.
+ */
+function packInstallInput(
+  input: WritePreferenceInput,
+  installInstant: Date,
+  windowDays: number,
+  stamp: string,
+): WritePreferenceInput {
+  return {
+    ...demoteToUnconfirmed(input, installInstant, windowDays),
+    evidenced_by: [],
+    applied_count: 0,
+    violated_count: 0,
+    last_evidence_at: null,
+    confidence_value: null,
+    revision: 0,
+    // Aliases are inbound wikilink targets - identities in THIS vault's
+    // link graph - and the `brain/` tag namespace is the writer's own
+    // (it re-composes the canonical set). Neither is a pack's to claim.
+    aliases: undefined,
+    extraTags: (input.extraTags ?? []).filter((t) => t !== "brain" && !t.startsWith("brain/")),
+    knowledge_pack: stamp,
+  };
+}
+
+/** Did the untrusted reset change anything the row carried? */
+function liveStateChanged(carried: WritePreferenceInput, reset: WritePreferenceInput): boolean {
+  return (
+    carried.status !== reset.status ||
+    carried.confidence !== reset.confidence ||
+    (carried.pinned ?? false) !== reset.pinned ||
+    (carried.confirmed_at ?? undefined) !== reset.confirmed_at ||
+    carried.unconfirmed_until !== reset.unconfirmed_until
+  );
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * The trial window the demotion grants, in days. Same source as every
+ * first-party unconfirmed write (`dream.unconfirmed_window_days`), read
+ * fail-soft: a destination vault with no readable `_brain.yaml` - a
+ * fresh restore target before `brain init` - gets the shipped default,
+ * because a missing config is not a reason to restore the row live.
+ */
+function unconfirmedWindowDays(vault: string): number {
+  try {
+    return loadBrainConfig(vault).dream.unconfirmed_window_days;
+  } catch {
+    return DEFAULT_BRAIN_CONFIG.dream.unconfirmed_window_days;
+  }
 }
 
 /**

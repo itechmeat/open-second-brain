@@ -70,12 +70,14 @@ import {
   readAllPreferenceRecords,
 } from "./doctor/records.ts";
 import { embeddingSunsetCheck } from "./doctor/embedding-sunset-check.ts";
+import { payloadRegistryCheck } from "./doctor/payload-checks.ts";
 import { recallChannelCoverageCheck } from "./doctor/recall-channel-coverage.ts";
 import { recoveryPointLivenessCheck } from "./doctor/recovery-point-liveness.ts";
 import { removedToolReferenceCheck } from "./doctor/removed-tool-checks.ts";
 import { makeStaleDependencyCheck } from "./doctor/stale-dependency-check.ts";
 import { auditStaleDependencies } from "./stale-dependency.ts";
 import { frozenVaultCheck } from "./doctor/frozen-check.ts";
+import { secretsSyncExposureCheck } from "./doctor/secrets-sync-check.ts";
 import { logChainCheck } from "./doctor/log-chain-check.ts";
 import { checkSemanticHealth } from "./doctor/semantic-health-check.ts";
 import {
@@ -162,6 +164,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   capturePatternCheck,
   syncConflictLogCheck,
   frozenVaultCheck,
+  secretsSyncExposureCheck,
   logChainCheck,
   symlinkEscapeCheck,
   frontmatterUncertaintyProbe,
@@ -171,6 +174,7 @@ const DOCTOR_CHECKS: ReadonlyArray<DoctorCheck> = Object.freeze([
   recallChannelCoverageCheck,
   recoveryPointLivenessCheck,
   embeddingSunsetCheck,
+  payloadRegistryCheck,
 ]);
 
 // ----- Entry point ----------------------------------------------------------

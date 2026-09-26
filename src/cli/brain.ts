@@ -83,6 +83,7 @@ import {
   cmdBrainExport,
   cmdBrainOkfExport,
   cmdBrainOkfImport,
+  cmdBrainKnowledgePack,
   cmdBrainUpgrade,
   handleBrainSnapshotSubcommand,
   cmdBrainScanInline,
@@ -101,6 +102,7 @@ import {
   cmdBrainProfile,
   cmdBrainSgrep,
   cmdBrainContinuity,
+  cmdBrainPayload,
   cmdBrainSessionSummary,
   cmdBrainIdeaLineage,
   cmdBrainNoteHistory,
@@ -182,6 +184,7 @@ export const BRAIN_IMPORT_VERB_PATHS: ReadonlyArray<string> = Object.freeze([
   "graph-import",
   "import-claude-memory",
   "import-session",
+  "knowledge-pack install",
 ]);
 
 /**
@@ -388,6 +391,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainSgrep(rest);
       case "continuity":
         return await cmdBrainContinuity(rest);
+      case "payload":
+        return await cmdBrainPayload(rest);
       case "session-summary":
         return await cmdBrainSessionSummary(rest);
       case "idea-lineage":
@@ -432,6 +437,8 @@ export async function handleBrainSubcommand(argv: ReadonlyArray<string>): Promis
         return await cmdBrainOkfExport(rest);
       case "okf-import":
         return await cmdBrainOkfImport(rest);
+      case "knowledge-pack":
+        return await cmdBrainKnowledgePack(rest);
       case "explorer":
         return await cmdBrainExplorer(rest);
       case "page-dedup":

@@ -29,6 +29,87 @@ export const RATE_LIMIT_STATUS = 429;
 /** Milliseconds per second, used to convert `Retry-After` delta-seconds. */
 const MS_PER_SECOND = 1000;
 
+/** Hosts a plain-`http://` provider endpoint is still accepted on. */
+function isLoopbackHost(hostname: string): boolean {
+  const h = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return h === "localhost" || h === "127.0.0.1" || h === "::1";
+}
+
+/**
+ * The endpoint a provider transport may POST vault bytes and bearer keys
+ * to, validated.
+ *
+ * `https` is required everywhere except a loopback host, where plain
+ * `http` is the local-server case (a self-hosted embedding endpoint on
+ * 127.0.0.1) and the plaintext hop never leaves the machine. Everywhere
+ * else the requirement is not ceremony: every indexed chunk body and the
+ * `authorization: Bearer` header travel to this host, and a `http://`
+ * endpoint hands both to anyone on the path. The registry file that
+ * carries `baseUrl` lives inside the vault, so this is also the wall
+ * between a config-writing boundary and vault exfiltration by config.
+ *
+ * The one exception is an explicit operator opt-out for a single endpoint
+ * ({@link HttpEgressOptOut}): a local embedding server on a LAN or tailnet
+ * address (LM Studio on the Windows host, Ollama on another box) has no
+ * certificate to offer. It is off by default, it is read only from the
+ * operator's own config or environment - never from the in-vault provider
+ * registry - and every process that uses it says so once on stderr.
+ *
+ * Returns the URL unchanged; throws `INVALID_INPUT` naming the config
+ * key when the shape or scheme is refused.
+ */
+export function assertHttpEgressEndpoint(
+  rawUrl: string,
+  configKey: string,
+  optOut?: HttpEgressOptOut,
+): string {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    throw new SearchError("INVALID_INPUT", `${configKey} is not a URL: ${rawUrl}`);
+  }
+  const httpsOk = url.protocol === "https:";
+  const loopbackHttpOk = url.protocol === "http:" && isLoopbackHost(url.hostname);
+  if (httpsOk || loopbackHttpOk) return rawUrl;
+  if (url.protocol === "http:" && optOut?.allowInsecureHttp === true) {
+    warnInsecureHttpOnce(rawUrl, configKey, optOut.key);
+    return rawUrl;
+  }
+  throw new SearchError(
+    "INVALID_INPUT",
+    `${configKey} must be an https endpoint (plain http is accepted only for ` +
+      `localhost/127.0.0.1/::1` +
+      (optOut !== undefined
+        ? `, or for this endpoint when the operator config sets ${optOut.key}: true`
+        : "") +
+      `): ${rawUrl}`,
+  );
+}
+
+/**
+ * The per-endpoint plain-http opt-out, as resolved from the operator's
+ * config. `key` is the config key that grants it, named in the refusal
+ * and in the warning so an operator can find the switch.
+ */
+export interface HttpEgressOptOut {
+  readonly allowInsecureHttp: boolean;
+  readonly key: string;
+}
+
+/** Endpoints this process already warned about. */
+const insecureHttpWarned = new Set<string>();
+
+function warnInsecureHttpOnce(rawUrl: string, configKey: string, optOutKey: string): void {
+  if (insecureHttpWarned.has(rawUrl)) return;
+  insecureHttpWarned.add(rawUrl);
+  process.stderr.write(
+    `warning: ${configKey} is plain http (${rawUrl}) because ${optOutKey} is true: ` +
+      `vault text and the API key travel unencrypted to that host. Use it only on a ` +
+      `network you trust (a LAN or tailnet).\n`,
+  );
+}
+
 /**
  * Parse an HTTP `Retry-After` header value into milliseconds. The header is
  * either a non-negative integer count of seconds (RFC 7231 delta-seconds) or

@@ -7,12 +7,14 @@
  * caller on a slow reindex.
  *
  * It is STATE-DRIVEN, not version-stamped: each step keys off actual on-disk
- * state (search index `schema_version`, `_brain.yaml` pending-changes plan).
- * This is deliberate - the vault is often synced across devices (e.g.
- * Syncthing), so a stamp written into the vault would let one device mark a
- * migration done and make another skip its own per-device work (the search
- * index is per-device). State checks are cheap reads and also handle
- * interrupted migrations and downgrades correctly.
+ * state (search index `schema_version` and `chunker_version`, `_brain.yaml`
+ * pending-changes plan). This is deliberate - the vault is often synced
+ * across devices (e.g. Syncthing), so a stamp written into the vault would
+ * let one device mark a migration done and make another skip its own
+ * per-device work (the search index is per-device). The two index cells are
+ * not such a stamp: they live in the per-device index and describe what it
+ * holds. State checks are cheap reads and also handle interrupted
+ * migrations and downgrades correctly.
  */
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -24,7 +26,9 @@ import { brainConfigPath } from "../brain/paths.ts";
 import { planUpgrade, applyUpgrade } from "../brain/upgrade.ts";
 import { resolveSearchConfig } from "../search/index.ts";
 import { reindexVault } from "../search/indexer.ts";
+import { CHUNKER_VERSION } from "../search/chunker.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../search/schema.ts";
+import { CHUNKER_VERSION_STATE_KEY } from "../search/store/state.ts";
 import { isWriterLockHeld } from "../search/store/writer-lock.ts";
 import type { ResolvedSearchConfig } from "../search/types.ts";
 import {
@@ -75,7 +79,24 @@ function message(e: unknown): string {
   return e instanceof Error ? (e.message ?? String(e)) : String(e);
 }
 
-/** Cheap, read-only check: is the search index absent or on a stale schema? */
+/**
+ * Whether the index holds chunks cut by older chunking rules: documents
+ * are present and the recorded CHUNKER_VERSION is not this binary's (or
+ * was never recorded). An unchanged file is never re-chunked by an
+ * incremental run, so only a rebuild replaces those chunks.
+ */
+function chunksAreStale(db: Database): boolean {
+  const row = db
+    .query<{ value: string }, [string]>("SELECT value FROM index_state WHERE key = ? LIMIT 1")
+    .get(CHUNKER_VERSION_STATE_KEY);
+  if (row?.value === String(CHUNKER_VERSION)) return false;
+  return db.query<{ one: number }, []>("SELECT 1 AS one FROM documents LIMIT 1").get() !== null;
+}
+
+/**
+ * Cheap, read-only check: is the search index absent, on a stale schema,
+ * or chunked by older rules?
+ */
 function indexNeedsRebuild(config: ResolvedSearchConfig): boolean {
   if (!existsSync(config.dbPath)) return true;
   let db: Database;
@@ -85,7 +106,7 @@ function indexNeedsRebuild(config: ResolvedSearchConfig): boolean {
     return true; // unreadable -> rebuild
   }
   try {
-    return readSchemaVersion(db) !== LATEST_SCHEMA_VERSION;
+    return readSchemaVersion(db) !== LATEST_SCHEMA_VERSION || chunksAreStale(db);
   } catch {
     return true; // corrupt / non-OSB file -> rebuild
   } finally {
@@ -198,6 +219,12 @@ function startSelfHealReindex(
       stderr: "ignore",
       // No console window flashing up on Windows for a background rebuild.
       windowsHide: true,
+      // On Windows a child that is not detached is ended together with its
+      // parent, so a rebuild started by a short-lived hook process died the
+      // moment the hook exited and never recorded an outcome. POSIX already
+      // lets an `unref`ed child outlive its parent, and its process group is
+      // left as it was.
+      detached: process.platform === "win32",
       // Bun hands a child spawned without `env` the environment this
       // process STARTED with, not the live `process.env`. A config the
       // process selected after start (`--config`, an embedding host, the
@@ -245,7 +272,8 @@ export async function ensureVaultCurrent(
     errors.push(`brain-upgrade: ${message(e)}`);
   }
 
-  // 2. Search index - rebuild if absent or on a stale schema.
+  // 2. Search index - rebuild if absent, on a stale schema, or chunked by
+  //    older rules.
   try {
     const configPath = opts.configPath ?? defaultConfigPath();
     const config = resolveSearchConfig({ vault, configPath });

@@ -94,7 +94,11 @@ export interface ResolvedToolSurface {
   readonly window?: RuntimeCapabilityWindow;
   /** The profile that applied ("full" when none/unknown). */
   readonly profile: string;
-  /** Set when the requested profile did not exist (fail-open marker). */
+  /**
+   * Set when the requested profile did not exist. `o2b mcp` refuses to
+   * start on it (fail closed); the scope/window fields beside it are the
+   * no-profile defaults and must not be served.
+   */
   readonly unknownProfile?: string;
 }
 
@@ -117,7 +121,11 @@ function mergeWindows(
   };
 }
 
-/** Resolve the effective surface. Unknown profiles fail OPEN to full. */
+/**
+ * Resolve the effective surface. An unknown profile is reported through
+ * `unknownProfile`, and the caller must refuse it rather than serve the
+ * defaults returned beside it.
+ */
 export function resolveToolSurface(opts: ResolveToolSurfaceOptions): ResolvedToolSurface {
   const requested = opts.profileName?.trim() || null;
   if (requested === null) {

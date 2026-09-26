@@ -22,8 +22,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 import {
@@ -32,6 +31,9 @@ import {
   LinkCandidateError,
   linkCandidateSchemaHint,
 } from "../../../../src/core/brain/notes/link-candidates.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..", "..");
 const MODULE_REL = "src/core/brain/notes/link-candidates.ts";
@@ -47,7 +49,7 @@ const FORBIDDEN_ROOTS: ReadonlyArray<string> = Object.freeze([
 const ALL_VISIBLE = Object.freeze({ visible: () => true });
 
 function vaultWith(names: ReadonlyArray<string>): string {
-  const vault = mkdtempSync(join(tmpdir(), "o2b-link-candidates-"));
+  const vault = mkTemp("o2b-link-candidates-");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   for (const name of names) {
     const abs = join(vault, `${name}.md`);

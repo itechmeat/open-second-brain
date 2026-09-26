@@ -106,3 +106,79 @@ describe("o2b mcp --host-target arg validation", () => {
     });
   });
 });
+
+/**
+ * An unknown tool profile fails CLOSED (audit L5): a profile narrows what
+ * an agent may call, so a typo must not widen it to the full surface.
+ */
+describe("o2b mcp unknown --tool-profile", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-profile-test-"));
+  });
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  test("from the flag: exits 2 naming the known profiles, serves nothing", async () => {
+    const res = await runCli(["mcp", "--tool-profile", "minimall", "--probe", "--json"], {
+      stdin: "",
+      env: { VAULT_DIR: tmp },
+    });
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain('unknown tool profile "minimall"');
+    expect(res.stderr).toContain("minimal");
+    expect(res.stdout).toBe("");
+  });
+
+  test("from the environment: the same refusal", async () => {
+    const res = await runCli(["mcp", "--probe", "--json"], {
+      stdin: "",
+      env: { VAULT_DIR: tmp, OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE: "recal" },
+    });
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain('unknown tool profile "recal"');
+  });
+
+  test("a known profile still starts", async () => {
+    const res = await runCli(["mcp", "--tool-profile", "minimal", "--probe", "--json"], {
+      stdin: "",
+      env: { VAULT_DIR: tmp },
+    });
+    expect(res.returncode).toBe(0);
+  });
+});
+
+/**
+ * The HTTP bearer key can arrive through the environment (audit L4), so
+ * it need not sit in argv where every process listing shows it.
+ */
+describe("o2b mcp OPEN_SECOND_BRAIN_MCP_API_KEY", () => {
+  let tmp: string;
+  beforeAll(() => {
+    tmp = mkdtempSync(join(tmpdir(), "o2b-mcp-apikey-test-"));
+  });
+  afterAll(() => {
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  const ARGS = ["mcp", "--transport", "http", "--host", "0.0.0.0", "--probe", "--json"];
+
+  test("a non-loopback bind without any key is refused", async () => {
+    const res = await runCli(ARGS, {
+      stdin: "",
+      env: { VAULT_DIR: tmp, OPEN_SECOND_BRAIN_MCP_API_KEY: "" },
+    });
+    expect(res.returncode).toBe(2);
+    expect(res.stderr).toContain("OPEN_SECOND_BRAIN_MCP_API_KEY");
+  });
+
+  test("the key from the environment satisfies the non-loopback requirement", async () => {
+    const res = await runCli(ARGS, {
+      stdin: "",
+      env: { VAULT_DIR: tmp, OPEN_SECOND_BRAIN_MCP_API_KEY: "env-supplied-key" },
+    });
+    expect(res.returncode).toBe(0);
+    expect(res.stdout).not.toContain("env-supplied-key");
+  });
+});

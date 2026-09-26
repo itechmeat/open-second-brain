@@ -66,12 +66,35 @@ function srcModule(rel: string): string {
 const BARRIER_LEAD_MS = 1_500;
 
 /**
- * Preamble every child script starts with: parse argv and spin until the
- * shared start instant so all four enter the critical section together.
+ * How many named refusals one write absorbs before the child fails. Each
+ * refusal already waited out the whole `LOCK_WAIT_BUDGET_MS`, so this bounds
+ * a lock that never frees, not the pace of the race.
+ */
+const MAX_REFUSALS = 5;
+
+/**
+ * Preamble every child script starts with: parse argv, spin until the
+ * shared start instant so all four enter the critical section together, and
+ * define `retryRefused`.
+ *
+ * `retryRefused` re-runs a write the lock REFUSED (`ELOCKED`, after the
+ * waiter spent its budget). A refusal writes nothing and says so, which is
+ * the lock working - not the lost update these tests hunt. The lock is not
+ * fair, so how often a waiter loses every draw for a whole budget depends on
+ * the runner: the Windows job lost one after ~10 s of a four-process
+ * checkpoint race, and the test failed on an update that was refused, not
+ * lost. Only `ELOCKED` is retried, so a writer that skipped the lock would
+ * still lose updates and still fail the tallies below.
  */
 const BARRIER_PREAMBLE: ReadonlyArray<string> = Object.freeze([
   "const [vault, tag, count, startAt] = process.argv.slice(2);",
   "while (Date.now() < Number(startAt)) Bun.sleepSync(1);",
+  "const retryRefused = (write) => {",
+  "  for (let attempt = 1; ; attempt += 1) {",
+  "    try { return write(); }",
+  `    catch (e) { if (e?.code !== "ELOCKED" || attempt >= ${MAX_REFUSALS}) throw e; }`,
+  "  }",
+  "};",
 ]);
 
 /** Write a child script and run `WRITERS` copies of it concurrently. */
@@ -124,7 +147,7 @@ describe("updateManifest — concurrent writers", () => {
       await runWriters("manifest-writer.ts", [
         `import { updateManifest } from ${JSON.stringify(srcModule("core/brain/ingest/content-manifest.ts"))};`,
         "for (let i = 0; i < Number(count); i++) {",
-        "  updateManifest(vault, [`sources/${tag}-${i}.md`]);",
+        "  retryRefused(() => updateManifest(vault, [`sources/${tag}-${i}.md`]));",
         "}",
       ]);
 
@@ -158,7 +181,7 @@ describe("recordCompleted — concurrent writers", () => {
       await runWriters("checkpoint-writer.ts", [
         `import { recordCompleted } from ${JSON.stringify(srcModule("core/brain/ingest/checkpoint.ts"))};`,
         "for (let i = 0; i < Number(count); i++) {",
-        `  recordCompleted(vault, ${JSON.stringify(PLAN_ID)}, "sources", [\`sources/\${tag}-\${i}.md\`], new Date());`,
+        `  retryRefused(() => recordCompleted(vault, ${JSON.stringify(PLAN_ID)}, "sources", [\`sources/\${tag}-\${i}.md\`], new Date()));`,
         "}",
       ]);
 
@@ -207,12 +230,12 @@ describe("appendGitRecords — concurrent writers", () => {
         `import { appendGitRecords } from ${JSON.stringify(srcModule("core/brain/git/store.ts"))};`,
         `const shaFor = (t, i) => \`\${t}\${i}\`.padEnd(40, "0").slice(0, 40).replace(/[^0-9a-f]/g, "a");`,
         "for (let i = 0; i < Number(count); i++) {",
-        `  appendGitRecords(vault, ${JSON.stringify(REPO_KEY)}, [`,
+        `  retryRefused(() => appendGitRecords(vault, ${JSON.stringify(REPO_KEY)}, [`,
         "    { kind: 'commit', sha: shaFor(tag, i), authorName: tag, authorEmail: 't@e.c',",
         "      committedAt: '2026-02-02T00:00:00Z', subject: `c ${i}`, body: '', files: [], release: null },",
         `    { kind: 'commit', sha: ${JSON.stringify(SHARED_SHA)}, authorName: 'shared', authorEmail: 't@e.c',`,
         "      committedAt: '2026-02-02T00:00:00Z', subject: 'shared', body: '', files: [], release: null },",
-        "  ]);",
+        "  ]));",
         "}",
       ]);
 

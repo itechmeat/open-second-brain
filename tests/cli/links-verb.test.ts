@@ -80,3 +80,25 @@ test("preserve mode (default) changes nothing", async () => {
   expect(parsed.mode).toBe("preserve");
   expect(parsed.total_changed).toBe(0);
 });
+
+test("a frozen vault refuses --write and leaves every note untouched; a dry run still reports", async () => {
+  const indexPath = join(vault, "Brain", "notes", "index.md");
+  const before = readFileSync(indexPath, "utf8");
+  const frozen = await runCli(["brain", "freeze", "--reason", "migrating"], { env: env() });
+  expect(frozen.returncode).toBe(0);
+
+  const write = await runCli(["brain", "links", "normalize", "--mode", "full", "--write"], {
+    env: env(),
+  });
+  expect(write.returncode).not.toBe(0);
+  expect(write.stderr).toContain("frozen");
+  expect(readFileSync(indexPath, "utf8")).toBe(before);
+
+  const dry = await runCli(["brain", "links", "normalize", "--mode", "full", "--json"], {
+    env: env(),
+  });
+  expect(dry.returncode).toBe(0);
+  expect((JSON.parse(dry.stdout) as { total_changed: number }).total_changed).toBe(1);
+
+  expect((await runCli(["brain", "unfreeze"], { env: env() })).returncode).toBe(0);
+});

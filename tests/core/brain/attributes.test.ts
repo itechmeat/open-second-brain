@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -135,6 +135,57 @@ describe("assignNoteAttribute / removeNoteAttribute", () => {
     assignNoteAttribute(vault, "notes/paper.md", { field: "year", value: "2026", pack: PACK });
     const [fm] = parseFrontmatter(join(vault, "notes", "paper.md"));
     expect(readAttributes(fm)).toEqual({ year: "2026" });
+  });
+
+  test("the write binding's own config is not writable through attributes (t_sec_labels_governance)", () => {
+    // Marker write-back resolves targets from note wikilinks, so a marker
+    // line naming the config must not become a governance rewrite either.
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    const configPath = join(vault, "Brain", "_brain.yaml");
+    writeFileSync(configPath, "schema_version: 1\n", "utf8");
+    expect(() =>
+      assignNoteAttribute(vault, "Brain/_brain.yaml", { field: "status", value: "x", pack: PACK }),
+    ).toThrow(/config/);
+    expect(() => removeNoteAttribute(vault, "Brain/_brain.yaml", { field: "status" })).toThrow(
+      /config/,
+    );
+    expect(readFileSync(configPath, "utf8")).toBe("schema_version: 1\n");
+  });
+
+  test("the standing rules are not writable through attributes", () => {
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    const rulesPath = join(vault, "Brain", "standing-rules.md");
+    writeFileSync(rulesPath, "# Rules\n\nhands off\n", "utf8");
+    expect(() =>
+      assignNoteAttribute(vault, "Brain/standing-rules.md", {
+        field: "status",
+        value: "x",
+        pack: PACK,
+      }),
+    ).toThrow(/standing-rules/);
+    expect(readFileSync(rulesPath, "utf8")).toContain("hands off");
+  });
+
+  test("Brain machinery and non-note files are refused with no binding declared", () => {
+    mkdirSync(join(vault, "Brain"), { recursive: true });
+    const idPath = join(vault, "Brain", "vault-id.json");
+    writeFileSync(idPath, '{"id":"v"}\n', "utf8");
+    expect(() =>
+      assignNoteAttribute(vault, "Brain/vault-id.json", {
+        field: "status",
+        value: "x",
+        pack: PACK,
+      }),
+    ).toThrow(/Brain machinery|not a Markdown note/);
+    expect(() => removeNoteAttribute(vault, "BRAIN/vault-id.json", { field: "status" })).toThrow(
+      /Brain machinery|not a Markdown note/,
+    );
+    expect(readFileSync(idPath, "utf8")).toBe('{"id":"v"}\n');
+    writeFileSync(join(vault, "_vault-map.yaml"), "roles: {}\n", "utf8");
+    expect(() =>
+      assignNoteAttribute(vault, "_vault-map.yaml", { field: "status", value: "x", pack: PACK }),
+    ).toThrow(/not a Markdown note/);
+    expect(readFileSync(join(vault, "_vault-map.yaml"), "utf8")).toBe("roles: {}\n");
   });
 });
 

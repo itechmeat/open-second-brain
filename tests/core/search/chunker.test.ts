@@ -76,14 +76,14 @@ test("code fence is atomic and not split", () => {
   expect(fenceChunks[0]?.content).toContain("line 49");
 });
 
-test("oversized code fence becomes its own chunk and is not truncated", () => {
+test("oversized code fence is split within the cap and nothing is truncated", () => {
   const huge = Array.from({ length: 2000 }, (_, i) => `word${i}`).join(" ");
   const text = "Intro paragraph.\n\n```\n" + huge + "\n```\n\nOutro.";
   const r = chunkMarkdown(text, "doc", { maxTokens: 100, minTokens: 50, overlapTokens: 0 });
-  const fenceChunk = r.chunks.find((c) => c.content.includes("word1999"));
-  expect(fenceChunk).toBeDefined();
-  expect(fenceChunk?.content).toContain("word0");
-  expect(fenceChunk?.tokenCount).toBeGreaterThan(100);
+  for (const c of r.chunks) expect(c.tokenCount).toBeLessThanOrEqual(100);
+  // Every word lands in exactly one chunk, in order.
+  const words = r.chunks.flatMap((c) => c.content.split(/\s+/)).filter((w) => /^word\d+$/.test(w));
+  expect(words).toEqual(Array.from({ length: 2000 }, (_, i) => `word${i}`));
 });
 
 test("heading attaches to current chunk when below min_tokens", () => {

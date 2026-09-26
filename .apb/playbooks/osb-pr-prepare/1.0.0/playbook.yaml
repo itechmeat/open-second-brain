@@ -1,0 +1,582 @@
+schema: 2
+id: osb-pr-prepare
+name: OSB PR prepare
+description: 'Turn an Open Second Brain branch whose implementation is done into an open pull request that is ready for the operator to merge. Works for every change kind (feature, fix, refactor, chore, docs, deps). Steps: intake and commit of any uncommitted work, a local zg index, a self-review against the base with zg reconnaissance, a test-audit of the tests the diff adds or changes, a focused security review of the diff, a code-ranker architecture gate, docs plus the version and CHANGELOG decision the change kind drives (CLAUDE.md), the CI QA gates run locally exactly as CI runs them, then push, open the PR with a verified mermaid diagram, one blocking CI wait, and a bounded bot-review loop. It never merges and never arms auto-merge. The run input (instruction) carries the change kind, the intent, the related issues or cards and the base branch. The finish answer reports the PR URL, the CI state, a summary and whatever is left for a human.'
+version: 1.0.0
+params:
+- name: brief
+  type: text
+  label: Standing brief for PR preparation (override to change the rules)
+  default: 'Open Second Brain is a PUBLIC repository. Every artifact (code, commits, PR text, CHANGELOG, comments) is English, uses the full name "Open Second Brain" in prose, and carries no exclamation marks. Engineering bar: SOLID, KISS, DRY, repeated literals hoisted into named constants, no fallbacks that silently do nothing, no stubs, errors surface explicitly and by name. Commits: conventional (`type(scope): imperative summary`), one atomic unit each, formatted and linted before every commit (`bun run fmt`, `bun run lint`; the repo pre-commit hook enforces fmt, mirrors and lint), files staged by name - never `git add -A` or `git add .` (the ignored runtime state in .apb/runs/, .apb/tmp/ and .zvec-grep/ is never part of a change, and the committed .apb/ playbooks and profiles change only when the change is about them). Every commit message ends with a blank line and the attribution trailer from the commit_trailer parameter. Tests run with a throwaway HOME: `env HOME=$(mktemp -d) bun test <paths>`. Code search: zg (`zg query --mode direct --refresh wait "<question>"` for semantic and hybrid hits, `--fts <Symbol>` for exact symbols, `zg query --rg -n -w <symbol> src tests` for exhaustive callers); CodeGraph is not used. Never merge a PR, never arm auto-merge, never push to the base branch, never force-push over commits you did not write. Never touch the kanban board: card ids are context, not something to move or comment. Security details never go into public text; see the security_review node. Long commands: wait with ONE blocking call, never a polling loop; never end a reply while a command you started is still running, and never end with a progress report - the reply is the node result.'
+- name: kind
+  type: enum
+  label: Change kind (auto reads it from the instruction, then the branch prefix)
+  options: [auto, feature, fix, refactor, chore, docs, deps]
+  default: auto
+- name: base
+  type: text
+  label: Base branch (an explicit base in the instruction wins)
+  default: main
+- name: release
+  type: enum
+  label: Version bump (auto derives it from the kind, and for deps from the runtime dependencies; see the intake node)
+  options: [auto, major, minor, patch, none]
+  default: auto
+- name: commit_trailer
+  type: text
+  label: Trailer that ends every commit message
+  default: 'Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>'
+- name: pr_footer
+  type: text
+  label: Last line of every PR description
+  default: "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"
+defaults:
+  profile: osb-developer
+  on_failure: blocked
+trigger:
+  when:
+  - prepare a pull request for an open-second-brain branch whose implementation is done
+  - review, gate, version and open a PR for an open-second-brain change of any kind
+  - get an open-second-brain branch to an open PR with green CI and addressed bot review
+  avoid_when:
+  - the change is not implemented yet (implement it first, or use osb-feature-release)
+  - merging or releasing (the operator merges; osb-release publishes)
+  examples:
+  - prepare the PR for this branch, it is a fix for issue 190
+  - open a docs PR from the current branch
+requires:
+  files:
+  - CLAUDE.md
+  commands:
+  - zg
+  - code-ranker
+  - bun
+  - git
+  - gh
+goal:
+  statement: The branch is open as a pull request against the base, with green CI, bot review findings addressed or answered, the version and CHANGELOG handled as CLAUDE.md prescribes for the change kind, and nothing merged.
+  criteria:
+  - description: 'The PR is open, not merged, auto-merge is not armed, and its head is the reviewed and gated commit.'
+    check:
+      type: manual
+  - description: 'Self-review, the diff-scoped test-audit and security review, the architecture gate and the local CI gates ran before the push; CI is green on the final head, or the finish answer names exactly what is left for a human.'
+    check:
+      type: manual
+  - description: 'A release-bearing kind carries its version bump, CHANGELOG entry with link reference and a mermaid diagram that renders in the PR; a no-release kind carries none of the version changes.'
+    check:
+      type: manual
+effects:
+- fs_read
+- fs_write
+- network
+- external
+nodes:
+- id: start
+  type: start
+
+- id: intake
+  title: Resolve the PR context and commit pending work
+  type: agent_task
+  expected_duration: 15m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Parameters: kind={{params.kind}}, base={{params.base}}, release={{params.release}}
+    Run input: {{run.instruction}}
+
+    You prepare the context every later node relies on. Work in the
+    repository root; do not change code beyond committing work that is
+    already there.
+
+    1. Base: an explicit base branch in the run input wins, else the
+       base parameter. `git fetch origin <base>`.
+    2. Kind (feature|fix|refactor|chore|docs|deps): the run input wins,
+       then a kind parameter other than auto, then the branch prefix
+       (feat/ fix/ refactor/ chore/ docs/ deps/ or chore/deps). If none
+       of these decides it, fail naming the ambiguity; do not guess.
+    3. Release bump: a release parameter other than auto wins (the run
+       input may state one too). Otherwise the kind decides, following
+       CLAUDE.md ("for any feature/fix PR that ships a release") and the
+       history of main: feature -> minor, fix -> patch, refactor, chore,
+       docs -> none (no version bump and no CHANGELOG entry, like #175,
+       #142 and #121 on main). deps -> none when only development
+       dependencies or tooling move (package.json devDependencies,
+       bun.lock entries only they pull in, CI actions); deps -> patch
+       when the diff adds, removes or changes a RUNTIME dependency
+       (package.json dependencies, optionalDependencies or
+       peerDependencies, or pyproject.toml project dependencies),
+       because that changes what users install. Read the diff of those
+       files to decide; say which rule applied in the intent.
+    4. Branch: if HEAD is on the base branch with uncommitted work, create
+       `<prefix>/<slug>` (prefix from the kind: feat, fix, refactor,
+       chore, docs, deps) and move the work there. A detached HEAD, or
+       a branch with no change against origin/<base> and nothing
+       uncommitted, is a failure with that reason.
+    5. Uncommitted implementation work: read it, then commit it as
+       atomic conventional commits per the brief (formatted and linted,
+       staged by name). Leave the ignored runtime state (.apb/runs/, .zvec-grep/) alone. If a
+       change looks unrelated to the stated intent, leave it
+       uncommitted and fail, naming the files.
+    6. Record the context for the script nodes:
+       `d=$(git rev-parse --path-format=absolute --git-path osb-pr-prepare); mkdir -p "$d"`
+       and write "$d/context.env" with exactly these shell assignments:
+       OSB_BASE=<base>, OSB_KIND=<kind>, OSB_RELEASE=<major|minor|patch|none>,
+       OSB_BRANCH=<branch>. Remove a stale "$d/pr.env" only if its PR is
+       not open for this branch (`gh pr view <n> --json state,headRefName`);
+       keep it when it is, so a re-run updates the same PR.
+
+    Write your verdict to $APB_STATUS_FILE with outputs
+    {kind, release, base, branch, intent (one paragraph, English),
+    issues (GitHub issue numbers the change addresses, or []),
+    cards (kanban card ids from the run input, or []),
+    commits_added (list of "sha title")}.
+  success_check: scripts/check-context.sh
+  max_retries: 1
+
+- id: zg_index
+  title: Ensure the local zg index
+  type: script
+  script: scripts/zg-index.sh
+  runner: sh
+  timeout_seconds: 1800
+  expected_duration: 5m
+
+- id: self_review
+  title: Self-review against the base (zg reconnaissance)
+  type: agent_task
+  expected_duration: 75m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Context: {{nodes.intake.output}}
+    Index step: {{nodes.zg_index.output}}
+
+    Review EVERYTHING on the branch against the merge base with
+    origin/<base>, committed work included (`git diff $(git merge-base
+    origin/<base> HEAD)...HEAD`), as a fresh reviewer who did not write
+    it. Use the superpowers skills requesting-code-review and
+    verification-before-completion.
+
+    Reconnaissance and impact with zg, not CodeGraph. For every changed
+    exported symbol, config key, CLI verb or MCP tool: find its callers
+    and consumers (`zg query --rg -n -w <name> src tests plugins scripts
+    hooks skills`), related mechanisms (`zg query --mode direct --refresh
+    wait "<what the change does>"`), and sibling implementations that
+    should have changed alike (Python plugin mirror, Codex mirrors,
+    docs). If the index step failed, use `zg query --rg` only and say so.
+
+    Check correctness, error paths, the engineering bar in the brief,
+    tests that pin the behavior, and docs that describe it. Fix real
+    findings in dedicated conventional commits with the smallest diff;
+    a finding you reject is named with its reason. Do not bump the
+    version or touch CHANGELOG here.
+
+    Wrap ONLY the result in <node_output> and </node_output>: findings
+    by severity with disposition (fixed in <sha> | rejected: reason),
+    the zg queries that decided the impact analysis, remaining known
+    issues (none, or argued).
+  outputs:
+    extract: node_output
+
+- id: test_audit
+  title: Test-audit of the tests this diff adds or changes
+  type: agent_task
+  expected_duration: 40m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Context: {{nodes.intake.output}}
+
+    Apply the test-audit skill (load it by name),
+    authoring-gate mode, to exactly the test files this branch adds or
+    changes: `git diff --name-only --diff-filter=AMR $(git merge-base
+    origin/<base> HEAD) HEAD -- tests '*.test.ts' '*_test.py'
+    'test_*.py'`. Tests the diff does not touch are out of scope: no
+    sweep, no campaign, no deletion outside the diff.
+
+    For each added or changed test: the four gate questions, the junk
+    patterns, and the retention bar. Rewrite or remove a test that
+    fails the gate, in the same branch.
+
+    Regression tests (kind fix, or any test that pins a bug): prove each
+    one fails on the pre-fix code for the intended reason. Take the
+    merge base in a throwaway worktree (`git worktree add --detach
+    "$(mktemp -d)" <merge-base>`), copy in only the new or changed test
+    file, run it there (`env HOME=$(mktemp -d) bun test <file>`),
+    record the failure line, then remove the worktree. A regression
+    test that passes on the pre-fix code is rewritten until it fails
+    there.
+
+    The skill's Validation and Landing sections name OpenClaw tooling
+    (vitest, crabbox, scripts/pr); here use the OSB commands from the
+    brief. Commit fixes as `test(<scope>): ...`.
+
+    Wrap ONLY the result in <node_output> and </node_output>: per test
+    file the verdict (kept | rewritten | removed) with the reason, and
+    for each regression test the pre-fix failure line.
+  outputs:
+    extract: node_output
+
+- id: security_review
+  title: Focused security review of the diff
+  type: agent_task
+  expected_duration: 40m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Context: {{nodes.intake.output}}
+
+    Apply the security-audit skill (load it by name)
+    in GUIDANCE mode as a focused review. Never the full audit workflow:
+    no six phases, no output directory, no hunter or verifier fan-out,
+    no report artifacts. Scope: the diff against the merge base with
+    origin/<base> and the trust boundaries it touches (read callers with
+    `zg query --rg` where a changed function is reached from an MCP
+    tool, CLI verb, hook, HTTP transport, file import or config read).
+    Follow its core principles: a finding needs a lower-trust principal,
+    the crossed boundary and a concrete result; source-first; no live
+    probing; run only the repository's own tests locally.
+
+    Dispositions:
+    - A confirmed issue the branch introduces (never released): fix it
+      in the branch with a regression test, as an ordinary
+      conventional commit.
+    - A confirmed issue in code already released on the base that the
+      diff touches: fix it in THIS public PR, worded neutrally (below),
+      AND open a private DRAFT security advisory (below) that carries
+      the details. Both, always: the fix does not wait for the advisory,
+      and the advisory is not skipped because the fix ships.
+    - A confirmed issue in released code the diff does not touch: do
+      not fix it here; open a private draft advisory only.
+    Private advisory, created as a draft and never published by you:
+    `gh api repos/itechmeat/open-second-brain/security-advisories -X POST
+    -f summary=<short> -f description=<details and fix> -f severity=<low|medium|high|critical>`
+    plus the required vulnerabilities field per the GitHub REST docs.
+    The advisory is the ONLY place the exploit details, the attack
+    narrative and the severity are written.
+
+    The repository is PUBLIC. Public artifacts - commit messages, code
+    comments, test names, the PR title and body, PR comments and
+    replies, CHANGELOG, docs and release notes - never carry exploit
+    details: they describe a security fix only in neutral behavioral
+    terms ("validate X before Y", "refuse paths outside the vault"),
+    with no exploit, no attack narrative, no severity, no advisory id
+    and no words like vulnerability or exploit.
+
+    Wrap ONLY the result in <node_output> and </node_output>: confirmed
+    findings with disposition (fixed in <sha>, advisory <GHSA id or
+    draft URL>), needs-validation items with the missing fact, and the
+    boundaries reviewed. This output stays in the run; it is not public.
+  outputs:
+    extract: node_output
+
+- id: arch_gate
+  title: Architecture gate (code-ranker, regressions only)
+  type: script
+  script: scripts/arch-gate.sh
+  runner: sh
+  timeout_seconds: 900
+  expected_duration: 2m
+
+- id: arch_check
+  title: Architecture verdict
+  type: condition
+  max_loops: 3
+
+- id: arch_fix
+  title: Fix the architecture regressions
+  type: agent_task
+  expected_duration: 30m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Gate output: {{nodes.arch_gate.output}}
+
+    The code-ranker gate found violations this branch introduces against
+    the merge base (pre-existing debt is excluded by the baseline).
+    Before touching code, read `code-ranker docs ts <PRINCIPLE>` for each
+    finding (for example ADP for a cycle, HK for coupling), then apply
+    the smallest structural fix it prescribes, keeping behavior and
+    public APIs intact. Re-run the gate yourself with
+    `sh .apb/playbooks/osb-pr-prepare/$(cat .apb/playbooks/osb-pr-prepare/current)/scripts/arch-gate.sh`
+    (the script node runs it again after you).
+    Run the affected tests, commit as `refactor(<scope>): ...`.
+
+    Wrap ONLY the result in <node_output> and </node_output>: each
+    violation and the commit that removed it.
+  outputs:
+    extract: node_output
+
+- id: docs_version
+  title: Docs, version and CHANGELOG per the change kind
+  type: agent_task
+  expected_duration: 30m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Context: {{nodes.intake.output}}
+    Review summary: {{nodes.self_review.output}}
+
+    Follow CLAUDE.md "Versioning" exactly. The release bump in the
+    context (OSB_RELEASE in <git-dir>/osb-pr-prepare/context.env) decides:
+
+    - major|minor|patch (the PR ships a release):
+      1. CHANGELOG.md: a new `## [X.Y.Z] - <today, YYYY-MM-DD>` entry at
+         the top in the house voice (read the last three entries first:
+         an opening paragraph, then Fixed / Changed / Added with bold
+         lead-ins, capability-first, true to the diff). An existing
+         `## [Unreleased]` section becomes that entry rather than
+         staying above it. Add the link reference
+         `[X.Y.Z]: https://github.com/itechmeat/open-second-brain/compare/vPREV...vX.Y.Z`
+         above the previous one. Security fixes are worded neutrally.
+      2. package.json `version` only, then `bun run scripts/sync-version.ts`
+         and `bun run scripts/sync-version.ts --check`. Never hand-edit
+         the mirrored manifests.
+    - none: no version bump, no CHANGELOG entry.
+
+    For every kind: README "What is new" or the docs the change affects
+    (install/, docs/, hooks/README.md, skills/) are updated when the
+    change alters what they describe; after changing skills/ or
+    hooks/hooks.json run `bun run sync-plugin-mirrors`. Commit as
+    `chore(release): vX.Y.Z` for the bump and `docs(<scope>): ...` for
+    docs.
+
+    Wrap ONLY the result in <node_output> and </node_output>: the bump
+    (PREV -> X.Y.Z, or none and why), the CHANGELOG heading, the docs
+    touched, commit shas.
+  success_check: scripts/check-release.sh
+  max_retries: 1
+  outputs:
+    extract: node_output
+
+- id: qa_gates
+  title: CI gates, run locally as CI runs them
+  type: script
+  script: scripts/qa-gates.sh
+  runner: sh
+  timeout_seconds: 3600
+  expected_duration: 25m
+
+- id: qa_check
+  title: QA verdict
+  type: condition
+  max_loops: 4
+
+- id: qa_fix
+  title: Fix the red QA gates
+  type: agent_task
+  expected_duration: 40m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    Gate output: {{nodes.qa_gates.output}}
+
+    Make every red gate green in the branch. Full logs are in
+    <git-dir>/osb-pr-prepare/qa-logs/<step>.log. The usual repairs:
+    `bun run fmt`, `bun run lint:fix`, `bun run sync-plugin-mirrors`,
+    `bun run scripts/sync-version.ts`, and for the openclaw-bundle gate
+    a rebuild with the CI Bun: `PATH=~/.cache/osb-pr-prepare/bun-1.4.0/bun-linux-x64:$PATH
+    bun run build:openclaw` (never with the local newer Bun). Fix
+    failing tests at their cause, not by weakening assertions.
+
+    A failing test that is environment-only (it fails on the merge base
+    too, in this environment, for a reason outside the branch, such as
+    the WSL loopback timeout in capability-tier) is not fixed here:
+    prove it by running that one test on the merge base in a throwaway
+    worktree, then append its exact `bun test` name (as printed after
+    "(fail) ", without the timing) to
+    <git-dir>/osb-pr-prepare/known-test-failures.txt and name it with
+    the evidence in your output. Never add a test that fails only on
+    the branch.
+
+    Commit fixes per the brief. Wrap ONLY the result in <node_output>
+    and </node_output>: each red gate, the cause, the fix commit or the
+    known-failure evidence.
+  outputs:
+    extract: node_output
+
+- id: push_pr
+  title: Push and open (or update) the PR
+  type: agent_task
+  expected_duration: 25m
+  prompt: |
+    Standing brief: {{params.brief}}
+    PR footer (the exact last line of the description): {{params.pr_footer}}
+    Context: {{nodes.intake.output}}
+    Review summary: {{nodes.self_review.output}}
+    Docs and version: {{nodes.docs_version.output}}
+
+    1. Push. If the diff against origin/<base> touches .github/workflows/,
+       push over SSH so no token scope can refuse it:
+       `git push git@github.com:itechmeat/open-second-brain.git HEAD:refs/heads/<branch>`
+       then `git branch --set-upstream-to=origin/<branch>` after a
+       `git fetch origin <branch>`; otherwise `git push -u origin <branch>`.
+       Never push to the base, never force-push commits you did not write.
+    2. PR text, in the voice of the recent PRs (`gh pr view 193` and
+       `gh pr view 191` are the reference): title as a conventional
+       summary, with ` (vX.Y.Z)` appended when the PR ships a release
+       (`feat: <capability tagline> (v1.58.0)`, `fix(<scope>): ... (v1.57.2)`).
+       Body: Summary (capability-first), a mermaid diagram of the
+       process-level benefit (required when the PR ships a release,
+       optional otherwise), What changed, Verification (the gates that
+       ran, with counts), and `Closes #N` / `Refs #N` for the GitHub
+       issues in the context. Kanban card ids stay out of the public
+       text. Security fixes in neutral terms only. The description ends
+       with the PR footer line above, verbatim.
+    3. Mermaid: try a local parse first when it runs here
+       (`bunx -p @mermaid-js/mermaid-cli mmdc -i <file>.mmd -o <file>.svg`;
+       agent-browser's Chrome can serve as PUPPETEER_EXECUTABLE_PATH).
+       The check that counts is the PR page: once the PR exists, open it
+       with agent-browser and confirm the diagram rendered as a diagram
+       (no "Unable to render rich display" box). Fix and
+       `gh pr edit --body-file` until it does.
+    4. Open or update: if an open PR for this branch exists
+       (`gh pr view --json number,state`), update its title and body;
+       else `gh pr create --base <base> --head <branch> --title ...
+       --body-file ...`. Never `gh pr merge`, never `--auto`.
+    5. Record `OSB_PR_NUMBER=<n>` and `OSB_PR_URL=<url>` in
+       <git-dir>/osb-pr-prepare/pr.env.
+
+    Wrap ONLY the result in <node_output> and </node_output>. Required
+    first line: `PR: #<number> <url>`. Then the pushed head sha and the
+    mermaid evidence (local render, and what the PR page showed).
+  success_check: scripts/check-pr.sh
+  max_retries: 2
+  outputs:
+    extract: node_output
+
+- id: ci_wait
+  title: Wait for CI (one blocking watch)
+  type: script
+  script: scripts/ci-wait.sh
+  runner: sh
+  timeout_seconds: 6600
+  expected_duration: 35m
+
+- id: ci_check
+  title: CI verdict
+  type: condition
+  max_loops: 4
+
+- id: ci_fix
+  title: Fix the red CI checks and push
+  type: agent_task
+  expected_duration: 40m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    CI output: {{nodes.ci_wait.output}}
+
+    Diagnose each failed check from the job logs above (`gh run view
+    --job <id> --log` for more). Reproduce it locally when the platform
+    allows (the windows job cannot run here: reason from the log and
+    the Windows notes in install/windows.md and CLAUDE.md). A flaky
+    timing failure unrelated to the branch is re-run once with
+    `gh run rerun <run-id> --failed` instead of a code change, and
+    named as such. Otherwise fix at the cause, run the affected local
+    gates, commit per the brief and push the same way push_pr did
+    (SSH when .github/workflows/ changed). Do not edit the PR text
+    unless the fix changes what it claims.
+
+    Wrap ONLY the result in <node_output> and </node_output>: each failed
+    check, the cause, and the fix commit or the rerun.
+  success_check: scripts/check-pr.sh
+  outputs:
+    extract: node_output
+
+- id: bot_review
+  title: Handle the bot review (CodeRabbit)
+  type: agent_task
+  expected_duration: 30m
+  prompt: |
+    Standing brief: {{params.brief}}
+    Commit trailer: {{params.commit_trailer}}
+    CI output: {{nodes.ci_wait.output}}
+    PR: read the number from <git-dir>/osb-pr-prepare/pr.env.
+
+    CI is green, which includes CodeRabbit's status, so its review has
+    finished or was skipped. Read what it said: `gh pr view <n>
+    --comments`, `gh api repos/itechmeat/open-second-brain/pulls/<n>/reviews`
+    and `.../pulls/<n>/comments`. Handle only comments you have not
+    already answered in an earlier pass of this node.
+
+    - Skipped (for example "files exceed the limit"): post one PR
+      comment saying which internal review compensated (the
+      self-review, test-audit and security review of this run), in
+      neutral terms.
+    - Each finding: verify it against the current code with the
+      receiving-code-review discipline. Valid: fix with the smallest
+      diff. Not valid or no longer applicable: reply on the thread with
+      a one-sentence technical reason. Valid fixes get a reply naming
+      the commit.
+    - Commit fixes per the brief (for example `fix: address CodeRabbit
+      review feedback`) and push the same way push_pr did.
+    One pass per call; do not wait for a second bot pass.
+
+    Write your verdict to $APB_STATUS_FILE with outputs
+    {pushed: "yes" if you pushed commits, else "no", findings: <count>,
+    fixed: [shas], answered: <count>, skipped_reason: <text or "">}.
+  success_check: scripts/check-pr.sh
+  max_retries: 1
+
+- id: ready
+  type: finish
+  outcome: success
+  expected_duration: 3m
+  prompt: |
+    Compose the final answer for the operator from the run context:
+    first line `PR: #<number> <url>`; then CI state as
+    `gh pr checks <n>` reports it NOW (run it once; say green, or name
+    what is red or pending); the kind, the version bump or none; a
+    five-line summary of what the PR ships; what the self-review, the
+    test-audit, the security review (only "clean" or the count of fixed
+    items and advisory drafts, never details) and the architecture
+    gate did; and a "Left for a human" list: gates that ended on their
+    loop budget, known environment-only test failures, bot findings
+    answered but not fixed, advisory drafts to publish, the merge
+    itself. Plain text, English.
+
+- id: blocked
+  type: finish
+  outcome: failure
+  expected_duration: 3m
+  prompt: |
+    The PR preparation stopped before a PR with green CI existed.
+    Compose the answer from the run context: the node that stopped it
+    and its last output (the reason, verbatim where short), whether a
+    PR exists (`PR: #<n> <url>` or `PR: none`), what was already
+    committed and pushed, and the exact next step a human should take.
+    Plain text, English. No security details.
+
+edges:
+- { from: start, to: intake }
+- { from: intake, to: zg_index }
+# The index is an aid, not a gate: the review falls back to `zg query --rg`.
+- { from: zg_index, to: self_review, condition: { type: node_status, node: zg_index, equals: success } }
+- { from: zg_index, to: self_review, condition: { type: node_status, node: zg_index, equals: failure } }
+- { from: self_review, to: test_audit }
+- { from: test_audit, to: security_review }
+- { from: security_review, to: arch_gate }
+- { from: arch_gate, to: arch_check }
+- { from: arch_check, to: docs_version, condition: { type: node_status, node: arch_gate, equals: success } }
+- { from: arch_check, to: arch_fix, condition: { type: output_match, node: arch_gate, pattern: 'ARCH-GATE: violations' } }
+# A tool error, or violations left after the loop budget: carry on and report them.
+- { from: arch_check, to: docs_version, fallback: true }
+- { from: arch_fix, to: arch_gate }
+- { from: docs_version, to: qa_gates }
+- { from: qa_gates, to: qa_check }
+- { from: qa_check, to: push_pr, condition: { type: node_status, node: qa_gates, equals: success } }
+- { from: qa_check, to: qa_fix, condition: { type: output_match, node: qa_gates, pattern: 'QA-GATE: red' } }
+# A setup error (no Bun 1.4.0, no Python 3.11) or red gates after the budget: never push red.
+- { from: qa_check, to: blocked, fallback: true }
+- { from: qa_fix, to: qa_gates }
+- { from: push_pr, to: ci_wait }
+- { from: ci_wait, to: ci_check }
+- { from: ci_check, to: bot_review, condition: { type: node_status, node: ci_wait, equals: success } }
+- { from: ci_check, to: ci_fix, condition: { type: output_match, node: ci_wait, pattern: 'CI-GATE: red' } }
+- { from: ci_check, to: blocked, fallback: true }
+- { from: ci_fix, to: ci_wait }
+- { from: bot_review, to: ci_wait, condition: { type: output_field, node: bot_review, field: pushed, equals: 'yes' }, max_traversals: 2 }
+- { from: bot_review, to: ready, condition: { type: output_field, node: bot_review, field: pushed, equals: 'no' } }
+# Pushed again after the second bot pass: `ready` reports the CI state it finds.
+- { from: bot_review, to: ready, fallback: true }

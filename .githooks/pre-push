@@ -4,8 +4,18 @@
 # check runs it on the PR. Bypass with `git push --no-verify`.
 set -euo pipefail
 
-SELF=$(realpath -- "${BASH_SOURCE[0]}")
-REPO=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
+# Check the working tree git is committing from. Git starts a hook at the
+# root of that tree, and `--show-toplevel` names it - a linked worktree
+# included. Deriving the root from this script's own path instead sent a
+# commit made in a worktree to the main checkout whenever core.hooksPath
+# was set to an absolute path, and the checks then ran against the wrong
+# tree. The script-relative root stays as the fallback outside git.
+if REPO=$(git rev-parse --show-toplevel 2>/dev/null) && [ -n "$REPO" ]; then
+  :
+else
+  SELF=$(realpath -- "${BASH_SOURCE[0]}")
+  REPO=$(cd -- "$(dirname -- "$SELF")/.." && pwd)
+fi
 cd -- "$REPO"
 
 if ! command -v bun >/dev/null 2>&1; then

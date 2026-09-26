@@ -8,7 +8,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { tmpdir } from "node:os";
 
 import { bootstrapBrain } from "../../../../src/core/brain/init.ts";
@@ -201,5 +201,33 @@ describe("ingestSource pre-extract pass (P4, t_ef786747)", () => {
     // there is nothing to read (and the ingest quarantines its entities).
     const res = ingestSource(vault, INPUT, { agent: "claude", now: NOW, preExtract: true });
     expect(res.preExtract?.extracted).toBe(false);
+  });
+
+  test("a source_path that climbs out of the vault is never read (t_sec_ingest_containment)", () => {
+    // The outside file exists and is parseable Python; if the pre-extract read
+    // skipped containment, its class names would land in the result.
+    const outside = mkdtempSync(join(tmpdir(), "o2b-ingest-outside-"));
+    try {
+      const outsideFile = join(outside, "secret-module.py");
+      writeFileSync(outsideFile, "class OutsideSecret:\n    pass\n", "utf8");
+      // A relative path from the vault to that file is, by construction, a
+      // `..`-climbing traversal string - exactly what a caller would supply.
+      const traversalPath = relative(vault, outsideFile);
+      const res = ingestSource(
+        vault,
+        {
+          sourcePath: traversalPath,
+          summary: "An outside file.",
+          extraction: { entities: [{ category: "concept", name: "Outside" }], relations: [] },
+        },
+        { agent: "claude", now: NOW, preExtract: true },
+      );
+      expect(res.preExtract?.extracted).toBe(false);
+      if (res.preExtract !== undefined && res.preExtract.extracted === false) {
+        expect(res.preExtract.reason).toContain("does not resolve inside this vault");
+      }
+    } finally {
+      rmSync(outside, { recursive: true, force: true });
+    }
   });
 });

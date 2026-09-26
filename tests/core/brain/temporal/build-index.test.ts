@@ -19,14 +19,16 @@
  */
 
 import { describe, expect, test, beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { buildTimelineIndex } from "../../../../src/core/brain/temporal/build-index.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 function makeVault(): string {
-  const dir = mkdtempSync(join(tmpdir(), "o2b-temporal-idx-"));
+  const dir = mkTemp("o2b-temporal-idx-");
   mkdirSync(join(dir, "Brain"), { recursive: true });
   mkdirSync(join(dir, "Brain", "log"), { recursive: true });
   mkdirSync(join(dir, "Brain", "preferences"), { recursive: true });

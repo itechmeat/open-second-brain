@@ -14,7 +14,14 @@ import {
 } from "./continuity/types.ts";
 import { readLineageLedger } from "./lineage/ledger.ts";
 import type { SessionLineage } from "./lineage/types.ts";
+import { PayloadRegistry, withPayloadStoreLock } from "./payload-registry.ts";
+import {
+  BRAIN_SESSION_PAYLOAD_DEFAULTS,
+  loadBrainConfigDetailed,
+  resolveSessionPayloadPolicy,
+} from "./policy.ts";
 import type { SessionTurn } from "./sessions/types.ts";
+import type { ResolvedSessionPayloadPolicy } from "./types.ts";
 
 export interface ImportSessionRecallInput {
   readonly sessionId: string;
@@ -27,6 +34,12 @@ export interface ImportSessionRecallInput {
    * recall can stitch the conversation across compression boundaries.
    */
   readonly lineage?: SessionLineage;
+  /**
+   * Payload-registry thresholds (t_35440e83). Absent resolves the vault's
+   * `sessions:` block, falling back to the defaults when the config
+   * cannot be read - an unreadable config must not store blobs inline.
+   */
+  readonly payloadPolicy?: ResolvedSessionPayloadPolicy;
 }
 
 export interface ImportSessionRecallResult {
@@ -36,6 +49,13 @@ export interface ImportSessionRecallResult {
 
 export interface SessionRecallSearchInput {
   readonly query: string;
+  /**
+   * Leave out continuity rows flagged `private` (a `<private>` region was
+   * stripped from them), and the summary nodes built from them, as if they
+   * did not exist. Set for a caller at remote reach; absent keeps every
+   * row, the local behaviour.
+   */
+  readonly withholdPrivate?: boolean;
   readonly sessionId?: string;
   readonly limit?: number;
   readonly snippetChars?: number;
@@ -107,6 +127,13 @@ export interface SessionRecallSearchResult {
 
 export interface DescribeSessionRecallInput {
   readonly sessionId: string;
+  /**
+   * Leave out continuity rows flagged `private` (a `<private>` region was
+   * stripped from them), and the summary nodes built from them, as if they
+   * did not exist. Set for a caller at remote reach; absent keeps every
+   * row, the local behaviour.
+   */
+  readonly withholdPrivate?: boolean;
 }
 
 export interface SessionLineageSegment {
@@ -130,6 +157,13 @@ export interface DescribeSessionRecallResult {
 
 export interface ExpandSessionRecallInput {
   readonly id: string;
+  /**
+   * Leave out continuity rows flagged `private` (a `<private>` region was
+   * stripped from them), and the summary nodes built from them, as if they
+   * did not exist. Set for a caller at remote reach; absent keeps every
+   * row, the local behaviour.
+   */
+  readonly withholdPrivate?: boolean;
   readonly rawLimit?: number;
   readonly cursor?: string;
 }
@@ -160,8 +194,14 @@ export function importSessionRecall(
   const createdAt = input.createdAt ?? new Date().toISOString();
   const lineage =
     input.lineage !== undefined && input.lineage.source !== "flat" ? input.lineage : undefined;
+  const policy = input.payloadPolicy ?? loadSessionPayloadPolicy(vault);
+  const registry = new PayloadRegistry({
+    vault,
+    maxInlineChars: policy.max_inline_chars,
+    maxTextChars: policy.max_text_chars,
+  });
   const rawTurns = input.turns.map((turn) =>
-    importRawTurn(vault, input.sessionId, turn, createdAt, lineage),
+    importRawTurn(vault, input.sessionId, turn, createdAt, lineage, registry),
   );
   const summaryNodes = [
     ...importSummaryDepth(
@@ -199,7 +239,7 @@ export function searchSessionRecall(
   if (needle.length === 0) return Object.freeze({ hits: Object.freeze([]) });
   const limit = Math.max(1, input.limit ?? DEFAULT_LIMIT);
   const snippetChars = Math.max(1, input.snippetChars ?? DEFAULT_SNIPPET_CHARS);
-  const records = sessionRecallRecords(vault, input.sessionId);
+  const records = sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
   const hits = records
     .filter((record) => recordInTimeRange(record, input.sinceMs, input.untilMs))
     .map((record) => hitFor(record, needle, snippetChars))
@@ -255,7 +295,7 @@ export function describeSessionRecall(
   vault: string,
   input: DescribeSessionRecallInput,
 ): DescribeSessionRecallResult {
-  const records = sessionRecallRecords(vault, input.sessionId);
+  const records = sessionRecallRecords(vault, input.sessionId, input.withholdPrivate);
   const rawTurns = records.filter((record) => record.kind === "session_turn");
   const summaries = records.filter((record) => record.kind === "session_summary_node");
   const depths: Record<string, number> = {};
@@ -292,7 +332,10 @@ function lineageDescription(
     if (typeof sid !== "string" || seen.has(sid)) continue;
     seen.add(sid);
     segments.push(
-      Object.freeze({ session_id: sid, parent_session_id: links.get(sid)?.parentId ?? null }),
+      Object.freeze({
+        session_id: sid,
+        parent_session_id: links.get(sid)?.parentId ?? null,
+      }),
     );
   }
   // A root segment can exist without records of its own (the chain was
@@ -300,7 +343,10 @@ function lineageDescription(
   // anchors the conversation, so list it first.
   if (!seen.has(rootId)) {
     segments.unshift(
-      Object.freeze({ session_id: rootId, parent_session_id: links.get(rootId)?.parentId ?? null }),
+      Object.freeze({
+        session_id: rootId,
+        parent_session_id: links.get(rootId)?.parentId ?? null,
+      }),
     );
   }
   if (segments.length < 2) return {};
@@ -332,7 +378,7 @@ export function expandSessionRecall(
   vault: string,
   input: ExpandSessionRecallInput,
 ): ExpandSessionRecallResult {
-  const records = sessionRecallRecords(vault);
+  const records = sessionRecallRecords(vault, undefined, input.withholdPrivate);
   const byId = new Map(records.map((record) => [record.id, record]));
   const record = byId.get(input.id);
   if (record === undefined) throw new Error(`session recall record not found: ${input.id}`);
@@ -361,22 +407,75 @@ function lineagePayloadFields(lineage: SessionLineage | undefined): Record<strin
   };
 }
 
+/**
+ * The vault's payload thresholds, or the defaults when `_brain.yaml`
+ * cannot be read. Falling back rather than throwing keeps a broken config
+ * from failing an import, and falling back to the DEFAULTS rather than to
+ * "no bound" keeps it from storing blobs inline either.
+ */
+function loadSessionPayloadPolicy(vault: string): ResolvedSessionPayloadPolicy {
+  try {
+    return resolveSessionPayloadPolicy(loadBrainConfigDetailed(vault).config);
+  } catch {
+    return BRAIN_SESSION_PAYLOAD_DEFAULTS;
+  }
+}
+
+/** A `<private>` opening tag, as the continuity sanitiser detects one. */
+const PRIVATE_OPEN_RE = /<private\b[^>]*>/i;
+
 function importRawTurn(
   vault: string,
   sessionId: string,
   turn: SessionTurn,
   createdAt: string,
   lineage: SessionLineage | undefined,
+  registry: PayloadRegistry,
 ): ContinuityRecord {
-  const text = turn.text ?? "";
-  const textHash = hash(text);
+  const original = turn.text ?? "";
+  // Keyed on the ORIGINAL text, so a re-import of the same transcript
+  // dedupes against rows written before the registry existed as well as
+  // after it, and a threshold change never duplicates a turn.
+  const textHash = hash(original);
   const dedupeKey = ["session_turn", sessionId, turn.turnId, textHash].join(":");
   const existing = findByDedupeKey(vault, dedupeKey);
   if (existing !== null) return existing;
+  // Externalize BEFORE the row is written: the ledger, recall search and
+  // every summary node built from this row only ever see placeholders.
+  // Both halves run under the payload store lock, so a gc cannot remove a
+  // payload between its write and the row that names it.
+  const row = { sessionId, turn, createdAt, lineage, original, textHash, dedupeKey };
+  if (!registry.mayExternalize(original)) return appendTurnRow(vault, registry, row);
+  return withPayloadStoreLock(vault, () => appendTurnRow(vault, registry, row));
+}
+
+interface TurnRowInput {
+  readonly sessionId: string;
+  readonly turn: SessionTurn;
+  readonly createdAt: string;
+  readonly lineage: SessionLineage | undefined;
+  readonly original: string;
+  readonly textHash: string;
+  readonly dedupeKey: string;
+}
+
+function appendTurnRow(
+  vault: string,
+  registry: PayloadRegistry,
+  input: TurnRowInput,
+): ContinuityRecord {
+  const { sessionId, turn, createdAt, lineage, original, textHash, dedupeKey } = input;
+  const externalized = registry.externalizeOversized(original);
+  const text = externalized.text;
   return appendContinuityRecord(vault, {
     kind: "session_turn",
     createdAt,
     sourceRefs: sourceRefs(sessionId, turn.turnId),
+    // The registry strips `<private>` regions before it writes anything,
+    // which leaves the store nothing to detect; the verdict is carried.
+    ...(externalized.payloads.length > 0 && PRIVATE_OPEN_RE.test(original)
+      ? { private: true }
+      : {}),
     payload: {
       session_id: sessionId,
       turn_id: turn.turnId,
@@ -384,6 +483,9 @@ function importRawTurn(
       role: turn.role,
       text,
       text_hash: textHash,
+      ...(externalized.payloads.length > 0
+        ? { payload_refs: externalized.payloads.map((payload) => payload.ref) }
+        : {}),
       dedupe_key: dedupeKey,
       ...lineagePayloadFields(lineage),
       ...delegationPayloadFields(turn),
@@ -460,16 +562,42 @@ function importSummaryDepth(
   return nodes;
 }
 
-function sessionRecallRecords(vault: string, sessionId?: string): ContinuityRecord[] {
-  const records = listContinuityRecords(vault).filter(
+function sessionRecallRecords(
+  vault: string,
+  sessionId?: string,
+  withholdPrivate?: boolean,
+): ContinuityRecord[] {
+  const all = listContinuityRecords(vault).filter(
     (record) => record.kind === "session_turn" || record.kind === "session_summary_node",
   );
+  const records = withholdPrivate === true ? withoutPrivateRecords(all) : all;
   let scoped = records;
   if (sessionId !== undefined) {
     const scope = lineageScope(vault, records, sessionId);
     scoped = records.filter((record) => scope.has(String(record.payload["session_id"] ?? "")));
   }
   return scoped.sort((left, right) => compareRecords(left, right));
+}
+
+/**
+ * `records` without the rows flagged `private` and without every summary
+ * node built, at any depth, from one of them: a summary copies the text of
+ * the turns it summarizes, so keeping it would show what the row hides.
+ */
+function withoutPrivateRecords(records: ReadonlyArray<ContinuityRecord>): ContinuityRecord[] {
+  const withheld = new Set(records.filter((record) => record.private).map((record) => record.id));
+  let grew = withheld.size > 0;
+  while (grew) {
+    grew = false;
+    for (const record of records) {
+      if (withheld.has(record.id) || record.kind !== "session_summary_node") continue;
+      if (sourceRecordIds(record).some((id) => withheld.has(id))) {
+        withheld.add(record.id);
+        grew = true;
+      }
+    }
+  }
+  return records.filter((record) => !withheld.has(record.id));
 }
 
 interface LineageLink {
@@ -492,13 +620,19 @@ function lineageLinks(
     const root = record.payload["root_session_id"];
     if (typeof sid !== "string" || typeof root !== "string" || links.has(sid)) continue;
     const parent = record.payload["parent_session_id"];
-    links.set(sid, { rootId: root, parentId: typeof parent === "string" ? parent : null });
+    links.set(sid, {
+      rootId: root,
+      parentId: typeof parent === "string" ? parent : null,
+    });
   }
   try {
     for (const [sid, entry] of readLineageLedger(vault)) {
       if (links.has(sid)) continue;
       if (entry.lineage === undefined || entry.lineage.source === "flat") continue;
-      links.set(sid, { rootId: entry.lineage.rootId, parentId: entry.lineage.parentId });
+      links.set(sid, {
+        rootId: entry.lineage.rootId,
+        parentId: entry.lineage.parentId,
+      });
     }
   } catch {
     // Fail-soft: recall works from record payloads alone.

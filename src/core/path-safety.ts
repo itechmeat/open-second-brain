@@ -8,15 +8,15 @@
  * file outside the vault root.
  */
 
-import { existsSync, realpathSync } from "node:fs";
-import { dirname, posix, relative, resolve, sep } from "node:path";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, posix, relative, resolve, sep } from "node:path";
 
 /**
  * Throw if `target` is not the vault root or a descendant of it.
  *
  * The check is twofold:
  *
- *   1. `path.resolve` normalises `..` so a slug like `../etc/passwd`
+ *   1. `path.resolve` normalises `..` so a slug like `../outside`
  *      cannot pretend to be inside the vault. The platform path
  *      separator (`/` or `\`) is used for the prefix check so siblings
  *      that share a name prefix (`/v` vs `/v-evil`) are rejected.
@@ -114,6 +114,62 @@ function safeRealpath(p: string): string {
     if ((err as NodeJS.ErrnoException)?.code === "ENOENT") return p;
     throw err;
   }
+}
+
+/**
+ * The realpath of `target`, resolving every symlink in the components
+ * that exist and re-appending the components that do not yet.
+ *
+ * A write target is normally the LAST component and does not exist yet,
+ * so `realpathSync` on it alone would only ever raise; what matters is
+ * the directory chain above it, which does exist and is where a symlink
+ * redirects the write. ENOENT walks one level up; any other errno is
+ * raised, because a directory we cannot examine is not a directory we
+ * know to be safe.
+ */
+function realpathOfDeepestExisting(target: string): string {
+  try {
+    return realpathSync(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") throw err;
+    const parent = dirname(target);
+    if (parent === target) return target;
+    const realParent = realpathOfDeepestExisting(parent);
+    assertNotAFile(realParent);
+    return join(realParent, basename(target));
+  }
+}
+
+/**
+ * Refuse to append a component below an existing non-directory.
+ *
+ * POSIX `realpath` answers `ENOTDIR` for `note.md/child.md` when `note.md`
+ * is a file, but Windows answers `ENOENT`, which the walk above reads as
+ * "not created yet" and would resolve to a path no write can ever create.
+ * Raising the POSIX errno here gives both platforms the same answer.
+ */
+function assertNotAFile(path: string): void {
+  const stat = statSync(path, { throwIfNoEntry: false });
+  if (stat === undefined || stat.isDirectory()) return;
+  const err: NodeJS.ErrnoException = new Error(`ENOTDIR: not a directory, '${path}'`);
+  err.code = "ENOTDIR";
+  err.path = path;
+  throw err;
+}
+
+/**
+ * Where `relPath` actually lands, as a vault-relative POSIX path, or
+ * `null` when it lands outside the vault altogether.
+ */
+export function realVaultRelative(vault: string, relPath: string): string | null {
+  const realVault = realpathOfDeepestExisting(resolve(vault));
+  const realTarget = realpathOfDeepestExisting(resolve(join(vault, relPath)));
+  const rel = relative(realVault, realTarget);
+  // `relative` emits the platform separator, so the "climbs out of the
+  // root" test uses it too. An empty result means the target IS the
+  // vault root, which is not a place a note can be written either.
+  if (rel === "" || rel === ".." || rel.startsWith(".." + sep)) return null;
+  return toPosix(rel);
 }
 
 /**

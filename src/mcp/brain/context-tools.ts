@@ -623,7 +623,7 @@ export const CONTEXT_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         target: {
           type: "string",
           description:
-            "Vault-relative commit target under Brain/ (artifact open; optional panel override). Reserved namespaces are refused.",
+            "Commit target: Brain/sources/, reports/, distillations/, notes/ or decisions/panels/ (artifact open; panel override). The rest of Brain/ is refused.",
         },
         text: {
           type: "string",

@@ -21,8 +21,7 @@
  */
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { diarize } from "../../../src/core/brain/diarization.ts";
@@ -34,6 +33,9 @@ import {
   type LinkCandidateManifest,
 } from "../../../src/core/brain/notes/link-candidates.ts";
 import { planRollupLadder } from "../../../src/core/brain/rollup-ladder.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const NOW = new Date("2026-08-23T10:00:00Z");
 const RUN_ID = "dream-2026-08-23-100000";
@@ -55,7 +57,7 @@ function writeNote(rel: string, body: string): void {
 }
 
 beforeEach(() => {
-  vault = mkdtempSync(join(tmpdir(), "o2b-link-envelopes-"));
+  vault = mkTemp("o2b-link-envelopes-");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   writeNote("notes/analytical-engine.md", "# Analytical engine\n");
   writeNote("notes/vector-index-storage.md", "# Vector index storage\n");

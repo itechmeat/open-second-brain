@@ -94,6 +94,7 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
     resolvedTransportReach(opts.transportReach),
     config.vault,
     frontmatterCache,
+    store,
   );
   // Self-tuning reinforce (Search & Recall Quality Suite): opt-in. When
   // the caller passes a reinforce set, the persisted ledger lifts

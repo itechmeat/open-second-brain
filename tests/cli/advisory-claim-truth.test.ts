@@ -15,12 +15,16 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { writeCaptureNote } from "../../src/core/brain/capture/capture-note.ts";
 import { bootstrapBrain } from "../../src/core/brain/init.ts";
+import { NEXT_COMMAND_KEY, resolveNextStep } from "../../src/core/brain/next-step.ts";
 import { writeSignal } from "../../src/core/brain/signal.ts";
+import { resolveSearchConfig } from "../../src/core/search/index.ts";
+import { indexVault } from "../../src/core/search/indexer.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 let tmp: string;
@@ -178,6 +182,8 @@ describe("search-index-missing claims the index is not built", () => {
 
   test("o2b init on a vault that already has one does not", async () => {
     // Build the index where the resolver will look for it, then re-init.
+    // The indexer refuses a vault directory that does not exist.
+    mkdirSync(vault, { recursive: true });
     const built = await runCli(["search", "index", "--vault", vault], {
       env: { OPEN_SECOND_BRAIN_CONFIG: configPath },
     });
@@ -195,52 +201,105 @@ describe("search-index-missing claims the index is not built", () => {
   });
 });
 
-describe("the audit of every other registered emission", () => {
-  /**
-   * The remaining rail call sites, and the condition each is guarded by.
-   * Read off the source at the time of this change and asserted rather
-   * than trusted: a site that loses its guard fails here.
-   */
-  const GUARDED: ReadonlyArray<readonly [string, string, string]> = [
-    ["src/cli/brain/verbs/bridges.ts", "bridge-proposals-absent", "!existsSync(path)"],
-    ["src/cli/brain/verbs/bridges.ts", "search-index-missing", "INDEX_MISSING"],
-    ["src/cli/brain/verbs/clusters.ts", "search-index-missing", "INDEX_MISSING"],
-    ["src/cli/brain/verbs/clusters.ts", "cluster-notes-absent", "!existsSync(dir)"],
-    ["src/cli/brain/verbs/dream.ts", "dream-bundles-absent", "bundles.length === 0"],
-    ["src/cli/brain/verbs/git.ts", "git-history-absent", "results.length === 0"],
-    ["src/cli/brain/verbs/git.ts", "git-history-absent", "repos.length === 0"],
-    ["src/cli/brain/verbs/inbox-drain.ts", "staged-captures-pending", "report.items.length > 0"],
-    ["src/cli/brain/verbs/intention.ts", "intentions-absent", "intentions.length === 0"],
-    [
-      "src/cli/brain/verbs/intent-review.ts",
-      "signal-clusters-absent",
-      "report.reviews.length === 0",
-    ],
-    ["src/cli/brain/verbs/tiers.ts", "tier-drift-restore", "findings.length > 0"],
-    ["src/cli/brain/verbs/tune.ts", "recall-tuning-absent", "tuned === null"],
-    ["src/cli/main.ts", "cli-config-absent", "!result.exists"],
-    ["src/cli/search/verbs/status.ts", "search-index-missing", "!status.exists"],
-  ];
+/**
+ * The emissions that no other suite drives in BOTH directions. The rest
+ * of the registered sites are held behaviourally elsewhere (the JSON
+ * `next_command` field in `json-next-command.test.ts`, the terminal-state
+ * suites); these three states had only a source-text check that some
+ * guard string appeared somewhere earlier in the file, which a refactor
+ * could satisfy while the emission itself lost its condition.
+ */
+describe("the remaining claims fire only where they hold", () => {
+  const env = (): Record<string, string> => ({ OPEN_SECOND_BRAIN_CONFIG: configPath });
 
-  test("every other emission sits under a guard naming its condition", () => {
-    const root = join(import.meta.dir, "..", "..");
-    const missing: string[] = [];
-    for (const [file, code, guard] of GUARDED) {
-      const text = readFileSync(join(root, file), "utf8");
-      // EVERY occurrence, not the first: a code is now named twice per
-      // site - once for the rail line and once for the JSON field - and
-      // checking only the first would let the second lose its guard.
-      const occurrences = [...text.matchAll(new RegExp(`"${code}"`, "g"))];
-      if (occurrences.length === 0) {
-        missing.push(`${file}: ${code} is not named at all`);
-        continue;
-      }
-      for (const occurrence of occurrences) {
-        if (!text.slice(0, occurrence.index!).includes(guard)) {
-          missing.push(`${file}: ${code} is not preceded by \`${guard}\``);
-        }
-      }
+  /** The rail line a code prints, read from the registry, never retyped. */
+  function railLine(code: string): string {
+    const step = resolveNextStep(code);
+    expect(`${code} is registered: ${step !== null}`).toBe(`${code} is registered: true`);
+    return `next: ${step!.nextCommand}`;
+  }
+
+  beforeEach(() => {
+    bootstrapBrain(vault, { configPath });
+  });
+
+  describe("tier-drift-restore claims an identity field drifted", () => {
+    function writePref(id: string): void {
+      writeFileSync(
+        join(vault, "Brain", "preferences", "pref-spaces.md"),
+        `---\nkind: brain-preference\nid: ${id}\ncreated_at: 2026-05-01T00:00:00Z\ntopic: style\n---\n\nUse spaces.\n`,
+      );
     }
-    expect(missing.join("\n")).toBe("");
+
+    test("an index with no hand-edits does not offer a restore", async () => {
+      writePref("pref-spaces");
+      await indexVault(resolveSearchConfig({ vault, configPath }));
+      const r = await runCli(["brain", "tiers", "check", "--vault", vault], { env: env() });
+      expect(r.returncode).toBe(0);
+      expect(r.stdout).toContain("0 open finding(s)");
+      expect(r.stdout).not.toContain(railLine("tier-drift-restore"));
+      expect(r.stdout).not.toContain(railLine("tier-drift-accept"));
+    });
+
+    test("a hand-edited identity field offers both exits", async () => {
+      const config = resolveSearchConfig({ vault, configPath });
+      writePref("pref-spaces");
+      await indexVault(config);
+      writePref("pref-tabs");
+      await indexVault(config);
+      const r = await runCli(["brain", "tiers", "check", "--vault", vault], { env: env() });
+      expect(r.returncode).toBe(0);
+      expect(r.stdout).toContain("1 open finding(s)");
+      expect(r.stdout).toContain(railLine("tier-drift-restore"));
+      expect(r.stdout).toContain(railLine("tier-drift-accept"));
+    });
+  });
+
+  describe("recall-tuning-absent claims nothing is tuned", () => {
+    test("with no persisted tuning the exit fires", async () => {
+      const r = await runCli(["brain", "tune", "status", "--vault", vault], { env: env() });
+      expect(r.returncode).toBe(0);
+      expect(r.stdout).toContain(railLine("recall-tuning-absent"));
+    });
+
+    test("with valid persisted tuning it does not, on either stream", async () => {
+      mkdirSync(join(vault, "Brain", "search"), { recursive: true });
+      writeFileSync(
+        join(vault, "Brain", "search", "tuning.json"),
+        JSON.stringify({
+          chosen: { poolMultiplier: 3, traversalDepth: 1, learnedWeights: false, expansion: false },
+        }),
+      );
+      const human = await runCli(["brain", "tune", "status", "--vault", vault], { env: env() });
+      expect(human.returncode).toBe(0);
+      expect(human.stdout).toContain("pool x3");
+      expect(human.stdout).not.toContain(railLine("recall-tuning-absent"));
+
+      const machine = await runCli(["brain", "tune", "status", "--vault", vault, "--json"], {
+        env: env(),
+      });
+      expect(machine.returncode).toBe(0);
+      expect(JSON.parse(machine.stdout)).not.toHaveProperty(NEXT_COMMAND_KEY);
+    });
+  });
+
+  describe("staged-captures-pending claims captures await routing", () => {
+    test("the human stream names the exit only while a capture is staged", async () => {
+      const nothing = await runCli(["brain", "inbox-drain"], { env: env() });
+      expect(nothing.returncode).toBe(0);
+      expect(nothing.stdout).not.toContain(railLine("staged-captures-pending"));
+
+      writeCaptureNote(vault, {
+        body: "an atomic idea to keep",
+        provenance: { source: "telegram", sender: "100", capturedAt: "2026-07-19T12:00:02Z" },
+      });
+      const staged = await runCli(["brain", "inbox-drain"], { env: env() });
+      expect(staged.returncode).toBe(0);
+      expect(staged.stdout).toContain(railLine("staged-captures-pending"));
+
+      const applied = await runCli(["brain", "inbox-drain", "--apply"], { env: env() });
+      expect(applied.returncode).toBe(0);
+      expect(applied.stdout).not.toContain(railLine("staged-captures-pending"));
+    });
   });
 });

@@ -332,3 +332,39 @@ describe("brain_unlinked_mentions round trip", () => {
     }
   });
 });
+
+describe("brain_unlinked_mentions at remote reach", () => {
+  const PREF = { kind: "preference", status: "confirmed", principle: "p" };
+
+  async function mentionsAt(reach: "local" | "remote", id: string): Promise<unknown[]> {
+    const server = new MCPServer({ vault, configPath }, { reach });
+    await initialize(server);
+    const r = await callTool(server, "brain_unlinked_mentions", { id });
+    return JSON.parse(r.result!.content[0]!.text)["mentions"] as unknown[];
+  }
+
+  test("a reserved source is dropped and a reserved target answers as absent", async () => {
+    writePref("pref-target", { ...PREF, topic: "t", title: "Subject Line" });
+    writePref("pref-open", { ...PREF, topic: "o" }, "Open note on Subject Line.");
+    writePref(
+      "pref-zzsecret",
+      { ...PREF, topic: "s", visibility: "[private]" },
+      "zzsecret prose about Subject Line.",
+    );
+    writePref("pref-zzsecrettarget", {
+      ...PREF,
+      topic: "st",
+      title: "Hidden Title",
+      visibility: "[private]",
+    });
+    writePref("pref-mentioner", { ...PREF, topic: "m" }, "Talks about Hidden Title.");
+
+    expect(JSON.stringify(await mentionsAt("local", "pref-target"))).toContain("zzsecret");
+    const remote = await mentionsAt("remote", "pref-target");
+    expect(JSON.stringify(remote)).not.toContain("zzsecret");
+    expect(remote).toHaveLength(1);
+
+    expect(await mentionsAt("local", "pref-zzsecrettarget")).toHaveLength(1);
+    expect(await mentionsAt("remote", "pref-zzsecrettarget")).toEqual([]);
+  });
+});

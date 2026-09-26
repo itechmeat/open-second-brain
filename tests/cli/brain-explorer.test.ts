@@ -13,6 +13,7 @@ import { join } from "node:path";
 
 import { writePreference } from "../../src/core/brain/preference.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
 /**
@@ -66,6 +67,31 @@ function seedOnePref(): void {
 }
 
 /** Pick a random high port to dodge collisions on shared build hosts. */
+/**
+ * Read `stream` until `marker` appears or the stream ends (the process
+ * exited). Returns what was read either way, so a failure can show it.
+ */
+async function readUntil(
+  stream: ReadableStream<Uint8Array>,
+  marker: string,
+): Promise<{ readonly found: boolean; readonly text: string }> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  try {
+    while (!text.includes(marker)) {
+      // Each read waits on the child's next write: there is nothing to batch.
+      // oxlint-disable-next-line no-await-in-loop
+      const chunk = await reader.read();
+      if (chunk.done) return { found: false, text };
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    return { found: true, text };
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function pickPort(): number {
   return 30000 + Math.floor(Math.random() * 25000);
 }
@@ -188,70 +214,70 @@ describe("o2b brain explorer --export", () => {
 });
 
 describe("o2b brain explorer (live)", () => {
-  test("binds to 127.0.0.1, serves / and /data.json, shuts down on SIGINT", async () => {
-    await bootstrap();
-    seedOnePref();
-    const port = pickPort();
-    // Spawn the CLI manually so we can poll the server and send SIGINT.
-    // `cwd: process.cwd()` instead of a hard-coded path so the test
-    // works from any checkout (CI, local clone, contributor laptop).
-    const isolatedConfig = config;
-    const proc = Bun.spawn(
-      [
-        "bun",
-        "run",
-        "src/cli/main.ts",
-        "brain",
-        "explorer",
-        "--vault",
-        vault,
-        "--port",
-        String(port),
-      ],
-      {
-        cwd: process.cwd(),
-        env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: isolatedConfig },
-        stdout: "pipe",
-        stderr: "pipe",
-      },
-    );
-    try {
-      // Wait up to ~3s for the server to come up.
-      let up = false;
-      let mainBody = "";
-      let dataBody = "";
-      for (let i = 0; i < 30; i++) {
-        await new Promise((res) => setTimeout(res, 100));
+  test(
+    "binds to 127.0.0.1, serves / and /data.json, shuts down on SIGINT",
+    async () => {
+      await bootstrap();
+      seedOnePref();
+      const port = pickPort();
+      // Spawn the CLI manually so we can poll the server and send SIGINT.
+      // `cwd: process.cwd()` instead of a hard-coded path so the test
+      // works from any checkout (CI, local clone, contributor laptop).
+      const isolatedConfig = config;
+      const proc = Bun.spawn(
+        [
+          "bun",
+          "run",
+          "src/cli/main.ts",
+          "brain",
+          "explorer",
+          "--vault",
+          vault,
+          "--port",
+          String(port),
+        ],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, OPEN_SECOND_BRAIN_CONFIG: isolatedConfig },
+          stdout: "pipe",
+          stderr: "pipe",
+        },
+      );
+      try {
+        // Wait for the CLI to say it is listening, not for a clock. It prints
+        // the line only after the server is bound, so the first fetch cannot
+        // race the boot. The fixed 3 s poll this replaces lost to a cold
+        // `bun run src/cli/main.ts` on the Windows runner, and polling a port
+        // nothing is bound to yet is not even a clean refusal everywhere
+        // (WSL's mirrored loopback drops the SYN instead of refusing it).
+        const banner = await readUntil(proc.stdout, "Live explorer at ");
+        if (!banner.found) {
+          const stderr = await new Response(proc.stderr).text();
+          throw new Error(`explorer exited before listening:\n${banner.text}${stderr}`);
+        }
+        const r = await fetch(`http://127.0.0.1:${port}/`);
+        expect(r.ok).toBe(true);
+        const mainBody = await r.text();
+        const d = await fetch(`http://127.0.0.1:${port}/data.json`);
+        const dataBody = await d.text();
+        expect(mainBody).toContain("Brain Explorer");
+        expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
+        const parsed = JSON.parse(dataBody);
+        expect(parsed.nodes.length).toBe(1);
+      } finally {
+        // Always tear the spawned CLI down so a failing assertion does
+        // not leak the port into the next test on the same worker.
         try {
-          const r = await fetch(`http://127.0.0.1:${port}/`);
-          if (r.ok) {
-            mainBody = await r.text();
-            const d = await fetch(`http://127.0.0.1:${port}/data.json`);
-            dataBody = await d.text();
-            up = true;
-            break;
-          }
+          proc.kill("SIGINT");
+          await proc.exited;
         } catch {
-          // ECONNREFUSED while booting — keep waiting.
+          // process may have already exited or be in a weird state;
+          // either way nothing else for us to do here.
         }
       }
-      expect(up).toBe(true);
-      expect(mainBody).toContain("Brain Explorer");
-      expect(mainBody.includes("__GRAPH_JSON__")).toBe(false);
-      const parsed = JSON.parse(dataBody);
-      expect(parsed.nodes.length).toBe(1);
-    } finally {
-      // Always tear the spawned CLI down so a failing assertion does
-      // not leak the port into the next test on the same worker.
-      try {
-        proc.kill("SIGINT");
-        await proc.exited;
-      } catch {
-        // process may have already exited or be in a weird state;
-        // either way nothing else for us to do here.
-      }
-    }
-  });
+    },
+    CLI_SPAWN_BUDGET_MS,
+  );
 
   test("port in use exits 1 with a friendly message", async () => {
     await bootstrap();

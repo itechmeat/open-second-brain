@@ -16,6 +16,8 @@ import { planUpgrade } from "../../../src/core/brain/upgrade.ts";
 import { brainConfigPath } from "../../../src/core/brain/paths.ts";
 import { atomicWriteFileSync } from "../../../src/core/fs-atomic.ts";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
+import { CHUNKER_VERSION } from "../../../src/core/search/chunker.ts";
+import { indexVault } from "../../../src/core/search/indexer.ts";
 import { LATEST_SCHEMA_VERSION, readSchemaVersion } from "../../../src/core/search/schema.ts";
 
 let vault: string;
@@ -117,5 +119,92 @@ describe("ensureVaultCurrent", () => {
     // Brain upgrade is skipped (plan has errors), but the call still succeeds.
     expect(r.skipped).toBe("");
     expect(Array.isArray(r.errors)).toBe(true);
+  });
+});
+
+describe("ensureVaultCurrent: chunks cut by older chunking rules (#186)", () => {
+  const HAN = "向量索引把每一篇笔记切成若干片段并分别计算嵌入以便语义检索".repeat(300);
+
+  function chunkerStamp(): string | null {
+    const db = new Database(dbPath(), { readonly: true });
+    try {
+      const row = db
+        .query<{ value: string }, []>("SELECT value FROM index_state WHERE key = 'chunker_version'")
+        .get();
+      return row?.value ?? null;
+    } finally {
+      db.close();
+    }
+  }
+
+  function chunkRows(): Array<{ content: string; token_count: number }> {
+    const db = new Database(dbPath(), { readonly: true });
+    try {
+      return db
+        .query<{ content: string; token_count: number }, []>(
+          "SELECT c.content, c.token_count FROM chunks c JOIN documents d ON d.id = c.document_id " +
+            "WHERE d.path = 'zh.md' ORDER BY c.chunk_index",
+        )
+        .all();
+    } finally {
+      db.close();
+    }
+  }
+
+  /**
+   * Turn a current index into one built before the stamp existed, holding
+   * the single oversize chunk the old chunker cut for the Han note.
+   */
+  function makePreFixIndex(): void {
+    const db = new Database(dbPath());
+    try {
+      db.run("DELETE FROM index_state WHERE key = 'chunker_version'");
+      const doc = db
+        .query<{ id: number }, []>("SELECT id FROM documents WHERE path = 'zh.md'")
+        .get()!;
+      db.run("DELETE FROM chunks WHERE document_id = ? AND chunk_index > 0", [doc.id]);
+      db.run(
+        "UPDATE chunks SET content = ?, token_count = 1 WHERE document_id = ? AND chunk_index = 0",
+        [HAN, doc.id],
+      );
+    } finally {
+      db.close();
+    }
+  }
+
+  test("an index from before the chunker stamp is rebuilt exactly once", async () => {
+    bootstrapBrain(vault, { configPath });
+    atomicWriteFileSync(join(vault, "zh.md"), HAN + "\n");
+    await ensureVaultCurrent(vault, { background: false }); // a current index
+    expect(chunkerStamp()).toBe(String(CHUNKER_VERSION));
+
+    makePreFixIndex();
+    expect(chunkRows().length).toBe(1);
+
+    // An incremental run skips the unchanged note and cannot heal it...
+    await indexVault(resolveSearchConfig({ vault, configPath }));
+    expect(chunkRows().length).toBe(1);
+    expect(chunkerStamp()).toBeNull();
+
+    // ...the self-heal rebuild does, once.
+    const first = await ensureVaultCurrent(vault, { background: false });
+    expect(first.errors).toEqual([]);
+    expect(first.reindexTriggered).toBe(true);
+    expect(chunkerStamp()).toBe(String(CHUNKER_VERSION));
+    const rows = chunkRows();
+    expect(rows.length).toBeGreaterThan(1);
+    for (const r of rows) expect(r.token_count).toBeLessThanOrEqual(800);
+
+    const second = await ensureVaultCurrent(vault, { background: false });
+    expect(second.reindexTriggered).toBe(false);
+  });
+
+  test("an index first built by an incremental run is current, not stale", async () => {
+    bootstrapBrain(vault, { configPath });
+    atomicWriteFileSync(join(vault, "zh.md"), HAN + "\n");
+    await indexVault(resolveSearchConfig({ vault, configPath }));
+    expect(chunkerStamp()).toBe(String(CHUNKER_VERSION));
+    const r = await ensureVaultCurrent(vault, { background: false });
+    expect(r.reindexTriggered).toBe(false);
   });
 });

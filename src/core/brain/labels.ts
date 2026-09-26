@@ -17,10 +17,16 @@
  * `Brain/standing-rules.md` is the operator's own text, and
  * `assertStandingRulesNotTargeted` refuses it by name here because the
  * Brain-root refusal that covers the note-write tools is not on this path.
+ * The other caller-named-write walls - the write binding's own authority,
+ * `Brain/_brain.yaml`, and the operator's declared write binding - are
+ * applied through `governCallerNamedWritePath` for the same reason: a
+ * caller-named write answers to the same governance whether it lands
+ * through the note envelope or around it.
  */
 
 import { parseFrontmatter, writeFrontmatterAtomic } from "../vault.ts";
 import { resolveNotePath } from "./note-path.ts";
+import { governCallerNamedWritePath } from "../write-binding/index.ts";
 import { assertStandingRulesNotTargeted } from "./standing-rules.ts";
 import { normalizeSchemaToken } from "./schema-vocab.ts";
 import { upsertEntity } from "./entities/registry.ts";
@@ -154,6 +160,11 @@ export function assignNoteLabel(
   // vocabulary check so the refusal is about the target rather than about
   // whichever dimension the caller happened to invent.
   assertStandingRulesNotTargeted(vault, relPath, LABEL_ASSIGN_SURFACE);
+  // The other caller-named-write walls bind this surface too: the write
+  // binding's own authority (`Brain/_brain.yaml`) and the operator's
+  // declared write binding. Without this, a caller-named label write
+  // rewrote frontmatter anywhere in the vault regardless of the binding.
+  governCallerNamedWritePath(vault, relPath, LABEL_ASSIGN_SURFACE);
   const assignment = validateLabelAssignment(opts.pack, opts.dimension, opts.value);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);
@@ -187,8 +198,9 @@ export function removeNoteLabel(
   // Vault-identity write guard (context-integrity-gates, Unit J).
   assertVaultIdentityForWrite(vault);
   // Removal rewrites the same frontmatter with the same overwrite, so it
-  // is the same write and takes the same refusal.
+  // is the same write and takes the same refusals.
   assertStandingRulesNotTargeted(vault, relPath, LABEL_REMOVE_SURFACE);
+  governCallerNamedWritePath(vault, relPath, LABEL_REMOVE_SURFACE);
   const dimension = normalizeSchemaToken(opts.dimension);
   const path = resolveNotePath(vault, relPath);
   const [metadata, body] = parseFrontmatter(path);

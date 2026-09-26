@@ -1,22 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  ACTIVITY_MARKER,
-  activityMarker,
   renderActivityLine,
   renderActivityTimeline,
   type ActivityItem,
 } from "../../../../src/core/brain/render/activity-line.ts";
 
 const NOW = new Date("2026-05-29T12:00:00Z");
-
-describe("activityMarker", () => {
-  test("maps each kind to its fixed structural marker", () => {
-    expect(activityMarker("preference")).toBe(ACTIVITY_MARKER.preference);
-    expect(activityMarker("openQuestion")).toBe(ACTIVITY_MARKER.openQuestion);
-    expect(activityMarker("note")).toBe(ACTIVITY_MARKER.note);
-  });
-});
 
 describe("renderActivityLine", () => {
   test("renders a typed, age-labeled bullet", () => {

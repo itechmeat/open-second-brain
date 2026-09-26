@@ -3,10 +3,31 @@
  *
  * Anchored in docs/plans/2026-05-16-brain-search-design.md §6.
  *
- * Token approximation: whitespace word count. Deterministic across
- * Bun/Node, dependency-free, machine-independent — so the same vault
- * hashes the same chunks on every Syncthing peer.
+ * Token approximation: whitespace word count, except for scripts written
+ * without spaces between words (Han, Hiragana, Katakana, Hangul, Bopomofo,
+ * Thai, Lao, Khmer, CJK punctuation and fullwidth forms), where every
+ * character is one token - a paragraph of Chinese has no whitespace, and
+ * counting it as one "word" sent 9,000-character chunks to providers that
+ * reject them (issue #186). Deterministic across Bun/Node,
+ * dependency-free, machine-independent — so the same vault hashes the
+ * same chunks on every Syncthing peer.
+ *
+ * Budget invariant: every chunk's `tokenCount`, overlap included, is at
+ * most `maxTokens`. A block too large for one chunk is split by line, then
+ * after sentence punctuation, then at a token boundary.
  */
+
+/**
+ * Version of the chunking rules. Chunks are only recomputed when a file
+ * changes, so a change to how the SAME text is chunked must bump this: the
+ * indexer compares it with the value an index recorded and re-chunks every
+ * document once when they differ.
+ *
+ *   1 - whitespace word count, overlap outside the budget (through v1.57).
+ *   2 - per-character count for unspaced scripts; overlap inside the
+ *       budget; oversize blocks split (issue #186).
+ */
+export const CHUNKER_VERSION = 2;
 
 const DEFAULT_MAX_TOKENS = 800;
 const DEFAULT_MIN_TOKENS = 100;
@@ -54,23 +75,103 @@ interface Block {
   readonly tokenCount: number;
 }
 
-function countTokens(text: string): number {
-  if (text.length === 0) return 0;
+/**
+ * A character of a script written without spaces between words, plus CJK
+ * punctuation (U+3000-303F) and halfwidth/fullwidth forms (U+FF00-FFEF).
+ * Sticky, so it tests the code point AT `lastIndex` without allocating.
+ * Cyrillic, Greek, Arabic and every other spaced script is deliberately
+ * absent: those keep the word count.
+ */
+const UNSPACED_RE =
+  /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}　-〿＀-￯]/uy;
+
+/** A combining mark (Thai vowel signs, the kana voicing marks, ...). */
+const MARK_RE = /\p{M}/uy;
+
+/** Every unspaced-script code point is at or above Thai (U+0E00). */
+const FIRST_UNSPACED_CODE_POINT = 0x0e00;
+
+function matchesAt(re: RegExp, text: string, i: number): boolean {
+  re.lastIndex = i;
+  return re.test(text);
+}
+
+/**
+ * Walk `text`'s tokens: a run of non-whitespace is one token, except that
+ * each unspaced-script character is a token of its own (a combining mark
+ * after one stays part of it). Pushes each token's start offset onto
+ * `starts` when given; returns the count.
+ *
+ * Whitespace is exactly space, tab, LF and CR, as it always was: text
+ * with no unspaced-script character counts exactly as before.
+ */
+function walkTokens(text: string, starts: number[] | null): number {
   let count = 0;
   let inWord = false;
-  for (let i = 0; i < text.length; i++) {
+  let afterUnspaced = false;
+  for (let i = 0; i < text.length; ) {
     const c = text.charCodeAt(i);
-    const isSpace = c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
-    if (!isSpace) {
+    if (c < FIRST_UNSPACED_CODE_POINT) {
+      const isSpace = c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;
+      if (isSpace) {
+        inWord = false;
+        afterUnspaced = false;
+        i++;
+        continue;
+      }
+      if (afterUnspaced && c >= 0x0300 && matchesAt(MARK_RE, text, i)) {
+        i++;
+        continue;
+      }
       if (!inWord) {
         count++;
+        starts?.push(i);
         inWord = true;
       }
-    } else {
-      inWord = false;
+      afterUnspaced = false;
+      i++;
+      continue;
     }
+    const cp = text.codePointAt(i)!;
+    const width = cp > 0xffff ? 2 : 1;
+    if (afterUnspaced && matchesAt(MARK_RE, text, i)) {
+      // Stays with the character it modifies.
+    } else if (matchesAt(UNSPACED_RE, text, i)) {
+      count++;
+      starts?.push(i);
+      inWord = false;
+      afterUnspaced = true;
+    } else {
+      if (!inWord) {
+        count++;
+        starts?.push(i);
+        inWord = true;
+      }
+      afterUnspaced = false;
+    }
+    i += width;
   }
   return count;
+}
+
+function countTokens(text: string): number {
+  if (text.length === 0) return 0;
+  return walkTokens(text, null);
+}
+
+/** UTF-16 offset of every token start in `text`, in order. */
+function tokenStarts(text: string): number[] {
+  const starts: number[] = [];
+  walkTokens(text, starts);
+  return starts;
+}
+
+/** The longest suffix of `text` holding at most `budget` tokens. */
+function tailTokens(text: string, budget: number): string {
+  if (budget <= 0) return "";
+  const starts = tokenStarts(text);
+  if (starts.length <= budget) return text;
+  return text.slice(starts[starts.length - budget]);
 }
 
 function tokensOfLines(lines: ReadonlyArray<Line>): number {
@@ -250,44 +351,180 @@ function splitIntoBlocks(lines: ReadonlyArray<Line>): { blocks: Block[]; warning
 
 interface DraftChunk {
   blocks: Block[];
-  startLine: number;
-  endLine: number;
   tokens: number;
 }
 
 function newDraft(): DraftChunk {
-  return { blocks: [], startLine: 0, endLine: 0, tokens: 0 };
+  return { blocks: [], tokens: 0 };
 }
 
-function takeOverlap(prev: DraftChunk, overlapTokens: number): Line[] {
-  if (overlapTokens <= 0 || prev.blocks.length === 0) return [];
-  // Flatten lines of previous chunk's body in order, then take tail until token budget.
-  const allLines: Line[] = [];
-  for (const b of prev.blocks) for (const l of b.lines) allLines.push(l);
+/**
+ * The tail of `lines` holding at most `budget` tokens, in order. Whole
+ * lines are taken from the end while they fit; when not even the last line
+ * fits, its own tail is taken, cut at a token boundary - so a dense
+ * document still carries overlap, and the overlap never costs more than
+ * its budget.
+ */
+function tailLines(lines: ReadonlyArray<Line>, budget: number): Line[] {
+  if (budget <= 0) return [];
   let acc = 0;
   const tail: Line[] = [];
-  for (let i = allLines.length - 1; i >= 0; i--) {
-    const t = countTokens(allLines[i]!.text);
-    if (acc + t > overlapTokens && tail.length > 0) break;
-    tail.unshift(allLines[i]!);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    const t = countTokens(line.text);
+    if (acc + t > budget) {
+      if (tail.length === 0) {
+        const cut = tailTokens(line.text, budget);
+        if (cut !== "") tail.unshift({ num: line.num, text: cut });
+      }
+      break;
+    }
+    tail.unshift(line);
     acc += t;
   }
   return tail;
 }
 
-function emitChunk(index: number, overlap: ReadonlyArray<Line>, draft: DraftChunk): MarkdownChunk {
+function takeOverlap(prev: DraftChunk, overlapTokens: number): Line[] {
+  if (overlapTokens <= 0 || prev.blocks.length === 0) return [];
+  const allLines: Line[] = [];
+  for (const b of prev.blocks) for (const l of b.lines) allLines.push(l);
+  return tailLines(allLines, overlapTokens);
+}
+
+function emitChunk(
+  index: number,
+  overlap: ReadonlyArray<Line>,
+  draft: DraftChunk,
+  maxTokens: number,
+): MarkdownChunk {
   const bodyLines: Line[] = [];
   for (const b of draft.blocks) for (const l of b.lines) bodyLines.push(l);
-  const allText = [...overlap.map((l) => l.text), ...bodyLines.map((l) => l.text)].join("\n");
+  // The packer leaves room for the overlap; this only bites when the
+  // configured overlap is larger than a chunk can spare.
+  const fitted =
+    tokensOfLines(overlap) + draft.tokens > maxTokens
+      ? tailLines(overlap, maxTokens - draft.tokens)
+      : overlap;
+  const allText = [...fitted.map((l) => l.text), ...bodyLines.map((l) => l.text)].join("\n");
   const tokenCount = countTokens(allText);
   return Object.freeze({
     chunkIndex: index,
     content: allText,
-    startLine: bodyLines[0]?.num ?? overlap[0]?.num ?? 1,
-    endLine: bodyLines[bodyLines.length - 1]?.num ?? overlap[overlap.length - 1]?.num ?? 1,
+    startLine: bodyLines[0]?.num ?? fitted[0]?.num ?? 1,
+    endLine: bodyLines[bodyLines.length - 1]?.num ?? fitted[fitted.length - 1]?.num ?? 1,
     tokenCount,
     headingPath: "",
   });
+}
+
+/**
+ * Sentence-final punctuation of the unspaced scripts. Each is a token of
+ * its own, so a cut right after one is a token boundary.
+ */
+const SENTENCE_ENDS: ReadonlySet<string> = new Set(["。", "！", "？", "；", "｡", "．"]);
+
+/** Closing quotes and brackets that belong to the sentence before them. */
+const SENTENCE_CLOSERS: ReadonlySet<string> = new Set([
+  "」",
+  "』",
+  "）",
+  "】",
+  "〕",
+  "》",
+  "〉",
+  "”",
+  "’",
+]);
+
+/** `text` cut after each sentence end (and its closing quotes). Concatenates back to `text`. */
+function sentences(text: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let i = 0;
+  while (i < text.length) {
+    const ch = String.fromCodePoint(text.codePointAt(i)!);
+    i += ch.length;
+    if (!SENTENCE_ENDS.has(ch)) continue;
+    while (i < text.length) {
+      const next = String.fromCodePoint(text.codePointAt(i)!);
+      if (!SENTENCE_ENDS.has(next) && !SENTENCE_CLOSERS.has(next)) break;
+      i += next.length;
+    }
+    out.push(text.slice(start, i));
+    start = i;
+  }
+  if (start < text.length) out.push(text.slice(start));
+  return out;
+}
+
+/**
+ * `text` cut into pieces of exactly `budget` tokens (the last may be
+ * shorter), at token starts: never inside a word, a surrogate pair, or
+ * between a character and its combining mark. Concatenates back to `text`.
+ */
+function hardCut(text: string, budget: number): string[] {
+  const starts = tokenStarts(text);
+  const out: string[] = [];
+  for (let k = 0; k < starts.length; k += budget) {
+    const from = k === 0 ? 0 : starts[k]!;
+    const to = k + budget < starts.length ? starts[k + budget]! : text.length;
+    out.push(text.slice(from, to));
+  }
+  return out;
+}
+
+/**
+ * One line longer than `budget`, cut into pieces within it: whole sentences
+ * packed together where they fit, a sentence longer than the budget cut at
+ * token boundaries. Concatenates back to the line.
+ */
+function splitLine(text: string, budget: number): string[] {
+  const parts: string[] = [];
+  let acc = "";
+  for (const s of sentences(text)) {
+    if (countTokens(s) > budget) {
+      if (acc !== "") parts.push(acc);
+      const pieces = hardCut(s, budget);
+      parts.push(...pieces.slice(0, -1));
+      acc = pieces[pieces.length - 1] ?? "";
+      continue;
+    }
+    const merged = acc + s;
+    if (acc !== "" && countTokens(merged) > budget) {
+      parts.push(acc);
+      acc = s;
+    } else {
+      acc = merged;
+    }
+  }
+  if (acc !== "") parts.push(acc);
+  return parts;
+}
+
+/**
+ * A block too large for one chunk, as a run of single-line blocks of the
+ * same kind, each within `budget`: its lines, and any line over the budget
+ * split by {@link splitLine}. Line numbers are kept, so a split line's
+ * pieces all point at the line they came from.
+ */
+function splitBlock(block: Block, budget: number): Block[] {
+  const units: Block[] = [];
+  for (const line of block.lines) {
+    const t = countTokens(line.text);
+    if (t <= budget) {
+      units.push({ kind: block.kind, lines: [line], tokenCount: t });
+      continue;
+    }
+    for (const part of splitLine(line.text, budget)) {
+      units.push({
+        kind: block.kind,
+        lines: [{ num: line.num, text: part }],
+        tokenCount: countTokens(part),
+      });
+    }
+  }
+  return units;
 }
 
 function packBlocks(
@@ -296,54 +533,56 @@ function packBlocks(
 ): MarkdownChunk[] {
   const out: MarkdownChunk[] = [];
   let draft = newDraft();
-  let prevForOverlap: DraftChunk | null = null;
   let pendingOverlap: Line[] = [];
+  let pendingOverlapTokens = 0;
+  // Pieces of a split block leave room for a full overlap, so the overlap
+  // survives the split - up to half the chunk; a larger configured overlap
+  // is trimmed to fit instead (see emitChunk).
+  const unitBudget = Math.max(
+    1,
+    opts.maxTokens - Math.min(opts.overlapTokens, Math.floor(opts.maxTokens / 2)),
+  );
+
+  const setOverlap = (lines: Line[]) => {
+    pendingOverlap = lines;
+    pendingOverlapTokens = tokensOfLines(lines);
+  };
 
   const flush = () => {
     if (draft.blocks.length === 0) return;
-    const chunk = emitChunk(out.length, pendingOverlap, draft);
-    out.push(chunk);
-    prevForOverlap = draft;
-    pendingOverlap = takeOverlap(prevForOverlap, opts.overlapTokens);
+    out.push(emitChunk(out.length, pendingOverlap, draft, opts.maxTokens));
+    setOverlap(takeOverlap(draft, opts.overlapTokens));
     draft = newDraft();
+  };
+
+  // The overlap is prepended to the chunk, so it spends the same budget.
+  const fits = (block: Block) =>
+    pendingOverlapTokens + draft.tokens + block.tokenCount <= opts.maxTokens;
+
+  const push = (block: Block) => {
+    draft.blocks.push(block);
+    draft.tokens += block.tokenCount;
   };
 
   for (const block of blocks) {
     if (block.kind === "frontmatter") {
       // Flush any in-progress (shouldn't happen — frontmatter is first), then
-      // emit the frontmatter as its own chunk *without* overlap since nothing
-      // precedes it.
+      // emit the frontmatter as its own chunk(s) *without* overlap since
+      // nothing precedes it. Only an oversize frontmatter becomes several.
       flush();
-      const fmContent = block.lines.map((l) => l.text).join("\n");
-      out.push(
-        Object.freeze({
-          chunkIndex: out.length,
-          content: fmContent,
-          startLine: block.lines[0]!.num,
-          endLine: block.lines[block.lines.length - 1]!.num,
-          tokenCount: countTokens(fmContent),
-          headingPath: "",
-        }),
-      );
+      const units = block.tokenCount > opts.maxTokens ? splitBlock(block, opts.maxTokens) : [block];
+      let fm = newDraft();
+      for (const unit of units) {
+        if (fm.blocks.length > 0 && fm.tokens + unit.tokenCount > opts.maxTokens) {
+          out.push(emitChunk(out.length, [], fm, opts.maxTokens));
+          fm = newDraft();
+        }
+        fm.blocks.push(unit);
+        fm.tokens += unit.tokenCount;
+      }
+      out.push(emitChunk(out.length, [], fm, opts.maxTokens));
       // The next chunk should NOT include frontmatter text as overlap.
-      prevForOverlap = null;
-      pendingOverlap = [];
-      continue;
-    }
-
-    // Atomic large block — emit as its own chunk.
-    if (block.tokenCount > opts.maxTokens) {
-      flush();
-      const standalone: DraftChunk = {
-        blocks: [block],
-        startLine: block.lines[0]!.num,
-        endLine: block.lines[block.lines.length - 1]!.num,
-        tokens: block.tokenCount,
-      };
-      const chunk = emitChunk(out.length, pendingOverlap, standalone);
-      out.push(chunk);
-      prevForOverlap = standalone;
-      pendingOverlap = takeOverlap(prevForOverlap, opts.overlapTokens);
+      setOverlap([]);
       continue;
     }
 
@@ -352,16 +591,22 @@ function packBlocks(
       if (hasNonHeading && draft.tokens >= opts.minTokens) {
         flush();
       }
-      draft.blocks.push(block);
-      draft.tokens += block.tokenCount;
+    }
+
+    if (draft.blocks.length > 0 && !fits(block)) {
+      flush();
+    }
+    if (fits(block)) {
+      push(block);
       continue;
     }
 
-    if (draft.tokens + block.tokenCount > opts.maxTokens && draft.blocks.length > 0) {
-      flush();
+    // Too large to share a chunk with its own overlap: split it, and pack
+    // the pieces like any other blocks.
+    for (const unit of splitBlock(block, unitBudget)) {
+      if (draft.blocks.length > 0 && !fits(unit)) flush();
+      push(unit);
     }
-    draft.blocks.push(block);
-    draft.tokens += block.tokenCount;
   }
 
   flush();

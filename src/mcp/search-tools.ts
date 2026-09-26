@@ -26,6 +26,7 @@ import {
 import { normalizeSessionFocus, parseStructuredRecallQueryDocument } from "../core/search/index.ts";
 import type { BrainSearchResult, SearchOutcome } from "../core/search/index.ts";
 import { parseDegreePredicate, type DegreePredicate } from "../core/search/property-filter.ts";
+import { REMOTE_DENY_VISIBILITY_TOKEN, normToken } from "../core/graph/visibility.ts";
 import { searchAcrossVaults } from "../core/search/cross-vault.ts";
 import { RECALL_PROFILE_NAMES } from "../core/search/profiles.ts";
 import { fileContextRecall } from "../core/brain/file-recall.ts";
@@ -714,6 +715,21 @@ function parseVisibilityArgument(raw: unknown): string[] | undefined {
   for (const item of raw) {
     if (typeof item !== "string") {
       throw new MCPError(INVALID_PARAMS, "argument 'visibility' must contain only strings");
+    }
+    // The reserved token is a reach boundary, not a caller-liftable scope.
+    // Every other visibility token keeps its caller-liftable semantics
+    // (`isVisible`), but letting a caller add `private` to its own scope
+    // would hand one argument the whole private class - the exact lift
+    // the reserved token exists to deny a remote reach, and the reason a
+    // prompt-injected agent would ask for it. Withheld here by name so
+    // the refusal explains itself; the transport reach that mints `local`
+    // for operator surfaces is where private visibility is granted.
+    if (normToken(item) === REMOTE_DENY_VISIBILITY_TOKEN) {
+      throw new MCPError(
+        INVALID_PARAMS,
+        `argument 'visibility' cannot include the reserved token "${REMOTE_DENY_VISIBILITY_TOKEN}": ` +
+          "it is a reach boundary the transport grants, not a scope a caller can request",
+      );
     }
     if (item.length > 0) out.push(item);
   }

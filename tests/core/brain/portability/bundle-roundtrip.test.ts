@@ -101,7 +101,11 @@ describe("bank bundle preference round-trip", () => {
   test("every exported preference field round-trips, or the result names it", () => {
     writePreference(src, richPreference());
     const bundle = exportBankBundle(src);
-    const result = importBankBundle(dest, bundle, { mode: "skip" });
+    // `trustedRestore` on purpose: this test's subject is EXPORT/IMPORT
+    // field fidelity, so the untrusted default's status demotion
+    // (t_sec_bank_demote, owned by legacy-bundle-restore.test.ts) would
+    // drown the measurement in states the restore did choose to change.
+    const result = importBankBundle(dest, bundle, { mode: "skip", trustedRestore: true });
 
     const before = bundle.preferences[0]!;
     const after = exportBankBundle(dest).preferences.find((r) => r.id === before.id);
@@ -166,7 +170,12 @@ describe("bank bundle preference round-trip", () => {
         confidence_value: 0.125,
       }),
     );
-    const result = importBankBundle(dest, exportBankBundle(src), { mode: "skip" });
+    // `trustedRestore`: this test's subject is field fidelity, and the
+    // untrusted default restarts every row's trial window (M4).
+    const result = importBankBundle(dest, exportBankBundle(src), {
+      mode: "skip",
+      trustedRestore: true,
+    });
     expect(result.preferences.failed).toEqual([]);
 
     const restored = exportBankBundle(dest).preferences.find((r) => r.id === "pref-trial-rule")!;
@@ -283,16 +292,18 @@ describe("bank bundle preference round-trip", () => {
     });
     const legacy = { ...bundle, preferences: legacyRows };
 
-    const result = importBankBundle(dest, legacy, { mode: "skip" });
-    expect(result.schema).toBe(BANK_BUNDLE_SCHEMA_VERSION);
-    expect(result.graph.created).toContain("Notes.md");
     // The rule is confirmed, so its trial window is inert and derivable
     // from the row's own `confirmed_at`. Refusing it would have discarded
     // recoverable data over a moot field - and a bank bundle IS the backup,
     // so there is no re-export to supply what the projection never carried.
     // The derivation is reported rather than passed off as carried data;
     // `tests/core/brain/portability/legacy-bundle-restore.test.ts` owns the
-    // full rule, including the `unconfirmed` row that is still refused.
+    // full rule, including the `unconfirmed` row that is still refused and
+    // the untrusted default that demotes past-trial rows (t_sec_bank_demote,
+    // opted out here so the legacy-window derivation stays the subject).
+    const result = importBankBundle(dest, legacy, { mode: "skip", trustedRestore: true });
+    expect(result.schema).toBe(BANK_BUNDLE_SCHEMA_VERSION);
+    expect(result.graph.created).toContain("Notes.md");
     expect(result.preferences.restored).toEqual(["pref-alpha-rule"]);
     expect(result.preferences.failed).toEqual([]);
     expect(result.preferences.derived.length).toBe(1);

@@ -1165,6 +1165,14 @@ export interface ResolvedEmbeddingConfig {
    * Absent/empty means single-key behaviour over `apiKey` (byte-identical).
    */
   readonly apiKeys?: ReadonlyArray<string>;
+  /**
+   * Operator opt-out that lets {@link baseUrl} be plain `http://` on a
+   * non-loopback host (`embedding_allow_insecure_http`). Present only when
+   * true, and only when the base URL itself came from the operator's
+   * config or environment - a URL from the in-vault provider registry
+   * never inherits it.
+   */
+  readonly allowInsecureHttp?: boolean;
   readonly dimension: number | null;
   readonly timeoutMs: number;
   readonly concurrency: number;
@@ -1238,6 +1246,12 @@ export interface ResolvedRerankConfig {
   readonly envKey: string | null;
   /** API key resolved from `envKey` at config-resolution time, else null. */
   readonly apiKey: string | null;
+  /**
+   * `search_rerank_allow_insecure_http`: the plain-http opt-out for
+   * {@link baseUrl}, with the same limits as the embedding one. Present
+   * only when true.
+   */
+  readonly allowInsecureHttp?: boolean;
   /** How many top fused candidates to re-score. Must be >= 1. */
   readonly topK: number;
   /**

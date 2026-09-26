@@ -695,6 +695,12 @@ export function listUnresolvedTensions(vault: string): TensionRecord[] {
 export function tensionWarningsForContextItems(
   vault: string,
   itemIds: ReadonlyArray<string>,
+  /**
+   * Subject ids the caller may not see. A tension id is derived from both
+   * subject ids, so a tension touching one of these is reported without
+   * its id - the injected memory is still flagged as contested.
+   */
+  withheldIds: ReadonlySet<string> = new Set(),
 ): string[] {
   const ids = new Set(itemIds);
   const out: string[] = [];
@@ -703,8 +709,9 @@ export function tensionWarningsForContextItems(
     if (ids.has(tension.subjectA)) touched.push(tension.subjectA);
     if (ids.has(tension.subjectB)) touched.push(tension.subjectB);
     if (touched.length === 0) continue;
+    const named = !withheldIds.has(tension.subjectA) && !withheldIds.has(tension.subjectB);
     out.push(
-      `unresolved tension [[${tension.id}]] (${tension.status}) involves injected memory ` +
+      `unresolved tension ${named ? `[[${tension.id}]] ` : ""}(${tension.status}) involves injected memory ` +
         touched.join(", "),
     );
   }

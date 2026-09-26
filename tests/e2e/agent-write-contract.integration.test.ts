@@ -118,6 +118,7 @@ test("backend registry renders a preference through the claude adapter", () => {
     body: parsed.body,
     memoryPath: "/x/memory/prefer_pipelines.md",
     importedAt: "2026-06-04T12:00:00Z",
+    unconfirmedUntil: "2026-06-18T12:00:00Z",
     bodySha256: parsed.bodySha256,
   });
   expect(rendered).toContain("pref-prefer-pipelines");

@@ -17,7 +17,7 @@ o2b doctor                    Run vault + adapter checks
 o2b index                     Rebuild the Markdown page index
 o2b export-config             Write a redacted config snapshot
 o2b secrets list|status       Inspect $secret:NAME references without printing values
-o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and --api-key is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal, --host-target <runtime>, --probe, --allow-tool, --disable-tool, --max-tools
+o2b mcp                       Run the MCP tool server (stdio by default; --transport http binds loopback, and a key - --api-key or, kept out of the process list, OPEN_SECOND_BRAIN_MCP_API_KEY - is required only for a non-loopback --host); --scope full|writer|catalog, --tool-profile full|writer|catalog|recall|minimal (an unknown profile exits 2 rather than serving the full surface), --host-target <runtime>, --probe, --allow-tool, --disable-tool, --max-tools
 o2b state status|migrate|rollback
                               Inventory the state this vault holds, move it to another directory, or put it back (see "State surfaces" below)
 o2b tool-call                 Invoke an MCP tool handler from the CLI
@@ -357,7 +357,7 @@ o2b brain rollback            (CLI-only) Restore Brain/ from a snapshot (--dry-r
 o2b brain upgrade             (CLI-only) Migrate release-owned files forward (_brain.yaml, _BRAIN.md, _OPEN_SECOND_BRAIN.md); --dry-run / --check / --apply --yes
 o2b brain export              Read-only dump of active preferences, or (since v1.50.0) a session-transcript dataset: --format json|llms-txt|transcripts-jsonl [--out <path>] [--force]; the transcript form takes --transcripts <file|dir> and reads no vault at all (see "The transcript corpus" below). Since v1.49.0 the preference bytes pass the shared egress redactor (stderr carries a notice when anything was removed), and a `pref-*.md` the parser cannot read is REFUSED, not skipped: exit 1 naming every unreadable file in one run rather than exit 0 over a shorter list. `o2b brain doctor` reports the same files
 o2b brain bank-export         (CLI-only) One-file backup bundle: preferences, the page graph, page contracts, the sources dashboard. Redacted on the way out; refuses with exit 1 on an unreadable `pref-*.md` (since v1.49.0)
-o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge). A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)
+o2b brain bank-import         (CLI-only) Restore a bank bundle (--mode skip|overwrite|merge) [--trusted-restore]. Preference rows restore UNTRUSTED by default: every row lands `unconfirmed`, unpinned, at low confidence, on a fresh trial window dated from the restore - including a row the bundle already marked unconfirmed - and the run names each row it reset; `--trusted-restore` keeps the carried status, confidence, pin and window verbatim, for a backup you vouch for. A malformed preference already in the DESTINATION does not abort the import: the rows restore and the run prints `topic-key check incomplete: <path>` for each rule the topic-collision scan could not read, because that list is then a partial answer (since v1.49.0)
 o2b brain explorer            (CLI-only) Force-directed HTML graph of Brain/preferences + retired; live HTTP on 127.0.0.1 or --export <path> single-file. Keyboard-accessible listbox + localStorage layout persistence. Double-click a node to open it in Obsidian (live mode). Since v1.49.0 BOTH modes refuse a Brain file they cannot parse - `--export` writes nothing and exits 1, and live mode does not start, because a browser showing a silently smaller graph is the same lie as a written file - and `--export` runs the shared redactor over the graph, so its output differs from a pre-v1.49.0 export on any vault holding a credential-shaped value
 o2b brain doctor              Check Brain-specific invariants (status-vs-folder, broken wikilinks, ...). --remediate [--dry-run] plans a dependency-ordered repair and applies auto-safe content-hash re-stamps
 o2b brain health              Semantic-health report (since v0.14.0): contradictory confirmed preferences, recurring concepts with no dedicated preference, stale claims, plus a clean | watch | investigate verdict
@@ -456,7 +456,7 @@ o2b brain intention           set|show|list|move [--scope S] [--text T] [--json]
 o2b brain obligation          add|done|list|show|remove [--title T] [--cadence C] [--anchor YYYY-MM-DD] [--date YYYY-MM-DD] [--slug S] [--notes N] [--overdue] [--json] - recurring obligations under Brain/obligations/ with a deterministic cadence-driven next-due date; cadences: daily|weekly|biweekly|monthly|quarterly|yearly|every-<N>-days (since v1.15.0)
 o2b brain agenda              --events <file|-> [--focus-min N] [--owner-domain D[,D2]] [--workday-start HH:MM --workday-end HH:MM] [--json] - stateless agenda synthesis over caller-provided calendar events: overlap conflicts, free focus blocks, external-organizer flags; no vault writes (since v1.15.0)
 o2b brain okf-export          --out <dir> [--force] [--json] - write a portable Open Knowledge Format bundle (concepts/queries/references + date-grouped log.md + okf.json manifest) to a directory; read-only on the vault (since v1.15.0)
-o2b brain okf-import          <bundle-dir> [--trusted] [--json] - import an Open Knowledge Format bundle; default stages pages under OKF Review/ as review candidates, --trusted writes them to their recorded paths; foreign-producer provenance is stamped (since v1.15.0)
+o2b brain okf-import          <bundle-dir> [--trusted] [--json] - import an Open Knowledge Format bundle; default stages pages under OKF Review/ as review candidates, --trusted writes them to their recorded paths; foreign-producer provenance is stamped (since v1.15.0); the manifest producer is never trusted - without --trusted, machinery frontmatter (_status, owner, origin_channel, ...) is stripped from every bundle, and only --trusted admits the Brain/sources/ and Brain/reports/ lanes
 ```
 
 Receipts, telemetry, transforms, and session recall import are opt-in. Receipt and telemetry records store redaction-safe payloads, source references, hashes, counters, and bounded snippets rather than raw private prompt context; session recall stores redacted turn text only when explicitly imported for later expansion.
@@ -487,6 +487,18 @@ o2b brain bench               memory --fixture <name|path> [--resume <run-id>] [
 
 The benchmark never touches the configured vault - the fixture materializes into `<runs-dir>/<run-id>/vault` (default runs dir `.open-second-brain/bench-runs/`, gitignored). The optional `bench_judge_cmd` config key (env `OPEN_SECOND_BRAIN_BENCH_JUDGE_CMD`) arms an advisory external judge; absent means the judge phase is skipped. The full observability contract (event kinds, gates, correlation ids, payload safety, schema version) lives in `docs/observability.md`.
 
+### Externalized session payloads (payload registry)
+
+```text
+o2b brain payload             get <osb-payload://sha256> [--offset N] [--limit N] [--json] - one page of the exact stored content (default 4000 chars); raw to stdout without --json, next offset on stderr
+                              list [--json] - stored payloads with byte size and reference count (orphans flagged), plus referenced payloads whose file is gone
+                              gc [--apply] [--json] - dry-run by default; --apply removes only payloads nothing in the vault references and older than ten minutes (younger ones are listed as `deferred`), behind a payload-gc recovery point and under the payload store lock session import also takes
+```
+
+`import-session --recall` bounds every recalled turn before its continuity row is written. A data URI or base64 run longer than `sessions.payload_max_inline_chars` (default 512) moves to `Brain/.payloads/<sha256>.txt`; turn text still longer than `sessions.payload_max_text_chars` (default 32000) moves out whole - which is what catches a giant plain tool output - and the row keeps a 1000-char head preview. Either way the row holds `[payload: osb-payload://<sha256> chars=N]` and lists its refs in `payload_refs`, so recall search and summary nodes only ever see the placeholder. A turn under both bounds is stored exactly as before.
+
+Payload bytes are private-region-stripped and redacted (`redactRawOutput`, no scan-window cap) before they are written, so a page reads back the stored redacted text byte for byte. `Brain/.payloads/` is refused by the index-admission predicate, is archived by every snapshot (a restore keeps restored refs resolvable), and is not exported by `bank-export` or `okf-export` - an exported page keeps its placeholder. "Referenced" means named by any text file in the vault outside `Brain/.snapshots/`, `.git`, `node_modules` and `.stversions`, and transitively by a live payload (a whole-turn payload names the blobs moved out of it). `o2b brain doctor` reports `payload-orphan`, `payload-missing` and `continuity-row-oversized` (rows written before the registry existed).
+
 ### Project history (since v0.40.0)
 
 ```text
@@ -512,7 +524,7 @@ o2b brain panel               open <topic...> [--personas a,b,c] [--target T] [-
                               status <id> - live envelope of a panel session
 ```
 
-Envelopes are stable JSON with `--json` (`status`, `step`, `prompt`, `errors`, `attempts_left`, `expires_at`, `target_path`, `existing`) - the same contract the MCP `brain_write_session` tool returns. `create` intent never overwrites an existing target; `merge` appends a session-stamped delimited section; reserved namespaces (`Brain/preferences/`, `Brain/log/`, `Brain/_brain.yaml`, dot-stores) are refused. The Brain never generates content - the calling agent does.
+Envelopes are stable JSON with `--json` (`status`, `step`, `prompt`, `errors`, `attempts_left`, `expires_at`, `target_path`, `existing`) - the same contract the MCP `brain_write_session` tool returns. `create` intent never overwrites an existing target; `merge` appends a session-stamped delimited section; a target must sit under `Brain/sources/`, `Brain/reports/`, `Brain/distillations/`, `Brain/notes/` or `Brain/decisions/panels/` (case-folded); the rest of `Brain/` is refused with `target-reserved`, and the commit re-checks where the bytes land and applies the write binding. The Brain never generates content - the calling agent does.
 
 ### Recall activation (since v0.42.0)
 
@@ -1061,6 +1073,67 @@ note: no conversation matched; <scanned> transcript file(s) scanned, <n> from an
 
 The four reasons sum to `scanned` minus the exported records, so an empty
 file under exit `0` can never be read as a machine that recorded nothing.
+
+### Knowledge packs
+
+A knowledge pack is a selected subset of Brain knowledge - rules and the
+pages that hold runbooks and conventions - that another vault can preview,
+install as untrusted candidates, and remove as a unit. It is not a schema
+pack (the `_brain.yaml` `schema:` vocabulary block): the two never share a
+verb.
+
+```
+o2b brain knowledge-pack export    --name <name> --select <sel>[,<sel>...] --out <dir> [--version <v>] [--force] [--json]
+o2b brain knowledge-pack preview   <pack-dir> [--json]
+o2b brain knowledge-pack install   <pack-dir> [--agent <name>] [--json]
+o2b brain knowledge-pack uninstall <name> [--confirm] [--json]
+o2b brain knowledge-pack list      [--json]
+```
+
+- **Format.** A pack directory is an OKF bundle of the selected pages
+  (`okf.json`, `concepts/…`, no `log.md`), plus `preferences.json` (the
+  selected rules as `bank-export` rows) and `knowledge-pack.json` (name,
+  version, selection, a sha256 per file and a digest over all of them).
+- **Selectors.** `pref-<slug>`, a page id or vault path, `topic:<topic>`,
+  `tag:<tag>`; comma-separated or repeated. A selector that matches nothing
+  fails the export - a pack is never "whatever happened to match".
+- **Privacy.** Export BLOCKS a page declaring `visibility:`, any entry with
+  an `owner:` claim, and an unreviewed `OKF Review/` candidate, and names
+  each on stdout. Everything carried goes through the shared egress
+  redactor (registry entry `brain-knowledge-pack-export`) before the pack is
+  sealed, so the hashes cover the redacted bytes; `<private>` regions are
+  replaced. Rules leave without their evidence links and rendered body.
+- **Preview** shows the manifest, count, a guarded sample per entry, the
+  integrity verdict, conflicts with the vault (`id_exists`,
+  `previously_retired`, `topic_claimed`, `review_target_exists`,
+  `path_exists`) and privacy / prompt-injection warnings. It exits `1` when
+  the pack fails its own integrity check.
+- **Install** refuses a pack whose files, file set, name or version no
+  longer match its digest. Rules land `unconfirmed` on a fresh trial window
+  (`dream.unconfirmed_window_days` from the install instant) through the
+  audited preference transaction, with the source vault's evidence,
+  counters, revision, pin and aliases cleared; a rule whose id this vault
+  already holds or once retired is skipped, never overwritten. Pages stage
+  under `OKF Review/` with `okf_review: pending` and machinery stripped.
+  Every landed entry is stamped `knowledge_pack: <name>@<digest12>`, and
+  each staged page also carries `knowledge_pack_sha`, a fingerprint of its
+  body and authored frontmatter as installed; both are written by the
+  installer and stripped from any bundle that supplies them itself.
+- **Provenance** of an installed entry shows in `o2b brain query
+  --preference` (and `brain_query`) and in search trust metadata
+  (`brain_search` with `trust: true`, field `trust.knowledge_pack`).
+- **Uninstall** is a dry run until `--confirm`. It removes every stamped
+  rule and every page still staged under `OKF Review/` for that pack name,
+  behind a `knowledge-pack-uninstall` snapshot, and writes a
+  `source_invalidation` continuity record for `pack:<name>`. A rule that
+  gained evidence links in this vault, a page promoted out of the review
+  lane, and a staged page whose body or authored frontmatter changed since
+  install (reason `edited`) are kept and named. Staged pages live outside
+  `Brain/`, so the snapshot does not cover them (the recoverability line
+  says so); only untouched staged pages are removed, and re-installing the
+  pack restores them.
+- **MCP.** CLI only: a preview reads an operator-named directory outside the
+  vault, which no MCP tool does.
 
 ## Stability and trust (since v1.0.0)
 
@@ -1692,8 +1765,20 @@ architecture sweep fails the suite when a file under `src/mcp/`,
 `src/cli/` or `src/openclaw/` reads a vault path directly without a
 registered reason. `--visibility` keeps its existing meaning and can only
 NARROW: it selects among the other tokens and cannot lift the reserved
-one. A vault that never wrote the reserved token behaves exactly as it
-did before.
+one. The reserved token also dominates the other tokens on the same page:
+a page tagged `visibility: [private, team]` is not returned for
+`--visibility team` (before this fix, any one matching token lifted it).
+A vault that never wrote the reserved token behaves exactly as it did
+before.
+
+What this boundary is, precisely: it is enforced against callers at
+`remote` reach (a non-loopback HTTP bind). An agent on stdio or the CLI
+runs at `local` reach, which is filesystem-equivalent access to the
+vault, so the reserved token does not bind it beyond the `--visibility`
+rule above. Whole-vault generated views (`osb://preferences/active`,
+`osb://lessons`, `osb://digest/latest`, `osb://status`, and the brief and
+digest views that render them) are not filtered by reach; `o2b search
+check` counts them among the surfaces that do not consult the field.
 
 Fail-closed, in both directions that matter. A page whose file cannot be
 read - deleted, renamed, moved to a failing mount, or chmod'd between one
@@ -1759,7 +1844,30 @@ by the id below.
 
 Semantic search, reranking, Telegram capture and research are all off
 until you configure an endpoint, so a default install has no network
-egress at all. `tests/core/architecture/egress-census.test.ts` fails if a
+egress at all.
+
+**Endpoint scheme.** The embedding (`embedding_base_url`) and reranker
+(`search_rerank_base_url`) endpoints must be `https://`; plain `http://`
+is accepted only for a loopback host (`localhost`, `127.0.0.1`, `::1`),
+and none of the provider requests follows a redirect. A local server
+on another machine - LM Studio on the Windows host seen from WSL, Ollama
+on a LAN box, anything at a tailnet `100.x` address - has no certificate
+to offer, so each endpoint has its own explicit opt-out:
+
+```yaml
+embedding_base_url: http://100.64.0.5:1234/v1
+embedding_allow_insecure_http: true        # OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP
+search_rerank_base_url: http://192.168.1.20:8080/v1
+search_rerank_allow_insecure_http: true    # OPEN_SECOND_BRAIN_SEARCH_RERANK_ALLOW_INSECURE_HTTP
+```
+
+Both default to `false`. An opt-out applies only to a base URL set in
+the o2b config or environment, never to one supplied by a provider
+profile registered with `o2b search provider add` (that registry lives
+inside the vault, and a vault write must not be able to point an opt-out
+at a new host). A process that uses one prints a warning on stderr once
+per endpoint: chunk text, the query and the API key travel unencrypted,
+so use it only on a network you trust. `tests/core/architecture/egress-census.test.ts` fails if a
 sixth such path is added without a declaration, and fails if a declared
 one is missing from this table.
 

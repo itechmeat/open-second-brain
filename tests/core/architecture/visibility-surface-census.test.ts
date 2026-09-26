@@ -519,6 +519,8 @@ describe("visibility surface census", () => {
         "brain_search",
         "brain_search_expand",
         "brain_skill_proposals",
+        "brain_unlinked_mentions",
+        "brain_writes",
         "second_brain_query",
       ]);
     });

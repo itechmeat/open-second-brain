@@ -43,6 +43,7 @@ import {
 } from "../../../src/core/search/embeddings/contract.ts";
 import { NullProvider } from "../../../src/core/search/embeddings/null-provider.ts";
 import { indexCheck, indexVault } from "../../../src/core/search/indexer.ts";
+import { PROVIDER_PROBE } from "../../../src/core/search/provider-probe.ts";
 import { runSemanticPhase } from "../../../src/core/search/semantic-phase.ts";
 import { Store } from "../../../src/core/search/store.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
@@ -193,18 +194,31 @@ describe("the four sites agree with the resolver", () => {
   });
 
   test("indexCheck reports the key as resolved exactly on the configured tier", async () => {
-    for (const variant of semanticVariants(REFUSED_ENDPOINT)) {
-      // A remote provider with a key would ping; the refused base URL
-      // keeps that on loopback and off the network.
-      const cfg = makeConfig({
-        vault,
-        dbPath,
-        semantic: { ...variant.semantic, baseUrl: REFUSED_ENDPOINT },
-      });
-      const report = await indexCheck(cfg);
-      expect(`${variant.label}: ${report.embeddingKeyResolved}`).toBe(
-        `${variant.label}: ${variant.tier === SEMANTIC_CAPABILITY_TIER.configured}`,
-      );
+    // A remote provider with a key pings. It pings a server that ANSWERS:
+    // a "refused" loopback port is not refused everywhere (WSL's mirrored
+    // loopback drops the SYN instead), and then the probe sat out its
+    // whole budget and this test timed out on the machine, not the code.
+    const server: FakeHttp = await startFakeHttp();
+    try {
+      for (const variant of semanticVariants(server.url)) {
+        const cfg = makeConfig({
+          vault,
+          dbPath,
+          semantic: { ...variant.semantic, baseUrl: server.url },
+        });
+        const report = await indexCheck(cfg);
+        const configured = variant.tier === SEMANTIC_CAPABILITY_TIER.configured;
+        expect(`${variant.label}: ${report.embeddingKeyResolved}`).toBe(
+          `${variant.label}: ${configured}`,
+        );
+        // The probe follows the same verdict: a blocked tier is never
+        // asked, a configured one is asked and answers.
+        expect(`${variant.label}: ${report.providerProbe}`).toBe(
+          `${variant.label}: ${configured ? PROVIDER_PROBE.reachable : PROVIDER_PROBE.notConfigured}`,
+        );
+      }
+    } finally {
+      await server.close();
     }
   });
 

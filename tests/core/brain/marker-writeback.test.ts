@@ -462,6 +462,75 @@ describe("apply mode - per-marker isolation", () => {
   });
 });
 
+describe("governance refusals are per-marker verdicts", () => {
+  function writeBoundConfig(): void {
+    writeConfig({ markerWriteback: true, readPaths: ["Projects", "Notes"] });
+    const configPath = join(brainDirs(vault).brain, "_brain.yaml");
+    const body = readFileSync(configPath, "utf8");
+    writeFileSync(
+      configPath,
+      `${body}\nwrite_binding:\n  path_prefixes:\n    - Projects\n`,
+      "utf8",
+    );
+  }
+
+  function seed(): void {
+    writeBoundConfig();
+    writePaper("Notes/outside.md");
+    writePaper("Projects/inside.md");
+    writePaper("Brain/preferences/pref-x.md");
+    writeSource(
+      "Projects/journal.md",
+      "@osb set note=Notes/outside.md field=status value=queued",
+      "@osb set note=Brain/preferences/pref-x.md field=status value=queued",
+      "@osb set note=Projects/inside.md field=status value=queued",
+    );
+  }
+
+  test("report mode reports a refused target instead of promising the write", async () => {
+    seed();
+    const report = await applyMarkerWritebacks(vault, {
+      files: ["Projects/journal.md"],
+      apply: false,
+      agent: "a",
+      now: NOW,
+    });
+    expect(report.entries.map((e) => [e.rawTarget, e.status])).toEqual([
+      ["Notes/outside.md", "refused"],
+      ["Brain/preferences/pref-x.md", "refused"],
+      ["Projects/inside.md", "would-apply"],
+    ]);
+    expect(report.entries[0]!.error).toMatch(/write binding/i);
+    expect(report.entries[1]!.error).toContain("Brain machinery");
+    expect(report.failedCount).toBe(2);
+    expect(report.pendingCount).toBe(1);
+  });
+
+  test("apply mode refuses those markers and still applies the rest of the run", async () => {
+    seed();
+    const report = await applyMarkerWritebacks(vault, {
+      files: ["Projects/journal.md"],
+      apply: true,
+      agent: "a",
+      now: NOW,
+    });
+    expect(report.entries.map((e) => [e.rawTarget, e.status])).toEqual([
+      ["Notes/outside.md", "refused"],
+      ["Brain/preferences/pref-x.md", "refused"],
+      ["Projects/inside.md", "applied"],
+    ]);
+    expect(attrsOf("Notes/outside.md")).toEqual({});
+    expect(attrsOf("Brain/preferences/pref-x.md")).toEqual({});
+    expect(attrsOf("Projects/inside.md")).toEqual({ status: "queued" });
+    // Refused markers stay live for the operator; the applied one is consumed.
+    const src = readSource("Projects/journal.md");
+    expect(src).toContain("@osb set note=Notes/outside.md");
+    expect(src).toContain("@osb set note=Brain/preferences/pref-x.md");
+    expect(src).toContain("@osb✓ [[Projects/inside.md]]");
+    expect(attributeWriteEvents()).toHaveLength(1);
+  });
+});
+
 describe("apply mode - consumption failure surfaces applied-unconsumed", () => {
   // Forces the post-write hazard: the attribute write and audit append
   // succeed, but the marker-consumption rewrite fails (the source lives in a

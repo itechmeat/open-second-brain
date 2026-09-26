@@ -1891,7 +1891,7 @@ function resolveInstallationSecret(configPath) {
       } catch (err) {
         if (err.code !== "ELOCKED")
           break;
-        Bun.sleepSync(50);
+        sleepSync(50);
       }
     }
     const won = read();
@@ -2298,6 +2298,13 @@ var EGRESS_SITES = Object.freeze({
     module: "src/cli/brain/verbs/explorer.ts",
     redaction: R.sharedRedactor,
     reason: "a self-contained HTML file with the whole rule graph embedded as JSON: every " + "preference and retired principle verbatim, plus each one's topic, scope and " + "provenance counts. It is the export most likely to be handed to a person rather " + "than a program - it opens in a browser - and it was the one export that never " + "scanned anything. Redaction runs over the graph TREE before the template " + "substitution, so a principle whose text contains a quote cannot disturb the " + "document. The label rule holds here too: a preference is not withheld for carrying " + "a `private` tag, because the `<private>` region marker is the only content-derived " + "privacy primitive in this product."
+  },
+  "brain-knowledge-pack-export": {
+    id: "brain-knowledge-pack-export",
+    verb: "o2b brain knowledge-pack export",
+    module: "src/cli/brain/verbs/knowledge-pack.ts",
+    redaction: R.sharedRedactor,
+    reason: "a selected subset - preference principles and page bodies verbatim - built to be " + "handed to someone else, so it is the one export that also filters by LABEL before " + "it scans: a page declaring `visibility:`, an entry carrying `owner:`, and an " + "unreviewed `OKF Review/` candidate are blocked and named, never written. What is " + "carried is redacted as a tree (OKF manifest, preference rows) and as text (pages) " + "BEFORE the pack is sealed, so the sha256 table hashes the bytes that left and a " + "recipient's integrity check verifies the redacted copy, not the vault. Preference " + "rows leave without their evidence links and rendered body."
   },
   "search-embedding-openai-compat": {
     id: "search-embedding-openai-compat",
@@ -3138,7 +3145,7 @@ function buildReminder(agent, target) {
 
 // src/core/vault.ts
 import { mkdirSync as mkdirSync4, readFileSync as readFileSync5, readdirSync as readdirSync2, writeFileSync } from "node:fs";
-import { dirname as dirname7, join as join6, relative as relative2 } from "node:path";
+import { dirname as dirname7, join as join7, relative as relative2 } from "node:path";
 
 // src/core/integrity/degradation.ts
 var DEGRADATION_CODE = Object.freeze({
@@ -3186,7 +3193,7 @@ function emitDegradationNotice(sink, input) {
 }
 
 // src/core/path-safety.ts
-import { dirname as dirname6, posix, relative, resolve as resolve5, sep } from "node:path";
+import { basename as basename2, dirname as dirname6, join as join6, posix, relative, resolve as resolve5, sep } from "node:path";
 function vaultRelative(target, vault) {
   const rel = relative(resolve5(vault), resolve5(target));
   return rel.split(/[\\/]/).filter((p) => p.length > 0).join(posix.sep);
@@ -3371,7 +3378,7 @@ function walk(root, dir, skipDirs, skipFiles, out, notices) {
     return;
   }
   for (const entry of entries) {
-    const full = join6(dir, entry.name);
+    const full = join7(dir, entry.name);
     if (entry.isDirectory()) {
       if (skipDirs.has(entry.name))
         continue;

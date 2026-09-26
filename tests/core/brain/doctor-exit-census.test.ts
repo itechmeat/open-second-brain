@@ -190,6 +190,7 @@ const DOCTOR_REGISTERED_CODES: ReadonlyArray<string> = [
   "log-chain-broken",
   "low-evidence-confirmed",
   "orphan-evidence",
+  "payload-orphan",
   "principle-corrupted",
   "recall-channel-silent",
   "recovery-point-stale",

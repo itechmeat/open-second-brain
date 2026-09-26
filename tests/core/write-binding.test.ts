@@ -42,8 +42,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  GovernedPathWriteRefusedError,
   WRITE_BINDING_REFUSED_CODE,
   checkWriteBinding,
+  governCallerNamedWritePath,
   normaliseWriteBindingPrefix,
   resolveWriteBinding,
   writeBindingAdmits,
@@ -418,6 +420,34 @@ describe("the binding is checked against where the bytes land, not the name give
     const res = createNote(vault, { path: LINK_PATH, content: "x" });
     expect(res.path).toBe(LINK_PATH);
     expect(readdirSync(join(vault, "Journal"))).toEqual(["escaped.md"]);
+  });
+});
+
+describe("a destination that cannot be resolved is refused, not raised", () => {
+  test("checkWriteBinding refuses a note used as a folder", () => {
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    mkdirSync(join(vault, "Projects"), { recursive: true });
+    writeFileSync(join(vault, "Projects", "existing.md"), "x\n");
+    const refusal = checkWriteBinding(vault, "Projects/existing.md/x.md");
+    expect(refusal).not.toBeNull();
+    expect(refusal!.code).toBe(WRITE_BINDING_REFUSED_CODE);
+    expect(refusal!.message).toContain("cannot be resolved");
+  });
+
+  test("checkWriteBinding refuses a symlink loop", () => {
+    writeBrainConfig(vault, declaredBindingYaml(PREFIX));
+    mkdirSync(join(vault, "Projects"), { recursive: true });
+    symlinkSync(join(vault, "Projects", "b"), join(vault, "Projects", "a"));
+    symlinkSync(join(vault, "Projects", "a"), join(vault, "Projects", "b"));
+    const refusal = checkWriteBinding(vault, "Projects/a/x.md");
+    expect(refusal?.message).toContain("cannot be resolved");
+  });
+
+  test("governCallerNamedWritePath refuses with its typed error", () => {
+    writeFileSync(join(vault, "existing.md"), "x\n");
+    expect(() => governCallerNamedWritePath(vault, "existing.md/x.md", "test surface")).toThrow(
+      GovernedPathWriteRefusedError,
+    );
   });
 });
 

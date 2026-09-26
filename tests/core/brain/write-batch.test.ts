@@ -151,6 +151,52 @@ describe("applyWriteBatch note operations", () => {
     }
   });
 
+  test("update_note refuses reserved boundary keys in caller frontmatter (t_sec_reserved_keys)", () => {
+    // `visibility` is the read-boundary token field: one merged key would
+    // demote a private page out of the boundary without ever reading it.
+    seedNote("Notes/Private.md", "secret body", "title: Private\nvisibility: private");
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Private.md", frontmatter: { visibility: "team" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+      expect((err as WriteBatchError).details).toMatchObject({
+        path: "Notes/Private.md",
+        key: "visibility",
+      });
+    }
+    // The boundary survived the refused update byte-for-byte.
+    expect(readFileSync(join(vault, "Notes/Private.md"), "utf8")).toContain("visibility: private");
+
+    // `origin_channel` is the server-derived creation stamp: a merged key
+    // would forge the channel a note did not arrive through.
+    seedNote("Notes/Sourced.md", "body", "title: S\norigin_channel: mcp");
+    try {
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Sourced.md", frontmatter: { origin_channel: "cli" } },
+      ]);
+      throw new Error("expected throw");
+    } catch (err) {
+      expect(err).toBeInstanceOf(WriteBatchError);
+      expect((err as WriteBatchError).code).toBe("reserved_frontmatter_key");
+    }
+    expect(readFileSync(join(vault, "Notes/Sourced.md"), "utf8")).toContain("origin_channel: mcp");
+
+    // A batch aborts wholesale in the projection phase, so a reserved key
+    // in one op leaves the other op's file untouched too.
+    seedNote("Notes/Other.md", "body", "title: O");
+    expect(() =>
+      applyWriteBatch(vault, [
+        { kind: "update_note", path: "Notes/Other.md", frontmatter: { status: "final" } },
+        { kind: "update_note", path: "Notes/Private.md", frontmatter: { visibility: "team" } },
+      ]),
+    ).toThrow(WriteBatchError);
+    expect(readFileSync(join(vault, "Notes/Other.md"), "utf8")).not.toContain("status: final");
+  });
+
   test("create_note refuses to clobber an existing note", () => {
     seedNote("Notes/Dup.md", "original");
     try {

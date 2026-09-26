@@ -55,6 +55,7 @@ import * as vectors from "./store/vectors.ts";
 // ─────────────────────────────────────────────────────────────────────────────
 
 export {
+  CHUNKER_VERSION_STATE_KEY,
   describeUnreadableIndex,
   EMBEDDING_DIMENSION_STATE_KEY,
   EMBEDDING_MODEL_STATE_KEY,
@@ -322,6 +323,11 @@ export class Store {
 
   getDocumentIdByPath(path: string): number | null {
     return documents.getDocumentIdByPath(this.db, path);
+  }
+
+  /** Measured `visibility:` tokens per indexed path; see `documents.indexedVisibilityByPaths`. */
+  indexedVisibilityByPaths(paths: ReadonlyArray<string>): Map<string, ReadonlyArray<string>> {
+    return documents.indexedVisibilityByPaths(this.db, paths);
   }
 
   /**

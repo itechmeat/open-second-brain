@@ -83,6 +83,7 @@ import type { PageLifecycle } from "./page-meta/lifecycle.ts";
 import type { PageTier } from "./page-meta/tier.ts";
 import { computeContentHash } from "./content-hash.ts";
 import { EXPIRATION_DATE_FIELD, normalizeExpirationDate } from "./expiration.ts";
+import { KNOWLEDGE_PACK_FIELD, parseKnowledgePackStamp } from "./portability/pack-stamp.ts";
 import {
   computePayloadHash,
   IdempotencyPayloadMismatchError,
@@ -241,6 +242,14 @@ export interface WritePreferenceInput {
    * moved to `Brain/retired/` on expiry.
    */
   readonly expiration_date?: string;
+  /**
+   * Knowledge-pack provenance stamp (`<name>@<digest12>`), supplied only
+   * by the pack installer. Emitted only when supplied, so every other
+   * write is byte-identical. The key is user-tier to the frontmatter
+   * merge, so a later framework rewrite (the dream refresh) that does not
+   * pass it keeps the stamp instead of dropping it.
+   */
+  readonly knowledge_pack?: string;
   /** Optional extra tags merged after the canonical set. */
   readonly extraTags?: ReadonlyArray<string>;
   /** Free-form "How to apply" prose (rendered as a section). */
@@ -724,6 +733,9 @@ function preferenceFrontmatter(input: WritePreferenceInput, id: string): Frontma
   if (input.content_hash) metadata["_content_hash"] = input.content_hash;
   if (input.scope?.trim()) metadata["scope"] = input.scope.trim();
   if (input.owner?.trim()) metadata["owner"] = input.owner.trim();
+  if (input.knowledge_pack?.trim()) {
+    metadata[KNOWLEDGE_PACK_FIELD] = input.knowledge_pack.trim();
+  }
   // Only emit a non-default provenance; absent reads as `stated`, so an
   // existing preference stays byte-identical.
   if (input.provenance !== undefined && input.provenance !== "stated") {
@@ -1006,6 +1018,11 @@ export function parsePreference(
       : {}),
     ...(optionalScalarString(meta, "expiration_date") !== undefined
       ? { expiration_date: optionalScalarString(meta, "expiration_date") }
+      : {}),
+    // Surfaced only when the value is a well-formed stamp: a hand-typed
+    // `knowledge_pack:` that is not one names no pack an uninstall keys on.
+    ...(parseKnowledgePackStamp(meta[KNOWLEDGE_PACK_FIELD]) !== null
+      ? { knowledge_pack: String(meta[KNOWLEDGE_PACK_FIELD]).trim() }
       : {}),
     ...(optionalScalarString(meta, "supersedes") !== undefined
       ? { supersedes: optionalScalarString(meta, "supersedes") }

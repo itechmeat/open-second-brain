@@ -19,7 +19,7 @@
  * (no live holder) is exercised by indexer.test.ts's ".bak auto-restore".
  */
 import { afterEach, beforeEach, expect, test } from "bun:test";
-import { cpSync, existsSync, rmSync } from "node:fs";
+import { cpSync, existsSync, readFileSync, rmSync } from "node:fs";
 
 import { indexVault, reindexVault } from "../../../src/core/search/indexer.ts";
 import { acquireWriterLock, Store } from "../../../src/core/search/store.ts";
@@ -137,4 +137,38 @@ test("A.2: crash-restore still fires when no writer holds the lock (genuine cras
   } finally {
     await store.close();
   }
+});
+
+test("a failed final swap rename puts the previous index back live", async () => {
+  // The swap is two renames: live -> `.bak`, then `.new` -> live. When the
+  // second one fails (a Windows sharing violation that outlasts the retry
+  // budget, a vanished staging file), the live index must not stay parked
+  // at `.bak` until some later Store.open happens to restore it (#187).
+  writeMd(vault, "a.md", "# A\n\nalpha content");
+  const cfg = makeConfig({ vault, dbPath });
+  await indexVault(cfg);
+  const liveBefore = readFileSync(dbPath);
+
+  // The swap stage's `started` event is emitted synchronously right before
+  // the renames. Removing the finished staging file there makes the second
+  // rename fail for real (ENOENT); the first rename has already moved the
+  // live index to `.bak`, which is the state the rollback has to undo.
+  let swapFailure: unknown = null;
+  try {
+    await reindexVault(cfg, {
+      onProgress: (event) => {
+        if (event.stage === "swap" && event.kind === "started") rmSync(`${dbPath}.new`);
+      },
+    });
+  } catch (error) {
+    swapFailure = error;
+  }
+
+  // The swap's own error surfaces, not one from the rollback.
+  expect(swapFailure).toMatchObject({ code: "ENOENT", path: `${dbPath}.new` });
+  // Checked on disk BEFORE any Store.open, whose crash-restore would mask a
+  // missing live index.
+  expect(existsSync(dbPath)).toBe(true);
+  expect(existsSync(`${dbPath}.bak`)).toBe(false);
+  expect(readFileSync(dbPath).equals(liveBefore)).toBe(true);
 });

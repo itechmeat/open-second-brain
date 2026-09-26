@@ -506,6 +506,10 @@ const NO_PREFERENCE_BYTES: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/health/remediation.ts":
     "re-stamps ONE derived frontmatter field (`_content_hash`) on an EXISTING page by spreading " +
     "the parsed metadata, so ownership travels untouched and nothing new is created.",
+  "src/core/brain/portability/knowledge-pack.ts":
+    "builds preference paths only to detect install conflicts; its preferences land through " +
+    "`restorePreferences`, and its one direct write adds the install fingerprint to a page it " +
+    "just staged under `OKF Review/`, never to a preference.",
 });
 
 test("every module that writes preference bytes reaches the ownership resolver", async () => {

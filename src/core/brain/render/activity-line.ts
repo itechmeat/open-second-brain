@@ -39,11 +39,6 @@ export interface ActivityItem {
   readonly timestamp: string;
 }
 
-/** The fixed structural marker for an item kind. */
-export function activityMarker(kind: ActivityKind): string {
-  return ACTIVITY_MARKER[kind];
-}
-
 /**
  * Render one activity line as a Markdown bullet: `- [marker] text · age`.
  * The age is omitted (no trailing `· `) when the timestamp is empty or

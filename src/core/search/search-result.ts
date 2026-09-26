@@ -63,6 +63,13 @@ export interface TrustMetadata {
    * successor target.
    */
   readonly replacement: string | null;
+  /**
+   * Knowledge-pack provenance (`<name>@<digest12>`) when the hit's page was
+   * landed by `o2b brain knowledge-pack install`. Present only on such
+   * pages, so a vault with no installed pack produces trust metadata
+   * byte-identical to before.
+   */
+  readonly knowledge_pack?: string;
 }
 
 /**

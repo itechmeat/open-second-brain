@@ -280,6 +280,18 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
  */
 export const OUT_OF_VAULT_SWEEP_EXCLUSIONS: ReadonlyMap<string, string> = new Map([
   [
+    "src/mcp/error-redaction.ts",
+    "it reads the home and temp roots only to REDACT them out of error prose sent to a remote " +
+      "MCP caller; it builds no path to write, read or create, so it leaves nothing on the " +
+      "machine outside the vault",
+  ],
+  [
+    "scripts/hermes-plugin-scan.ts",
+    "a repository check run by CI and by maintainers, never by an install; its only temp-rooted " +
+      "write is one `mkdtempSync` scratch directory (the fetched scanner and the exported tree) " +
+      "that the same run removes, so nothing it creates outlives the run",
+  ],
+  [
     "src/core/brain/snapshot.ts",
     "its only home- or temp-rooted write is an `mkdtempSync` staging directory that the same " +
       "call removes; the archives it stages are written under Brain/.snapshots inside the vault, " +

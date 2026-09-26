@@ -25,11 +25,13 @@
  */
 
 import { beforeEach, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { ownerScopeView } from "../../../src/core/brain/owner-scope-view.ts";
+import { tempDirs } from "../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";
@@ -37,7 +39,7 @@ const OWNER_B = "agent-b";
 let vault: string;
 
 beforeEach(() => {
-  vault = mkdtempSync(join(tmpdir(), "o2b-owner-view-"));
+  vault = mkTemp("o2b-owner-view-");
   for (const sub of ["preferences", "retired", "inbox", "pending", "sources", "entities"]) {
     mkdirSync(join(vault, "Brain", sub), { recursive: true });
   }

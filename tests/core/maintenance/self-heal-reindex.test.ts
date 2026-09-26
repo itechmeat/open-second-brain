@@ -237,6 +237,25 @@ describe("self-heal reindex: the child's terminal outcome", () => {
     CONTENTION_BUDGET_MS,
   );
 
+  test("a child whose vault is gone refuses and does not recreate it", async () => {
+    // The spawn is detached: the vault can be moved or deleted between the
+    // parent's decision and the child's start. The child used to rebuild
+    // an empty index into a freshly created vault directory and exit 0.
+    const gone = join(configHome, "moved-away");
+    await expect(
+      cmdSearchReindex([
+        "--self-heal",
+        mintSelfHealRunId(),
+        "--vault",
+        gone,
+        "--config",
+        configPath,
+        "--json",
+      ]),
+    ).rejects.toThrow(/vault not found/);
+    expect(existsSync(gone)).toBe(false);
+  });
+
   test("a run without --self-heal records nothing", async () => {
     const code = await cmdSearchReindex(["--vault", vault, "--config", configPath, "--json"]);
     expect(code).toBe(0);

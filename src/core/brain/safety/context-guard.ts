@@ -83,7 +83,7 @@ const HORIZONTAL_SPACE_RE = /[^\S\r\n]+/g;
 const TEXT_PATTERNS: ReadonlyArray<DetectionPattern> = Object.freeze([
   {
     code: "prompt_injection.instruction_override",
-    message: "Text asks the agent to ignore or override prior instructions.",
+    message: "Text asks the agent to disregard or override prior instructions.",
     pattern:
       /\b(ignore|disregard|forget|override)\s+(all\s+)?(previous|prior|earlier|system|developer)\s+instructions?\b/,
   },

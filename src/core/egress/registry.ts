@@ -210,6 +210,21 @@ export const EGRESS_SITES = Object.freeze({
       "a `private` tag, because the `<private>` region marker is the only content-derived " +
       "privacy primitive in this product.",
   },
+  "brain-knowledge-pack-export": {
+    id: "brain-knowledge-pack-export",
+    verb: "o2b brain knowledge-pack export",
+    module: "src/cli/brain/verbs/knowledge-pack.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "a selected subset - preference principles and page bodies verbatim - built to be " +
+      "handed to someone else, so it is the one export that also filters by LABEL before " +
+      "it scans: a page declaring `visibility:`, an entry carrying `owner:`, and an " +
+      "unreviewed `OKF Review/` candidate are blocked and named, never written. What is " +
+      "carried is redacted as a tree (OKF manifest, preference rows) and as text (pages) " +
+      "BEFORE the pack is sealed, so the sha256 table hashes the bytes that left and a " +
+      "recipient's integrity check verifies the redacted copy, not the vault. Preference " +
+      "rows leave without their evidence links and rendered body.",
+  },
   "search-embedding-openai-compat": {
     id: "search-embedding-openai-compat",
     verb: "o2b search index (embedding provider)",

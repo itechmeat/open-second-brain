@@ -194,7 +194,9 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
   // typed relations, never stored. Off by default keeps the result
   // shape byte-identical.
   const resultsOut =
-    opts.trust === true ? attachTrustMetadata(config.vault, finalResults) : finalResults;
+    opts.trust === true
+      ? attachTrustMetadata(config.vault, finalResults, input.frontmatterCache)
+      : finalResults;
 
   const retrievalTrail = buildRetrievalTrail({
     retrieved: resultsOut.length,

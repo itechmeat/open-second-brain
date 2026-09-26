@@ -2,8 +2,9 @@
  * Capability-gated secret custody store (write-time-integrity-
  * governance, t_0b134404). Secrets live as per-value AES-256-GCM
  * ciphertext in `<vault>/.open-second-brain/secrets/secrets.json`
- * (0600) beside a 0600 keyfile - the vault-local state dir, never
- * synced as vault content. The public surface never returns
+ * (0600) beside a 0600 keyfile - the vault-local state dir, kept out
+ * of git by a marker file and out of a Syncthing folder only by the
+ * operator's `.stignore` (see `./sync-exposure.ts`). The public surface never returns
  * plaintext: `setSecret` ingests, `listSecrets` exposes metadata
  * only, `resolveSecretForExec` exists for the exec path alone (env
  * injection into an allowlisted subprocess - exec.ts), and every
@@ -12,7 +13,7 @@
  * the vault.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import lockfile from "proper-lockfile";
 
@@ -139,6 +140,24 @@ export function setSecret(vault: string, input: SetSecretInput): SecretMetadata 
   });
 
   const key = loadOrCreateKey(keyPath(vault));
+  // Custody is a precondition, not a stderr line: on Windows, a keyfile
+  // whose ACL restriction failed (a share or FAT volume `icacls` cannot
+  // serve, a broken whoami) would hold ciphertext readable by every
+  // authenticated account on the volume, and `secret stored` with exit 0
+  // would tell the operator the opposite of the truth. `set` refuses and
+  // names the repair; `run`/`list` keep their warn-and-continue because
+  // the material is already there and the warning is on stderr.
+  if (process.platform === "win32") {
+    // Every target is asked (no short-circuit) so each failure is named
+    // on stderr before the refusal.
+    const results = custodyTargets(vault).map(([path, kind]) => restrictToOwner(path, kind));
+    if (results.includes(false)) {
+      throw new Error(
+        `refusing to store the secret: the secrets directory could not be restricted to the ` +
+          `current user (${secretsDir(vault)}); resolve the icacls warning above and retry`,
+      );
+    }
+  }
   const { next, existing } = withSecretsLock(vault, () => {
     const file = readStore(vault);
     const current = file.secrets[name];
@@ -218,16 +237,38 @@ export function resolveSecretForExec(
   const normalized = name.trim().toLowerCase();
   const stored = file.secrets[normalized];
   if (stored === undefined) {
-    const names = Object.keys(file.secrets).toSorted();
-    throw new Error(
-      `unknown secret "${normalized}" - stored: ${names.length === 0 ? "(none)" : names.join(", ")}`,
-    );
+    // No enumeration on this path: `list` is the discovery surface and it
+    // returns metadata only by design. An error that names the stored
+    // set would hand the same metadata to every caller that can spell a
+    // wrong name, including ones a narrow allowlist was meant to keep
+    // out of the inventory.
+    throw new Error(`unknown secret "${normalized}"`);
   }
   const key = loadOrCreateKey(keyPath(vault));
   const value = decryptValue(key, stored);
   touchLastUsed(vault, normalized, ctx.now);
   audit(vault, ctx, "secret_resolved_for_exec", normalized, { env_var: stored.env_var });
   return { name: normalized, env_var: stored.env_var, allow: stored.allow, value };
+}
+
+/**
+ * The paths whose owner-only protection `set` requires before it stores
+ * material: the directory and the keyfile, which `loadOrCreateKey` has
+ * just ensured exist, and the ciphertext store ONLY when it already
+ * exists. On a fresh vault the store is created by the write that
+ * follows and inherits the directory's owner-only entry; asking `icacls`
+ * to reset a file that is not there fails, which made the first `secret
+ * set` in every fresh vault refuse on Windows.
+ */
+export function custodyTargets(
+  vault: string,
+): ReadonlyArray<readonly [string, "file" | "directory"]> {
+  const targets: Array<readonly [string, "file" | "directory"]> = [
+    [secretsDir(vault), "directory"],
+    [keyPath(vault), "file"],
+  ];
+  if (existsSync(storePath(vault))) targets.push([storePath(vault), "file"]);
+  return targets;
 }
 
 // ----- Internals -------------------------------------------------------------
@@ -248,6 +289,19 @@ function readStore(vault: string): SecretsFile {
   // Windows: a store that came in with a copied vault may carry an ACL
   // of its own; the ones this module writes inherit the directory's.
   restrictToOwner(path, "file");
+  // The POSIX mirror (audit M8): mode bits are set only when this module
+  // writes the store, so one restored by a copy or a tar keeps whatever
+  // mode it arrived with. Warn-and-continue, like the keyfile beside it.
+  if (process.platform !== "win32") {
+    try {
+      if ((statSync(path).mode & 0o777) !== 0o600) chmodSync(path, 0o600);
+    } catch (err) {
+      process.stderr.write(
+        `warning: could not re-apply owner-only mode to the secrets store: ` +
+          `${path}: ${err instanceof Error ? err.message : String(err)}\n`,
+      );
+    }
+  }
   const parsed: unknown = JSON.parse(readFileSync(path, "utf8"));
   if (
     parsed === null ||

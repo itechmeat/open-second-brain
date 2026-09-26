@@ -267,6 +267,12 @@ const SCP_REMOTE_RE = /^(?<user>[^\s/@]+)@(?<host>[^\s/:]+):(?<path>(?!\/).+)$/;
 /** `C:\` or `C:/` - an absolute Windows drive path, which is not a URL. */
 const WINDOWS_DRIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
+/** `\\server\share\...` - a Windows UNC path, which is not a URL either. */
+const UNC_PATH_RE = /^\\\\(?<host>[^\\/]+)[\\/](?<path>.+)$/;
+
+/** A `file:` pathname that starts with a drive: `/c:/...` or a bare `/c:`. */
+const FILE_URL_DRIVE_RE = /^\/([A-Za-z]):(?=\/|$)/;
+
 /** A trailing `.git`, with or without trailing slashes already stripped. */
 const DOT_GIT_SUFFIX_RE = /\.git$/;
 
@@ -286,7 +292,11 @@ const DOT_GIT_SUFFIX_RE = /\.git$/;
  *
  * Host case is normalized (DNS is case-insensitive); path case is not
  * (many forges are case-sensitive, and folding it would merge two
- * genuinely distinct repositories).
+ * genuinely distinct repositories) - except a Windows drive letter,
+ * which is case-insensitive and is folded to upper case.
+ *
+ * Path remotes (POSIX, drive, UNC, scp-like) are escaped before parsing,
+ * so their identity carries `#`, `?` and `%` percent-encoded.
  */
 export function canonicalizeGitRemote(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
@@ -300,26 +310,56 @@ export function canonicalizeGitRemote(raw: unknown): string | null {
   const isFile = url.protocol === "file:";
   if (!isFile && url.hostname.length === 0) return null;
 
-  const path = canonicalRemotePath(url.pathname);
+  const path = canonicalRemotePath(isFile ? foldDriveLetter(url.pathname) : url.pathname);
   if (path === null) return null;
   return `${url.protocol}//${url.hostname}${path}`;
+}
+
+/**
+ * Upper-case the drive letter of a `file:` pathname. Windows drive
+ * letters are case-insensitive and git reports whichever spelling the
+ * clone was made with, so `c:\x.git` and `C:\x.git` are one repository.
+ * Only the letter is folded; the rest of the path keeps its case. Doing
+ * it here rather than in the drive-path branch also folds an explicit
+ * `file:///c:/...` remote and the identity an older version recorded.
+ */
+function foldDriveLetter(pathname: string): string {
+  return pathname.replace(FILE_URL_DRIVE_RE, (_m, drive: string) => `/${drive.toUpperCase()}:`);
+}
+
+/**
+ * Escape the characters of a filesystem path that are URL syntax, before
+ * the path is placed into a URL to be parsed. `#` and `?` are legal in
+ * directory names and would otherwise end the path (`/repos/c#1` and
+ * `/repos/c#2` both parse as `/repos/c`); `%` goes first, so a literal
+ * `%23` in a name stays distinct from an escaped `#`.
+ */
+function toFileUrlPath(path: string): string {
+  return path.replaceAll("%", "%25").replaceAll("#", "%23").replaceAll("?", "%3F");
 }
 
 function parseRemote(value: string): URL | null {
   const scp = SCP_REMOTE_RE.exec(value);
   if (scp?.groups !== undefined) {
-    return safeUrl(`ssh://${scp.groups["host"]}/${scp.groups["path"]}`);
+    return safeUrl(`ssh://${scp.groups["host"]}/${toFileUrlPath(scp.groups["path"]!)}`);
   }
   // An absolute filesystem path is a legitimate git remote and is not a
   // URL; give it the `file:` scheme so it lands in the same shape.
-  if (value.startsWith("/")) return safeUrl(`file://${value}`);
+  if (value.startsWith("/")) return safeUrl(`file://${toFileUrlPath(value)}`);
+  // A UNC path (`\\server\share\repo.git`) names a host, so it becomes a
+  // `file:` URL WITH that authority instead of failing to parse at all.
+  const unc = UNC_PATH_RE.exec(value);
+  if (unc?.groups !== undefined) {
+    const path = toFileUrlPath(unc.groups["path"]!.replaceAll("\\", "/"));
+    return safeUrl(`file://${unc.groups["host"]}/${path}`);
+  }
   // A Windows drive path (`C:\srv\git\x.git`, or git's own `C:/srv/...`
   // spelling) is the same kind of remote. Left to `new URL` it parses as
   // a `c:` scheme with no host and the identity is lost. Matched by shape
   // rather than host platform, so the identity is the same on every
   // device that reads the remote.
   if (WINDOWS_DRIVE_PATH_RE.test(value)) {
-    return safeUrl(`file:///${value.replaceAll("\\", "/")}`);
+    return safeUrl(`file:///${toFileUrlPath(value.replaceAll("\\", "/"))}`);
   }
   return safeUrl(value);
 }

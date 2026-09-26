@@ -48,6 +48,7 @@ import {
   BRAIN_LOG_REL,
   BRAIN_MANUAL_FILE,
   BRAIN_OBLIGATIONS_REL,
+  BRAIN_PAYLOADS_REL,
   BRAIN_PENDING_REL,
   BRAIN_PINNED_FILE,
   BRAIN_PREFERENCES_REL,
@@ -299,6 +300,29 @@ export function writeImagePath(vault: string, sha256: string): string {
     );
   }
   return ensureInsideVault(join(writeImagesDir(vault), sha256), vault);
+}
+
+/** The payload registry's store: `Brain/.payloads/`. */
+export function payloadsDir(vault: string): string {
+  return ensureInsideVault(join(vault, BRAIN_PAYLOADS_REL), vault);
+}
+
+/**
+ * One externalized payload: `Brain/.payloads/<sha256>.txt`.
+ *
+ * The digest is validated rather than trusted: it reaches this builder
+ * from an `osb-payload://` ref a caller typed or a row an operator may
+ * have hand-edited, and a separator smuggled through it would be a
+ * traversal out of the store.
+ */
+export function payloadPath(vault: string, sha256: string): string {
+  if (!SHA256_HEX_RE.test(sha256)) {
+    throw new Error(
+      `payloadPath: invalid payload digest ${JSON.stringify(sha256)} - ` +
+        "expected 64 lowercase hexadecimal characters",
+    );
+  }
+  return ensureInsideVault(join(payloadsDir(vault), `${sha256}.txt`), vault);
 }
 
 /** A single exact-state aspect page: `Brain/state/<aspect>.md` (t_b0c9d0a3). */

@@ -21,11 +21,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { nestedCommand } from "../../src/cli/command-manifest.ts";
 import { VAULT_FLAGS } from "../../src/cli/search/helpers.ts";
+import { parsedFlagSchema } from "../helpers/parsed-flag-schema.ts";
 
 const VERBS_DIR = join(import.meta.dir, "..", "..", "src", "cli", "search", "verbs");
 
@@ -106,42 +106,14 @@ const COVERED: ReadonlyArray<CoveredVerb> = Object.freeze([
  */
 const INHERITED_FLAG_NAME = "json";
 
-/** `<name>: { type: "<type>"` — one entry of a `parseFlags` schema literal. */
-const SCHEMA_ENTRY_RE = /(?:"([^"]+)"|([A-Za-z][\w-]*)):\s*\{\s*type:\s*"([^"]+)"/g;
-
-/** The spread that pulls in the shared vault-addressing triple. */
-const VAULT_SPREAD = "...VAULT_FLAGS";
-
-/**
- * The `parseFlags(argv, { ... })` schema the named function declares, as
- * `name -> type`, with `...VAULT_FLAGS` resolved from the real constant.
- */
-function parsedFlagSchema(entry: CoveredVerb): ReadonlyMap<string, string> {
-  const text = readFileSync(join(VERBS_DIR, entry.source), "utf8");
-  const fn = text.indexOf(entry.marker);
-  expect(`${entry.source} declares ${entry.marker}: ${fn >= 0}`).toBe(
-    `${entry.source} declares ${entry.marker}: true`,
-  );
-  const start = text.indexOf("parseFlags(argv, {", fn);
-  expect(`${entry.verb} calls parseFlags: ${start >= 0}`).toBe(
-    `${entry.verb} calls parseFlags: true`,
-  );
-  const end = text.indexOf("});", start);
-  expect(`the ${entry.verb} parseFlags call is terminated: ${end > start}`).toBe(
-    `the ${entry.verb} parseFlags call is terminated: true`,
-  );
-  const literal = text.slice(start, end);
-
-  const out = new Map<string, string>();
-  if (literal.includes(VAULT_SPREAD)) {
-    for (const [name, spec] of Object.entries(VAULT_FLAGS)) {
-      out.set(name, (spec as { type: string }).type);
-    }
-  }
-  for (const match of literal.matchAll(SCHEMA_ENTRY_RE)) {
-    out.set(match[1] ?? match[2]!, match[3]!);
-  }
-  return out;
+/** The `parseFlags(argv, { ... })` schema the verb declares, as `name -> type`. */
+function verbFlagSchema(entry: CoveredVerb): ReadonlyMap<string, string> {
+  return parsedFlagSchema({
+    file: join(VERBS_DIR, entry.source),
+    marker: entry.marker,
+    callOpen: "parseFlags(argv, {",
+    spreads: { "...VAULT_FLAGS": VAULT_FLAGS },
+  });
 }
 
 /** The manifest's declared flags for one `o2b search` verb, as `name -> type`. */
@@ -185,7 +157,7 @@ describe("the search verbs declare the flags they parse", () => {
     for (const entry of COVERED) {
       problems.push(
         ...mismatches(
-          comparable(parsedFlagSchema(entry)),
+          comparable(verbFlagSchema(entry)),
           comparable(manifestFlagSchema(entry.verb)),
           entry.verb,
         ),
@@ -197,7 +169,7 @@ describe("the search verbs declare the flags they parse", () => {
   test("no modelled flag outlives the parse that would accept it", () => {
     const stale: string[] = [];
     for (const entry of COVERED) {
-      const parsed = comparable(parsedFlagSchema(entry));
+      const parsed = comparable(verbFlagSchema(entry));
       for (const name of comparable(manifestFlagSchema(entry.verb)).keys()) {
         if (!parsed.has(name)) stale.push(`${entry.verb} --${name}`);
       }
@@ -219,7 +191,7 @@ describe("the search verbs declare the flags they parse", () => {
     // Pin the measurement, not only its verdict: a regex that stopped
     // matching would report a clean sweep over an empty set.
     for (const entry of COVERED) {
-      const parsed = comparable(parsedFlagSchema(entry));
+      const parsed = comparable(verbFlagSchema(entry));
       expect(`${entry.verb} parsed count above floor: ${parsed.size >= entry.minFlags}`).toBe(
         `${entry.verb} parsed count above floor: true`,
       );
@@ -229,7 +201,7 @@ describe("the search verbs declare the flags they parse", () => {
 
     // Prove the comparison catches a violation: a verb schema carrying a
     // flag the manifest never heard of, and one whose type disagrees.
-    const violating = new Map(comparable(parsedFlagSchema(COVERED[0]!)));
+    const violating = new Map(comparable(verbFlagSchema(COVERED[0]!)));
     violating.set("undeclared-flag", "boolean");
     violating.set("limit", "boolean");
     expect(

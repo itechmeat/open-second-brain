@@ -59,7 +59,7 @@ export function checkpointingEnabled(): boolean {
 
 /**
  * Refuse an id that is not a hex digest, naming the lane. The id becomes a
- * filename, so a caller-supplied `../../etc/passwd` has to fail here rather
+ * filename, so a caller-supplied `../outside` has to fail here rather
  * than reach `join`.
  */
 export function assertCheckpointId(label: string, id: string): void {

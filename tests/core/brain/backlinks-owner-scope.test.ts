@@ -17,9 +17,10 @@ import { join } from "node:path";
 
 import { buildBacklinkIndex } from "../../../src/core/brain/backlinks.ts";
 import { brainDirs } from "../../../src/core/brain/paths.ts";
+import { pinHome } from "../../helpers/temp-dir.ts";
 
 /** Pinned per file; nothing in this repository pins it globally. */
-process.env["HOME"] = mkdtempSync(join(tmpdir(), "o2b-backlinks-scope-home-"));
+pinHome("o2b-backlinks-scope-home-");
 
 const OWNER_A = "agent-a";
 const OWNER_B = "agent-b";

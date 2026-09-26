@@ -110,6 +110,18 @@ export const BRAIN_ARTIFACTS_DIR = ".artifacts";
 export const BRAIN_ARTIFACTS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_ARTIFACTS_DIR);
 
 /**
+ * Externalized oversized session content (payload registry, t_35440e83):
+ * `Brain/.payloads/<sha256>.txt`. Session import moves data URIs, long
+ * base64 runs and over-threshold turn text here and leaves a
+ * `[payload: osb-payload://<sha256> chars=N]` placeholder in the
+ * continuity row. Dot-directory so the vault walker never indexes it,
+ * and deliberately NOT in {@link BRAIN_SNAPSHOT_EXCLUDED_ENTRIES}: a
+ * restore must bring back the bytes the restored rows point at.
+ */
+export const BRAIN_PAYLOADS_DIR = ".payloads";
+export const BRAIN_PAYLOADS_REL = posix.join(BRAIN_ROOT_REL, BRAIN_PAYLOADS_DIR);
+
+/**
  * Content-addressed store of the bytes a note write replaced:
  * `Brain/.state/write-images/<sha256>` (who-wrote-what, Task A). One file
  * per distinct prior content, so repeated edits between two states cost
@@ -201,3 +213,75 @@ export const BRAIN_ROLLUP_LEDGER_FILE = "rollup-ladder.json";
 
 /** Vault-relative path of the `o2b index` output file. */
 export const BRAIN_INDEX_REL = posix.join(BRAIN_ROOT_REL, BRAIN_INDEX_FILE);
+
+/**
+ * The Brain page lanes: the directories under `Brain/` whose files are
+ * content pages (one Markdown page per ingested source, distillation, or
+ * cited report, built by `sourcePagePath` / `distillationPagePath` /
+ * `reportPagePath`) rather than machinery the Brain's own writers own.
+ * Every other path under `Brain/` - config, identity markers, standing
+ * rules, preferences, logs, search state, snapshots - is machinery, and a
+ * caller-named writer that is not the Brain itself must not reach it.
+ */
+export const BRAIN_PAGE_LANES_REL: ReadonlyArray<string> = Object.freeze([
+  BRAIN_SOURCES_REL,
+  BRAIN_REPORTS_REL,
+  BRAIN_DISTILLATIONS_REL,
+]);
+
+/**
+ * One path segment folded the way a case-insensitive filesystem reads it
+ * (macOS APFS/HFS+ by default, NTFS): case-folded, with the trailing dots
+ * and spaces Windows drops from a name removed. A wall that compares
+ * segments must compare the folded forms, or `brain/`, `BRAIN/`, and
+ * `Brain./` walk past a check that only knew `Brain/` while the
+ * filesystem opens the same directory. Folding is conservative on a
+ * case-sensitive filesystem - a user folder that differs from a Brain
+ * directory only by case is refused too - which is the right side of the
+ * trade for a machinery wall.
+ */
+function foldSegment(segment: string): string {
+  return segment.replace(/[. ]+$/u, "").toLowerCase();
+}
+
+/**
+ * The segments of a vault-relative path under the Brain root, or `null`
+ * when the path does not land under `Brain/` at all.
+ *
+ * The path is read the way the filesystem will read it, not the way it
+ * was spelled: `\` is a separator (Windows), `.` and `..` are collapsed
+ * (`x/../Brain/a`, `./Brain/a`), leading separators are dropped (a join
+ * onto the vault re-roots them), and the first segment is compared
+ * case-insensitively (see {@link foldSegment}). A `..` that climbs above
+ * the vault root collapses at the root rather than escaping, which reads
+ * `../Brain/a` as Brain too - an over-refusal only for a path the vault
+ * containment check refuses anyway.
+ */
+export function brainRootSegments(relPath: string): ReadonlyArray<string> | null {
+  const normalized = posix.normalize(`/${relPath.replaceAll("\\", "/")}`);
+  const segments = normalized.split("/").filter((s) => s.length > 0);
+  const head = segments[0];
+  if (head === undefined || foldSegment(head) !== foldSegment(BRAIN_ROOT_REL)) return null;
+  return segments.slice(1);
+}
+
+/** Does `relPath` land at or under `Brain/`? See {@link brainRootSegments}. */
+export function isUnderBrainRoot(relPath: string): boolean {
+  return brainRootSegments(relPath) !== null;
+}
+
+/**
+ * Does `relPath` name a file strictly inside one of `lanes` (each a
+ * `Brain/<dir>` constant)? Read with the same normalization and
+ * case-folding as {@link brainRootSegments}, so a lane admits exactly the
+ * spellings the machinery wall would otherwise refuse.
+ */
+export function isInBrainLane(relPath: string, lanes: ReadonlyArray<string>): boolean {
+  const tail = brainRootSegments(relPath);
+  if (tail === null) return false;
+  return lanes.some((lane) => {
+    const laneTail = lane.split("/").slice(1);
+    if (tail.length <= laneTail.length) return false;
+    return laneTail.every((segment, i) => foldSegment(segment) === foldSegment(tail[i]!));
+  });
+}

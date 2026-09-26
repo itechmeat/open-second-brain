@@ -17,6 +17,9 @@ export function renderQueryPreferenceText(out: ReturnType<typeof queryByPreferen
   if (p.scope) ok(`scope: ${p.scope}`);
   ok(`status: ${"status" in p ? p.status : "(unknown)"}`);
   ok(`principle: ${p.principle}`);
+  if ("knowledge_pack" in p && p.knowledge_pack !== undefined) {
+    ok(`knowledge pack: ${p.knowledge_pack}`);
+  }
   if (out.evidence.length === 0) {
     ok("evidence: (none)");
     return;

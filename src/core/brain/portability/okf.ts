@@ -38,6 +38,12 @@
  * `OKF Review/` with `okf_review: pending` so nothing in the live vault is
  * touched until an operator promotes them. `--trusted` writes each page
  * directly to its recorded vault-relative path (a true round-trip).
+ *
+ * The bundle's self-declared `producer` is a LABEL, never a credential:
+ * any bundle can write `"producer": "open-second-brain"` into its
+ * manifest. It decides only provenance stamping. Every security decision
+ * - whether machinery frontmatter survives, whether the Brain page lanes
+ * are writable - keys on the operator's explicit `--trusted` instead.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
@@ -62,10 +68,13 @@ import {
   BRAIN_SOURCES_REL,
   BRAIN_REPORTS_REL,
   ensureInsideVault,
+  isInBrainLane,
+  isUnderBrainRoot,
 } from "../paths.ts";
 import { isoSecond } from "../time.ts";
 import { vaultDisplayName } from "../templates.ts";
 import { assertVaultIdentityForWrite } from "../vault-identity.ts";
+import { KNOWLEDGE_PACK_FIELD, KNOWLEDGE_PACK_SHA_FIELD } from "./pack-stamp.ts";
 
 export const OKF_SCHEMA_VERSION = "1";
 export const OKF_PRODUCER = "open-second-brain";
@@ -415,8 +424,25 @@ export function renderOkfManifest(manifest: OkfManifest): string {
  * `manifest.generated_at` varies.
  */
 export function buildOkfBundle(vault: string): OkfBundle {
-  const pages = collectOkfPages(vault);
-  const log = buildLog(vault);
+  return assembleOkfBundle(vault, collectOkfPages(vault), buildLog(vault));
+}
+
+/**
+ * Build an OKF bundle write-plan over a caller-chosen SUBSET of pages and
+ * no change log. The knowledge-pack export is the caller: a pack carries
+ * the pages an operator selected, never the vault's whole history, so the
+ * date-grouped `log.md` a full bundle folds in is left out (the manifest
+ * says `log_days: 0`). Pure; the pages are written as given.
+ */
+export function buildOkfSubsetBundle(vault: string, pages: ReadonlyArray<OkfPage>): OkfBundle {
+  return assembleOkfBundle(vault, pages, null);
+}
+
+function assembleOkfBundle(
+  vault: string,
+  pages: ReadonlyArray<OkfPage>,
+  log: { contents: string; days: number } | null,
+): OkfBundle {
   const manifest: OkfManifest = {
     schema: OKF_SCHEMA_VERSION,
     producer: OKF_PRODUCER,
@@ -434,14 +460,14 @@ export function buildOkfBundle(vault: string): OkfBundle {
       foreign_type: p.foreign_type,
       producer_meta: p.producer_meta,
     })),
-    log_days: log.days,
+    log_days: log?.days ?? 0,
   };
 
   const files: OkfBundleFile[] = [
     { path: OKF_MANIFEST_FILENAME, contents: renderOkfManifest(manifest) },
     { path: "index.md", contents: renderIndex(manifest) },
-    { path: "log.md", contents: log.contents },
   ];
+  if (log !== null) files.push({ path: "log.md", contents: log.contents });
   for (const p of pages) {
     files.push({ path: p.bundle_path, contents: formatFrontmatter(p.frontmatter, p.body) });
   }
@@ -610,10 +636,21 @@ export interface OkfImportOptions {
    * path (a true round-trip). When false (default), stage every page
    * under `OKF Review/` with `okf_review: pending` so the live vault is
    * untouched until an operator promotes the candidates.
+   *
+   * This flag is the operator's vouch, and the only one the import
+   * honours: without it machinery frontmatter (`_status`, `owner`,
+   * `origin_channel`, ...) is stripped and the Brain page lanes are not
+   * writable, whatever `producer` the bundle's manifest declares.
    */
   readonly trusted?: boolean;
   /** Wall clock for the import stamp. Tests pin this. */
   readonly now?: Date;
+  /**
+   * Server-side provenance written onto every landed page AFTER the
+   * machinery strip, so the bundle can neither supply nor forge it. The
+   * knowledge-pack installer passes its `knowledge_pack` stamp here.
+   */
+  readonly provenance?: Readonly<Record<string, string>>;
 }
 
 export interface OkfImportResult {
@@ -629,12 +666,122 @@ export interface OkfImportResult {
 }
 
 /**
+ * Frontmatter keys an imported page may not carry across the trust
+ * boundary. These are the machinery fields this system's own writers
+ * stamp server-side - the `_status`/`_confidence` lifecycle, the
+ * `_revision`/`_content_hash` write accounting, the `origin_channel`
+ * transport stamp, the `owner` scope claim, and the `okf_review` staging
+ * marker - so a bundle supplying them verbatim would mint pages that
+ * read as system-authored the moment an operator promotes them out of
+ * the review lane.
+ *
+ * Stripped on every import the operator did not vouch for with
+ * `--trusted`, whatever the manifest's `producer` says: the producer
+ * field is bundle-supplied and a forged `open-second-brain` must not
+ * carry `_status: confirmed` through. A trusted import of a bundle that
+ * declares a foreign producer strips them too - nothing a foreign tool
+ * wrote is this system's machinery. The one lossless path is a trusted
+ * import of a bundle that declares this producer: the operator's own
+ * round-trip, vouched for by the operator, not by the bundle.
+ *
+ * `visibility` is deliberately NOT in this set. It is the page's
+ * read-scope, and every token it can carry only NARROWS reach (a page
+ * with no `visibility:` is reachable by every consumer; see
+ * `graph/visibility.ts`). Stripping it could only widen what a page
+ * exposes - a private page in the operator's own bundle would land
+ * public in the review lane - while preserving it can at worst hide a
+ * staged page from a remote read, which the review lane survives.
+ */
+const FOREIGN_MACHINERY_KEYS: ReadonlySet<string> = new Set([
+  "_status",
+  "_confidence",
+  "_confidence_value",
+  "_revision",
+  "_content_hash",
+  "_force_confirmed_via",
+  "origin_channel",
+  "owner",
+  "okf_review",
+  // The knowledge-pack provenance stamp: written by the pack installer
+  // after this strip, so a bundle cannot enrol a page in a pack's uninstall.
+  KNOWLEDGE_PACK_FIELD,
+  // The staged page's install-time fingerprint, same rule as the stamp.
+  KNOWLEDGE_PACK_SHA_FIELD,
+]);
+
+/**
+ * A copy of `meta` without this system's machinery keys (see
+ * {@link FOREIGN_MACHINERY_KEYS}). The knowledge-pack export runs every
+ * selected page through it: a pack is handed to someone else, and this
+ * vault's lifecycle, write-accounting, transport and owner stamps are not
+ * knowledge the recipient can use - the recipient's import strips them
+ * anyway, so leaving them in would only widen what the file leaks.
+ */
+export function stripOkfMachinery(meta: FrontmatterMap): FrontmatterMap {
+  const out: FrontmatterMap = { ...meta };
+  for (const key of FOREIGN_MACHINERY_KEYS) delete out[key];
+  return out;
+}
+
+/**
+ * The Brain directories an OKF bundle carries pages for: exactly the two
+ * lanes {@link buildOkfBundle} exports (`sources/` as references,
+ * `reports/` as queries).
+ */
+const OKF_BRAIN_PAGE_LANES: ReadonlyArray<string> = Object.freeze([
+  BRAIN_SOURCES_REL,
+  BRAIN_REPORTS_REL,
+]);
+
+/**
+ * The refusal reason for a recorded page path, or `null` when the path may
+ * proceed into its lane. Two walls:
+ *
+ * 1. A recorded path is a vault-relative POSIX path: absolute, empty,
+ *    backslash, `.`, and `..` segments are refused before any join.
+ *    Refusing `..` is what keeps the review lane unescapable -
+ *    `posix.join("OKF Review", "../Brain/standing-rules.md")` normalizes
+ *    to `Brain/standing-rules.md`, which would let a hostile manifest
+ *    plant machinery files straight into the live vault. Backslash is
+ *    refused as a character because it is a separator on the Windows
+ *    filesystems this project ships on, where a posix-string check would
+ *    not see the escape.
+ * 2. In trusted mode `Brain/` is machinery, not pages: only the two page
+ *    lanes the exporter emits (`sources/`, `reports/`) are writable, and
+ *    only because the operator passed `--trusted` - the bundle's
+ *    `producer` claim plays no part. The Brain segment is compared
+ *    case-insensitively (`brain/` opens `Brain/` on macOS and Windows).
+ *    Review mode needs no such wall - wall 1 already guarantees staging
+ *    stays under `OKF Review/`, where a Brain-shaped subpath is inert.
+ */
+function okfTargetRefusal(entryPath: string, trusted: boolean): string | null {
+  if (
+    entryPath.length === 0 ||
+    entryPath.startsWith("/") ||
+    entryPath.includes("\\") ||
+    entryPath.split("/").some((s) => s.length === 0 || s === "." || s === "..")
+  ) {
+    return `recorded path must be a relative POSIX path with no empty, '.', '..', or backslash segments: ${entryPath}`;
+  }
+  if (trusted && isUnderBrainRoot(entryPath) && !isInBrainLane(entryPath, OKF_BRAIN_PAGE_LANES)) {
+    return (
+      `trusted import refuses Brain machinery paths except the ` +
+      `${BRAIN_SOURCES_REL}/ and ${BRAIN_REPORTS_REL}/ page lanes: ${entryPath}`
+    );
+  }
+  return null;
+}
+
+/**
  * Compose the frontmatter a page lands with. Standard fields are taken
- * from the bundle file verbatim; for a foreign bundle we additionally
- * stamp provenance (producer + raw foreign type) without clobbering any
- * such key the page already carries — preserving, never overwriting,
- * producer-specific metadata. Review-staged pages also get
- * `okf_review: pending`.
+ * from the bundle file verbatim. This system's machinery keys (they are
+ * server-stamped, not caller-supplied - see
+ * {@link FOREIGN_MACHINERY_KEYS}) are stripped unless the operator
+ * vouched for an own-producer bundle with `--trusted`. A bundle that
+ * declares a foreign producer additionally gets provenance stamped
+ * (producer + raw foreign type) without clobbering any such key the page
+ * already carries — preserving, never overwriting, producer-specific
+ * metadata. Review-staged pages also get `okf_review: pending`.
  */
 function importFrontmatter(
   page: ParsedOkfPage,
@@ -644,6 +791,9 @@ function importFrontmatter(
   nowIso: string,
 ): FrontmatterMap {
   const meta: FrontmatterMap = { ...page.frontmatter };
+  if (!trusted || foreign) {
+    for (const key of FOREIGN_MACHINERY_KEYS) delete meta[key];
+  }
   if (foreign) {
     if (meta[PRODUCER_KEY] === undefined) meta[PRODUCER_KEY] = producer;
     // Preserve the raw foreign type: prefer the bundle's recorded
@@ -679,6 +829,14 @@ export function importOkfBundle(
   const errors: { path: string; message: string }[] = [];
 
   for (const page of bundle.pages) {
+    // The lane check runs BEFORE any join: a recorded path that is not a
+    // clean vault-relative POSIX path (or, in trusted mode, reaches into
+    // Brain machinery) is reported as an error and never touches disk.
+    const refusal = okfTargetRefusal(page.entry.path, trusted);
+    if (refusal !== null) {
+      errors.push({ path: page.entry.path, message: refusal });
+      continue;
+    }
     const targetRel = trusted ? page.entry.path : posix.join(OKF_REVIEW_REL, page.entry.path);
     let abs: string;
     try {
@@ -691,7 +849,10 @@ export function importOkfBundle(
       skipped.push(targetRel);
       continue;
     }
-    const meta = importFrontmatter(page, bundle.manifest.producer, bundle.foreign, trusted, nowIso);
+    const meta: FrontmatterMap = {
+      ...importFrontmatter(page, bundle.manifest.producer, bundle.foreign, trusted, nowIso),
+      ...opts.provenance,
+    };
     try {
       mkdirSync(dirname(abs), { recursive: true });
       // overwrite: trusted closes the TOCTOU window in review mode: if a

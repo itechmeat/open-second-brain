@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 
 import type { FrontmatterMap } from "../../types.ts";
-import { canonicalNotePath } from "../../path-safety.ts";
+import { canonicalNotePath, ensureInsideVault } from "../../path-safety.ts";
 import { assertCheckpointId } from "../checkpoint-store.ts";
 import {
   formatFrontmatter,
@@ -204,7 +204,11 @@ export function ingestSource(
   // `unchanged` and skip the extraction pass. Only when the source resolves to
   // a real file inside the vault - URL and other identity-only sources have no
   // bytes to hash and must leave the manifest untouched (backward-compatible).
-  if (existsSync(join(vault, canonicalSource))) {
+  // The containment predicate is the same one the pre-extract read answers to:
+  // an escaping identity must not reach `existsSync` either, or a path outside
+  // the vault would be hashed into the content manifest and keyed into a
+  // folder-plan checkpoint.
+  if (resolvesInsideVault(vault, canonicalSource) && existsSync(join(vault, canonicalSource))) {
     updateManifest(vault, [canonicalSource]);
     // Record plan-scoped progress so an interrupted batch resumes at the item
     // boundary (t_ba1fa5f6). Only for real vault files - a URL/identity-only
@@ -239,6 +243,17 @@ export function ingestSource(
  * so it is reported as unextracted rather than a fake empty success.
  */
 function runPreExtract(vault: string, canonicalSource: string): PreExtractResult {
+  // The identity is caller-supplied and `..` segments survive normalization,
+  // so the read is contained the same way the trust classifier contains its
+  // own resolution (`source-trust.ts`): an identity that resolves outside the
+  // vault is not this vault's file to read, and is reported as unextracted
+  // rather than turned into a host-filesystem read.
+  if (!resolvesInsideVault(vault, canonicalSource)) {
+    return {
+      extracted: false,
+      reason: `source does not resolve inside this vault; code-structure pre-extraction skipped: ${canonicalSource}`,
+    };
+  }
   const abs = join(vault, canonicalSource);
   try {
     return preExtractCodeStructure(canonicalSource, readFileSync(abs, "utf8"));
@@ -250,6 +265,20 @@ function runPreExtract(vault: string, canonicalSource: string): PreExtractResult
       extracted: false,
       reason: `source has no readable file bytes for code-structure pre-extraction: ${canonicalSource}`,
     };
+  }
+}
+
+/**
+ * Does this canonical identity resolve to a location this vault owns? The
+ * same containment the note-write ladder enforces, applied to the one
+ * read path in the ingest pipeline that takes a caller-named identity.
+ */
+function resolvesInsideVault(vault: string, canonicalSource: string): boolean {
+  try {
+    ensureInsideVault(join(vault, canonicalSource), vault);
+    return true;
+  } catch {
+    return false;
   }
 }
 

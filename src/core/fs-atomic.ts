@@ -46,7 +46,14 @@ const WINDOWS_TRANSIENT_RENAME_CODES: ReadonlySet<string> = new Set(["EPERM", "E
 /** Total time {@link renameWithRetry} keeps retrying on Windows. */
 const WINDOWS_RENAME_RETRY_BUDGET_MS = 2_000;
 
-function sleepSync(ms: number): void {
+/**
+ * Block the calling thread for `ms` milliseconds.
+ *
+ * Runtime-neutral on purpose: `Atomics.wait` exists in Bun and in Node,
+ * while `Bun.sleepSync` does not exist in the Node-targeted OpenClaw
+ * bundle - a module that bundle reaches must wait through this.
+ */
+export function sleepSync(ms: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 

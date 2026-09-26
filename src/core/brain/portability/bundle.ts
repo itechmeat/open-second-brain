@@ -140,7 +140,7 @@ interface BankBundleInput {
 export function importBankBundle(
   vault: string,
   bundle: BankBundleInput,
-  opts: { mode?: GraphImportMode; agent?: string } = {},
+  opts: { mode?: GraphImportMode; agent?: string; trustedRestore?: boolean } = {},
 ): BankImportResult {
   if (bundle === null || typeof bundle !== "object") {
     throw new BankImportError("invalid bank bundle payload: expected an object");
@@ -158,11 +158,10 @@ export function importBankBundle(
   // is refused by the row guard - reporting it as zero carried rows would
   // be the same silent drop this unit removes.
   const preferenceRows = preferenceSection(bundle.preferences);
-  const preferences = restorePreferences(
-    vault,
-    preferenceRows,
-    opts.agent !== undefined ? { agent: opts.agent } : {},
-  );
+  const preferences = restorePreferences(vault, preferenceRows, {
+    ...(opts.agent !== undefined ? { agent: opts.agent } : {}),
+    ...(opts.trustedRestore !== undefined ? { trustedRestore: opts.trustedRestore } : {}),
+  });
 
   return {
     schema: BANK_BUNDLE_SCHEMA_VERSION,

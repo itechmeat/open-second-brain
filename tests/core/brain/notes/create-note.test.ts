@@ -15,6 +15,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
   mkdirSync,
 } from "node:fs";
@@ -78,6 +79,16 @@ describe("createNote", () => {
       CreateNoteError,
     );
     expect(existsSync(join(vault, "Brain/sneaky.md"))).toBe(false);
+  });
+
+  test("refuses the Brain root under any case spelling", () => {
+    // `brain/` opens `Brain/` on the case-insensitive macOS and Windows
+    // defaults, so a case-sensitive compare is not a wall there.
+    for (const path of ["brain/sneaky.md", "BRAIN/sneaky.md", "bRaIn/deep/sneaky.md"]) {
+      expect(() => createNote(vault, { path, content: "x" })).toThrow(/Brain machinery root/);
+    }
+    expect(existsSync(join(vault, "brain"))).toBe(false);
+    expect(existsSync(join(vault, "BRAIN"))).toBe(false);
   });
 
   test("refuses a vault-scope excluded path, naming the key and the entry", () => {
@@ -165,5 +176,32 @@ describe("a caller-named path is read with this host's separator only", () => {
     const res = createNote(vault, { path: "Projects/evil.md", content: "x" });
     expect(res.path).toBe("Projects/evil.md");
     expect(existsSync(join(vault, "Projects", "evil.md"))).toBe(true);
+  });
+});
+
+describe("createNote refuses a target it cannot resolve on disk", () => {
+  function refusal(path: string): CreateNoteError {
+    try {
+      createNote(vault, { path, content: "x" });
+    } catch (err) {
+      if (err instanceof CreateNoteError) return err;
+      throw err;
+    }
+    throw new Error("expected CreateNoteError");
+  }
+
+  test("a note used as a folder is an invalid_path refusal, not an I/O crash", () => {
+    writeFileSync(join(vault, "existing.md"), "x\n");
+    const err = refusal("existing.md/x.md");
+    expect(err.code).toBe("invalid_path");
+    expect(err.message).toContain("cannot be resolved");
+  });
+
+  test("a symlink loop is an invalid_path refusal", () => {
+    symlinkSync(join(vault, "loop-b"), join(vault, "loop-a"));
+    symlinkSync(join(vault, "loop-a"), join(vault, "loop-b"));
+    const err = refusal("loop-a/x.md");
+    expect(err.code).toBe("invalid_path");
+    expect(existsSync(join(vault, "loop-a", "x.md"))).toBe(false);
   });
 });

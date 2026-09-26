@@ -27,8 +27,13 @@
 import { TRANSPORT_REACH, type TransportReach } from "./transport-reach.ts";
 import type { FrontmatterMap } from "../types.ts";
 
-/** Lower-case + NFC + trim a single visibility token. */
-function normToken(raw: string): string {
+/**
+ * Lower-case + NFC + trim a single visibility token. Exported because the
+ * MCP argument gate refuses the reserved token by its NORMALIZED form -
+ * a caller spelling `Private` or ` PRIVATE ` must meet the same refusal
+ * as one that spells the identifier exactly.
+ */
+export function normToken(raw: string): string {
   return raw.normalize("NFC").trim().toLowerCase();
 }
 
@@ -57,9 +62,17 @@ export function normalizeVisibilityScope(values: ReadonlyArray<string>): Set<str
  * Default-visibility pages (no tags) are always reachable; a tagged
  * page is reachable only when one of its tags is in the requested
  * scope (an empty scope reaches default pages only).
+ *
+ * The reserved token ({@link REMOTE_DENY_VISIBILITY_TOKEN}) DOMINATES:
+ * a page carrying it is reachable only when the scope names it too, so
+ * `visibility: [private, team]` is not lifted by a caller asking for
+ * `team`. Any-tag matching let the co-tag open the private class.
  */
 export function isVisible(pageTags: ReadonlyArray<string>, scope: ReadonlySet<string>): boolean {
   if (pageTags.length === 0) return true;
+  if (pageTags.includes(REMOTE_DENY_VISIBILITY_TOKEN)) {
+    return scope.has(REMOTE_DENY_VISIBILITY_TOKEN);
+  }
   for (const t of pageTags) if (scope.has(t)) return true;
   return false;
 }

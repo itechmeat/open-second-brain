@@ -8,20 +8,22 @@
  */
 
 import { beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { mkdirSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { BRAIN_TEMPORAL_DEFAULTS } from "../../../../src/core/brain/policy.ts";
 import { buildTimelineIndex } from "../../../../src/core/brain/temporal/build-index.ts";
 import { buildWeeklySynthesis } from "../../../../src/core/brain/temporal/weekly-brief.ts";
+import { tempDirs } from "../../../helpers/temp-dir.ts";
+
+const mkTemp = tempDirs();
 
 const WEEK_END = "2026-06-04";
 
 let vault: string;
 
 beforeEach(() => {
-  vault = mkdtempSync(join(tmpdir(), "o2b-top-source-"));
+  vault = mkTemp("o2b-top-source-");
   mkdirSync(join(vault, "Brain", "log"), { recursive: true });
   mkdirSync(join(vault, "Brain", "notes"), { recursive: true });
 });

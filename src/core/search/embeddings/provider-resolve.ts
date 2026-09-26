@@ -26,6 +26,8 @@ export interface OpenAiCompatEndpoint {
   readonly baseUrl: string;
   readonly model: string;
   readonly apiKey: string;
+  /** The operator's plain-http opt-out for this endpoint; present only when true. */
+  readonly allowInsecureHttp?: boolean;
 }
 
 /** Inputs to {@link resolveOpenAiCompatEndpoint}. */
@@ -40,6 +42,8 @@ export interface ResolveEndpointInput {
   readonly apiKey?: string | null;
   /** Environment map; defaults to `process.env`. */
   readonly env?: Readonly<Record<string, string | undefined>>;
+  /** The operator's plain-http opt-out, carried onto the endpoint. */
+  readonly allowInsecureHttp?: boolean;
 }
 
 function nonEmpty(value: string | null | undefined): string | null {
@@ -90,5 +94,6 @@ export function resolveOpenAiCompatEndpoint(
     baseUrl: baseUrl.replace(/\/+$/, ""),
     model,
     apiKey,
+    ...(input.allowInsecureHttp === true ? { allowInsecureHttp: true } : {}),
   });
 }

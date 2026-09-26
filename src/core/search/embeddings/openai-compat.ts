@@ -29,6 +29,7 @@ import {
   PAYMENT_REQUIRED_STATUS,
   RATE_LIMIT_STATUS,
   RETRYABLE_STATUSES,
+  assertHttpEgressEndpoint,
   chunkArrayByTokenBudget,
   jittered,
   parseRetryAfterMs,
@@ -208,7 +209,10 @@ function resolveHttp(config: ResolvedEmbeddingConfig): ResolvedHttp {
       "embedding_api_key is required when semantic is enabled",
     );
   }
-  const base = config.baseUrl.replace(/\/+$/, "");
+  const base = assertHttpEgressEndpoint(config.baseUrl, "embedding_base_url", {
+    allowInsecureHttp: config.allowInsecureHttp === true,
+    key: "embedding_allow_insecure_http",
+  }).replace(/\/+$/, "");
   return { url: `${base}/embeddings`, apiKey: config.apiKey };
 }
 
@@ -448,6 +452,9 @@ export class OpenAICompatProvider implements EmbeddingProvider {
           input: texts,
           encoding_format: "float",
         }),
+        // No cross-host redirect may take the bearer key - or the chunk
+        // bodies - somewhere the operator did not configure.
+        redirect: "error",
         signal: controller.signal,
       });
     } catch (e) {

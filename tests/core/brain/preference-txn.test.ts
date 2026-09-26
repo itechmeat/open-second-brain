@@ -5,7 +5,7 @@
  * `BrainCollisionError`, then mutates via `writeFrontmatterAtomic`.
  */
 
-import { afterAll, beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -34,7 +34,7 @@ beforeEach(() => {
   });
 });
 
-afterAll(() => {
+afterEach(() => {
   if (tmpRoot) rmSync(tmpRoot, { recursive: true, force: true });
 });
 

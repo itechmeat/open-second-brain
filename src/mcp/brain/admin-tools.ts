@@ -7,6 +7,10 @@
  */
 
 import { existsSync } from "node:fs";
+import { relative } from "node:path";
+
+import { toPosix } from "../../core/path-safety.ts";
+import { reachView } from "../../core/brain/reach-view.ts";
 import { resolveAgentName } from "../../core/config.ts";
 import { indexVault, resolveSearchConfig } from "../../core/search/index.ts";
 import { Store } from "../../core/search/store.ts";
@@ -17,6 +21,8 @@ import {
   removeNoteLabel,
 } from "../../core/brain/labels.ts";
 import { StandingRulesWriteRefusedError } from "../../core/brain/standing-rules.ts";
+import { GovernedPathWriteRefusedError } from "../../core/write-binding/index.ts";
+import { assertVaultIdentityForWrite } from "../../core/brain/vault-identity.ts";
 import { loadSchemaPack } from "../../core/brain/schema-pack.ts";
 import { listSecrets } from "../../core/brain/secrets/store.ts";
 import { runWithSecret, SecretExecDeniedError } from "../../core/brain/secrets/exec.ts";
@@ -56,6 +62,7 @@ import { normalizeAgentArgument } from "../../core/agent-identity.ts";
 import { coerceInt, coerceStrList } from "../coerce.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
+import { contextReach } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 
 /** Controlled-vocabulary classification over the schema pack's labels. */
@@ -79,7 +86,15 @@ function toolBrainLabels(
   // sentence.
   const path = requiredStringArg(`brain_labels ${op}`, args, "path");
   if (op === "show") {
-    const [metadata] = parseFrontmatter(vaultContainedPath(ctx.vault, path, "brain_labels show"));
+    const abs = vaultContainedPath(ctx.vault, path, "brain_labels show");
+    // A metadata oracle otherwise (audit L8): at remote reach a page
+    // reserved against remote reads answers exactly as an absent one, so
+    // the reply cannot prove it exists. At local reach the view is a no-op.
+    const view = reachView(ctx.vault, contextReach(ctx));
+    if (!view.visible(toPosix(relative(ctx.vault, abs)))) {
+      throw new MCPError(INVALID_PARAMS, `brain_labels show: note does not exist: ${path}`);
+    }
+    const [metadata] = parseFrontmatter(abs);
     return { path, labels: readLabels(metadata) };
   }
   const pack = loadSchemaPack(ctx.vault);
@@ -110,6 +125,12 @@ function toolBrainLabels(
     // named a file this surface will not rewrite, and the message says
     // which one so the agent stops trying rather than retrying blind.
     if (exc instanceof StandingRulesWriteRefusedError) {
+      throw new MCPError(INVALID_PARAMS, `brain_labels ${op}: ${exc.message}`);
+    }
+    // The Brain machinery root and the operator's declared write binding
+    // refuse the same way: the caller named a target the governance
+    // envelope does not admit, and naming it back is the whole answer.
+    if (exc instanceof GovernedPathWriteRefusedError) {
       throw new MCPError(INVALID_PARAMS, `brain_labels ${op}: ${exc.message}`);
     }
     throw exc;
@@ -153,6 +174,13 @@ async function toolBrainTiers(
       "brain_tiers restore: pass apply=true - restore writes the file",
     );
   }
+  // Both remaining operations WRITE - `restore` rewrites the note's
+  // frontmatter, `accept` rewrites the tier snapshot - so both answer to
+  // the freeze the way every other content write does. The dispatcher
+  // turns the thrown `VaultFrozenError` into the structured refusal and
+  // records the attempt, so a frozen vault is not writable through this
+  // surface merely because it is a repair surface.
+  assertVaultIdentityForWrite(ctx.vault);
   const field = typeof args["field"] === "string" ? (args["field"] as string) : undefined;
   if (!existsSync(searchConfig.dbPath)) {
     throw new MCPError(INVALID_PARAMS, `brain_tiers ${op}: the vault has no search index yet`);

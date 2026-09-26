@@ -222,6 +222,23 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "the other two are defects in this build rather than in the vault being examined",
   },
   {
+    code: "payload-missing",
+    reason:
+      "the exact bytes a placeholder stands for are gone from the payload store. Nothing in this " +
+      "vault can regenerate them - the source transcript may be deleted or rotated - and which " +
+      "recovery point still holds them is a choice between archives that also roll back " +
+      "everything else written since, which only the operator can weigh",
+  },
+  {
+    code: "continuity-row-oversized",
+    reason:
+      "the rows were appended before the payload registry bounded session text. The continuity " +
+      "ledger is append-only history that other devices merge by content id, so rewriting a " +
+      "shard in place would re-identify its rows on every peer. The finding measures weight " +
+      "rather than damage - every row still reads - so whether that cost is worth a rewrite is " +
+      "the operator's call, and no command makes it for them",
+  },
+  {
     code: "recovery-point-unmeasured",
     reason:
       "the recovery-point history is there and the walk over it was refused. What repairs that " +
@@ -266,6 +283,14 @@ const EXCLUSIONS: ReadonlyArray<DoctorExitExclusion> = [
       "the retired record could not be parsed, for a reason the parser reports verbatim in the " +
       "finding. As with its preference twin, the repair is an edit whose shape depends on which " +
       "part of the grammar broke",
+  },
+  {
+    code: "secrets-sync-exposed",
+    reason:
+      "the repair is one line in the Syncthing folder's root .stignore, which the finding " +
+      "names verbatim. That file is the operator's sync configuration and is shared with every " +
+      "peer, so no verb here edits it: whether a machine the operator owns should hold the " +
+      "keyfile is their decision, not a repair this tool can make for them",
   },
   {
     code: "signal-invalid",

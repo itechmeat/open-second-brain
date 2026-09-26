@@ -72,6 +72,15 @@ import { SearchError } from "../../core/search/types.ts";
 import { aggregateQueryDemand, serializeQueryDemandReport } from "../../core/brain/query-demand.ts";
 import { buildRetrievalPlan, serializeRetrievalPlan } from "../../core/brain/retrieval-plan.ts";
 import { isoSecond } from "../../core/brain/time.ts";
+import { isPayloadRemotelyReadable } from "../../core/brain/payload-inventory.ts";
+import {
+  DEFAULT_PAYLOAD_PAGE_CHARS,
+  PayloadNotFoundError,
+  PayloadRefError,
+  PayloadRegistry,
+  payloadIdFromRef,
+} from "../../core/brain/payload-registry.ts";
+import { TRANSPORT_REACH } from "../../core/graph/transport-reach.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { contextReach } from "../tool-contract.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -911,6 +920,7 @@ async function toolBrainSessionGrep(
   return {
     ...searchSessionRecall(ctx.vault, {
       query: requiredStringArg("brain_session_grep", args, "query"),
+      ...withheldAtRemoteReach(ctx),
       ...(optionalStringArg("brain_session_grep", args, "session_id") !== undefined
         ? {
             sessionId: optionalStringArg("brain_session_grep", args, "session_id"),
@@ -951,6 +961,15 @@ function resolveSessionGrepBounds(
   }
 }
 
+/**
+ * Private continuity rows are session data a remote caller does not get:
+ * the recall tools answer about them exactly as about a row that does not
+ * exist. A local caller keeps every row.
+ */
+function withheldAtRemoteReach(ctx: ServerContext): { withholdPrivate?: true } {
+  return contextReach(ctx) === TRANSPORT_REACH.local ? {} : { withholdPrivate: true };
+}
+
 async function toolBrainSessionDescribe(
   ctx: ServerContext,
   args: Record<string, unknown>,
@@ -958,6 +977,7 @@ async function toolBrainSessionDescribe(
   return {
     ...describeSessionRecall(ctx.vault, {
       sessionId: requiredStringArg("brain_session_describe", args, "session_id"),
+      ...withheldAtRemoteReach(ctx),
     }),
   };
 }
@@ -966,16 +986,97 @@ async function toolBrainSessionExpand(
   ctx: ServerContext,
   args: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
+  const payloadRef = optionalStringArg("brain_session_expand", args, "payload");
+  if (payloadRef !== undefined) return expandPayload(ctx, args, payloadRef);
   const rawLimit = coercePositiveInteger("brain_session_expand", "raw_limit", args["raw_limit"]);
   return {
     ...expandSessionRecall(ctx.vault, {
       id: requiredStringArg("brain_session_expand", args, "id"),
+      ...withheldAtRemoteReach(ctx),
       ...(rawLimit !== undefined ? { rawLimit } : {}),
       ...(optionalStringArg("brain_session_expand", args, "cursor") !== undefined
         ? { cursor: optionalStringArg("brain_session_expand", args, "cursor") }
         : {}),
     }),
   };
+}
+
+/**
+ * Page one externalized payload (t_35440e83) - the `payload` mode of
+ * `brain_session_expand`.
+ *
+ * Payloads only ever come out of session import, so expanding a
+ * placeholder found in a recalled turn is the same act as expanding the
+ * turn: one more level of "give me the exact source". Riding this tool
+ * rather than adding one keeps the tool budget and every profile that
+ * already carries the session tools unchanged.
+ *
+ * Reach: a local caller reads any stored payload. A REMOTE caller reads
+ * one only when a non-private session turn references it, directly or
+ * through another remotely readable payload (`payload-inventory.ts`).
+ * Pages grant nothing: a page can be written by tools a session turn
+ * cannot. A payload referenced only from a private row or a page, and an
+ * orphan nobody references, answer the same refusal, so a remote caller
+ * cannot use the difference to probe what exists.
+ */
+function expandPayload(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+  ref: string,
+): Record<string, unknown> {
+  if (args["id"] !== undefined || args["raw_limit"] !== undefined) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_expand: `payload` pages one payload ref; it cannot be combined with `id` or `raw_limit`",
+    );
+  }
+  let sha256: string;
+  try {
+    sha256 = payloadIdFromRef(ref);
+  } catch (err) {
+    if (err instanceof PayloadRefError) throw new MCPError(INVALID_PARAMS, err.message);
+    throw err;
+  }
+  if (
+    contextReach(ctx) !== TRANSPORT_REACH.local &&
+    !isPayloadRemotelyReadable(ctx.vault, sha256)
+  ) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `brain_session_expand: payload ${ref} is not readable at remote reach - no non-private ` +
+        "session turn references it",
+    );
+  }
+  const cursor = optionalStringArg("brain_session_expand", args, "cursor");
+  const offset = cursor === undefined ? 0 : Number.parseInt(cursor, 10);
+  if (cursor !== undefined && (!/^[0-9]+$/.test(cursor) || !Number.isFinite(offset))) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_session_expand: a payload cursor is the next_cursor of a previous page",
+    );
+  }
+  const limit =
+    coercePositiveInteger("brain_session_expand", "payload_chars", args["payload_chars"]) ??
+    DEFAULT_PAYLOAD_PAGE_CHARS;
+  try {
+    const page = new PayloadRegistry({ vault: ctx.vault, maxInlineChars: 1 }).get(ref, {
+      offset,
+      limit,
+    });
+    return {
+      payload: {
+        ref: page.ref,
+        offset: page.offset,
+        limit: page.limit,
+        total_chars: page.totalChars,
+        content: page.content,
+      },
+      next_cursor: page.nextOffset === null ? null : String(page.nextOffset),
+    };
+  } catch (err) {
+    if (err instanceof PayloadNotFoundError) throw new MCPError(INVALID_PARAMS, err.message);
+    throw err;
+  }
 }
 
 // ----- brain_pre_compress_pack (v0.20.0) -----------------------------------
@@ -1437,11 +1538,14 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
     name: "brain_session_expand",
     previewBudget: MCP_PREVIEW_BUDGET,
     description:
-      "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content.",
+      "Expand a session recall raw or summary node to immediate sources and paginated exact raw turn content. With payload instead of id, page the exact content behind an [payload: osb-payload://<sha256> chars=N] placeholder.",
     inputSchema: {
       type: "object",
       properties: {
-        id: { type: "string", description: "Session recall record id." },
+        id: {
+          type: "string",
+          description: "Session recall record id (omit when paging a payload).",
+        },
         raw_limit: {
           type: "integer",
           minimum: 1,
@@ -1449,10 +1553,20 @@ export const RECALL_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         cursor: {
           type: "string",
-          description: "Raw turn pagination cursor from a previous response.",
+          description:
+            "Pagination cursor from a previous response (raw turns, or payload chars with payload).",
+        },
+        payload: {
+          type: "string",
+          description:
+            "An osb-payload://<sha256> ref from a placeholder; pages that payload instead of a record.",
+        },
+        payload_chars: {
+          type: "integer",
+          minimum: 1,
+          description: "With payload: characters per page (default 4000).",
         },
       },
-      required: ["id"],
       additionalProperties: false,
     },
     handler: toolBrainSessionExpand,

@@ -49,6 +49,26 @@ OPEN_SECOND_BRAIN_EMBEDDING_KEY=<placeholder; user pastes the key>
 # OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL=https://api.together.xyz/v1
 ```
 
+The base URL must be `https://`. Plain `http://` works only for a
+loopback host (`localhost`, `127.0.0.1`, `::1`). When the user's
+embedding server runs on ANOTHER machine without TLS - LM Studio on the
+Windows host reached from WSL, Ollama on a LAN box, a tailnet `100.x`
+address - the endpoint is refused until the operator opts in for it
+explicitly:
+
+```bash
+OPEN_SECOND_BRAIN_EMBEDDING_BASE_URL=http://100.64.0.5:1234/v1
+OPEN_SECOND_BRAIN_EMBEDDING_ALLOW_INSECURE_HTTP=true
+```
+
+(or `embedding_allow_insecure_http: true` in the o2b config; the
+reranker has its own `search_rerank_allow_insecure_http`). Tell the user
+what it means before setting it: chunk text and the API key cross the
+network unencrypted, so it belongs only on a network they trust. The
+opt-out never applies to a base URL that comes from a provider profile
+registered with `o2b search provider add`; set the URL in config or env
+instead. Every run that uses it prints one stderr warning per endpoint.
+
 **Never invent or echo the key.** Write a placeholder, then ask the
 user to paste their key in place of it. Recheck with `o2b search
 check` after the user confirms.

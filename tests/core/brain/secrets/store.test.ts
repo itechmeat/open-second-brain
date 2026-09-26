@@ -88,9 +88,13 @@ describe("setSecret / listSecrets / removeSecret", () => {
     expect(() => resolveSecretForExec(vault, "embed-key")).toThrow();
   });
 
-  test("an unknown name fails with the stored names listed", () => {
+  test("an unknown name fails without enumerating the stored set (t_sec_secret_names)", () => {
     set();
-    expect(() => resolveSecretForExec(vault, "ghost")).toThrow(/ghost.*embed-key/);
+    // The name inventory is `list`'s job, metadata only, by design; an
+    // error path that hands the same inventory to any caller that can
+    // spell a wrong name would give it away for nothing.
+    expect(() => resolveSecretForExec(vault, "ghost")).toThrow(/unknown secret "ghost"/);
+    expect(() => resolveSecretForExec(vault, "ghost")).not.toThrow(/embed-key/);
   });
 
   test("removeSecret deletes the entry; the value is unrecoverable", () => {

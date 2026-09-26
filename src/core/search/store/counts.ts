@@ -95,7 +95,8 @@ export const NO_REQUEST_PREFIX = "";
  * an optional one is the drift this parameter exists to close.
  *
  * The unit measured is a token ESTIMATE, never the `chunks.token_count`
- * column: that column is the chunker's whitespace WORD count, a
+ * column: that column is the chunker's own count (whitespace words, one
+ * per character for unspaced scripts such as Han), a
  * different unit from a model's token window, and comparing the two as
  * though they matched is the arithmetic this census exists to stop.
  *

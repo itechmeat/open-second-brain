@@ -33,15 +33,32 @@ afterEach(() => {
 });
 
 describe("matchesAllowlist (pure)", () => {
-  test("glob star spans arguments; everything else is literal", () => {
-    expect(matchesAllowlist(["curl *"], "curl https://api.example.com")).toBe(true);
-    expect(matchesAllowlist(["curl *"], "bash -c curl")).toBe(false);
-    expect(matchesAllowlist(["echo secret-test"], "echo secret-test")).toBe(true);
-    expect(matchesAllowlist([], "anything")).toBe(false);
+  test("a trailing star means this binary with arguments; tokens align otherwise", () => {
+    expect(matchesAllowlist(["curl *"], ["curl", "https://api.example.com"])).toBe(true);
+    expect(matchesAllowlist(["curl *"], ["curl"])).toBe(false);
+    expect(matchesAllowlist(["curl *"], ["bash", "-c", "curl"])).toBe(false);
+    expect(matchesAllowlist(["echo secret-test"], ["echo", "secret-test"])).toBe(true);
+    expect(matchesAllowlist(["echo secret-test"], ["echo", "other", "secret-test"])).toBe(false);
+    expect(matchesAllowlist([], ["anything"])).toBe(false);
   });
 
-  test("regex metacharacters in patterns stay literal", () => {
-    expect(matchesAllowlist(["node script.js"], "node scriptxjs")).toBe(false);
+  test("argv boundaries are visible: a space inside one argument cannot satisfy two tokens (t_sec_allowlist_segments)", () => {
+    // The joined-string matcher read `curl * https://good` as a regular
+    // expression over `argv.join(" ")`, so the single argument
+    // `https://evil https://good` satisfied it - and the curl that
+    // actually spawned fetched both URLs. Segment matching counts
+    // elements instead.
+    expect(matchesAllowlist(["curl * https://good"], ["curl", "https://evil https://good"])).toBe(
+      false,
+    );
+    expect(matchesAllowlist(["curl * https://good"], ["curl", "--silent", "https://good"])).toBe(
+      true,
+    );
+  });
+
+  test("regex metacharacters in patterns stay literal; stars glob within one element", () => {
+    expect(matchesAllowlist(["node script.js"], ["node", "scriptxjs"])).toBe(false);
+    expect(matchesAllowlist(["node script*.js"], ["node", "scriptABC.js"])).toBe(true);
   });
 });
 
@@ -155,6 +172,34 @@ describe("runWithSecret", () => {
     expect(started).toBeDefined();
     expect(started!.details!.command).toContain("***REDACTED***");
     expect(started!.details!.command).not.toContain(foreignToken);
+  });
+
+  test("a transformed echo of the secret is scrubbed too, not only the literal (audit L3)", async () => {
+    const value = "sk-live-9f8e7d6c5b4a39281706f5e4d3c2b1a0";
+    const encoded = Buffer.from(value).toString("base64");
+    setSecret(vault, {
+      name: "api-key",
+      value,
+      envVar: "MY_API_KEY",
+      allow: ["bun -e *"],
+      agent: "tester",
+      now: NOW,
+    });
+    const result = await runWithSecret(
+      vault,
+      "api-key",
+      [
+        "bun",
+        "-e",
+        "console.log(Buffer.from(process.env.MY_API_KEY).toString('base64')); " +
+          "console.error(Buffer.from(process.env.MY_API_KEY).toString('base64'))",
+      ],
+      CTX,
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain(encoded);
+    expect(result.stderr).not.toContain(encoded);
+    expect(result.stdout).toContain("***REDACTED***");
   });
 
   test("the subprocess exit code propagates", async () => {

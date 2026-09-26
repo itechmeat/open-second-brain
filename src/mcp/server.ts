@@ -47,8 +47,13 @@ import { assertOutputContract } from "./output-contract.ts";
 import { ArtifactStore } from "./artifact-store.ts";
 import { applyPreviewBudget } from "./preview-budget.ts";
 import { evaluateToolCapabilities, type RuntimeCapabilityWindow } from "./capabilities.ts";
+import { redactErrorForCaller } from "./error-redaction.ts";
 import type { InstallTargetId } from "../core/runtime/host-facts.ts";
-import { resolvedTransportReach, type TransportReach } from "../core/graph/transport-reach.ts";
+import {
+  resolvedTransportReach,
+  TRANSPORT_REACH,
+  type TransportReach,
+} from "../core/graph/transport-reach.ts";
 
 /** TTL after which a prior process's artifact run directory is pruned. */
 const ARTIFACT_TTL_MS = 24 * 60 * 60 * 1000;
@@ -349,7 +354,14 @@ export class MCPServer {
       if (exc instanceof MCPError) {
         return errorResponse(requestId, exc.code, exc.message, exc.data);
       }
-      const message = (exc as Error).message ?? String(exc);
+      // A channel that forwards raw exception prose to the caller. Node's
+      // fs errors embed the absolute path of whatever the caller's last
+      // bad argument named, so before this leaves the process it goes
+      // through the redactor - at remote reach with the vault, home and
+      // temp roots replaced too: a caller probing with traversal paths
+      // learns that a file is missing, not the host layout behind it.
+      const raw = (exc as Error).message ?? String(exc);
+      const message = redactErrorForCaller(raw, this.vault, this.reach);
       return errorResponse(requestId, INTERNAL_ERROR, `internal error: ${message}`);
     }
   }
@@ -446,7 +458,15 @@ export class MCPServer {
       return withProgressRefusal(buildMcpToolResult(tool, structured, this.artifactStore), refusal);
     } catch (exc) {
       if (exc instanceof MCPError) throw exc;
-      const message = (exc as Error).message ?? String(exc);
+      // The tool-level twin of the INTERNAL_ERROR channel: the same raw
+      // exception prose, so the same host-path redaction at remote reach.
+      // A local caller already holds the filesystem, and these messages
+      // carry operator remediation (a config path to chmod) verbatim.
+      const raw = (exc as Error).message ?? String(exc);
+      const message =
+        this.reach === TRANSPORT_REACH.local
+          ? raw
+          : redactErrorForCaller(raw, this.vault, this.reach);
       // ValueError/TypeError semantics in Python → tool-level error envelope.
       // OSError in Python → "filesystem error" prefix. We collapse both to a
       // single tool-level error since JS doesn't distinguish.

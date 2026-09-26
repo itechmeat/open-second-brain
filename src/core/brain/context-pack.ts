@@ -297,6 +297,15 @@ export interface ContextPackOptions {
    * Omitted keeps the report byte-identical.
    */
   readonly stamp?: PackStampOptions;
+  /**
+   * Which candidate pages the caller may see, asked with each page's
+   * ABSOLUTE path. Applied to the collected candidates before ranking,
+   * budgeting, lanes, dedup, tension warnings and the receipt, so a
+   * withheld page contributes nothing to any member of the report - not
+   * its body, not its id in `skipped`, not its path in `lanes`. Omitted
+   * keeps every candidate (the operator's own local surfaces).
+   */
+  readonly visible?: (absPath: string) => boolean;
 }
 
 interface Candidate {
@@ -470,9 +479,17 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
   // supersession chains passes through byte-identically.
   const ownerScope = resolveOwnerScopeDelivery(vault, opts.agentScope);
   const collected = collectCandidates(vault, delimitUntrusted, ownerScope);
-  const candidates = preferChainTips(collected.candidates, {
+  // Reach filtering happens after the chain-tip preference: a withheld
+  // tip must not resurrect the superseded ancestor it replaced.
+  const tips = preferChainTips(collected.candidates, {
     historical: opts.includeHistorical === true,
   }).kept;
+  const withheldIds = new Set<string>();
+  const candidates = tips.filter((c) => {
+    if (opts.visible === undefined || opts.visible(c.path)) return true;
+    withheldIds.add(c.id);
+    return false;
+  });
   // Reported only under `warn`, where nothing was withheld - see
   // `formatOwnerScopeWarning` for why `fail` stays silent.
   const ownerScopeWarning = formatOwnerScopeWarning(ownerScope, collected.hiddenByOwnerScope);
@@ -690,6 +707,8 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
           ...withOptionalLanes(opts, keptItems),
         },
         startedAtMs,
+        [],
+        withheldIds,
       );
     }
   }
@@ -708,6 +727,7 @@ export function packContext(vault: string, opts: ContextPackOptions): ContextPac
     },
     startedAtMs,
     ownerScopeWarnings,
+    withheldIds,
   );
 }
 
@@ -723,6 +743,12 @@ function finalizeContextPackReport(
    * byte-identical.
    */
   extraWarnings: ReadonlyArray<string> = [],
+  /**
+   * Ids of candidates {@link ContextPackOptions.visible} withheld. A
+   * tension between an injected memory and one of these is still
+   * reported, but without the tension id, which embeds both subject ids.
+   */
+  withheldIds: ReadonlySet<string> = new Set(),
 ): ContextPackReport {
   let enriched = report;
   // Belief lifecycle suite (S2, t_0e3f2bee): flag any injected memory that
@@ -732,6 +758,7 @@ function finalizeContextPackReport(
   const tensionWarnings = tensionWarningsForContextItems(
     vault,
     report.items.map((item) => item.id),
+    withheldIds,
   );
   const warnings = [...extraWarnings, ...tensionWarnings];
   if (warnings.length > 0) {

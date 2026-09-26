@@ -12,6 +12,19 @@ import { describe, expect, test } from "bun:test";
 import { parseBrainYaml } from "../../../src/core/brain/yaml-parse.ts";
 
 describe("parseBrainYaml", () => {
+  test("prototype-pollution keys are refused at every level, not assigned (audit L10)", () => {
+    for (const text of [
+      "__proto__:\n  polluted: true\n",
+      "vault:\n  __proto__:\n    polluted: true\n",
+      "constructor:\n  polluted: true\n",
+      "vault:\n  prototype: x\n",
+    ]) {
+      expect(() => parseBrainYaml(text)).toThrow(/reserved key name/);
+    }
+    // Nothing leaked onto the shared prototype either way.
+    expect(({} as Record<string, unknown>)["polluted"]).toBeUndefined();
+  });
+
   test("parses top-level scalars with type coercion", () => {
     const parsed = parseBrainYaml("schema_version: 1\nname: 'quoted'\nflag: true\nempty: null\n");
     expect(parsed).toEqual({ schema_version: 1, name: "quoted", flag: true, empty: null });

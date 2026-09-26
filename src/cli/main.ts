@@ -679,19 +679,28 @@ async function cmdMcp(argv: string[]): Promise<number> {
     return 2;
   }
   const host = flags["host"] as string;
-  const apiKey = flags["api-key"] as string | undefined;
+  // An argv flag is visible in every process listing on the host, so the
+  // key can arrive through the environment instead. The flag wins when
+  // both are set - an explicit argument is the operator's most recent
+  // word.
+  const apiKey =
+    (flags["api-key"] as string | undefined) ??
+    process.env["OPEN_SECOND_BRAIN_MCP_API_KEY"] ??
+    undefined;
   // Bearer is optional on a loopback bind (the loopback bind + Host/Origin
   // rebinding guard are the baseline defence) but mandatory on a non-loopback
   // host, which would otherwise expose the Brain unauthenticated on the network.
   if (transport === "http" && !isLoopbackHost(host) && (apiKey === undefined || apiKey === "")) {
     process.stderr.write(
-      "o2b mcp: --api-key is required when --transport http binds a non-loopback --host\n",
+      "o2b mcp: --api-key (or OPEN_SECOND_BRAIN_MCP_API_KEY) is required when --transport http binds a non-loopback --host\n",
     );
     return 2;
   }
 
-  // Named tool-surface profile: flag wins over the config key; an
-  // unknown name FAILS OPEN to the full surface (logged, never fatal).
+  // Named tool-surface profile: flag wins over the config key. An unknown
+  // name FAILS CLOSED (audit L5): a profile is how an operator narrows
+  // what an agent may call, and a typo that silently widened it to the
+  // full surface would grant exactly the tools the profile withheld.
   const profileName =
     (flags["tool-profile"] as string | undefined) ?? resolveMcpToolProfile(config);
   const explicitWindow = parseCapabilityWindow(flags);
@@ -702,9 +711,12 @@ async function cmdMcp(argv: string[]): Promise<number> {
   });
   if (surface.unknownProfile !== undefined) {
     process.stderr.write(
-      `o2b mcp: unknown tool profile "${surface.unknownProfile}"; ` +
-        `failing open to the full surface (known: ${toolSurfaceProfileNames().join(", ")})\n`,
+      `o2b mcp: unknown tool profile "${surface.unknownProfile}" ` +
+        `(from ${flags["tool-profile"] !== undefined ? "--tool-profile" : "mcp_tool_profile / OPEN_SECOND_BRAIN_MCP_TOOL_PROFILE"}); ` +
+        `refusing to start rather than serve the full surface ` +
+        `(known: ${toolSurfaceProfileNames().join(", ")})\n`,
     );
+    return 2;
   }
   const scope = surface.scope;
   const serverName = scope === "writer" ? "open-second-brain-writer" : "open-second-brain";

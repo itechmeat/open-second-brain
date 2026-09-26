@@ -27,7 +27,7 @@ import {
 } from "./capability-tier.ts";
 import { sha256Hex } from "../integrity/digest.ts";
 import { parseAuthoredAtSeconds } from "./authored-at.ts";
-import { chunkMarkdown } from "./chunker.ts";
+import { CHUNKER_VERSION, chunkMarkdown } from "./chunker.ts";
 import { expandTextForCjkFts } from "./cjk-tokenizer.ts";
 import { declaredInputWindowTokens, passagePrefixSentByProvider } from "./embeddings/presets.ts";
 import { makeProvider } from "./embeddings/provider.ts";
@@ -78,6 +78,7 @@ import {
   readEmbeddingAbiSync,
   runtimeEmbeddingAbi,
   Store,
+  CHUNKER_VERSION_STATE_KEY,
   EMBEDDING_PREFIX_QUERY_STATE_KEY,
   EMBEDDING_PREFIX_PASSAGE_STATE_KEY,
   LAST_FULL_INDEX_AT_STATE_KEY,
@@ -316,6 +317,28 @@ function readUtf8(absPath: string): string {
 // indexVault — incremental
 // ─────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Refuse a vault root that is not an existing directory.
+ *
+ * Both builds create the index directory under the vault (`mkdir -p` on
+ * `dirname(dbPath)`) and write metrics rows into `Brain/metrics`. Without
+ * this check a build pointed at a vault that is not there - a mistyped
+ * `--vault`, or a vault moved or deleted while a detached self-heal
+ * reindex was starting up - recreated the vault directory, filled it with
+ * an empty index and reported "added: 0 files" with exit 0.
+ */
+function assertVaultDirectory(vault: string): void {
+  let isDir = false;
+  try {
+    isDir = statSync(vault).isDirectory();
+  } catch {
+    throw new SearchError("INVALID_INPUT", `vault not found: ${vault}`);
+  }
+  if (!isDir) {
+    throw new SearchError("INVALID_INPUT", `vault path is not a directory: ${vault}`);
+  }
+}
+
 export async function indexVault(
   config: ResolvedSearchConfig,
   opts?: IndexVaultOptions,
@@ -353,6 +376,7 @@ async function indexIntoRun(
   opts?: IndexVaultOptions,
   storeOverride?: Store,
 ): Promise<IndexStats> {
+  assertVaultDirectory(config.vault);
   const t0 = Date.now();
   const ownsStore = !storeOverride;
   const store = storeOverride ?? (await Store.open(config, { mode: "write" }));
@@ -360,6 +384,13 @@ async function indexIntoRun(
 
   try {
     const existing = store.listDocuments();
+    // An empty index holds nothing cut by older chunking rules, and every
+    // chunk this run writes is cut by the current ones: stamp it now, so
+    // an interrupted build that is resumed later is not mistaken for a
+    // stale one. See CHUNKER_VERSION_STATE_KEY for when else it is written.
+    if (existing.size === 0) {
+      store.setState(CHUNKER_VERSION_STATE_KEY, String(CHUNKER_VERSION));
+    }
     const seen = new Set<string>();
     // Changed docs declaring a frontmatter `kind`, for the tier-guard
     // post-pass (write-time-integrity-governance).
@@ -643,7 +674,8 @@ async function indexIntoRun(
     // Oversize-chunk census. Taken here, over the index this run just
     // wrote, because the chunk boundaries the run produced are exactly
     // what the configured model's declared window has to hold - and the
-    // configured chunk size is expressed in whitespace WORDS while a
+    // configured chunk size is expressed in the chunker's units (words,
+    // or characters for unspaced scripts such as Han) while a
     // window is expressed in tokens, so the two settings can only be
     // compared through what they actually produced. The stored model
     // fills in a config that leaves `embedding_model` unset.
@@ -655,6 +687,8 @@ async function indexIntoRun(
     // "this index resolved the whole vault" predicate the broken-link
     // ratchet verifies before it trusts a count (unit G).
     if (opts?.force) store.setState(LAST_FULL_INDEX_AT_STATE_KEY, now);
+    // A completed forced run re-chunked every document it kept.
+    if (opts?.force) store.setState(CHUNKER_VERSION_STATE_KEY, String(CHUNKER_VERSION));
 
     // Bump the corpus-generation revision whenever the index actually
     // changed, so the persistent query cache (v0.20.0) is invalidated
@@ -1037,6 +1071,7 @@ async function reindexInto(
   const newPath = config.dbPath + ".new";
   const bakPath = config.dbPath + ".bak";
 
+  assertVaultDirectory(config.vault);
   mkdirSync(dirname(config.dbPath), { recursive: true });
 
   // Opened BEFORE the wait, not after it. `acquireWriterLock` can block
@@ -1111,7 +1146,12 @@ async function reindexInto(
     progress.start(INDEX_STAGE.swap, 1);
     tryUnlink(bakPath);
     tryRename(config.dbPath, bakPath); // no-op (ENOENT) on fresh reindex
-    renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
+    try {
+      renameWithRetry(newPath, config.dbPath); // must succeed — `newPath` was just built
+    } catch (swapError) {
+      restoreLiveFromBak(bakPath, config.dbPath);
+      throw swapError;
+    }
     progress.advance(INDEX_STAGE.swap);
     return stats;
   } finally {
@@ -1124,7 +1164,7 @@ const REINDEX_SIGNATURE_KEY = "reindex_signature";
 
 /**
  * Compatibility signature for a staging rebuild: a resume is safe only
- * when the schema version, chunk parameters, and (when embeddings are
+ * when the schema version, chunker rules, chunk parameters, and (when embeddings are
  * computed) the active embedding signature all match the partial build.
  * Any drift invalidates the staging DB and forces a fresh rebuild.
  */
@@ -1132,6 +1172,7 @@ function reindexStagingSignature(config: ResolvedSearchConfig, embeddings: boole
   const embedding = embeddings ? (activeEmbeddingSignature(config) ?? "active") : "off";
   return JSON.stringify({
     schema: LATEST_SCHEMA_VERSION,
+    chunker: CHUNKER_VERSION,
     chunkSize: config.chunkSize,
     chunkOverlap: config.chunkOverlap,
     chunkMinSize: config.chunkMinSize,
@@ -1188,6 +1229,30 @@ function tryRename(from: string, to: string): void {
     renameWithRetry(from, to);
   } catch (e) {
     if (!isEnoent(e)) throw e;
+  }
+}
+
+/**
+ * Undo the first half of a reindex swap whose second rename failed: put the
+ * previous index (parked at `.bak`) back at the live path, so the failure
+ * reads as "reindex refused, old index intact" rather than "no search
+ * index" until the next `Store.open` happens to run its crash-restore
+ * (#187). ENOENT on `.bak` is a fresh reindex with nothing to restore.
+ *
+ * Best effort by design: the caller rethrows the swap's own error, and a
+ * rollback failure must not replace it. If the rollback fails too, `.bak`
+ * stays where it is and the crash-restore in `Store.open` still recovers it.
+ *
+ * `.new` is left in place. It holds a complete build, and in the Windows
+ * case that motivates this path it is the very file a sharing violation
+ * refuses to move, so deleting it would only spend a second retry budget;
+ * the next reindex discards it (or resumes from it with `resumeReindex`).
+ */
+function restoreLiveFromBak(bakPath: string, dbPath: string): void {
+  try {
+    tryRename(bakPath, dbPath);
+  } catch {
+    // Deliberately swallowed: see above.
   }
 }
 

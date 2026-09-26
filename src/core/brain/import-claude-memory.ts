@@ -6,6 +6,8 @@ import { appendLogEvent } from "./log.ts";
 import { BRAIN_LOG_EVENT_KIND, BRAIN_SNAPSHOT_REASON } from "./types.ts";
 import { createSnapshot } from "./snapshot.ts";
 import { isoSecond } from "./time.ts";
+import { loadBrainConfig } from "./policy.ts";
+import { DEFAULT_BRAIN_CONFIG } from "./policy/defaults.ts";
 import { resolveAgentName } from "../config.ts";
 import { loadManifest, saveManifest } from "./claude-memory-manifest.ts";
 import { planAction, type PlannedFile } from "./claude-memory-plan.ts";
@@ -93,6 +95,11 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
   const now = opts.now ?? new Date();
   const importedAt = isoSecond(now);
   const localDate = importedAt.slice(0, 10);
+  // Every import lands under trial (t_sec_memory_trial): MEMORY.md is
+  // session-derived - agent-writable from conversation content - so a
+  // poisoned entry must not become a live rule on landing. Same window
+  // source as every first-party unconfirmed write, read fail-soft.
+  const unconfirmedUntil = isoSecond(addDays(now, unconfirmedWindowDays(opts.vault)));
 
   const manifest = loadManifest(opts.vault);
   const newImports: Record<string, { pref_id: string; sha256: string; imported_at: string }> = {
@@ -173,6 +180,7 @@ export function importClaudeMemory(opts: ImportClaudeMemoryOpts): ImportClaudeMe
           body: parsed.body,
           memoryPath: join(baseDir, name),
           importedAt,
+          unconfirmedUntil,
           bodySha256: parsed.bodySha256,
           owner: resolvedOwnerFor(opts.vault, prefFile, undefined, undefined),
         });
@@ -305,5 +313,23 @@ export class ConflictsError extends Error {
     super(`import-claude-memory: ${conflicts.length} conflict(s)`);
     this.conflicts = conflicts;
     this.partial = partial;
+  }
+}
+
+function addDays(date: Date, days: number): Date {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+/**
+ * The trial window an import grants, in days. Same source as every
+ * first-party unconfirmed write (`dream.unconfirmed_window_days`), read
+ * fail-soft for the same reason the restore's is: a vault with no
+ * readable `_brain.yaml` still gets the shipped default, not a live rule.
+ */
+function unconfirmedWindowDays(vault: string): number {
+  try {
+    return loadBrainConfig(vault).dream.unconfirmed_window_days;
+  } catch {
+    return DEFAULT_BRAIN_CONFIG.dream.unconfirmed_window_days;
   }
 }

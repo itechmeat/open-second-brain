@@ -1,0 +1,437 @@
+{
+  "about": "chunkMarkdown output over tests/helpers/chunker-corpus.ts, captured from the chunker before issue #186 (sha256 of JSON.stringify(chunks)). withinCap=false marks outputs whose chunks exceeded maxTokens, which the fix changes by design.",
+  "entries": [
+    {
+      "options": 0,
+      "doc": 0,
+      "withinCap": true,
+      "digest": "d4a1f37d3ac5f8c22b3232230ec6ace5820e6839590b6daac0a792fc6b2448a7"
+    },
+    {
+      "options": 0,
+      "doc": 1,
+      "withinCap": true,
+      "digest": "e9a9af874671f40e6cc355ece7d4302de55a82c3f414f0d294e0dc8113e4fc01"
+    },
+    {
+      "options": 0,
+      "doc": 2,
+      "withinCap": true,
+      "digest": "2687aa730ab0c4549d5584136218cd7c3d8a7431edd79fa357e89583710c40b7"
+    },
+    {
+      "options": 0,
+      "doc": 3,
+      "withinCap": true,
+      "digest": "8c44ee061c4090bd147c47ba8219fe67b5dc2db5cd28ce31a043455fc868007c"
+    },
+    {
+      "options": 0,
+      "doc": 4,
+      "withinCap": true,
+      "digest": "08dc3265c5fe02c547cc167f2efa3977c5cab7bb714bd3bcd7b4167dfe84fe11"
+    },
+    {
+      "options": 0,
+      "doc": 5,
+      "withinCap": true,
+      "digest": "1db74e7af2e7691f48f3f76f54e6b48786e81df38be6db717ad2e47b127a0c81"
+    },
+    {
+      "options": 0,
+      "doc": 6,
+      "withinCap": true,
+      "digest": "e7da92d2103473843149dcf5f22235ded9329b73cf319884241f329674db95bb"
+    },
+    {
+      "options": 0,
+      "doc": 7,
+      "withinCap": true,
+      "digest": "e54f7588513bd25895ff4f269bd975e93281c3cb1cfa3695faf85cfb5bb7f15a"
+    },
+    {
+      "options": 0,
+      "doc": 8,
+      "withinCap": true,
+      "digest": "7403d72743c484c997a4e837e1068f86edb73c6b7ff7de9bc614be4f0e0be9c8"
+    },
+    {
+      "options": 0,
+      "doc": 9,
+      "withinCap": true,
+      "digest": "0cd2ba759035af3b00d28ab553c145bb0053e3316e2ce260868422293b6b684b"
+    },
+    {
+      "options": 0,
+      "doc": 10,
+      "withinCap": true,
+      "digest": "5952a950213e6e8a56a8a994ee583d2315f37bef4e74bf3df3a7fef8b8f77950"
+    },
+    {
+      "options": 0,
+      "doc": 11,
+      "withinCap": true,
+      "digest": "456dd4729ee2f3f41823408c8da08c5641ee7ce5fc8dcc891192fb3db225a952"
+    },
+    {
+      "options": 0,
+      "doc": 12,
+      "withinCap": true,
+      "digest": "577e7de10361e4c5c84253ae337f737d453b03437a46ca536d1edc559de90d7e"
+    },
+    {
+      "options": 0,
+      "doc": 13,
+      "withinCap": true,
+      "digest": "a6b9498810ca52b110444916aab5b858ee1cbada3732b68370d5b1cef264e81a"
+    },
+    {
+      "options": 0,
+      "doc": 14,
+      "withinCap": true,
+      "digest": "5f811cbf49765e03f4d9e780a1fbb25b24b906e85214b452ee2b14f4e4e42648"
+    },
+    {
+      "options": 0,
+      "doc": 15,
+      "withinCap": true,
+      "digest": "22cfca4bf30e16fdd5d90c4140bee2041810eec3825cead9b39bce51d642d40f"
+    },
+    {
+      "options": 0,
+      "doc": 16,
+      "withinCap": true,
+      "digest": "ea0cdca354e030e3e5b2203b5d135c594e184829400fe38a75c63effd872e796"
+    },
+    {
+      "options": 0,
+      "doc": 17,
+      "withinCap": true,
+      "digest": "cc01287cb4cec53c069b19d6c17e6f3576568db8de99f6f31d508be8d4508cf5"
+    },
+    {
+      "options": 0,
+      "doc": 18,
+      "withinCap": true,
+      "digest": "26da040f7f92378e2ef28216714185fdddc5546c897b26b0277971e801f9108e"
+    },
+    {
+      "options": 0,
+      "doc": 19,
+      "withinCap": true,
+      "digest": "fcb2f8c605cb269cb25b448972ab9309074e6eb8f6c7f75d8fb7cd10f1982aba"
+    },
+    {
+      "options": 0,
+      "doc": 20,
+      "withinCap": true,
+      "digest": "77295cd2f0c353f5d59f2b81a5c9fc342d949436e18f898153794edf04176017"
+    },
+    {
+      "options": 0,
+      "doc": 21,
+      "withinCap": true,
+      "digest": "4082a06693c116c08361af2c21ca7e34e34d369934700c955f17675f2616f7c1"
+    },
+    {
+      "options": 0,
+      "doc": 22,
+      "withinCap": true,
+      "digest": "18691892c1c052c03dbb01ae3472bce5319d7446ec710380b7ae87d6ee1d023e"
+    },
+    {
+      "options": 0,
+      "doc": 23,
+      "withinCap": true,
+      "digest": "db7187fb8c26711fb53e4a9c0ef6c089689df6e67404e702075096d6f26c66b3"
+    },
+    {
+      "options": 1,
+      "doc": 0,
+      "withinCap": true,
+      "digest": "d2895fc874ccc67e8dd8e1fcdd54a7a4f2fcf0e1902a1e42d84d376e25512686"
+    },
+    {
+      "options": 1,
+      "doc": 1,
+      "withinCap": true,
+      "digest": "343b3565edca6c61f1970b6638597c6097024f8dd740339fdec64a7fdd7d8570"
+    },
+    {
+      "options": 1,
+      "doc": 2,
+      "withinCap": true,
+      "digest": "6e040682c18fb43a32c1ad694427c78d80596b35410be2bcdc04be1d4e496ac3"
+    },
+    {
+      "options": 1,
+      "doc": 3,
+      "withinCap": true,
+      "digest": "9c53024e7553082f4dc4c478fc8751d827d9ede5eab40b881feb986bc41b7d98"
+    },
+    {
+      "options": 1,
+      "doc": 4,
+      "withinCap": true,
+      "digest": "d3de3fa4008fad630d1a5af0b6c5fde105bfdfc235b0d24da6d54335c414a326"
+    },
+    {
+      "options": 1,
+      "doc": 5,
+      "withinCap": false,
+      "digest": "febeaf2d3c6a4c1217dbabbcec2eae851a8ca2ca6f8077ae718948fa44f645ec"
+    },
+    {
+      "options": 1,
+      "doc": 6,
+      "withinCap": false,
+      "digest": "a9fd1c6d298bf7927769ed2e2ee15251f77cfa6cfdbf600492e8450f6004bdc3"
+    },
+    {
+      "options": 1,
+      "doc": 7,
+      "withinCap": true,
+      "digest": "7caf6e67184e618dd368c6aad407af598d6e2a9e4a5b55787e677626f02762be"
+    },
+    {
+      "options": 1,
+      "doc": 8,
+      "withinCap": false,
+      "digest": "8652a4d0b0884c780dc665939e85c7d314e444cf3cc9555dd58c4cd99e5caf3d"
+    },
+    {
+      "options": 1,
+      "doc": 9,
+      "withinCap": false,
+      "digest": "f3690500df220b5fe96df64a2c122e39b15dfaf35941ee92954bec898e80ef8a"
+    },
+    {
+      "options": 1,
+      "doc": 10,
+      "withinCap": false,
+      "digest": "d84c44aa58ef2cd76a717a92a5d666ab5c20297210b446aac288c9c55300d26f"
+    },
+    {
+      "options": 1,
+      "doc": 11,
+      "withinCap": false,
+      "digest": "ce3baa774c57aa895b082ec8111ba0f8eba561d91b1b448e3263d7dae0f88561"
+    },
+    {
+      "options": 1,
+      "doc": 12,
+      "withinCap": false,
+      "digest": "5af5de2f26dba1faf3229c597acfe64f56bbc1a9763be7e79e47247fc27b66a5"
+    },
+    {
+      "options": 1,
+      "doc": 13,
+      "withinCap": false,
+      "digest": "0360b8169136e2fb8dfe21c56bfdf8ad9ceafaec9386ca4bcb71ee6eb7f08cad"
+    },
+    {
+      "options": 1,
+      "doc": 14,
+      "withinCap": true,
+      "digest": "5dbb0a347b631ded87c6cd9f17e920db06be4ad1926b8b3f69d4d6f8fb07fcdf"
+    },
+    {
+      "options": 1,
+      "doc": 15,
+      "withinCap": true,
+      "digest": "16fcd0e1d24b06b0405d82f5580533e38d124b25df39514be446651d94f0e534"
+    },
+    {
+      "options": 1,
+      "doc": 16,
+      "withinCap": false,
+      "digest": "15721756ebbb33c383ccc7de925fe3b87964b72cd830a24e520015bfae22d8aa"
+    },
+    {
+      "options": 1,
+      "doc": 17,
+      "withinCap": false,
+      "digest": "47d4aec3f2fded73b5061fc3e034f607da3480984b6ea27822076dd8a7d32027"
+    },
+    {
+      "options": 1,
+      "doc": 18,
+      "withinCap": true,
+      "digest": "c6ed49326f173d8683c76365e21e8b10aa7dbe5c258c96335629581bbf0c9d60"
+    },
+    {
+      "options": 1,
+      "doc": 19,
+      "withinCap": true,
+      "digest": "af427e6d5e682d0d23a1d082794c58aff769945ea9d3733e022cc8f709681258"
+    },
+    {
+      "options": 1,
+      "doc": 20,
+      "withinCap": false,
+      "digest": "f7f86aa0fe7290a80bc0e1d28cad340b0c89e323935e623ae3b64a6688d45f4a"
+    },
+    {
+      "options": 1,
+      "doc": 21,
+      "withinCap": true,
+      "digest": "82f85fead404b495c7a67f1298363b41ef675b1f355cc646edba8a3387fb28da"
+    },
+    {
+      "options": 1,
+      "doc": 22,
+      "withinCap": true,
+      "digest": "6e05dfbcb52b4ab2d1f5d3e7334e569bddd64c89150141025c3fdb68c7831e7e"
+    },
+    {
+      "options": 1,
+      "doc": 23,
+      "withinCap": true,
+      "digest": "b89c55910954f91b240c7ce96365677d3a6c5c6920bb7892bac18a7a96f19aed"
+    },
+    {
+      "options": 2,
+      "doc": 0,
+      "withinCap": true,
+      "digest": "a44b2fd85f17db447ecc0ad521b78a95c26f6dfc25471a21cb9d5fc3d330eafe"
+    },
+    {
+      "options": 2,
+      "doc": 1,
+      "withinCap": true,
+      "digest": "6d6edda5e369e775172ea13c01450573ed7e4bb01ee311f1a5fcfc3bccd16460"
+    },
+    {
+      "options": 2,
+      "doc": 2,
+      "withinCap": true,
+      "digest": "28d49bec51d04a531ac72f66046fab861b4817daa59291701d0e340b5cfe620d"
+    },
+    {
+      "options": 2,
+      "doc": 3,
+      "withinCap": true,
+      "digest": "e88bfa36ff0373fa9c52d80fd2aa5e5104425d1efba4420e8ea10a7bc23917a1"
+    },
+    {
+      "options": 2,
+      "doc": 4,
+      "withinCap": true,
+      "digest": "0feed3167c18c0e21b473232cc2453ae10f19b61c3c5eef7181ce9491a701e96"
+    },
+    {
+      "options": 2,
+      "doc": 5,
+      "withinCap": true,
+      "digest": "00ebdd5718d1be200cb81dd47c832ec1d4315a161eab82eecef89c6a146be160"
+    },
+    {
+      "options": 2,
+      "doc": 6,
+      "withinCap": true,
+      "digest": "17a69cb88d020d2d588e6bcc38fb151869d6fadee269a40ea20772a4d06b3177"
+    },
+    {
+      "options": 2,
+      "doc": 7,
+      "withinCap": true,
+      "digest": "afbc71d66d9cb6b1dca5c64beebe3ae5a1b2bb0e77b9cc0ab1ab70e323c62966"
+    },
+    {
+      "options": 2,
+      "doc": 8,
+      "withinCap": true,
+      "digest": "9a2d2585a1726d33f3a8d3ffd57a0b35d4caa2f2b413b1bf44f2227731623e21"
+    },
+    {
+      "options": 2,
+      "doc": 9,
+      "withinCap": true,
+      "digest": "3eed8e353e894765a60e61e023852d477aacdbe2a6ded6581dd8a90451a40466"
+    },
+    {
+      "options": 2,
+      "doc": 10,
+      "withinCap": true,
+      "digest": "02d46b60f661dbb1a283bf36bfeaa725b4a5a167b0c9edf23a2c0a939abcb3de"
+    },
+    {
+      "options": 2,
+      "doc": 11,
+      "withinCap": true,
+      "digest": "5d8f84c8be6c7b76d9f8975c6392b1b0dc41eff19338522467b49dd86faff09f"
+    },
+    {
+      "options": 2,
+      "doc": 12,
+      "withinCap": true,
+      "digest": "402f1df9038cb7f3fc9263f9b97181c88e2842bd9e84ed5375c29b04db2a05e4"
+    },
+    {
+      "options": 2,
+      "doc": 13,
+      "withinCap": true,
+      "digest": "c9459062b74c8f08df4905f112287d1b7d1481bea1435009d56155efa67af804"
+    },
+    {
+      "options": 2,
+      "doc": 14,
+      "withinCap": true,
+      "digest": "46e14d9e65462d53055c04d84a767e3869012842ff99df454b14498896a16093"
+    },
+    {
+      "options": 2,
+      "doc": 15,
+      "withinCap": true,
+      "digest": "fb4ef9f8edb992184a6b26bdbabec4b971c605b8cd7c3fc6de2efb5be0aea578"
+    },
+    {
+      "options": 2,
+      "doc": 16,
+      "withinCap": true,
+      "digest": "31575310e1d9677c75bc8ea91adac4952f1f402f876ee4e37b1f58875cee2fb8"
+    },
+    {
+      "options": 2,
+      "doc": 17,
+      "withinCap": true,
+      "digest": "1d7965596db33cf127c5780a79ee811e97b957adaa85cb5de9d288fe61fe54fc"
+    },
+    {
+      "options": 2,
+      "doc": 18,
+      "withinCap": true,
+      "digest": "4dcd98bff070f3ed841240600a247865f7591a8b46071367f05ad5a637ac2981"
+    },
+    {
+      "options": 2,
+      "doc": 19,
+      "withinCap": true,
+      "digest": "621f2c64c12d82012eb27a7e84756ffd6966b411e31f18fc6c0ab6c03eea9d56"
+    },
+    {
+      "options": 2,
+      "doc": 20,
+      "withinCap": true,
+      "digest": "c659ef91f23a1404770dc51270eebde419f4d8d246fc69d2317bf34a1a2e2fda"
+    },
+    {
+      "options": 2,
+      "doc": 21,
+      "withinCap": true,
+      "digest": "cab8b4fa241ca01019fe3f4b86e05ca746f18473103e5de45f75cd57add5be4f"
+    },
+    {
+      "options": 2,
+      "doc": 22,
+      "withinCap": true,
+      "digest": "05a02c4da90c01e573821026c796feac3ff7de7ac4ca62b51fbce842ae58ec78"
+    },
+    {
+      "options": 2,
+      "doc": 23,
+      "withinCap": true,
+      "digest": "5c808a8d9b5ffb15b80c2e66aaa868cda21a337f7b8639a8417485914702731d"
+    }
+  ]
+}

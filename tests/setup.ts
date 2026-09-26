@@ -16,8 +16,8 @@
  * Tests that need their own vault still set `OPEN_SECOND_BRAIN_CONFIG` /
  * `XDG_CONFIG_HOME` themselves; this only provides a safe default.
  */
-import { beforeEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { afterAll, beforeEach } from "bun:test";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -45,12 +45,22 @@ beforeEach(() => {
 // to the empty string so the suite writes the legacy un-sharded log
 // pair deterministically. Shard-specific tests clear / override
 // O2B_DEVICE_ID themselves.
+/**
+ * Recursive removal that rides out a transient Windows refusal (EBUSY,
+ * EPERM, ENOTEMPTY while a handle is still closing) instead of failing on
+ * the first attempt. The retries are a no-op where the first attempt works.
+ */
+const REMOVE_TREE = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+
 if (process.env["O2B_DEVICE_ID"] === undefined) {
   process.env["O2B_DEVICE_ID"] = "";
 }
 
 if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
   const root = mkdtempSync(join(tmpdir(), "osb-test-default-"));
+  // A preload's afterAll runs once, after the last file: the throwaway
+  // default must not outlive the run that minted it.
+  afterAll(() => rmSync(root, REMOVE_TREE));
   const vault = join(root, "vault");
   mkdirSync(join(vault, "Brain"), { recursive: true });
   const configPath = join(root, "config.yaml");
@@ -75,9 +85,52 @@ if (!process.env["OPEN_SECOND_BRAIN_CONFIG"]) {
 // child without one the environment the process started with.
 if (process.platform === "win32") {
   const appRoot = mkdtempSync(join(tmpdir(), "osb-test-appdata-"));
+  afterAll(() => rmSync(appRoot, REMOVE_TREE));
   for (const name of ["LOCALAPPDATA", "APPDATA"] as const) {
     const dir = join(appRoot, name);
     mkdirSync(dir, { recursive: true });
     process.env[name] = dir;
   }
+}
+
+// Every temp entry a test mints lands under ONE per-run root, and the run
+// fails if any of them is still there after the last file (issue #194).
+//
+// `os.tmpdir()` reads TMPDIR (TEMP/TMP on Windows) on every call, so
+// redirecting them here reaches every `mkdtempSync(join(tmpdir(), ...))` in
+// the suite and every child spawned with `env: { ...process.env }`. Created
+// after the roots above, which own their own teardown and live outside it.
+//
+// The root is removed whether or not the guard fires, so a leaking test
+// fails the run instead of filling the temp directory run after run. On
+// Windows the leftovers are reported but do not fail the run: a removal
+// there can be refused while a just-exited child's handle or a virus scan
+// still holds a file, which says nothing about the test's cleanup, and the
+// POSIX jobs already enforce the rule for the shared suite.
+{
+  const runRoot = mkdtempSync(join(tmpdir(), "osb-run-"));
+  for (const name of ["TMPDIR", "TMP", "TEMP"] as const) process.env[name] = runRoot;
+  afterAll(() => {
+    let leftovers: string[] = [];
+    try {
+      leftovers = readdirSync(runRoot).toSorted();
+    } catch {
+      // Nothing listable is nothing to report; the removal below still runs.
+    }
+    try {
+      rmSync(runRoot, REMOVE_TREE);
+    } catch (err) {
+      // Windows can refuse the removal while a just-exited child's handle
+      // or a scanner still holds a file; that is reported, not fatal.
+      if (process.platform !== "win32") throw err;
+      console.warn(`warning: could not remove ${runRoot}: ${(err as Error).message}`);
+    }
+    if (leftovers.length === 0) return;
+    const message =
+      `${leftovers.length} temp entries outlived the test that made them: ` +
+      `${leftovers.join(", ")}. Remove each in afterEach/afterAll ` +
+      `(tests/helpers/temp-dir.ts).`;
+    if (process.platform === "win32") console.warn(`warning: ${message}`);
+    else throw new Error(message);
+  });
 }

@@ -18,13 +18,14 @@ import {
   isVisible,
   pageVisibility,
 } from "../graph/visibility.ts";
-import { type TransportReach } from "../graph/transport-reach.ts";
+import { TRANSPORT_REACH, type TransportReach } from "../graph/transport-reach.ts";
 import { isOwnerVisible, pageOwner } from "../graph/agent-scope.ts";
 import { scopeAxisReachable, scopeFromFrontmatter, type CompositeScope } from "../scope-key.ts";
 import { applyDegreeFilters, filterByProperties, type DegreePredicate } from "./property-filter.ts";
 import { degreeForPath, getGraphSnapshot } from "../brain/link-graph/graph-index.ts";
 import type { Store } from "./store.ts";
 import { deriveTrust, hasSupersededRelation } from "./enrich.ts";
+import { KNOWLEDGE_PACK_FIELD, parseKnowledgePackStamp } from "../brain/portability/pack-stamp.ts";
 import { isTerminalStatus } from "./evidence-pack.ts";
 import { isTombstoned } from "../brain/lifecycle/tombstone.ts";
 import { SUPERSEDE_FADE_MULTIPLIER } from "./ranker.ts";
@@ -191,6 +192,7 @@ export function applyPropertyFilter(
 export function attachTrustMetadata(
   vault: string,
   results: ReadonlyArray<BrainSearchResult>,
+  frontmatterCache: FrontmatterCache = new Map(),
 ): ReadonlyArray<BrainSearchResult> {
   const nowMs = Date.now();
   return results.map((r) => {
@@ -200,9 +202,22 @@ export function attachTrustMetadata(
     } catch {
       return r;
     }
+    const trust = deriveTrust({
+      mtimeMs,
+      nowMs,
+      ...(r.relations ? { relations: r.relations } : {}),
+    });
+    // Provenance of an installed knowledge pack, read from the same
+    // cached frontmatter the filters use. Only a well-formed stamp counts.
+    const stamp = parseKnowledgePackStamp(
+      readCachedFrontmatter(frontmatterCache, vault, r.path)[KNOWLEDGE_PACK_FIELD],
+    );
     return Object.freeze({
       ...r,
-      trust: deriveTrust({ mtimeMs, nowMs, ...(r.relations ? { relations: r.relations } : {}) }),
+      trust:
+        stamp === null
+          ? trust
+          : Object.freeze({ ...trust, knowledge_pack: `${stamp.name}@${stamp.digest}` }),
     });
   });
 }
@@ -271,14 +286,24 @@ export function applyDegreeFilter(
  * and the by-chunk-id drill-down cannot drift on what "reserved" means -
  * including the unreadable-file verdict, which an empty frontmatter map
  * cannot express.
+ *
+ * `store` supplies what the index measured of each result's visibility,
+ * because a result's snippet is the INDEXED text; see
+ * {@link isPathReadableAtReach}. Not consulted at local reach, where
+ * nothing is withheld.
  */
 export function applyReachFilter(
   ranked: ReadonlyArray<BrainSearchResult>,
   reach: TransportReach,
   vault: string,
   frontmatterCache: FrontmatterCache,
+  store: Pick<Store, "indexedVisibilityByPaths">,
 ): ReadonlyArray<BrainSearchResult> {
-  return ranked.filter((r) => isPathReadableAtReach(vault, r.path, reach, frontmatterCache));
+  if (reach === TRANSPORT_REACH.local) return ranked;
+  const indexed = store.indexedVisibilityByPaths(ranked.map((r) => r.path));
+  return ranked.filter((r) =>
+    isPathReadableAtReach(vault, r.path, reach, frontmatterCache, indexed.get(r.path)),
+  );
 }
 
 /**
@@ -324,16 +349,26 @@ export function applyVisibilityScope(
  * unconditionally - that caller can open the file directly anyway, and
  * hiding a stale index row from the operator who has to fix it helps
  * nobody.
+ *
+ * `indexedTags` are the tokens the index measured for this path when the
+ * caller is about to serve INDEXED text (a snippet, a chunk), and the
+ * verdict honours both sets: the file decides for a page reserved since
+ * the last run, the index decides for bytes that were reserved when they
+ * were captured. Without the second, deleting or moving a private page
+ * and writing a public one at its path made the stale private chunks
+ * pass this check - the file said "public" - and a remote search served
+ * the private body. Omitted by surfaces that serve the file itself.
  */
 export function isPathReadableAtReach(
   vault: string,
   path: string,
   reach: TransportReach,
   frontmatterCache: FrontmatterCache,
+  indexedTags: ReadonlyArray<string> = [],
 ): boolean {
   const entry = readCachedFrontmatterEntry(frontmatterCache, vault, path);
   const tags = entry.unreadable ? UNMEASURABLE_VISIBILITY : pageVisibility(entry.meta);
-  return isRemotelyReadable(tags, reach);
+  return isRemotelyReadable(tags, reach) && isRemotelyReadable(indexedTags, reach);
 }
 
 /**

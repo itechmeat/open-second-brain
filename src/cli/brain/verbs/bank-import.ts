@@ -7,9 +7,9 @@ import { brainVerbContext, fail, parse, resolveBrainAgent } from "../helpers.ts"
 const MODES: ReadonlyArray<GraphImportMode> = ["skip", "overwrite", "merge"];
 
 /**
- * `o2b brain bank-import <file> [--mode skip|overwrite|merge] [--agent
- * <name>] [--json]` reconstruct the page graph and the preferences from
- * a bank bundle.json.
+ * `o2b brain bank-import <file> [--mode skip|overwrite|merge]
+ * [--trusted-restore] [--agent <name>] [--json]` reconstruct the page
+ * graph and the preferences from a bank bundle.json.
  *
  * `--mode` governs the page graph; `skip` (default) never overwrites.
  * Preferences restore through the audited preference transaction and are
@@ -19,6 +19,13 @@ const MODES: ReadonlyArray<GraphImportMode> = ["skip", "overwrite", "merge"];
  * and that every other redacted row shares. Page contracts and the
  * sources dashboard stay carried-not-restored. An unsupported bundle
  * schema fails loudly.
+ *
+ * Preference rows are restored UNTRUSTED by default: every row the bundle
+ * carries lands `unconfirmed`, unpinned, at low confidence, on a fresh
+ * trial window dated from the restore (one already `unconfirmed` too),
+ * because the file argument is not a vouching for its contents. Pass
+ * `--trusted-restore` to restore the carried state verbatim - the
+ * round-trip of a backup the operator vouches for.
  */
 export async function cmdBrainBankImport(argv: string[]): Promise<number> {
   const { flags, positional } = parse(argv, {
@@ -26,10 +33,13 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
     json: { type: "boolean" },
     mode: { type: "string" },
     agent: { type: "string" },
+    "trusted-restore": { type: "boolean" },
   });
   const file = positional[0];
   if (!file) {
-    process.stderr.write("usage: o2b brain bank-import <file> [--mode skip|overwrite|merge]\n");
+    process.stderr.write(
+      "usage: o2b brain bank-import <file> [--mode skip|overwrite|merge] [--trusted-restore]\n",
+    );
     return 2;
   }
 
@@ -60,7 +70,11 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
 
   let result;
   try {
-    result = importBankBundle(vault, bundle, { mode: mode as GraphImportMode, agent });
+    result = importBankBundle(vault, bundle, {
+      mode: mode as GraphImportMode,
+      agent,
+      ...(flags["trusted-restore"] === true ? { trustedRestore: true } : {}),
+    });
   } catch (exc) {
     if (exc instanceof BankImportError) return fail(`bank-import: ${exc.message}`);
     return fail(`bank-import failed: ${(exc as Error).message ?? exc}`);
@@ -75,7 +89,8 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
       `graph: created ${g.created.length}, overwritten ${g.overwritten.length}, ` +
         `merged ${g.merged.length}, skipped ${g.skipped.length}, rejected ${g.rejected.length}`,
       `preferences: restored ${p.restored.length} of ${p.carried}, failed ${p.failed.length}` +
-        `${p.fieldsNotRestored.length > 0 ? `, not restored: ${p.fieldsNotRestored.join(", ")}` : ""}`,
+        `${p.fieldsNotRestored.length > 0 ? `, not restored: ${p.fieldsNotRestored.join(", ")}` : ""}` +
+        `${p.demotedToUnconfirmed.length > 0 ? `, demoted to unconfirmed: ${p.demotedToUnconfirmed.length}` : ""}`,
       `carried (not restored): ${result.pagesCarried} page contracts, ` +
         `sources ${result.sourcesCarried ? "yes" : "no"}`,
     ];
@@ -86,6 +101,16 @@ export async function cmdBrainBankImport(argv: string[]): Promise<number> {
     // into the restored count as if the backup had contained it.
     for (const d of p.derived) {
       lines.push(`  ${d.id}: ${d.field} derived from ${d.derivedFrom} (${d.value})`);
+    }
+    // The untrusted default is a state change the bundle did not ask for,
+    // so every demoted row is named: an operator restoring their own
+    // backup sees exactly which rules need `--trusted-restore` to land
+    // live, and an operator who did not vouch for the file sees which
+    // rules it tried to land live.
+    for (const id of p.demotedToUnconfirmed) {
+      lines.push(
+        `  ${id}: restored unconfirmed (trial window restarted); use --trusted-restore to keep the carried status`,
+      );
     }
     // A contention this import created: the dream pass plans nothing for a
     // topic key two spellings claim, so an operator who is not told here

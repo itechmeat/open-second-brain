@@ -8,33 +8,70 @@
  * the calling agent receives exactly what to fix - the session keeps
  * the target and schema, the agent resubmits the full artifact.
  *
- * Target policy mirrors the design doc's reserved-deny list: writes
- * land inside `Brain/` but never in machine-owned or dream-owned
- * namespaces (`preferences/`, `log/`, `.sessions/`, `.payloads/`,
- * `_brain.yaml`).
+ * Target policy is an allow-list, not a deny-list: under `Brain/` a
+ * session writes only the lanes that hold agent-authored pages
+ * ({@link WRITE_SESSION_LANES_REL}). Everything else there - config,
+ * standing rules, the active context, preferences, logs, session and
+ * payload stores - is owned by the Brain's own writers. The lane test
+ * reads the path the way the filesystem does (case-folded, trailing
+ * dots dropped), so `Brain/Preferences/` or `Brain/log./` is not a way
+ * around it.
  */
 
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, normalize, sep } from "node:path";
+import { join, normalize, posix, sep } from "node:path";
 
 import { ORIGIN_CHANNEL_FIELD } from "../../origin-channel.ts";
 import { parseFrontmatterText } from "../../vault.ts";
+import {
+  BRAIN_DECISIONS_REL,
+  BRAIN_PAGE_LANES_REL,
+  BRAIN_ROOT_REL,
+  isInBrainLane,
+  isUnderBrainRoot,
+} from "../path-constants.ts";
 import { isKnownSchemaToken, type BrainSchemaVocabulary } from "../schema-vocab.ts";
 import type { ExistingTargetInfo, WriteSessionError } from "./types.ts";
 
 /** Hard cap on artifact size - a note, not a payload dump. */
 export const ARTIFACT_MAX_BYTES = 262_144;
 
-/** Reserved vault-relative prefixes (and exact files) sessions may never touch. */
-const RESERVED_PREFIXES: ReadonlyArray<string> = Object.freeze([
-  "Brain/preferences/",
-  "Brain/log/",
-  "Brain/.sessions/",
-  "Brain/.payloads/",
+/**
+ * The `Brain/` lanes a write session may commit into:
+ *
+ * - the page lanes ({@link BRAIN_PAGE_LANES_REL}: sources, reports,
+ *   distillations) every caller-named writer may reach;
+ * - `Brain/decisions/panels/`, where a decision-panel session commits
+ *   its synthesis note by default;
+ * - `Brain/notes/`, the free-form agent note lane the artifact kind is
+ *   documented and tested against (handoffs, ADR drafts). No Brain
+ *   writer owns it and nothing reads it as machinery.
+ */
+export const WRITE_SESSION_LANES_REL: ReadonlyArray<string> = Object.freeze([
+  ...BRAIN_PAGE_LANES_REL,
+  posix.join(BRAIN_DECISIONS_REL, "panels"),
+  posix.join(BRAIN_ROOT_REL, "notes"),
 ]);
 
-const RESERVED_FILES: ReadonlySet<string> = new Set(["Brain/_brain.yaml"]);
+/**
+ * The refusal for a `Brain/`-relative landing path outside
+ * {@link WRITE_SESSION_LANES_REL}, or `null` when a session may write
+ * there. Shared by the open-time check and the commit-time re-check of
+ * where the bytes actually land.
+ */
+export function writeSessionLaneRefusal(relPath: string): WriteSessionError | null {
+  if (!isUnderBrainRoot(relPath)) {
+    return err("target-outside-brain", "target", `${relPath} is not under ${BRAIN_ROOT_REL}/`);
+  }
+  if (isInBrainLane(relPath, WRITE_SESSION_LANES_REL)) return null;
+  return err(
+    "target-reserved",
+    "target",
+    `${relPath} is Brain machinery; a write session commits only under ` +
+      WRITE_SESSION_LANES_REL.map((lane) => `${lane}/`).join(", "),
+  );
+}
 
 function err(code: string, path: string, message: string): WriteSessionError {
   return Object.freeze({ code, path, message });
@@ -75,14 +112,8 @@ export function validateTargetPath(targetPath: string): ReadonlyArray<WriteSessi
       err("target-traversal", "target", "target must be a normalized relative path"),
     ]);
   }
-  if (RESERVED_FILES.has(targetPath)) {
-    errors.push(err("target-reserved", "target", `${targetPath} is machine-owned`));
-  }
-  for (const prefix of RESERVED_PREFIXES) {
-    if (targetPath.startsWith(prefix)) {
-      errors.push(err("target-reserved", "target", `${prefix} is a reserved namespace`));
-    }
-  }
+  const laneRefusal = writeSessionLaneRefusal(targetPath);
+  if (laneRefusal !== null) errors.push(laneRefusal);
   if (errors.length === 0 && !targetPath.endsWith(".md")) {
     errors.push(err("target-extension", "target", "target must be a .md note"));
   }

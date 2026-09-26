@@ -17,6 +17,7 @@ import {
 } from "../../../core/brain/link-graph/format-wikilink.ts";
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { walkVault } from "../../../core/search/walker.ts";
+import { assertVaultIdentityForWrite } from "../../../core/brain/vault-identity.ts";
 import { fail, normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 interface FileChange {
@@ -44,6 +45,12 @@ export async function cmdBrainLinks(argv: string[]): Promise<number> {
 
   try {
     const vault = resolveBrainVault(flags["vault"] as string | undefined, config);
+    // `--write` rewrites notes across the tree, which makes this verb a
+    // content writer - so it answers to `brain freeze` like every other
+    // one. The guard runs only on the applying path: a dry run writes
+    // nothing, and an operator inspecting a frozen vault is exactly who
+    // the preview is for.
+    if (write) assertVaultIdentityForWrite(vault);
     const modeFlag = normalizeFlagString(flags["mode"]);
     let mode: WikiLinkFormat;
     if (modeFlag !== null) {
