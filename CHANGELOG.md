@@ -15,6 +15,8 @@ When a turn changed files but recorded no brain event, the Stop guardrail contin
 
 - **The Stop guardrail uses Claude Code's non-error feedback channel and one line of text.** In Claude Code the hook now returns `hookSpecificOutput.additionalContext` for the Stop event (supported since Claude Code 2.1.163), which continues the turn as "Stop hook feedback" instead of a hook error. Codex documents only `decision: "block"` for Stop, where the reason becomes the continuation prompt, so Codex, Grok Build and unrecognised runtimes keep that shape. In every runtime the text is now a single line (`STOP_GUARDRAIL_TEXT`): "Open Second Brain: this turn changed files but recorded no brain event. Call brain_feedback, brain_apply_evidence or brain_note if one fits (brain-memory skill); otherwise just finish." The guardrail still fires at most once per turn through `stop_hook_active`, and the per-runtime cadence lines are gone. The opencode plugin has no Stop guardrail and is unchanged.
 - **The `brain-memory` skill has an "End-of-turn check" section** with the decision the one-line reminder asks for, which the Stop reason used to spell out. The Codex plugin copy is regenerated.
+- **Claude Code is recognised on Stop when its transcripts live outside `~/.claude`** (a custom `CLAUDE_CONFIG_DIR`): a Stop payload with `stop_hook_active` and `last_assistant_message` but no Codex `turn_id` resolves to Claude Code, so such installs get the feedback channel too.
+- **The `brain-memory` skill documents `result: outdated`** for `brain_apply_evidence`, next to `applied` and `violated`.
 
 ## [1.58.1] - 2026-09-26
 

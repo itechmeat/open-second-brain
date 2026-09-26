@@ -54,7 +54,7 @@ Parameters:
 
 - `pref_id`: id of the preference you are recording against (`pref-no-internal-abbrev`).
 - `artifact`: wikilink identifying what you produced — `[[src/cli/main.ts]]`, `[[docs/release-notes/v0.11.0.md]]`, `[[Brain/preferences/pref-no-internal-abbrev]]`. The wikilink resolves in Obsidian; use `#anchor` to point at a specific section when relevant.
-- `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it. Recording a `violated` event is not a failure — it is what trains the system.
+- `result`: `applied` if the rule held in this artifact, `violated` if you (or another agent) broke it, `outdated` if the artifact shows the rule itself is obsolete (one `outdated` event retires the preference on the next dream pass). Recording a `violated` event is not a failure — it is what trains the system.
 - `agent`: your runtime identity.
 
 Optional:
