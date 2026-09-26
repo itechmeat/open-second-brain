@@ -55,16 +55,14 @@ export const payloadRegistryCheck: DoctorCheck = {
     const inventory = buildPayloadInventory(ctx.vault);
     pushCapped(
       out,
-      inventory.orphans.map(
-        (orphan): DoctorIssue => ({
-          severity: "warning",
-          code: PAYLOAD_ORPHAN_CODE,
-          path: join(ctx.vault, orphan.path),
-          message:
-            `payload ${orphan.ref} (${orphan.bytes} bytes) is referenced by nothing in the ` +
-            "vault; it is carried in every snapshot until it is collected",
-        }),
-      ),
+      inventory.orphans.map((orphan): DoctorIssue => ({
+        severity: "warning",
+        code: PAYLOAD_ORPHAN_CODE,
+        path: join(ctx.vault, orphan.path),
+        message:
+          `payload ${orphan.ref} (${orphan.bytes} bytes) is referenced by nothing in the ` +
+          "vault; it is carried in every snapshot until it is collected",
+      })),
       "unreferenced payloads",
     );
     pushCapped(

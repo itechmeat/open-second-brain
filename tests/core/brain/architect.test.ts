@@ -152,7 +152,10 @@ test("first generation creates overview + per-module notes under Brain/projects/
   expect(overview).toContain("<!-- o2b:begin summary -->");
   expect(overview).toContain("demo-app");
   expect(overview).toContain("core");
-  const moduleNote = readFileSync(res.modulePaths.find((p) => p.endsWith("core.md"))!, "utf8");
+  const moduleNote = readFileSync(
+    res.modulePaths.find((p) => p.endsWith("core.md"))!,
+    "utf8",
+  );
   expect(moduleNote).toContain("kind: arch-module");
   expect(moduleNote).toContain("engine.ts");
 });

@@ -88,8 +88,8 @@ function result(path: string): BrainSearchResult {
 
 describe("trustGateAdjuster", () => {
   test("excludes a quarantined candidate with the joined reason", () => {
-    const adjuster = trustGateAdjuster(
-      (path): FrontmatterMap => (path === "bad.md" ? { status: "quarantine" } : {}),
+    const adjuster = trustGateAdjuster((path): FrontmatterMap =>
+      path === "bad.md" ? { status: "quarantine" } : {},
     );
     expect(adjuster.adjust(result("bad.md"))).toEqual({
       kind: "exclude",

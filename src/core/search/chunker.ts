@@ -109,7 +109,7 @@ function walkTokens(text: string, starts: number[] | null): number {
   let count = 0;
   let inWord = false;
   let afterUnspaced = false;
-  for (let i = 0; i < text.length; ) {
+  for (let i = 0; i < text.length;) {
     const c = text.charCodeAt(i);
     if (c < FIRST_UNSPACED_CODE_POINT) {
       const isSpace = c === 0x20 || c === 0x09 || c === 0x0a || c === 0x0d;

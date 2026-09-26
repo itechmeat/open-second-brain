@@ -125,7 +125,7 @@ function namesStoreDir(file: SourceFile): boolean {
   if (new RegExp(`\\b${STORE_DIR_IDENTIFIER}\\b`).test(code)) return true;
   for (const quote of ['"', "'"]) {
     const needle = `${quote}${DERIVED_STORE_DIR}${quote}`;
-    for (let at = withoutComments.indexOf(needle); at !== -1; ) {
+    for (let at = withoutComments.indexOf(needle); at !== -1;) {
       if (code[at] === quote) return true;
       at = withoutComments.indexOf(needle, at + 1);
     }
