@@ -60,15 +60,15 @@
     "proper-lockfile": "^4.1.2"
   },
   "devDependencies": {
-    "@types/bun": "^1.1.0",
-    "@types/node": "^22.0.0",
+    "@types/bun": "^1.4.2",
+    "@types/node": "^22.20.4",
     "@types/proper-lockfile": "^4.1.4",
-    "oxfmt": "0.47.0",
-    "oxlint": "1.62.0",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
     "typescript": "^5.5.0"
   },
   "optionalDependencies": {
-    "@node-rs/jieba": "^2.0.1",
+    "@node-rs/jieba": "^2.0.3",
     "sqlite-vec": "^0.1.9",
     "tiny-segmenter": "^0.2.0"
   },
