@@ -39,6 +39,7 @@ import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 import { sessionLedgerPath } from "../../src/core/brain/sessions/discover.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 let tmp: string;
 let vault: string;
@@ -70,7 +71,7 @@ interface DiscoveryJson {
  * "redaction and the tool-payload exclusion cannot be relaxed on one path
  * without failing on the other" - true only by construction.
  */
-const FIXTURE_SECRET = "sk-live-9f2ba7c1d4e8";
+const FIXTURE_SECRET = fakeCredential("sk-", "live-9f2ba7c1d4e8");
 
 /** A tool INPUT, which no signal may ever carry: a host path. */
 const FIXTURE_TOOL_INPUT = "/etc/shadow";

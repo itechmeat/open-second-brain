@@ -4,7 +4,8 @@
  *
  * `package.json` is the single source of truth in v0.7+. Manifests
  * consumed by external runtimes (Hermes, OpenClaw, Claude Code, Codex,
- * pip) carry a copy on disk for parity with their schemas.
+ * pip) carry a copy on disk for parity with their schemas, and `uv.lock`
+ * records the same version for the project's own (editable) package.
  *
  * Files NOT touched (matches the legacy Python script's design):
  *   - `CHANGELOG.md` — historical record, edited by hand on release.
@@ -31,10 +32,13 @@ const JSON_TARGETS = [
   "openclaw.plugin.json",
 ] as const;
 const PYPROJECT = "pyproject.toml";
+const UV_LOCK = "uv.lock";
 
 const YAML_RE = /^(version:\s*)"[^"]*"/m;
 const JSON_RE = /("version"\s*:\s*)"[^"]*"/;
 const PYPROJECT_RE = /^(version\s*=\s*)"[^"]*"/m;
+/** The project's own entry in `uv.lock`, never a dependency's. */
+const UV_LOCK_RE = /(^\[\[package\]\]\r?\nname = "open-second-brain"\r?\nversion = )"[^"]*"/m;
 
 interface FileSpec {
   readonly rel: string;
@@ -45,6 +49,7 @@ const TARGETS: FileSpec[] = [
   ...YAML_TARGETS.map((rel) => ({ rel, regex: YAML_RE })),
   ...JSON_TARGETS.map((rel) => ({ rel, regex: JSON_RE })),
   { rel: PYPROJECT, regex: PYPROJECT_RE },
+  { rel: UV_LOCK, regex: UV_LOCK_RE },
 ];
 
 function canonicalVersion(): string {

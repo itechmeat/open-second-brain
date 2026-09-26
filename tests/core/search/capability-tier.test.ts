@@ -53,6 +53,7 @@ import { detectSemanticDedup } from "../../../src/core/brain/hygiene/detectors/d
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 /** An endpoint nothing listens on; used where no call may be made. */
 const REFUSED_ENDPOINT = "http://127.0.0.1:9";
@@ -127,7 +128,7 @@ function semanticVariants(baseUrl: string): ReadonlyArray<Variant> {
         provider: "openai-compat",
         baseUrl,
         model: "fake-model",
-        apiKey: "test-key",
+        apiKey: FAKE_PROVIDER_KEY,
         dimension: 4,
       },
       tier: SEMANTIC_CAPABILITY_TIER.configured,
@@ -289,7 +290,7 @@ describe("the four sites agree with the resolver", () => {
             provider: "openai-compat",
             baseUrl: server.url,
             model: "fake-model",
-            apiKey: "test-key",
+            apiKey: FAKE_PROVIDER_KEY,
             dimension: 4,
             timeoutMs: 5_000,
           },

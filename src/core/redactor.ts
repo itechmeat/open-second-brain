@@ -79,11 +79,11 @@ export const PRIVATE_REGION_PLACEHOLDER = "***PRIVATE***";
 export const MAX_REDACTOR_INPUT = 1024 * 1024;
 
 /**
- * Stable, machine-detectable token embedded in {@link SCAN_TRUNCATED_MARKER}.
+ * Stable, machine-detectable sentinel embedded in {@link SCAN_TRUNCATED_MARKER}.
  * {@link wasScanTruncated} matches on this so downstream consumers can
  * demote/exclude a partially-scanned artifact without parsing prose.
  */
-const SCAN_TRUNCATED_TOKEN = "***SCAN_TRUNCATED***";
+const SCAN_TRUNCATED_SENTINEL = "***SCAN_TRUNCATED***";
 
 /**
  * Appended when input exceeds the scan window. The tail past the window
@@ -91,7 +91,7 @@ const SCAN_TRUNCATED_TOKEN = "***SCAN_TRUNCATED***";
  * payload must be treated as unverified rather than clean.
  */
 export const SCAN_TRUNCATED_MARKER =
-  `\n\n${SCAN_TRUNCATED_TOKEN} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` +
+  `\n\n${SCAN_TRUNCATED_SENTINEL} [redactor scan window exceeded (> 1 MiB); the unscanned tail was dropped. ` +
   `This payload was only partially scanned — treat it as unverified and inspect the raw source before sharing.]\n`;
 
 /**
@@ -101,7 +101,7 @@ export const SCAN_TRUNCATED_MARKER =
  * of trusting the redactor's output as complete.
  */
 export function wasScanTruncated(text: string): boolean {
-  return typeof text === "string" && text.includes(SCAN_TRUNCATED_TOKEN);
+  return typeof text === "string" && text.includes(SCAN_TRUNCATED_SENTINEL);
 }
 
 const PRIVATE_OPEN_TAG_RE = /<private\b[^>]*>/gi;

@@ -42,6 +42,7 @@ import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { runCli } from "../../helpers/run-cli.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 let vault: string;
 let dbPath: string;
@@ -70,7 +71,7 @@ function cfg(semantic: Partial<ResolvedEmbeddingConfig> = {}) {
       provider: "openai-compat",
       baseUrl: server.url,
       model: "fake-model",
-      apiKey: "test-key",
+      apiKey: FAKE_PROVIDER_KEY,
       dimension: 4,
       timeoutMs: 5_000,
       concurrency: 2,

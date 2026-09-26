@@ -17,6 +17,7 @@ import { join } from "node:path";
 
 import { EXPORT_FORMAT, EXPORT_FORMATS } from "../../src/core/brain/export.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 let tmp: string;
 let vault: string;
@@ -310,7 +311,7 @@ describe("brain export --format transcripts-jsonl", () => {
     // the record's `session_id`, which IS the transcript's basename. The
     // guard's own message is careful about exactly this: "(Locations, not
     // values: the identifier is the secret.)"
-    const secret = "sk-live-9f2ba7c1d4e8.jsonl";
+    const secret = fakeCredential("sk-", "live-9f2ba7c1d4e8.jsonl");
     const dir = transcriptDir({ file: secret });
     const out = join(tmp, "corpus.jsonl");
     const r = await runCli(

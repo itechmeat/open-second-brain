@@ -4,6 +4,9 @@ import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { runCli } from "../helpers/run-cli.ts";
 import { INSTALL_TARGET_IDS, RUNTIME_FACTS } from "../../src/core/runtime/host-facts.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+const ENV_SUPPLIED_KEY = fakeCredential("env-", "supplied-key");
 
 /** Whole tokens: `copilot-cli` contains `pi`, so containment over ids lies. */
 function tokensOf(text: string): ReadonlySet<string> {
@@ -176,9 +179,9 @@ describe("o2b mcp OPEN_SECOND_BRAIN_MCP_API_KEY", () => {
   test("the key from the environment satisfies the non-loopback requirement", async () => {
     const res = await runCli(ARGS, {
       stdin: "",
-      env: { VAULT_DIR: tmp, OPEN_SECOND_BRAIN_MCP_API_KEY: "env-supplied-key" },
+      env: { VAULT_DIR: tmp, OPEN_SECOND_BRAIN_MCP_API_KEY: ENV_SUPPLIED_KEY },
     });
     expect(res.returncode).toBe(0);
-    expect(res.stdout).not.toContain("env-supplied-key");
+    expect(res.stdout).not.toContain(ENV_SUPPLIED_KEY);
   });
 });

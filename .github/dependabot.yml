@@ -1,0 +1,37 @@
+# Weekly and grouped, with at most two open pull requests per ecosystem, so
+# dependency updates stay reviewable. Every workflow action is pinned by
+# full commit SHA; Dependabot bumps the SHA and its version comment together.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: chore
+      include: scope
+
+  # The JavaScript dependencies resolve through bun.lock, so they update
+  # through Dependabot's bun ecosystem, which rewrites that lockfile.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+    groups:
+      bun-minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
+    commit-message:
+      prefix: chore
+      include: scope

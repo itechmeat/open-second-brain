@@ -17,6 +17,9 @@ import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { createPluginRepo, createSandboxVault } from "../helpers/fixtures.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { FAKE_GITHUB_SECRET } from "../helpers/fake-credentials.ts";
+
+const GITHUB_REF = "$secret:GITHUB_TOKEN";
 
 setDefaultTimeout(CLI_SPAWN_BUDGET_MS);
 
@@ -397,17 +400,17 @@ describe("export-config", () => {
 describe("secrets", () => {
   test("list reports references without resolved values", async () => {
     const config = join(tmp, "config.yaml");
-    writeFileSync(config, 'github_token: "$secret:GITHUB_TOKEN"\nplain: visible\n');
+    writeFileSync(config, `github_token: ${JSON.stringify(GITHUB_REF)}\nplain: visible\n`);
 
     const r = await runCli(["secrets", "list", "--config", config, "--json"], {
       env: {
         OPEN_SECOND_BRAIN_CONFIG: config,
-        GITHUB_TOKEN: "ghp_secret_value",
+        GITHUB_TOKEN: FAKE_GITHUB_SECRET,
       },
     });
 
     expect(r.returncode).toBe(0);
-    expect(r.stdout).not.toContain("ghp_secret_value");
+    expect(r.stdout).not.toContain(FAKE_GITHUB_SECRET);
     const data = JSON.parse(r.stdout);
     expect(data.secrets).toEqual([
       {
@@ -424,12 +427,12 @@ describe("secrets", () => {
     const r = await runCli(["secrets", "status", "GITHUB_TOKEN", "--config", config, "--json"], {
       env: {
         OPEN_SECOND_BRAIN_CONFIG: config,
-        GITHUB_TOKEN: "ghp_secret_value",
+        GITHUB_TOKEN: FAKE_GITHUB_SECRET,
       },
     });
 
     expect(r.returncode).toBe(0);
-    expect(r.stdout).not.toContain("ghp_secret_value");
+    expect(r.stdout).not.toContain(FAKE_GITHUB_SECRET);
     expect(JSON.parse(r.stdout)).toEqual({
       name: "GITHUB_TOKEN",
       available: true,

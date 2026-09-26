@@ -26,6 +26,13 @@
  *     hook gets a `commandWindows` ({@link codexWindowsHookCommand}): on
  *     Windows Codex runs a hook as `%COMSPEC% /C "<command>"`, where the
  *     POSIX `command` cannot parse.
+ *   - `LICENSE` and `.codexignore` -> the same names under `plugins/codex/`,
+ *     byte for byte, so the subtree Codex installs carries its own license
+ *     and ignore list.
+ *   - `README.md` and `SECURITY.md` -> the same names under `plugins/codex/`,
+ *     with relative links made absolute ({@link withAbsoluteLinks}): the
+ *     mirror sits two levels down, where the root's relative links resolve
+ *     to nothing.
  *   - NOT `hooks/*.ts`. The hook commands run `o2b-hook <name>`, which
  *     resolves the checkout that holds `hooks/<name>.ts` (see
  *     `scripts/o2b-hook`). Codex exports `CLAUDE_PLUGIN_ROOT` as the cache
@@ -137,6 +144,23 @@ export function codexHooksJson(source: string): string {
   return `${JSON.stringify(doc, null, 2)}\n`;
 }
 
+/** Where a root document's relative links point once it is mirrored. */
+export const REPO_BLOB_URL = "https://github.com/itechmeat/open-second-brain/blob/main";
+/** Where its relative images point: `raw`, so GitHub serves the file rather than a page. */
+export const REPO_RAW_URL = "https://github.com/itechmeat/open-second-brain/raw/main";
+
+/** A Markdown link or image whose target is repo-relative: not a URL, an anchor or mail. */
+const RELATIVE_MARKDOWN_LINK = /(!?)\[([^\]\n]*)\]\((?![a-z][a-z0-9+.-]*:|#|\/)([^)\s]+)\)/gi;
+
+/** A root Markdown document as the Codex subtree carries it: every relative link made absolute. */
+export function withAbsoluteLinks(source: string): string {
+  return source.replace(
+    RELATIVE_MARKDOWN_LINK,
+    (_match, bang: string, text: string, target: string) =>
+      `${bang}[${text}](${bang === "!" ? REPO_RAW_URL : REPO_BLOB_URL}/${target.replace(/^\.\//, "")})`,
+  );
+}
+
 export const MIRRORS: ReadonlyArray<MirrorSpec> = [
   { source: "skills", target: "plugins/codex/skills" },
   {
@@ -144,6 +168,10 @@ export const MIRRORS: ReadonlyArray<MirrorSpec> = [
     target: "plugins/codex/hooks/hooks.json",
     transform: codexHooksJson,
   },
+  { source: "LICENSE", target: "plugins/codex/LICENSE" },
+  { source: ".codexignore", target: "plugins/codex/.codexignore" },
+  { source: "README.md", target: "plugins/codex/README.md", transform: withAbsoluteLinks },
+  { source: "SECURITY.md", target: "plugins/codex/SECURITY.md", transform: withAbsoluteLinks },
 ];
 
 /** Directories the mirrors own outright: a file in them that no spec produces is drift. */
@@ -242,7 +270,9 @@ export function findDrift(root: string = ROOT): Drift[] {
   for (const pair of pairs) {
     if (linkedDirs.some((d) => pair.target.startsWith(`${d}/`))) continue;
     const dst = join(root, pair.target);
-    if (!existsSync(dst)) drift.push({ path: pair.target, reason: "missing" });
+    // A symlinked single file reads as identical here, yet Codex drops it.
+    if (isSymlink(dst)) drift.push({ path: pair.target, reason: "symlink" });
+    else if (!existsSync(dst)) drift.push({ path: pair.target, reason: "missing" });
     else if (!expectedBytes(root, pair).equals(readFileSync(dst))) {
       drift.push({ path: pair.target, reason: "differs" });
     }
@@ -258,6 +288,8 @@ export function writeMirrors(root: string = ROOT): number {
   pairs.forEach((pair, i) => {
     const dst = join(root, pair.target);
     mkdirSync(dirname(dst), { recursive: true });
+    // Writing through a symlink would leave the link in place.
+    if (isSymlink(dst)) rmSync(dst);
     writeFileSync(dst, contents[i]!);
   });
   return pairs.length;

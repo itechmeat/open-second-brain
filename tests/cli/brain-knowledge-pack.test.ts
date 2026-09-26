@@ -12,6 +12,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+/** A GitHub personal-access-token shape the pack must never carry. */
+const GITHUB_PAT = fakeCredential("ghp_", "abcdefghijklmnopqrstuvwxyz0123456789");
 
 let tmp: string;
 let src: string;
@@ -42,7 +46,7 @@ describe("o2b brain knowledge-pack", () => {
     mkdirSync(join(src, "Runbooks"), { recursive: true });
     writeFileSync(
       join(src, "Runbooks", "deploy.md"),
-      "---\ntags: [ops]\n---\nDeploy with token: ghp_abcdefghijklmnopqrstuvwxyz0123456789 set.\n",
+      `---\ntags: [ops]\n---\nDeploy with token: ${GITHUB_PAT} set.\n`,
     );
     writeFileSync(
       join(src, "Runbooks", "incident.md"),
@@ -72,7 +76,7 @@ describe("o2b brain knowledge-pack", () => {
     ]);
     expect(exported.redacted).toBe(true);
     const carried = readFileSync(join(packDir, "concepts", "deploy.md"), "utf8");
-    expect(carried).not.toContain("ghp_abcdefghijklmnopqrstuvwxyz0123456789");
+    expect(carried).not.toContain(GITHUB_PAT);
     expect(existsSync(join(packDir, "concepts", "incident.md"))).toBe(false);
 
     const preview = await o2b([

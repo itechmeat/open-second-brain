@@ -45,9 +45,10 @@ import { buildOkfBundle } from "../../src/core/brain/portability/okf.ts";
 import { exportPreferencesLlmsTxt } from "../../src/core/brain/export.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
+import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
 
 /** A vendor-prefixed credential token: caught by shape, not by a word list. */
-const VENDOR_TOKEN = "sk-live-9f8e7d6c5b4a32100112";
+const VENDOR_TOKEN = FAKE_VENDOR_KEY;
 
 let tmp: string;
 let vault: string;

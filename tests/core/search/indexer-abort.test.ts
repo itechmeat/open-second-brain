@@ -17,6 +17,7 @@ import { Store } from "../../../src/core/search/store.ts";
 import { createTempVault, makeConfig, writeMd } from "../../helpers/search-fixtures.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
 import { sqliteVecLoadable } from "../../helpers/sqlite-vec.ts";
+import { FAKE_PROVIDER_KEY } from "../../helpers/fake-credentials.ts";
 
 let vault: string;
 let dbPath: string;
@@ -120,7 +121,7 @@ test("aborting between embed batches stops further embedding but keeps committed
         provider: "openai-compat",
         baseUrl: server.url,
         model: "fake-model",
-        apiKey: "test-key",
+        apiKey: FAKE_PROVIDER_KEY,
         dimension: 4,
         timeoutMs: 5_000,
         concurrency: 1,

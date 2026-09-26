@@ -15,13 +15,14 @@ import { writePreference } from "../../src/core/brain/preference.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
 import { CLI_SPAWN_BUDGET_MS } from "../helpers/cli-timeout.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 /**
  * A vendor-prefixed credential shape, synthesised for this test. Caught by
  * shape rather than by a word list, which is why an obviously fake body is
  * enough to prove the boundary runs.
  */
-const FAKE_VENDOR_TOKEN = "sk-live-FAKEEXAMPLE0000111122223333";
+const FAKE_VENDOR_TOKEN = fakeCredential("sk-", "live-FAKEEXAMPLE0000111122223333");
 
 let tmp: string;
 let vault: string;

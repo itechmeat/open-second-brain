@@ -1,6 +1,6 @@
 {
   "name": "open-second-brain",
-  "version": "1.58.0",
+  "version": "1.58.1",
   "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, OpenClaw, and other agent runtimes.",
   "author": {
     "name": "Open Second Brain contributors",
@@ -18,6 +18,7 @@
     "longDescription": "Open Second Brain gives every agent on this machine a shared, append-only event log and a curated AI Wiki space inside a portable Markdown vault. The plugin exposes vault status, query, capture, event-log append, and vault health tools via MCP, and injects a per-turn identity reminder so agents reliably log durable artifacts.",
     "developerName": "Open Second Brain contributors",
     "category": "Productivity",
+    "websiteURL": "https://github.com/itechmeat/open-second-brain",
     "capabilities": ["Read", "Write"],
     "defaultPrompt": ["Capture this finding to the second brain"]
   }

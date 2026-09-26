@@ -26,9 +26,10 @@ import { describe, expect, test } from "bun:test";
 
 import { EGRESS_OUTCOME, redactForEgress } from "../../src/core/egress/guard.ts";
 import { redactRawOutput, REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 const AWS_ID = "AKIAIOSFODNN7EXAMPLE";
-const AWS_SECRET = "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY";
+const AWS_SECRET = fakeCredential("wJalrXUtnFEMI/K7MDENG", "+bPxRfiCYEXAMPLEKEY");
 const DIGEST = "a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f90";
 const TOKENS = { redactTokens: true } as const;
 

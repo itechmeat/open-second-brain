@@ -117,6 +117,8 @@ import {
   type ProbeEntry,
 } from "../helpers/tool-probe-catalogue.ts";
 
+const PROBE_PROGRESS = "probe-token";
+
 /** HOME is pinned per file by convention; nothing pins it globally. */
 const SAVED_HOME = process.env["HOME"];
 const PINNED_HOME = mkdtempSync(join(tmpdir(), "o2b-vis-matrix-home-"));
@@ -429,7 +431,7 @@ async function drive(
     jsonrpc: JSONRPC_VERSION,
     id: 1,
     method: "tools/call",
-    params: { name, arguments: args, _meta: { progressToken: "probe-token" } },
+    params: { name, arguments: args, _meta: { progressToken: PROBE_PROGRESS } },
   });
   return JSON.stringify(response);
 }

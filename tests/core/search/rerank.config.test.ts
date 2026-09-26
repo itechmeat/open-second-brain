@@ -13,6 +13,7 @@ import { join } from "node:path";
 import { resolveSearchConfig } from "../../../src/core/search/index.ts";
 import { addRerankProviderProfile } from "../../../src/core/search/rerank/registry.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 
 let tmp: string;
 let configPath: string;
@@ -76,7 +77,7 @@ test("explicit config keys resolve, with the api key read from env-key", () => {
     baseUrl: "https://api.example.com/v1/",
     model: "rerank-1",
     envKey: "MY_RERANK_KEY",
-    apiKey: "sk-rerank",
+    apiKey: fakeCredential("sk-", "rerank"),
     topK: 8,
     minScore: 0.25,
   });

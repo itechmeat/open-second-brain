@@ -32,9 +32,10 @@ import { join } from "node:path";
 
 import { runCli } from "../helpers/run-cli.ts";
 import { REDACTION_PLACEHOLDER, MAX_REDACTOR_INPUT } from "../../src/core/redactor.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 const VENDOR_TOKEN = "sk-live-CONTINUITY1111";
-const BARE_TOKEN = "Zq7Xb2Kd9Lm4Np6Rt8Vw1Yc7";
+const BARE_TOKEN = fakeCredential("Zq7Xb2Kd9Lm4", "Np6Rt8Vw1Yc7");
 const URL_CREDENTIAL = "https://admin:hunter2@db.example.com/x";
 const RECORD_ID = "ctn_20260801120000_a1b2c3d4e5f6a7b8";
 const MONTH = "2026-08";

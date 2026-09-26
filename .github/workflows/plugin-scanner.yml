@@ -1,0 +1,38 @@
+name: Plugin scanner
+
+# Runs the HOL AI Plugin Scanner, the check registries such as Awesome AI
+# Plugins apply before listing a plugin, on every pull request and on pushes
+# to main. The action pins the scanner wheel by SHA-256 and verifies its PyPI
+# provenance; this job holds only `contents: read`, needs no secrets, and runs
+# offline without uploading SARIF.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plugin-scanner-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    name: plugin-scanner
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      # v1.2.635 installs plugin-scanner 3.0.123.
+      - name: Scan the plugin repository
+        uses: hashgraph-online/ai-plugin-scanner-action@caba2e96aa8ad2feb6cf6fca52442b52e22e779f # v1.2.635
+        with:
+          plugin_dir: "."
+          min_score: 80
+          fail_on_severity: high

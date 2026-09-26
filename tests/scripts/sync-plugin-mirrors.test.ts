@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -27,6 +28,9 @@ import {
   codexHooksJson,
   codexWindowsHookCommand,
   findDrift,
+  REPO_BLOB_URL,
+  REPO_RAW_URL,
+  withAbsoluteLinks,
   writeMirrors,
 } from "../../scripts/sync-plugin-mirrors.ts";
 
@@ -143,6 +147,34 @@ describe("the Codex hooks.json", () => {
   });
 });
 
+describe("the Codex copies of the root documents", () => {
+  test("the plugin subtree carries its own license, readme, security policy and ignore list", () => {
+    for (const name of ["LICENSE", "README.md", "SECURITY.md", ".codexignore"]) {
+      expect(existsSync(join(REPO_ROOT, "plugins/codex", name))).toBe(true);
+    }
+    expect(readFileSync(join(REPO_ROOT, "plugins/codex/LICENSE"))).toEqual(
+      readFileSync(join(REPO_ROOT, "LICENSE")),
+    );
+  });
+
+  test("relative links and images become absolute; URLs, anchors and mail stay as they are", () => {
+    const source = [
+      "![poster](docs/images/poster.jpg)",
+      "See [the guide](./install/codex.md) and [`install/`](install/).",
+      "[CLI](docs/cli-reference.md#knowledge-packs) [site](https://obsidian.md)",
+      "[top](#what-is-new) [mail](mailto:someone@example.com) [root](/abs)",
+    ].join("\n");
+    expect(withAbsoluteLinks(source)).toBe(
+      [
+        `![poster](${REPO_RAW_URL}/docs/images/poster.jpg)`,
+        `See [the guide](${REPO_BLOB_URL}/install/codex.md) and [\`install/\`](${REPO_BLOB_URL}/install/).`,
+        `[CLI](${REPO_BLOB_URL}/docs/cli-reference.md#knowledge-packs) [site](https://obsidian.md)`,
+        "[top](#what-is-new) [mail](mailto:someone@example.com) [root](/abs)",
+      ].join("\n"),
+    );
+  });
+});
+
 describe("drift detection", () => {
   let root: string;
 
@@ -153,6 +185,10 @@ describe("drift detection", () => {
     mkdirSync(join(root, "hooks"), { recursive: true });
     writeFileSync(join(root, "hooks/hooks.json"), '{"hooks":{}}\n');
     writeFileSync(join(root, "hooks/active-inject.ts"), "// not mirrored\n");
+    writeFileSync(join(root, "LICENSE"), "license\n");
+    writeFileSync(join(root, ".codexignore"), ".env\n");
+    writeFileSync(join(root, "README.md"), "# readme\n");
+    writeFileSync(join(root, "SECURITY.md"), "# security\n");
   });
 
   afterEach(() => {
@@ -160,7 +196,7 @@ describe("drift detection", () => {
   });
 
   test("a fresh write is clean, and copies only what the specs name", () => {
-    expect(writeMirrors(root)).toBe(2);
+    expect(writeMirrors(root)).toBe(6);
     expect(findDrift(root)).toEqual([]);
     expect(readFileSync(join(root, "plugins/codex/skills/alpha/SKILL.md"), "utf8")).toBe("alpha\n");
     expect(existsSync(join(root, "plugins/codex/hooks/active-inject.ts"))).toBe(false);
@@ -194,11 +230,31 @@ describe("drift detection", () => {
       expect(findDrift(root)).toEqual([
         { path: "plugins/codex/skills", reason: "symlink" },
         { path: "plugins/codex/hooks", reason: "symlink" },
+        // The single-file mirrors were never written in this fixture.
+        { path: "plugins/codex/LICENSE", reason: "missing" },
+        { path: "plugins/codex/.codexignore", reason: "missing" },
+        { path: "plugins/codex/README.md", reason: "missing" },
+        { path: "plugins/codex/SECURITY.md", reason: "missing" },
       ]);
 
       writeMirrors(root);
       expect(findDrift(root)).toEqual([]);
       expect(existsSync(join(root, "hooks/active-inject.ts"))).toBe(true);
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "a symlinked single-file mirror is drift, and a write replaces it with a real file",
+    () => {
+      writeMirrors(root);
+      rmSync(join(root, "plugins/codex/LICENSE"));
+      symlinkSync("../../LICENSE", join(root, "plugins/codex/LICENSE"));
+
+      expect(findDrift(root)).toEqual([{ path: "plugins/codex/LICENSE", reason: "symlink" }]);
+
+      writeMirrors(root);
+      expect(findDrift(root)).toEqual([]);
+      expect(lstatSync(join(root, "plugins/codex/LICENSE")).isSymbolicLink()).toBe(false);
     },
   );
 });

@@ -17,8 +17,9 @@ import {
   type ExternalFetchResponse,
   type ExternalFetchTransport,
 } from "../../../../src/core/brain/research/external-fetch.ts";
+import { fakeCredential } from "../../../helpers/fake-credentials.ts";
 
-const API_KEY = "sk-secret-abc123def456ghi789";
+const API_KEY = fakeCredential("sk-", "secret-abc123def456ghi789");
 
 function jsonResponse(status: number, payload: unknown): ExternalFetchResponse {
   return {

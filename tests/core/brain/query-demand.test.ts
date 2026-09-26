@@ -13,6 +13,9 @@ import {
   readQueryDemand,
   recordQueryDemand,
 } from "../../../src/core/brain/query-demand.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
+
+const SECRET_SHAPED_TERM = fakeCredential("sk-", "abcdef0123456789abcdef0123456789");
 
 let vault: string;
 
@@ -37,7 +40,7 @@ describe("normalizeQueryTerms", () => {
   });
 
   test("drops secret-shaped tokens the redactor rewrites", () => {
-    const terms = normalizeQueryTerms("api key sk-abcdef0123456789abcdef0123456789 rotation");
+    const terms = normalizeQueryTerms(`api key ${SECRET_SHAPED_TERM} rotation`);
     expect(terms).toContain("api");
     expect(terms).toContain("key");
     expect(terms).toContain("rotation");

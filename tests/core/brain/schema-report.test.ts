@@ -12,6 +12,15 @@ import {
   BRAIN_SIGNAL_SIGN,
 } from "../../../src/core/brain/types.ts";
 
+/** Schema tokens used by the cases below. */
+const RESEARCH = "research";
+const EXTERNAL = "external";
+const DECISION = "decision";
+const OBSERVATION = "observation";
+const MILESTONE = "milestone";
+const UNUSED_PAGE = "unused-page";
+const UNUSED_EVENT = "unused-event";
+
 let vault: string;
 
 beforeEach(() => {
@@ -99,35 +108,35 @@ describe("buildSchemaReport", () => {
 
     expect(report.vocabulary.preference_types).toEqual(["preference", "research", "decision"]);
     expect(report.vocabulary.signal_types).toEqual(["feedback", "observation"]);
-    expect(report.usage.preference_types).toEqual([{ token: "research", count: 1 }]);
-    expect(report.usage.signal_types).toEqual([{ token: "external", count: 1 }]);
+    expect(report.usage.preference_types).toEqual([{ token: RESEARCH, count: 1 }]);
+    expect(report.usage.signal_types).toEqual([{ token: EXTERNAL, count: 1 }]);
     expect(report.usage.page_types).toEqual([{ token: "paper", count: 1 }]);
-    expect(report.usage.log_event_kinds).toEqual([{ token: "milestone", count: 1 }]);
+    expect(report.usage.log_event_kinds).toEqual([{ token: MILESTONE, count: 1 }]);
     expect(report.findings).toContainEqual({
       kind: "unknown-token",
       category: "signal_types",
-      token: "external",
+      token: EXTERNAL,
       path: "Brain/inbox/sig-2026-05-30-external.md",
     });
     expect(report.findings).toContainEqual({
       kind: "unused-declaration",
       category: "preference_types",
-      token: "decision",
+      token: DECISION,
     });
     expect(report.findings).toContainEqual({
       kind: "unused-declaration",
       category: "signal_types",
-      token: "observation",
+      token: OBSERVATION,
     });
     expect(report.findings).toContainEqual({
       kind: "unused-declaration",
       category: "page_types",
-      token: "unused-page",
+      token: UNUSED_PAGE,
     });
     expect(report.findings).toContainEqual({
       kind: "unused-declaration",
       category: "log_event_kinds",
-      token: "unused-event",
+      token: UNUSED_EVENT,
     });
   });
 
@@ -159,11 +168,11 @@ describe("buildSchemaReport", () => {
       detail: "preference missing field: retired_at",
     });
     // The readable half of the vault is still measured and still linted.
-    expect(report.usage.preference_types).toEqual([{ token: "research", count: 1 }]);
+    expect(report.usage.preference_types).toEqual([{ token: RESEARCH, count: 1 }]);
     expect(report.findings).toContainEqual({
       kind: "unused-declaration",
       category: "preference_types",
-      token: "decision",
+      token: DECISION,
     });
   });
 

@@ -29,6 +29,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { redactRawOutput, REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
 
 /** Strict YAML: rejects the unquoted placeholder as an unresolved alias. */
 function parseStrictYaml(text: string): unknown {
@@ -42,7 +43,7 @@ function frontmatterOf(page: string): string {
   return match[1]!;
 }
 
-const VENDOR_TOKEN = "sk-live-9f8e7d6c5b4a32100112";
+const VENDOR_TOKEN = FAKE_VENDOR_KEY;
 const TOKENS = { redactTokens: true, redactUrlCredentials: true } as const;
 
 describe("a value on the NEXT line is not this key's value", () => {

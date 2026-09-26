@@ -25,6 +25,7 @@ import {
 } from "../../src/core/config.ts";
 import { redactConfigMapping } from "../../src/core/egress/guard.ts";
 import { REDACTION_PLACEHOLDER } from "../../src/core/redactor.ts";
+import { FAKE_VENDOR_KEY } from "../helpers/fake-credentials.ts";
 
 let tmp: string;
 const savedEnv: Record<string, string | undefined> = {};
@@ -208,7 +209,7 @@ describe("redactConfigMapping", () => {
   });
 
   test("redacts a credential value under a key name that suggests nothing", () => {
-    const out = redactConfigMapping({ scratch: "sk-live-9f8e7d6c5b4a32100112" });
+    const out = redactConfigMapping({ scratch: FAKE_VENDOR_KEY });
     expect(out["scratch"]).toBe(REDACTION_PLACEHOLDER);
   });
 });

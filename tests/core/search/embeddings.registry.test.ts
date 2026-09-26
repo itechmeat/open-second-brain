@@ -13,6 +13,9 @@ import {
   RESERVED_PROVIDER_NAMES,
 } from "../../../src/core/search/embeddings/registry.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
+
+const NIM_KEY = fakeCredential("secret-", "123");
 
 let vault: string;
 
@@ -81,13 +84,13 @@ test("removing an absent profile reports removed:false", () => {
 
 test("expandRegisteredProvider resolves to openai-compat with the env key", () => {
   const registry = addProviderProfile(vault, nim);
-  const expanded = expandRegisteredProvider("nvidia-nim", registry, { NIM_API_KEY: "secret-123" });
+  const expanded = expandRegisteredProvider("nvidia-nim", registry, { NIM_API_KEY: NIM_KEY });
   expect(expanded).toEqual({
     provider: "openai-compat",
     baseUrl: nim.baseUrl,
     model: nim.defaultModel,
-    apiKey: "secret-123",
-    apiKeys: ["secret-123"],
+    apiKey: NIM_KEY,
+    apiKeys: [NIM_KEY],
   });
 });
 

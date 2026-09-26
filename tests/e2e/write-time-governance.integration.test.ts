@@ -29,6 +29,9 @@ import { search } from "../../src/core/search/search.ts";
 import { Store } from "../../src/core/search/store.ts";
 import { makeConfig } from "../helpers/search-fixtures.ts";
 
+/** Schema tokens used by the cases below. */
+const DEPENDS_ON = "depends_on";
+
 const NOW = new Date("2026-06-05T03:00:00Z");
 
 let vault: string;
@@ -54,7 +57,7 @@ test("the suite composes end to end on one vault", async () => {
     [
       { op: "add_type", category: "page_types", token: "paper" },
       { op: "add_type", category: "page_types", token: "receipt" },
-      { op: "add_link_type", token: "depends_on" },
+      { op: "add_link_type", token: DEPENDS_ON },
       { op: "add_label_dimension", dimension: "priority", values: ["low", "high"] },
       { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "paper" },
       {

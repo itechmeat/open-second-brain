@@ -17,6 +17,9 @@ import {
   MCP_CONFIG_FILENAMES,
   parseMcpConfig,
 } from "../../../src/core/graph/mcp-config.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
+
+const LEAK_CANARY = fakeCredential("sk-", "DO-NOT-LEAK-abc123");
 
 describe("parseMcpConfig (pure)", () => {
   test("extracts server, package (npx) and env-requirement names", () => {
@@ -44,13 +47,13 @@ describe("parseMcpConfig (pure)", () => {
         secretful: {
           command: "uvx",
           args: ["some-mcp-package"],
-          env: { API_KEY: "sk-DO-NOT-LEAK-abc123", PASSWORD: "hunter2" },
+          env: { API_KEY: LEAK_CANARY, PASSWORD: "hunter2" },
         },
       },
     });
     const servers = parseMcpConfig(json, "mcp.json");
     const blob = JSON.stringify(servers);
-    expect(blob).not.toContain("sk-DO-NOT-LEAK-abc123");
+    expect(blob).not.toContain(LEAK_CANARY);
     expect(blob).not.toContain("hunter2");
     expect(servers[0]!.env.toSorted()).toEqual(["API_KEY", "PASSWORD"]);
     expect(servers[0]!.packages).toEqual(["some-mcp-package"]);

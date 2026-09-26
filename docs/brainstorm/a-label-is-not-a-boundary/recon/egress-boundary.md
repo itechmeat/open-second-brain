@@ -279,7 +279,7 @@ exported 1 nodes to …/explorer.html
 
 $ grep -o '"nodes":\[[^]]*\]' explorer.html
 "nodes":[{"id":"pref-secret-leak","kind":"preference","topic":"secret-leak",
-"principle":"Always deploy with OPENAI_API_KEY=sk-proj-AAAABBBBCCCCDDDDEEEEFFFFGGGGHHHH1234
+"principle":"Always deploy with OPENAI_API_KEY=sk-proj-<example-key>
  set from <operator-home>/private-client-work", …}]
 ```
 

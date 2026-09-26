@@ -24,6 +24,9 @@ import {
 } from "../../src/core/config.ts";
 import { atomicWriteFileSync } from "../../src/core/fs-atomic.ts";
 
+/** A stored value of the wrong shape: not 32 lowercase hex characters. */
+const CORRUPT_VALUE = "not-a-valid-secret";
+
 const HEX32 = /^[0-9a-f]{32}$/;
 
 let configHome: string;
@@ -62,7 +65,7 @@ describe("resolveInstallationSecret", () => {
   });
 
   test("regenerates when the stored value is corrupt or the wrong shape", () => {
-    atomicWriteFileSync(configPath, 'installation_secret: "not-a-valid-secret"\n');
+    atomicWriteFileSync(configPath, `installation_secret: ${JSON.stringify(CORRUPT_VALUE)}\n`);
     const secret = resolveInstallationSecret(configPath);
     expect(secret).toMatch(HEX32);
     expect(readFileSync(configPath, "utf8")).toContain(`installation_secret: "${secret}"`);

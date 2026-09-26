@@ -17,6 +17,10 @@ import { JSONRPC_VERSION, MCPServer, PROTOCOL_VERSION } from "../../src/mcp/inde
 import { INVALID_PARAMS } from "../../src/mcp/protocol.ts";
 import { toPosix } from "../../src/core/path-safety.ts";
 
+/** Schema tokens used by the cases below. */
+const DECISION = "decision";
+const UNDECLARED = "undeclared";
+
 let tmp: string;
 let vault: string;
 let configPath: string;
@@ -116,7 +120,7 @@ describe("schema MCP tools", () => {
     await initialize(server);
 
     const applied = await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
     });
     expect((applied as any).result.structuredContent.applied).toBe(1);
 
@@ -132,8 +136,8 @@ describe("schema MCP tools", () => {
 
     await call(server, "schema_apply_mutations", {
       mutations: [
-        { op: "add_type", category: "preference_types", token: "decision" },
-        { op: "add_link_type", token: "decision" },
+        { op: "add_type", category: "preference_types", token: DECISION },
+        { op: "add_link_type", token: DECISION },
       ],
     });
     const graph = await call(server, "schema_inspect", { view: "graph" });
@@ -153,7 +157,7 @@ describe("schema MCP tools", () => {
     const mtimeBefore = statSync(brainConfig).mtimeMs;
 
     const preview = await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
       dry_run: true,
     });
 
@@ -181,7 +185,7 @@ describe("schema MCP tools", () => {
     await initialize(server);
 
     const applied = await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
     });
 
     const structured = (applied as any).result.structuredContent;
@@ -213,7 +217,7 @@ describe("schema MCP tools", () => {
     );
 
     const applied = await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
     });
     const digest = (applied as any).result.structuredContent.pack_digest;
     expect(typeof digest).toBe("string");
@@ -237,7 +241,7 @@ describe("schema MCP tools", () => {
     const server = makeServer();
     await initialize(server);
     await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
     });
 
     const brainConfig = join(vault, "Brain", "_brain.yaml");
@@ -258,7 +262,7 @@ describe("schema MCP tools", () => {
   test("a rejected preview returns the same error envelope the apply returns", async () => {
     const server = makeServer();
     await initialize(server);
-    const rejected = [{ op: "add_prefix", prefix: "pref", token: "undeclared" }];
+    const rejected = [{ op: "add_prefix", prefix: "pref", token: UNDECLARED }];
 
     const preview = await call(server, "schema_apply_mutations", {
       mutations: rejected,
@@ -278,7 +282,7 @@ describe("schema MCP tools", () => {
     await initialize(server);
 
     const response = await call(server, "schema_apply_mutations", {
-      mutations: [{ op: "add_type", category: "preference_types", token: "decision" }],
+      mutations: [{ op: "add_type", category: "preference_types", token: DECISION }],
       dry_run: "yes",
     });
 

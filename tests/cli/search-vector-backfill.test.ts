@@ -31,6 +31,7 @@ import { progressRecords, STAGE_IDENTIFIER } from "../helpers/progress-records.t
 import { sqliteVecLoadable } from "../helpers/sqlite-vec.ts";
 import { CHMOD_CANNOT_DENY } from "../helpers/platform.ts";
 import { runCli } from "../helpers/run-cli.ts";
+import { FAKE_PROVIDER_KEY } from "../helpers/fake-credentials.ts";
 
 /**
  * Whether `sqlite-vec` loaded in THIS process, resolved once at module
@@ -81,7 +82,7 @@ function semanticConfig(): ReturnType<typeof makeConfig> {
       provider: "openai-compat",
       baseUrl: server.url,
       model: "fake-model",
-      apiKey: "test-key",
+      apiKey: FAKE_PROVIDER_KEY,
       dimension: 4,
       timeoutMs: 5_000,
     },

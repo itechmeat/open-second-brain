@@ -20,6 +20,10 @@ import {
 } from "../../src/core/brain/types.ts";
 import { runCli } from "../helpers/run-cli.ts";
 
+/** Schema tokens used by the cases below. */
+const EXTERNAL = "external";
+const STRATEGY = "strategy";
+
 let tmp: string;
 let vault: string;
 let configPath: string;
@@ -101,9 +105,9 @@ describe("o2b brain schema", () => {
       findings: Array<{ kind: string; token: string }>;
     };
     expect(payload.vocabulary.preference_types).toEqual(["preference", "research", "decision"]);
-    expect(payload.usage.signal_types).toEqual([{ token: "external", count: 1 }]);
+    expect(payload.usage.signal_types).toEqual([{ token: EXTERNAL, count: 1 }]);
     expect(payload.findings).toContainEqual(
-      expect.objectContaining({ kind: "unknown-token", token: "external" }),
+      expect.objectContaining({ kind: "unknown-token", token: EXTERNAL }),
     );
   });
 
@@ -188,7 +192,7 @@ describe("o2b brain schema", () => {
     const mutation = JSON.stringify({
       op: "add_type",
       category: "preference_types",
-      token: "strategy",
+      token: STRATEGY,
     });
     const applied = await runCli(["brain", "schema", "apply", "--mutation", mutation, "--json"], {
       env: env(),
@@ -204,7 +208,7 @@ describe("o2b brain schema", () => {
     const mutation = JSON.stringify({
       op: "add_type",
       category: "preference_types",
-      token: "strategy",
+      token: STRATEGY,
     });
     const applied = await runCli(["brain", "schema", "apply", "--mutation", mutation, "--json"], {
       env: env(),
@@ -230,7 +234,7 @@ describe("o2b brain schema", () => {
     const mutation = JSON.stringify({
       op: "add_type",
       category: "preference_types",
-      token: "strategy",
+      token: STRATEGY,
     });
 
     const before = await runCli(["brain", "schema", "--json"], { env: env() });
@@ -251,7 +255,7 @@ describe("o2b brain schema", () => {
     const mutation = JSON.stringify({
       op: "add_type",
       category: "preference_types",
-      token: "strategy",
+      token: STRATEGY,
     });
     const brainConfig = join(vault, "Brain", "_brain.yaml");
     // Stamped far in the past so any write during the preview moves the

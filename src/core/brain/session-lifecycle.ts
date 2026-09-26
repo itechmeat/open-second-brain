@@ -138,6 +138,32 @@ interface NormalizedPayload {
   readonly malformed: number;
 }
 
+/**
+ * Whether capturing this event may need the signal dedup index - the
+ * one step whose cost grows with the vault: a read and a frontmatter
+ * parse of every `Brain/inbox/sig-*.md` and `processed/sig-*.md`. On a
+ * WSL 9p mount of a Windows drive with ~4k signals that walk measured
+ * 9-12 s, past the 10 s host timeout, and it is synchronous, so the
+ * in-process ceiling timer cannot interrupt it either.
+ *
+ * Deliberately an OVER-approximation, pure and cheap (no I/O): a prompt
+ * that carries a feedback marker or any extractable fact (a URL, an
+ * e-mail, a unit-bound quantity such as `80%`), a replayed
+ * `brain_feedback` call, and an interrupted SessionEnd (whose transcript
+ * is re-extracted). The capture boundary may still suppress the text
+ * later; deferring an event that turns out to write nothing costs only
+ * a background process.
+ */
+export function lifecycleEventNeedsDedup(payload: unknown): boolean {
+  const normalized = normalizePayload(payload);
+  if (normalized.toolName === "brain_feedback") return true;
+  if (normalized.event === "SessionEnd" && normalized.interrupted === true) return true;
+  const text = normalized.promptText;
+  if (text === undefined) return false;
+  if (discoverMarkersDetailed(text).markers.some(isFeedbackMarker)) return true;
+  return extractFacts(text).length > 0;
+}
+
 export async function captureSessionLifecycleEvent(
   vault: string,
   payload: unknown,

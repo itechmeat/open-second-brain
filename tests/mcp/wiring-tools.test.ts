@@ -61,9 +61,10 @@ import {
   setCodexRunner,
 } from "../../src/core/install/adapters/codex.ts";
 import { buildPayload } from "../../src/core/install/payload.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
 
 /** Deterministic 32-hex key so `vault://<hex>` is stable across runs. */
-const SECRET = "0123456789abcdef0123456789abcdef";
+const SECRET = fakeCredential("0123456789abcdef", "0123456789abcdef");
 
 /** The escape hatch that restores raw host paths. */
 const EXPOSE_ENV = "OPEN_SECOND_BRAIN_EXPOSE_HOST_PATHS";

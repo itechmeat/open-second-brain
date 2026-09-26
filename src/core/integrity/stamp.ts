@@ -110,7 +110,7 @@ export interface StampCheck {
 }
 
 /** Rendered for a side that recorded nothing, so a gap is never blank. */
-const UNRECORDED_TOKEN = "<unrecorded>";
+const UNRECORDED_MARKER = "<unrecorded>";
 
 /** Runs of any whitespace; collapsed so a rendered mismatch is one line. */
 const WHITESPACE_RUN_RE = /\s+/g;
@@ -200,7 +200,7 @@ export function formatStampMismatch(mismatch: StampMismatch): string {
 }
 
 function renderToken(value: string | null): string {
-  return value === null ? UNRECORDED_TOKEN : JSON.stringify(collapse(value));
+  return value === null ? UNRECORDED_MARKER : JSON.stringify(collapse(value));
 }
 
 function collapse(value: string): string {

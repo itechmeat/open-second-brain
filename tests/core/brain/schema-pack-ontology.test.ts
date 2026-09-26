@@ -21,6 +21,9 @@ import {
   renderSchemaBlock,
 } from "../../../src/core/brain/schema-pack.ts";
 
+/** Schema tokens used by the cases below. */
+const DEPENDS_ON = "depends_on";
+
 const BASE = [
   "schema_version: 1",
   "schema:",
@@ -273,7 +276,7 @@ describe("ontology mutations", () => {
     const added = applyMutationsToPack(base, [
       { op: "add_link_constraint", link_type: "depends_on", source: "paper", target: "person" },
     ]);
-    const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: "depends_on" }]);
+    const removed = applyMutationsToPack(added, [{ op: "remove_link_type", token: DEPENDS_ON }]);
     expect(removed.link_constraints).toEqual({});
   });
 

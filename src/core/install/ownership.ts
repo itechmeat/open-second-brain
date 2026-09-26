@@ -156,6 +156,26 @@ export const OUT_OF_VAULT_STATE: ReadonlyArray<OutOfVaultState> = Object.freeze(
     sources: ["src/core/search/paths.ts"],
   },
   {
+    id: "session_capture_spool",
+    label: "deferred session-capture spool",
+    location: WINDOWS
+      ? "o2b-capture-*.json, plus one o2b-capture-<hash>.lock per vault, in the temp directory " +
+        "(%TEMP%, else %TMP%, else %SystemRoot%\\temp)"
+      : "o2b-capture-*.json, plus one o2b-capture-<hash>.lock per vault, in the temp directory " +
+        "($TMPDIR, else $TMP, else $TEMP, else /tmp)",
+    carries_memory: true,
+    created_by:
+      "the session-capture hook, for each prompt or tool event it hands to a background worker",
+    removed_by:
+      "the worker, which deletes the spool file as it reads it and the lock when it finishes; " +
+      "a leftover after a crash can be deleted by hand",
+    note:
+      "One hook payload per file, created with mode 0600: the prompt or tool call the worker is " +
+      "about to capture. It normally lives for well under a second, but a worker that dies before " +
+      "reading it leaves that text in the temp directory until the OS or you remove it.",
+    sources: ["hooks/session-capture.ts"],
+  },
+  {
     id: "machine_config",
     label: "machine-local plugin config",
     location: WINDOWS

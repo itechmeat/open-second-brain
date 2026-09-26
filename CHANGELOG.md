@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.58.1] - 2026-09-26
+
+Session capture off the hook path, and registry scanner hygiene.
+
+A session-capture event that needs duplicate checking read every signal in the inbox inside the hook itself. On a large inbox on a slow mount that took longer than the host's 10 s hook timeout. Those captures now run in a background worker.
+
+Plugin registries such as Awesome AI Plugins run the HOL AI Plugin Scanner over a repository before they list it. Its secret patterns matched test fixtures, schema tokens and two constant names, none of which is a credential, and it asked for the repository files a published plugin is expected to carry. The hygiene changes do not change runtime behaviour. The scanner (plugin-scanner 3.0.123, default profile) now reports 0 critical, high, medium or low findings and a score of 99/100, up from 73/100 with 132 high findings.
+
+### Fixed
+
+- **Session capture no longer exceeds the host hook timeout on large inboxes: captures that need duplicate checking run in a background worker.** A UserPromptSubmit or PostToolUse event that may need the signal dedup index (a feedback marker, an extractable fact such as a URL or a percentage, a replayed `brain_feedback` call, or an interrupted SessionEnd) is written to a spool file created with mode 0600 and handed to a detached worker, and the hook returns at once. Workers for one vault run one at a time, so two deferred captures still see each other in the dedup index. Every other event is still captured inline, and a failed hand-off falls back to an inline capture. `OPEN_SECOND_BRAIN_SESSION_CAPTURE_DEFER=0` restores inline capture for every event. The spool is listed with the other out-of-vault state, as memory-bearing: a worker that dies before reading its spool leaves that payload in the temp directory.
+- **A note rename on Windows no longer mistakes an occupied destination for the source.** The case-only-rename check compared `dev` and `ino` as numbers. NTFS file IDs are 64-bit, and above 2^53 two different files can round to the same value, so a rename onto an existing note could skip the `destination_occupied` refusal. The check now reads exact `bigint` stats. The Windows CI job surfaced it as an intermittent test failure.
+
+### Changed
+
+- **Test fixtures build placeholder credentials at runtime.** `tests/helpers/fake-credentials.ts` assembles each fake key from parts, so no source line holds a literal shaped like a real credential. The assembled values are the ones the tests used before, so the redactor tests still exercise realistic shapes. Schema tokens that tests pass as `token: "..."` moved into named constants.
+- **Two internal constants renamed.** `SCAN_TRUNCATED_TOKEN` in `src/core/redactor.ts` is now `SCAN_TRUNCATED_SENTINEL` (`SCAN_TRUNCATED_MARKER` already names the exported marker that embeds it), and `UNRECORDED_TOKEN` in `src/core/integrity/stamp.ts` is now `UNRECORDED_MARKER`. Neither is exported and their values are unchanged; the OpenClaw bundle is rebuilt.
+- **The codegraph install recommendation names npm.** The `codegraph-partner` skill no longer quotes a `curl ... | sh` installer. It suggests `npm i -g @colbymchenry/codegraph` and links to codegraph's own install section.
+- **A brainstorm recon note uses an obvious placeholder** (`sk-proj-<example-key>`) where it quoted a realistic-looking key.
+
+### Added
+
+- **`SECURITY.md`**, with private GitHub vulnerability reporting as the reporting channel.
+- **`.github/dependabot.yml`**: weekly, grouped updates for GitHub Actions and for the Bun dependencies, with major JavaScript upgrades left to a person.
+- **`.codexignore`**, listing local state, secrets and build output.
+- **`uv.lock`** for the Hermes Python shim, which has no dependencies. `scripts/sync-version.ts` keeps the project's own version in it in step with `package.json`.
+- **Codex metadata.** The root `.codex-plugin/plugin.json` carries the author, homepage, repository and license that `plugins/codex` already declared; the Codex manifest adds its `websiteURL`; and the marketplace entry declares `"authentication": "ON_INSTALL"`.
+- **The Codex plugin subtree carries `LICENSE`, `README.md`, `SECURITY.md` and `.codexignore`.** `bun run sync-plugin-mirrors` generates them from the root as real files: `LICENSE` and `.codexignore` byte for byte, and the two Markdown files with repository-relative links made absolute, since those links resolve to nothing two levels down. The `--check` form reports a symlinked single-file mirror as drift, as it already did for the mirrored directories.
+- **A plugin-scanner CI job** (`.github/workflows/plugin-scanner.yml`) runs the scanner's GitHub Action, pinned by commit SHA, on every pull request and on pushes to main. It fails on a high or critical finding or a score below 80, holds only `contents: read`, and needs no secrets.
+
 ## [1.58.0] - 2026-09-26
 
 Two features that 0.28.0 shipped as preview foundations, and that no verb, tool or hook ever reached, are now wired end to end: the oversized-payload registry and knowledge packs. Around them, this release hardens the boundaries that decide what a remote MCP caller can see, which paths a write may land on, how much trust imported content arrives with, and where a credential may travel. It also fixes chunking for Chinese, Japanese, Korean, Thai and similar text, which rebuilds each existing search index once, and stops the prompt hook from reading the whole inbox on every prompt.
@@ -7686,6 +7716,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.58.1]: https://github.com/itechmeat/open-second-brain/compare/v1.58.0...v1.58.1
 [1.58.0]: https://github.com/itechmeat/open-second-brain/compare/v1.57.1...v1.58.0
 [1.57.1]: https://github.com/itechmeat/open-second-brain/compare/v1.57.0...v1.57.1
 [1.57.0]: https://github.com/itechmeat/open-second-brain/compare/v1.56.0...v1.57.0

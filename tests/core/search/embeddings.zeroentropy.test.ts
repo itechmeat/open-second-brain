@@ -5,6 +5,7 @@ import { makeProvider } from "../../../src/core/search/embeddings/provider.ts";
 import { SearchError } from "../../../src/core/search/types.ts";
 import type { ResolvedEmbeddingConfig } from "../../../src/core/search/types.ts";
 import { startFakeHttp, type FakeHttp } from "../../helpers/fake-http.ts";
+import { fakeCredential } from "../../helpers/fake-credentials.ts";
 
 let server: FakeHttp;
 
@@ -14,7 +15,7 @@ function cfg(overrides: Partial<ResolvedEmbeddingConfig> = {}): ResolvedEmbeddin
     provider: "zeroentropy",
     baseUrl: server.url,
     model: "zembed-1",
-    apiKey: "ze-test-key",
+    apiKey: fakeCredential("ze-", "test-key"),
     dimension: null,
     timeoutMs: 5_000,
     concurrency: 2,

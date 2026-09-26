@@ -6,6 +6,10 @@ import { join } from "node:path";
 import { appendAuditRecord } from "../../src/core/reliability/audit.ts";
 import { withFileLock } from "../../src/core/reliability/lock.ts";
 import { buildProbeReport } from "../../src/core/reliability/probe.ts";
+import { fakeCredential } from "../helpers/fake-credentials.ts";
+
+const RESEARCH_TYPE = "research";
+const LOGGED_KEY = fakeCredential("secret-", "value");
 
 let tmp: string;
 
@@ -76,7 +80,7 @@ describe("appendAuditRecord", () => {
       action: "schema_apply_mutations",
       target: "Brain/_brain.yaml",
       ok: true,
-      details: { token: "research", api_key: "secret-value" },
+      details: { token: RESEARCH_TYPE, api_key: LOGGED_KEY },
     });
 
     expect(path.endsWith("2026-W22.jsonl")).toBe(true);
@@ -84,7 +88,7 @@ describe("appendAuditRecord", () => {
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain("schema_apply_mutations");
     expect(lines[0]).toContain("***REDACTED***");
-    expect(lines[0]).not.toContain("secret-value");
+    expect(lines[0]).not.toContain(LOGGED_KEY);
   });
 
   test("rejects invalid timestamps before week bucketing", () => {

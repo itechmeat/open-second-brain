@@ -1,8 +1,15 @@
 {
   "name": "open-second-brain",
-  "version": "1.58.0",
+  "version": "1.58.1",
   "description": "Plugin-first second brain package for Codex, Hermes, Claude Code, OpenClaw, and other agent runtimes.",
+  "author": {
+    "name": "Open Second Brain contributors",
+    "url": "https://github.com/itechmeat/open-second-brain"
+  },
+  "homepage": "https://github.com/itechmeat/open-second-brain",
+  "repository": "https://github.com/itechmeat/open-second-brain",
+  "license": "MIT",
+  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"],
   "skills": "./skills",
-  "hooks": "./hooks/hooks.json",
-  "keywords": ["second-brain", "obsidian", "agents", "skills", "event-log", "mcp"]
+  "hooks": "./hooks/hooks.json"
 }
