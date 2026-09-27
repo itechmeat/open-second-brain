@@ -70,7 +70,14 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     ...(config.rerank.kind === "decision-model"
       ? {
           rrkKind: config.rerank.kind,
-          rrkDm: `${config.rerank.decisionModel?.model ?? ""}:${config.rerank.decisionModel?.uses.rerank ?? "off"}`,
+          // Route identity without the credential: provider, endpoint,
+          // pinned model and mode each change what an enforced order is.
+          rrkDm: [
+            config.rerank.decisionModel?.provider ?? "",
+            config.rerank.decisionModel?.baseUrl ?? "",
+            config.rerank.decisionModel?.model ?? "",
+            config.rerank.decisionModel?.uses.rerank ?? "off",
+          ].join("|"),
         }
       : {}),
     // Trigram prefilter augments the candidate pool, so a toggle or
