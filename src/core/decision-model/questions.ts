@@ -63,3 +63,7 @@ export const RERANK_QUESTIONS = Object.freeze({
     };
   },
 });
+
+// ----- skills (skills_attach two-stage selection) -----------------------------
+
+export * from "./questions-skills.ts";

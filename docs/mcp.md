@@ -799,6 +799,12 @@ counts the invocations of that skill which cited an offer, out of
 `invocationCount` total. The remainder are not unattributed by error - most
 runtimes' skill calls follow no offer at all.
 
+When the optional `skills` decision-model use is `shadow` or `enforce`,
+`skills_attach` also returns `decision_model: { mode, applied, degraded?, model? }`
+and, in `enforce`, may offer a subset or reorder of the BM25 shortlist chosen
+by two decision requests. The field is absent while the use is `off`, the
+default. See [Skill selection](decision-models/skills.md).
+
 `skills_attach` additionally applies a discriminating-term floor: a
 candidate whose entire match rests on terms more than half the descriptor
 corpus carries is dropped rather than offered, because such a term is

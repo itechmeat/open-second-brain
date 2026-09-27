@@ -11,11 +11,22 @@
  */
 
 import {
+  discoverConfig,
   resolveSkillAutoAttach,
   resolveSkillsDir,
   resolveSkillsAttachTriggers,
+  resolveTokenImpactLedgerEnabled,
 } from "../core/config.ts";
-import { buildSkillAttachment } from "../core/surface/skill-attach.ts";
+import {
+  decisionModelModeFor,
+  resolveDecisionModelConfig,
+  type ResolvedDecisionModelConfig,
+} from "../core/decision-model/config.ts";
+import { buildSkillAttachment, type SkillAttachment } from "../core/surface/skill-attach.ts";
+import {
+  buildSkillAttachmentWithDecision,
+  type SkillDecisionInfo,
+} from "../core/surface/skill-attach-decision.ts";
 import { isSkillOfferId, SKILL_OFFER_ID_KEY } from "../core/surface/skill-offer.ts";
 import { discoverSkills, readSkillFile, skillRoots, SkillError } from "../core/surface/skills.ts";
 import { coerceInt, coerceStr } from "./coerce.ts";
@@ -89,22 +100,26 @@ function toolGetSkill(ctx: ServerContext, args: Record<string, unknown>): Record
   };
 }
 
-function toolSkillsAttach(
-  ctx: ServerContext,
-  args: Record<string, unknown>,
-): Record<string, unknown> {
-  const query = coerceStr(args, "query", true)!;
-  const maxSkills = coerceInt(args, "max_skills", 3, 1, 10);
-  if (!resolveSkillAutoAttach(ctx.configPath ?? undefined)) {
-    return { enabled: false, block: "", skills: [], [SKILL_OFFER_ID_KEY]: null };
+/**
+ * The decision-model config when the `skills` use is not off, else null.
+ * Never throws: an unreadable config leaves today's path untouched.
+ */
+function skillsDecisionConfig(ctx: ServerContext): ResolvedDecisionModelConfig | null {
+  try {
+    const cfg = resolveDecisionModelConfig({
+      config: discoverConfig(ctx.configPath ?? undefined).data,
+      vault: ctx.vault,
+    });
+    return decisionModelModeFor(cfg, "skills") === "off" ? null : cfg;
+  } catch {
+    return null;
   }
-  const includeTriggers = resolveSkillsAttachTriggers(ctx.configPath ?? undefined);
-  const attachment = buildSkillAttachment({
-    query,
-    skills: discoverSkills(rootsFor(ctx)),
-    maxSkills,
-    includeTriggers,
-  });
+}
+
+function attachResult(
+  attachment: SkillAttachment,
+  decisionModel?: SkillDecisionInfo | null,
+): Record<string, unknown> {
   return {
     enabled: true,
     block: attachment.block,
@@ -117,7 +132,36 @@ function toolSkillsAttach(
       path: item.path,
       score: item.score,
     })),
+    // Present only while the optional `skills` decision-model use is on.
+    ...(decisionModel !== undefined && decisionModel !== null
+      ? { decision_model: decisionModel }
+      : {}),
   };
+}
+
+function toolSkillsAttach(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+): Record<string, unknown> | Promise<Record<string, unknown>> {
+  const query = coerceStr(args, "query", true)!;
+  const maxSkills = coerceInt(args, "max_skills", 3, 1, 10);
+  if (!resolveSkillAutoAttach(ctx.configPath ?? undefined)) {
+    return { enabled: false, block: "", skills: [], [SKILL_OFFER_ID_KEY]: null };
+  }
+  const includeTriggers = resolveSkillsAttachTriggers(ctx.configPath ?? undefined);
+  const skills = discoverSkills(rootsFor(ctx));
+  const decisionConfig = skillsDecisionConfig(ctx);
+  if (decisionConfig === null) {
+    return attachResult(buildSkillAttachment({ query, skills, maxSkills, includeTriggers }));
+  }
+  return buildSkillAttachmentWithDecision({
+    query,
+    skills,
+    maxSkills,
+    includeTriggers,
+    config: decisionConfig,
+    tokenImpact: resolveTokenImpactLedgerEnabled(ctx.configPath ?? undefined),
+  }).then((attachment) => attachResult(attachment, attachment.decisionModel));
 }
 
 export const SKILL_TOOLS: ReadonlyArray<ToolDefinition> = [

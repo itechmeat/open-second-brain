@@ -61,8 +61,8 @@ export interface BuildSkillAttachmentOptions {
   readonly includeTriggers?: boolean;
 }
 
-const DEFAULT_MAX_SKILLS = 3;
-const DEFAULT_MAX_CHARS = 1200;
+export const DEFAULT_MAX_SKILLS = 3;
+export const DEFAULT_MAX_CHARS = 1200;
 const BLOCK_HEADER = "## Relevant skills";
 const OFFER_LINE_PREFIX = "Offer ";
 const OFFER_LINE_SUFFIX = ` - cite it as ${SKILL_OFFER_ID_KEY} when calling get_skill.`;
@@ -110,28 +110,51 @@ function emptyAttachment(): SkillAttachment {
   return Object.freeze({ block: "", items: Object.freeze([]), offerId: null });
 }
 
-export function buildSkillAttachment(opts: BuildSkillAttachmentOptions): SkillAttachment {
-  const maxSkills = opts.maxSkills ?? DEFAULT_MAX_SKILLS;
-  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
+/**
+ * The BM25 ranking with the discriminating-term floor, cut at `limit`.
+ * `buildSkillAttachment` offers the first `maxSkills` of it; the optional
+ * decision-model selection (`./skill-attach-decision.ts`) reads a longer
+ * shortlist from the same ranking and never adds anything outside it.
+ */
+export function rankSkillCandidates(
+  opts: Pick<BuildSkillAttachmentOptions, "query" | "skills" | "includeTriggers">,
+  limit: number,
+): SkillAttachItem[] {
   const byName = new Map(opts.skills.map((s) => [s.name, s]));
   const descriptors = skillDescriptors(opts.skills, opts.includeTriggers);
   const ranked = scoreDescriptors(opts.query, descriptors)
     // The floor filters, it never reorders: ranking stays the scorer's.
     .filter((scored) => hasDiscriminatingMatch(scored, descriptors.length))
-    .slice(0, maxSkills);
-
+    .slice(0, limit);
   const items: SkillAttachItem[] = [];
-  const lines: string[] = [];
-  let used = BLOCK_HEADER.length + 2 + OFFER_LINE_BUDGET; // header + blank line + offer line
   for (const { descriptor, score } of ranked) {
     const skill = byName.get(descriptor.name);
     if (skill === undefined) continue;
-    const item: SkillAttachItem = Object.freeze({
-      name: skill.name,
-      description: skill.description,
-      path: skill.path,
-      score,
-    });
+    items.push(
+      Object.freeze({
+        name: skill.name,
+        description: skill.description,
+        path: skill.path,
+        score,
+      }),
+    );
+  }
+  return items;
+}
+
+/**
+ * Render ranked items into the attach block within the char budget, and
+ * compute the offer id over exactly the items that fit.
+ */
+export function renderSkillAttachment(
+  query: string,
+  ranked: ReadonlyArray<SkillAttachItem>,
+  maxChars: number = DEFAULT_MAX_CHARS,
+): SkillAttachment {
+  const items: SkillAttachItem[] = [];
+  const lines: string[] = [];
+  let used = BLOCK_HEADER.length + 2 + OFFER_LINE_BUDGET; // header + blank line + offer line
+  for (const item of ranked) {
     const line = renderLine(item);
     if (used + line.length + 1 > maxChars) break;
     used += line.length + 1;
@@ -141,7 +164,7 @@ export function buildSkillAttachment(opts: BuildSkillAttachmentOptions): SkillAt
 
   if (items.length === 0) return emptyAttachment();
   const offerId = computeSkillOfferId(
-    opts.query,
+    query,
     items.map((item) => ({ name: item.name, path: item.path })),
   );
   return Object.freeze({
@@ -149,4 +172,10 @@ export function buildSkillAttachment(opts: BuildSkillAttachmentOptions): SkillAt
     items: Object.freeze(items),
     offerId,
   });
+}
+
+export function buildSkillAttachment(opts: BuildSkillAttachmentOptions): SkillAttachment {
+  const maxSkills = opts.maxSkills ?? DEFAULT_MAX_SKILLS;
+  const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS;
+  return renderSkillAttachment(opts.query, rankSkillCandidates(opts, maxSkills), maxChars);
 }
