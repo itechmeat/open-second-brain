@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.60.0] - 2026-09-27
+
+Optional decision-model support, second part: every remaining use, more routes, threshold profiles and a setup skill (issue #213, Parts 3 to 10).
+
+Every use is off by default and stays off unless the operator enables the feature in machine config, the key variable is set (a self-hosted `laya` or `openjev` server on loopback needs none) and the use is set to `shadow` or `enforce` in `decision_model_uses`. With a use `off`, no key, an invalid config or the vault opt-out, every tool, hook and CLI output is byte-identical to 1.59.0, no request is sent and no record is written; each use's tests prove it. Any failure (timeout, network, HTTP error, invalid reply, state budget, cost gate) falls back silently to the deterministic result and is recorded only in the `decision_model_call` record. No decision writes to the vault.
+
+### Added
+
+- **`skills` use: two-stage skill selection for `skills_attach`.** The BM25 shortlist (cut at 40 instead of `max_skills`) goes to one request that asks which skill fits and whether the turn needs one at all; when that answer is confident, a second request asks per finalist, over its SKILL.md body, whether it applies. Both stages stay within `decision_model_timeout_ms`. `enforce` offers the decision subset or reorder of the shortlist; any failure in either stage returns the BM25 offer. The result gains `decision_model: { mode, applied, degraded?, model? }` only while the use is not `off`, and the `offer_id` is computed over what is actually offered, so the `skill_invoked` join works in both modes. Private or unreadable SKILL.md files are never sent. See `docs/decision-models/skills.md`.
+- **`extract_prefilter` use: turn pre-filter before the `brain_extract_signals` envelope.** One yes/no question per mined user turn. `shadow` records the probabilities and returns the full plan; `enforce` leaves turns below the threshold out of the envelope (`turns_dropped`) and, when every turn is below it, returns `skipped: { reason: "decision_model_prefilter" }` with `llm_step: null`, saving the round trip. Commit items accept an optional `source_turn`, which feeds a regret metric. See `docs/decision-models/extract-prefilter.md`.
+- **`dedup` and `tension` uses: advisory pair verdicts.** One `choice` per pair (`same | related | different` for dedup findings of `brain_hygiene scan` and entity alias candidates of the doctor; `contradicts | compatible | unrelated` for tensions). `enforce` annotates each item with `decision_model: { verdict, probabilities, model, calibrated }` and lists a confident low-priority verdict last with `decision_model_low_priority: true`; nothing is hidden, merged, dismissed or resolved. New read-only `brain_tension` action `verify` and CLI verb `o2b brain tension verify [<slug>]`. See `docs/decision-models/dedup-tension.md`.
+- **`labels` use: label suggestions.** New read-only `brain_labels` operation `suggest` (`path`, optional `dimensions`) and `o2b brain label <path> --suggest [--dimensions a,b]`: one request per note over each declared vocabulary plus `none`. `shadow` returns null suggestions; `suggest` never assigns, and a private note is refused. See `docs/decision-models/labels.md`.
+- **`answerable` use: advisory signal for search and the recall gates.** Carried by the rerank request: `brain_search` and `o2b search --json` gain `decision_model.answerable`, and `brain_recall_gate` and `brain_context_pack` accept `decision_answerable` next to the scores and `match_quality` and annotate the verdict with `{ probability, disagrees }`. The level and action never change. See `docs/decision-models/answerable.md`.
+- **`recall_inject` use: recall-inject hook filter.** One request per injecting prompt, within `decision_model_hook_budget_ms` and the hook's existing retrieval budget; `enforce` drops notes that would not help or withholds the brief (`decision_model_abstain`), never adds material. Any failure, including the sub-budget running out, injects today's brief. See `docs/decision-models/recall-inject.md`.
+- **Routes:** a `vercel-evaluate` adapter and preset for the Vercel AI Gateway `/v1/evaluate` variant; self-hosted `laya` and `openjev` presets on loopback (no key needed there, small state defaults with a raisable ceiling, per-preset `choice` limits, a licence note in `check`); and an `llm-emulation` adapter that asks an OpenAI-compatible chat model for probabilities only, `calibrated: false` everywhere, never chosen implicitly, refused in `enforce` without `decision_model_allow_uncalibrated`. Shared transport rules live in `transport.ts`, and one contract suite runs the same fixtures against every adapter. See `docs/decision-models/providers.md`.
+- **Threshold profiles per model family.** Every threshold is held to the family it was tuned against (`jev-1.13` for the hosted routes). `enforce` on a profile without tuned thresholds for the use (`laya`, `openjev`, `llm-emulation`, or a `compatible` server without a named family) runs as `shadow` for every use; only `check` says so.
+- **Config keys** `decision_model_threshold_profile` (the family a `compatible` server serves) and `decision_model_output_price_usd_per_mtok` (read only for `llm-emulation`, whose cost is `unknown` unless both prices are set). `decision_model_hook_budget_ms`, reserved in 1.59.0, now drives the `recall_inject` sub-budget.
+- **`o2b decision-model report --use <use>`** adds the use's own evaluation report after the summary (JSON `use_report`) for every use: offer-hit and needless-offer rates (`skills`), regret, drop and skip shares (`extract_prefilter`), verdict bands against the operator's later decisions (`dedup`, `tension`), acceptance (`labels`), level against advisory band and outcomes (`answerable`), added latency and hook timeouts (`recall_inject`), and the shadow agreement (`rerank`).
+- **`token_impact` samples** gain an optional `source` attribution (`decision_model:skills`, `decision_model:extract_prefilter`, `decision_model:recall_inject`) for host-side savings.
+- **Skill `decision-model-setup`** (mirrored into the Codex plugin): routes, the key by name only, `check` and `--ping`, one use in shadow, `report` and `rerank-eval` before `enforce`, turning a use off, and the privacy and terms notes.
+- **Docs:** `docs/decision-models.md` is the hub, with a per-use table (surface, what `enforce` changes, failure policy) linking a page per use under `docs/decision-models/` and the providers page, retention links per processor and a note on non-English vaults; `README.md`, `docs/architecture.md`, `docs/mcp.md`, `docs/cli-reference.md` and `docs/observability.md` updated.
+
+### Changed
+
+- **Rerank kind `decision-model` follow-ups from 1.59.0:** each passage now carries the note `title` and, when declared, its `status` and `updated` values, so an archived copy can be told from the current one; a chunk that holds only frontmatter is not sent and keeps its position; the injection questions are asked only in `enforce`, which saves roughly 15 to 20 percent of input tokens in `shadow`; the query-cache key names the passage shape.
+- A `compatible` provider enforces only once `decision_model_threshold_profile` names its model family; until then its `enforce` uses run as `shadow` (in 1.59.0 every preset enforced with the Jev thresholds).
+- The agent-scope probe covers the new `brain_tension verify` and `brain_labels suggest` calls (233 call recipes).
+
 ## [1.59.0] - 2026-09-27
 
 Optional decision-model support, first part: the provider core and a `decision-model` rerank kind (issue #213, Parts 1 and 2).
@@ -7753,6 +7781,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.60.0]: https://github.com/itechmeat/open-second-brain/compare/v1.59.0...v1.60.0
 [1.59.0]: https://github.com/itechmeat/open-second-brain/compare/v1.58.2...v1.59.0
 [1.58.2]: https://github.com/itechmeat/open-second-brain/compare/v1.58.1...v1.58.2
 [1.58.1]: https://github.com/itechmeat/open-second-brain/compare/v1.58.0...v1.58.1
