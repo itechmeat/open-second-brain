@@ -105,6 +105,18 @@ describe("runDecision", () => {
     expect(JSON.stringify(records[0])).not.toContain("relevant?");
   });
 
+  test("per-use details cannot overwrite an accounting field", async () => {
+    const vault = tempVault();
+    await runDecision("rerank", build, QUESTIONS, {
+      config: activeDecisionConfig({ vault }),
+      provider: new FakeDecisionProvider({ answer: () => 0.8, usage: { costUsd: 0.001 } }),
+      recordDetails: () => ({ cost_usd: 0, outcome: "forged" }),
+    });
+    const p = listDecisionModelCalls(vault)[0]!.payload;
+    expect(p["cost_usd"]).toBe(0.001);
+    expect(p["outcome"]).toBe("ok");
+  });
+
   test("a provider failure degrades with its reason and is recorded", async () => {
     const vault = tempVault();
     const res = await runDecision("rerank", build, QUESTIONS, {

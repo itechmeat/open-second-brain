@@ -15,7 +15,10 @@ self-hosted compatible servers.
 The feature is **off by default** and stays off unless you turn it on
 explicitly **and** provide a key. Without that, Open Second Brain behaves
 exactly as it does without the feature: no network request, no record, and no
-change in any tool, hook or CLI output.
+change in any tool, hook or CLI output. The only exceptions are the explicit
+diagnostics that exist to describe the feature: `o2b decision-model check` and
+the `decision_model` line of `o2b doctor --readiness`, which reports `skipped`
+while the feature is off.
 
 ## How it fits "Open Second Brain never calls an LLM"
 
@@ -25,8 +28,10 @@ change in any tool, hook or CLI output.
 - **The deterministic result stays canonical** and is the fallback on every
   failure: timeout, network error, HTTP error (401, 402, 422, 429, 529 and so
   on), an invalid reply, an over-budget state, the daily cost gate, or the
-  vault opt-out. A failure is recorded in the accounting record and is
-  otherwise silent: the output is the deterministic one.
+  vault opt-out. A failed request is recorded in the accounting record and
+  is otherwise silent: the output is the deterministic one. Inactive paths
+  (a use set to `off`, a missing key, the vault opt-out, an invalid config)
+  send no request and write no record at all.
 - **Decisions never write to the vault.** They filter or reorder what is
   returned. Only an accounting record (identifiers and numbers, never text) is
   persisted.

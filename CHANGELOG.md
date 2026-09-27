@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Optional decision-model support, first part: the provider core and a `decision-model` rerank kind (issue #213, Parts 1 and 2).
 
-A decision model is a typed judgment model: it answers questions about a text state with probabilities over options Open Second Brain supplies, and never generates text. The feature is off by default. It becomes active only when the operator sets `decision_model_enabled: "true"` in machine config AND the environment variable named by `decision_model_env_key` is set. Without both, every surface behaves exactly as before: no network request, no record, and no change in tool, hook or CLI output.
+A decision model is a typed judgment model: it answers questions about a text state with probabilities over options Open Second Brain supplies, and never generates text. The feature is off by default. It becomes active only when the operator sets `decision_model_enabled: "true"` in machine config AND the environment variable named by `decision_model_env_key` is set. Without both, every surface behaves exactly as before: no network request, no record, and no change in tool, hook or CLI output, apart from the explicit diagnostics (`o2b decision-model check` and a `decision_model` line in `o2b doctor --readiness` that reads `skipped` while the feature is off).
 
 ### Added
 

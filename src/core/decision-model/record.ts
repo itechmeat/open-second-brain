@@ -65,7 +65,10 @@ export function emitDecisionModelCall(
 ): ContinuityRecord | null {
   return emitGatedTelemetry(vault, (v) => {
     const cost = decisionCost(input.usage, input.inputPriceUsdPerMtok);
+    // Per-use details go first so they can never overwrite an accounting
+    // field (the cost gate sums `cost_usd`).
     const payload: Record<string, unknown> = {
+      ...input.details,
       use: input.use,
       mode: input.mode,
       provider: input.provider,
@@ -82,7 +85,6 @@ export function emitDecisionModelCall(
       latency_ms: Math.max(0, Math.round(input.latencyMs)),
       outcome: input.outcome,
       ...(input.stateHash !== undefined ? { state_hash: input.stateHash } : {}),
-      ...input.details,
     };
     return appendContinuityRecord(v, {
       kind: DECISION_MODEL_CALL_KIND,
