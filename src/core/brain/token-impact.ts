@@ -126,6 +126,11 @@ export interface TokenImpactInput {
    * prompt or recalled text.
    */
   readonly packId?: string;
+  /**
+   * Optional attribution of the saving to the feature that produced it,
+   * e.g. `decision_model:skills`. An identifier, never text.
+   */
+  readonly source?: string;
   /** Prompt-token cost WITHOUT the memory layer's compaction/selection. */
   readonly baselineTokens: number;
   /** Prompt-token cost the memory layer actually shipped. */
@@ -275,6 +280,7 @@ export function emitTokenImpact<G>(
       ...(input.agentId !== undefined ? { [CONTINUITY_AGENT_ID_KEY]: input.agentId } : {}),
       ...(input.turnId !== undefined ? { turn_id: input.turnId } : {}),
       ...(input.packId !== undefined ? { pack_id: input.packId } : {}),
+      ...(input.source !== undefined ? { source: input.source } : {}),
       method: input.method,
       baseline_tokens: baseline,
       packed_tokens: packed,

@@ -145,3 +145,7 @@ export function thresholdsTunedFor(profile: string | null, use: DecisionModelUse
  */
 export const ANSWERABLE_LOW = 0.3;
 export const ANSWERABLE_HIGH = 0.8;
+
+// ----- skills (skills_attach two-stage selection) -----------------------------
+
+export * from "./questions-skills.ts";
