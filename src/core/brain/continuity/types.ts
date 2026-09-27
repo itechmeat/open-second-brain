@@ -77,7 +77,14 @@ export type ContinuityRecordKind =
    * Part 1). Identifiers and numbers only - never the state, a passage, a
    * prompt or a question text. Written only while the feature is active.
    */
-  | "decision_model_call";
+  | "decision_model_call"
+  /**
+   * Which committed extract-signals items cited a plan turn
+   * (`source_turn`) while the decision-model turn pre-filter was on
+   * (issue #213, Part 4). Session id and turn ids only; feeds the
+   * pre-filter's regret metric.
+   */
+  | "decision_model_extract_commit";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 

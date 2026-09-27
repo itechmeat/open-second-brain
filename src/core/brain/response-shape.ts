@@ -351,6 +351,9 @@ export const EXTRACTED_SIGNALS_SHAPE: ShapeDescriptor = freezeDescriptor({
           principle: FILLED_STRING_SHAPE,
           confidence: { type: "number" },
           scope: STRING_SHAPE,
+          // Optional plan turn id, for the decision-model pre-filter's
+          // regret measurement. Absent behaves as before.
+          source_turn: STRING_SHAPE,
         },
       },
     },

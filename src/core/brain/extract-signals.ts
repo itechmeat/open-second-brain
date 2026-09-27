@@ -96,7 +96,7 @@ export const AUTO_EXTRACT_CONFIDENCE_FLOOR = 0.6;
 const MINED_TURN_ROLE = "user";
 
 /** Per-turn text budget in the prompt, so one huge turn cannot crowd out the rest. */
-const PROMPT_TURN_TEXT_MAX = 2000;
+export const PROMPT_TURN_TEXT_MAX = 2000;
 
 /** A signal extraction could not proceed, and the reason is in the message. */
 export class ExtractSignalsError extends Error {
@@ -211,6 +211,12 @@ export interface ExtractedSignalItem {
   readonly principle: string;
   readonly confidence: number;
   readonly scope?: string;
+  /**
+   * Optional plan turn id the item was mined from. Used only to measure
+   * the decision-model turn pre-filter; an item without it behaves as
+   * before.
+   */
+  readonly source_turn?: string;
 }
 
 /** One item the durability gate refused, named rather than dropped. */
@@ -224,6 +230,8 @@ export interface ExtractedSignalWrite {
   readonly id: string;
   readonly path: string;
   readonly topic: string;
+  /** The item's `source_turn`, when it carried a non-empty one. */
+  readonly sourceTurn?: string;
 }
 
 export interface CommitExtractedSignalsResult {
@@ -255,6 +263,13 @@ export interface CommitExtractedSignalsResult {
 
 export interface PlanExtractSignalsOptions {
   readonly now: Date;
+  /**
+   * Add the optional `source_turn` item field to the envelope's schema
+   * hints. Set only by the decision-model pre-filter path (use not
+   * `off`), which measures regret from it; absent, the envelope is
+   * exactly as it has always been.
+   */
+  readonly sourceTurnHint?: boolean;
 }
 
 export interface CommitExtractedSignalsOptions {
@@ -382,7 +397,7 @@ export function planExtractSignals(
     turnsMined: Object.freeze(mined),
     cap: AUTO_EXTRACT_PER_SESSION_CAP,
     confidenceFloor: AUTO_EXTRACT_CONFIDENCE_FLOOR,
-    llmStep: buildMiningStep(trimmed, mined),
+    llmStep: buildMiningStep(trimmed, mined, { sourceTurnHint: opts.sourceTurnHint === true }),
   });
 }
 
@@ -392,7 +407,11 @@ export function planExtractSignals(
  * turns and nothing else; a prompt that named a session id would invite the
  * caller to go and read more of it.
  */
-function buildMiningStep(sessionId: string, mined: ReadonlyArray<MinedTurn>): NeedsLlmStep {
+export function buildMiningStep(
+  sessionId: string,
+  mined: ReadonlyArray<MinedTurn>,
+  opts: { readonly sourceTurnHint?: boolean } = {},
+): NeedsLlmStep {
   const transcript = mined
     .map((turn) => `[${turn.turnId}] ${turn.text.slice(0, PROMPT_TURN_TEXT_MAX)}`)
     .join("\n");
@@ -413,6 +432,9 @@ function buildMiningStep(sessionId: string, mined: ReadonlyArray<MinedTurn>): Ne
       "principle: one imperative line, in the language the operator used",
       `confidence: number in [${AUTO_EXTRACT_CONFIDENCE_FLOOR}, 1]`,
       `items: at most ${AUTO_EXTRACT_PER_SESSION_CAP} entries`,
+      ...(opts.sourceTurnHint === true
+        ? ["source_turn: optional, the bracketed id of the turn the rule was stated in"]
+        : []),
     ],
     target_path: posix.normalize(AUTO_EXTRACT_TARGET_DIR_REL),
   });
@@ -539,7 +561,15 @@ export function commitExtractedSignals(
       });
     }
     dedup.set(hash, { id: res.id, path: res.path });
-    written.push(Object.freeze({ id: res.id, path: res.path, topic: item.topic }));
+    const sourceTurn = typeof item.source_turn === "string" ? item.source_turn.trim() : "";
+    written.push(
+      Object.freeze({
+        id: res.id,
+        path: res.path,
+        topic: item.topic,
+        ...(sourceTurn !== "" ? { sourceTurn } : {}),
+      }),
+    );
   }
 
   return Object.freeze({

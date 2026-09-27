@@ -183,3 +183,8 @@ session recall; oversized content there (data URIs, base64, giant tool
 output) reads as `[payload: osb-payload://<sha256> chars=N]` - page the
 exact bytes with `brain_session_expand` `{payload: "<ref>"}` or
 `o2b brain payload get <ref>` rather than guessing what was elided.
+
+To mine taste signals from an imported session afterwards, call
+`brain_extract_signals` `{session}` and answer its one envelope (optionally
+citing each item's `source_turn`); a plan with `llm_step: null` and
+`skipped` means there is nothing to mine, so commit nothing.
