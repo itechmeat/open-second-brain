@@ -49,7 +49,7 @@ prompt carries at most this one decision request.
 
 Measured with the real hook entry against a loopback fake server (default
 sub-budget 700 ms, including process start): about 90 ms without the use,
-about 140-150 ms with a server answering in 50 ms, and about 800 ms with a
+about 135-175 ms with a server answering in 50 ms, and about 800 ms with a
 server that takes 5 s (the request is cut off at the sub-budget and today's
 brief is injected).
 
