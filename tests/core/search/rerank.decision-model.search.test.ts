@@ -95,6 +95,8 @@ const DECISION = {
   decision_model_provider: "compatible",
   decision_model_id: "fake-model-1",
   decision_model_env_key: KEY_VAR,
+  // The fake server stands in for a Jev-family route, so enforce applies.
+  decision_model_threshold_profile: "jev-1.13",
   decision_model_uses: "rerank:shadow",
 };
 

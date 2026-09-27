@@ -6,8 +6,16 @@
  * The feature is ACTIVE only when both of these hold at once:
  *   1. the operator explicitly set `decision_model_enabled: "true"`, and
  *   2. the environment variable named by `decision_model_env_key` (or the
- *      preset's default name) is set to a non-empty value.
- * Everything else is off. A missing key is a normal state rather than an
+ *      preset's default name) is set to a non-empty value. The one
+ *      exception is a self-hosted server on a loopback host whose preset
+ *      makes the key optional (`laya`, `openjev`): nothing
+ *      leaves the machine, so no key is needed.
+ * Everything else is off.
+ *
+ * Per-use modes are held to the provider's threshold profile
+ * (`questions.ts`): an `enforce` setting on a use without tuned
+ * thresholds for that profile runs as `shadow`, and only the diagnostics
+ * say so. A missing key is a normal state rather than an
  * error: it is reported only by the explicit diagnostics
  * (`o2b decision-model check`, the doctor readiness line), and every other
  * surface behaves exactly as it does without the feature.
@@ -33,8 +41,14 @@ import {
 import {
   DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
   DECISION_MODEL_PRESET_NAMES,
+  DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
   decisionModelPreset,
 } from "./presets.ts";
+import {
+  DECISION_THRESHOLD_PROFILE_NAMES,
+  isDecisionThresholdProfile,
+  thresholdsTunedFor,
+} from "./questions.ts";
 
 export const DECISION_MODEL_DEFAULTS = Object.freeze({
   timeoutMs: 3000,
@@ -79,6 +93,36 @@ function withoutUserinfo(raw: string): { readonly url: string; readonly hadUseri
   parsed.username = "";
   parsed.password = "";
   return { url: parsed.toString().replace(/\/+$/, ""), hadUserinfo: true };
+}
+
+/** Hosts where a self-hosted server runs on this machine. */
+function isLoopbackUrl(raw: string | null): boolean {
+  if (raw === null) return false;
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  const host = url.hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+/**
+ * The modes the uses actually run in: `enforce` becomes `shadow` for every
+ * use whose thresholds are not tuned for `profile`.
+ */
+function holdToProfile(
+  uses: DecisionModelUses,
+  profile: string | null,
+): { readonly uses: DecisionModelUses; readonly shadowOnly: ReadonlyArray<DecisionModelUse> } {
+  const shadowOnly = DECISION_MODEL_USES.filter(
+    (use) => uses[use] === "enforce" && !thresholdsTunedFor(profile, use),
+  );
+  if (shadowOnly.length === 0) return { uses, shadowOnly: Object.freeze([]) };
+  const out: Record<DecisionModelUse, DecisionModelMode> = { ...uses };
+  for (const use of shadowOnly) out[use] = "shadow";
+  return { uses: Object.freeze(out), shadowOnly: Object.freeze(shadowOnly) };
 }
 
 function setting(
@@ -238,21 +282,30 @@ export function resolveDecisionModelConfig(
       notes: Object.freeze(notes),
       enabled: false,
       provider: providerRaw,
-      adapter: "systemone",
+      adapter: preset?.adapter ?? "systemone",
       baseUrl,
       model,
       envKey,
       keyPresent,
+      keyRequired: true,
       allowInsecureHttp: false,
       timeoutMs: DECISION_MODEL_DEFAULTS.timeoutMs,
       hookBudgetMs: DECISION_MODEL_DEFAULTS.hookBudgetMs,
-      maxStateTokens: preset?.maxStateTokens ?? DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
+      maxStateTokens:
+        preset?.defaultStateTokens ??
+        preset?.maxStateTokens ??
+        DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
+      maxChoiceOptions: preset?.maxChoiceOptions ?? DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
       uses: ALL_OFF,
       configuredUses,
       dailyCostGateUsd: DECISION_MODEL_DEFAULTS.dailyCostGateUsd,
       inputPriceUsdPerMtok: preset?.inputPriceUsdPerMtok ?? null,
+      outputPriceUsdPerMtok: null,
       allowUncalibrated: false,
       calibrated: preset?.calibrated ?? true,
+      thresholdProfile: preset?.thresholdProfile ?? null,
+      shadowOnlyUses: Object.freeze([]),
+      licenceNote: preset?.licenceNote ?? null,
       processor: preset?.processor ?? null,
       vault: opts.vault,
     });
@@ -323,7 +376,7 @@ export function resolveDecisionModelConfig(
   const presetMax = preset?.maxStateTokens ?? DECISION_MODEL_HOSTED_MAX_STATE_TOKENS;
   const maxStateRequested = parseIntSetting(
     setting(env, config, "max_state_tokens"),
-    presetMax,
+    preset?.defaultStateTokens ?? presetMax,
     "decision_model_max_state_tokens",
     errors,
   );
@@ -334,7 +387,7 @@ export function resolveDecisionModelConfig(
     );
   }
   const maxStateTokens = Math.min(maxStateRequested, presetMax);
-  const uses = parseDecisionModelUses(setting(env, config, "uses"), errors);
+  const configured = parseDecisionModelUses(setting(env, config, "uses"), errors);
   const dailyCostGateUsd =
     parseNonNegativeSetting(
       setting(env, config, "cost_gate_usd"),
@@ -342,12 +395,37 @@ export function resolveDecisionModelConfig(
       "decision_model_cost_gate_usd",
       errors,
     ) ?? DECISION_MODEL_DEFAULTS.dailyCostGateUsd;
-  const inputPriceUsdPerMtok = parseNonNegativeSetting(
+  const inputPriceConfigured = parseNonNegativeSetting(
     setting(env, config, "input_price_usd_per_mtok"),
     preset?.inputPriceUsdPerMtok ?? null,
     "decision_model_input_price_usd_per_mtok",
     errors,
   );
+  const outputPriceRaw = parseNonNegativeSetting(
+    setting(env, config, "output_price_usd_per_mtok"),
+    null,
+    "decision_model_output_price_usd_per_mtok",
+    errors,
+  );
+  const emulated = preset?.adapter === "llm-emulation";
+  if (!emulated && outputPriceRaw !== null) {
+    notes.push(
+      "decision_model_output_price_usd_per_mtok is read only for provider 'llm-emulation'; " +
+        "other routes do not bill output, so it is ignored",
+    );
+  }
+  // A chat model bills output too: with either price unknown, so is the cost.
+  const inputPriceUsdPerMtok =
+    emulated && (inputPriceConfigured === null || outputPriceRaw === null)
+      ? null
+      : inputPriceConfigured;
+  const outputPriceUsdPerMtok = emulated ? outputPriceRaw : null;
+  if (emulated && inputPriceUsdPerMtok === null) {
+    notes.push(
+      "llm-emulation cost is unknown (cost_source: unknown) unless both " +
+        "decision_model_input_price_usd_per_mtok and decision_model_output_price_usd_per_mtok are set",
+    );
+  }
   const allowUncalibrated = parseBoolSetting(
     setting(env, config, "allow_uncalibrated"),
     "decision_model_allow_uncalibrated",
@@ -355,7 +433,7 @@ export function resolveDecisionModelConfig(
   );
   const calibrated = preset?.calibrated ?? true;
   if (!calibrated && !allowUncalibrated) {
-    const enforced = DECISION_MODEL_USES.filter((use) => uses[use] === "enforce");
+    const enforced = DECISION_MODEL_USES.filter((use) => configured[use] === "enforce");
     if (enforced.length > 0) {
       errors.push(
         `decision_model_uses: enforce (${enforced.join(", ")}) needs a calibrated provider; ` +
@@ -364,9 +442,37 @@ export function resolveDecisionModelConfig(
     }
   }
 
+  // The threshold profile. Only a `compatible` server may name one, since
+  // only the operator knows which model family it serves; every other
+  // preset carries its own, and an uncalibrated route never borrows a
+  // calibrated family's thresholds.
+  const profileRaw = setting(env, config, "threshold_profile");
+  let thresholdProfile = preset?.thresholdProfile ?? null;
+  if (profileRaw !== null && profileRaw !== "") {
+    if (!isDecisionThresholdProfile(profileRaw)) {
+      errors.push(
+        `decision_model_threshold_profile must be one of ` +
+          `${DECISION_THRESHOLD_PROFILE_NAMES.join(", ")}, got '${profileRaw}'`,
+      );
+    } else if (preset?.name === "compatible") {
+      thresholdProfile = profileRaw;
+    } else if (profileRaw !== thresholdProfile) {
+      notes.push(
+        `decision_model_threshold_profile is read only for provider 'compatible'; ` +
+          `provider '${providerRaw}' keeps its own profile (${thresholdProfile ?? "none"})`,
+      );
+    }
+  }
+  const held = holdToProfile(configured, thresholdProfile);
+  const uses = held.uses;
+
+  // A self-hosted server on this machine needs no key; anything that leaves
+  // the machine does.
+  const keyRequired = !(preset?.keyOptionalOnLoopback === true && isLoopbackUrl(baseUrl));
+
   let status: DecisionModelStatus;
   if (errors.length > 0) status = "invalid";
-  else if (!keyPresent) status = "no_key";
+  else if (!keyPresent && keyRequired) status = "no_key";
   else if (opts.vault !== null && (opts.vaultOptOut ?? defaultVaultOptOut)(opts.vault)) {
     status = "disabled_by_vault";
   } else status = "active";
@@ -377,21 +483,27 @@ export function resolveDecisionModelConfig(
     notes: Object.freeze(notes),
     enabled: true,
     provider: providerRaw,
-    adapter: "systemone",
+    adapter: preset?.adapter ?? "systemone",
     baseUrl,
     model,
     envKey,
     keyPresent,
+    keyRequired,
     allowInsecureHttp,
     timeoutMs,
     hookBudgetMs,
     maxStateTokens,
+    maxChoiceOptions: preset?.maxChoiceOptions ?? DECISION_MODEL_WIRE_MAX_CHOICE_OPTIONS,
     uses,
-    configuredUses: uses,
+    configuredUses: configured,
     dailyCostGateUsd,
     inputPriceUsdPerMtok,
+    outputPriceUsdPerMtok,
     allowUncalibrated,
     calibrated,
+    thresholdProfile,
+    shadowOnlyUses: held.shadowOnly,
+    licenceNote: preset?.licenceNote ?? null,
     processor: preset?.processor ?? null,
     vault: opts.vault,
   });

@@ -1891,14 +1891,20 @@ enables it in machine config and the named key variable is set. What leaves
 is a masked, clipped state (for a rerank, the query plus the top candidate
 passages as `P0..Pn`, never a page whose visibility is `private` or cannot be
 resolved, nor a chunk that carries part of a `<private>` region) and the question texts; the whole body passes `redactForEgress`,
-and a refused body is not sent.
+and a refused body is not sent. The same holds for
+`decision-model-llm-emulation`, the optional uncalibrated route that sends
+that state to an OpenAI-compatible chat model and only when the operator
+names it (`docs/decision-models/providers.md`).
 
 ## Decision model (optional)
 
 ```text
 o2b decision-model check      Config state: enabled, provider, base URL, pinned model, the key
                               variable's NAME and whether it is set (never the value), per-use
-                              modes, vault opt-out, cost gate and today's spend, processor terms.
+                              modes, vault opt-out, cost gate and today's spend, processor terms,
+                              adapter and calibration, threshold profile (with one warning for
+                              uses whose enforce runs as shadow), choice option limit, licence
+                              note for open weights with a commercial-use restriction.
                               --ping sends one request over a synthetic state (no vault content)
                               and records it (use ping, counted toward the cost gate).
                               Exit 1 only for an invalid config or a failed ping of an active

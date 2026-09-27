@@ -144,6 +144,9 @@ export async function runDecision<C>(
       candidateCount: extra.candidateCount ?? 0,
       ...(extra.response !== undefined ? { usage: extra.response.usage } : {}),
       inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
+      ...(cfg.outputPriceUsdPerMtok !== undefined && cfg.outputPriceUsdPerMtok !== null
+        ? { outputPriceUsdPerMtok: cfg.outputPriceUsdPerMtok }
+        : {}),
       latencyMs: extra.latencyMs ?? 0,
       outcome,
       ...(extra.response?.stateHash !== undefined ? { stateHash: extra.response.stateHash } : {}),

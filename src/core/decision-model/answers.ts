@@ -137,15 +137,19 @@ export function validateAnswer(question: DecisionQuestion, raw: unknown): Decisi
 /**
  * Client-side limits, checked before anything is sent. Returns the first
  * violation as a sentence, or null when every question is within limits.
+ * `maxChoiceOptions` is the route's own limit (52 for OpenJev, for
+ * example), never above the wire maximum.
  */
 export function questionLimitViolation(
   questions: Readonly<Record<string, DecisionQuestion>>,
+  maxChoiceOptions: number = CHOICE_MAX_OPTIONS,
 ): string | null {
+  const maxOptions = Math.min(CHOICE_MAX_OPTIONS, Math.max(CHOICE_MIN_OPTIONS, maxChoiceOptions));
   for (const [id, q] of Object.entries(questions)) {
     if (q.type === "choice") {
       const n = Object.keys(q.criteria).length;
-      if (n < CHOICE_MIN_OPTIONS || n > CHOICE_MAX_OPTIONS) {
-        return `question '${id}': a choice needs ${CHOICE_MIN_OPTIONS}-${CHOICE_MAX_OPTIONS} options, got ${n}`;
+      if (n < CHOICE_MIN_OPTIONS || n > maxOptions) {
+        return `question '${id}': a choice needs ${CHOICE_MIN_OPTIONS}-${maxOptions} options on this route, got ${n}`;
       }
     } else if (q.type === "score") {
       const n = q.criteria.length;

@@ -4,13 +4,15 @@
  * Uses add their entries here and nowhere else, so the wording a model is
  * asked and the thresholds its answers are held to can be reviewed
  * together. Thresholds are conservative starting points, to be tuned per
- * provider profile from shadow data; they are not tuned yet.
+ * provider profile from shadow data; they are not tuned yet. The threshold
+ * profiles at the end of this file say which provider family each use may
+ * enforce on.
  *
  * Question texts refer to state fields with backticked paths
  * (`passages.P0`), the convention the `systemone` wire format documents.
  */
 
-import type { DecisionNoulQuestion } from "./contract.ts";
+import type { DecisionModelUse, DecisionNoulQuestion } from "./contract.ts";
 
 /** Default per-candidate clip for any use that does not set its own. */
 export const DEFAULT_CANDIDATE_CLIP_CHARS = 900;
@@ -63,3 +65,51 @@ export const RERANK_QUESTIONS = Object.freeze({
     };
   },
 });
+
+// ----- threshold profiles ------------------------------------------------------
+
+/**
+ * Threshold profiles, one per provider family. Probabilities from
+ * different models are not comparable, so a threshold tuned against one
+ * family says nothing about another. A use runs `enforce` only on a
+ * profile that lists it as tuned; on any other profile (or on none, as
+ * with a `compatible` server of unknown family) an `enforce` setting runs
+ * as `shadow`, and `o2b decision-model check` says so. Hot paths never
+ * warn.
+ *
+ * `baseline` marks the profile every threshold in this file was set
+ * against: all uses are tuned for it, including uses later parts add, so
+ * no use needs to be registered here twice. Any other profile lists the
+ * uses tuned for it explicitly, from its own shadow data.
+ */
+export interface DecisionThresholdProfile {
+  readonly name: string;
+  /** `baseline`: the thresholds in this file; otherwise the uses tuned for it. */
+  readonly tuned: "baseline" | ReadonlyArray<DecisionModelUse>;
+}
+
+export const DECISION_THRESHOLD_PROFILES: Readonly<Record<string, DecisionThresholdProfile>> =
+  Object.freeze({
+    // Every threshold above was set against the hosted Jev 1.13 family.
+    "jev-1.13": { name: "jev-1.13", tuned: "baseline" },
+    // Self-hosted open-weight models: their own calibration, none tuned yet.
+    laya: { name: "laya", tuned: Object.freeze([]) },
+    openjev: { name: "openjev", tuned: Object.freeze([]) },
+    // Self-reported probabilities of a generative model: none tuned.
+    "llm-emulation": { name: "llm-emulation", tuned: Object.freeze([]) },
+  });
+
+export const DECISION_THRESHOLD_PROFILE_NAMES: ReadonlyArray<string> = Object.freeze(
+  Object.keys(DECISION_THRESHOLD_PROFILES),
+);
+
+export function isDecisionThresholdProfile(name: string): boolean {
+  return Object.hasOwn(DECISION_THRESHOLD_PROFILES, name);
+}
+
+/** Whether `use` has tuned thresholds on `profile`; false for an unknown or absent profile. */
+export function thresholdsTunedFor(profile: string | null, use: DecisionModelUse): boolean {
+  if (profile === null || !isDecisionThresholdProfile(profile)) return false;
+  const tuned = DECISION_THRESHOLD_PROFILES[profile]!.tuned;
+  return tuned === "baseline" || tuned.includes(use);
+}
