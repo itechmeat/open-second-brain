@@ -112,7 +112,7 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_env_key` | **name** of the env var holding the key (`A-Z`, `0-9`, `_`); anything else, such as the key itself, makes the config invalid and is never printed | from preset |
 | `decision_model_allow_insecure_http` | allow plain `http://` to a non-loopback host; config or env only | `false` |
 | `decision_model_timeout_ms` | per-request timeout for MCP and CLI paths | `3000` |
-| `decision_model_hook_budget_ms` | sub-budget for hook uses; reserved, read by no hook yet (see "Hooks" below) | `700` |
+| `decision_model_hook_budget_ms` | sub-budget for the `recall_inject` hook use: the request gets `min(this, remaining retrieval budget)` and never extends the hook's 2,500 ms total (see [the recall-inject hook filter](decision-models/recall-inject.md)) | `700` |
 | `decision_model_max_state_tokens` | client-side state cap, clamped to the preset maximum | preset, at most `32000` |
 | `decision_model_uses` | `use:mode` comma list, mode `off`, `shadow` or `enforce` | every use `off` |
 | `decision_model_cost_gate_usd` | stop sending once today's (UTC) spend reaches this; `0` turns the gate off. Named like `embedding_cost_gate_usd` | `0.50` |
@@ -268,12 +268,9 @@ more with no gain, 5 was markedly weaker.
 
 ### Hooks
 
-The hook surfaces never run the decision-model kind in this release: the
-recall-inject hook searches with the heuristic order even when
-`search_rerank_kind` is `decision-model`. A decision request (its timeout
-plus one retry) does not fit the hook's retrieval budget, and a hook fires on
-every prompt. A hook-specific use with its own budget
-(`decision_model_hook_budget_ms`) is planned for a later release.
+The recall-inject hook never runs the decision-model rerank kind; its own
+use, `recall_inject`, with the sub-budget `decision_model_hook_budget_ms`, is
+described in [the recall-inject hook filter](decision-models/recall-inject.md).
 
 ### Measuring before enforcing
 

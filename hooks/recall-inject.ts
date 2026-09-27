@@ -22,13 +22,29 @@
  *     a retriever's own message (see `recordDecision`).
  *   - FAIL-OPEN FOR THE SESSION: the hook process never blocks the user. It
  *     arms a self-watchdog ceiling and exits 0 on every path.
+ *   - OPTIONAL DECISION-MODEL FILTER: with the `recall_inject` use in
+ *     `shadow` or `enforce` (default `off`), an `inject` decision is checked
+ *     by one decision request within `decision_model_hook_budget_ms` and
+ *     what is left of the retrieval budget. It can only drop notes or
+ *     withhold the brief; any failure keeps the decision unchanged.
  *
  * Contract mirrors active-inject.ts: stdin is the hook payload JSON; the
  * vault is resolved from the persisted config, not the payload; stdout, when
  * present, is the standard `hookSpecificOutput.additionalContext` envelope.
  */
 
-import { defaultConfigPath, resolveRecallInjectEnabled, resolveVault } from "../src/core/config.ts";
+import {
+  defaultConfigPath,
+  discoverConfig,
+  resolveRecallInjectEnabled,
+  resolveTokenImpactLedgerEnabled,
+  resolveVault,
+} from "../src/core/config.ts";
+import {
+  decisionModelModeFor,
+  resolveDecisionModelConfig,
+} from "../src/core/decision-model/config.ts";
+import { emitTokenImpact, TOKEN_COUNT_METHOD } from "../src/core/brain/token-impact.ts";
 import { appendAuditRecord } from "../src/core/reliability/audit.ts";
 import { emitGatedTelemetry } from "../src/core/brain/continuity/emit.ts";
 import { hookAuditDir } from "../src/core/brain/paths.ts";
@@ -39,6 +55,7 @@ import {
   recallInjectAuditDetails,
   recallInjectTelemetryMetadata,
   type RecallInjectDecision,
+  type RecallInjectFilter,
 } from "../src/core/brain/recall-inject.ts";
 import {
   emitRecallTelemetry,
@@ -132,6 +149,59 @@ function auditDecision(vault: string, decision: RecallInjectDecision): void {
   }
 }
 
+/**
+ * The optional decision-model filter (issue #213, Part 9), or undefined
+ * when the `recall_inject` use is `off`, the feature is not active, or the
+ * config cannot be read. Undefined leaves the decision exactly as before:
+ * no module loaded, no request, no record, no extra field.
+ */
+async function decisionFilterFor(
+  configPath: string,
+  vault: string,
+): Promise<RecallInjectFilter | undefined> {
+  try {
+    const cfg = resolveDecisionModelConfig({ config: discoverConfig(configPath).data, vault });
+    if (decisionModelModeFor(cfg, "recall_inject") === "off") return undefined;
+    const { createRecallInjectDecisionFilter } =
+      await import("../src/core/brain/recall-inject-decision.ts");
+    return createRecallInjectDecisionFilter({ config: cfg, vault }) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The host-side saving of an enforced filter, as a `token_impact` sample
+ * (gated by `token_impact_ledger_enabled`, fail-open). Counts only.
+ */
+function recordTokenImpact(
+  vault: string,
+  configPath: string,
+  decision: RecallInjectDecision,
+): void {
+  if (decision.kind === "error") return;
+  const info = decision.decisionModel;
+  if (info === undefined || info.tokensBefore === undefined || info.tokensAfter === undefined) {
+    return;
+  }
+  if (info.charsRemoved <= 0) return;
+  try {
+    emitTokenImpact(
+      vault,
+      {
+        host: HOOK_TELEMETRY_HOST,
+        source: "decision_model:recall_inject",
+        baselineTokens: info.tokensBefore,
+        packedTokens: info.tokensAfter,
+        method: TOKEN_COUNT_METHOD.heuristic,
+      },
+      resolveTokenImpactLedgerEnabled(configPath) || undefined,
+    );
+  } catch {
+    // best-effort, like every other telemetry write here
+  }
+}
+
 async function main(): Promise<void> {
   // Fast opt-out FIRST: default OFF means an immediate no-op, no process
   // ceiling armed, no payload read, no output - byte-identical to before.
@@ -171,8 +241,14 @@ async function main(): Promise<void> {
     auditVault = vault;
     const configPath = defaultConfigPath();
 
-    const decision = await decideRecallInject(prompt, defaultRecallRetriever(configPath, vault));
+    const decisionFilter = await decisionFilterFor(configPath, vault);
+    const decision = await decideRecallInject(
+      prompt,
+      defaultRecallRetriever(configPath, vault),
+      decisionFilter !== undefined ? { decisionFilter } : {},
+    );
     recordDecision(vault, decision);
+    recordTokenImpact(vault, configPath, decision);
     if (decision.kind !== "inject") return;
 
     const out = {

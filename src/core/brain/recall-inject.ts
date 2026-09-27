@@ -22,6 +22,8 @@ import { deriveRecallHint, type RecallHintInput } from "../search/recall-hint.ts
 import { searchAcrossVaults } from "../search/cross-vault.ts";
 import type { RecallSource } from "./portability/recall-sources.ts";
 import { fenceUntrustedContent, neutralizeUntrustedText } from "./untrusted-source.ts";
+import { RECALL_INJECT_ANY_MIN, RECALL_INJECT_NOTE_MIN } from "../decision-model/questions.ts";
+import { estimateTokens } from "./text/tokenizer.ts";
 
 /** `origin` label stamped on the recall brief's untrusted-content fence. */
 const RECALL_FENCE_ORIGIN = "recall-inject";
@@ -71,6 +73,12 @@ export interface RecallCandidate {
   readonly endLine: number;
   /** Cross-vault origin label (a {@link RecallSource} alias), when present. */
   readonly origin?: RecallSource["alias"];
+  /**
+   * The matched chunk's text. Never rendered into the brief; read only by
+   * the optional decision-model filter, which sends it (after the privacy
+   * rules) when the `recall_inject` use is not `off`.
+   */
+  readonly content?: string;
 }
 
 /** A retriever's returned candidates plus the ranked pool they came from. */
@@ -101,6 +109,84 @@ export interface RecallInjectOptions {
   readonly maxChars?: number;
   readonly timeBudgetMs?: number;
   readonly confidenceFloor?: number;
+  /**
+   * The optional decision-model filter (issue #213, Part 9). Absent (the
+   * default, and whenever the `recall_inject` use is `off`) leaves every
+   * decision exactly as it was. Consulted only on an `inject` decision,
+   * inside what is left of {@link timeBudgetMs}.
+   */
+  readonly decisionFilter?: RecallInjectFilter;
+  /** Clock for the time budget (tests). */
+  readonly now?: () => number;
+}
+
+/** The two modes in which the decision-model filter runs at all. */
+export type RecallInjectFilterMode = "shadow" | "enforce";
+
+/** What the filter is asked: the prompt and the notes the brief carries. */
+export interface RecallInjectFilterInput {
+  readonly query: string;
+  /** The notes actually rendered into today's brief, in brief order. */
+  readonly notes: ReadonlyArray<RecallCandidate>;
+  /**
+   * What is left of the retrieval time budget. The filter spends at most
+   * `min(decision_model_hook_budget_ms, remainingMs)`; the core also cuts
+   * it off at `remainingMs`, so the total budget never grows.
+   */
+  readonly remainingMs: number;
+}
+
+/** The filter's answer for one brief; never a thrown error. */
+export type RecallInjectFilterVerdict =
+  /** Not active after all (e.g. no provider): no request, no field. */
+  | { readonly status: "off" }
+  /** Nothing could be sent (every note private or unresolvable). */
+  | { readonly status: "not_sent"; readonly mode: RecallInjectFilterMode }
+  | {
+      readonly status: "ok";
+      readonly mode: RecallInjectFilterMode;
+      readonly latencyMs: number;
+      /** `helps_<k>` per note in brief order; null when not sent or invalid. */
+      readonly helps: ReadonlyArray<number | null>;
+      /** Whether each note was sent at all. */
+      readonly sent: ReadonlyArray<boolean>;
+      /** `inject_any`; null when invalid. */
+      readonly injectAny: number | null;
+    }
+  | {
+      readonly status: "degraded";
+      readonly mode: RecallInjectFilterMode;
+      /** A decision-model degrade reason (closed set), for the local audit only. */
+      readonly reason: string;
+      readonly latencyMs: number;
+    };
+
+export interface RecallInjectFilter {
+  readonly mode: RecallInjectFilterMode;
+  run(input: RecallInjectFilterInput): Promise<RecallInjectFilterVerdict>;
+}
+
+/**
+ * What the decision-model filter did to one decision. Numbers and closed
+ * classifications only; never prompt or note text.
+ */
+export interface RecallInjectDecisionModelInfo {
+  readonly mode: RecallInjectFilterMode;
+  /** `ok` (an answer arrived), `not_sent`, or `degraded`. */
+  readonly outcome: "ok" | "not_sent" | "degraded";
+  /** The degrade reason; carried to the local audit line only. */
+  readonly degradeReason?: string;
+  /** Time the filter added to this prompt, in milliseconds. */
+  readonly latencyMs: number;
+  /** Notes removed from the brief (in shadow: notes enforce would remove). */
+  readonly notesDropped: number;
+  /** Whether the brief was withheld (in shadow: whether enforce would withhold it). */
+  readonly abstained: boolean;
+  /** Estimated brief tokens before and after enforcement; enforce only, when it changed. */
+  readonly tokensBefore?: number;
+  readonly tokensAfter?: number;
+  /** Brief characters removed in enforce; 0 otherwise. */
+  readonly charsRemoved: number;
 }
 
 /**
@@ -118,7 +204,13 @@ export type RecallAbstainReason =
   | "empty_prompt"
   | "no_matches"
   | "below_floor"
-  | "unmeasurable_quality";
+  | "unmeasurable_quality"
+  /**
+   * The optional decision-model filter, in enforce, judged that no note
+   * would help (issue #213, Part 9). Only ever follows what would have
+   * been an `inject`.
+   */
+  | "decision_model_abstain";
 
 /**
  * Why an attempt failed, as a closed vocabulary rather than as prose.
@@ -173,6 +265,8 @@ export type RecallInjectDecision =
       readonly topScore: number;
       /** The quantity the floor was compared against; see the floor's docblock. */
       readonly matchQuality: number;
+      /** Present only when the decision-model filter ran (use not `off`). */
+      readonly decisionModel?: RecallInjectDecisionModelInfo;
     }
   | {
       readonly kind: "abstain";
@@ -185,6 +279,8 @@ export type RecallInjectDecision =
        * short-circuits when the retrieval could not weigh the prompt.
        */
       readonly matchQuality: number | null;
+      /** Present only on a `decision_model_abstain`. */
+      readonly decisionModel?: RecallInjectDecisionModelInfo;
     }
   | {
       readonly kind: "error";
@@ -217,6 +313,8 @@ export async function decideRecallInject(
   retriever: RecallRetriever,
   options: RecallInjectOptions = {},
 ): Promise<RecallInjectDecision> {
+  const clock = options.now ?? Date.now;
+  const started = clock();
   const query = prompt.trim();
   if (query.length === 0) {
     return Object.freeze({ kind: "abstain", reason: "empty_prompt", topScore: 0, matchQuality: 0 });
@@ -271,7 +369,177 @@ export async function decideRecallInject(
 
   const chosen = ranked.slice(0, maxNotes);
   const { brief, noteCount } = renderRecallBrief(chosen, resultSet.total, maxChars);
-  return Object.freeze({ kind: "inject", brief, noteCount, topScore, matchQuality });
+  const today: Extract<RecallInjectDecision, { kind: "inject" }> = Object.freeze({
+    kind: "inject",
+    brief,
+    noteCount,
+    topScore,
+    matchQuality,
+  });
+  const filter = options.decisionFilter;
+  if (filter === undefined || noteCount === 0) return today;
+  return applyDecisionFilter(filter, today, {
+    query,
+    rendered: chosen.slice(0, noteCount),
+    total: resultSet.total,
+    maxChars,
+    remainingMs: timeBudgetMs - (clock() - started),
+    clock,
+  });
+}
+
+/**
+ * Which notes survive an answer, and whether the brief is withheld. Pure,
+ * so a shadow record can carry what enforce would do.
+ *
+ *   - `inject_any` below {@link RECALL_INJECT_ANY_MIN} withholds the brief,
+ *     but only when every note was sent: a note the model never saw
+ *     cannot be judged useless by it;
+ *   - otherwise a sent note whose `helps_<k>` is below
+ *     {@link RECALL_INJECT_NOTE_MIN} is dropped; a note that was not sent,
+ *     or whose answer is invalid, stays;
+ *   - no note left withholds the brief.
+ *
+ * The result only removes notes; it never adds one.
+ */
+export function recallInjectFilterOutcome(
+  helps: ReadonlyArray<number | null>,
+  sent: ReadonlyArray<boolean>,
+  injectAny: number | null,
+): { readonly abstain: boolean; readonly keep: ReadonlyArray<boolean> } {
+  const keep = helps.map((p, i) => !(sent[i] === true && p !== null && p < RECALL_INJECT_NOTE_MIN));
+  const allSent = sent.length === helps.length && sent.every(Boolean);
+  const abstain =
+    (injectAny !== null && injectAny < RECALL_INJECT_ANY_MIN && allSent) || !keep.some(Boolean);
+  return { abstain, keep };
+}
+
+interface FilterContext {
+  readonly query: string;
+  readonly rendered: ReadonlyArray<RecallCandidate>;
+  readonly total: number;
+  readonly maxChars: number;
+  readonly remainingMs: number;
+  readonly clock: () => number;
+}
+
+/**
+ * Run the decision-model filter over today's `inject` decision. Never
+ * throws and never extends the time budget: with nothing left the filter
+ * is not asked at all, and a filter still running when the budget ends
+ * is abandoned as a `timeout`. Every failure keeps today's decision.
+ */
+async function applyDecisionFilter(
+  filter: RecallInjectFilter,
+  today: Extract<RecallInjectDecision, { kind: "inject" }>,
+  ctx: FilterContext,
+): Promise<RecallInjectDecision> {
+  const t0 = ctx.clock();
+  const degraded = (reason: string): RecallInjectDecision =>
+    Object.freeze({
+      ...today,
+      decisionModel: Object.freeze({
+        mode: filter.mode,
+        outcome: "degraded",
+        degradeReason: reason,
+        latencyMs: Math.max(0, ctx.clock() - t0),
+        notesDropped: 0,
+        abstained: false,
+        charsRemoved: 0,
+      }),
+    });
+  if (ctx.remainingMs <= 0) return degraded("budget");
+
+  let verdict: RecallInjectFilterVerdict;
+  try {
+    verdict = await withTimeBudget(
+      filter.run({ query: ctx.query, notes: ctx.rendered, remainingMs: ctx.remainingMs }),
+      ctx.remainingMs,
+    );
+  } catch (exc) {
+    return degraded(exc instanceof RecallInjectTimeoutError ? "timeout" : "internal_error");
+  }
+  if (verdict.status === "off") return today;
+  if (verdict.status === "degraded") {
+    return Object.freeze({
+      ...today,
+      decisionModel: Object.freeze({
+        mode: verdict.mode,
+        outcome: "degraded",
+        degradeReason: verdict.reason,
+        latencyMs: verdict.latencyMs,
+        notesDropped: 0,
+        abstained: false,
+        charsRemoved: 0,
+      }),
+    });
+  }
+  if (verdict.status === "not_sent") {
+    return Object.freeze({
+      ...today,
+      decisionModel: Object.freeze({
+        mode: verdict.mode,
+        outcome: "not_sent",
+        latencyMs: Math.max(0, ctx.clock() - t0),
+        notesDropped: 0,
+        abstained: false,
+        charsRemoved: 0,
+      }),
+    });
+  }
+
+  const { abstain, keep } = recallInjectFilterOutcome(
+    verdict.helps,
+    verdict.sent,
+    verdict.injectAny,
+  );
+  const kept = ctx.rendered.filter((_, i) => keep[i] === true);
+  const notesDropped = abstain ? ctx.rendered.length : ctx.rendered.length - kept.length;
+  const info = {
+    mode: verdict.mode,
+    outcome: "ok" as const,
+    latencyMs: verdict.latencyMs,
+    notesDropped,
+    abstained: abstain,
+    charsRemoved: 0,
+  };
+  // Shadow: recorded, and today's brief goes out unchanged.
+  if (verdict.mode === "shadow" || notesDropped === 0) {
+    return Object.freeze({ ...today, decisionModel: Object.freeze(info) });
+  }
+  const tokensBefore = estimateTokens(today.brief);
+  const withheld = (): RecallInjectDecision =>
+    Object.freeze({
+      kind: "abstain",
+      reason: "decision_model_abstain",
+      topScore: today.topScore,
+      matchQuality: today.matchQuality,
+      decisionModel: Object.freeze({
+        ...info,
+        abstained: true,
+        notesDropped: ctx.rendered.length,
+        tokensBefore,
+        tokensAfter: 0,
+        charsRemoved: today.brief.length,
+      }),
+    });
+  if (abstain) return withheld();
+  // The existing renderer and caps over the surviving notes only.
+  const { brief, noteCount } = renderRecallBrief(kept, ctx.total, ctx.maxChars);
+  if (noteCount === 0) return withheld();
+  return Object.freeze({
+    kind: "inject",
+    brief,
+    noteCount,
+    topScore: today.topScore,
+    matchQuality: today.matchQuality,
+    decisionModel: Object.freeze({
+      ...info,
+      tokensBefore,
+      tokensAfter: estimateTokens(brief),
+      charsRemoved: Math.max(0, today.brief.length - brief.length),
+    }),
+  });
 }
 
 /**
@@ -383,6 +651,7 @@ export function recallInjectTelemetryMetadata(
       note_count: decision.noteCount,
       top_score: decision.topScore,
       match_quality: decision.matchQuality,
+      ...decisionModelTelemetry(decision.decisionModel),
     });
   }
   if (decision.kind === "abstain") {
@@ -391,6 +660,7 @@ export function recallInjectTelemetryMetadata(
       reason: decision.reason,
       top_score: decision.topScore,
       match_quality: decision.matchQuality,
+      ...decisionModelTelemetry(decision.decisionModel),
     });
   }
   return Object.freeze({ decision: "error", fault: decision.fault });
@@ -411,8 +681,42 @@ export function recallInjectAuditDetails(
   decision: RecallInjectDecision,
 ): Readonly<Record<string, unknown>> {
   const safe = recallInjectTelemetryMetadata(decision);
-  if (decision.kind !== "error" || decision.detail === undefined) return safe;
+  if (decision.kind !== "error") {
+    // The decision-model degrade reason is local operational evidence,
+    // like a retriever's message: it rides this line only.
+    const reason = decision.decisionModel?.degradeReason;
+    if (reason === undefined) return safe;
+    return Object.freeze({
+      ...safe,
+      decision_model: Object.freeze({
+        ...(safe["decision_model"] as Readonly<Record<string, unknown>>),
+        degrade_reason: reason,
+      }),
+    });
+  }
+  if (decision.detail === undefined) return safe;
   return Object.freeze({ ...safe, detail: decision.detail });
+}
+
+/**
+ * The decision-model fields of a telemetry record: mode, a coarse outcome,
+ * the added latency, notes dropped and whether the brief was withheld.
+ * Absent when the filter did not run, so an install without the feature
+ * writes exactly the record it wrote before.
+ */
+function decisionModelTelemetry(
+  info: RecallInjectDecisionModelInfo | undefined,
+): Readonly<Record<string, unknown>> {
+  if (info === undefined) return {};
+  return {
+    decision_model: Object.freeze({
+      mode: info.mode,
+      outcome: info.outcome,
+      latency_ms: Math.max(0, Math.round(info.latencyMs)),
+      notes_dropped: info.notesDropped,
+      abstained: info.abstained,
+    }),
+  };
 }
 
 /**
@@ -461,6 +765,7 @@ export function defaultRecallRetriever(
         startLine: result.startLine,
         endLine: result.endLine,
         ...(result.origin !== undefined ? { origin: result.origin } : {}),
+        content: result.content,
       }),
     );
     return Object.freeze({
