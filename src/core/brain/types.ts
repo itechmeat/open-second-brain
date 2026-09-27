@@ -1840,6 +1840,12 @@ export interface BrainConfig {
    */
   readonly embeddings?: BrainEmbeddingsConfig;
   /**
+   * Optional `decision_model:` block. A vault can only opt out of the
+   * decision-model feature (`enabled: false`); it can never enable it,
+   * add uses, raise a mode or change the endpoint.
+   */
+  readonly decision_model?: BrainDecisionModelConfig;
+  /**
    * Optional `integrity:` block (context-integrity-gates). Chooses where
    * refusal begins for the owner-scoped delivery filter and the
    * embedding-store ABI check, and bounds how long a context pack stays
@@ -2104,6 +2110,12 @@ export interface BrainEmbeddingsConfig {
   readonly sunset_model?: string;
   /** Announced decommission date, ISO-8601 date or timestamp. */
   readonly sunset_at?: string;
+}
+
+/** Optional `decision_model:` block; see `policy/blocks/decision-model.ts`. */
+export interface BrainDecisionModelConfig {
+  /** Only `false` is honoured: the vault opted out of every use. */
+  readonly enabled?: false;
 }
 
 export interface BrainHealthConfig {

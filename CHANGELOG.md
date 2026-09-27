@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.59.0] - 2026-09-27
+
+Optional decision-model support, first part: the provider core and a `decision-model` rerank kind (issue #213, Parts 1 and 2).
+
+A decision model is a typed judgment model: it answers questions about a text state with probabilities over options Open Second Brain supplies, and never generates text. The feature is off by default. It becomes active only when the operator sets `decision_model_enabled: "true"` in machine config AND the environment variable named by `decision_model_env_key` is set. Without both, every surface behaves exactly as before: no network request, no record, and no change in tool, hook or CLI output.
+
+### Added
+
+- **Decision-model provider core** in `src/core/decision-model/`: the contract (`noul`, `choice` and `score` questions; answers with probabilities and a `valid` flag), a `systemone` adapter for `POST <base>/v1/systemone` (TypeSafe, OpenRouter, Vercel AI Gateway compatible route, OpenCode Zen, compatible servers), presets `typesafe`, `openrouter`, `vercel`, `opencode-zen` and `compatible`, and `runDecision`, the one entry point every use goes through. The adapter uses raw `fetch` with `redirect: "error"`, validates each answer (known ids and option keys, probabilities in range and summing to one, argmax matching the reported choice), recomputes a missing confidence, retries once only on 408, 409, 429, 5xx and 529 within the timeout, and never retries after a reset connection.
+- **Config keys `decision_model_*`** (enabled, provider, base_url, id, env_key, allow_insecure_http, timeout_ms, hook_budget_ms, max_state_tokens, uses, daily_cost_gate_usd, input_price_usd_per_mtok, allow_uncalibrated), each with an `OPEN_SECOND_BRAIN_DECISION_MODEL_*` override. The config holds only the NAME of the key variable. Invalid values keep the feature off and are reported by `check`, naming the key. The model id must be pinned; a moving alias such as `jev-latest` is refused.
+- **Privacy rules for the state:** candidates whose page carries `visibility: private`, or whose visibility cannot be resolved, are never sent; `<private>` regions are stripped; ids and paths are masked as `P0..Pn`; texts are clipped; the state is kept within `decision_model_max_state_tokens`. The whole body passes the shared egress guard, and the adapter is declared in the egress registry as `decision-model-systemone` with status `shared_redactor`.
+- **Vault opt-out:** `decision_model: { enabled: false }` in `Brain/_brain.yaml` disables every use for that vault. A vault can only narrow: `enabled: true`, uses, modes or endpoints there are ignored with a warning.
+- **Accounting:** a `decision_model_call` continuity record per request (use, mode, provider, answering model, counts, tokens, cost and its source, latency, outcome, a hash of the redacted state, and per-use identifiers; never text), a daily cost gate (`decision_model_daily_cost_gate_usd`, default 0.50 USD per UTC day), and an optional `decision_ms` component on `mcp_route_latency` records.
+- **`o2b decision-model check [--ping]`** shows the configured state, the key variable's name and whether it is set (never the value), per-use modes, vault opt-out, cost gate, today's spend and the processor; `--ping` sends one synthetic request. **`o2b decision-model report`** summarises records per use, including rerank shadow agreement. `o2b doctor --readiness` gains a `decision_model` line.
+- **Rerank kind `decision-model`** (`search_rerank_kind: decision-model`, mode from `decision_model_uses` `rerank`): one request per rerank carrying a relevance question per candidate, an injection question per candidate, and an `answerable` question while that use is not `off`. `shadow` records and returns the heuristic order unchanged; `enforce` reorders the head, keeps private, unsent and invalid candidates in place, and moves suspected injections to the end of the head with `decision_model_injection_suspected`. Any failure returns the heuristic order and is recorded, with no warning in the search output.
+- **`o2b search rerank-eval --dataset <path> [--kind local|decision-model|openai-compat] [--compare-local]`**, the operator entry point for the rerank eval gate, reporting hit@k and MRR for rerank off and the chosen kind with deltas and a recommendation. `runRerankEvalGate` accepts `kind: "decision-model"` and measures it in `enforce`.
+- **Docs:** `docs/decision-models.md` (configuration reference, presets, privacy and retention notes, the vault opt-out, the rerank kind and how to measure it), plus sections in `docs/architecture.md`, `docs/cli-reference.md` and `docs/observability.md`.
+
+### Changed
+
+- `search_rerank_kind` accepts `decision-model`, and its error message names the three kinds.
+- `o2b search rerank-fit` reports the `decision-model` kind as inapplicable and points to `rerank-eval`.
+- The data-ownership statement counts an active decision-model reranker as a networked rerank endpoint.
+
 ## [1.58.2] - 2026-09-26
 
 A quieter end-of-turn reminder in Claude Code.
@@ -7729,6 +7753,7 @@ plugin config (vault field)`, and exits with a clear
 - Sandbox vault and plugin manifest fixtures for tests.
 - GitHub release workflow for tag-based and manually dispatched releases.
 
+[1.59.0]: https://github.com/itechmeat/open-second-brain/compare/v1.58.2...v1.59.0
 [1.58.2]: https://github.com/itechmeat/open-second-brain/compare/v1.58.1...v1.58.2
 [1.58.1]: https://github.com/itechmeat/open-second-brain/compare/v1.58.0...v1.58.1
 [1.58.0]: https://github.com/itechmeat/open-second-brain/compare/v1.57.1...v1.58.0

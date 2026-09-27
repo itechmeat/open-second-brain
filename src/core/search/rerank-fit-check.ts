@@ -295,6 +295,15 @@ export async function rerankFitCheck(
   if (!config.rerank.enabled) {
     return inapplicable("reranker is disabled for this vault (search rerank enabled=false)");
   }
+  if (config.rerank.kind === "decision-model" && deps.provider === undefined) {
+    // The fit probe would send sampled vault queries and candidate texts
+    // with no page paths, so the privacy filter could not prove any of
+    // them may leave. The decision-model kind is measured by the eval
+    // gate instead.
+    return inapplicable(
+      "the decision-model reranker is measured with `o2b search rerank-eval --kind decision-model`, not this probe",
+    );
+  }
   const provider = resolveProbeProvider(config, deps);
   if (provider === null) {
     return inapplicable(

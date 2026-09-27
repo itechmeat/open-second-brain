@@ -113,6 +113,8 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
   "src/core/brain/temporal/foresight.ts":
     "reads `pre_compact_extract` since a horizon for foresight items.",
   "src/core/brain/token-impact.ts": "reads `token_impact` and `token_impact_outcome` samples.",
+  "src/core/decision-model/record.ts":
+    "reads `decision_model_call` records (numbers and identifiers only) for the cost gate and report.",
 });
 
 /**
@@ -123,7 +125,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * these say how far the counts may fall before the split stops describing
  * anything.
  *
- * Four modules read through the read-model and twenty-one read the store
+ * Four modules read through the read-model and twenty-two read the store
  * directly. Both numbers are EQUALITIES, not floors.
  *
  * The direct floor used to sit at twenty against a reality of
@@ -137,7 +139,7 @@ const DIRECT_STORE_READERS: Readonly<Record<string, string>> = Object.freeze({
  * nothing extra to keep true.
  */
 const READ_MODEL_READER_COUNT = 4;
-const DIRECT_STORE_READER_COUNT = 21;
+const DIRECT_STORE_READER_COUNT = 22;
 
 /** A file the classifier must see, and that `grep` alone does not. */
 

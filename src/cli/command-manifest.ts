@@ -685,6 +685,28 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
       ],
     ),
     command(
+      "decision-model",
+      "Inspect the optional decision-model feature (off unless enabled with a key)",
+      [],
+      [
+        command(
+          "check",
+          "Show the decision-model config, the key variable's name and whether it is set; --ping sends one synthetic request",
+          [flag("vault", "string"), flag("config", "string"), flag("ping", "boolean")],
+        ),
+        command(
+          "report",
+          "Summarise decision_model_call records per use: outcomes, latency, tokens, cost, rerank shadow agreement",
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("since", "string"),
+            flag("use", "string"),
+          ],
+        ),
+      ],
+    ),
+    command(
       "search",
       "Search the vault index",
       [],
@@ -775,6 +797,19 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("weights", "Show or reset the learned hybrid ranking weights"),
         command("rerank-provider", "Manage reranker provider profiles"),
         command("rerank-fit", "Diagnose whether the configured reranker fits this vault's queries"),
+        command(
+          "rerank-eval",
+          "Benchmark rerank off against a reranker kind over a labelled dataset (hit@k and MRR deltas)",
+          [
+            flag("vault", "string"),
+            flag("config", "string"),
+            flag("db", "string"),
+            flag("dataset", "string"),
+            flag("kind", "string"),
+            flag("k", "string"),
+            flag("compare-local", "boolean"),
+          ],
+        ),
         command("plan", "Preview the should-read shortlist for a query without reading the notes"),
         // The whole schema, for the reason the neighbours give: this
         // family has no per-verb `--help`, so an unmodelled flag is

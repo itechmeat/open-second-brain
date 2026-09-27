@@ -140,3 +140,4 @@ export {
   resolveSessions,
 } from "./policy/blocks/sessions.ts";
 export { resolveEmbeddingSunsetDeclaration } from "./policy/blocks/embeddings.ts";
+export { decisionModelDisabledByVault } from "./policy/blocks/decision-model.ts";

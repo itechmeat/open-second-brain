@@ -45,6 +45,12 @@ export interface McpRouteLatencyInput {
    * without ever persisting argument values.
    */
   readonly argKeys?: ReadonlyArray<string>;
+  /**
+   * Wall time spent in decision-model requests inside this call (issue
+   * #213). Absent when the call made none, so a record from an install
+   * without the feature is unchanged.
+   */
+  readonly decisionMs?: number;
 }
 
 export interface McpRouteLatencyFilter {
@@ -111,6 +117,9 @@ export function emitMcpRouteLatency<G>(
       status: input.status,
       duration_ms: Math.max(0, Math.round(safeDurationMs)),
       ...(argKeys.length > 0 ? { arg_keys: argKeys } : {}),
+      ...(input.decisionMs !== undefined && Number.isFinite(input.decisionMs)
+        ? { decision_ms: Math.max(0, Math.round(input.decisionMs)) }
+        : {}),
     };
     return appendContinuityRecord(vault, {
       kind: "mcp_route_latency",

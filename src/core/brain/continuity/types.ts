@@ -71,7 +71,13 @@ export type ContinuityRecordKind =
    * `recall_gate_telemetry` opt-in so the corpus statement a "no" rested
    * on stays auditable after the answer has been given.
    */
-  | "negative_recall";
+  | "negative_recall"
+  /**
+   * One optional decision-model request and how it ended (issue #213,
+   * Part 1). Identifiers and numbers only - never the state, a passage, a
+   * prompt or a question text. Written only while the feature is active.
+   */
+  | "decision_model_call";
 
 export type ContinuityPayload = Readonly<Record<string, unknown>>;
 

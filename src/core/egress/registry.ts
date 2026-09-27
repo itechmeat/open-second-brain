@@ -265,6 +265,21 @@ export const EGRESS_SITES = Object.freeze({
       "for the same reason as the embedding path: a reranker scoring placeholders returns " +
       "an order computed over text nobody wrote.",
   },
+  "decision-model-systemone": {
+    id: "decision-model-systemone",
+    verb: "decision_model_uses (for example o2b search query with search_rerank_kind: decision-model)",
+    module: "src/core/decision-model/systemone.ts",
+    redaction: R.sharedRedactor,
+    reason:
+      "the optional decision-model route: a masked, clipped state (for a rerank, the QUERY " +
+      "plus the top candidate passages as P0..Pn) and the question texts, POSTed to the " +
+      "operator's configured `/v1/systemone` endpoint. Unlike the embedding and rerank " +
+      "paths it IS scanned: a judgment over a redacted passage is still a usable judgment, " +
+      "so the whole body passes the shared guard and a refusal sends nothing. Pages whose " +
+      "visibility carries the reserved `private` token, or cannot be resolved, never enter " +
+      "the state, and `<private>` regions are stripped first. Off unless the operator " +
+      "enables it in machine config AND the named key variable is set; a vault can opt out.",
+  },
   "brain-telegram-capture": {
     id: "brain-telegram-capture",
     verb: "o2b brain telegram-run",

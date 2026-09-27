@@ -26,6 +26,8 @@ import { resolveOpenAiCompatEndpoint } from "../embeddings/provider-resolve.ts";
 import type { BrainSearchResult, ResolvedRerankConfig } from "../types.ts";
 import { makeRerankProvider } from "./provider.ts";
 import type { RerankProvider } from "./contract.ts";
+import type { DecisionProvider } from "../../decision-model/contract.ts";
+import type { DecisionRerankExtras } from "./decision-model.ts";
 
 /** Fixed-precision so the reason string is stable for a given score. */
 function fmtScore(x: number): string {
@@ -54,6 +56,18 @@ export interface ApplyCrossEncoderRerankOptions {
    * fail the search.
    */
   readonly onTelemetry?: (event: RerankTelemetryEvent) => void;
+  /**
+   * Visibility tokens for a result path, or null when unresolvable. Used
+   * only by the `decision-model` kind, which never sends a candidate whose
+   * page is private or whose visibility cannot be resolved.
+   */
+  readonly resolveVisibility?: (path: string) => ReadonlyArray<string> | null;
+  /** Inject a decision provider (tests). `decision-model` kind only. */
+  readonly decisionProvider?: DecisionProvider;
+  /** Receives the extra decision answers (e.g. `answerable`). */
+  readonly onDecisionExtras?: (extras: DecisionRerankExtras) => void;
+  /** The eval gate measures `enforce` whatever the configured mode. */
+  readonly decisionModeOverride?: "shadow" | "enforce";
 }
 
 interface Scored {
@@ -104,6 +118,26 @@ export async function applyCrossEncoderRerank(
 ): Promise<ReadonlyArray<BrainSearchResult>> {
   // Invariant 1: disabled -> zero-cost no-op, byte-identical input.
   if (!config.enabled) return results;
+
+  // The decision-model kind owns its own fail-open and privacy rules and
+  // never emits rerank telemetry: a failed decision is recorded in the
+  // `decision_model_call` record and returns the heuristic order unchanged.
+  if (config.kind === "decision-model") {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const { applyDecisionModelRerank } =
+      require("./decision-model.ts") as typeof import("./decision-model.ts");
+    return applyDecisionModelRerank(results, query, config, {
+      ...(opts.resolveVisibility !== undefined
+        ? { resolveVisibility: opts.resolveVisibility }
+        : {}),
+      ...(opts.decisionProvider !== undefined ? { provider: opts.decisionProvider } : {}),
+      ...(opts.env !== undefined ? { env: opts.env } : {}),
+      ...(opts.onDecisionExtras !== undefined ? { onExtras: opts.onDecisionExtras } : {}),
+      ...(opts.decisionModeOverride !== undefined
+        ? { modeOverride: opts.decisionModeOverride }
+        : {}),
+    });
+  }
 
   // Resolve the provider. The bundled offline reranker ("local") needs no
   // endpoint - it is deterministic and network-free. The remote

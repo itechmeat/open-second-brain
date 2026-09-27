@@ -59,6 +59,7 @@
  */
 
 import { discoverConfig } from "./config.ts";
+import { resolveDecisionModelConfig } from "./decision-model/config.ts";
 import {
   resolveSemanticCapability,
   SEMANTIC_CAPABILITY_CODE,
@@ -84,6 +85,7 @@ export const READINESS_PROBE = {
   embeddingProvider: "embedding_provider",
   runtimeAdapterWiring: "runtime_adapter_wiring",
   installedRuntimes: "installed_runtimes",
+  decisionModel: "decision_model",
 } as const;
 
 /**
@@ -348,6 +350,55 @@ export async function probeEmbeddingProvider(opts: ReadinessOptions): Promise<Re
 }
 
 /**
+ * The optional decision model (issue #213). `skipped` whenever the feature
+ * is not active - off, no key, or opted out by the vault - because a
+ * missing key is a normal state, not a fault; the detail says how to set
+ * it. `fail` only for an enabled config with an invalid value. No request
+ * is sent: `o2b decision-model check --ping` is the live probe.
+ */
+export async function probeDecisionModel(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  const configPath = resolveConfigPath(opts);
+  let data: Readonly<Record<string, string>>;
+  try {
+    data = discoverConfig(configPath).data;
+  } catch (err) {
+    return {
+      status: READINESS_STATUS.unknown,
+      detail: `config could not be read: ${(err as Error).message}`,
+    };
+  }
+  const cfg = resolveDecisionModelConfig({
+    config: data,
+    vault: opts.vault,
+    ...(opts.env !== undefined ? { env: opts.env as NodeJS.ProcessEnv } : {}),
+  });
+  switch (cfg.status) {
+    case "disabled":
+      return {
+        status: READINESS_STATUS.skipped,
+        detail: "off (decision_model_enabled is not true)",
+      };
+    case "no_key":
+      return {
+        status: READINESS_STATUS.skipped,
+        detail:
+          cfg.envKey === null
+            ? "enabled but no key variable is named; set decision_model_env_key"
+            : `enabled but ${cfg.envKey} is not set; set it in the environment to turn the feature on`,
+      };
+    case "disabled_by_vault":
+      return { status: READINESS_STATUS.skipped, detail: "opted out by this vault's _brain.yaml" };
+    case "invalid":
+      return { status: READINESS_STATUS.fail, detail: cfg.errors.join("; ") };
+    case "active":
+      return {
+        status: READINESS_STATUS.pass,
+        detail: `key present in ${cfg.envKey ?? "?"}, endpoint accepted (${cfg.provider ?? "?"} ${cfg.baseUrl ?? ""})`,
+      };
+  }
+}
+
+/**
  * The `InstallEnv` both install-facing probes hand to the adapters. One
  * builder so the construction probe and the installed-state probe cannot
  * disagree about which HOME, cwd or environment a runtime is judged
@@ -547,6 +598,7 @@ export const DEFAULT_PROBES: ReadonlyArray<NamedProbe> = [
   { name: READINESS_PROBE.embeddingProvider, fn: probeEmbeddingProvider },
   { name: READINESS_PROBE.runtimeAdapterWiring, fn: probeRuntimeAdapterWiring },
   { name: READINESS_PROBE.installedRuntimes, fn: probeInstalledRuntimes },
+  { name: READINESS_PROBE.decisionModel, fn: probeDecisionModel },
 ];
 
 /**

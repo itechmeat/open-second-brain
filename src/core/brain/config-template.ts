@@ -626,6 +626,20 @@ export const BRAIN_CONFIG_TEMPLATE_OMISSIONS: ReadonlyArray<BrainTemplateOmissio
       "hygiene.dedup_threshold, so templating it would advertise a knob that " +
       "does nothing. Wire a reader (or drop the validation) before documenting it.",
   },
+  {
+    key: "decision_model",
+    reason:
+      "An opt-out for an optional feature that is off unless the operator's machine " +
+      "config enables it with a key. Templating it would put a decision-model line in " +
+      "every new vault whether or not the feature exists on that machine; it is " +
+      "documented in docs/decision-models.md instead.",
+  },
+  {
+    key: "decision_model.enabled",
+    reason:
+      "The one field of the decision_model opt-out block (only `false` is honoured); " +
+      "documented with the block in docs/decision-models.md.",
+  },
 ]) as ReadonlyArray<BrainTemplateOmission>;
 
 export interface RenderBrainConfigTemplateOptions {

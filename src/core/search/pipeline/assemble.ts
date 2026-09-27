@@ -221,7 +221,15 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // it is on, the candidate pool must be at least `top_k` wide so a
   // genuinely-relevant hit the heuristic ranker placed deep can be pulled
   // into the final window. Off by default keeps the pool byte-identical.
-  const crossEncoderActive = config.rerank.enabled;
+  // A decision-model reranker in shadow returns the heuristic order, so it
+  // must not widen the pool either: shadow output is byte-identical to
+  // rerank off.
+  const crossEncoderActive =
+    config.rerank.enabled &&
+    !(
+      config.rerank.kind === "decision-model" &&
+      config.rerank.decisionModel?.uses.rerank === "shadow"
+    );
   const maxHops = opts.maxHops ?? config.recall.maxHops;
   const traversalActive = maxHops > NO_TRAVERSAL_HOPS;
   const baseRankLimit =

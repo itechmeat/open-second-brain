@@ -37,6 +37,7 @@ import { ORIGIN_CHANNEL, setOriginChannel, type OriginChannel } from "../core/or
 import { handleDisciplineSubcommand } from "./discipline.ts";
 import { handlePartnerSubcommand } from "./partner.ts";
 import { handleSearchSubcommand } from "./search.ts";
+import { handleDecisionModelSubcommand } from "./decision-model.ts";
 import { handleStateSubcommand } from "./state.ts";
 import { installMcpSignalDrain, type McpSignalDrainHandle } from "./mcp-drain.ts";
 import { handleVaultSubcommand } from "./vault.ts";
@@ -1129,6 +1130,8 @@ async function dispatchCommand(command: string, rest: string[]): Promise<number>
         return await handleVaultSubcommand(rest);
       case "partner":
         return await handlePartnerSubcommand(rest);
+      case "decision-model":
+        return await handleDecisionModelSubcommand(rest);
       default:
         process.stderr.write(`error: unknown command: ${command}\n`);
         process.stderr.write(renderUsage());

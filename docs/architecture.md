@@ -347,6 +347,24 @@ redaction would corrupt rather than protect the result, and
 a sixth appears undeclared or an existing one falls out of that table. A
 default install reaches none of them.
 
+The optional decision model (`src/core/decision-model/`, next to the
+embedding and rerank providers) is a third outbound model seam and the one
+network path that IS scanned: its adapter (`systemone.ts`, registry id
+`decision-model-systemone`) passes the whole request body through
+`redactForEgress`, and the state builder drops any candidate whose page is
+`private` or whose visibility cannot be resolved before anything is built. It
+fits the rule that Open Second Brain never calls an LLM the same way the
+embedding and rerank calls do: a decision model returns probabilities over
+candidates this code produced and never text, the deterministic result stays
+canonical and is returned on every failure, and no decision writes to the
+vault. It is active only when the operator enables it in machine config AND
+the named key variable is set; otherwise every code path is the one without
+it. Every use goes through `runDecision` (`run.ts`), which owns the modes
+(`off`, `shadow`, `enforce`), the daily cost gate and the
+`decision_model_call` accounting record. The first use is the rerank kind
+`decision-model` (`src/core/search/rerank/decision-model.ts`). See
+[`docs/decision-models.md`](decision-models.md).
+
 Ownership is a boundary only where something writes it. With
 `integrity.owner_scope_delivery` on, every production preference writer stamps
 the server-resolved agent identity onto a NEW record; a rewrite never re-owns,

@@ -1563,7 +1563,19 @@ o2b search rerank-fit         Per-store reranker fit check (read-only diagnostic
                               retrieval signal. Reports fits (quiet), out_of_domain (low fit), or
                               inverted (negative) with a disable/swap recommendation; a rerankerless
                               vault reports inapplicable. --max-queries N --top-k K --json
+o2b search rerank-eval        Rerank eval gate over a labelled dataset: runs the recall benchmark
+                              with rerank off and with --kind local|decision-model|openai-compat
+                              (default local) and reports hit@k and MRR for both, the deltas and
+                              the recommendation (enable only on lift without a hit@k regression).
+                              --dataset PATH (required) --k N --compare-local --json. The
+                              decision-model arm runs in enforce and needs an active decision-model
+                              config; every query then sends its top candidates to that endpoint.
 ```
+
+`search_rerank_kind` is `openai-compat` (default), `local` or
+`decision-model`. The `decision-model` kind reranks through the optional
+decision model and its `decision_model_*` config; see
+[`docs/decision-models.md`](decision-models.md).
 
 ### The retrieval trail (since v1.46.0)
 
@@ -1870,6 +1882,32 @@ per endpoint: chunk text, the query and the API key travel unencrypted,
 so use it only on a network you trust. `tests/core/architecture/egress-census.test.ts` fails if a
 sixth such path is added without a declaration, and fails if a declared
 one is missing from this table.
+
+One network path IS scanned: `decision-model-systemone`, the optional
+decision model (`docs/decision-models.md`). It is off unless the operator
+enables it in machine config and the named key variable is set. What leaves
+is a masked, clipped state (for a rerank, the query plus the top candidate
+passages as `P0..Pn`, never a page whose visibility is `private` or cannot be
+resolved) and the question texts; the whole body passes `redactForEgress`,
+and a refused body is not sent.
+
+## Decision model (optional)
+
+```text
+o2b decision-model check      Config state: enabled, provider, base URL, pinned model, the key
+                              variable's NAME and whether it is set (never the value), per-use
+                              modes, vault opt-out, cost gate and today's spend, processor terms.
+                              --ping sends one request over a synthetic state (no vault content).
+                              Exit 1 only for an invalid config or a failed ping of an active
+                              provider; a missing key is exit 0 with a hint. --vault --config --json
+o2b decision-model report     decision_model_call records per use: calls, outcome mix, p50/p95
+                              latency, input tokens, cost, rerank shadow agreement (top-1, top-5
+                              overlap). --since DATE --use USE --vault --config --json
+```
+
+Off by default; active only when `decision_model_enabled: "true"` AND the
+environment variable named by `decision_model_env_key` is set. Config keys,
+presets, privacy and the vault opt-out: [`docs/decision-models.md`](decision-models.md).
 
 ## Helpers
 

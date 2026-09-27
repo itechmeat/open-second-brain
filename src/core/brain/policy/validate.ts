@@ -46,6 +46,7 @@ import {
   parseRecallBlock,
 } from "./blocks/continuity-hygiene.ts";
 import { parseFeedbackBlock } from "./blocks/feedback.ts";
+import { parseDecisionModelBlock } from "./blocks/decision-model.ts";
 
 export interface ValidateResult {
   readonly config: BrainConfig;
@@ -122,6 +123,7 @@ export function validateBrainConfigDetailed(
   const anticipatory = parseAnticipatoryBlock(ctx);
   const recall = parseRecallBlock(ctx);
   const feedback = parseFeedbackBlock(ctx);
+  const decisionModel = parseDecisionModelBlock(ctx);
 
   warnUnknownTopLevelKeys(ctx);
 
@@ -153,6 +155,7 @@ export function validateBrainConfigDetailed(
     ...(anticipatory !== undefined ? { anticipatory } : {}),
     ...(recall !== undefined ? { recall } : {}),
     ...(feedback !== undefined ? { feedback } : {}),
+    ...(decisionModel !== undefined ? { decision_model: decisionModel } : {}),
   };
 
   return { config, warnings: ctx.warnings, knownKeys: ctx.keys };

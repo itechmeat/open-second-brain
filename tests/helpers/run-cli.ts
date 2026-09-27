@@ -51,6 +51,10 @@ const RUNTIME_OVERRIDABLE_ENV = [
   // property of an unset shell rather than of the code.
   "OPEN_SECOND_BRAIN_SEARCH_SEMANTIC",
   "OPEN_SECOND_BRAIN_EMBEDDING_PROVIDER",
+  // The optional decision model: a developer who enabled it in the shell
+  // must not turn a network-free test into one that calls an endpoint.
+  "OPEN_SECOND_BRAIN_DECISION_MODEL_ENABLED",
+  "OPEN_SECOND_BRAIN_DECISION_MODEL_USES",
   // The codegraph partner switch, for the same reason and with a default
   // of its own below.
   PARTNER_CODEGRAPH_DISABLED_ENV,

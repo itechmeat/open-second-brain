@@ -21,6 +21,7 @@ import {
   type ExpandedProvider,
 } from "./embeddings/registry.ts";
 import { loadRerankRegistry, expandRegisteredRerankProvider } from "./rerank/registry.ts";
+import { decisionModelModeFor, resolveDecisionModelConfig } from "../decision-model/config.ts";
 import { resolveEmbeddingPrefixes } from "./embeddings/presets.ts";
 import { SearchError } from "./types.ts";
 import type {
@@ -728,15 +729,35 @@ export function resolveSearchConfig(opts: {
     "OPEN_SECOND_BRAIN_SEARCH_RERANK_KIND",
     "search_rerank_kind",
   );
-  if (rerankKindRaw !== null && rerankKindRaw !== "openai-compat" && rerankKindRaw !== "local") {
+  if (
+    rerankKindRaw !== null &&
+    rerankKindRaw !== "openai-compat" &&
+    rerankKindRaw !== "local" &&
+    rerankKindRaw !== "decision-model"
+  ) {
     throw new SearchError(
       "INVALID_INPUT",
-      `search_rerank_kind must be 'openai-compat' or 'local', got '${rerankKindRaw}'`,
+      `search_rerank_kind must be 'openai-compat', 'local' or 'decision-model', got '${rerankKindRaw}'`,
     );
   }
-  const rerankKind = rerankKindRaw === "local" ? "local" : "openai-compat";
+  const rerankKind =
+    rerankKindRaw === "local" || rerankKindRaw === "decision-model"
+      ? rerankKindRaw
+      : "openai-compat";
+  // The decision-model kind reuses the core decision config. It is resolved
+  // only for this kind, and it never throws: anything short of an active
+  // config with a non-`off` rerank use leaves the stage disabled, which is
+  // byte-identical to rerank off (no request, no record, no warning).
+  const rerankDecisionModel =
+    rerankKind === "decision-model"
+      ? resolveDecisionModelConfig({ env, config, vault: opts.vault })
+      : null;
+  const rerankEffectiveEnabled =
+    rerankDecisionModel === null
+      ? rerankEnabled
+      : rerankEnabled && decisionModelModeFor(rerankDecisionModel, "rerank") !== "off";
   const rerank: ResolvedRerankConfig = Object.freeze({
-    enabled: rerankEnabled,
+    enabled: rerankEffectiveEnabled,
     kind: rerankKind,
     baseUrl: rerankBaseUrl,
     model: rerankModel,
@@ -745,6 +766,7 @@ export function resolveSearchConfig(opts: {
     ...(rerankAllowInsecureHttp ? { allowInsecureHttp: true } : {}),
     topK: rerankTopK,
     minScore: rerankMinScore,
+    ...(rerankDecisionModel !== null ? { decisionModel: rerankDecisionModel } : {}),
   });
 
   const mmrLambda = parseFloat01(

@@ -18,7 +18,8 @@
 import { runRecallBenchmark } from "./benchmark.ts";
 import type { RecallBenchmarkDataset, RecallBenchmarkReport } from "./benchmark.ts";
 import { MAINTENANCE_LANE_REACH } from "../graph/transport-reach.ts";
-import type { ResolvedRerankConfig, ResolvedSearchConfig } from "./types.ts";
+import type { ResolvedDecisionModelConfig } from "../decision-model/config.ts";
+import { SearchError, type ResolvedRerankConfig, type ResolvedSearchConfig } from "./types.ts";
 
 export interface RerankEvalGateOptions {
   /** Rank depth for the benchmark (defaults to the benchmark default). */
@@ -29,6 +30,13 @@ export interface RerankEvalGateOptions {
   readonly minMrrDelta?: number;
   /** Minimum hit@k lift that alone justifies enabling. Default 0.01. */
   readonly minHitDelta?: number;
+  /**
+   * The decision-model config for `kind: "decision-model"`, when the
+   * search config was not resolved with that kind. Must be active; the
+   * reranked arm always runs the `rerank` use in `enforce`, since a shadow
+   * arm would return the heuristic order and measure nothing.
+   */
+  readonly decisionModel?: ResolvedDecisionModelConfig;
 }
 
 export interface RerankEvalGateResult {
@@ -44,11 +52,40 @@ function withRerank(
   config: ResolvedSearchConfig,
   enabled: boolean,
   kind: ResolvedRerankConfig["kind"],
+  decisionModel?: ResolvedDecisionModelConfig,
 ): ResolvedSearchConfig {
   return Object.freeze({
     ...config,
-    rerank: Object.freeze({ ...config.rerank, enabled, kind }),
+    rerank: Object.freeze({
+      ...config.rerank,
+      enabled,
+      kind,
+      ...(decisionModel !== undefined
+        ? {
+            decisionModel: Object.freeze({
+              ...decisionModel,
+              uses: Object.freeze({ ...decisionModel.uses, rerank: "enforce" as const }),
+            }),
+          }
+        : {}),
+    }),
   });
+}
+
+/** The active decision config the reranked arm needs, or a typed refusal. */
+function decisionModelFor(
+  config: ResolvedSearchConfig,
+  opts: RerankEvalGateOptions,
+): ResolvedDecisionModelConfig {
+  const dm = opts.decisionModel ?? config.rerank.decisionModel;
+  if (dm === undefined || dm.status !== "active") {
+    throw new SearchError(
+      "INVALID_INPUT",
+      `the decision-model reranker is not active (${dm?.status ?? "not configured"}); ` +
+        "run `o2b decision-model check` for what is missing",
+    );
+  }
+  return dm;
 }
 
 /**
@@ -72,14 +109,19 @@ export async function runRerankEvalGate(
   // compare the two arms over different vaults. Named through the shared
   // constant so the claim is the same claim every lane makes.
   const reach = MAINTENANCE_LANE_REACH;
+  const decisionModel = kind === "decision-model" ? decisionModelFor(config, opts) : undefined;
   const baseline = await runRecallBenchmark(withRerank(config, false, kind), dataset, {
     k,
     transportReach: reach,
   });
-  const reranked = await runRecallBenchmark(withRerank(config, true, kind), dataset, {
-    k,
-    transportReach: reach,
-  });
+  const reranked = await runRecallBenchmark(
+    withRerank(config, true, kind, decisionModel),
+    dataset,
+    {
+      k,
+      transportReach: reach,
+    },
+  );
 
   const hitDelta = reranked.hitAtK - baseline.hitAtK;
   const mrrDelta = reranked.mrr - baseline.mrr;

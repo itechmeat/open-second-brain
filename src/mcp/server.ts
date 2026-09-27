@@ -10,6 +10,7 @@ import {
   resolveMcpRouteMetricsEnabled,
 } from "../core/config.ts";
 import { emitMcpRouteLatency, type McpRouteStatus } from "../core/brain/mcp-route-metrics.ts";
+import { createDecisionLatencyScope } from "../core/decision-model/latency.ts";
 import { assertKnownArguments } from "./argument-guard.ts";
 import { VaultFrozenError } from "../core/brain/freeze-marker.ts";
 import { UNRESOLVED_AGENT, vaultFrozenRefusal } from "./frozen-refusal.ts";
@@ -249,8 +250,9 @@ export class MCPServer {
     }
     const start = performance.now();
     let status: McpRouteStatus = "ok";
+    const decisionScope = createDecisionLatencyScope();
     try {
-      return await tool.handler(this.context, args, onProgress);
+      return await decisionScope.run(async () => tool.handler(this.context, args, onProgress));
     } catch (exc) {
       status = "error";
       throw this.mapFrozen(tool, exc);
@@ -263,6 +265,9 @@ export class MCPServer {
           status,
           durationMs: performance.now() - start,
           argKeys: Object.keys(args),
+          ...(decisionScope.decisionMs() !== undefined
+            ? { decisionMs: decisionScope.decisionMs() }
+            : {}),
         },
         this.routeMetricsEnabled,
       );

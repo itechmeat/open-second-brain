@@ -65,6 +65,14 @@ function configFingerprint(config: ResolvedSearchConfig): string {
     rrkModel: config.rerank.model,
     rrkTopK: config.rerank.topK,
     rrkMin: config.rerank.minScore,
+    // The decision-model kind: its mode decides whether the order changes.
+    // Present only for that kind, so every other key is unchanged.
+    ...(config.rerank.kind === "decision-model"
+      ? {
+          rrkKind: config.rerank.kind,
+          rrkDm: `${config.rerank.decisionModel?.model ?? ""}:${config.rerank.decisionModel?.uses.rerank ?? "off"}`,
+        }
+      : {}),
     // Trigram prefilter augments the candidate pool, so a toggle or
     // selectivity change must invalidate cached rows.
     tri: r.trigramPrefilterEnabled,

@@ -21,3 +21,6 @@ export const FAKE_VENDOR_KEY = fakeCredential("sk-", "live-9f8e7d6c5b4a32100112"
 
 /** A GitHub-token placeholder resolved through `$secret:` references. */
 export const FAKE_GITHUB_SECRET = fakeCredential("ghp_", "secret_value");
+
+/** The key handed to fake decision-model servers (issue #213). */
+export const FAKE_DECISION_KEY = fakeCredential("dm", "-test-", "key-7c1e");

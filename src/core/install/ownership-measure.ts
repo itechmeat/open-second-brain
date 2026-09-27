@@ -114,11 +114,17 @@ function searchOutbound(search: ResolvedSearchConfig): {
   const embeddingNetworked =
     semantic.enabled && semantic.provider !== "local" && semantic.provider !== "disabled";
   // The local rerank kind runs the bundled offline model, so only the
-  // `openai-compat` kind reaches an endpoint at all.
-  const rerankNetworked = search.rerank.enabled && search.rerank.kind === "openai-compat";
+  // `openai-compat` and `decision-model` kinds reach an endpoint. The
+  // decision-model kind is enabled here only while its config is active,
+  // and its endpoint is the decision model's base URL.
+  const rerankNetworked = search.rerank.enabled && search.rerank.kind !== "local";
+  const rerankEndpoint =
+    search.rerank.kind === "decision-model"
+      ? (search.rerank.decisionModel?.baseUrl ?? null)
+      : search.rerank.baseUrl;
   return {
     embedding: present(embeddingNetworked, semantic.baseUrl),
-    rerank: present(rerankNetworked, search.rerank.baseUrl),
+    rerank: present(rerankNetworked, rerankEndpoint),
   };
 }
 

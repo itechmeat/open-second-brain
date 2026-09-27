@@ -1,0 +1,119 @@
+/**
+ * State builder: turns candidates Open Second Brain's own code produced
+ * into the `state` a decision request carries, under the privacy rules.
+ *
+ *   - Private pages never leave. A candidate whose visibility carries the
+ *     reserved `private` token, or whose visibility could not be resolved
+ *     at all, is dropped before anything is built. The search index keeps
+ *     private page text, so this filter cannot rely on an upstream one.
+ *   - `<private>` regions are stripped from every candidate text.
+ *   - Candidate ids and vault paths never appear: candidates are masked as
+ *     `P0..Pn` (or a use-specific prefix) and the mapping stays in memory.
+ *   - Each text is clipped to a per-use constant from `questions.ts`.
+ *   - The state is kept within `max_state_tokens` by dropping the
+ *     lowest-ranked candidates; when not even one fits, the caller
+ *     degrades with `budget`.
+ *
+ * Redaction of secret-shaped strings happens once, over the whole request
+ * body, in the adapter (`redactForEgress`), so it covers question texts
+ * too.
+ *
+ * State text is vault content and may try to steer the answer. That is
+ * acceptable only because no decision authorises a write.
+ */
+
+import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
+import { stripPrivateRegions } from "../redactor.ts";
+
+/**
+ * Conservative characters-per-token estimate. The hosted tokenizer yields
+ * noticeably more tokens than common character heuristics, so this errs
+ * towards overestimating; refine from recorded `usage.input_tokens`.
+ */
+export const STATE_CHARS_PER_TOKEN = 2;
+
+/** Room reserved for the longest question beside the state, in tokens. */
+export const QUESTION_TOKEN_ALLOWANCE = 256;
+
+export function estimateTokens(value: unknown): number {
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return Math.ceil(text.length / STATE_CHARS_PER_TOKEN);
+}
+
+export interface StateCandidate {
+  readonly text: string;
+  /**
+   * Normalised visibility tokens of the candidate's page, or null when the
+   * visibility could not be resolved (such a candidate is never sent).
+   */
+  readonly visibility: ReadonlyArray<string> | null;
+}
+
+export interface CandidateStateInput {
+  readonly candidates: ReadonlyArray<StateCandidate>;
+  /** Mask prefix, e.g. `P` gives `P0`, `P1`, ... */
+  readonly prefix: string;
+  readonly clipChars: number;
+  readonly maxStateTokens: number;
+  /** Wrap the masked texts into the full state object. */
+  readonly frame: (texts: Readonly<Record<string, string>>) => Readonly<Record<string, unknown>>;
+}
+
+export type CandidateStateResult =
+  | {
+      readonly kind: "ok";
+      readonly state: Readonly<Record<string, unknown>>;
+      /** Candidate index for each mask position: `included[k]` is `P<k>`. */
+      readonly included: ReadonlyArray<number>;
+      /** Candidates withheld because their page is private or unresolvable. */
+      readonly withheld: ReadonlyArray<number>;
+      /** Candidates dropped (lowest-ranked first) to fit the budget. */
+      readonly dropped: ReadonlyArray<number>;
+    }
+  | { readonly kind: "budget" }
+  | { readonly kind: "empty" };
+
+/** Whether a candidate with these tokens may be sent at all. */
+export function mayLeaveMachine(visibility: ReadonlyArray<string> | null): boolean {
+  return visibility !== null && !visibility.includes(REMOTE_DENY_VISIBILITY_TOKEN);
+}
+
+function clip(text: string, maxChars: number): string {
+  const chars = [...text];
+  return chars.length <= maxChars ? text : chars.slice(0, maxChars).join("");
+}
+
+export function buildCandidateState(input: CandidateStateInput): CandidateStateResult {
+  const withheld: number[] = [];
+  const eligible: Array<{ index: number; text: string }> = [];
+  input.candidates.forEach((candidate, index) => {
+    if (!mayLeaveMachine(candidate.visibility)) {
+      withheld.push(index);
+      return;
+    }
+    eligible.push({ index, text: clip(stripPrivateRegions(candidate.text), input.clipChars) });
+  });
+  if (eligible.length === 0) return { kind: "empty" };
+
+  const dropped: number[] = [];
+  let kept = eligible;
+  for (;;) {
+    const texts: Record<string, string> = {};
+    kept.forEach((c, k) => {
+      texts[`${input.prefix}${k}`] = c.text;
+    });
+    const state = input.frame(texts);
+    if (estimateTokens(state) + QUESTION_TOKEN_ALLOWANCE <= input.maxStateTokens) {
+      return {
+        kind: "ok",
+        state,
+        included: Object.freeze(kept.map((c) => c.index)),
+        withheld: Object.freeze(withheld),
+        dropped: Object.freeze(dropped.toReversed()),
+      };
+    }
+    if (kept.length <= 1) return { kind: "budget" };
+    dropped.push(kept[kept.length - 1]!.index);
+    kept = kept.slice(0, -1);
+  }
+}
