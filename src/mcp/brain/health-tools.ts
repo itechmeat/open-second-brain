@@ -9,6 +9,8 @@
 import { resolveSearchConfig } from "../../core/search/index.ts";
 import { collectMaintenanceActions } from "../../core/brain/maintenance/collect.ts";
 import { runDoctor } from "../../core/brain/doctor.ts";
+import { annotateEntityAliasIssues } from "../../core/brain/doctor/entity-alias-verdicts.ts";
+import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import { applyRepair } from "../../core/brain/diagnostics.ts";
 import { nextCommandField } from "../../core/brain/next-step.ts";
 import { NO_EXIT_KEY, noExitReasons } from "../../core/brain/doctor-exits.ts";
@@ -133,6 +135,9 @@ async function toolBrainDoctor(
   // so we mirror that semantic here: with `strict`, warnings demote ok
   // to false. Errors always do.
   const ok = errors.length === 0 && (!strict || warnings.length === 0);
+  const aliasVerdicts = await annotateEntityAliasIssues(ctx.vault, warnings, {
+    configPath: ctx.configPath,
+  });
 
   // Why a reported code carries no `next_command`. Without it the field's
   // absence has two readings - a class no single command resolves, and a
@@ -151,7 +156,12 @@ async function toolBrainDoctor(
     // code with no registered signal, because there is no honest command
     // to name and a generic one would be invented.
     errors: errors.map((i) => issueView(ctx, i)),
-    warnings: warnings.map((i) => issueView(ctx, i)),
+    // Optional decision-model verdicts on alias-merge candidates (use
+    // `dedup`); null while off, and the list is rendered as before.
+    warnings:
+      aliasVerdicts === null
+        ? warnings.map((i) => issueView(ctx, i))
+        : aliasVerdicts.map((a) => ({ ...issueView(ctx, a.item), ...verdictFields(a) })),
     // v0.10.15: ranked maintenance actions surfaced as a parallel
     // signal to errors/warnings. The list is independent of `strict`
     // because nothing here downgrades the `ok` flag - actions are

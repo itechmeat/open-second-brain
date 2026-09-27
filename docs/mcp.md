@@ -227,7 +227,7 @@ flags for a narrower per-process full server.
 | `brain_agenda`              | Stateless agenda synthesis over caller-provided calendar events (the host fetches them; the Brain never calls a calendar API): overlap conflicts, free focus blocks (optionally clipped to a workday window), and events organised outside the operator's own email domain(s). No vault writes. | `events`                                       |
 | `brain_context_presets`     | Show, suggest, or diff read-only context budget presets (`tight-context`, `long-context`) without writing config.                              | `operation`                                    |
 | `brain_pre_compact_extract` | Extract decision/commitment/outcome/rule/open-question records from bounded text into continuity storage.                                      | `session_id`, `turn_start`, `turn_end`, `text` |
-| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. | `mode`                                         |
+| `brain_hygiene`             | Memory hygiene: `scan` findings (conflicts, dedup, freshness, usefulness), `apply` selected ids, `refresh` stale pages. Resolver command comes from `_brain.yaml` only. With the optional `dedup` decision-model use in enforce, `scan` dedup findings carry an advisory `decision_model` verdict; `apply` never reads it. | `mode`                                         |
 | `brain_anticipatory_context` | Turn-specific context bundle kept warm by lifecycle hooks, keyed by the session's lineage root; reports `cache_state` warm / stale / miss.   | `session_id`                                   |
 | `brain_session_grep`        | Search imported session recall raw turns and deterministic summary nodes.                                                                      | `query`                                        |
 | `brain_session_describe`    | Describe raw-turn counts and summary depths for one imported session recall DAG.                                                               | `session_id`                                   |
@@ -1510,3 +1510,22 @@ log line is machine-composed rather than authored.
   skipped create (`if_exists: "skip"`) authored no bytes, so it carries no
   `write_id` at all. `brain_writes` reads the record back. One new tool - the
   surface moves from 113 to 114.
+- Advisory decision-model fields (optional, see
+  [decision-models/dedup-tension.md](decision-models/dedup-tension.md) and
+  [decision-models/labels.md](decision-models/labels.md)). All of them are
+  absent, and every output is byte-identical, while the use is off. With the
+  `dedup` use in enforce, `brain_hygiene scan` dedup findings and
+  `brain_doctor` `entity-alias-candidate` warnings gain
+  `decision_model: { verdict, probabilities, model, calibrated }`
+  (`same | related | different`); a confident `different` is listed last with
+  `decision_model_low_priority: true`, never hidden. `brain_tension` gains the
+  read-only `verify` action (`slug` optional; without it every unresolved
+  tension) returning `available`, `mode` or `reason`, and the rows with the
+  same field (`contradicts | compatible | unrelated`; a confident `compatible`
+  or `unrelated` is listed last). `brain_labels` gains the read-only `suggest`
+  operation (`path`, optional `dimensions`) returning per dimension
+  `{ dimension, suggestion, probabilities, confidence, current, model,
+  calibrated }`, `suggestion: null` in shadow, for `none` and below the
+  confidence threshold; `{ available: false, reason: "decision_model_off" }`
+  while the use is off, and a private note is refused. None of these writes to
+  the vault, and `suggest` never assigns.

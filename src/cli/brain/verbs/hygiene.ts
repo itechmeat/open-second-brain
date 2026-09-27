@@ -11,6 +11,8 @@
  */
 
 import { applyHygienePlan } from "../../../core/brain/hygiene/apply.ts";
+import { annotateDedupFindings } from "../../../core/brain/hygiene/dedup-verdicts.ts";
+import { verdictFields, verdictLine } from "../../../core/decision-model/pair-verdict.ts";
 import { buildHygienePlan } from "../../../core/brain/hygiene/plan.ts";
 import { assertExpectedCount } from "../../../core/brain/count-guard.ts";
 import { resolveConflictFindings } from "../../../core/brain/hygiene/resolve-conflicts.ts";
@@ -92,6 +94,23 @@ export async function cmdBrainHygiene(argv: string[]): Promise<number> {
   }
 
   if (sub === "scan") {
+    const verdictLines = new Map<string, string>();
+    // Optional decision-model verdicts on dedup findings (use `dedup`);
+    // null while the use is off, and the output below is unchanged.
+    const annotated = await annotateDedupFindings(vault, report.findings, {
+      configPath: config,
+    });
+    if (annotated !== null) {
+      const findings = annotated.map((a) => ({ ...a.item, ...verdictFields(a) }));
+      if (flags["json"]) {
+        process.stdout.write(JSON.stringify({ ...report, findings }, null, 2) + "\n");
+        return 0;
+      }
+      report = Object.freeze({ ...report, findings: annotated.map((a) => a.item) });
+      for (const a of annotated) {
+        if (a.verdict !== null) verdictLines.set(a.item.id, verdictLine(a));
+      }
+    }
     if (flags["json"]) {
       process.stdout.write(JSON.stringify(report, null, 2) + "\n");
       return 0;
@@ -104,6 +123,8 @@ export async function cmdBrainHygiene(argv: string[]): Promise<number> {
       process.stdout.write(
         `- [${finding.detector}] ${finding.id} -> ${finding.proposed_action}\n    ${finding.title}\n`,
       );
+      const verdict = verdictLines.get(finding.id);
+      if (verdict !== undefined) process.stdout.write(`    ${verdict}\n`);
     }
     for (const error of report.errors) {
       process.stdout.write(`! ${error.detector}: ${error.message}\n`);

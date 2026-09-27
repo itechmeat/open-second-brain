@@ -450,6 +450,7 @@ o2b brain session-describe    --session-id <id> [--json]
 o2b brain session-expand      <record-id> [--raw-limit <n>] [--cursor <offset>] [--json]
 o2b brain handoff             <session-file> [--session-id <id>] [--format auto|claude|codex|hermes] [--json] - write Brain/handoffs/<date>-<scope>.md (since v0.37.0)
 o2b brain hygiene             scan | apply --ids <id,...> [--detectors conflicts,dedup,freshness,usefulness] [--dry-run] [--json] - hygiene findings pipeline; review findings never execute (since v1.3.0)
+o2b brain hygiene             scan: with the optional `dedup` decision-model use in enforce, dedup findings carry an advisory `decision_model` verdict and a confident `different` is listed last; `o2b brain doctor` annotates `entity-alias-candidate` warnings the same way; `apply` ignores verdicts
 o2b brain refresh             --stale [--dry-run] [--json] - targeted recompile of stale derived pages; orphans archive into Brain/.snapshots (since v1.3.0)
 o2b brain anticipate          --session <id> [--refresh] [--signal <text>] [--json] - read or warm the anticipatory context cache for the session's lineage root (since v1.3.0)
 o2b brain intention           set|show|list|move [--scope S] [--text T] [--json] - scoped current-intention chains under Brain/intentions/ (since v0.37.0)
@@ -555,6 +556,7 @@ Claims live as device-sharded append-only JSONL under `Brain/truth/` with a reco
 
 ```text
 o2b brain label               <path> <dimension>=<value> | --remove <dimension> | --show - controlled-vocabulary classification; fail-closed against the schema pack's labels field
+o2b brain label               <path> --suggest [--dimensions a,b] - read-only advisory suggestions from the optional `labels` decision-model use; never assigns; `available: false` while the use is off; a private note is refused (see docs/decision-models/labels.md)
 o2b brain attr                <path> <field>=<value> | --remove <field> | --show - per-type attribute fields; an undeclared field error lists the declared fields WITH descriptions
 o2b brain tiers               check | restore <path> [--field F] --apply | accept <path> [--field F] - staged repair for identity-tier frontmatter hand-edits
 o2b brain secret              set <name> [--env-var V] [--allow PATTERN]... [--from-env SRC] | list | rm <name> | run <name> -- <command...> - capability-gated custody; the value enters via stdin, never argv
@@ -597,6 +599,7 @@ o2b brain lifecycle           tombstone <path> --reason <r> | supersede <path> -
 o2b brain claims              [--at <instant>] [--history] [--replaced <id>] [--contests <id>] [--rebuild] - claim-graph queries over existing relations and validity fields; current truth by default, history opt-in; --rebuild persists Brain/claim-graph.json deterministically
 o2b brain decision            record --title <t> --chosen <c> [--assumption <a>] [--review-date <d>] [--premortem <p>] [--commitment <tier>] | outcome <slug> <text> | rate <slug> <1-5> [--rationale <r>] | show | list [--rated] | compare <slug...> | similar --title <t> | history [--subject <id>] [--cursor <c>] | recall --prompt <p> [--turn <n>] [--count <n>] [--last-turn <n>] [--surfaced-ids <ids>] - decision records under Brain/decisions/; record opens one review obligation per review_date, history pages decision_change.v1 receipts, recall is governed by decision_recall.max_per_session and decision_recall.min_spacing_turns
 o2b brain tension             detect [--jaccard <n>] | list [--unresolved] | show <id> | confirm <id> | dismiss <id> | resolve <id> - persisted contradictions under Brain/tensions/ with an open -> confirmed/dismissed/resolved state machine; re-detection refreshes the existing note; unresolved tensions warn at context-pack build time
+o2b brain tension             verify [<slug>] - read-only advisory decision-model verdict (contradicts | compatible | unrelated) per tension, or for every unresolved one; needs the optional `tension` use, else `available: false`; never changes a tension (see docs/decision-models/dedup-tension.md)
 o2b brain authored-at-backfill  [--apply] - stamp authored_at on pre-1.33.0 session signals from their preserved turn instant; dry-run default, idempotent, never re-embeds
 o2b brain session-grep        gains --since <time> and --before <time> bounds on turn time
 ```

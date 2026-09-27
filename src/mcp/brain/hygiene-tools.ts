@@ -26,6 +26,8 @@ import { everyArtifactRefView } from "../../core/brain/artifact-ref-view.ts";
 import { reachView } from "../../core/brain/reach-view.ts";
 import { contextReach } from "../tool-contract.ts";
 import { applyHygienePlan } from "../../core/brain/hygiene/apply.ts";
+import { annotateDedupFindings } from "../../core/brain/hygiene/dedup-verdicts.ts";
+import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import { buildHygienePlan } from "../../core/brain/hygiene/plan.ts";
 import { resolveConflictFindings } from "../../core/brain/hygiene/resolve-conflicts.ts";
 import { runHygieneScan } from "../../core/brain/hygiene/scan.ts";
@@ -264,6 +266,12 @@ async function toolBrainHygiene(
   const report: HygieneScanReport = Object.freeze({ ...scanned, findings });
 
   if (mode === "scan") {
+    // Optional decision-model verdicts on the visible dedup findings
+    // (use `dedup`). Off: null and the listing below is unchanged. The
+    // verdicts are advisory output only; `apply` never sees them.
+    const annotated = await annotateDedupFindings(ctx.vault, findings, {
+      configPath: ctx.configPath,
+    });
     // `counts` is recomputed from the visible findings: a count over the
     // unfiltered set would report how many findings were withheld.
     return {
@@ -271,7 +279,10 @@ async function toolBrainHygiene(
       generated_at: report.generated_at,
       detectors_run: report.detectors_run,
       counts: countByDetector(report.detectors_run, findings),
-      findings: findings.map((finding) => findingView(ctx.vault, finding)),
+      findings:
+        annotated === null
+          ? findings.map((finding) => findingView(ctx.vault, finding))
+          : annotated.map((a) => ({ ...findingView(ctx.vault, a.item), ...verdictFields(a) })),
       errors: report.errors,
       link_integrity: await linkIntegrityView(ctx),
     };

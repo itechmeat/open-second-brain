@@ -42,6 +42,10 @@ Name the surface a question is shaped for, and route to it explicitly:
 
 If a write operation might affect anything outside the `Brain/` directory, ask for explicit confirmation. When in doubt, prefer `Brain/`.
 
+Decision-model verdicts (`decision_model` on `brain_hygiene scan` dedup findings, doctor alias candidates and `brain_tension verify`) are advisory only: merges, dismissals and resolutions still need an explicit action.
+
+To label a note, call `brain_labels suggest` before `assign`; `suggest` never assigns, and a null suggestion means no confident value.
+
 ## See also
 
 - `brain-memory` skill — when and how to call `brain_feedback` / `brain_apply_evidence`.
