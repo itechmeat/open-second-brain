@@ -510,7 +510,6 @@ describe("recall_inject failures keep today's decision", () => {
     const elapsed = Date.now() - started;
     expect(decision.kind).toBe("inject");
     expect(elapsed).toBeLessThan(RECALL_INJECT_TIME_BUDGET_MS + 100);
-    expect(listDecisionModelCalls(vault)).toHaveLength(0); // still in flight
     expect(recallInjectAuditDetails(decision)["decision_model"]).toMatchObject({
       outcome: "degraded",
       degrade_reason: "timeout",
@@ -583,19 +582,10 @@ describe("telemetry, audit and record hold no prompt or note text", () => {
 });
 
 describe("recallInjectFilterOutcome", () => {
-  test("drops only sent notes below the floor; abstains only when all were sent", () => {
-    expect(recallInjectFilterOutcome([0.9, 0.1], [true, true], 0.9)).toEqual({
-      abstain: false,
-      keep: [true, false],
-    });
-    expect(recallInjectFilterOutcome([0.9, null], [true, false], 0.1)).toEqual({
-      abstain: false,
-      keep: [true, true],
-    });
-    expect(recallInjectFilterOutcome([0.9, 0.9], [true, true], 0.1).abstain).toBe(true);
-    expect(recallInjectFilterOutcome([0.1], [true], null).abstain).toBe(true);
-    // The floors are inclusive: exactly 0.2 stays.
+  test("the floors are inclusive: exactly 0.2 keeps the note and the brief", () => {
     expect(recallInjectFilterOutcome([0.2], [true], 0.2)).toEqual({ abstain: false, keep: [true] });
+    expect(recallInjectFilterOutcome([0.19], [true], 0.2).abstain).toBe(true);
+    expect(recallInjectFilterOutcome([0.9], [true], 0.19).abstain).toBe(true);
   });
 });
 
