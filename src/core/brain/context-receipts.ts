@@ -61,6 +61,11 @@ export interface EmitContextReceiptInput {
    * insufficient and what action the caller was told to take.
    */
   readonly adequacy?: RecallAdequacyVerdict;
+  /**
+   * The advisory decision-model annotation of that verdict (issue #213,
+   * Part 8), stored next to it as `decision_answerable`. Numbers only.
+   */
+  readonly decisionAnswerable?: { readonly probability: number; readonly disagrees: boolean };
 }
 
 /** Flatten a verdict into the snake_cased receipt payload shape. */
@@ -133,6 +138,14 @@ export function emitContextReceipt(
     items: itemPayloads,
     ...(input.budget ? { budget: input.budget } : {}),
     ...(input.adequacy ? { adequacy: serializeAdequacy(input.adequacy) } : {}),
+    ...(input.adequacy && input.decisionAnswerable
+      ? {
+          decision_answerable: {
+            probability: input.decisionAnswerable.probability,
+            disagrees: input.decisionAnswerable.disagrees,
+          },
+        }
+      : {}),
   };
   mergeReceiptExtra(payload, input.extra);
   return appendContinuityRecord(vault, {

@@ -24,6 +24,8 @@ import { applyRankAdjusters, type RankAdjuster } from "../rank-adjust.ts";
 import { applyReinforceBoost, loadReinforceStrengths } from "../reinforce.ts";
 import { applyCrossEncoderRerank } from "../rerank/index.ts";
 import type { DecisionRerankExtras } from "../rerank/decision-model.ts";
+import { RERANK_QUESTIONS } from "../../decision-model/questions.ts";
+import type { FrontmatterMap } from "../../types.ts";
 import { pageVisibility } from "../../graph/visibility.ts";
 import {
   applyReachFilter,
@@ -76,6 +78,20 @@ export interface PostRankOutcome {
    * or a later search would be served the fallback as the enforced order.
    */
   readonly decisionFallback?: boolean;
+}
+
+/**
+ * The frontmatter values a decision-model rerank sends beside a passage:
+ * only the fields `questions.ts` names, only scalar values, as strings.
+ * Null when the page declares none of them.
+ */
+function decisionMetaFields(meta: FrontmatterMap): Readonly<Record<string, string>> | null {
+  const out: Record<string, string> = {};
+  for (const key of RERANK_QUESTIONS.metaFields) {
+    const value = meta[key];
+    if (typeof value === "string" || typeof value === "number") out[key] = String(value);
+  }
+  return Object.keys(out).length > 0 ? out : null;
 }
 
 export async function applyPostRankPhases(input: PostRankInput): Promise<PostRankOutcome> {
@@ -160,6 +176,13 @@ export async function applyPostRankPhases(input: PostRankInput): Promise<PostRan
       }
       regionsByPath.set(path, regions);
       return regions;
+    },
+    // Decision-model kind only: the declared `status` and `updated` of a
+    // result's page travel beside its passage, so an archived or older
+    // copy can be told from the current one. Nothing else is read.
+    resolveMeta: (path) => {
+      const entry = readCachedFrontmatterEntry(frontmatterCache, config.vault, path);
+      return entry.unreadable ? null : decisionMetaFields(entry.meta);
     },
     skipDecisionModel: opts.skipDecisionModelRerank === true,
     onDecisionFallback: () => {

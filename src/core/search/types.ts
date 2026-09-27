@@ -14,6 +14,7 @@
  */
 
 import type { ResolvedDecisionModelConfig } from "../decision-model/config-types.ts";
+import type { DecisionAnswerableSignal } from "../decision-model/contract.ts";
 import type { TransportReach } from "../graph/transport-reach.ts";
 import type { DegradationNotice } from "../integrity/degradation.ts";
 import type { StampMismatch } from "../integrity/stamp.ts";
@@ -1148,6 +1149,13 @@ export interface SearchOutcome {
    * {@link SearchOutcome.warnings}.
    */
   readonly retrievalTrail?: RetrievalTrail;
+  /**
+   * Extra answers of a decision-model rerank (issue #213, Part 8). Present
+   * only when rerank kind `decision-model` ran, the `answerable` use is
+   * not `off` and a valid answer arrived; absent when off, for any other
+   * kind and on a degraded request, so the default shape is unchanged.
+   */
+  readonly decisionModel?: { readonly answerable: DecisionAnswerableSignal };
 }
 
 /**

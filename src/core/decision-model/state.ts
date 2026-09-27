@@ -15,6 +15,12 @@
  *   - Candidate ids and vault paths never appear: candidates are masked as
  *     `P0..Pn` (or a use-specific prefix) and the mapping stays in memory.
  *   - Each text is clipped to a per-use constant from `questions.ts`.
+ *   - A candidate may carry a few short named fields beside its text (the
+ *     rerank sends the note title, `status` and `updated`); the passage is
+ *     then an object `{ ...fields, text }`, and the fields pass the same
+ *     private-region checks as the text. Without fields it stays a string.
+ *   - A candidate the caller marks `skip` (nothing useful to judge, e.g. a
+ *     chunk holding only frontmatter) is not sent and keeps its position.
  *   - The state is kept within `max_state_tokens` by dropping the
  *     lowest-ranked candidates; when not even one fits, the caller
  *     degrades with `budget`.
@@ -58,7 +64,17 @@ export interface StateCandidate {
    * sent). Empty when the page has none.
    */
   readonly privateRegions: ReadonlyArray<string> | null;
+  /**
+   * Short named fields sent beside the text, already clipped by the
+   * caller. Absent: the passage is the bare text string.
+   */
+  readonly fields?: Readonly<Record<string, string>>;
+  /** Not sent at all (nothing to judge); keeps its position. */
+  readonly skip?: boolean;
 }
+
+/** One masked passage: the bare text, or the text beside its named fields. */
+export type StatePassage = string | Readonly<Record<string, string>>;
 
 export interface CandidateStateInput {
   readonly candidates: ReadonlyArray<StateCandidate>;
@@ -66,8 +82,13 @@ export interface CandidateStateInput {
   readonly prefix: string;
   readonly clipChars: number;
   readonly maxStateTokens: number;
-  /** Wrap the masked texts into the full state object. */
-  readonly frame: (texts: Readonly<Record<string, string>>) => Readonly<Record<string, unknown>>;
+  /**
+   * Wrap the masked passages into the full state object. A passage is the
+   * bare text, or `{ ...fields, text }` for a candidate that carries
+   * fields. Declared as a method so a use whose candidates carry no fields
+   * may keep typing its passages as plain strings.
+   */
+  frame(texts: Readonly<Record<string, StatePassage>>): Readonly<Record<string, unknown>>;
 }
 
 export type CandidateStateResult =
@@ -83,6 +104,8 @@ export type CandidateStateResult =
       readonly withheld: ReadonlyArray<number>;
       /** Candidates dropped (lowest-ranked first) to fit the budget. */
       readonly dropped: ReadonlyArray<number>;
+      /** Candidates the caller marked `skip`; never sent. */
+      readonly skipped: ReadonlyArray<number>;
     }
   | { readonly kind: "budget" }
   | { readonly kind: "empty" };
@@ -109,34 +132,57 @@ function carriesPrivateText(text: string, regions: ReadonlyArray<string>): boole
   return false;
 }
 
-function clip(text: string, maxChars: number): string {
+export function clip(text: string, maxChars: number): string {
   const chars = [...text];
   return chars.length <= maxChars ? text : chars.slice(0, maxChars).join("");
 }
 
 export function buildCandidateState(input: CandidateStateInput): CandidateStateResult {
   const withheld: number[] = [];
-  const eligible: Array<{ index: number; text: string }> = [];
+  const skipped: number[] = [];
+  const eligible: Array<{ index: number; passage: StatePassage }> = [];
   input.candidates.forEach((candidate, index) => {
     if (!mayLeaveMachine(candidate.visibility) || candidate.privateRegions === null) {
       withheld.push(index);
       return;
     }
+    if (candidate.skip === true) {
+      skipped.push(index);
+      return;
+    }
+    const regions = candidate.privateRegions;
     const stripped = stripPrivateRegions(candidate.text);
-    if (carriesPrivateText(stripped, candidate.privateRegions)) {
+    if (carriesPrivateText(stripped, regions)) {
       withheld.push(index);
       return;
     }
-    eligible.push({ index, text: clip(stripped, input.clipChars) });
+    const text = clip(stripped, input.clipChars);
+    if (candidate.fields === undefined) {
+      eligible.push({ index, passage: text });
+      return;
+    }
+    const fields: Record<string, string> = {};
+    for (const [key, value] of Object.entries(candidate.fields)) {
+      const cleaned = stripPrivateRegions(value).trim();
+      if (cleaned === "") continue;
+      // A field that repeats private text withholds the whole candidate,
+      // exactly as the text would.
+      if (carriesPrivateText(cleaned, regions)) {
+        withheld.push(index);
+        return;
+      }
+      fields[key] = cleaned;
+    }
+    eligible.push({ index, passage: Object.freeze({ ...fields, text }) });
   });
   if (eligible.length === 0) return { kind: "empty" };
 
   const dropped: number[] = [];
   let kept = eligible;
   for (;;) {
-    const texts: Record<string, string> = {};
+    const texts: Record<string, StatePassage> = {};
     kept.forEach((c, k) => {
-      texts[`${input.prefix}${k}`] = c.text;
+      texts[`${input.prefix}${k}`] = c.passage;
     });
     const state = input.frame(texts);
     if (estimateTokens(state) + QUESTION_TOKEN_ALLOWANCE <= input.maxStateTokens) {
@@ -146,6 +192,7 @@ export function buildCandidateState(input: CandidateStateInput): CandidateStateR
         included: Object.freeze(kept.map((c) => c.index)),
         withheld: Object.freeze(withheld),
         dropped: Object.freeze(dropped.toReversed()),
+        skipped: Object.freeze(skipped),
       };
     }
     if (kept.length <= 1) return { kind: "budget" };

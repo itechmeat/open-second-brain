@@ -192,3 +192,14 @@ export class DecisionProviderError extends Error {
     this.reason = reason;
   }
 }
+
+/**
+ * The advisory `answerable` answer a decision-model rerank carries: the
+ * probability that the passages together answer the query, the answering
+ * model and whether the provider is calibrated (issue #213, Part 8).
+ */
+export interface DecisionAnswerableSignal {
+  readonly probability: number;
+  readonly model: string;
+  readonly calibrated: boolean;
+}

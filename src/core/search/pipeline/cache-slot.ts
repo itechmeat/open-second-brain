@@ -26,6 +26,12 @@ import type {
 
 const MILLISECONDS_PER_SECOND = 1000;
 
+/**
+ * What a decision-model rerank passage carries. Part of the decision-model
+ * fingerprint only, so the keys of every other rerank kind are unchanged.
+ */
+const DECISION_RERANK_STATE_SHAPE = "passage:title,status,updated,text;skip:frontmatter";
+
 /** Fingerprint placeholder for a state source the query did not consult. */
 const FINGERPRINT_OFF = "off";
 
@@ -74,6 +80,9 @@ function configFingerprint(config: ResolvedSearchConfig): string {
           // pinned model and mode each change what an enforced order is,
           // and so do the state budget (how many candidates are sent) and
           // the answerable mode (an extra question in the same request).
+          // The last entry names what a passage carries (title, `status`,
+          // `updated`, frontmatter-only chunks skipped): the model judges
+          // those fields, so a change to that shape re-keys the order.
           rrkDm: [
             config.rerank.decisionModel?.provider ?? "",
             config.rerank.decisionModel?.baseUrl ?? "",
@@ -81,6 +90,7 @@ function configFingerprint(config: ResolvedSearchConfig): string {
             config.rerank.decisionModel?.uses.rerank ?? "off",
             String(config.rerank.decisionModel?.maxStateTokens ?? ""),
             config.rerank.decisionModel?.uses.answerable ?? "off",
+            DECISION_RERANK_STATE_SHAPE,
           ].join("|"),
         }
       : {}),

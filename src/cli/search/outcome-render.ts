@@ -4,6 +4,7 @@
  * produces is a CLI contract.
  */
 
+import { decisionModelSearchEnvelope } from "../../core/decision-model/answerable.ts";
 import { serializeEvidencePack, serializeSearchCard } from "../../core/search/index.ts";
 import type { SearchOutcome } from "../../core/search/index.ts";
 import {
@@ -153,6 +154,9 @@ export function jsonForOutcome(o: SearchOutcome, options: ExplainRequest = EXPLA
     // gate already built, appended only when --explain asks. Absent, never
     // null, otherwise.
     ...explainEnvelope(o, options),
+    // Advisory decision-model answer (issue #213, Part 8); absent unless
+    // the rerank request carried a valid `answerable` answer.
+    ...decisionModelSearchEnvelope(o),
   };
 }
 

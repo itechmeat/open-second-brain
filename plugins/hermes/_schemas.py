@@ -479,10 +479,21 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                      '`idf_weighted_coverage`. '
                                                                      'Required with `scores`; the '
                                                                      'adequacy level reads this, '
-                                                                     'never a score.'}},
+                                                                     'never a score.'},
+                                    'decision_answerable': {'type': 'number',
+                                                            'minimum': 0,
+                                                            'maximum': 1,
+                                                            'description': 'Advisory [0,1] '
+                                                                           'probability from a '
+                                                                           "search's "
+                                                                           '`decision_model.answerable`. '
+                                                                           'Needs `scores` and '
+                                                                           '`match_quality`; never '
+                                                                           'changes the level.'}},
                      'required': ['prompt'],
                      'dependentRequired': {'scores': ['match_quality'],
-                                           'match_quality': ['scores']},
+                                           'match_quality': ['scores'],
+                                           'decision_answerable': ['scores', 'match_quality']},
                      'additionalProperties': False}},
     {'name': 'brain_context',
      'description': 'Pull the current Brain/active.md body, pinned current-task context, and '
@@ -586,6 +597,17 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                                                                      '`recall_scores`; the '
                                                                      'adequacy level reads this, '
                                                                      'never a score.'},
+                                    'decision_answerable': {'type': 'number',
+                                                            'minimum': 0,
+                                                            'maximum': 1,
+                                                            'description': 'Advisory [0,1] '
+                                                                           'probability from a '
+                                                                           "search's "
+                                                                           '`decision_model.answerable`. '
+                                                                           'Needs `recall_scores` '
+                                                                           'and `match_quality`; '
+                                                                           'never changes the '
+                                                                           'level.'},
                                     'telemetry': {'type': 'boolean',
                                                   'description': 'When true, emit an opt-in recall '
                                                                  'telemetry record for this '
@@ -610,6 +632,8 @@ STATIC_TOOL_SCHEMAS: tuple[dict[str, Any], ...] = (
                      'required': ['max_tokens'],
                      'dependentRequired': {'recall_scores': ['match_quality'],
                                            'match_quality': ['recall_scores'],
+                                           'decision_answerable': ['recall_scores',
+                                                                   'match_quality'],
                                            'query_mode': ['query']},
                      'additionalProperties': False}},
     {
