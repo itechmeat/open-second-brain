@@ -17,10 +17,13 @@
  *     anywhere the operator did not configure;
  *   - the whole body passes `redactForEgress` before it is sent, and a
  *     refusal degrades with `egress_refused` rather than sending part;
- *   - one retry at most, only on 408, 409, 429, 5xx and 529, honouring
- *     `retry-after`, and only within the remaining timeout. Never after a
- *     network error or an aborted request: that call may already be
- *     billed.
+ *   - one retry at most, only on 408, 409, 429 and any 5xx (529
+ *     included), honouring `retry-after`, and only within the remaining
+ *     timeout. Never after a network error or an aborted request: that
+ *     call may already be billed. A wait the timeout cuts short reports
+ *     `timeout`;
+ *   - the reply body is read up to {@link MAX_REPLY_BYTES}; a larger one
+ *     is an `invalid_reply` and is not read further.
  *
  * Errors name the env var that holds the key, never its value, and no
  * response body is ever logged or put into an error message.
@@ -44,7 +47,50 @@ import {
 /** The registry id this module is declared under in `EGRESS_SITES`. */
 export const SYSTEMONE_EGRESS_SITE = "decision-model-systemone";
 
-const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 409, 429, 500, 502, 503, 504, 529]);
+/** 408, 409 and 429 are retried; so is every 5xx (see {@link isRetryable}). */
+const RETRYABLE_STATUSES: ReadonlySet<number> = new Set([408, 409, 429]);
+
+function isRetryable(status: number): boolean {
+  return RETRYABLE_STATUSES.has(status) || (status >= 500 && status <= 599);
+}
+
+/** Largest reply body accepted, in bytes. A real reply is a few KiB. */
+export const MAX_REPLY_BYTES = 1024 * 1024;
+
+/**
+ * Read a body up to `limit` bytes. Returns null when it is larger; the
+ * rest is cancelled unread.
+ */
+async function readCapped(response: Response, limit: number): Promise<string | null> {
+  const declared = Number(response.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > limit) {
+    await response.body?.cancel().catch(() => undefined);
+    return null;
+  }
+  if (response.body === null) return "";
+  const reader = response.body.getReader();
+  const parts: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    // eslint-disable-next-line no-await-in-loop -- a stream is read chunk by chunk
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > limit) {
+      // eslint-disable-next-line no-await-in-loop -- leaves the loop right after
+      await reader.cancel().catch(() => undefined);
+      return null;
+    }
+    parts.push(value);
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const part of parts) {
+    bytes.set(part, offset);
+    offset += part.byteLength;
+  }
+  return new TextDecoder().decode(bytes);
+}
 
 export interface SystemOneEndpoint {
   readonly name: string;
@@ -145,16 +191,22 @@ export class SystemOneDecisionProvider implements DecisionProvider {
     try {
       const first = await this.send(body, controller.signal, opts.timeoutMs);
       if (first.kind === "ok") return first.json;
-      if (RETRYABLE_STATUSES.has(first.status)) {
+      if (isRetryable(first.status)) {
         const wait = parseRetryAfterMs(first.retryAfter) ?? 0;
         // Retry once, and only when the wait plus a request still fits.
         if (Date.now() + wait < deadline - 50) {
           await sleep(wait, controller.signal);
-          if (!controller.signal.aborted) {
-            const second = await this.send(body, controller.signal, opts.timeoutMs);
-            if (second.kind === "ok") return second.json;
-            throw this.httpError(second.status);
+          if (controller.signal.aborted) {
+            // The timeout (or the caller) cut the wait short: the request
+            // ran out of time, whatever the first status was.
+            throw new DecisionProviderError(
+              "timeout",
+              `decision request timed out after ${opts.timeoutMs}ms`,
+            );
           }
+          const second = await this.send(body, controller.signal, opts.timeoutMs);
+          if (second.kind === "ok") return second.json;
+          throw this.httpError(second.status);
         }
       }
       throw this.httpError(first.status);
@@ -208,10 +260,22 @@ export class SystemOneDecisionProvider implements DecisionProvider {
       throw new DecisionProviderError("network", `decision request failed (${name})`);
     }
     if (response.ok) {
+      let text: string | null;
       try {
-        return { kind: "ok", json: await response.json() };
+        text = await readCapped(response, MAX_REPLY_BYTES);
       } catch {
         if (signal.aborted) throw timedOut();
+        throw new DecisionProviderError("network", "decision reply could not be read");
+      }
+      if (text === null) {
+        throw new DecisionProviderError(
+          "invalid_reply",
+          `decision reply is larger than ${MAX_REPLY_BYTES} bytes`,
+        );
+      }
+      try {
+        return { kind: "ok", json: JSON.parse(text) as unknown };
+      } catch {
         throw new DecisionProviderError("invalid_reply", "decision reply is not JSON");
       }
     }
@@ -265,9 +329,14 @@ export class SystemOneDecisionProvider implements DecisionProvider {
         { timeoutMs: this.endpoint.timeoutMs },
       );
       if (res.answers["ping"]?.valid !== true) {
-        return { ok: false, reason: "invalid_reply", latencyMs: Date.now() - started };
+        return {
+          ok: false,
+          reason: "invalid_reply",
+          latencyMs: Date.now() - started,
+          usage: res.usage,
+        };
       }
-      return { ok: true, model: res.model, latencyMs: Date.now() - started };
+      return { ok: true, model: res.model, latencyMs: Date.now() - started, usage: res.usage };
     } catch (e) {
       const reason = e instanceof DecisionProviderError ? e.reason : "network";
       return { ok: false, reason, latencyMs: Date.now() - started };

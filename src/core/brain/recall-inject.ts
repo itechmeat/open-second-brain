@@ -444,7 +444,14 @@ export function defaultRecallRetriever(
   limit: number = RECALL_INJECT_MAX_NOTES,
 ): RecallRetriever {
   return async (query) => {
-    const outcome = await searchAcrossVaults(configPath, vault, { query, limit });
+    // The decision-model rerank kind is skipped here: a decision request
+    // (its timeout plus a retry) does not fit the hook's retrieval budget,
+    // and a hook fires on every prompt. The heuristic order is used.
+    const outcome = await searchAcrossVaults(configPath, vault, {
+      query,
+      limit,
+      skipDecisionModelRerank: true,
+    });
     const candidates = outcome.results.map((result) =>
       Object.freeze({
         path: result.path,

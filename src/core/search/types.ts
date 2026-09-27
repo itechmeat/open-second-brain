@@ -999,6 +999,13 @@ export interface SearchOptions {
    * index surfaces as a per-origin warning instead.
    */
   readonly selfHeal?: boolean;
+  /**
+   * Skip rerank kind `decision-model` for this call. Set by the hook
+   * surfaces (recall inject), whose time budget is shorter than a decision
+   * request, until a hook-specific decision use exists. The skipped call
+   * returns the heuristic order and is never written to the query cache.
+   */
+  readonly skipDecisionModelRerank?: boolean;
 }
 
 export interface SearchOutcome {

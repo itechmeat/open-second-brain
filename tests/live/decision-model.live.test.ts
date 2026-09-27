@@ -93,6 +93,7 @@ test.skipIf(!LIVE)("an enforced rerank puts the relevant synthetic passage first
     },
     {
       resolveVisibility: () => [],
+      resolvePrivateRegions: () => [],
       onDecisionExtras: (extras) => {
         answerable = extras.answerable;
       },

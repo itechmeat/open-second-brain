@@ -108,6 +108,7 @@ export function activeDecisionConfig(
     hookBudgetMs: 700,
     maxStateTokens: 32_000,
     uses: { ...uses, rerank: "enforce" } as ResolvedDecisionModelConfig["uses"],
+    configuredUses: { ...uses, rerank: "enforce" } as ResolvedDecisionModelConfig["uses"],
     dailyCostGateUsd: 0.5,
     inputPriceUsdPerMtok: 0.042,
     allowUncalibrated: false,

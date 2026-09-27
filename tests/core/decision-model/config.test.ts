@@ -111,7 +111,7 @@ describe("decision-model config", () => {
         ...ENABLED,
         decision_model_uses: "rerank:loud,nope:shadow",
         decision_model_timeout_ms: "soon",
-        decision_model_daily_cost_gate_usd: "-1",
+        decision_model_cost_gate_usd: "-1",
       },
       vault: null,
     });
@@ -121,7 +121,7 @@ describe("decision-model config", () => {
     expect(all).toContain("decision_model_uses");
     expect(all).toContain("'nope'");
     expect(all).toContain("decision_model_timeout_ms");
-    expect(all).toContain("decision_model_daily_cost_gate_usd");
+    expect(all).toContain("decision_model_cost_gate_usd");
   });
 
   test("an unknown provider and a moving model alias are refused", () => {
@@ -168,6 +168,45 @@ describe("decision-model config", () => {
       vault: null,
     });
     expect(loopback.status).toBe("active");
+  });
+
+  test("an env_key that is not a variable name is invalid and never repeated", () => {
+    const pasted = FAKE_DECISION_KEY;
+    const cfg = resolveDecisionModelConfig({
+      env: { [pasted]: "x" } as NodeJS.ProcessEnv,
+      config: { ...ENABLED, decision_model_env_key: pasted },
+      vault: null,
+    });
+    expect(cfg.status).toBe("invalid");
+    expect(cfg.envKey).toBeNull();
+    expect(cfg.keyPresent).toBe(false);
+    expect(cfg.errors.join()).toContain("decision_model_env_key must be the NAME");
+    expect(JSON.stringify(cfg)).not.toContain(pasted);
+  });
+
+  test("a base_url with user:password@ is invalid and printed without them", () => {
+    const cfg = resolveDecisionModelConfig({
+      env: WITH_KEY,
+      config: {
+        ...ENABLED,
+        decision_model_provider: "compatible",
+        decision_model_id: "m-1",
+        decision_model_base_url: "https://someone:hunter22@decisions.example.com/api",
+      },
+      vault: null,
+    });
+    expect(cfg.status).toBe("invalid");
+    expect(cfg.errors.join()).toContain("must not carry user:password@");
+    expect(cfg.baseUrl).toBe("https://decisions.example.com/api");
+    expect(JSON.stringify(cfg)).not.toContain("hunter22");
+  });
+
+  test("a disabled config still reports the uses it would run", () => {
+    const { decision_model_enabled: _, ...notEnabled } = ENABLED;
+    const cfg = resolveDecisionModelConfig({ env: WITH_KEY, config: notEnabled, vault: null });
+    expect(cfg.status).toBe("disabled");
+    expect(cfg.uses.rerank).toBe("off");
+    expect(cfg.configuredUses.rerank).toBe("shadow");
   });
 
   test("max_state_tokens is clamped to the preset maximum", () => {

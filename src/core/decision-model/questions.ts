@@ -21,8 +21,8 @@ export const RERANK_QUESTIONS = Object.freeze({
   /** Mask prefix for rerank candidates. */
   prefix: "P",
   clipChars: DEFAULT_CANDIDATE_CLIP_CHARS,
-  /** A candidate whose injection probability reaches this is demoted and flagged. */
-  injectionDemoteMin: 0.8,
+  /** A candidate whose injection probability reaches this is flagged (advisory, never moved). */
+  injectionFlagMin: 0.8,
   relevanceId: (k: number): string => `rel_${k}`,
   injectionId: (k: number): string => `inj_${k}`,
   answerableId: "answerable",

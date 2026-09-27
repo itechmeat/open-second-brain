@@ -1565,8 +1565,10 @@ o2b search rerank-fit         Per-store reranker fit check (read-only diagnostic
                               vault reports inapplicable. --max-queries N --top-k K --json
 o2b search rerank-eval        Rerank eval gate over a labelled dataset: runs the recall benchmark
                               with rerank off and with --kind local|decision-model|openai-compat
-                              (default local) and reports hit@k and MRR for both, the deltas and
-                              the recommendation (enable only on lift without a hit@k regression).
+                              (default local) and reports hit@1/3/5/10 (up to --k), hit@k and MRR
+                              for both, the deltas, per-query wins/losses/ties against off and the
+                              recommendation (enable only on lift without a hit@k regression); for
+                              decision-model also the run's calls by outcome, cost and latency.
                               --dataset PATH (required) --k N --compare-local --json. The
                               decision-model arm runs in enforce and needs an active decision-model
                               config; every query then sends its top candidates to that endpoint.
@@ -1888,7 +1890,7 @@ decision model (`docs/decision-models.md`). It is off unless the operator
 enables it in machine config and the named key variable is set. What leaves
 is a masked, clipped state (for a rerank, the query plus the top candidate
 passages as `P0..Pn`, never a page whose visibility is `private` or cannot be
-resolved) and the question texts; the whole body passes `redactForEgress`,
+resolved, nor a chunk that carries part of a `<private>` region) and the question texts; the whole body passes `redactForEgress`,
 and a refused body is not sent.
 
 ## Decision model (optional)
@@ -1897,12 +1899,14 @@ and a refused body is not sent.
 o2b decision-model check      Config state: enabled, provider, base URL, pinned model, the key
                               variable's NAME and whether it is set (never the value), per-use
                               modes, vault opt-out, cost gate and today's spend, processor terms.
-                              --ping sends one request over a synthetic state (no vault content).
+                              --ping sends one request over a synthetic state (no vault content)
+                              and records it (use ping, counted toward the cost gate).
                               Exit 1 only for an invalid config or a failed ping of an active
                               provider; a missing key is exit 0 with a hint. --vault --config --json
 o2b decision-model report     decision_model_call records per use: calls, outcome mix, p50/p95
                               latency, input tokens, cost, rerank shadow agreement (top-1, top-5
-                              overlap). --since DATE --use USE --vault --config --json
+                              overlap, ordinary shadow records only). --since DATE --use USE
+                              --vault --config --json
 ```
 
 Off by default; active only when `decision_model_enabled: "true"` AND the

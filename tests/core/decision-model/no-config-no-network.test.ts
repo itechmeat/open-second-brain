@@ -25,8 +25,11 @@ let fetchCalls = 0;
 let tmp: string;
 let vault: string;
 let configPath: string;
+let savedKey: string | undefined;
 
 beforeEach(() => {
+  savedKey = process.env["TYPESAFE_API_KEY"];
+  delete process.env["TYPESAFE_API_KEY"];
   tmp = mkdtempSync(join(tmpdir(), "osb-dm-no-config-"));
   vault = join(tmp, "vault");
   mkdirSync(join(vault, "Brain"), { recursive: true });
@@ -42,7 +45,8 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.fetch = realFetch;
-  delete process.env["TYPESAFE_API_KEY"];
+  if (savedKey === undefined) delete process.env["TYPESAFE_API_KEY"];
+  else process.env["TYPESAFE_API_KEY"] = savedKey;
   rmSync(tmp, { recursive: true, force: true });
 });
 

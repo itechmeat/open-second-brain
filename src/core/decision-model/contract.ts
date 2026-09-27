@@ -61,6 +61,13 @@ export function isDecisionModelMode(value: unknown): value is DecisionModelMode 
 }
 
 /**
+ * Where a recorded request came from when it is not an ordinary use call:
+ * the rerank eval gate (`eval`) or `o2b decision-model check --ping`
+ * (`ping`). Kept out of the shadow agreement, counted toward the gate.
+ */
+export type DecisionCallOrigin = "eval" | "ping";
+
+/**
  * Why a decision was not applied. A closed set, recorded in the
  * `decision_model_call` accounting record as the outcome.
  *
@@ -68,8 +75,6 @@ export function isDecisionModelMode(value: unknown): value is DecisionModelMode 
  * answered with (401, 402, 422, 429, 529, ...).
  */
 export type DecisionDegradeReason =
-  | "no_key"
-  | "disabled_by_vault"
   | "cost_gate"
   | "budget"
   | "egress_refused"
@@ -151,6 +156,8 @@ export interface DecisionPingResult {
   readonly latencyMs?: number;
   /** A degrade reason on failure, never a response body. */
   readonly reason?: string;
+  /** Usage of the ping request when a reply arrived, for its accounting record. */
+  readonly usage?: DecisionUsage;
 }
 
 export interface DecideOptions {

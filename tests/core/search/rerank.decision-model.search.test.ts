@@ -22,6 +22,7 @@ import { search } from "../../../src/core/search/search.ts";
 import { runRerankEvalGate } from "../../../src/core/search/rerank-eval-gate.ts";
 import { listDecisionModelCalls } from "../../../src/core/decision-model/record.ts";
 import { SearchError, type ResolvedSearchConfig } from "../../../src/core/search/types.ts";
+import { defaultRecallRetriever } from "../../../src/core/brain/recall-inject.ts";
 import { FAKE_DECISION_KEY } from "../../helpers/fake-credentials.ts";
 import {
   answerAll,
@@ -222,6 +223,111 @@ describe("decision-model rerank: activation", () => {
       /search_rerank_kind must be 'openai-compat', 'local' or 'decision-model'/,
     );
     expect(() => resolve({ search_rerank_kind: "magic" })).toThrow(SearchError);
+  });
+});
+
+describe("decision-model rerank: privacy, cache and hook surfaces", () => {
+  test("a private region split across chunks never reaches the provider", async () => {
+    process.env[KEY_VAR] = FAKE_DECISION_KEY;
+    const paragraphs = Array.from(
+      { length: 400 },
+      (_, i) => `Paragraph ${i} about gardening in spring.`,
+    );
+    const secret = Array.from({ length: 900 }, (_, i) => `zebracode secret line ${i}`);
+    writeMd(
+      vault,
+      "big.md",
+      `# Big\n\n${paragraphs.join("\n\n")}\n\n<private>\n${secret.join("\n")}\n</private>\n`,
+    );
+    writeMd(vault, "open.md", "# Open\n\nzebracode is a public word in this note.");
+    const cfg = resolve({ ...RERANK, ...withServer() });
+    await indexVault(cfg);
+    const out = await search(cfg, { query: "zebracode", limit: 10 });
+    // The head holds chunks cut from inside the region, with no tag at all.
+    expect(
+      out.results.some(
+        (r) =>
+          r.path === "big.md" &&
+          r.content.includes("zebracode secret line") &&
+          !r.content.includes("<private"),
+      ),
+    ).toBe(true);
+    expect(server.requests.length).toBeGreaterThan(0);
+    expect(server.requests.some((r) => r.bodyText.includes("public word"))).toBe(true);
+    for (const r of server.requests) expect(r.bodyText).not.toContain("zebracode secret line");
+  });
+
+  test("a degraded enforce search is not cached as the enforced order", async () => {
+    process.env[KEY_VAR] = FAKE_DECISION_KEY;
+    const cfg = resolve({
+      ...RERANK,
+      ...withServer(),
+      decision_model_uses: "rerank:enforce",
+      search_cache_enabled: "true",
+    });
+    await indexVault(cfg);
+    server.setReply(() => ({ status: 400 }));
+    const degraded = await search(cfg, { query: "fox", limit: 10 });
+    expect(degraded.results[0]!.path).not.toBe("weak.md");
+    expect(server.requests).toHaveLength(1);
+
+    server.setReply((req) => {
+      const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+      return {
+        json: answerAll(req, (id) => {
+          if (!id.startsWith("rel_")) return 0.01;
+          return passages[`P${id.slice(4)}`]!.includes("cats") ? 0.99 : 0.05;
+        }),
+      };
+    });
+    // Not served from the cache: the request is made and the order applies.
+    const applied = await search(cfg, { query: "fox", limit: 10 });
+    expect(server.requests).toHaveLength(2);
+    expect(applied.results[0]!.path).toBe("weak.md");
+    // The applied order is cached: a repeat makes no request.
+    const repeat = await search(cfg, { query: "fox", limit: 10 });
+    expect(server.requests).toHaveLength(2);
+    expect(repeat.results[0]!.path).toBe("weak.md");
+  });
+
+  test("the state budget and the answerable mode are part of the cache key", async () => {
+    process.env[KEY_VAR] = FAKE_DECISION_KEY;
+    const base = {
+      ...RERANK,
+      ...withServer(),
+      decision_model_uses: "rerank:enforce",
+      search_cache_enabled: "true",
+    };
+    const first = resolve(base);
+    await indexVault(first);
+    await search(first, { query: "fox", limit: 10 });
+    await search(first, { query: "fox", limit: 10 });
+    expect(server.requests).toHaveLength(1);
+    await search(resolve({ ...base, decision_model_max_state_tokens: "16000" }), {
+      query: "fox",
+      limit: 10,
+    });
+    expect(server.requests).toHaveLength(2);
+    await search(resolve({ ...base, decision_model_uses: "rerank:enforce,answerable:shadow" }), {
+      query: "fox",
+      limit: 10,
+    });
+    expect(server.requests).toHaveLength(3);
+  });
+
+  test("the recall-inject retriever skips the decision-model kind", async () => {
+    process.env[KEY_VAR] = FAKE_DECISION_KEY;
+    const entries = { ...RERANK, ...withServer(), decision_model_uses: "rerank:enforce" };
+    const cfg = resolve(entries);
+    await indexVault(cfg);
+    // A provider that never answers would cost the hook its whole budget.
+    server.setReply(() => ({ hang: true }));
+    const started = Date.now();
+    const found = await defaultRecallRetriever(configFile(entries), vault)("fox");
+    expect(Date.now() - started).toBeLessThan(2500);
+    expect(found.candidates.length).toBeGreaterThan(0);
+    expect(server.requests).toHaveLength(0);
+    expect(decisionRecords()).toBe(0);
   });
 });
 

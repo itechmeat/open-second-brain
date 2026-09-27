@@ -12,8 +12,33 @@
 import { DECISION_MODEL_USES, type DecisionModelUse } from "./contract.ts";
 import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
 import { makeDecisionProvider } from "./provider.ts";
-import { DECISION_MODEL_CALL_KIND, listDecisionModelCalls, todaySpendUsd } from "./record.ts";
+import {
+  DECISION_MODEL_CALL_KIND,
+  emitDecisionModelCall,
+  listDecisionModelCalls,
+  todaySpendUsd,
+} from "./record.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
+
+/**
+ * Warnings the vault's `_brain.yaml` parser raised about its
+ * `decision_model:` block (for example `enabled: true`, which a vault may
+ * not set). Empty when there is no vault or no such warning.
+ */
+export function vaultDecisionModelWarnings(vault: string | null): string[] {
+  if (vault === null) return [];
+  // Lazy, as in the config resolver: the policy loader is large.
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const policy = require("../brain/policy.ts") as typeof import("../brain/policy.ts");
+  try {
+    return policy
+      .loadBrainConfigDetailed(vault)
+      .warnings.map((w) => w.message)
+      .filter((m) => m.startsWith("decision_model"));
+  } catch {
+    return [];
+  }
+}
 
 export interface DecisionModelCheckReport {
   readonly enabled: boolean;
@@ -24,6 +49,10 @@ export interface DecisionModelCheckReport {
   /** NAME of the key variable, never its value. */
   readonly env_key: string | null;
   readonly key_set: boolean;
+  /**
+   * The uses as configured. While the feature is not active every use
+   * runs `off` whatever this says; `status` tells which applies.
+   */
   readonly uses: Readonly<Record<DecisionModelUse, string>>;
   /** True when some use is in shadow or enforce: requests carry vault text. */
   readonly sends_data: boolean;
@@ -31,7 +60,7 @@ export interface DecisionModelCheckReport {
   readonly vault_opt_out: boolean;
   readonly timeout_ms: number;
   readonly max_state_tokens: number;
-  readonly daily_cost_gate_usd: number;
+  readonly cost_gate_usd: number;
   readonly today_spend_usd: number | null;
   readonly input_price_usd_per_mtok: number | null;
   readonly processor: string | null;
@@ -69,12 +98,19 @@ const RERANK_ENDPOINT_KEYS = [
 
 function hintFor(cfg: ResolvedDecisionModelConfig): string | null {
   switch (cfg.status) {
-    case "disabled":
-      return (
-        'the feature is off; to try it, set decision_model_enabled: "true", a ' +
-        "decision_model_provider and one use in shadow (for example " +
-        'decision_model_uses: "rerank:shadow") in the machine config'
-      );
+    case "disabled": {
+      // Name only what is missing.
+      const missing = ['decision_model_enabled: "true"'];
+      if (cfg.provider === null) missing.push("a decision_model_provider");
+      if (DECISION_MODEL_USES.every((use) => cfg.configuredUses[use] === "off")) {
+        missing.push('one use in shadow (for example decision_model_uses: "rerank:shadow")');
+      }
+      const list =
+        missing.length === 1
+          ? missing[0]!
+          : `${missing.slice(0, -1).join(", ")} and ${missing[missing.length - 1]!}`;
+      return `the feature is off; to try it, set ${list} in the machine config`;
+    }
     case "no_key":
       return cfg.envKey === null
         ? "no key variable is named: set decision_model_env_key to the NAME of an " +
@@ -100,9 +136,13 @@ export async function buildDecisionModelCheck(
   if (cfg.enabled && sendsData) {
     warnings.push(
       "shadow and enforce both send data: each request carries the masked, clipped, " +
-        "redacted text of the candidates to the processor below",
+        "redacted text of the candidates to the processor named above",
     );
   }
+  if (!cfg.enabled && DECISION_MODEL_USES.some((use) => cfg.configuredUses[use] !== "off")) {
+    warnings.push("decision_model_enabled is not true, so every use listed above runs off");
+  }
+  for (const w of vaultDecisionModelWarnings(opts.vault)) warnings.push(`vault: ${w}`);
   if (cfg.enabled && !sendsData) {
     warnings.push("no use is in shadow or enforce, so nothing is ever sent");
   }
@@ -138,13 +178,13 @@ export async function buildDecisionModelCheck(
     model: cfg.model,
     env_key: cfg.envKey,
     key_set: cfg.keyPresent,
-    uses: cfg.uses,
+    uses: cfg.configuredUses,
     sends_data: cfg.status === "active" && sendsData,
     vault: opts.vault,
     vault_opt_out: cfg.status === "disabled_by_vault",
     timeout_ms: cfg.timeoutMs,
     max_state_tokens: cfg.maxStateTokens,
-    daily_cost_gate_usd: cfg.dailyCostGateUsd,
+    cost_gate_usd: cfg.dailyCostGateUsd,
     today_spend_usd: todaySpend,
     input_price_usd_per_mtok: cfg.inputPriceUsdPerMtok,
     processor: cfg.processor,
@@ -161,6 +201,23 @@ export async function buildDecisionModelCheck(
     return { ...report, ping: { ok: false, reason: `not sent: status ${cfg.status}` } };
   }
   const pong = await provider.ping();
+  // A ping is a real request: record it (origin `ping`), so it counts
+  // toward the daily gate and shows in the report.
+  emitDecisionModelCall(cfg.vault, {
+    use: "ping",
+    mode: "shadow",
+    provider: provider.name,
+    model: pong.model ?? provider.model,
+    calibrated: provider.calibrated,
+    questionCount: 1,
+    candidateCount: 0,
+    ...(pong.usage !== undefined ? { usage: pong.usage } : {}),
+    inputPriceUsdPerMtok: cfg.inputPriceUsdPerMtok,
+    latencyMs: pong.latencyMs ?? 0,
+    outcome: pong.ok ? "ok" : (pong.reason ?? "network"),
+    origin: "ping",
+    ...(opts.now !== undefined ? { createdAt: opts.now.toISOString() } : {}),
+  });
   return {
     ...report,
     ping: {
@@ -187,7 +244,9 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
   lines.push(`  base url: ${report.base_url ?? "(not set)"}`);
   lines.push(`  model: ${report.model ?? "(not set)"}`);
   lines.push(
-    `  key variable: ${report.env_key ?? "(not set)"} (${report.key_set ? "set" : "not set"})`,
+    report.env_key === null
+      ? "  key variable: (not named)"
+      : `  key variable: ${report.env_key} (${report.key_set ? "set" : "not set"})`,
   );
   const uses = DECISION_MODEL_USES.map((use) => `${use}:${report.uses[use]}`).join(", ");
   lines.push(`  uses: ${uses}`);
@@ -195,11 +254,14 @@ export function renderDecisionModelCheck(report: DecisionModelCheckReport): stri
   lines.push(`  timeout: ${report.timeout_ms}ms, max state: ${report.max_state_tokens} tokens`);
   const spend =
     report.today_spend_usd === null ? "unknown" : `$${report.today_spend_usd.toFixed(6)}`;
-  const gate = report.daily_cost_gate_usd > 0 ? `$${report.daily_cost_gate_usd}` : "off";
+  const gate = report.cost_gate_usd > 0 ? `$${report.cost_gate_usd}` : "off";
   lines.push(`  daily cost gate: ${gate}; today (UTC): ${spend}`);
   if (report.processor !== null) lines.push(`  processor: ${report.processor}`);
   if (report.rerank.kind_configured) {
-    lines.push("  rerank: search_rerank_kind is decision-model and uses this config");
+    lines.push(
+      "  rerank: search_rerank_kind is decision-model and uses this config " +
+        "(pays off with a semantic lane and search_rerank_top_k around 30)",
+    );
     if (report.rerank.ignored_keys.length > 0) {
       lines.push(`    ignored for this kind: ${report.rerank.ignored_keys.join(", ")}`);
     }
@@ -229,7 +291,10 @@ export interface DecisionModelUseSummary {
   readonly input_tokens: number;
   readonly cost_usd: number;
   readonly unknown_cost_calls: number;
-  /** Rerank only: shadow agreement between decision and heuristic order. */
+  /**
+   * Rerank only: agreement between decision and heuristic order over the
+   * shadow records of ordinary searches (eval and ping records excluded).
+   */
   readonly agreement?: {
     readonly compared: number;
     readonly top1_agreement: number;
@@ -262,6 +327,7 @@ function agreementOf(
   let top1 = 0;
   let overlapSum = 0;
   for (const record of records) {
+    if (record.payload["mode"] !== "shadow" || record.payload["origin"] !== undefined) continue;
     const heuristic = stringArray(record.payload["heuristic_order"]);
     const decision = stringArray(record.payload["decision_order"]);
     if (heuristic === null || decision === null || heuristic.length === 0) continue;
@@ -278,12 +344,13 @@ function agreementOf(
 
 export function buildDecisionModelReport(
   vault: string,
-  opts: { readonly since?: string; readonly use?: string } = {},
+  opts: { readonly since?: string; readonly use?: string; readonly origin?: string } = {},
 ): DecisionModelReport {
   const records = listDecisionModelCalls(vault, opts.since).filter(
     (r) =>
       r.kind === DECISION_MODEL_CALL_KIND &&
-      (opts.use === undefined || r.payload["use"] === opts.use),
+      (opts.use === undefined || r.payload["use"] === opts.use) &&
+      (opts.origin === undefined || r.payload["origin"] === opts.origin),
   );
   const byUse = new Map<string, ContinuityRecord[]>();
   for (const record of records) {

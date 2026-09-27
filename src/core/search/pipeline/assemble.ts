@@ -224,11 +224,14 @@ export function assembleRankedResults(input: AssemblyInput): ReadonlyArray<Brain
   // A decision-model reranker in shadow returns the heuristic order, so it
   // must not widen the pool either: shadow output is byte-identical to
   // rerank off.
+  // A call that skips the decision-model kind (hook surfaces) must not
+  // widen it either.
   const crossEncoderActive =
     config.rerank.enabled &&
     !(
       config.rerank.kind === "decision-model" &&
-      config.rerank.decisionModel?.uses.rerank === "shadow"
+      (config.rerank.decisionModel?.uses.rerank === "shadow" ||
+        opts.skipDecisionModelRerank === true)
     );
   const maxHops = opts.maxHops ?? config.recall.maxHops;
   const traversalActive = maxHops > NO_TRAVERSAL_HOPS;

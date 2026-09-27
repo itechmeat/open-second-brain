@@ -155,6 +155,7 @@ That is the day-to-day picture. The full capability surface, every CLI verb, and
 - Secrets are not supposed to live in the vault. Daily logs and config exports run through a best-effort redactor, `$secret:NAME` references resolve from the local environment and are never stored, and Brain redaction strips `<private>...</private>` regions before storage.
 - Automatically surfaced Brain context passes through a deterministic prompt-injection guard; filtered output returns a placeholder with a reason code and the source Markdown is never rewritten. Opt into `untrusted_source_delimiting` for language-agnostic structural containment instead: an untrusted span is wrapped in a provenance-carrying `<untrusted_source path sha256>` delimiter and neutralized by structure (invisible/control characters, delimiter breakouts) rather than a per-language word list, losslessly and identically for every language.
 - Context receipts and recall telemetry are opt-in and store redacted metadata, hashes, and counters rather than raw prompt text.
+- Optional decision models (a typed judgment model such as Jev, used to rerank search candidates) are off by default. They run only when the machine config enables them and the named key variable is set; while active, shadow and enforce both send masked, clipped, redacted candidate text to the configured endpoint, and private pages and `<private>` regions never leave. See [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md).
 
 ## Updating
 
@@ -181,6 +182,7 @@ change to hooks/launcher/install must keep) lives in
 | Hermes cron jobs (daily digest, discipline report) | [`docs/hermes-cron.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/hermes-cron.md)                     |
 | Cross-project pointer (multi-host vaults)          | [`docs/cross-project-pointer.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/cross-project-pointer.md) |
 | Observability contract (events, gates, payloads)   | [`docs/observability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/observability.md)                 |
+| Optional decision models (off by default)          | [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md)             |
 | Metrics layer (the dashboard data contract)        | [`docs/metrics.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/metrics.md)                             |
 | Frozen-surface and stability policy                | [`docs/stability.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/stability.md)                         |
 | Architecture                                       | [`docs/architecture.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/architecture.md)                   |

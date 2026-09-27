@@ -9,7 +9,10 @@ import {
   DecisionProviderError,
   type DecisionRequest,
 } from "../../../src/core/decision-model/contract.ts";
-import { SystemOneDecisionProvider } from "../../../src/core/decision-model/systemone.ts";
+import {
+  MAX_REPLY_BYTES,
+  SystemOneDecisionProvider,
+} from "../../../src/core/decision-model/systemone.ts";
 import { FAKE_DECISION_KEY, FAKE_VENDOR_KEY } from "../../helpers/fake-credentials.ts";
 import {
   answerAll,
@@ -165,6 +168,40 @@ describe("systemone adapter", () => {
     const err = await decideError();
     expect(err.reason).toBe("http_529");
     expect(server.requests).toHaveLength(2);
+  });
+
+  for (const status of [501, 507, 599]) {
+    test(`HTTP ${status} (any 5xx) is retried once`, async () => {
+      server.setReply((req, i) => (i === 0 ? { status } : { json: answerAll(req, () => 0.6) }));
+      const res = await provider().decide(REQUEST, { timeoutMs: 2000 });
+      expect(server.requests).toHaveLength(2);
+      expect(res.answers["rel_0"]).toMatchObject({ valid: true, value: 0.6 });
+    });
+  }
+
+  test("a wait before the retry that is cut short reports timeout, not the status", async () => {
+    server.setReply(() => ({ status: 503, headers: { "retry-after": "1" } }));
+    const outer = new AbortController();
+    setTimeout(() => outer.abort(), 100);
+    let err: unknown;
+    try {
+      await provider(3000).decide(REQUEST, { timeoutMs: 3000, signal: outer.signal });
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(DecisionProviderError);
+    expect((err as DecisionProviderError).reason).toBe("timeout");
+    expect(server.requests).toHaveLength(1);
+  });
+
+  test("a reply larger than the cap is invalid_reply", async () => {
+    // A valid reply in every other respect: only its size is wrong.
+    server.setReply((req) => ({
+      json: { ...answerAll(req, () => 0.5), pad: "x".repeat(MAX_REPLY_BYTES) },
+    }));
+    const err = await decideError();
+    expect(err.reason).toBe("invalid_reply");
+    expect(err.message).toContain("larger than");
   });
 
   test("a hanging response times out", async () => {

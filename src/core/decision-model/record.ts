@@ -16,19 +16,30 @@
  * The same records feed the daily cost gate and `o2b decision-model
  * report`. Nothing trains on them, and operators should not build that
  * on them either.
+ *
+ * Records written by the eval gate and by `check --ping` carry an
+ * `origin` (`eval`, `ping`), so the report can keep them out of the
+ * shadow agreement. They still count toward the daily gate: they are
+ * real spend.
  */
 
 import { emitGatedTelemetry } from "../brain/continuity/emit.ts";
 import { appendContinuityRecord, listContinuityRecords } from "../brain/continuity/store.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
-import type { DecisionModelMode, DecisionModelUse, DecisionUsage } from "./contract.ts";
+import type {
+  DecisionCallOrigin,
+  DecisionModelMode,
+  DecisionModelUse,
+  DecisionUsage,
+} from "./contract.ts";
 
 export const DECISION_MODEL_CALL_KIND = "decision_model_call";
 
 export type DecisionCostSource = "reported" | "estimated" | "unknown";
 
 export interface DecisionCallRecordInput {
-  readonly use: DecisionModelUse;
+  /** The use, or `ping` for the connectivity check. */
+  readonly use: DecisionModelUse | "ping";
   readonly mode: DecisionModelMode;
   readonly provider: string;
   /** Answering model when a reply arrived, else the pinned id. */
@@ -44,6 +55,7 @@ export interface DecisionCallRecordInput {
   readonly stateHash?: string;
   /** Per-use evaluation identifiers (paths, ids, probabilities), never text. */
   readonly details?: Readonly<Record<string, unknown>>;
+  readonly origin?: DecisionCallOrigin;
   readonly createdAt?: string;
 }
 
@@ -85,13 +97,17 @@ export function emitDecisionModelCall(
       latency_ms: Math.max(0, Math.round(input.latencyMs)),
       outcome: input.outcome,
       ...(input.stateHash !== undefined ? { state_hash: input.stateHash } : {}),
+      ...(input.origin !== undefined ? { origin: input.origin } : {}),
     };
-    return appendContinuityRecord(v, {
+    const createdAt = input.createdAt ?? new Date().toISOString();
+    const written = appendContinuityRecord(v, {
       kind: DECISION_MODEL_CALL_KIND,
-      createdAt: input.createdAt ?? new Date().toISOString(),
+      createdAt,
       sourceRefs: [],
       payload,
     });
+    if (cost.costUsd !== null) noteSpend(v, createdAt, cost.costUsd);
+    return written;
   });
 }
 
@@ -112,16 +128,68 @@ export function listDecisionModelCalls(
 }
 
 /**
- * Today's (UTC) spend: the sum of recorded `cost_usd`. Records without a
- * cost (unknown price) contribute nothing. Fail-open: an unreadable log
- * reads as 0 spend only when it cannot be read at all, and the caller
- * decides what that means.
+ * How long a loaded day total is trusted before the log is read again.
+ * Within this window the total moves only by this process's own records;
+ * the reload picks up what other processes spent meanwhile.
  */
-export function todaySpendUsd(vault: string, now: Date = new Date()): number {
+export const SPEND_CACHE_TTL_MS = 60_000;
+
+interface SpendEntry {
+  /** The UTC day this total is for (`YYYY-MM-DD`). */
+  readonly day: string;
+  total: number;
+  readonly loadedAtMs: number;
+}
+
+/**
+ * Today's spend per vault, loaded from the log once and then kept current
+ * by this process's own writes, so the gate does not parse the month's
+ * continuity shard on every request.
+ */
+const SPEND_CACHE = new Map<string, SpendEntry>();
+
+/** Tests only: forget every loaded total. */
+export function resetDecisionSpendCache(): void {
+  SPEND_CACHE.clear();
+}
+
+function noteSpend(vault: string, createdAt: string, costUsd: number): void {
+  if (!Number.isFinite(costUsd) || costUsd <= 0) return;
+  const entry = SPEND_CACHE.get(vault);
+  if (entry !== undefined && entry.day === createdAt.slice(0, 10)) entry.total += costUsd;
+}
+
+function readDaySpend(vault: string, now: Date): number {
   let total = 0;
   for (const record of listDecisionModelCalls(vault, utcDayStart(now))) {
     const cost = record.payload["cost_usd"];
     if (typeof cost === "number" && Number.isFinite(cost) && cost > 0) total += cost;
   }
+  return total;
+}
+
+/**
+ * Today's (UTC) spend: the sum of recorded `cost_usd`. Records without a
+ * cost (unknown price) contribute nothing. The total is read from the log
+ * at most once per {@link SPEND_CACHE_TTL_MS} and per UTC day, and this
+ * process's own records are added as they are written; other processes'
+ * records show up on the next reload, which keeps the gate a soft limit
+ * across processes. A log that cannot be read throws, and the caller
+ * decides what that means (the gate treats it as over the limit).
+ */
+export function todaySpendUsd(vault: string, now: Date = new Date()): number {
+  const day = now.toISOString().slice(0, 10);
+  const nowMs = now.getTime();
+  const entry = SPEND_CACHE.get(vault);
+  if (
+    entry !== undefined &&
+    entry.day === day &&
+    nowMs >= entry.loadedAtMs &&
+    nowMs - entry.loadedAtMs < SPEND_CACHE_TTL_MS
+  ) {
+    return entry.total;
+  }
+  const total = readDaySpend(vault, now);
+  SPEND_CACHE.set(vault, { day, total, loadedAtMs: nowMs });
   return total;
 }

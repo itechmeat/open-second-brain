@@ -602,6 +602,49 @@ export function stripPrivateRegions(text: string): string {
   return output;
 }
 
+/**
+ * The text of every outermost `<private>` region in `text`, tags included,
+ * using the same nesting rule as {@link stripPrivateRegions}. An unclosed
+ * region runs to the end of the text. A caller holding only a slice of a
+ * page (a search chunk) uses this over the whole page to tell whether the
+ * slice carries private text whose tags fell outside the slice.
+ */
+export function privateRegionTexts(text: string): string[] {
+  const regions: string[] = [];
+  if (!text) return regions;
+  const open = new RegExp(PRIVATE_OPEN_TAG_RE.source, "gi");
+  const close = new RegExp(PRIVATE_CLOSE_TAG_RE.source, "gi");
+  let cursor = 0;
+  while (cursor < text.length) {
+    open.lastIndex = cursor;
+    const openMatch = open.exec(text);
+    if (!openMatch) break;
+    const start = openMatch.index;
+    let depth = 1;
+    let scan = open.lastIndex;
+    while (depth > 0) {
+      open.lastIndex = scan;
+      close.lastIndex = scan;
+      const nextOpen = open.exec(text);
+      const nextClose = close.exec(text);
+      if (!nextClose) {
+        regions.push(text.slice(start));
+        return regions;
+      }
+      if (nextOpen && nextOpen.index < nextClose.index) {
+        depth += 1;
+        scan = open.lastIndex;
+      } else {
+        depth -= 1;
+        scan = close.lastIndex;
+      }
+    }
+    regions.push(text.slice(start, scan));
+    cursor = scan;
+  }
+  return regions;
+}
+
 export interface RedactRawOutputOptions {
   /**
    * Maximum input length before the truncation guard fires. Defaults to

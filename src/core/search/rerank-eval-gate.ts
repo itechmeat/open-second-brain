@@ -65,6 +65,9 @@ function withRerank(
             decisionModel: Object.freeze({
               ...decisionModel,
               uses: Object.freeze({ ...decisionModel.uses, rerank: "enforce" as const }),
+              // Eval requests are real spend (the gate counts them) but not
+              // shadow data: the report keeps them out of the agreement.
+              recordOrigin: "eval" as const,
             }),
           }
         : {}),

@@ -4,7 +4,7 @@
  * resolver and its endpoint validation.
  */
 
-import type { DecisionModelMode, DecisionModelUse } from "./contract.ts";
+import type { DecisionCallOrigin, DecisionModelMode, DecisionModelUse } from "./contract.ts";
 
 /**
  * Why the feature is (not) active. Only `active` ever builds a state or
@@ -42,6 +42,11 @@ export interface ResolvedDecisionModelConfig {
   readonly hookBudgetMs: number;
   readonly maxStateTokens: number;
   readonly uses: DecisionModelUses;
+  /**
+   * The uses as configured, whatever the status. Diagnostics only: shows
+   * what would run once the feature is active. Never consulted by a use.
+   */
+  readonly configuredUses: DecisionModelUses;
   readonly dailyCostGateUsd: number;
   /** USD per million input tokens for routes that report no cost; null when unknown. */
   readonly inputPriceUsdPerMtok: number | null;
@@ -51,4 +56,9 @@ export interface ResolvedDecisionModelConfig {
   readonly processor: string | null;
   /** The vault whose `_brain.yaml` was consulted and where records go; null when none. */
   readonly vault: string | null;
+  /**
+   * Set by a caller that runs requests outside an ordinary use (the rerank
+   * eval gate); stamped on each record. Never set by the resolver.
+   */
+  readonly recordOrigin?: DecisionCallOrigin;
 }

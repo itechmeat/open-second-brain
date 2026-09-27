@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { probeDecisionModel } from "../../src/core/doctor-readiness.ts";
+import { listDecisionModelCalls } from "../../src/core/decision-model/record.ts";
 import { FAKE_DECISION_KEY } from "../helpers/fake-credentials.ts";
 import {
   answerAll,
@@ -67,7 +68,32 @@ describe("o2b decision-model check", () => {
     const res = await check();
     expect(res.returncode).toBe(0);
     expect(res.stdout).toContain("decision model: disabled");
+    expect(res.stdout).toContain("key variable: (not named)");
     expect(res.stdout).toContain("hint:");
+  });
+
+  test("configured but not enabled: shows the configured uses, hints only what is missing", async () => {
+    const { decision_model_enabled: _, ...notEnabled } = ENABLED;
+    writeConfig({ ...notEnabled, decision_model_base_url: server.url });
+    const res = await check();
+    expect(res.stdout).toContain("uses: rerank:shadow");
+    expect(res.stdout).toContain("every use listed above runs off");
+    expect(res.stdout).toContain(
+      'hint: the feature is off; to try it, set decision_model_enabled: "true" in',
+    );
+    expect(res.stdout).not.toContain("a decision_model_provider");
+  });
+
+  test("a vault that tries to enable the feature is warned about in check and doctor", async () => {
+    writeFileSync(
+      join(vault, "Brain", "_brain.yaml"),
+      "schema_version: 1\ndecision_model:\n  enabled: true\n",
+    );
+    writeConfig({ ...ENABLED, decision_model_base_url: server.url });
+    const res = await check();
+    expect(res.stdout).toContain("warning: vault: decision_model.enabled: true ignored");
+    const verdict = await probeDecisionModel({ vault, config: configPath, env: {} });
+    expect(verdict.detail).toContain("decision_model.enabled: true ignored");
   });
 
   test("enabled without the key: names the variable, says how to set it, exits 0", async () => {
@@ -92,6 +118,10 @@ describe("o2b decision-model check", () => {
     expect(res.stdout + res.stderr).not.toContain(FAKE_DECISION_KEY);
     expect(server.requests).toHaveLength(1);
     expect(server.requests[0]!.bodyText).not.toContain(vault);
+    // The ping is real spend: it is recorded like any request.
+    const records = listDecisionModelCalls(vault);
+    expect(records).toHaveLength(1);
+    expect(records[0]!.payload).toMatchObject({ use: "ping", origin: "ping", outcome: "ok" });
   });
 
   test("--json carries the same facts without the key value", async () => {
@@ -218,8 +248,37 @@ describe("o2b search rerank-eval", () => {
     );
     expect(res.returncode).toBe(0);
     const out = JSON.parse(res.stdout) as Record<string, Record<string, number>>;
-    expect(out["baseline"]).toEqual({ hit_at_k: 1, mrr: 1 });
-    expect(out["local"]).toMatchObject({ delta_hit_at_k: 0 });
+    expect(out["baseline"]).toMatchObject({ hit_at_k: 1, mrr: 1, hit_at_1: 1, hit_at_5: 1 });
+    expect(out["baseline"]!["hit_at_10"]).toBeUndefined();
+    expect(out["local"]).toMatchObject({
+      delta_hit_at_k: 0,
+      versus_off: { wins: 0, losses: 0, ties: 1 },
+    });
+  });
+
+  test("--kind decision-model reports the run's calls, so a failing arm shows as failing", async () => {
+    writeConfig({ ...ENABLED, decision_model_base_url: server.url });
+    writeFileSync(join(vault, "ml.md"), "# Machine learning\n\nGradient descent optimizes.\n");
+    writeFileSync(join(vault, "gd.md"), "# Descent\n\nGradient descent notes.\n");
+    const dataset = join(tmp, "dataset.json");
+    writeFileSync(
+      dataset,
+      JSON.stringify({ queries: [{ id: "q1", query: "gradient descent", expected: ["ml.md"] }] }),
+    );
+    const env = { OPEN_SECOND_BRAIN_CONFIG: configPath, [KEY_VAR]: FAKE_DECISION_KEY };
+    await runCli(["search", "index", "--config", configPath], { env });
+    server.setReply(() => ({ status: 400 }));
+    const args = ["search", "rerank-eval", "--config", configPath, "--dataset", dataset];
+    const res = await runCli([...args, "--kind", "decision-model", "--json"], { env });
+    expect(res.returncode).toBe(0);
+    const out = JSON.parse(res.stdout) as Record<string, Record<string, unknown>>;
+    expect(out["decision-model"]!["calls"]).toMatchObject({
+      total: 1,
+      outcomes: { http_400: 1 },
+    });
+    const text = await runCli([...args, "--kind", "decision-model"], { env });
+    expect(text.stdout).toContain("decision calls: 1 (http_400 1)");
+    expect(text.stdout).toMatch(/vs off \d+ win\(s\)/);
   });
 
   test("--kind decision-model without an active config is refused with a pointer", async () => {

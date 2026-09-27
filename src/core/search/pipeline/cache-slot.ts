@@ -71,12 +71,16 @@ function configFingerprint(config: ResolvedSearchConfig): string {
       ? {
           rrkKind: config.rerank.kind,
           // Route identity without the credential: provider, endpoint,
-          // pinned model and mode each change what an enforced order is.
+          // pinned model and mode each change what an enforced order is,
+          // and so do the state budget (how many candidates are sent) and
+          // the answerable mode (an extra question in the same request).
           rrkDm: [
             config.rerank.decisionModel?.provider ?? "",
             config.rerank.decisionModel?.baseUrl ?? "",
             config.rerank.decisionModel?.model ?? "",
             config.rerank.decisionModel?.uses.rerank ?? "off",
+            String(config.rerank.decisionModel?.maxStateTokens ?? ""),
+            config.rerank.decisionModel?.uses.answerable ?? "off",
           ].join("|"),
         }
       : {}),

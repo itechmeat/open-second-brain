@@ -88,6 +88,7 @@ function byNote(
 }
 
 const PUBLIC = (): ReadonlyArray<string> => [];
+const NO_REGIONS = (): ReadonlyArray<string> => [];
 
 describe("decision-model rerank", () => {
   test("enforce reorders the head by relevance and leaves the tail untouched", async () => {
@@ -96,6 +97,7 @@ describe("decision-model rerank", () => {
     });
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
       decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
     });
     expect(out.map((r) => r.path)).toEqual([
@@ -121,6 +123,7 @@ describe("decision-model rerank", () => {
     });
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("shadow", { vault }), {
       decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
     });
     expect(out).toBe(RESULTS);
@@ -139,6 +142,7 @@ describe("decision-model rerank", () => {
     const provider = new FakeDecisionProvider({ answer: byNote({ 0: 0.1, 2: 0.2, 3: 0.9 }) });
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
       decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: (path) =>
         path === "note-1.md" ? ["private"] : path === "note-4.md" ? null : [],
     });
@@ -158,6 +162,7 @@ describe("decision-model rerank", () => {
     const vault = tempVault();
     await applyCrossEncoderRerank(RESULTS, "q", config("shadow", { vault }), {
       decisionProvider: new FakeDecisionProvider({ answer: byNote({ 0: 0.1, 2: 0.2, 3: 0.9 }) }),
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: (path) => (path === "note-1.md" ? ["private"] : []),
     });
     const payload = listDecisionModelCalls(vault)[0]!.payload;
@@ -185,6 +190,7 @@ describe("decision-model rerank", () => {
     });
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
       decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
     });
     expect(out[1]).toBe(RESULTS[1]!);
@@ -196,22 +202,62 @@ describe("decision-model rerank", () => {
     ]);
   });
 
-  test("a suspected injection is demoted to the end of the head and tagged", async () => {
+  test("a suspected injection is tagged but keeps its place by relevance", async () => {
     const provider = new FakeDecisionProvider({
       answer: byNote({ 0: 0.1, 1: 0.2, 2: 0.95, 3: 0.5 }, { 2: 0.85 }),
     });
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
       decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
     });
     expect(out.map((r) => r.path).slice(0, 4)).toEqual([
+      "note-2.md",
       "note-3.md",
       "note-1.md",
       "note-0.md",
-      "note-2.md",
     ]);
-    expect(out[3]!.reasons).toContain("decision_model_injection_suspected");
-    expect(out[0]!.reasons).not.toContain("decision_model_injection_suspected");
+    expect(out[0]!.reasons).toContain("decision_model_injection_suspected");
+    expect(out[1]!.reasons).not.toContain("decision_model_injection_suspected");
+  });
+
+  test("a suspected injection is tagged even when its relevance answer is invalid", async () => {
+    const provider = new FakeDecisionProvider({
+      answer: byNote({ 0: 0.1, 1: { invalid: true }, 2: 0.9, 3: 0.5 }, { 1: 0.9 }),
+    });
+    const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
+      decisionProvider: provider,
+      resolvePrivateRegions: NO_REGIONS,
+      resolveVisibility: PUBLIC,
+    });
+    expect(out[1]!.path).toBe("note-1.md");
+    expect(out[1]!.reasons).toContain("decision_model_injection_suspected");
+    expect(out[1]!.reasons.some((r) => r.startsWith("decision_model: "))).toBe(false);
+  });
+
+  test("an enforce record carries a permutation, not the paths", async () => {
+    const vault = tempVault();
+    await applyCrossEncoderRerank(RESULTS, "q", config("enforce", { vault }), {
+      decisionProvider: new FakeDecisionProvider({
+        answer: byNote({ 0: 0.1, 1: 0.2, 2: 0.9, 3: 0.5 }),
+      }),
+      resolvePrivateRegions: NO_REGIONS,
+      resolveVisibility: PUBLIC,
+    });
+    const payload = listDecisionModelCalls(vault)[0]!.payload;
+    expect(payload["decision_permutation"]).toEqual([2, 3, 1, 0]);
+    expect(payload["heuristic_order"]).toBeUndefined();
+    expect(JSON.stringify(payload)).not.toContain("note-");
+  });
+
+  test("without a private-region resolver nothing is sent", async () => {
+    const provider = new FakeDecisionProvider();
+    const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce"), {
+      decisionProvider: provider,
+      resolveVisibility: PUBLIC,
+    });
+    expect(out).toBe(RESULTS);
+    expect(provider.requests).toHaveLength(0);
   });
 
   test("a provider failure returns the heuristic order with no warning", async () => {
@@ -219,6 +265,7 @@ describe("decision-model rerank", () => {
     const events: unknown[] = [];
     const out = await applyCrossEncoderRerank(RESULTS, "q", config("enforce", { vault }), {
       decisionProvider: new FakeDecisionProvider({ fail: "timeout" }),
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
       onTelemetry: (e) => events.push(e),
     });
@@ -232,6 +279,7 @@ describe("decision-model rerank", () => {
     let extras: unknown;
     await applyCrossEncoderRerank(RESULTS, "q", config("shadow"), {
       decisionProvider: off,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
       onDecisionExtras: (e) => {
         extras = e;
@@ -243,6 +291,7 @@ describe("decision-model rerank", () => {
     const on = new FakeDecisionProvider({ answer: byNote({ 0: 0.5 }, {}, 0.7) });
     await applyCrossEncoderRerank(RESULTS, "q", config("shadow", { answerable: "shadow" }), {
       decisionProvider: on,
+      resolvePrivateRegions: NO_REGIONS,
       resolveVisibility: PUBLIC,
       onDecisionExtras: (e) => {
         extras = e;
@@ -257,6 +306,6 @@ describe("decision-model rerank", () => {
 
 describe("decisionRerankOrder", () => {
   test("below-floor candidates keep their relative order under the qualifying ones", () => {
-    expect(decisionRerankOrder([0.2, 0.9, 0.1, 0.6], [0, 0, 0, 0], 0.5)).toEqual([1, 3, 0, 2]);
+    expect(decisionRerankOrder([0.2, 0.9, 0.1, 0.6], 0.5)).toEqual([1, 3, 0, 2]);
   });
 });

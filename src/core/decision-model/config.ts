@@ -55,6 +55,32 @@ import type {
 
 const ENV_PREFIX = "OPEN_SECOND_BRAIN_DECISION_MODEL_";
 
+/**
+ * What `decision_model_env_key` must look like: an environment variable
+ * NAME (the same rule the secrets store applies). Anything else, such as a
+ * key pasted where its variable's name belongs, is an invalid config, and
+ * the value is never repeated in a message.
+ */
+const ENV_VAR_NAME_RE = /^[A-Z_][A-Z0-9_]*$/;
+
+/**
+ * The base URL without any `user:password@` part, and whether it had one.
+ * Credentials never belong in the URL (the key travels in a header), and
+ * a URL that carries them is never printed as is.
+ */
+function withoutUserinfo(raw: string): { readonly url: string; readonly hadUserinfo: boolean } {
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    return { url: raw, hadUserinfo: false };
+  }
+  if (parsed.username === "" && parsed.password === "") return { url: raw, hadUserinfo: false };
+  parsed.username = "";
+  parsed.password = "";
+  return { url: parsed.toString().replace(/\/+$/, ""), hadUserinfo: true };
+}
+
 function setting(
   env: NodeJS.ProcessEnv,
   config: Readonly<Record<string, string>>,
@@ -194,11 +220,16 @@ export function resolveDecisionModelConfig(
   const preset = providerRaw !== null ? decisionModelPreset(providerRaw) : null;
   const explicitBaseUrl = setting(env, config, "base_url");
   const baseUrlRaw = explicitBaseUrl ?? preset?.baseUrl ?? null;
-  const baseUrl = baseUrlRaw !== null ? baseUrlRaw.replace(/\/+$/, "") : null;
+  const cleanedUrl = baseUrlRaw !== null ? withoutUserinfo(baseUrlRaw.replace(/\/+$/, "")) : null;
+  const baseUrl = cleanedUrl?.url ?? null;
   const model = setting(env, config, "id") ?? preset?.model ?? null;
-  const envKey = setting(env, config, "env_key") ?? preset?.envKey ?? null;
+  const envKeyRaw = setting(env, config, "env_key") ?? preset?.envKey ?? null;
+  const envKeyValid = envKeyRaw === null || ENV_VAR_NAME_RE.test(envKeyRaw);
+  // An invalid name is never looked up and never reported back.
+  const envKey = envKeyValid ? envKeyRaw : null;
   const keyValue = envKey !== null ? env[envKey] : undefined;
   const keyPresent = typeof keyValue === "string" && keyValue.trim() !== "";
+  const configuredUses = parseDecisionModelUses(setting(env, config, "uses"), []);
 
   if (!enabled) {
     return Object.freeze({
@@ -217,6 +248,7 @@ export function resolveDecisionModelConfig(
       hookBudgetMs: DECISION_MODEL_DEFAULTS.hookBudgetMs,
       maxStateTokens: preset?.maxStateTokens ?? DECISION_MODEL_HOSTED_MAX_STATE_TOKENS,
       uses: ALL_OFF,
+      configuredUses,
       dailyCostGateUsd: DECISION_MODEL_DEFAULTS.dailyCostGateUsd,
       inputPriceUsdPerMtok: preset?.inputPriceUsdPerMtok ?? null,
       allowUncalibrated: false,
@@ -247,12 +279,25 @@ export function resolveDecisionModelConfig(
     errors.push(`decision_model_id must pin a model version, not a moving alias ('${model}')`);
   }
 
+  if (!envKeyValid) {
+    errors.push(
+      "decision_model_env_key must be the NAME of an environment variable " +
+        "(A-Z, 0-9 and _), not the key itself; the value is not shown",
+    );
+  }
+  if (cleanedUrl?.hadUserinfo === true) {
+    errors.push(
+      "decision_model_base_url must not carry user:password@ credentials; " +
+        "the key is sent in a header from decision_model_env_key",
+    );
+  }
+
   const allowInsecureHttp = parseBoolSetting(
     setting(env, config, "allow_insecure_http"),
     "decision_model_allow_insecure_http",
     errors,
   );
-  if (baseUrl !== null) {
+  if (baseUrl !== null && cleanedUrl?.hadUserinfo !== true) {
     try {
       assertHttpEgressEndpoint(baseUrl, "decision_model_base_url", {
         allowInsecureHttp,
@@ -292,9 +337,9 @@ export function resolveDecisionModelConfig(
   const uses = parseDecisionModelUses(setting(env, config, "uses"), errors);
   const dailyCostGateUsd =
     parseNonNegativeSetting(
-      setting(env, config, "daily_cost_gate_usd"),
+      setting(env, config, "cost_gate_usd"),
       DECISION_MODEL_DEFAULTS.dailyCostGateUsd,
-      "decision_model_daily_cost_gate_usd",
+      "decision_model_cost_gate_usd",
       errors,
     ) ?? DECISION_MODEL_DEFAULTS.dailyCostGateUsd;
   const inputPriceUsdPerMtok = parseNonNegativeSetting(
@@ -342,6 +387,7 @@ export function resolveDecisionModelConfig(
     hookBudgetMs,
     maxStateTokens,
     uses,
+    configuredUses: uses,
     dailyCostGateUsd,
     inputPriceUsdPerMtok,
     allowUncalibrated,

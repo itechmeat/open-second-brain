@@ -148,6 +148,7 @@ export async function runDecision<C>(
       outcome,
       ...(extra.response?.stateHash !== undefined ? { stateHash: extra.response.stateHash } : {}),
       ...(details !== undefined ? { details } : {}),
+      ...(cfg.recordOrigin !== undefined ? { origin: cfg.recordOrigin } : {}),
       createdAt: now().toISOString(),
     });
   };

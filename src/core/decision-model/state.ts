@@ -6,7 +6,12 @@
  *     reserved `private` token, or whose visibility could not be resolved
  *     at all, is dropped before anything is built. The search index keeps
  *     private page text, so this filter cannot rely on an upstream one.
- *   - `<private>` regions are stripped from every candidate text.
+ *   - `<private>` regions are stripped from every candidate text. A
+ *     candidate is a search chunk, and a long region can be split across
+ *     chunks, so a chunk may carry private text without either tag. The
+ *     caller therefore hands over the page's own private regions, and a
+ *     candidate whose stripped text still shares a line with one of them
+ *     is withheld. A candidate whose page could not be read is withheld.
  *   - Candidate ids and vault paths never appear: candidates are masked as
  *     `P0..Pn` (or a use-specific prefix) and the mapping stays in memory.
  *   - Each text is clipped to a per-use constant from `questions.ts`.
@@ -23,7 +28,7 @@
  */
 
 import { REMOTE_DENY_VISIBILITY_TOKEN } from "../graph/visibility.ts";
-import { stripPrivateRegions } from "../redactor.ts";
+import { PRIVATE_REGION_PLACEHOLDER, stripPrivateRegions } from "../redactor.ts";
 
 /**
  * Conservative characters-per-token estimate. The hosted tokenizer yields
@@ -47,6 +52,12 @@ export interface StateCandidate {
    * visibility could not be resolved (such a candidate is never sent).
    */
   readonly visibility: ReadonlyArray<string> | null;
+  /**
+   * The `<private>` regions of the candidate's whole page (tags included),
+   * or null when the page could not be read (such a candidate is never
+   * sent). Empty when the page has none.
+   */
+  readonly privateRegions: ReadonlyArray<string> | null;
 }
 
 export interface CandidateStateInput {
@@ -65,7 +76,10 @@ export type CandidateStateResult =
       readonly state: Readonly<Record<string, unknown>>;
       /** Candidate index for each mask position: `included[k]` is `P<k>`. */
       readonly included: ReadonlyArray<number>;
-      /** Candidates withheld because their page is private or unresolvable. */
+      /**
+       * Candidates withheld because their page is private, unresolvable or
+       * unreadable, or their text carries part of a private region.
+       */
       readonly withheld: ReadonlyArray<number>;
       /** Candidates dropped (lowest-ranked first) to fit the budget. */
       readonly dropped: ReadonlyArray<number>;
@@ -78,6 +92,23 @@ export function mayLeaveMachine(visibility: ReadonlyArray<string> | null): boole
   return visibility !== null && !visibility.includes(REMOTE_DENY_VISIBILITY_TOKEN);
 }
 
+/**
+ * Whether `text` (already stripped of whole regions) still carries a line
+ * of one of the page's private regions: the chunk boundary fell inside a
+ * region, so a tag is missing and stripping found nothing to remove. Any
+ * non-blank line that occurs inside a region counts, which errs towards
+ * withholding a public line that repeats private text.
+ */
+function carriesPrivateText(text: string, regions: ReadonlyArray<string>): boolean {
+  if (regions.length === 0) return false;
+  for (const raw of text.split("\n")) {
+    const line = raw.split(PRIVATE_REGION_PLACEHOLDER).join("").trim();
+    if (line === "") continue;
+    if (regions.some((region) => region.includes(line))) return true;
+  }
+  return false;
+}
+
 function clip(text: string, maxChars: number): string {
   const chars = [...text];
   return chars.length <= maxChars ? text : chars.slice(0, maxChars).join("");
@@ -87,11 +118,16 @@ export function buildCandidateState(input: CandidateStateInput): CandidateStateR
   const withheld: number[] = [];
   const eligible: Array<{ index: number; text: string }> = [];
   input.candidates.forEach((candidate, index) => {
-    if (!mayLeaveMachine(candidate.visibility)) {
+    if (!mayLeaveMachine(candidate.visibility) || candidate.privateRegions === null) {
       withheld.push(index);
       return;
     }
-    eligible.push({ index, text: clip(stripPrivateRegions(candidate.text), input.clipChars) });
+    const stripped = stripPrivateRegions(candidate.text);
+    if (carriesPrivateText(stripped, candidate.privateRegions)) {
+      withheld.push(index);
+      return;
+    }
+    eligible.push({ index, text: clip(stripped, input.clipChars) });
   });
   if (eligible.length === 0) return { kind: "empty" };
 

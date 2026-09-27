@@ -303,7 +303,11 @@ export async function search(
       degraded,
     );
 
-    return finalize(
+    // A decision-model fallback (degraded, inactive or skipped) is the
+    // heuristic order under a key that promises the configured one: serve
+    // it, but never cache it.
+    const emit = postRank.decisionFallback === true ? (o: SearchOutcome) => o : finalize;
+    return emit(
       buildSearchOutcome({
         store,
         config: effectiveConfig,

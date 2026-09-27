@@ -62,6 +62,23 @@ export interface ApplyCrossEncoderRerankOptions {
    * page is private or whose visibility cannot be resolved.
    */
   readonly resolveVisibility?: (path: string) => ReadonlyArray<string> | null;
+  /**
+   * The `<private>` regions of a result's page, or null when the page
+   * cannot be read. `decision-model` kind only: a chunk that carries part
+   * of a region is never sent.
+   */
+  readonly resolvePrivateRegions?: (path: string) => ReadonlyArray<string> | null;
+  /**
+   * Skip the `decision-model` kind for this call (the hook surfaces, which
+   * run under a tighter time budget than a decision request). The order is
+   * returned unchanged and `onDecisionFallback` fires.
+   */
+  readonly skipDecisionModel?: boolean;
+  /**
+   * Called when the `decision-model` kind returned the heuristic order in
+   * place of the configured one (degraded, not active, or skipped).
+   */
+  readonly onDecisionFallback?: () => void;
   /** Inject a decision provider (tests). `decision-model` kind only. */
   readonly decisionProvider?: DecisionProvider;
   /** Receives the extra decision answers (e.g. `answerable`). */
@@ -123,6 +140,10 @@ export async function applyCrossEncoderRerank(
   // never emits rerank telemetry: a failed decision is recorded in the
   // `decision_model_call` record and returns the heuristic order unchanged.
   if (config.kind === "decision-model") {
+    if (opts.skipDecisionModel === true) {
+      opts.onDecisionFallback?.();
+      return results;
+    }
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { applyDecisionModelRerank } =
       require("./decision-model.ts") as typeof import("./decision-model.ts");
@@ -130,6 +151,10 @@ export async function applyCrossEncoderRerank(
       ...(opts.resolveVisibility !== undefined
         ? { resolveVisibility: opts.resolveVisibility }
         : {}),
+      ...(opts.resolvePrivateRegions !== undefined
+        ? { resolvePrivateRegions: opts.resolvePrivateRegions }
+        : {}),
+      ...(opts.onDecisionFallback !== undefined ? { onFallback: opts.onDecisionFallback } : {}),
       ...(opts.decisionProvider !== undefined ? { provider: opts.decisionProvider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.onDecisionExtras !== undefined ? { onExtras: opts.onDecisionExtras } : {}),

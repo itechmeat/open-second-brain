@@ -60,6 +60,7 @@
 
 import { discoverConfig } from "./config.ts";
 import { resolveDecisionModelConfig } from "./decision-model/config.ts";
+import { vaultDecisionModelWarnings } from "./decision-model/diagnostics.ts";
 import {
   resolveSemanticCapability,
   SEMANTIC_CAPABILITY_CODE,
@@ -357,6 +358,13 @@ export async function probeEmbeddingProvider(opts: ReadinessOptions): Promise<Re
  * is sent: `o2b decision-model check --ping` is the live probe.
  */
 export async function probeDecisionModel(opts: ReadinessOptions): Promise<ReadinessVerdict> {
+  const verdict = await decisionModelVerdict(opts);
+  const vaultWarnings = vaultDecisionModelWarnings(opts.vault);
+  if (vaultWarnings.length === 0) return verdict;
+  return { ...verdict, detail: `${verdict.detail}; vault: ${vaultWarnings.join("; ")}` };
+}
+
+async function decisionModelVerdict(opts: ReadinessOptions): Promise<ReadinessVerdict> {
   const configPath = resolveConfigPath(opts);
   let data: Readonly<Record<string, string>>;
   try {

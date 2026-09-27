@@ -15,6 +15,8 @@ import {
   todaySpendUsd,
 } from "../../../src/core/decision-model/record.ts";
 import { createDecisionLatencyScope } from "../../../src/core/decision-model/latency.ts";
+import { appendContinuityRecord } from "../../../src/core/brain/continuity/store.ts";
+import { buildDecisionModelReport } from "../../../src/core/decision-model/diagnostics.ts";
 import {
   activeDecisionConfig,
   FakeDecisionProvider,
@@ -198,6 +200,75 @@ describe("runDecision", () => {
     expect(todaySpendUsd(vault)).toBe(0);
   });
 
+  test("today's spend is read from the log once, then kept current by own writes", () => {
+    const vault = tempVault();
+    // Midday, so the reload below stays on the same UTC day.
+    const now = new Date("2031-05-10T12:00:00.000Z");
+    const spent = (usd: number) => ({
+      use: "rerank" as const,
+      mode: "shadow" as const,
+      provider: "fake",
+      model: "m",
+      calibrated: true,
+      questionCount: 1,
+      candidateCount: 1,
+      usage: { costUsd: usd },
+      inputPriceUsdPerMtok: null,
+      latencyMs: 1,
+      outcome: "ok",
+      createdAt: now.toISOString(),
+    });
+    emitDecisionModelCall(vault, spent(0.1));
+    expect(todaySpendUsd(vault, now)).toBeCloseTo(0.1, 10);
+    // Another process writes a record: not seen until the next reload.
+    appendContinuityRecord(vault, {
+      kind: "decision_model_call",
+      createdAt: now.toISOString(),
+      sourceRefs: [],
+      payload: { cost_usd: 1 },
+    });
+    expect(todaySpendUsd(vault, now)).toBeCloseTo(0.1, 10);
+    // This process's own write counts at once.
+    emitDecisionModelCall(vault, spent(0.2));
+    expect(todaySpendUsd(vault, now)).toBeCloseTo(0.3, 10);
+    // After the reload window the log is read again and the other
+    // process's record is in.
+    expect(todaySpendUsd(vault, new Date(now.getTime() + 61_000))).toBeCloseTo(1.3, 10);
+  });
+
+  test("the report's shadow agreement counts only ordinary shadow records", () => {
+    const vault = tempVault();
+    const rec = (mode: "shadow" | "enforce", origin?: "eval") =>
+      emitDecisionModelCall(vault, {
+        use: "rerank",
+        mode,
+        provider: "fake",
+        model: "m",
+        calibrated: true,
+        questionCount: 2,
+        candidateCount: 2,
+        usage: { costUsd: 0.001 },
+        inputPriceUsdPerMtok: null,
+        latencyMs: 1,
+        outcome: "ok",
+        // Agreeing for the ordinary shadow run, disagreeing for the others.
+        details: {
+          heuristic_order: ["a.md", "b.md"],
+          decision_order:
+            mode === "shadow" && origin === undefined ? ["a.md", "b.md"] : ["b.md", "a.md"],
+        },
+        ...(origin !== undefined ? { origin } : {}),
+      });
+    rec("shadow");
+    rec("enforce");
+    rec("shadow", "eval");
+    const rerank = buildDecisionModelReport(vault).uses.find((u) => u.use === "rerank")!;
+    expect(rerank.calls).toBe(3);
+    expect(rerank.cost_usd).toBeCloseTo(0.003, 10);
+    expect(rerank.agreement).toEqual({ compared: 1, top1_agreement: 1, top5_overlap: 1 });
+    expect(buildDecisionModelReport(vault, { origin: "eval" }).total).toBe(1);
+  });
+
   test("a budget refusal from the state builder is recorded as budget", async () => {
     const vault = tempVault();
     const provider = new FakeDecisionProvider();
@@ -238,10 +309,14 @@ describe("state builder", () => {
   test("private and unresolvable pages are withheld; private regions are stripped", () => {
     const res = buildCandidateState({
       candidates: [
-        { text: "public one <private>hidden bit</private> end", visibility: [] },
-        { text: "private page", visibility: ["private"] },
-        { text: "unknown visibility", visibility: null },
-        { text: "team page", visibility: ["team"] },
+        {
+          text: "public one <private>hidden bit</private> end",
+          visibility: [],
+          privateRegions: ["<private>hidden bit</private>"],
+        },
+        { text: "private page", visibility: ["private"], privateRegions: [] },
+        { text: "unknown visibility", visibility: null, privateRegions: [] },
+        { text: "team page", visibility: ["team"], privateRegions: [] },
       ],
       prefix: "P",
       clipChars: 900,
@@ -258,9 +333,34 @@ describe("state builder", () => {
     expect(Object.keys((res.state as { passages: object }).passages)).toEqual(["P0", "P1"]);
   });
 
+  test("a chunk cut from inside a private region is withheld, though it has no tag", () => {
+    // The page's region spans three chunks; only the first carries the
+    // opening tag and only the last the closing one.
+    const region = "<private>\nsecret line one\nsecret line two\nsecret line three\n</private>";
+    const res = buildCandidateState({
+      candidates: [
+        { text: "intro\n<private>\nsecret line one", visibility: [], privateRegions: [region] },
+        { text: "secret line two", visibility: [], privateRegions: [region] },
+        { text: "secret line three\n</private>\noutro", visibility: [], privateRegions: [region] },
+        { text: "a public paragraph", visibility: [], privateRegions: [region] },
+        { text: "page not readable", visibility: [], privateRegions: null },
+      ],
+      prefix: "P",
+      clipChars: 900,
+      maxStateTokens: 32_000,
+      frame,
+    });
+    if (res.kind !== "ok") throw new Error("expected ok");
+    expect(res.included).toEqual([0, 3]);
+    expect(res.withheld).toEqual([1, 2, 4]);
+    const text = JSON.stringify(res.state);
+    expect(text).not.toContain("secret line");
+    expect(text).not.toContain("page not readable");
+  });
+
   test("every candidate private gives empty", () => {
     const res = buildCandidateState({
-      candidates: [{ text: "x", visibility: ["private"] }],
+      candidates: [{ text: "x", visibility: ["private"], privateRegions: [] }],
       prefix: "P",
       clipChars: 900,
       maxStateTokens: 32_000,
@@ -272,7 +372,7 @@ describe("state builder", () => {
   test("texts are clipped and the lowest-ranked candidates dropped to fit", () => {
     const long = "x".repeat(2000);
     const res = buildCandidateState({
-      candidates: [0, 1, 2, 3].map(() => ({ text: long, visibility: [] })),
+      candidates: [0, 1, 2, 3].map(() => ({ text: long, visibility: [], privateRegions: [] })),
       prefix: "P",
       clipChars: 900,
       maxStateTokens: 256 + 1000,
@@ -287,7 +387,7 @@ describe("state builder", () => {
 
   test("when not even one candidate fits, the result is budget", () => {
     const res = buildCandidateState({
-      candidates: [{ text: "x".repeat(900), visibility: [] }],
+      candidates: [{ text: "x".repeat(900), visibility: [], privateRegions: [] }],
       prefix: "P",
       clipChars: 900,
       maxStateTokens: 300,
