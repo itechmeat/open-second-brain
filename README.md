@@ -159,34 +159,13 @@ That is the day-to-day picture. The full capability surface, every CLI verb, and
 
 ## Optional decision models
 
-An optional decision model (a typed judgment model such as Jev) can rerank the head of the search results. It is off by default: until you enable it, nothing changes and nothing is sent.
+An optional decision model (a typed judgment model such as Jev) can rerank the head of the search results. It is off by default: until you enable it, nothing changes and nothing is sent. To turn it on:
 
-To turn it on:
+1. Export a key from a supported provider as an environment variable, for example `TYPESAFE_API_KEY`.
+2. In the machine config set `decision_model_enabled: "true"`, `decision_model_provider: typesafe`, `decision_model_env_key: TYPESAFE_API_KEY` (the variable's name, never the key), `decision_model_uses: "rerank:shadow"`, `search_rerank_enabled: "true"`, `search_rerank_kind: decision-model` and `search_rerank_top_k: "30"`.
+3. Run `o2b decision-model check --ping`.
 
-1. Get a key from a supported provider (`typesafe`, `openrouter`, `vercel`, `opencode-zen`, or a `compatible` server) and export it as an environment variable, for example `TYPESAFE_API_KEY`. The config names only the variable, never the key.
-2. Add to the machine config (`~/.config/open-second-brain/config.yaml`):
-
-   ```yaml
-   decision_model_enabled: "true"
-   decision_model_provider: typesafe
-   decision_model_env_key: TYPESAFE_API_KEY
-   decision_model_uses: "rerank:shadow"
-   search_rerank_enabled: "true"
-   search_rerank_kind: decision-model
-   search_rerank_top_k: "30"
-   ```
-
-3. Run `o2b decision-model check --ping` to verify the key, the endpoint and the answering model.
-
-`rerank:shadow` sends requests and records them but keeps today's order. Measure before switching: `o2b search rerank-eval --dataset queries.json --kind decision-model` compares rerank off and on over labelled queries, and `o2b decision-model report` shows the shadow agreement. Change the use to `rerank:enforce` only when the numbers justify it.
-
-It pays off only with a semantic lane (`embedding_provider` configured, `local` is enough). With keyword-only search the candidate pool is too small to reorder.
-
-What is sent: the query and the top candidates, masked as `P0..Pn`, clipped, with secret-shaped strings redacted. Pages with `visibility: private` and `<private>` regions are never sent, and no decision writes to the vault. Names, e-mail addresses and paths inside ordinary notes are sent as they are.
-
-Cost: about $0.0003 per query at `search_rerank_top_k: 30`. `decision_model_cost_gate_usd` (default `0.50` per UTC day) stops sending once the day's spend reaches it.
-
-A vault can opt out for itself with `decision_model: { enabled: false }` in `Brain/_brain.yaml`. Everything else (presets, all keys, privacy, accounting) is in [`docs/decision-models.md`](docs/decision-models.md).
+It pays off only with a semantic lane (`embedding_provider` configured, `local` is enough). Moving from shadow to enforce, measuring, what is sent, the cost gate and the per-vault opt-out: [`docs/decision-models.md`](docs/decision-models.md).
 
 ## Updating
 

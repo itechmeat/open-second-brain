@@ -20,6 +20,45 @@ diagnostics that exist to describe the feature: `o2b decision-model check` and
 the `decision_model` line of `o2b doctor --readiness`, which reports `skipped`
 while the feature is off.
 
+## Quick start
+
+1. **Get a key** from a supported provider (see the presets below) and export
+   it as an environment variable in the environment that runs Open Second
+   Brain, for example `TYPESAFE_API_KEY`. The config holds only the
+   variable's name.
+2. **Add the minimal config** to the machine config
+   (`~/.config/open-second-brain/config.yaml`), outside the vault:
+
+   ```yaml
+   decision_model_enabled: "true"
+   decision_model_provider: typesafe
+   decision_model_env_key: TYPESAFE_API_KEY   # the variable's name, not the key
+   decision_model_uses: "rerank:shadow"
+   search_rerank_enabled: "true"
+   search_rerank_kind: decision-model
+   search_rerank_top_k: "30"
+   ```
+
+3. **Verify** with `o2b decision-model check --ping`: it shows the status,
+   the key variable (never the value), the modes and the processor, and
+   sends one synthetic request that names the answering model.
+4. **Measure in shadow.** `rerank:shadow` sends and records each request but
+   returns today's order. After some use, `o2b decision-model report` shows
+   how often the decision order agrees with the heuristic one, and
+   `o2b search rerank-eval --dataset queries.json --kind decision-model
+   --compare-local` compares rerank off, the decision model and the local
+   reranker over labelled queries (see "Measuring before enforcing").
+5. **Enforce** only when the numbers justify it: change the use to
+   `decision_model_uses: "rerank:enforce"`.
+
+It pays off only with a semantic lane (`embedding_provider` set, `local` is
+enough); see "When it pays off". Each request sends the query and the top
+candidates, masked, clipped and redacted, never private pages or `<private>`
+regions ("Privacy" below). It costs about $0.0003 per query at top_k 30, and
+`decision_model_cost_gate_usd` (default `0.50` per UTC day) stops sending once
+the day's spend reaches it ("Accounting"). A vault opts out with
+`decision_model: { enabled: false }` in `Brain/_brain.yaml` ("Vault opt-out").
+
 ## How it fits "Open Second Brain never calls an LLM"
 
 - **Judgment, not generation.** Every answer is an index into a list Open
