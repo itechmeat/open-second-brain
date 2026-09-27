@@ -475,9 +475,11 @@ describe("recall_inject failures keep today's decision", () => {
 
   test("a slow fake beyond the sub-budget returns today's decision within the sub-budget", async () => {
     const vault = tempVault();
+    // The abandoned request settles after the test; with no record vault
+    // its late record cannot recreate the removed temp vault.
     const provider = new FakeDecisionProvider({ latencyMs: 5_000 });
     const filter = createRecallInjectDecisionFilter({
-      config: config(vault, "enforce", { hookBudgetMs: 150 }),
+      config: config(vault, "enforce", { hookBudgetMs: 150, vault: null }),
       vault,
       provider,
     });
@@ -496,9 +498,11 @@ describe("recall_inject failures keep today's decision", () => {
 
   test("the sub-budget never extends the total retrieval budget", async () => {
     const vault = tempVault();
+    // The abandoned request settles after the test; with no record vault
+    // its late record cannot recreate the removed temp vault.
     const provider = new FakeDecisionProvider({ latencyMs: 5_000 });
     const filter = createRecallInjectDecisionFilter({
-      config: config(vault, "enforce", { hookBudgetMs: 700 }),
+      config: config(vault, "enforce", { hookBudgetMs: 700, vault: null }),
       vault,
       provider,
     });
