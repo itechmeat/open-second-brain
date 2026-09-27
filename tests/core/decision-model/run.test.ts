@@ -162,6 +162,23 @@ describe("runDecision", () => {
     expect(outcomes.toSorted()).toEqual(["cost_gate", "ok"]);
   });
 
+  test("requests in flight count toward the gate, so concurrent calls cannot all pass", async () => {
+    const vault = tempVault();
+    const provider = new FakeDecisionProvider({ latencyMs: 30 });
+    // A gate just above one request's estimate: the second concurrent
+    // request must see the first one's reservation and stop.
+    const config = activeDecisionConfig({
+      vault,
+      dailyCostGateUsd: 1e-9,
+      inputPriceUsdPerMtok: 0.042,
+    });
+    const results = await Promise.all(
+      [0, 1, 2].map(() => runDecision("rerank", build, QUESTIONS, { config, provider })),
+    );
+    expect(results.map((r) => r.status).toSorted()).toEqual(["degraded", "degraded", "ok"]);
+    expect(provider.requests).toHaveLength(1);
+  });
+
   test("yesterday's spend does not count toward today's gate", async () => {
     const vault = tempVault();
     emitDecisionModelCall(vault, {

@@ -215,7 +215,11 @@ calibration, question and candidate counts, token counts, cost and its source
 reason) and a sha-256 of the redacted state, plus each use's evaluation
 identifiers (for a rerank, the heuristic and decision orders as paths). It
 never carries the state, a passage or a question text. The daily cost gate
-sums today's recorded `cost_usd`.
+sums today's recorded `cost_usd` plus the estimated cost of requests still in
+flight in the same process, so concurrent requests in one process cannot all
+pass against the same spend. Separate processes share only the recorded
+spend, so the gate is a soft limit that the requests in flight elsewhere can
+pass by a few requests.
 
 Degrade reasons: `no_key`, `disabled_by_vault`, `cost_gate`, `budget`,
 `egress_refused`, `timeout`, `network`, `invalid_reply`, `http_<status>`.

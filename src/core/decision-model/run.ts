@@ -32,6 +32,25 @@ import { decisionModelModeFor, type ResolvedDecisionModelConfig } from "./config
 import { noteDecisionLatency } from "./latency.ts";
 import { makeDecisionProvider } from "./provider.ts";
 import { emitDecisionModelCall, todaySpendUsd } from "./record.ts";
+import { estimateTokens } from "./state.ts";
+
+/** Estimated cost of requests in flight in this process, per vault. */
+const IN_FLIGHT_USD = new Map<string, number>();
+
+function inFlightUsd(vault: string): number {
+  return IN_FLIGHT_USD.get(vault) ?? 0;
+}
+
+/** Reserve an estimate until the request settles; returns the release. */
+function reserveInFlight(vault: string | null, usd: number): () => void {
+  if (vault === null || usd <= 0) return () => undefined;
+  IN_FLIGHT_USD.set(vault, inFlightUsd(vault) + usd);
+  return () => {
+    const left = inFlightUsd(vault) - usd;
+    if (left > 1e-12) IN_FLIGHT_USD.set(vault, left);
+    else IN_FLIGHT_USD.delete(vault);
+  };
+}
 
 /** What a use's state builder hands back. */
 export type BuiltDecisionState<C> =
@@ -133,11 +152,18 @@ export async function runDecision<C>(
     });
   };
 
-  // Daily cost gate, before any state is built. A gate of 0 is off.
-  if (cfg.dailyCostGateUsd > 0 && cfg.vault !== null) {
+  // Daily cost gate, before any state is built. A gate of 0 is off. The
+  // check counts requests still in flight in this process, and the new
+  // request's estimate is reserved in the same synchronous step (no await
+  // between the check, the build and the reservation), so concurrent
+  // requests cannot all pass against the same recorded spend. Separate
+  // processes still share only the recorded spend, so the gate is a
+  // soft limit that can be passed by the requests in flight elsewhere.
+  const gated = cfg.dailyCostGateUsd > 0 && cfg.vault !== null;
+  if (gated) {
     let spend: number;
     try {
-      spend = todaySpendUsd(cfg.vault, now());
+      spend = todaySpendUsd(cfg.vault!, now()) + inFlightUsd(cfg.vault!);
     } catch {
       spend = Number.POSITIVE_INFINITY;
     }
@@ -159,35 +185,50 @@ export async function runDecision<C>(
     return { status: "degraded", mode, reason: "budget" };
   }
 
-  const qs = questions(built);
+  const ready: Extract<BuiltDecisionState<C>, { kind: "ok" }> = built;
+  const qs = questions(ready);
   const questionCount = Object.keys(qs).length;
-  const started = Date.now();
-  let response: DecisionResponse;
-  try {
-    response = await provider.decide(
-      { use, state: built.state, questions: qs },
-      { timeoutMs: opts.timeoutMs ?? cfg.timeoutMs },
-    );
-  } catch (e) {
+  const reservation =
+    gated && cfg.inputPriceUsdPerMtok !== null
+      ? (estimateTokens({ state: ready.state, questions: qs }) * cfg.inputPriceUsdPerMtok) /
+        1_000_000
+      : 0;
+  const send = async (): Promise<DecisionRunResult<C>> => {
+    const started = Date.now();
+    let response: DecisionResponse;
+    try {
+      response = await provider.decide(
+        { use, state: ready.state, questions: qs },
+        { timeoutMs: opts.timeoutMs ?? cfg.timeoutMs },
+      );
+    } catch (e) {
+      const latencyMs = Date.now() - started;
+      noteDecisionLatency(latencyMs);
+      const reason: DecisionDegradeReason =
+        e instanceof DecisionProviderError ? e.reason : "network";
+      record(reason, {
+        questionCount,
+        candidateCount: ready.candidateCount,
+        context: ready.context,
+        latencyMs,
+      });
+      return { status: "degraded", mode, reason };
+    }
     const latencyMs = Date.now() - started;
     noteDecisionLatency(latencyMs);
-    const reason: DecisionDegradeReason = e instanceof DecisionProviderError ? e.reason : "network";
-    record(reason, {
+    record("ok", {
       questionCount,
-      candidateCount: built.candidateCount,
-      context: built.context,
+      candidateCount: ready.candidateCount,
+      response,
+      context: ready.context,
       latencyMs,
     });
-    return { status: "degraded", mode, reason };
+    return { status: "ok", mode, response, context: ready.context, latencyMs };
+  };
+  const release = reserveInFlight(gated ? cfg.vault : null, reservation);
+  try {
+    return await send();
+  } finally {
+    release();
   }
-  const latencyMs = Date.now() - started;
-  noteDecisionLatency(latencyMs);
-  record("ok", {
-    questionCount,
-    candidateCount: built.candidateCount,
-    response,
-    context: built.context,
-    latencyMs,
-  });
-  return { status: "ok", mode, response, context: built.context, latencyMs };
 }
