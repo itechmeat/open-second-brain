@@ -297,7 +297,7 @@ export const VERB_HELP: Record<string, string> = {
     "decision_recall.max_per_session is configured (byte-identical when unset); the\n" +
     "count/last-turn/surfaced-ids flags thread the per-session cap and spacing state.\n",
   tension:
-    "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve> [...] [--vault <path>] [--json]\n" +
+    "usage: o2b brain tension <detect|list|show|confirm|dismiss|resolve|verify> [...] [--vault <path>] [--json]\n" +
     "Triage persisted contradictions under Brain/tensions/. detect [--jaccard <n>] scans\n" +
     "the configured note corpus (notes.read_paths) and persists a\n" +
     "tension note (open state) with a dedup key (subject pair + stance signature) so\n" +
@@ -306,7 +306,8 @@ export const VERB_HELP: Record<string, string> = {
     "[--reason <r>] and resolve <slug> [--reason <r>] close it (open|confirmed ->\n" +
     "dismissed|resolved). Invalid transitions are rejected. A context pack that injects\n" +
     "a subject note of an unresolved (open|confirmed) tension emits a warning; dismissed\n" +
-    "and resolved tensions warn about nothing.\n",
+    "and resolved tensions warn about nothing. verify [<slug>] (read-only) adds an\n" +
+    "advisory decision-model verdict per tension when the optional tension use is set.\n",
   digest:
     "usage: o2b brain digest [--vault <path>] [--since <ISO>] [--until <ISO>] [--json] [--silent-if-empty]\n" +
     "Renders the 24-hour change digest. Empty + --silent-if-empty exits 2.\n",
@@ -510,12 +511,14 @@ export const VERB_HELP: Record<string, string> = {
     "first), recent open commitments, and open questions - every item carries\n" +
     "deterministic sources. --write persists Brain/foresight/<date>.md.\n",
   label:
-    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show  [--agent N] [--vault <path>] [--json]\n" +
+    "usage: o2b brain label <path> <dimension>=<value> | --remove <dimension> | --show | --suggest [--dimensions a,b]  [--agent N] [--vault <path>] [--json]\n" +
     "Controlled-vocabulary classification against the schema pack's labels\n" +
     "field. Assignments are fail-closed - unknown dimensions and values are\n" +
     "rejected with the declared vocabulary - single-choice per dimension, and\n" +
     "persist as a sorted labels frontmatter array plus a canonical label\n" +
-    "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n",
+    "entity. Filter recall with: o2b search <q> --property labels=<dim>/<value>.\n" +
+    "--suggest is read-only and never assigns: advisory suggestions from the\n" +
+    "optional labels decision-model use (available: false while it is off).\n",
   bridges:
     "usage: o2b brain bridges discover [--max N] [--min-similarity X] | list | accept <source> <target> | dismiss <source> <target>  [--vault <path>] [--json]\n" +
     "Bridge discovery over the vec index: propose links between embedding-near\n" +

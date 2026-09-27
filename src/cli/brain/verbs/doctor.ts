@@ -1,5 +1,7 @@
 import { resolveSearchConfig } from "../../../core/search/index.ts";
 import { runDoctor } from "../../../core/brain/doctor.ts";
+import { annotateEntityAliasIssues } from "../../../core/brain/doctor/entity-alias-verdicts.ts";
+import { verdictFields, verdictLine } from "../../../core/decision-model/pair-verdict.ts";
 import { applyRepair, type RepairOutcome } from "../../../core/brain/diagnostics.ts";
 import {
   applyRemediation,
@@ -173,11 +175,25 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
   // every reported code has an exit, and on a clean vault.
   const noExit = noExitReasons(reportedCodes);
 
+  // Optional decision-model verdicts on alias-merge candidates (use
+  // `dedup`); null while off, and both renderings below are unchanged.
+  const aliasVerdicts = await annotateEntityAliasIssues(vault, result.warnings, {
+    configPath: config,
+  });
+  const warnings = aliasVerdicts === null ? result.warnings : aliasVerdicts.map((a) => a.item);
+  const warningExtra = new Map<DoctorIssue, ReturnType<typeof verdictFields>>();
+  const warningLine = new Map<DoctorIssue, string>();
+  for (const a of aliasVerdicts ?? []) {
+    if (a.verdict === null) continue;
+    warningExtra.set(a.item, verdictFields(a));
+    warningLine.set(a.item, verdictLine(a));
+  }
+
   if (flags["json"]) {
     process.stdout.write(
       JSON.stringify(
         {
-          warnings: result.warnings.map(withNextCommand),
+          warnings: warnings.map((w) => ({ ...withNextCommand(w), ...warningExtra.get(w) })),
           errors: result.errors.map(withNextCommand),
           ...(uncertain.length > 0 ? { uncertain: uncertain.map(withNextCommand) } : {}),
           // Beside the streams, once per code, rather than repeated on
@@ -191,7 +207,11 @@ export async function cmdBrainDoctor(argv: string[]): Promise<number> {
     );
   } else {
     for (const e of result.errors) process.stdout.write(renderIssueLine("[ERROR]", e));
-    for (const w of result.warnings) process.stdout.write(renderIssueLine("[WARN] ", w));
+    for (const w of warnings) {
+      process.stdout.write(renderIssueLine("[WARN] ", w));
+      const line = warningLine.get(w);
+      if (line !== undefined) process.stdout.write(`        ${line}\n`);
+    }
     for (const u of uncertain) process.stdout.write(renderIssueLine("[UNSURE]", u));
     if (result.errors.length === 0 && result.warnings.length === 0 && uncertain.length === 0) {
       ok("brain doctor: clean");

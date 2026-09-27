@@ -9,6 +9,9 @@
  *   - `confirm`   open -> confirmed
  *   - `dismiss`   open|confirmed -> dismissed
  *   - `resolve`   open|confirmed -> resolved
+ *   - `verify`    read-only: an advisory decision-model verdict per
+ *                 tension (one slug, or every unresolved tension); needs
+ *                 the optional `tension` decision-model use
  *
  * MCP mirror of the `o2b brain tension` CLI verb; both delegate to the
  * core tensions module so the on-disk shape cannot drift.
@@ -25,6 +28,8 @@ import {
   TensionError,
   type TensionRecord,
 } from "../../core/brain/tensions.ts";
+import { verifyTensions } from "../../core/brain/tension-verdicts.ts";
+import { verdictFields } from "../../core/decision-model/pair-verdict.ts";
 import { INVALID_PARAMS, MCPError } from "../protocol.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
@@ -121,10 +126,28 @@ async function toolBrainTension(
         const t = fn(ctx.vault, slug, opts);
         return { action, ...renderRow(t) };
       }
+      case "verify": {
+        const slug = coerceStr(args, "slug", false);
+        let records: TensionRecord[];
+        if (slug) {
+          const t = showTension(ctx.vault, slug);
+          if (t === null) throw new TensionError(`no tension: ${slug}`);
+          records = [t];
+        } else {
+          records = listUnresolvedTensions(ctx.vault);
+        }
+        const verified = await verifyTensions(ctx.vault, records, { configPath: ctx.configPath });
+        return {
+          action,
+          available: verified.available,
+          ...(verified.available ? { mode: verified.mode } : { reason: verified.reason }),
+          tensions: verified.rows.map((row) => ({ ...renderRow(row.item), ...verdictFields(row) })),
+        };
+      }
       default:
         throw new MCPError(
           INVALID_PARAMS,
-          `${TOOL}: 'action' must be one of detect, list, show, confirm, dismiss, resolve`,
+          `${TOOL}: 'action' must be one of detect, list, show, confirm, dismiss, resolve, verify`,
         );
     }
   });
@@ -134,18 +157,19 @@ export const TENSION_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: TOOL,
     description:
-      "Persisted-contradiction (tension) lifecycle. action: detect scans notes.read_paths and persists contradictions as open tensions (idempotent); list/show read; confirm=open->confirmed; dismiss/resolve close. Invalid transitions error. Unresolved tensions warn at context-pack injection.",
+      "Persisted-contradiction (tension) lifecycle. detect persists contradictions from notes.read_paths as open tensions (idempotent); list/show read; confirm, dismiss, resolve transition. verify: read-only advisory verdict from the optional tension decision-model use; never changes a tension.",
     inputSchema: {
       type: "object",
       properties: {
         action: {
           type: "string",
-          enum: ["detect", "list", "show", "confirm", "dismiss", "resolve"],
+          enum: ["detect", "list", "show", "confirm", "dismiss", "resolve", "verify"],
           description: "Which tension operation to run.",
         },
         slug: {
           type: "string",
-          description: "show/confirm/dismiss/resolve: the tension slug.",
+          description:
+            "show/confirm/dismiss/resolve: the tension slug. verify: optional; without it every unresolved tension is verified.",
         },
         jaccard: {
           type: "number",

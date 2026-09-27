@@ -299,7 +299,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         command("facts", "Decompose text into atomic assertions"),
         command("dead-end", "Record or list failed approaches"),
         command("foresight", "Render forward-looking projection"),
-        command("label", "Assign, remove, or show controlled-vocabulary labels"),
+        command("label", "Assign, remove, show or suggest controlled-vocabulary labels"),
         command("attr", "Assign, remove, or show typed-page attribute fields"),
         command("tiers", "Check, restore, or accept identity-field drift"),
         command("secret", "Capability-gated secret custody: set, list, rm, run"),
@@ -516,7 +516,7 @@ export const CLI_COMMAND_MANIFEST: CliRootManifest = Object.freeze({
         ),
         command(
           "tension",
-          "Detect and triage persisted contradictions: detect, list, show, confirm, dismiss, resolve",
+          "Detect and triage persisted contradictions: detect, list, show, confirm, dismiss, resolve, verify",
         ),
         command("state", "Overwrite-only exact-state lane keyed by aspect: set, get, list, clear"),
         command(

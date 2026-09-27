@@ -9,6 +9,8 @@
  *   - `confirm <slug> [--reason <r>]`       open -> confirmed
  *   - `dismiss <slug> [--reason <r>]`       open|confirmed -> dismissed
  *   - `resolve <slug> [--reason <r>]`       open|confirmed -> resolved
+ *   - `verify [<slug>]`                     read-only advisory decision-model verdict
+ *                                           (needs the optional `tension` use)
  *
  * CLI mirror of the `brain_tension` MCP tool; both delegate to the core
  * tensions module so the on-disk shape cannot drift. `detect` is the
@@ -28,6 +30,8 @@ import {
   showTension,
   type TensionRecord,
 } from "../../../core/brain/tensions.ts";
+import { verifyTensions } from "../../../core/brain/tension-verdicts.ts";
+import { verdictFields, verdictLine } from "../../../core/decision-model/pair-verdict.ts";
 import { normalizeFlagString, ok, okJson, parse, resolveBrainVault } from "../helpers.ts";
 
 const USAGE_ERROR_EXIT = 2;
@@ -66,7 +70,7 @@ export async function cmdBrainTension(argv: string[]): Promise<number> {
   const action = positional[0];
   if (action === undefined) {
     return usageError(
-      "brain tension requires an action: detect | list | show | confirm | dismiss | resolve",
+      "brain tension requires an action: detect | list | show | confirm | dismiss | resolve | verify",
     );
   }
 
@@ -170,6 +174,41 @@ export async function cmdBrainTension(argv: string[]): Promise<number> {
           okJson(renderRow(t));
         } else {
           ok(`${t.id} -> ${t.status}`);
+        }
+        return 0;
+      }
+      case "verify": {
+        const slug = positional[1];
+        let records: TensionRecord[];
+        if (slug !== undefined) {
+          const t = showTension(vault, slug);
+          if (t === null) {
+            process.stderr.write(`error: no tension: ${slug}\n`);
+            return 1;
+          }
+          records = [t];
+        } else {
+          records = listUnresolvedTensions(vault);
+        }
+        const verified = await verifyTensions(vault, records, { configPath: config });
+        if (wantsJson) {
+          okJson({
+            available: verified.available,
+            ...(verified.available ? { mode: verified.mode } : { reason: verified.reason }),
+            tensions: verified.rows.map((row) => ({
+              ...renderRow(row.item),
+              ...verdictFields(row),
+            })),
+          });
+          return 0;
+        }
+        if (!verified.available) ok(`decision model not available: ${verified.reason}`);
+        else if (verified.mode === "shadow") ok("decision model: shadow (verdicts recorded only)");
+        if (verified.rows.length === 0) ok("no unresolved tensions");
+        for (const row of verified.rows) {
+          const t = row.item;
+          ok(`${t.id} [${t.status}]: ${t.subjectA} vs ${t.subjectB}`);
+          if (row.verdict !== null) ok(`    ${verdictLine(row)}`);
         }
         return 0;
       }

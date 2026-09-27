@@ -8,6 +8,7 @@
 import {
   entityLexicalAliasCandidates,
   resolveEntitySemanticDedupConfig,
+  type EntityAliasCandidate,
 } from "../entities/semantic-dedup.ts";
 import {
   anyDiffersOnlyByQuoteVariant,
@@ -45,6 +46,21 @@ function claimedForms(index: EntityIndex, conflict: EntityConflict): string[] {
   }
   return claimants.map(
     (c) => c.aliases.find((a) => normalizeEntityName(a) === conflict.key) ?? c.name,
+  );
+}
+
+/** Doctor code of a proposal-only alias-merge candidate. */
+export const ENTITY_ALIAS_CANDIDATE_CODE = "entity-alias-candidate";
+
+/**
+ * The doctor message of one alias-merge candidate. Shared with the
+ * decision-model annotator (`entities/alias-verdicts.ts`), which matches
+ * the doctor's issues back to their candidates by this exact text.
+ */
+export function entityAliasCandidateMessage(c: EntityAliasCandidate): string {
+  return (
+    `possible alias-merge: '${c.name_a}' (${c.a}) ~ '${c.name_b}' (${c.b}) ` +
+    `[${c.method} ${c.similarity}]. Review and add an alias to merge — never auto-merged.`
   );
 }
 
@@ -147,10 +163,8 @@ export const entityRegistryCheck: DoctorCheck = {
       })) {
         issues.push({
           severity: "warning",
-          code: "entity-alias-candidate",
-          message:
-            `possible alias-merge: '${c.name_a}' (${c.a}) ~ '${c.name_b}' (${c.b}) ` +
-            `[${c.method} ${c.similarity}]. Review and add an alias to merge — never auto-merged.`,
+          code: ENTITY_ALIAS_CANDIDATE_CODE,
+          message: entityAliasCandidateMessage(c),
         });
       }
     }

@@ -20,6 +20,7 @@ import {
   readLabels,
   removeNoteLabel,
 } from "../../core/brain/labels.ts";
+import { LabelSuggestPrivateNoteError, suggestNoteLabels } from "../../core/brain/label-suggest.ts";
 import { StandingRulesWriteRefusedError } from "../../core/brain/standing-rules.ts";
 import { GovernedPathWriteRefusedError } from "../../core/write-binding/index.ts";
 import { assertVaultIdentityForWrite } from "../../core/brain/vault-identity.ts";
@@ -65,14 +66,49 @@ import type { ServerContext, ToolDefinition } from "../tool-contract.ts";
 import { contextReach } from "../tool-contract.ts";
 import { MCP_PREVIEW_BUDGET } from "../preview-budget.ts";
 
+/**
+ * `brain_labels suggest`: advisory decision-model suggestions (use
+ * `labels`). Read-only; never assigns.
+ */
+async function labelsSuggest(
+  ctx: ServerContext,
+  args: Record<string, unknown>,
+  path: string,
+): Promise<Record<string, unknown>> {
+  const abs = vaultContainedPath(ctx.vault, path, "brain_labels suggest");
+  // Same reach rule as `show`: a page reserved against remote reads
+  // answers exactly as an absent one.
+  const view = reachView(ctx.vault, contextReach(ctx));
+  if (!view.visible(toPosix(relative(ctx.vault, abs)))) {
+    throw new MCPError(INVALID_PARAMS, `brain_labels suggest: note does not exist: ${path}`);
+  }
+  const dimensions = coerceStrList(args, "dimensions");
+  try {
+    const result = await suggestNoteLabels(ctx.vault, path, {
+      pack: loadSchemaPack(ctx.vault),
+      ...(dimensions.length > 0 ? { dimensions } : {}),
+      configPath: ctx.configPath,
+    });
+    return { ...result };
+  } catch (exc) {
+    if (exc instanceof LabelVocabularyError || exc instanceof LabelSuggestPrivateNoteError) {
+      throw new MCPError(INVALID_PARAMS, `brain_labels suggest: ${exc.message}`);
+    }
+    throw exc;
+  }
+}
+
 /** Controlled-vocabulary classification over the schema pack's labels. */
 function toolBrainLabels(
   ctx: ServerContext,
   args: Record<string, unknown>,
-): Record<string, unknown> {
+): Record<string, unknown> | Promise<Record<string, unknown>> {
   const op = args["operation"];
-  if (op !== "assign" && op !== "remove" && op !== "show") {
-    throw new MCPError(INVALID_PARAMS, "brain_labels: operation must be assign|remove|show");
+  if (op !== "assign" && op !== "remove" && op !== "show" && op !== "suggest") {
+    throw new MCPError(
+      INVALID_PARAMS,
+      "brain_labels: operation must be assign|remove|show|suggest",
+    );
   }
   // a-label-is-not-a-boundary, U12: the ARGUMENT is right and the
   // VALIDATOR's message was wrong. `path` is the only name this tool
@@ -85,6 +121,7 @@ function toolBrainLabels(
   // the operation into both, so the two failures no longer share a
   // sentence.
   const path = requiredStringArg(`brain_labels ${op}`, args, "path");
+  if (op === "suggest") return labelsSuggest(ctx, args, path);
   if (op === "show") {
     const abs = vaultContainedPath(ctx.vault, path, "brain_labels show");
     // A metadata oracle otherwise (audit L8): at remote reach a page
@@ -511,16 +548,21 @@ export const ADMIN_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
   {
     name: "brain_labels",
     description:
-      "Controlled-vocabulary classification against the schema pack's labels field: assign (fail-closed - unknown dimensions/values rejected with the declared vocabulary), remove, or show a note's labels. Single-choice per dimension; persists as a labels frontmatter array plus a canonical label entity.",
+      "Controlled-vocabulary labels from the schema pack: assign (fail-closed, one value per dimension; labels frontmatter plus a label entity), remove, show. suggest: read-only advisory suggestions from the optional labels decision-model use (available: false when off); it never assigns.",
     inputSchema: {
       type: "object",
       properties: {
         operation: {
           type: "string",
-          enum: ["assign", "remove", "show"],
+          enum: ["assign", "remove", "show", "suggest"],
           description: "Tool operation.",
         },
         path: { type: "string", description: "Vault-relative note path." },
+        dimensions: {
+          type: "array",
+          items: { type: "string" },
+          description: "Dimensions to suggest (suggest). Default: every declared dimension.",
+        },
         dimension: { type: "string", description: "Label dimension (assign/remove)." },
         value: { type: "string", description: "Label value (assign)." },
         agent: { type: "string", description: "Agent identity override (assign)." },
