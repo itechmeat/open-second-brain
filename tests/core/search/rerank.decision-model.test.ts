@@ -78,10 +78,10 @@ function byNote(
   answerable?: number,
 ) {
   return (id: string, req: { state: unknown }): ScriptedAnswer | undefined => {
-    const passages = (req.state as { passages: Record<string, string> }).passages;
+    const passages = (req.state as { passages: Record<string, { text: string }> }).passages;
     const m = /^(rel|inj)_(\d+)$/.exec(id);
     if (m === null) return id === "answerable" ? answerable : undefined;
-    const text = passages[`P${m[2]}`]!;
+    const text = passages[`P${m[2]}`]!.text;
     const note = Number(/note (\d+)/.exec(text)![1]);
     return m[1] === "rel" ? rel[note] : (inj[note] ?? 0.01);
   };

@@ -323,6 +323,9 @@ export async function search(
         poolSize,
         degraded,
         corpus,
+        ...(postRank.decisionModel?.answerable !== undefined
+          ? { decisionModel: { answerable: postRank.decisionModel.answerable } }
+          : {}),
       }),
     );
   } finally {

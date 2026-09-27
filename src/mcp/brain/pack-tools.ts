@@ -67,12 +67,17 @@ import {
   matchQualitySchema,
   RECALL_SCORES_SCHEMA,
   coerceAgentScope,
+  coerceDecisionAnswerable,
   coerceRecallAdequacyInput,
+  DECISION_ANSWERABLE_ARG_NAME,
+  decisionAnswerablePairing,
+  decisionAnswerableSchema,
   coerceStr,
   coerceStrList,
   coerceBool,
   recallAdequacyPairing,
 } from "../coerce.ts";
+import { decisionAnswerableFor } from "../decision-answerable.ts";
 import {
   coercePositiveInteger,
   optionalStringArg,
@@ -148,6 +153,12 @@ async function toolBrainContextPack(
     args,
     RECALL_SCORES_ARG_NAME,
   );
+  const answerableArg = coerceDecisionAnswerable(
+    "brain_context_pack",
+    args,
+    RECALL_SCORES_ARG_NAME,
+    recallAttempt !== undefined,
+  );
   const adequacy =
     recallAttempt !== undefined
       ? assessRecallAdequacy(
@@ -155,6 +166,13 @@ async function toolBrainContextPack(
           resolveRecallAdequacyThresholds(ctx.configPath ?? undefined),
         )
       : undefined;
+  // Advisory decision-model signal (issue #213, Part 8): annotates the
+  // verdict and its receipt, never the level, the action or the pack.
+  const answerable =
+    adequacy !== undefined && answerableArg !== undefined
+      ? decisionAnswerableFor(ctx, adequacy.level, answerableArg)
+      : undefined;
+  const answerableVerdict = answerable?.kind === "annotated" ? answerable.verdict : undefined;
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
   // cross-query demand log under the bucket key normalizeQueryTerms already
   // computes, so the knowledge-gap loop can aggregate recurrence without a
@@ -223,6 +241,7 @@ async function toolBrainContextPack(
     ...(includeLanes ? { includeLanes: true } : {}),
     ...(receipt !== undefined ? { receipt } : {}),
     ...(adequacy !== undefined ? { recallAdequacy: adequacy } : {}),
+    ...(answerableVerdict !== undefined ? { decisionAnswerable: answerableVerdict } : {}),
     ...(cacheStable || dedupRepeated
       ? {
           transforms: {
@@ -276,7 +295,14 @@ async function toolBrainContextPack(
     // one surface that could not say a memory it injected is contested.
     // `brain_pre_compress_pack` has forwarded them all along; absent when
     // empty, so a warning-free pack stays byte-identical.
-    ...(report.warnings ? { warnings: report.warnings } : {}),
+    ...(report.warnings || answerable?.kind === "ignored"
+      ? {
+          warnings: [
+            ...(report.warnings ?? []),
+            ...(answerable?.kind === "ignored" ? [answerable.warning] : []),
+          ],
+        }
+      : {}),
     ...(adequacy !== undefined
       ? {
           adequacy: {
@@ -287,6 +313,14 @@ async function toolBrainContextPack(
             top_score: adequacy.topScore,
             mean_score: adequacy.meanScore,
             reason: adequacy.reason,
+            ...(answerableVerdict !== undefined
+              ? {
+                  [DECISION_ANSWERABLE_ARG_NAME]: {
+                    probability: answerableVerdict.probability,
+                    disagrees: answerableVerdict.disagrees,
+                  },
+                }
+              : {}),
           },
         }
       : {}),
@@ -815,6 +849,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
         },
         [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
         [MATCH_QUALITY_ARG_NAME]: matchQualitySchema(RECALL_SCORES_ARG_NAME),
+        [DECISION_ANSWERABLE_ARG_NAME]: decisionAnswerableSchema(RECALL_SCORES_ARG_NAME),
         telemetry: {
           type: "boolean",
           description:
@@ -842,6 +877,7 @@ export const PACK_TOOLS: ReadonlyArray<ToolDefinition> = Object.freeze([
       // a mode needs a query, a query needs no mode.
       dependentRequired: {
         ...recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
+        ...decisionAnswerablePairing(RECALL_SCORES_ARG_NAME),
         query_mode: ["query"],
       },
       additionalProperties: false,

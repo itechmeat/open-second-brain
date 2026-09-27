@@ -59,11 +59,17 @@ import {
   RECALL_SCORES_SCHEMA,
   coerceAgentScope,
   coerceBoolOptional,
+  coerceDecisionAnswerable,
   coerceRecallAdequacyInput,
   coerceStr,
   coerceStringOptional,
+  DECISION_ANSWERABLE_ARG_NAME,
+  decisionAnswerablePairing,
+  decisionAnswerableSchema,
   recallAdequacyPairing,
 } from "./coerce.ts";
+import { decisionAnswerableFor, type DecisionAnswerableOutcome } from "./decision-answerable.ts";
+import { decisionModelSearchEnvelope } from "../core/decision-model/answerable.ts";
 import { MCP_PREVIEW_BUDGET } from "./preview-budget.ts";
 import { explainEnvelope } from "../core/search/explain-envelope.ts";
 import { deriveRecallHint } from "../core/search/recall-hint.ts";
@@ -437,6 +443,21 @@ const SEARCH_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
     total: { type: "integer" },
     recall_hint: { type: "string" },
     evidence_pack: { type: "object" },
+    decision_model: {
+      type: "object",
+      required: ["answerable"],
+      properties: {
+        answerable: {
+          type: "object",
+          required: ["probability", "model", "calibrated"],
+          properties: {
+            probability: { type: "number" },
+            model: { type: "string" },
+            calibrated: { type: "boolean" },
+          },
+        },
+      },
+    },
     // Retrieval receipts under `explain` (what-the-index-already-knew,
     // task F). Declared deliberately: this output schema does not set
     // `additionalProperties: false`, so an undeclared key would pass
@@ -561,12 +582,16 @@ const RECALL_GATE_INPUT_SCHEMA: Record<string, unknown> = {
     },
     [RECALL_SCORES_ARG_NAME]: RECALL_SCORES_SCHEMA,
     [MATCH_QUALITY_ARG_NAME]: matchQualitySchema(RECALL_SCORES_ARG_NAME),
+    [DECISION_ANSWERABLE_ARG_NAME]: decisionAnswerableSchema(RECALL_SCORES_ARG_NAME),
   },
   required: ["prompt"],
   // Both or neither, stated declaratively so a schema-driven client can
   // discover the pairing instead of learning it from an INVALID_PARAMS at
   // call time. Built beside the enforcement; see `recallAdequacyPairing`.
-  dependentRequired: recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
+  dependentRequired: {
+    ...recallAdequacyPairing(RECALL_SCORES_ARG_NAME),
+    ...decisionAnswerablePairing(RECALL_SCORES_ARG_NAME),
+  },
   additionalProperties: false,
 };
 
@@ -624,8 +649,22 @@ const RECALL_GATE_OUTPUT_SCHEMA: NonNullable<ToolDefinition["outputSchema"]> = {
         mean_score: { type: "number" },
         [MATCH_QUALITY_ARG_NAME]: { type: "number" },
         reason: { type: "string" },
+        // Advisory decision-model annotation (issue #213, Part 8): present
+        // only when the caller passed `decision_answerable` and the use is
+        // not off. Never changes `level` or `action`.
+        [DECISION_ANSWERABLE_ARG_NAME]: {
+          type: "object",
+          required: ["probability", "disagrees"],
+          properties: {
+            probability: { type: "number" },
+            disagrees: { type: "boolean" },
+          },
+        },
       },
     },
+    // Present only when an argument was ignored (a `decision_answerable`
+    // while the use is off); absent otherwise.
+    warnings: { type: "array", items: { type: "string" } },
     // Typed negative recall (silence-is-not-an-answer, U2). Present only
     // when the caller reported no usable result, mirroring `adequacy`
     // above: absent - never null - when it does not apply.
@@ -1110,6 +1149,10 @@ async function toolBrainSearch(
       trustGateEnabled: config.recall.retrievalTrustGateEnabled,
     }),
     ...(telemetryRecord ? { telemetry_id: telemetryRecord.id } : {}),
+    // Advisory decision-model answer carried by the rerank request (issue
+    // #213, Part 8). Absent unless rerank kind `decision-model` ran with
+    // the `answerable` use on and a valid answer arrived.
+    ...decisionModelSearchEnvelope(outcome),
   };
 }
 
@@ -1172,6 +1215,37 @@ async function toolBrainRecallGate(
     previousPrompt: previousPrompt ?? null,
     explicit,
   });
+  // Adequacy verdict (t_b8f66fec): thin verdict + action layer over one
+  // recall attempt. Only computed when the caller passes the pair,
+  // keeping the pure structural-gate contract otherwise. Computed before
+  // the gate record so that record can carry the advisory signal below;
+  // a refused argument is rethrown only after the record, as before.
+  let refused: unknown = null;
+  let verdict: ReturnType<typeof assessRecallAdequacy> | undefined;
+  let answerable: DecisionAnswerableOutcome | undefined;
+  try {
+    const attempt = coerceRecallAdequacyInput("brain_recall_gate", args, RECALL_SCORES_ARG_NAME);
+    const answerableArg = coerceDecisionAnswerable(
+      "brain_recall_gate",
+      args,
+      RECALL_SCORES_ARG_NAME,
+      attempt !== undefined,
+    );
+    if (attempt !== undefined) {
+      verdict = assessRecallAdequacy(
+        attempt,
+        resolveRecallAdequacyThresholds(ctx.configPath ?? undefined),
+      );
+      // Advisory decision-model signal (issue #213, Part 8): annotates the
+      // verdict, never changes its level or action. Resolved only when passed.
+      if (answerableArg !== undefined) {
+        answerable = decisionAnswerableFor(ctx, verdict.level, answerableArg);
+      }
+    }
+  } catch (err) {
+    refused = err;
+  }
+  const answerableVerdict = answerable?.kind === "annotated" ? answerable.verdict : undefined;
   // Gate telemetry (t_65036e02): default off. Routed through the lazy
   // emit kernel (t_5d7aa7c5) - the payload thunk never runs with the
   // config off, and a broken continuity store never breaks the gate's
@@ -1185,15 +1259,19 @@ async function toolBrainRecallGate(
       retrieve: decision.retrieve,
       reason: decision.reason,
       ...(sessionId !== undefined ? { sessionId } : {}),
+      ...(verdict !== undefined && answerableVerdict !== undefined
+        ? {
+            decisionAnswerable: {
+              level: verdict.level,
+              probability: answerableVerdict.probability,
+              disagrees: answerableVerdict.disagrees,
+            },
+          }
+        : {}),
     });
   });
-  // Adequacy verdict (t_b8f66fec): thin verdict + action layer over one
-  // recall attempt. Only computed when the caller passes the pair,
-  // keeping the pure structural-gate contract otherwise.
-  const attempt = coerceRecallAdequacyInput("brain_recall_gate", args, RECALL_SCORES_ARG_NAME);
-  if (attempt === undefined) return { ...decision };
-  const thresholds = resolveRecallAdequacyThresholds(ctx.configPath ?? undefined);
-  const verdict = assessRecallAdequacy(attempt, thresholds);
+  if (refused !== null) throw refused;
+  if (verdict === undefined) return { ...decision };
   // signals-that-survive, unit 6: an unmet verdict is stamped onto the
   // cross-query demand log under the bucket key normalizeQueryTerms already
   // computes, so the knowledge-gap loop can aggregate recurrence without a
@@ -1237,7 +1315,16 @@ async function toolBrainRecallGate(
       // verdict from its own inputs.
       [MATCH_QUALITY_ARG_NAME]: verdict.matchQuality,
       reason: verdict.reason,
+      ...(answerableVerdict !== undefined
+        ? {
+            [DECISION_ANSWERABLE_ARG_NAME]: {
+              probability: answerableVerdict.probability,
+              disagrees: answerableVerdict.disagrees,
+            },
+          }
+        : {}),
     },
+    ...(answerable?.kind === "ignored" ? { warnings: [answerable.warning] } : {}),
     // Absent, never null, when the attempt had usable results - the
     // convention the `explain` trace and the `adequacy` block above set.
     ...(negative !== null ? { negative } : {}),

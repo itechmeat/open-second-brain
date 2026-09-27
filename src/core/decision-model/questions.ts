@@ -22,7 +22,18 @@ export const DEFAULT_CANDIDATE_CLIP_CHARS = 900;
 export const RERANK_QUESTIONS = Object.freeze({
   /** Mask prefix for rerank candidates. */
   prefix: "P",
+  /** Clip for a candidate's body text. */
   clipChars: DEFAULT_CANDIDATE_CLIP_CHARS,
+  /** Clip for the note title sent beside each candidate. */
+  titleClipChars: 160,
+  /** Clip for each frontmatter value sent beside a candidate (`status`, `updated`). */
+  metaClipChars: 40,
+  /**
+   * The frontmatter fields sent beside a candidate when the note declares
+   * them, so an archived or superseded copy can be told from the current
+   * one. Nothing else from the frontmatter leaves the machine.
+   */
+  metaFields: Object.freeze(["status", "updated"] as const),
   /** A candidate whose injection probability reaches this is flagged (advisory, never moved). */
   injectionFlagMin: 0.8,
   relevanceId: (k: number): string => `rel_${k}`,
@@ -31,7 +42,9 @@ export const RERANK_QUESTIONS = Object.freeze({
   relevance(k: number): DecisionNoulQuestion {
     return {
       type: "noul",
-      instructions: `Does passage \`passages.P${k}\` help answer \`query\`?`,
+      instructions:
+        `Does passage \`passages.P${k}\` help answer \`query\`? Its \`text\` is an excerpt ` +
+        "of the note named by `title`; `status` and `updated`, when present, come from that note.",
       criteria: {
         true: "The passage contains information that directly helps answer the query.",
         false:
@@ -39,6 +52,13 @@ export const RERANK_QUESTIONS = Object.freeze({
       },
     };
   },
+  /**
+   * Injection questions (`inj_<k>`) add one question per candidate, about
+   * 15-20 percent of a rerank's input tokens. They are asked only in
+   * `enforce`, where the `decision_model_injection_suspected` tag reaches
+   * the search output; a shadow request does not ask them, since nothing
+   * would consume the answer.
+   */
   injection(k: number): DecisionNoulQuestion {
     return {
       type: "noul",
@@ -113,3 +133,15 @@ export function thresholdsTunedFor(profile: string | null, use: DecisionModelUse
   const tuned = DECISION_THRESHOLD_PROFILES[profile]!.tuned;
   return tuned === "baseline" || tuned.includes(use);
 }
+
+// ----- answerable (advisory, carried by the rerank request) -----------------
+
+/**
+ * Bands for the advisory `answerable` signal next to the deterministic
+ * recall-adequacy level. The signal disagrees with a `sufficient` level
+ * below {@link ANSWERABLE_LOW} and with an `insufficient` level above
+ * {@link ANSWERABLE_HIGH}; both edges are strict. Advisory only: the level
+ * and the action never change.
+ */
+export const ANSWERABLE_LOW = 0.3;
+export const ANSWERABLE_HIGH = 0.8;

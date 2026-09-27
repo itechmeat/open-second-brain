@@ -188,11 +188,12 @@ describe("decision-model rerank: activation", () => {
     const cfg = resolve({ ...RERANK, ...withServer(), decision_model_uses: "rerank:enforce" });
     await indexVault(cfg);
     server.setReply((req) => {
-      const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+      const passages = (req.body["state"] as { passages: Record<string, { text: string }> })
+        .passages;
       return {
         json: answerAll(req, (id) => {
           if (!id.startsWith("rel_")) return 0.01;
-          return passages[`P${id.slice(4)}`]!.includes("cats") ? 0.99 : 0.05;
+          return passages[`P${id.slice(4)}`]!.text.includes("cats") ? 0.99 : 0.05;
         }),
       };
     });
@@ -274,11 +275,12 @@ describe("decision-model rerank: privacy, cache and hook surfaces", () => {
     expect(server.requests).toHaveLength(1);
 
     server.setReply((req) => {
-      const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+      const passages = (req.body["state"] as { passages: Record<string, { text: string }> })
+        .passages;
       return {
         json: answerAll(req, (id) => {
           if (!id.startsWith("rel_")) return 0.01;
-          return passages[`P${id.slice(4)}`]!.includes("cats") ? 0.99 : 0.05;
+          return passages[`P${id.slice(4)}`]!.text.includes("cats") ? 0.99 : 0.05;
         }),
       };
     });
@@ -339,11 +341,12 @@ describe("rerank eval gate with kind decision-model", () => {
     const cfg = resolve({ ...RERANK, ...withServer() });
     await indexVault(cfg);
     server.setReply((req) => {
-      const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+      const passages = (req.body["state"] as { passages: Record<string, { text: string }> })
+        .passages;
       return {
         json: answerAll(req, (id) => {
           if (!id.startsWith("rel_")) return 0.01;
-          return passages[`P${id.slice(4)}`]!.includes("hound") ? 0.99 : 0.05;
+          return passages[`P${id.slice(4)}`]!.text.includes("hound") ? 0.99 : 0.05;
         }),
       };
     });

@@ -242,6 +242,12 @@ export interface ContextPackOptions {
    * verdict and the action the caller was told to take.
    */
   readonly recallAdequacy?: RecallAdequacyVerdict;
+  /**
+   * Advisory decision-model annotation of `recallAdequacy` (issue #213,
+   * Part 8), persisted in the receipt next to the verdict. It never
+   * changes the verdict or the pack.
+   */
+  readonly decisionAnswerable?: { readonly probability: number; readonly disagrees: boolean };
   /** Opt-in telemetry for recall coverage and gap diagnostics. */
   readonly telemetry?: RecallTelemetryOptions;
   /**
@@ -793,6 +799,9 @@ function finalizeContextPackReport(
       finalText: report.items.map((item) => item.body).join("\n\n"),
       budget: contextPackBudgetMetadata(opts, report),
       ...(opts.recallAdequacy ? { adequacy: opts.recallAdequacy } : {}),
+      ...(opts.recallAdequacy && opts.decisionAnswerable
+        ? { decisionAnswerable: opts.decisionAnswerable }
+        : {}),
       extra: {
         skipped_count: report.skipped.length,
         lanes: opts.includeLanes === true,

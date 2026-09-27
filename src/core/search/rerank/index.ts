@@ -83,6 +83,11 @@ export interface ApplyCrossEncoderRerankOptions {
   readonly decisionProvider?: DecisionProvider;
   /** Receives the extra decision answers (e.g. `answerable`). */
   readonly onDecisionExtras?: (extras: DecisionRerankExtras) => void;
+  /**
+   * Decision-model kind only: the `status` and `updated` frontmatter
+   * values of a result's page, sent beside its passage.
+   */
+  readonly resolveMeta?: (path: string) => Readonly<Record<string, string>> | null;
   /** The eval gate measures `enforce` whatever the configured mode. */
   readonly decisionModeOverride?: "shadow" | "enforce";
 }
@@ -158,6 +163,7 @@ export async function applyCrossEncoderRerank(
       ...(opts.decisionProvider !== undefined ? { provider: opts.decisionProvider } : {}),
       ...(opts.env !== undefined ? { env: opts.env } : {}),
       ...(opts.onDecisionExtras !== undefined ? { onExtras: opts.onDecisionExtras } : {}),
+      ...(opts.resolveMeta !== undefined ? { resolveMeta: opts.resolveMeta } : {}),
       ...(opts.decisionModeOverride !== undefined
         ? { modeOverride: opts.decisionModeOverride }
         : {}),

@@ -219,7 +219,10 @@ Only while the feature is active and a use is in `shadow` or `enforce`:
 - **Ids and paths are masked.** Candidates travel as `P0..Pn`; the mapping
   stays in memory.
 - **Text is clipped** to a per-use limit (900 characters per rerank
-  candidate).
+  candidate). A rerank candidate also carries its note title (clipped to 160
+  characters) and, when the note declares them, its `status` and `updated`
+  frontmatter values (40 characters each); no other frontmatter field is
+  sent, and these fields pass the same private-region checks as the text.
 - **Redaction.** The whole request body passes the shared egress guard
   (`redactForEgress`, registry id `decision-model-systemone`). Secret-shaped
   strings are redacted; a body the guard refuses is not sent at all. Nothing
@@ -238,10 +241,17 @@ Only while the feature is active and a use is in `shadow` or `enforce`:
 ## Rerank kind `decision-model`
 
 `search_rerank_kind: decision-model` reranks the top `search_rerank_top_k`
-search candidates with one request: one relevance `noul` per candidate, one
-injection `noul` per candidate (the passage contains instructions addressed
-to an AI assistant), and, only while the `answerable` use is not `off`, one
-`answerable` noul over all passages. It reuses the `decision_model_*` config;
+search candidates with one request: one relevance `noul` per candidate, in
+`enforce` one injection `noul` per candidate (the passage contains
+instructions addressed to an AI assistant), and, only while the `answerable`
+use is not `off`, one `answerable` noul over all passages (see
+[answerable](decision-models/answerable.md)). Each passage carries the note
+`title`, its `status` and `updated` when declared, and the chunk `text`, so
+an archived or older copy can be told from the current one. A chunk that
+holds only a page's frontmatter has no body to judge: it is not sent and
+keeps its position. The injection questions cost roughly 15-20 percent of a
+request's input tokens; `shadow` does not ask them, because only an
+enforced order surfaces the tag. It reuses the `decision_model_*` config;
 `search_rerank_base_url`, `search_rerank_model` and `search_rerank_env_key`
 are ignored for this kind, and `check` says so.
 
@@ -251,7 +261,7 @@ are ignored for this kind, and `check` says so.
   search result is the heuristic one, and the candidate pool is not widened.
 - `rerank:enforce`: the head is reordered by relevance probability. Candidates
   that were not sent (private, unresolvable, part of a private region,
-  dropped for budget) and candidates with an invalid relevance answer keep
+  frontmatter only, dropped for budget) and candidates with an invalid relevance answer keep
   their exact position. Nothing is added or removed; the tail is untouched.
 - A candidate whose injection probability is 0.8 or more gets
   `decision_model_injection_suspected` in its `reasons`, also when its

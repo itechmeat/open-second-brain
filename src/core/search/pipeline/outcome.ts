@@ -114,6 +114,8 @@ export interface OutcomeInput {
    * because the results ARE its prefix.
    */
   readonly poolSize: number;
+  /** Decision-model extras from the rerank stage (Part 8); absent by default. */
+  readonly decisionModel?: SearchOutcome["decisionModel"];
   /**
    * Typed degradations collected across the lanes, the counterpart of
    * `warnings`. Mutable because it is the same sink every lane pushed into
@@ -212,6 +214,7 @@ export function buildSearchOutcome(input: OutcomeInput): SearchOutcome {
     ...(input.secondPass !== undefined ? { secondPass: input.secondPass } : {}),
     ...(input.routedSurface === "summary" ? { surface: input.routedSurface } : {}),
     ...input.trustReceipts,
+    ...(input.decisionModel !== undefined ? { decisionModel: input.decisionModel } : {}),
   };
 
   // Progressive disclosure (D3): layer 1. When the caller opts into

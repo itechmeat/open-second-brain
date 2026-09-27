@@ -2,12 +2,16 @@
  * Rerank kind `decision-model` (issue #213, Part 2).
  *
  * One decision request per rerank: the state is the query plus the top-K
- * candidates masked as `P0..Pn`, and the questions are one relevance
- * `noul` per candidate (`rel_<k>`), one injection `noul` per candidate
+ * candidates masked as `P0..Pn`, each passage carrying the note title, the
+ * note's `status` and `updated` frontmatter values when it declares them,
+ * and the clipped chunk text. A chunk holding only frontmatter has no body
+ * to judge and is not sent. The questions are one relevance `noul` per
+ * candidate (`rel_<k>`), in `enforce` one injection `noul` per candidate
  * (`inj_<k>`, the passage carries instructions addressed to an AI
- * assistant) and, only while the `answerable` use is not `off`, one
- * `answerable` noul over all passages. Question texts and thresholds live
- * in `decision-model/questions.ts`.
+ * assistant; only `enforce` surfaces the tag, so shadow does not pay for
+ * it) and, only while the `answerable` use is not `off`, one `answerable`
+ * noul over all passages. Question texts and thresholds live in
+ * `decision-model/questions.ts`.
  *
  * Modes come from `decision_model_uses` `rerank`:
  *   - `off`, or any configuration that is not active: the stage is
@@ -18,7 +22,8 @@
  *
  * Invariants of the enforced order:
  *   - candidates that were not sent (private, unresolvable or unreadable
- *     page, part of a private region, or dropped to fit the budget) and
+ *     page, part of a private region, frontmatter only, or dropped to fit
+ *     the budget) and
  *     candidates whose relevance answer is invalid keep their exact
  *     heuristic index in the head;
  *   - every other candidate fills the remaining head slots by relevance
@@ -43,10 +48,14 @@ import {
   decisionModelModeFor,
   type ResolvedDecisionModelConfig,
 } from "../../decision-model/config.ts";
-import type { DecisionModelMode, DecisionProvider } from "../../decision-model/contract.ts";
+import type {
+  DecisionAnswerableSignal,
+  DecisionModelMode,
+  DecisionProvider,
+} from "../../decision-model/contract.ts";
 import { RERANK_QUESTIONS } from "../../decision-model/questions.ts";
 import { runDecision } from "../../decision-model/run.ts";
-import { buildCandidateState, mayLeaveMachine } from "../../decision-model/state.ts";
+import { buildCandidateState, clip, mayLeaveMachine } from "../../decision-model/state.ts";
 
 import type { BrainSearchResult } from "../search-result.ts";
 import type { ResolvedRerankConfig } from "../types.ts";
@@ -57,11 +66,7 @@ const WITHHELD_PATH = "(withheld)";
 
 /** The extra answers one rerank request carries beside relevance. */
 export interface DecisionRerankExtras {
-  readonly answerable?: {
-    readonly probability: number;
-    readonly model: string;
-    readonly calibrated: boolean;
-  };
+  readonly answerable?: DecisionAnswerableSignal;
 }
 
 interface RerankContext {
@@ -71,6 +76,8 @@ interface RerankContext {
   readonly withheld: number;
   /** Candidates dropped to fit `max_state_tokens`. */
   readonly dropped: number;
+  /** Candidates not sent because they hold only frontmatter. */
+  readonly skipped: number;
 }
 
 interface RerankAnswers {
@@ -92,6 +99,13 @@ export interface DecisionModelRerankProviderOptions {
   readonly privateRegions: ReadonlyArray<ReadonlyArray<string> | null>;
   /** Vault paths per document, for the accounting record only. */
   readonly paths: ReadonlyArray<string>;
+  /**
+   * Named fields sent beside each document (title, `status`, `updated`),
+   * aligned with `documents`; absent or null sends the bare text.
+   */
+  readonly fields?: ReadonlyArray<Readonly<Record<string, string>> | null>;
+  /** Documents not to send (frontmatter only), aligned with `documents`. */
+  readonly skip?: ReadonlyArray<boolean>;
   readonly provider?: DecisionProvider;
   readonly env?: Readonly<Record<string, string | undefined>>;
   /** The eval gate measures `enforce` whatever the configured mode. */
@@ -154,6 +168,9 @@ export class DecisionModelRerankProvider implements RerankProvider {
     const withAnswerable = decisionModelModeFor(this.cfg, "answerable") !== "off";
     const minScore = this.opts.minScore ?? 0;
     const recordedMode = this.opts.modeOverride ?? decisionModelModeFor(this.cfg, "rerank");
+    // The injection tag is surfaced only by an enforced order; a shadow
+    // request does not ask what nothing would read.
+    const withInjection = recordedMode === "enforce";
     const relevanceFor = (
       response: DecisionResponse,
       context: RerankContext,
@@ -173,11 +190,16 @@ export class DecisionModelRerankProvider implements RerankProvider {
       "rerank",
       () => {
         const built = buildCandidateState({
-          candidates: documents.map((text, i) => ({
-            text,
-            visibility: this.opts.visibility[i] ?? null,
-            privateRegions: this.opts.privateRegions[i] ?? null,
-          })),
+          candidates: documents.map((text, i) => {
+            const fields = this.opts.fields?.[i];
+            return {
+              text,
+              visibility: this.opts.visibility[i] ?? null,
+              privateRegions: this.opts.privateRegions[i] ?? null,
+              ...(fields !== null && fields !== undefined ? { fields } : {}),
+              ...(this.opts.skip?.[i] === true ? { skip: true } : {}),
+            };
+          }),
           prefix: RERANK_QUESTIONS.prefix,
           clipChars: RERANK_QUESTIONS.clipChars,
           maxStateTokens: this.cfg.maxStateTokens,
@@ -192,6 +214,7 @@ export class DecisionModelRerankProvider implements RerankProvider {
             included: built.included,
             withheld: built.withheld.length,
             dropped: built.dropped.length,
+            skipped: built.skipped.length,
           },
         };
       },
@@ -199,7 +222,9 @@ export class DecisionModelRerankProvider implements RerankProvider {
         const questions: Record<string, ReturnType<typeof RERANK_QUESTIONS.relevance>> = {};
         for (let k = 0; k < built.context.included.length; k++) {
           questions[RERANK_QUESTIONS.relevanceId(k)] = RERANK_QUESTIONS.relevance(k);
-          questions[RERANK_QUESTIONS.injectionId(k)] = RERANK_QUESTIONS.injection(k);
+          if (withInjection) {
+            questions[RERANK_QUESTIONS.injectionId(k)] = RERANK_QUESTIONS.injection(k);
+          }
         }
         if (withAnswerable)
           questions[RERANK_QUESTIONS.answerableId] = RERANK_QUESTIONS.answerable();
@@ -233,9 +258,12 @@ export class DecisionModelRerankProvider implements RerankProvider {
           }
           details["withheld_count"] = context.withheld;
           details["budget_dropped_count"] = context.dropped;
-          details["injection_suspected"] = injection.filter(
-            (p) => p !== null && p >= RERANK_QUESTIONS.injectionFlagMin,
-          ).length;
+          if (context.skipped > 0) details["frontmatter_only_count"] = context.skipped;
+          if (withInjection) {
+            details["injection_suspected"] = injection.filter(
+              (p) => p !== null && p >= RERANK_QUESTIONS.injectionFlagMin,
+            ).length;
+          }
           const ans = response.answers[RERANK_QUESTIONS.answerableId];
           if (ans?.valid === true && typeof ans.value === "number") {
             details["answerable_probability"] = ans.value;
@@ -291,6 +319,11 @@ export interface ApplyDecisionModelRerankOptions {
    * when the page cannot be read. No resolver means nothing is sent.
    */
   readonly resolvePrivateRegions?: (path: string) => ReadonlyArray<string> | null;
+  /**
+   * The `status` and `updated` frontmatter values of a result's page, as
+   * strings; null or absent when the page declares none or cannot be read.
+   */
+  readonly resolveMeta?: (path: string) => Readonly<Record<string, string>> | null;
   /** Receives the extra answers (e.g. `answerable`) when a reply arrived. */
   readonly onExtras?: (extras: DecisionRerankExtras) => void;
   /**
@@ -303,6 +336,33 @@ export interface ApplyDecisionModelRerankOptions {
 
 function formatProbability(p: number): string {
   return p.toFixed(4);
+}
+
+/**
+ * Whether a chunk holds only its page's frontmatter. The chunker emits the
+ * frontmatter as its own chunk (never with body text, never as overlap),
+ * and it is the only chunk that starts on line 1 with the opening fence. A
+ * page whose frontmatter is unterminated has no such chunk.
+ */
+function isFrontmatterOnlyChunk(result: Pick<BrainSearchResult, "content" | "startLine">): boolean {
+  return result.startLine === 1 && /^\uFEFF?---[ \t]*\r?\n/.test(result.content);
+}
+
+/** The fields sent beside one candidate: its title and the declared metadata. */
+function candidateFields(
+  result: BrainSearchResult,
+  meta: Readonly<Record<string, string>> | null,
+): Readonly<Record<string, string>> {
+  const fields: Record<string, string> = {};
+  const title = (result.title ?? "").trim();
+  if (title !== "") fields["title"] = clip(title, RERANK_QUESTIONS.titleClipChars);
+  for (const key of RERANK_QUESTIONS.metaFields) {
+    const value = meta?.[key]?.trim();
+    if (value !== undefined && value !== "") {
+      fields[key] = clip(value, RERANK_QUESTIONS.metaClipChars);
+    }
+  }
+  return fields;
 }
 
 /**
@@ -330,6 +390,13 @@ export async function applyDecisionModelRerank(
     visibility,
     privateRegions,
     paths: head.map((r) => r.path),
+    // Title and metadata are read only for pages that may leave at all.
+    fields: head.map((r, i) =>
+      mayLeaveMachine(visibility[i] ?? null)
+        ? candidateFields(r, opts.resolveMeta?.(r.path) ?? null)
+        : null,
+    ),
+    skip: head.map((r) => isFrontmatterOnlyChunk(r)),
     minScore: config.minScore,
     ...(opts.provider !== undefined ? { provider: opts.provider } : {}),
     ...(opts.env !== undefined ? { env: opts.env } : {}),

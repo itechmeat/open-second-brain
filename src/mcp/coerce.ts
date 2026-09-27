@@ -272,6 +272,71 @@ export function coerceRecallAdequacyInput(
   return { matchQuality: rawQuality, scores: rawScores as ReadonlyArray<number> };
 }
 
+/**
+ * The optional advisory probability a decision-model search surfaced as
+ * `decision_model.answerable.probability` (issue #213, Part 8).
+ */
+export const DECISION_ANSWERABLE_ARG_NAME = "decision_answerable";
+
+export function decisionAnswerableSchema(scoresKey: string): Readonly<Record<string, unknown>> {
+  return Object.freeze({
+    type: "number",
+    minimum: 0,
+    maximum: 1,
+    description:
+      "Advisory [0,1] probability from a search's `decision_model.answerable`. " +
+      `Needs \`${scoresKey}\` and \`${MATCH_QUALITY_ARG_NAME}\`; never changes the level.`,
+  });
+}
+
+/**
+ * `decision_answerable` needs the pair it annotates, stated in the same
+ * `dependentRequired` style as {@link recallAdequacyPairing}; the pair
+ * itself does not need it.
+ */
+export function decisionAnswerablePairing(
+  scoresKey: string,
+): Readonly<Record<string, ReadonlyArray<string>>> {
+  return Object.freeze({
+    [DECISION_ANSWERABLE_ARG_NAME]: Object.freeze([scoresKey, MATCH_QUALITY_ARG_NAME]),
+  });
+}
+
+/**
+ * The caller's `decision_answerable`, or `undefined` when absent. Refused
+ * without the recall pair (there is no verdict to annotate) and outside
+ * [0,1].
+ */
+export function coerceDecisionAnswerable(
+  tool: string,
+  args: Record<string, unknown>,
+  scoresKey: string,
+  hasAttempt: boolean,
+): number | undefined {
+  const raw = args[DECISION_ANSWERABLE_ARG_NAME];
+  if (raw === undefined || raw === null) return undefined;
+  if (!hasAttempt) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: '${DECISION_ANSWERABLE_ARG_NAME}' requires '${scoresKey}' and ` +
+        `'${MATCH_QUALITY_ARG_NAME}'; it annotates their adequacy verdict`,
+    );
+  }
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: '${DECISION_ANSWERABLE_ARG_NAME}' must be a finite number`,
+    );
+  }
+  if (raw < 0 || raw > 1) {
+    throw new MCPError(
+      INVALID_PARAMS,
+      `${tool}: '${DECISION_ANSWERABLE_ARG_NAME}' must be in [0,1]; got ${raw}`,
+    );
+  }
+  return raw;
+}
+
 export function coerceIsoDate(args: Record<string, unknown>, key: string): Date | null {
   const raw = coerceStr(args, key, false);
   if (raw === null) return null;

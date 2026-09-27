@@ -32,6 +32,17 @@ export interface GateTelemetryInput {
   readonly reason: string;
   readonly sessionId?: string;
   readonly createdAt?: string;
+  /**
+   * The adequacy verdict and the caller's advisory decision-model
+   * probability, recorded only when the call carried `decision_answerable`
+   * and the `answerable` use is not off (issue #213, Part 8). Numbers and
+   * closed values only.
+   */
+  readonly decisionAnswerable?: {
+    readonly level: string;
+    readonly probability: number;
+    readonly disagrees: boolean;
+  };
 }
 
 export interface GateTelemetryFilter {
@@ -65,6 +76,15 @@ export function emitGateTelemetry(vault: string, input: GateTelemetryInput): Con
       reason: input.reason,
       prompt_hash: hashPrompt(input.prompt),
       prompt_chars: input.prompt.length,
+      ...(input.decisionAnswerable !== undefined
+        ? {
+            adequacy_level: input.decisionAnswerable.level,
+            decision_answerable: {
+              probability: input.decisionAnswerable.probability,
+              disagrees: input.decisionAnswerable.disagrees,
+            },
+          }
+        : {}),
     },
   });
 }

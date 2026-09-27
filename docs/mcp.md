@@ -360,6 +360,21 @@ to its owning vault at the configuration level. `brain_idea_lineage` accepts `id
 `brain_recall_gate` accepts optional `previous_prompt` and
 `explicit`; `explicit: true` always returns `retrieve: true`.
 
+Optional decision-model `answerable` signal (see
+[decision-models/answerable.md](decision-models/answerable.md)): with rerank
+kind `decision-model` and the `answerable` use in `shadow` or `enforce`,
+`brain_search` adds `decision_model: { answerable: { probability, model,
+calibrated } }`; the field is absent when the use is off, for any other kind
+and when the request degraded. `brain_recall_gate` and `brain_context_pack`
+accept that probability as `decision_answerable` (a number in [0,1]), only
+together with the scores and `match_quality` pair (`dependentRequired`;
+alone it is `INVALID_PARAMS`). With the use on, the `adequacy` verdict gains
+`decision_answerable: { probability, disagrees }`, where `disagrees` is true
+for `sufficient` below 0.3 or `insufficient` above 0.8; `level` and `action`
+never change. The context-pack receipt stores the field next to its verdict.
+With the use off the argument is ignored and the response carries one
+`warnings` entry saying so.
+
 > **Date format note.** Brain tools use ISO 8601 `YYYY-MM-DD`
 > throughout; the `Brain/log/<date>.md` subdirectory layout shares that
 > convention.
