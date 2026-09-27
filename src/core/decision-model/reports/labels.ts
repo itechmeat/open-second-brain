@@ -22,9 +22,6 @@
  * degraded calls are left out. Read-only.
  */
 
-// TODO(integrator): register `labelsReport` in the `o2b decision-model
-// report` builder (`diagnostics.ts`) for the use `labels`.
-
 import { readLabels } from "../../brain/labels.ts";
 import { resolveNotePath } from "../../brain/note-path.ts";
 import { parseFrontmatter } from "../../vault.ts";

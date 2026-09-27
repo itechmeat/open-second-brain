@@ -10,7 +10,7 @@
  */
 
 import { CHOICE_MAX_OPTIONS } from "./answers.ts";
-import { DECISION_MODEL_USES, type DecisionModelUse } from "./contract.ts";
+import { DECISION_MODEL_USES, isDecisionModelUse, type DecisionModelUse } from "./contract.ts";
 import { resolveDecisionModelConfig, type ResolvedDecisionModelConfig } from "./config.ts";
 import { makeDecisionProvider } from "./provider.ts";
 import {
@@ -20,6 +20,7 @@ import {
   todaySpendUsd,
 } from "./record.ts";
 import type { ContinuityRecord } from "../brain/continuity/types.ts";
+import { USE_REPORTS } from "./reports/index.ts";
 
 /**
  * Warnings the vault's `_brain.yaml` parser raised about its
@@ -366,6 +367,11 @@ export interface DecisionModelReport {
   readonly since: string | null;
   readonly total: number;
   readonly uses: ReadonlyArray<DecisionModelUseSummary>;
+  /**
+   * With `--use`, the use's own evaluation report (`reports/index.ts`);
+   * absent for `rerank`, whose metric is the summary's shadow agreement.
+   */
+  readonly use_report?: { readonly use: DecisionModelUse; readonly report: unknown };
 }
 
 function percentile(sorted: ReadonlyArray<number>, p: number): number | null {
@@ -404,7 +410,13 @@ function agreementOf(
 
 export function buildDecisionModelReport(
   vault: string,
-  opts: { readonly since?: string; readonly use?: string; readonly origin?: string } = {},
+  opts: {
+    readonly since?: string;
+    readonly use?: string;
+    readonly origin?: string;
+    /** Attach the use's own report when `use` names one (default true). */
+    readonly useReport?: boolean;
+  } = {},
 ): DecisionModelReport {
   const records = listDecisionModelCalls(vault, opts.since).filter(
     (r) =>
@@ -451,7 +463,14 @@ export function buildDecisionModelReport(
       ...(agreement !== undefined ? { agreement } : {}),
     });
   }
-  return { since: opts.since ?? null, total: records.length, uses };
+  const summary: DecisionModelReport = { since: opts.since ?? null, total: records.length, uses };
+  if (opts.use === undefined || opts.useReport === false || !isDecisionModelUse(opts.use)) {
+    return summary;
+  }
+  const entry = USE_REPORTS[opts.use];
+  if (entry === null) return summary;
+  const since = opts.since !== undefined ? { since: opts.since } : {};
+  return { ...summary, use_report: { use: opts.use, report: entry.build(vault, since) } };
 }
 
 export function renderDecisionModelReport(report: DecisionModelReport): string {
@@ -476,6 +495,10 @@ export function renderDecisionModelReport(report: DecisionModelReport): string {
           `${(u.agreement.top5_overlap * 100).toFixed(1)}%`,
       );
     }
+  }
+  if (report.use_report !== undefined) {
+    const entry = USE_REPORTS[report.use_report.use];
+    if (entry !== null) lines.push(entry.render(report.use_report.report));
   }
   return lines.join("\n");
 }

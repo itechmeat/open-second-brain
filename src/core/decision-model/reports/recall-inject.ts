@@ -10,10 +10,6 @@
  * Moving the use to `enforce` on a machine requires p95 added latency
  * below the sub-budget (`decision_model_hook_budget_ms`) and no increase
  * in hook timeouts; both numbers are here.
- *
- * TODO(integrator): register `buildRecallInjectUseReport` /
- * `renderRecallInjectUseReport` in `buildDecisionModelReport` /
- * `renderDecisionModelReport` (diagnostics.ts has no per-use registry yet).
  */
 
 import type { ContinuityRecord } from "../../brain/continuity/types.ts";

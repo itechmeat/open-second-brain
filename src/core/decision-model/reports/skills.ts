@@ -1,9 +1,6 @@
 /**
  * `o2b decision-model report --use skills` metrics (issue #213, Part 3).
  *
- * TODO(integrator): register `buildSkillsDecisionReport` /
- * `renderSkillsDecisionReport` in the per-use report of `diagnostics.ts`.
- *
  * One skill selection writes one `decision_model_call` record per stage,
  * joined by `correlation_id`; the record with `final: true` carries both
  * offered lists (`deterministic_offered`, `decision_offered`) and the

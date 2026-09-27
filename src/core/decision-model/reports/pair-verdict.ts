@@ -23,9 +23,6 @@
  * Read-only.
  */
 
-// TODO(integrator): register `pairVerdictReport` in the `o2b decision-model
-// report` builder (`diagnostics.ts`) for the uses `dedup` and `tension`.
-
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 

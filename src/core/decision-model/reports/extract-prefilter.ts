@@ -3,10 +3,6 @@
  * the turn pre-filter before the `extract-signals` envelope (issue #213,
  * Part 4).
  *
- * TODO(integrator): register {@link buildExtractPrefilterReport} and
- * {@link renderExtractPrefilterReport} in the `report` command once
- * `diagnostics.ts` has a per-use report registry.
- *
  * Three metrics, from records only (identifiers and numbers, never text):
  *
  *   - regret: committed items whose cited `source_turn` scored below the

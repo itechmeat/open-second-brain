@@ -1,10 +1,6 @@
 /**
  * `o2b decision-model report --use answerable` (issue #213, Part 8).
  *
- * TODO(integrator): register {@link buildAnswerableReport} and
- * {@link renderAnswerableReport} in `diagnostics.ts` `report` once the
- * per-use report registry exists.
- *
  * The signal is advisory, so the report compares it with the level it
  * annotates rather than measuring a change it never makes:
  *
