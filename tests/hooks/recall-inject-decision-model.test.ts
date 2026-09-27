@@ -129,6 +129,7 @@ function writeConfig(entries: Record<string, string>): void {
 const DECISION = (): Record<string, string> => ({
   decision_model_enabled: "true",
   decision_model_provider: "compatible",
+  decision_model_threshold_profile: "jev-1.13",
   decision_model_base_url: server.url,
   decision_model_id: "fake-model-1",
   decision_model_env_key: KEY_VAR,

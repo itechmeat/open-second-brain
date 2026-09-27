@@ -87,11 +87,17 @@ async function baseline(): Promise<string> {
   return outcome(off);
 }
 
+/** A rerank passage as sent: the note title, its declared metadata and the chunk text. */
+interface Passage {
+  readonly title: string;
+  readonly text: string;
+}
+
 /** Relevance: the cats note wins, so an applied decision is visible. */
-function catsFirst(passages: Record<string, string>): (id: string) => number {
+function catsFirst(passages: Record<string, Passage>): (id: string) => number {
   return (id) => {
     if (!id.startsWith("rel_")) return 0.01;
-    return passages[`P${id.slice(4)}`]!.includes("cats") ? 0.99 : 0.05;
+    return passages[`P${id.slice(4)}`]!.text.includes("cats") ? 0.99 : 0.05;
   };
 }
 
@@ -132,7 +138,7 @@ describe("laya preset (keyless loopback)", () => {
   test("enforce without tuned thresholds behaves as shadow, silently", async () => {
     const before = await baseline();
     server.setReply((req) => {
-      const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+      const passages = (req.body["state"] as { passages: Record<string, Passage> }).passages;
       return { json: answerAll(req, catsFirst(passages)) };
     });
     const cfg = resolve(laya("rerank:enforce"));
@@ -162,7 +168,7 @@ function vercel(uses: string): Record<string, string> {
 }
 
 function evaluateReply(req: SystemOneRequestLog): unknown {
-  const passages = (req.body["state"] as { passages: Record<string, string> }).passages;
+  const passages = (req.body["state"] as { passages: Record<string, Passage> }).passages;
   const p = catsFirst(passages);
   const questions = req.body["questions"] as Record<string, { type: string }>;
   return {
@@ -209,7 +215,7 @@ describe("llm-emulation adapter", () => {
         /<untrusted_source[^>]*>\n([^]*)\n<\/untrusted_source>/.exec(
           (req.body["messages"] as Array<{ content: string }>)[1]!.content,
         )![1]!,
-      ) as { passages: Record<string, string> };
+      ) as { passages: Record<string, Passage> };
       const p = catsFirst(passages.passages);
       const schema = (
         req.body["response_format"] as { json_schema: { schema: { required: string[] } } }

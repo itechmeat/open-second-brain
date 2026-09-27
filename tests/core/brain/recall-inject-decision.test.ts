@@ -158,6 +158,7 @@ describe("recall_inject off: no filter, no request, no field", () => {
     const env = { KEY_VAR: FAKE_DECISION_KEY };
     const base = {
       decision_model_provider: "compatible",
+      decision_model_threshold_profile: "jev-1.13",
       decision_model_base_url: "https://decisions.example.test",
       decision_model_id: "fake-model-1",
       decision_model_env_key: "KEY_VAR",

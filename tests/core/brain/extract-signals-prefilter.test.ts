@@ -155,6 +155,7 @@ describe("off", () => {
         `vault: "${vault}"`,
         'decision_model_enabled: "true"',
         'decision_model_provider: "compatible"',
+        'decision_model_threshold_profile: "jev-1.13"',
         'decision_model_base_url: "http://127.0.0.1:9"',
         'decision_model_id: "fake-model-1"',
         'decision_model_env_key: "O2B_TEST_DM_KEY"',
