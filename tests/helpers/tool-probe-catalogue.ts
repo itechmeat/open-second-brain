@@ -290,7 +290,7 @@ export const REASONS_REACHING_OWNER_CONTENT: ReadonlySet<string> = new Set([REAS
  * test that reads them.
  */
 export const PROBE_ENTRY_COUNT = 101;
-export const PROBE_RECIPE_COUNT = 231;
+export const PROBE_RECIPE_COUNT = 233;
 export const PROBE_TWO_SIDED_COUNT = 32;
 
 /**
@@ -754,6 +754,10 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
         args: { operation: "remove", path: "notes/shared.md", dimension: "probe" },
         reason: REASON.callerNamedArtifact,
       },
+      {
+        args: { operation: "suggest", path: "notes/shared.md" },
+        reason: REASON.callerNamedArtifact,
+      },
     ],
   },
   {
@@ -965,6 +969,7 @@ export const NON_CONTENT: ReadonlyArray<ProbeEntry> = [
       { args: { action: "confirm", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
       { args: { action: "dismiss", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
       { args: { action: "resolve", id: "tension-probe-absent" }, reason: REASON.ownerlessLane },
+      { args: { action: "verify" }, reason: REASON.ownerlessLane },
     ],
   },
   {

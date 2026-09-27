@@ -155,17 +155,17 @@ That is the day-to-day picture. The full capability surface, every CLI verb, and
 - Secrets are not supposed to live in the vault. Daily logs and config exports run through a best-effort redactor, `$secret:NAME` references resolve from the local environment and are never stored, and Brain redaction strips `<private>...</private>` regions before storage.
 - Automatically surfaced Brain context passes through a deterministic prompt-injection guard; filtered output returns a placeholder with a reason code and the source Markdown is never rewritten. Opt into `untrusted_source_delimiting` for language-agnostic structural containment instead: an untrusted span is wrapped in a provenance-carrying `<untrusted_source path sha256>` delimiter and neutralized by structure (invisible/control characters, delimiter breakouts) rather than a per-language word list, losslessly and identically for every language.
 - Context receipts and recall telemetry are opt-in and store redacted metadata, hashes, and counters rather than raw prompt text.
-- Optional decision models (a typed judgment model such as Jev, used to rerank search candidates) are off by default. They run only when the machine config enables them and the named key variable is set; while active, shadow and enforce both send masked, clipped, redacted candidate text to the configured endpoint, and private pages and `<private>` regions never leave. See [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md).
+- Optional decision models (a typed judgment model such as Jev, used to choose among candidates the code already produced) are off by default, per use. They run only when the machine config enables them and the named key variable is set (a self-hosted server on loopback needs no key); while active, shadow and enforce both send masked, clipped, redacted candidate text to the configured endpoint, private pages and `<private>` regions never leave, and no decision writes to the vault. See [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md).
 
 ## Optional decision models
 
-An optional decision model (a typed judgment model such as Jev) can rerank the head of the search results. It is off by default: until you enable it, nothing changes and nothing is sent. To turn it on:
+An optional decision model (a typed judgment model such as Jev) can rerank the head of the search results, pick the skills `skills_attach` offers, pre-filter the turns of the extract-signals envelope and the notes the recall hook injects, and add advisory verdicts to dedup, tension, label and answerable proposals. Each use is off by default: until you enable it, nothing changes and nothing is sent. The `decision-model-setup` skill walks an agent through the setup. To turn on the reranker by hand:
 
 1. Export a key from a supported provider as an environment variable, for example `TYPESAFE_API_KEY`.
 2. In the machine config set `decision_model_enabled: "true"`, `decision_model_provider: typesafe`, `decision_model_env_key: TYPESAFE_API_KEY` (the variable's name, never the key), `decision_model_uses: "rerank:shadow"`, `search_rerank_enabled: "true"`, `search_rerank_kind: decision-model` and `search_rerank_top_k: "30"`.
 3. Run `o2b decision-model check --ping`.
 
-It pays off only with a semantic lane (`embedding_provider` configured, `local` is enough). Moving from shadow to enforce, measuring, what is sent, the cost gate and the per-vault opt-out: [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md).
+It pays off only with a semantic lane (`embedding_provider` configured, `local` is enough). The other uses, the routes (TypeSafe, OpenRouter, Vercel, OpenCode Zen, self-hosted), moving from shadow to enforce, measuring, what is sent, the cost gate and the per-vault opt-out: [`docs/decision-models.md`](https://github.com/itechmeat/open-second-brain/blob/main/docs/decision-models.md).
 
 ## Updating
 

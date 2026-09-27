@@ -125,10 +125,8 @@ All keys live in the machine config file outside the vault. Each has an
 | `decision_model_threshold_profile` | the model family a `compatible` server serves (`jev-1.13`, `laya`, `openjev`, `llm-emulation`), so its uses may enforce; ignored for every other preset | from preset (none for `compatible`) |
 
 Uses: `rerank`, `answerable`, `skills`, `extract_prefilter`, `dedup`,
-`tension`, `labels`, `recall_inject`. This release implements `rerank` (and
-carries the `answerable` question inside the rerank request); the others are
-declared so later releases only add behaviour, and setting them has no effect
-yet.
+`tension`, `labels`, `recall_inject`. Every use is implemented; each one is
+`off` until you set it, and each has its own page (see "Uses" below).
 
 Modes:
 
@@ -190,6 +188,36 @@ decision_model_max_state_tokens: "4000"
 decision_model_uses: "rerank:shadow"
 ```
 
+## Uses
+
+Each use has its own mode in `decision_model_uses`, its own failure policy
+and its own evaluation metric in `o2b decision-model report --use <use>`.
+Context uses change what the host receives in `enforce` and fall back to
+the deterministic result on any failure. Advisory uses only add a field
+next to a deterministic proposal and omit it on any failure. No use ever
+blocks a write or an answer, and no use writes to the vault.
+
+| Use | Surface | Kind | What `enforce` changes | On failure | Page |
+|---|---|---|---|---|---|
+| `rerank` | search rerank stage (`search_rerank_kind: decision-model`) | context | reorders the head by relevance; unsent and invalid candidates keep their position | the heuristic order | below |
+| `answerable` | `brain_search`, `brain_recall_gate`, `brain_context_pack` | advisory | nothing is reordered: the signal is surfaced and the verdict gains `decision_answerable`; the level and action never change | the field is absent | [answerable](decision-models/answerable.md) |
+| `skills` | `skills_attach` | context | offers the decision subset or reorder of the BM25 shortlist | the BM25 offer | [skills](decision-models/skills.md) |
+| `extract_prefilter` | `brain_extract_signals` and `o2b brain extract-signals` plan phase | context | leaves turns below the threshold out of the envelope; no envelope when every turn is below it | every turn is sent | [extract pre-filter](decision-models/extract-prefilter.md) |
+| `dedup` | `brain_hygiene scan` dedup findings, doctor entity alias candidates | advisory | adds a verdict; a confident `different` is listed last, never hidden | the field is absent | [dedup and tension](decision-models/dedup-tension.md) |
+| `tension` | `brain_tension verify`, `o2b brain tension verify` | advisory | adds a verdict; a confident `compatible` or `unrelated` is listed last | the field is absent | [dedup and tension](decision-models/dedup-tension.md) |
+| `labels` | `brain_labels suggest`, `o2b brain label --suggest` | advisory | returns a suggestion per dimension; never assigns | `available: false` with the reason | [labels](decision-models/labels.md) |
+| `recall_inject` | the prompt-time recall-inject hook | context | drops notes that would not help, or withholds the brief; never adds material | today's brief | [recall-inject hook filter](decision-models/recall-inject.md) |
+
+In `shadow` every use sends and records its request and returns today's
+result; for `labels` the suggestions are null and for `dedup` and `tension`
+the listings are unchanged. `enforce` on a threshold profile without tuned
+thresholds for the use runs as `shadow` (see [providers](decision-models/providers.md#threshold-profiles)).
+
+Moving a use to `enforce` needs evidence from that use's report: a gain
+against the deterministic baseline without a regression, and for
+`extract_prefilter` zero regret. The `decision-model-setup` skill walks an
+agent through setup, shadow measurement and turning a use off.
+
 ## Vault opt-out
 
 A vault can turn the feature off for itself in `Brain/_brain.yaml`:
@@ -234,7 +262,19 @@ Only while the feature is active and a use is in `shadow` or `enforce`:
   standard accounts, and offers zero retention only by enterprise
   arrangement. Gateways (OpenRouter, Vercel, OpenCode Zen) add their own
   logging and retention terms. `o2b decision-model check` names the processor
-  for the configured preset.
+  for the configured preset. The terms: TypeSafe
+  <https://typesafe.ai/legal/privacy-policy>; OpenRouter
+  <https://openrouter.ai/privacy> and its provider logging page
+  <https://openrouter.ai/docs/guides/privacy/provider-logging>; Vercel AI
+  Gateway <https://vercel.com/docs/ai-gateway/security-and-compliance/zdr>;
+  OpenCode Zen <https://opencode.ai/legal/privacy-policy>. A self-hosted
+  server on loopback keeps every request on the machine.
+- **Shadow mode sends data.** A use in `shadow` sends exactly what it would
+  send in `enforce`; only the returned result differs.
+- **Non-English vaults.** Hosted decision models are strongest in English,
+  while principles and notes are often written in the operator's own
+  language. Evaluate each vault on its own shadow data, consider a
+  multilingual self-hosted model, or keep the uses in `shadow`.
 - Vault text may try to steer an answer. That is acceptable only because no
   decision authorises a write.
 
@@ -378,7 +418,13 @@ timeout. A reply body larger than 1 MiB is an `invalid_reply`.
 - `o2b decision-model report [--since <date>] [--use <use>] [--json]`: per
   use, calls, outcome mix, p50/p95 latency, input tokens, cost, and for the
   reranker the shadow agreement (top-1 agreement and top-5 overlap between the
-  decision and heuristic orders, over ordinary `shadow` records only).
+  decision and heuristic orders, over ordinary `shadow` records only). With
+  `--use`, the use's own evaluation report follows (JSON: `use_report`):
+  offer-hit and needless-offer rates for `skills`, regret, drop and skip
+  shares for `extract_prefilter`, verdict bands against the operator's later
+  decisions for `dedup` and `tension`, acceptance for `labels`, level against
+  advisory band and outcomes for `answerable`, and added latency and hook
+  timeouts for `recall_inject`. Each use's page describes its metric.
 - `o2b doctor --readiness` has a `decision_model` line for every install:
   `skipped` when off, without a key, or opted out (with how to proceed),
   `fail` for an invalid config, `pass` when active. It also names an ignored

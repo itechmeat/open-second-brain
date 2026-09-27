@@ -361,8 +361,14 @@ vault. It is active only when the operator enables it in machine config AND
 the named key variable is set; otherwise every code path is the one without
 it. Every use goes through `runDecision` (`run.ts`), which owns the modes
 (`off`, `shadow`, `enforce`), the daily cost gate and the
-`decision_model_call` accounting record. The first use is the rerank kind
-`decision-model` (`src/core/search/rerank/decision-model.ts`). See
+`decision_model_call` accounting record. The uses are the rerank kind
+`decision-model` (`src/core/search/rerank/decision-model.ts`, which also
+carries the advisory `answerable` question), `skills`
+(`src/core/surface/skill-attach-decision.ts`), `extract_prefilter`
+(`src/core/brain/extract-signals-prefilter.ts`), `dedup` and `tension`
+(`pair-verdict.ts`), `labels` (`src/core/brain/label-suggest.ts`) and `recall_inject`
+(`src/core/brain/recall-inject-decision.ts`); each use's evaluation report
+lives in `reports/` and is registered in `reports/index.ts`. See
 [`docs/decision-models.md`](decision-models.md).
 
 Decision adapters, all behind `makeDecisionProvider` (`provider.ts`, `null`
@@ -411,12 +417,12 @@ new files, not a count in any response.
 
 The enforcement lives in `tests/mcp/agent-scope-matrix.test.ts`, and its shape
 is the point rather than its size. One hundred and one classified tools carry
-231 call recipes - one per mode, view or operation, because one executed view
+233 call recipes - one per mode, view or operation, because one executed view
 is not an executed classification. Every recipe runs TWICE against the same
 two-owner fixture, once with the gate closed and once with it open, and the
 classification decides what the open run must show: the 32 recipes classified
 as reaching owner-taggable content must surface the marker with the gate off,
-which is what stops the closed run from passing vacuously. The other 199 carry
+which is what stops the closed run from passing vacuously. The other 201 carry
 a claim of unreachability, and that claim is executed directly - the marker
 must be absent even where nothing is hidden. The first version of this probe
 asserted only the closed half, and 81 of its entries were driven against
